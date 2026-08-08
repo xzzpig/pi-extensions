@@ -7,6 +7,7 @@ import {
 import type { AuthorizerSelectionLifecycle } from "./authority/authorizer-selection";
 import type { ShellToolsConfig } from "./config-schema";
 import type { SessionConfigStore } from "./config-store";
+import type { WrapperFloors } from "./types";
 import type { PermissionSystemExtensionConfig } from "./extension-config";
 import type { ExtensionPaths } from "./extension-paths";
 import type { ToolCallGateInputs } from "./handlers/gates/tool-call-gate-pipeline";
@@ -230,6 +231,11 @@ export class PermissionSession implements ToolCallGateInputs {
    */
   getShellToolAliases(): ShellToolsConfig | undefined {
     return this.config.shellTools;
+  }
+
+  /** The configured wrapper-floor mode; see `wrapperFloors`. */
+  getWrapperFloors(): WrapperFloors {
+    return this.config.wrapperFloors;
   }
 
   // ── Path normalization ────────────────────────────────────────────────

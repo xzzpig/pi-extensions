@@ -51,6 +51,7 @@ function cloneDefaultConfig(): PermissionSystemExtensionConfig {
     debugLog: DEFAULT_EXTENSION_CONFIG.debugLog,
     permissionReviewLog: DEFAULT_EXTENSION_CONFIG.permissionReviewLog,
     yoloMode: DEFAULT_EXTENSION_CONFIG.yoloMode,
+    wrapperFloors: DEFAULT_EXTENSION_CONFIG.wrapperFloors,
     doublePressToConfirm: DEFAULT_EXTENSION_CONFIG.doublePressToConfirm,
   };
 }
@@ -79,6 +80,7 @@ function summarizeConfig(
 ): string {
   const knobs = [
     `yoloMode=${toOnOff(config.yoloMode)}`,
+    `wrapperFloors=${config.wrapperFloors}`,
     `permissionReviewLog=${toOnOff(config.permissionReviewLog)}`,
     `debugLog=${toOnOff(config.debugLog)}`,
   ].join(", ");
@@ -97,6 +99,14 @@ function buildSettingItems(
         "Auto-approve ask-state permission checks, including subagent approval forwarding",
       currentValue: toOnOff(config.yoloMode),
       values: ON_OFF,
+    },
+    {
+      id: "wrapperFloors",
+      label: "Wrapper flooring",
+      description:
+        "fallback: gate the wrapper's inner commands as their own units; always: floor every wrapper allow to ask (upstream v24)",
+      currentValue: config.wrapperFloors,
+      values: ["fallback", "always"],
     },
     {
       id: "permissionReviewLog",
@@ -137,6 +147,8 @@ function applySetting(
       return { ...config, permissionReviewLog: value === "on" };
     case "debugLog":
       return { ...config, debugLog: value === "on" };
+    case "wrapperFloors":
+      return { ...config, wrapperFloors: value === "always" ? "always" : "fallback" };
     case "doublePressToConfirm":
       return { ...config, doublePressToConfirm: value === "on" };
     default:
@@ -149,6 +161,7 @@ function syncSettingValues(
   config: PermissionSystemExtensionConfig,
 ): void {
   settingsList.updateValue("yoloMode", toOnOff(config.yoloMode));
+  settingsList.updateValue("wrapperFloors", config.wrapperFloors);
   settingsList.updateValue(
     "permissionReviewLog",
     toOnOff(config.permissionReviewLog),

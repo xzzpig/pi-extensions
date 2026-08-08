@@ -2,6 +2,24 @@
   <img src="docs/assets/logo.png" alt="pi-permission-system logo">
 </p>
 
+## Fork notice
+
+This is a **local fork** (upstream: [@gotgenes/pi-permission-system](https://github.com/gotgenes/pi-packages/tree/main/packages/pi-permission-system))
+maintained in the `pi-extensions` monorepo. The main difference from upstream v24.0.0 is:
+
+**Configurable wrapper flooring** — instead of blanket-floored `eval`/`bash -c`/`env`/`xargs`/`sudo`/`timeout`/… commands always prompting, the fork
+re-parses opaque-wrapper payloads and locates inner commands of indirection wrappers as separate gated units. The `wrapperFloors` extension config
+controls this:
+
+- `"fallback"` (default): inner commands are gated individually; the wrapper unit is floored to `ask` only when the inner content cannot be statically
+  resolved (fail-closed). So `eval "git status"` and `env X=1 git status` match `git status *`/`*` like a plain command, while `eval "rm -rf /"` still
+  hits `rm -rf *: ask` and `sudo rm …` still hits `sudo rm *: deny`.
+- `"always"` (upstream behavior): every wrapper's `allow` is clamped to `ask` regardless of resolution.
+
+See [`docs/configuration.md`](./docs/configuration.md) for the full fail-closed behavior documentation.
+
+---
+
 # @gotgenes/pi-permission-system
 
 [![npm version](https://img.shields.io/npm/v/@gotgenes/pi-permission-system?style=flat&logo=npm&logoColor=white)](https://www.npmjs.com/package/@gotgenes/pi-permission-system) [![CI](https://img.shields.io/github/actions/workflow/status/gotgenes/pi-packages/ci.yml?style=flat&logo=github&label=CI)](https://github.com/gotgenes/pi-packages/actions/workflows/ci.yml) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat)](https://opensource.org/licenses/MIT) [![TypeScript](https://img.shields.io/badge/TypeScript-6.x-3178C6?style=flat&logo=typescript&logoColor=white)](https://www.typescriptlang.org/) [![pnpm](https://img.shields.io/badge/pnpm-%3E%3D11-F69220?style=flat&logo=pnpm&logoColor=white)](https://pnpm.io/) [![Pi Package](https://img.shields.io/badge/Pi-Package-6366F1?style=flat)](https://pi.mariozechner.at/)

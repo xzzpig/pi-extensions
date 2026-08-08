@@ -133,6 +133,7 @@ test("permission-system command handlers manage config summary, persistence, and
     debugLog: true,
     permissionReviewLog: false,
     yoloMode: true,
+    wrapperFloors: "fallback",
     doublePressToConfirm: true,
   };
 

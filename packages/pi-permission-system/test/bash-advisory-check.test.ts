@@ -85,17 +85,38 @@ describe("resolveBashAdvisoryCheck", () => {
       });
     });
 
-    it("floors an opaque wrapper allow to ask", () => {
+    it("leaves a resolved opaque wrapper's allow alone in fallback mode", () => {
       const resolver = makeBashResolver({
-        'bash -c "rm -rf /"': makeCheckResult({
-          state: "allow",
-          toolName: "bash",
-        }),
+        'bash -c "rm -rf /"': makeCheckResult({ state: "allow", toolName: "bash" }),
+        "rm -rf /": makeCheckResult({ state: "allow", toolName: "bash" }),
       });
       const result = resolveBashAdvisoryCheck(
         'bash -c "rm -rf /"',
         undefined,
         resolver,
+      );
+      expect(result.state).toBe("allow");
+    });
+
+    it("floors an unresolved opaque wrapper allow to ask", () => {
+      const resolver = makeBashResolver({
+        eval: makeCheckResult({ state: "allow", toolName: "bash" }),
+      });
+      const result = resolveBashAdvisoryCheck("eval", undefined, resolver);
+      expect(result.state).toBe("ask");
+      expect(result.matchedPattern).toBe("<opaque-bash-wrapper>");
+    });
+
+    it("floors a resolved wrapper in wrapperFloors 'always' mode", () => {
+      const resolver = makeBashResolver({
+        'bash -c "rm -rf /"': makeCheckResult({ state: "allow", toolName: "bash" }),
+        "rm -rf /": makeCheckResult({ state: "allow", toolName: "bash" }),
+      });
+      const result = resolveBashAdvisoryCheck(
+        'bash -c "rm -rf /"',
+        undefined,
+        resolver,
+        { wrapperFloors: "always" },
       );
       expect(result.state).toBe("ask");
       expect(result.matchedPattern).toBe("<opaque-bash-wrapper>");

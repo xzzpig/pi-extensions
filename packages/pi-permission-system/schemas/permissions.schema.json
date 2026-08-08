@@ -25,6 +25,16 @@
       "default": false,
       "type": "boolean"
     },
+    "wrapperFloors": {
+      "description": "Bash wrapper flooring: \"fallback\" gates wrapper inner commands as their own units and floors only unresolvable content; \"always\" floors every wrapper allow to ask (upstream v24 behavior).",
+      "markdownDescription": "How wrapper commands (`eval`/`bash -c`/`env`/`xargs`/`sudo`/`timeout`/…) are gated.\n\n- `fallback` (default): the wrapper's inner commands are gated as separate units, so `env X=1 git status` matches `git status *`/`*` like a plain command; an `allow` on the wrapper itself is floored to `ask` only when the inner command cannot be statically resolved.\n- `always`: every wrapper command's `allow` is floored to `ask` (the upstream v24 fail-closed behavior).",
+      "default": "fallback",
+      "type": "string",
+      "enum": [
+        "fallback",
+        "always"
+      ]
+    },
     "doublePressToConfirm": {
       "description": "Require a confirming second press of a decision hotkey in the inline permission dialog. Applies to TUI sessions only.",
       "markdownDescription": "Require a confirming second press of a decision hotkey (`y`/`s`/`n`/`r`) in the inline permission dialog before it commits — the first press arms the action and shows a `Press y again to approve.` hint.\n\nApplies to interactive **TUI** sessions only; the non-TUI (RPC/frontend) prompt keeps its single-select flow. Set to `false` to commit decisions on the first hotkey press.",
@@ -139,7 +149,9 @@
             "minLength": 1
           }
         },
-        "required": ["commandArgument"],
+        "required": [
+          "commandArgument"
+        ],
         "additionalProperties": false,
         "description": "Maps one shell-aliased tool to the input arguments holding its command and (optionally) its working directory."
       },
@@ -214,7 +226,9 @@
           "maxLength": 500
         }
       },
-      "required": ["action"],
+      "required": [
+        "action"
+      ],
       "additionalProperties": false,
       "description": "Deny with an optional custom reason shown to the agent when the action is blocked."
     }

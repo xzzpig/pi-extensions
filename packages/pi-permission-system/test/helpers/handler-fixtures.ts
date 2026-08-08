@@ -30,7 +30,11 @@ import { PERMISSIONS_DECISION_CHANNEL } from "#src/permission-events";
 import type { Rule } from "#src/rule";
 import { SessionRules } from "#src/session-rules";
 import type { ToolRegistry } from "#src/tool-registry";
-import type { PermissionCheckResult, PermissionState } from "#src/types";
+import type {
+  PermissionCheckResult,
+  PermissionState,
+  WrapperFloors,
+} from "#src/types";
 import {
   makeConfigStore,
   makeRealResolver,
@@ -236,13 +240,20 @@ export function makeHandler(overrides?: {
   tools?: string[];
   /** Inject `shellTools` aliases into the session config (#574). */
   shellTools?: ShellToolsConfig;
+  /** Override `wrapperFloors` in the session config (fallback by default). */
+  wrapperFloors?: WrapperFloors;
 }) {
   const configStore =
-    overrides?.shellTools !== undefined
+    overrides?.shellTools !== undefined || overrides?.wrapperFloors !== undefined
       ? makeConfigStore({
           current: vi.fn().mockReturnValue({
             ...DEFAULT_EXTENSION_CONFIG,
-            shellTools: overrides.shellTools,
+            ...(overrides?.shellTools !== undefined
+              ? { shellTools: overrides.shellTools }
+              : null),
+            ...(overrides?.wrapperFloors !== undefined
+              ? { wrapperFloors: overrides.wrapperFloors }
+              : null),
           }),
         })
       : undefined;

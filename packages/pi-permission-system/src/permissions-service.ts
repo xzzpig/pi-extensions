@@ -13,7 +13,11 @@ import type {
   ToolInputFormatter,
   ToolInputFormatterRegistrar,
 } from "./tool-input-formatter-registry";
-import type { PermissionCheckResult, PermissionState } from "./types";
+import type {
+  PermissionCheckResult,
+  PermissionState,
+  WrapperFloors,
+} from "./types";
 
 /**
  * Resolution surface the service needs: answer a gate-style {@link AccessIntent}
@@ -25,9 +29,10 @@ interface ResolverForService {
   getToolPermission(toolName: string, agentName?: string): PermissionState;
 }
 
-/** Narrow session view: hands out the cwd-bound path normalizer. */
+/** Narrow session view: hands out the cwd-bound path normalizer and config knobs. */
 interface PathNormalizerProvider {
   getPathNormalizer(): PathNormalizer;
+  getWrapperFloors(): WrapperFloors;
 }
 
 /**
@@ -59,7 +64,9 @@ export class LocalPermissionsService implements PermissionsService {
     // the enforcement gate enforces (#309). A cold parser falls back to the
     // whole-string match inside resolveBashAdvisoryCheck.
     if (surface === "bash") {
-      return resolveBashAdvisoryCheck(value ?? "", agentName, this.resolver);
+      return resolveBashAdvisoryCheck(value ?? "", agentName, this.resolver, {
+        wrapperFloors: this.session.getWrapperFloors(),
+      });
     }
     const intent = buildAccessIntentForSurface(
       surface,

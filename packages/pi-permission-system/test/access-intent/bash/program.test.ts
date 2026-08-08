@@ -868,18 +868,19 @@ describe("BashProgram", () => {
 
     describe("opaque-payload wrappers", () => {
       it.each([
-        ['bash -c "rm -rf /"', 'bash -c "rm -rf /"'],
-        ['sh -c "rm -rf /"', 'sh -c "rm -rf /"'],
-        ['dash -c "rm -rf /"', 'dash -c "rm -rf /"'],
-        ['zsh -c "rm -rf /"', 'zsh -c "rm -rf /"'],
-        ['ksh -c "rm -rf /"', 'ksh -c "rm -rf /"'],
-        ['eval "rm -rf /"', 'eval "rm -rf /"'],
-        ['/bin/bash -c "rm -rf /"', '/bin/bash -c "rm -rf /"'],
-        ['bash -ec "rm -rf /"', 'bash -ec "rm -rf /"'],
-      ])("flags %s as opaque", async (command, text) => {
+        ['bash -c "rm -rf /"', 'bash -c "rm -rf /"', "rm -rf /"],
+        ['sh -c "rm -rf /"', 'sh -c "rm -rf /"', "rm -rf /"],
+        ['dash -c "rm -rf /"', 'dash -c "rm -rf /"', "rm -rf /"],
+        ['zsh -c "rm -rf /"', 'zsh -c "rm -rf /"', "rm -rf /"],
+        ['ksh -c "rm -rf /"', 'ksh -c "rm -rf /"', "rm -rf /"],
+        ['eval "rm -rf /"', 'eval "rm -rf /"', "rm -rf /"],
+        ['/bin/bash -c "rm -rf /"', '/bin/bash -c "rm -rf /"', "rm -rf /"],
+        ['bash -ec "rm -rf /"', 'bash -ec "rm -rf /"', "rm -rf /"],
+      ])("flags %s as opaque and re-parses its payload as an inner unit", async (command, text, inner) => {
         const program = await BashProgram.parse(command, normalizer);
         expect(program.commands()).toEqual([
           { text, wrapperKind: "opaque-payload" },
+          { text: inner, context: "wrapper_payload" },
         ]);
       });
 
@@ -890,6 +891,26 @@ describe("BashProgram", () => {
         );
         expect(program.commands()).toEqual([
           { text: 'bash -c "rm -rf /"', wrapperKind: "opaque-payload" },
+          { text: "rm -rf /", context: "wrapper_payload" },
+        ]);
+      });
+
+      it("splits a chained opaque payload into its own units", async () => {
+        const program = await BashProgram.parse(
+          'eval "cd /tmp && rm -rf /"',
+          normalizer,
+        );
+        expect(program.commands()).toEqual([
+          { text: 'eval "cd /tmp && rm -rf /"', wrapperKind: "opaque-payload" },
+          { text: "cd /tmp", context: "wrapper_payload" },
+          { text: "rm -rf /", context: "wrapper_payload" },
+        ]);
+      });
+
+      it("flags an opaque payload that cannot be located or parsed as unresolved", async () => {
+        const program = await BashProgram.parse("eval", normalizer);
+        expect(program.commands()).toEqual([
+          { text: "eval", wrapperKind: "opaque-payload", payloadUnresolved: true },
         ]);
       });
 
@@ -903,30 +924,51 @@ describe("BashProgram", () => {
         expect(program.commands()).toEqual([{ text: command }]);
       });
     });
-
     describe("indirection wrappers", () => {
       it.each([
-        ["sudo aws s3 ls", "sudo aws s3 ls"],
-        ["env FOO=bar aws s3 ls", "env FOO=bar aws s3 ls"],
-        ["xargs rm -rf", "xargs rm -rf"],
-        ["time aws s3 ls", "time aws s3 ls"],
-        ["nohup aws s3 ls", "nohup aws s3 ls"],
-        ["timeout 10 aws s3 ls", "timeout 10 aws s3 ls"],
-        ["nice -n 10 aws s3 ls", "nice -n 10 aws s3 ls"],
-        ["/usr/bin/sudo aws s3 ls", "/usr/bin/sudo aws s3 ls"],
+        ["sudo aws s3 ls", "sudo aws s3 ls", "aws s3 ls"],
+        ["env FOO=bar aws s3 ls", "env FOO=bar aws s3 ls", "aws s3 ls"],
+        ["xargs rm -rf", "xargs rm -rf", "rm -rf"],
+        ["time aws s3 ls", "time aws s3 ls", "aws s3 ls"],
+        ["nohup aws s3 ls", "nohup aws s3 ls", "aws s3 ls"],
+        ["timeout 10 aws s3 ls", "timeout 10 aws s3 ls", "aws s3 ls"],
+        ["nice -n 10 aws s3 ls", "nice -n 10 aws s3 ls", "aws s3 ls"],
+        ["/usr/bin/sudo aws s3 ls", "/usr/bin/sudo aws s3 ls", "aws s3 ls"],
         // Exec-capable rewrites and prefix wrappers (#575).
-        ["parallel rm ::: x", "parallel rm ::: x"],
-        ["rust-parallel echo", "rust-parallel echo"],
-        ["rush echo", "rush echo"],
-        ["doas aws s3 ls", "doas aws s3 ls"],
-        ["setsid aws s3 ls", "setsid aws s3 ls"],
-        ["stdbuf -oL aws s3 ls", "stdbuf -oL aws s3 ls"],
-        ["watch ls", "watch ls"],
-        ["flock /tmp/lock aws s3 ls", "flock /tmp/lock aws s3 ls"],
-      ])("flags %s as an indirection wrapper", async (command, text) => {
+        ["parallel rm ::: x", "parallel rm ::: x", "rm ::: x"],
+        ["rust-parallel echo", "rust-parallel echo", "echo"],
+        ["rush echo", "rush echo", "echo"],
+        ["doas aws s3 ls", "doas aws s3 ls", "aws s3 ls"],
+        ["setsid aws s3 ls", "setsid aws s3 ls", "aws s3 ls"],
+        ["stdbuf -oL aws s3 ls", "stdbuf -oL aws s3 ls", "aws s3 ls"],
+        ["watch ls", "watch ls", "ls"],
+        ["flock /tmp/lock aws s3 ls", "flock /tmp/lock aws s3 ls", "aws s3 ls"],
+      ])("flags %s as an indirection wrapper and emits its inner command", async (command, text, inner) => {
         const program = await BashProgram.parse(command, normalizer);
         expect(program.commands()).toEqual([
           { text, wrapperKind: "indirection" },
+          { text: inner, context: "wrapper_indirection" },
+        ]);
+      });
+
+      it("skips an indirection wrapper's option values and duration when locating the inner command", async () => {
+        const program = await BashProgram.parse(
+          "timeout -k 5 570 nix eval .#x --json",
+          normalizer,
+        );
+        expect(program.commands()).toEqual([
+          {
+            text: "timeout -k 5 570 nix eval .#x --json",
+            wrapperKind: "indirection",
+          },
+          { text: "nix eval .#x --json", context: "wrapper_indirection" },
+        ]);
+      });
+
+      it("flags an indirection wrapper with no inner command as unresolved", async () => {
+        const program = await BashProgram.parse("sudo", normalizer);
+        expect(program.commands()).toEqual([
+          { text: "sudo", wrapperKind: "indirection", payloadUnresolved: true },
         ]);
       });
 
@@ -937,6 +979,7 @@ describe("BashProgram", () => {
         );
         expect(program.commands()).toEqual([
           { text: "sudo aws s3 ls", wrapperKind: "indirection" },
+          { text: "aws s3 ls", context: "wrapper_indirection" },
         ]);
       });
 
@@ -949,21 +992,21 @@ describe("BashProgram", () => {
         expect(program.commands()).toEqual([{ text: command }]);
       });
     });
-
     describe("exec-conditional wrappers (find/fd)", () => {
       it.each([
-        "find . -exec rm {} \\;",
-        "find . -execdir rm {} \\;",
-        "find . -ok rm {} \\;",
-        "find . -okdir rm {} \\;",
-        "fd -x rm",
-        "fd --exec rm",
-        "fd -X rm",
-        "fd --exec-batch rm",
-      ])("flags %s as an indirection wrapper", async (command) => {
+        ["find . -exec rm {} \\;", "rm {} \\;"],
+        ["find . -execdir rm {} \\;", "rm {} \\;"],
+        ["find . -ok rm {} \\;", "rm {} \\;"],
+        ["find . -okdir rm {} \\;", "rm {} \\;"],
+        ["fd -x rm", "rm"],
+        ["fd --exec rm", "rm"],
+        ["fd -X rm", "rm"],
+        ["fd --exec-batch rm", "rm"],
+      ])("flags %s as an indirection wrapper and emits the exec'd command", async (command, inner) => {
         const program = await BashProgram.parse(command, normalizer);
         expect(program.commands()).toEqual([
           { text: command, wrapperKind: "indirection" },
+          { text: inner, context: "wrapper_indirection" },
         ]);
       });
 

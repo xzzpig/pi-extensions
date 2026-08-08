@@ -2,6 +2,7 @@ import type {
   BashCommand,
   WrapperKind,
 } from "#src/access-intent/bash/command-enumeration";
+import type { WrapperFloors } from "#src/types";
 import { pickMostRestrictive } from "#src/handlers/gates/candidate-check";
 import type { ScopedPermissionResolver } from "#src/permission-resolver";
 import type { PermissionCheckResult } from "#src/types";
@@ -55,6 +56,7 @@ export function resolveBashCommandCheck(
   commands: BashCommand[],
   agentName: string | undefined,
   resolver: ScopedPermissionResolver,
+  options?: { wrapperFloors?: WrapperFloors },
 ): PermissionCheckResult {
   if (commands.length === 0) {
     if (isTriviallyEmptyCommand(command)) {
@@ -82,8 +84,17 @@ export function resolveBashCommandCheck(
       input: { command: cmd.text },
       agentName,
     });
+    // Fork: wrapper flooring is configurable. In `fallback` mode (default), a
+    // wrapper unit is floored only when its inner commands could not be
+    // resolved (`payloadUnresolved`); resolved inner commands are gated as
+    // their own units, so the wrapper itself does not prompt. In `always`
+    // mode, the upstream v24 behavior is preserved: every wrapper `allow` is
+    // clamped to `ask`.
+    const shouldFloor =
+      cmd.wrapperKind !== undefined &&
+      (cmd.payloadUnresolved === true || options?.wrapperFloors === "always");
     const result =
-      cmd.wrapperKind && base.state === "allow"
+      shouldFloor && base.state === "allow"
         ? {
             ...base,
             state: "ask" as const,

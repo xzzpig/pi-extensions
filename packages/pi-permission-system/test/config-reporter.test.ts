@@ -113,6 +113,7 @@ test("config.resolved entry appears in review log via logger", () => {
         debugLog: false,
         permissionReviewLog: true,
         yoloMode: false,
+        wrapperFloors: "fallback",
         doublePressToConfirm: true,
       }),
       debugLogPath,

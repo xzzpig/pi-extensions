@@ -41,6 +41,9 @@ commits, or pushes.
 - Keep repository-specific metadata outside imported subtree prefixes.
 - Do not commit credentials, generated environment state, or fake upstream
   records. Never silently overwrite an existing `upstream-*` remote.
+- Never run `git commit` or `git push` unless the user explicitly asks for it.
+  Leave changes staged/unstaged in the working tree and report what to review;
+  history rewrites and remote pushes require an explicit, per-operation request.
 
 ## Verification
 
@@ -49,9 +52,14 @@ Run all commands from the repository root inside the direnv/Nix environment:
 ```bash
 direnv allow
 pnpm install --frozen-lockfile
-pnpm -r run typecheck
+pnpm --filter pi-permission-system run typecheck
+pnpm --filter pi-permission-system test
 pnpm exec prettier --check .
 ```
+
+The subtree (`packages/pi-permission-system`) is excluded from the prettier
+check via `.prettierignore` because its upstream code is formatted with biome,
+not prettier.
 
 `direnv reload` re-runs the metadata schema and ref validation and exports the
 `PI_UPSTREAM_*` environment; address any failure it reports before committing.

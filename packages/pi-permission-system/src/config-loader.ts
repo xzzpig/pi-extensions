@@ -219,6 +219,14 @@ export function mergeUnifiedConfigs(
     }
   }
 
+  // Enum scalars: override replaces base when defined
+  for (const key of ["wrapperFloors"] as const) {
+    const value = override[key] ?? base[key];
+    if (value !== undefined) {
+      merged[key] = value;
+    }
+  }
+
   // Number scalars: override replaces base when defined
   for (const key of [
     "toolInputPreviewMaxLength",

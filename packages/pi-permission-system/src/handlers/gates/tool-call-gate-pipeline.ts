@@ -17,6 +17,7 @@ import {
 } from "#src/tool-preview-formatter";
 import type { PermissionCheckResult } from "#src/types";
 import { resolveBashCommandCheck } from "./bash-command";
+import type { WrapperFloors } from "#src/types";
 import { describeBashExternalDirectoryGate } from "./bash-external-directory";
 import { describeBashPathGate } from "./bash-path";
 import type { GateResult } from "./descriptor";
@@ -52,6 +53,8 @@ export interface ToolCallGateInputs {
    * tool is gated through the bash stack at parity with native `bash` (#574).
    */
   getShellToolAliases(): ShellToolsConfig | undefined;
+  /** The configured wrapper-floor mode (`"fallback"` or `"always"`). */
+  getWrapperFloors(): WrapperFloors;
 }
 
 /**
@@ -174,6 +177,7 @@ export class ToolCallGatePipeline {
             bashProgram.commands(),
             tcc.agentName ?? undefined,
             this.resolver,
+            { wrapperFloors: this.inputs.getWrapperFloors() },
           ),
         };
       }

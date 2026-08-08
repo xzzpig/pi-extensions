@@ -4,6 +4,7 @@
 import { vi } from "vitest";
 import type { AskEscalator } from "#src/authority/authorizer-selection";
 import type { ShellToolsConfig } from "#src/config-schema";
+import type { WrapperFloors } from "#src/types";
 import type { DecisionReporter } from "#src/decision-reporter";
 import type { DenialContext } from "#src/denial-messages";
 import type { GateDescriptor } from "#src/handlers/gates/descriptor";
@@ -253,6 +254,7 @@ export function makeGateInputs(
     getToolPreviewLimits?: () => ToolPreviewFormatterOptions;
     getPathNormalizer?: () => PathNormalizer;
     getShellToolAliases?: () => ShellToolsConfig | undefined;
+    getWrapperFloors?: () => WrapperFloors;
   } = {},
 ): ToolCallGateInputs {
   return {
@@ -280,6 +282,9 @@ export function makeGateInputs(
     getShellToolAliases:
       overrides.getShellToolAliases ??
       vi.fn<() => ShellToolsConfig | undefined>(() => undefined),
+    getWrapperFloors:
+      overrides.getWrapperFloors ??
+      vi.fn<() => WrapperFloors>(() => "fallback"),
   };
 }
 

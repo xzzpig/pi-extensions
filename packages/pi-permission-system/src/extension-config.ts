@@ -5,6 +5,7 @@ import type {
   ShellToolsConfig,
   UnifiedPermissionConfig,
 } from "./config-loader";
+import type { WrapperFloors } from "./types";
 import {
   OWNER_ONLY_DIRECTORY_MODE,
   restrictExistingPathToOwner,
@@ -16,6 +17,13 @@ export interface PermissionSystemExtensionConfig {
   debugLog: boolean;
   permissionReviewLog: boolean;
   yoloMode: boolean;
+  /**
+   * Wrapper-floor mode for bash wrapper commands (`eval`/`bash -c`/`env`/
+   * `xargs`/`sudo`/`timeout`/…): `"fallback"` gates the wrapper's inner
+   * commands as their own units and floors only unresolvable content
+   * (default); `"always"` preserves the upstream v24 blanket floor.
+   */
+  wrapperFloors: WrapperFloors;
   /** Require a confirming second press of a decision hotkey in the inline TUI dialog. Defaults to true. */
   doublePressToConfirm: boolean;
   /** Additional directories to auto-allow for reads as Pi infrastructure. */
@@ -34,6 +42,7 @@ export const DEFAULT_EXTENSION_CONFIG: PermissionSystemExtensionConfig = {
   debugLog: false,
   permissionReviewLog: true,
   yoloMode: false,
+  wrapperFloors: "fallback",
   doublePressToConfirm: true,
 };
 
@@ -66,6 +75,7 @@ export function normalizePermissionSystemConfig(
     debugLog: raw.debugLog === true,
     permissionReviewLog: raw.permissionReviewLog !== false,
     yoloMode: raw.yoloMode === true,
+    wrapperFloors: raw.wrapperFloors === "always" ? "always" : "fallback",
     doublePressToConfirm: raw.doublePressToConfirm !== false,
   };
   if (raw.piInfrastructureReadPaths !== undefined) {

@@ -116,6 +116,7 @@ describe("service round-trip through the global slot", () => {
         {
           getPathNormalizer: () =>
             new PathNormalizer(posixPathFlavor, "/test/project"),
+          getWrapperFloors: () => "fallback",
         },
         new ToolInputFormatterRegistry(),
         new ToolAccessExtractorRegistry(),

@@ -1,8 +1,8 @@
 import type {
-  DenyWithReason,
-  FlatPermissionConfig,
-  PatternValue,
-  PermissionState,
+	DenyWithReason,
+	FlatPermissionConfig,
+	PatternValue,
+	PermissionState,
 } from "./config-schema";
 import type { RuleOrigin } from "./rule";
 
@@ -10,11 +10,11 @@ import type { RuleOrigin } from "./rule";
 // (config-schema.ts) — the single source of truth — and re-exported here so
 // existing importers keep their import path.
 export type {
-  DenyWithReason,
-  FlatPermissionConfig,
-  PatternValue,
-  PermissionState,
-  RuleOrigin,
+	DenyWithReason,
+	FlatPermissionConfig,
+	PatternValue,
+	PermissionState,
+	RuleOrigin,
 };
 
 /**
@@ -22,46 +22,59 @@ export type {
  * Holds only the flat permission map — all policy is expressed there.
  */
 export interface ScopeConfig {
-  permission?: FlatPermissionConfig;
-  /**
-   * True when the scope's config file was present but failed to load or
-   * validate (JSON parse error or schema rejection). Absent and valid files
-   * leave this unset. Drives the fail-closed allow→ask clamp for non-global
-   * scopes (#646).
-   */
-  invalid?: boolean;
+	permission?: FlatPermissionConfig;
+	/**
+	 * True when the scope's config file was present but failed to load or
+	 * validate (JSON parse error or schema rejection). Absent and valid files
+	 * leave this unset. Drives the fail-closed allow→ask clamp for non-global
+	 * scopes (#646).
+	 */
+	invalid?: boolean;
 }
 
 /**
- * Execution context of a bash command nested inside a substitution or subshell.
- * Absent for current-shell (top-level) commands.
+ * Execution context of a bash command nested inside a substitution, subshell,
+ * or wrapper. Absent for current-shell (top-level) commands.
  */
 export type BashCommandContext =
-  | "command_substitution"
-  | "process_substitution"
-  | "subshell";
+	| "command_substitution"
+	| "process_substitution"
+	| "subshell"
+	| "wrapper_payload"
+	| "wrapper_indirection";
+
+/**
+ * How wrapper commands (`eval`/`bash -c`/`sudo`/`env`/`xargs`/`timeout`/…)
+ * are gated:
+ * - `"fallback"` (default): the wrapper's inner commands are gated as their
+ *   own units; the wrapper unit itself is floored to `ask` only when its
+ *   inner content could not be statically resolved (fail-closed).
+ * - `"always"`: every wrapper unit's `allow` is floored to `ask`, preserving
+ *   the upstream v24 behavior.
+ */
+export type WrapperFloors = "fallback" | "always";
 
 export interface PermissionCheckResult {
-  toolName: string;
-  state: PermissionState;
-  /** Custom denial reason from a deny-with-reason pattern, when present. */
-  reason?: string;
-  matchedPattern?: string;
-  command?: string;
-  target?: string;
-  source: "tool" | "bash" | "mcp" | "skill" | "special" | "default" | "session";
-  /** Which source contributed the winning rule. */
-  origin: RuleOrigin;
-  /**
-   * Execution context of the offending nested command, when the winning bash
-   * unit came from a substitution or subshell. Absent for current-shell
-   * (top-level) commands.
-   */
-  commandContext?: BashCommandContext;
+	toolName: string;
+	state: PermissionState;
+	/** Custom denial reason from a deny-with-reason pattern, when present. */
+	reason?: string;
+	matchedPattern?: string;
+	command?: string;
+	target?: string;
+	source: "tool" | "bash" | "mcp" | "skill" | "special" | "default" | "session";
+	/** Which source contributed the winning rule. */
+	origin: RuleOrigin;
+	/**
+	 * Execution context of the offending nested command, when the winning bash
+	 * unit came from a substitution or subshell. Absent for current-shell
+	 * (top-level) commands.
+	 */
+	commandContext?: BashCommandContext;
 }
 
 export function isPermissionState(value: unknown): value is PermissionState {
-  return value === "allow" || value === "deny" || value === "ask";
+	return value === "allow" || value === "deny" || value === "ask";
 }
 
 /**
@@ -70,12 +83,12 @@ export function isPermissionState(value: unknown): value is PermissionState {
  * Rejects a non-string `reason` to keep malformed config out of the rule set.
  */
 export function isDenyWithReason(value: unknown): value is DenyWithReason {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return false;
-  }
-  const record = value as Record<string, unknown>;
-  return (
-    record.action === "deny" &&
-    (record.reason === undefined || typeof record.reason === "string")
-  );
+	if (typeof value !== "object" || value === null || Array.isArray(value)) {
+		return false;
+	}
+	const record = value as Record<string, unknown>;
+	return (
+		record.action === "deny" &&
+		(record.reason === undefined || typeof record.reason === "string")
+	);
 }

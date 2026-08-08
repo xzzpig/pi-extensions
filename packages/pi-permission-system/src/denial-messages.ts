@@ -161,6 +161,10 @@ export function describeBashCommandContext(
       return "process substitution";
     case "subshell":
       return "subshell";
+    case "wrapper_payload":
+      return "an opaque wrapper payload (eval/bash -c)";
+    case "wrapper_indirection":
+      return "an indirection wrapper (env/xargs/…)";
     default:
       return undefined;
   }

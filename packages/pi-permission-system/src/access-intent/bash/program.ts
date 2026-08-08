@@ -6,8 +6,9 @@ import {
 import {
   type BashCommand,
   collectCommands,
+  type ParseProgram,
 } from "#src/access-intent/bash/command-enumeration";
-import { getParser } from "#src/access-intent/bash/parser";
+import { getParser, type TSNode } from "#src/access-intent/bash/parser";
 import type { PathNormalizer } from "#src/path-normalizer";
 
 export type { BashCommand, BashPathRuleCandidate };
@@ -59,13 +60,15 @@ export class BashProgram {
     if (!tree) return new BashProgram(command, [], [], []);
 
     try {
+      const parseProgram: ParseProgram = (source) =>
+        parseCommandUnits(source, parser, parseProgram);
       const { externalPaths, ruleCandidates } = new BashPathResolver(
         normalizer,
         options?.workdir,
       ).resolve(tree.rootNode);
       return new BashProgram(
         command,
-        collectCommands(tree.rootNode),
+        collectCommands(tree.rootNode, { parseProgram }),
         externalPaths,
         ruleCandidates,
       );
@@ -130,5 +133,31 @@ export class BashProgram {
    */
   pathRuleCandidates(): BashPathRuleCandidate[] {
     return [...this.resolvedRuleCandidates];
+  }
+}
+
+/**
+ * Parse a bash source string (an opaque wrapper payload) into command units,
+ * sharing the caller's parser instance and recursing on nested payloads.
+ *
+ * The parser is stateless (`parse` is a pure function of its input), so
+ * re-entrant use from inside the enumeration walk is safe: the walk is
+ * synchronous and the inner parse fully completes before the walk continues.
+ * An unparseable payload contributes no units (the wrapper is then flagged
+ * `payloadUnresolved` by the enumerator).
+ */
+function parseCommandUnits(
+  source: string,
+  parser: {
+    parse(input: string): { rootNode: TSNode; delete(): void } | null;
+  },
+  parseProgram: ParseProgram,
+): BashCommand[] {
+  const tree = parser.parse(source);
+  if (!tree) return [];
+  try {
+    return collectCommands(tree.rootNode, { parseProgram });
+  } finally {
+    tree.delete();
   }
 }
