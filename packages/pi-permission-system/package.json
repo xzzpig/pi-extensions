@@ -1,8 +1,7 @@
 {
-  "name": "pi-permission-system",
-  "version": "24.0.0",
+  "name": "@xzzpig/pi-permission-system",
+  "version": "0.1.0",
   "description": "Permission enforcement extension for the Pi coding agent. Fork of @gotgenes/pi-permission-system with configurable wrapper-floor behavior.",
-  "description": "Permission enforcement extension for the Pi coding agent.",
   "type": "module",
   "exports": {
     ".": {
@@ -30,6 +29,8 @@
   "scripts": {
     "check": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
+    "build:types": "rollup -c rollup.dts.config.mjs",
+    "prepack": "pnpm run build:types",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -74,6 +75,8 @@
     "@earendil-works/pi-coding-agent": "catalog:",
     "@earendil-works/pi-tui": "catalog:",
     "@types/node": "catalog:",
+    "rollup": "^4.62.2",
+    "rollup-plugin-dts": "^6.4.1",
     "typescript": "catalog:",
     "vitest": "catalog:"
   },
