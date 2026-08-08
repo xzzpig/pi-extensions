@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/pi-extensions/subtree-metadata.schema.json",
+  "title": "pi extension subtree metadata",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "$schema",
+    "name",
+    "prefix",
+    "source",
+    "remote",
+    "ref",
+    "upstreamCommit",
+    "squash",
+    "lastSyncedAt"
+  ],
+  "properties": {
+    "$schema": { "type": "string" },
+    "name": {
+      "type": "string",
+      "pattern": "^pi-[a-z0-9][a-z0-9-]*$"
+    },
+    "prefix": {
+      "type": "string",
+      "pattern": "^packages/pi-[a-z0-9][a-z0-9-]*$"
+    },
+    "source": {
+      "type": "string",
+      "minLength": 1
+    },
+    "remote": {
+      "type": "string",
+      "pattern": "^upstream-pi-[a-z0-9][a-z0-9-]*$"
+    },
+    "ref": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "type": ["string", "null"]
+    },
+    "upstreamCommit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "squash": { "const": true },
+    "lastSyncedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "notes": { "type": "string" }
+  }
+}

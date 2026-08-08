@@ -1,0 +1,13 @@
+{
+  "$schema": "../schemas/subtree-metadata.schema.json",
+  "name": "pi-upstream-plugin",
+  "prefix": "packages/pi-upstream-plugin",
+  "source": "https://github.com/example/pi-upstream-plugin.git",
+  "remote": "upstream-pi-upstream-plugin",
+  "ref": "main",
+  "version": null,
+  "upstreamCommit": "0000000000000000000000000000000000000000",
+  "squash": true,
+  "lastSyncedAt": "1970-01-01T00:00:00.000Z",
+  "notes": "Template only; copy this file after running subtree:add."
+}

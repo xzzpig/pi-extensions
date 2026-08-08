@@ -1,0 +1,14 @@
+node_modules/
+.pnpm-store/
+.direnv/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+
+# pi goal state is session metadata, not project configuration.
+.pi/goals/
+.pi/goal_events.jsonl
