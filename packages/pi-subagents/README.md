@@ -11,7 +11,7 @@
 ## Install
 
 ```bash
-pi install npm:pi-subagents
+pi install npm:@xzzpig/pi-subagents
 ```
 
 That is the only required step.
