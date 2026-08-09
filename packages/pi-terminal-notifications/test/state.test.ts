@@ -8,7 +8,7 @@ function createState() {
 }
 
 describe("interaction state", () => {
-  it("does not clear Herdr while another interaction remains active", () => {
+  it("emits one balanced Herdr lifecycle across overlapping interactions", () => {
     const { emit, state } = createState();
 
     expect(state.startAsk("ask-1", "Question")).toBe(true);
@@ -17,14 +17,16 @@ describe("interaction state", () => {
     );
     expect(state.completeAsk("ask-1")).toBe(true);
     expect(state.activeCount()).toBe(1);
-    expect(emit).toHaveBeenLastCalledWith("herdr:blocked", {
+    expect(emit).toHaveBeenCalledExactlyOnceWith("herdr:blocked", {
       active: true,
-      label: "Permission required",
+      label: "Question",
     });
 
     expect(state.resolvePermission("permission-1")).toBe(true);
     expect(state.activeCount()).toBe(0);
-    expect(emit).toHaveBeenLastCalledWith("herdr:blocked", { active: false });
+    expect(emit).toHaveBeenNthCalledWith(2, "herdr:blocked", {
+      active: false,
+    });
   });
 
   it("ignores duplicate lifecycle events and emits one shutdown clear", () => {

@@ -30,6 +30,10 @@ export function createInteractionState(events: EventBus): InteractionState {
   };
 
   const emitBlocked = (label: string): void => {
+    if (blocked) {
+      return;
+    }
+
     blocked = true;
     emit(HERDR_BLOCKED_EVENT, { active: true, label });
   };

@@ -136,11 +136,21 @@ export function createPermissionPromptTracker(
         return false;
       }
 
-      const entry = pending.find(
+      const directCandidates = pending.filter(
         (candidate) =>
           !candidate.prompt.forwarding &&
-          promptMatchesDecision(candidate.prompt, decision),
+          promptAgentMatchesDecision(candidate.prompt, decision),
       );
+      const entry =
+        directCandidates.find((candidate) =>
+          promptMatchesDecision(candidate.prompt, decision),
+        ) ??
+        // PermissionDecisionEvent intentionally has no requestId. Some direct
+        // gates publish a display projection for ui_prompt and a distinct
+        // decision projection at completion. With one compatible pending
+        // prompt the association is unambiguous; otherwise retain strict
+        // projection matching rather than guessing between requests.
+        (directCandidates.length === 1 ? directCandidates[0] : undefined);
       if (!entry) {
         return false;
       }
@@ -189,8 +199,15 @@ function promptMatchesDecision(
   return (
     optionalFieldMatches(prompt.surface, decision.surface) &&
     optionalFieldMatches(prompt.value, decision.value) &&
-    optionalFieldMatches(prompt.agentName, decision.agentName)
+    promptAgentMatchesDecision(prompt, decision)
   );
+}
+
+function promptAgentMatchesDecision(
+  prompt: PermissionPrompt,
+  decision: PermissionDecision,
+): boolean {
+  return optionalFieldMatches(prompt.agentName, decision.agentName);
 }
 
 function optionalFieldMatches(

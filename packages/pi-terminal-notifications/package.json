@@ -1,6 +1,6 @@
 {
   "name": "@xzzpig/pi-terminal-notifications",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Desktop notifications and Herdr blocked-state integration for Pi ask flows.",
   "license": "MIT",
   "repository": {

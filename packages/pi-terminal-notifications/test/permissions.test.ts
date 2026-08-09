@@ -77,6 +77,77 @@ describe("permission prompt tracking", () => {
     expect(onResolved).toHaveBeenCalledWith("request-bash");
   });
 
+  it("resolves a sole direct prompt when display and decision projections differ", () => {
+    const onResolved = vi.fn();
+    const tracker = createPermissionPromptTracker({ onResolved });
+    const command = "find ~/.pi -name package.json";
+    tracker.track({
+      agentName: "Worker",
+      requestId: "external-directory-request",
+      surface: "bash",
+      value: command,
+    });
+
+    expect(
+      tracker.resolveDecision(
+        decision({
+          resolution: "user_approved_for_session",
+          surface: "external_directory",
+          value: command,
+        })!,
+      ),
+    ).toBe(true);
+    expect(onResolved).toHaveBeenCalledWith("external-directory-request");
+  });
+
+  it("does not use projection fallback when multiple direct prompts remain", () => {
+    const onResolved = vi.fn();
+    const tracker = createPermissionPromptTracker({ onResolved });
+    tracker.track({
+      agentName: "Worker",
+      requestId: "first-request",
+      surface: "bash",
+      value: "first command",
+    });
+    tracker.track({
+      agentName: "Worker",
+      requestId: "second-request",
+      surface: "bash",
+      value: "second command",
+    });
+
+    expect(
+      tracker.resolveDecision(
+        decision({
+          surface: "external_directory",
+          value: "unmatched command",
+        })!,
+      ),
+    ).toBe(false);
+    expect(onResolved).not.toHaveBeenCalled();
+  });
+
+  it("does not use projection fallback for a different agent", () => {
+    const onResolved = vi.fn();
+    const tracker = createPermissionPromptTracker({ onResolved });
+    tracker.track({
+      agentName: "Other worker",
+      requestId: "other-agent-request",
+      surface: "bash",
+      value: "command",
+    });
+
+    expect(
+      tracker.resolveDecision(
+        decision({
+          surface: "external_directory",
+          value: "command",
+        })!,
+      ),
+    ).toBe(false);
+    expect(onResolved).not.toHaveBeenCalled();
+  });
+
   it("resolves same-projection direct prompts in order when agentName is omitted", () => {
     const onResolved = vi.fn();
     const tracker = createPermissionPromptTracker({ onResolved });

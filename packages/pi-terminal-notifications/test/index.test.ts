@@ -132,6 +132,33 @@ describe("pi-terminal-notifications extension", () => {
     await runtime.shutdown();
   });
 
+  it("clears a direct external-directory ask with a different decision surface", async () => {
+    const runtime = createRuntime();
+    await runtime.start("parent-session");
+    const command = "find ~/.pi -name package.json";
+
+    runtime.dispatch("permissions:ui_prompt", {
+      agentName: "Worker",
+      forwarding: null,
+      message: "Allow external directory access?",
+      requestId: "external-directory-request",
+      surface: "bash",
+      value: command,
+    });
+    runtime.dispatch("permissions:decision", {
+      agentName: "Worker",
+      resolution: "user_approved_for_session",
+      surface: "external_directory",
+      value: command,
+    });
+
+    expect(blockedEvents(runtime)).toEqual([
+      { active: true, label: "Permission required" },
+      { active: false },
+    ]);
+    await runtime.shutdown();
+  });
+
   it("clears a forwarded child permission ask from the parent decision event", async () => {
     const runtime = createRuntime();
     await runtime.start("parent-session");
@@ -198,7 +225,6 @@ describe("pi-terminal-notifications extension", () => {
 
     expect(blockedEvents(runtime)).toEqual([
       { active: true, label: "Permission required" },
-      { active: true, label: "Permission required by Worker" },
     ]);
 
     runtime.dispatch("permissions:forwarded_decision", {
@@ -214,7 +240,6 @@ describe("pi-terminal-notifications extension", () => {
     });
     expect(blockedEvents(runtime)).toEqual([
       { active: true, label: "Permission required" },
-      { active: true, label: "Permission required by Worker" },
       { active: false },
     ]);
     await runtime.shutdown();
@@ -254,12 +279,10 @@ describe("pi-terminal-notifications extension", () => {
 
     expect(blockedEvents(runtime)).toEqual([
       { active: true, label: "Permission required by Worker" },
-      { active: true, label: "Permission required by Worker" },
     ]);
 
     runtime.dispatch("permissions:forwarded_decision", response("forwarded-b"));
     expect(blockedEvents(runtime)).toEqual([
-      { active: true, label: "Permission required by Worker" },
       { active: true, label: "Permission required by Worker" },
       { active: false },
     ]);
