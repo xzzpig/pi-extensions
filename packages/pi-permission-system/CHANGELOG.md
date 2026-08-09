@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-08-09
+
+### Added
+
+- `permissions:forwarded_decision`, emitted by the serving parent after it
+  persists a forwarded permission response. The public payload carries the
+  request ID, forwarding context, parent response outcome and resolution, and
+  responder session ID without changing `permissions:decision` semantics.
+
 ## [24.0.0](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v23.0.3...pi-permission-system-v24.0.0) (2026-07-26)
 
 

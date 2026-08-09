@@ -7,14 +7,17 @@ import { getGlobalConfigPath } from "#src/config-paths";
 import piPermissionSystemExtension from "#src/index";
 import type {
   PermissionDecisionEvent,
+  PermissionForwardedDecisionEvent,
   PermissionsReadyEvent,
   PermissionUiPromptEvent,
 } from "#src/permission-events";
 import {
   emitDecisionEvent,
+  emitForwardedDecisionEvent,
   emitReadyEvent,
   emitUiPromptEvent,
   PERMISSIONS_DECISION_CHANNEL,
+  PERMISSIONS_FORWARDED_DECISION_CHANNEL,
   PERMISSIONS_READY_CHANNEL,
   PERMISSIONS_UI_PROMPT_CHANNEL,
 } from "#src/permission-events";
@@ -35,6 +38,9 @@ describe("constants", () => {
     expect(PERMISSIONS_READY_CHANNEL).toBe("permissions:ready");
     expect(PERMISSIONS_UI_PROMPT_CHANNEL).toBe("permissions:ui_prompt");
     expect(PERMISSIONS_DECISION_CHANNEL).toBe("permissions:decision");
+    expect(PERMISSIONS_FORWARDED_DECISION_CHANNEL).toBe(
+      "permissions:forwarded_decision",
+    );
   });
 });
 
@@ -200,7 +206,59 @@ describe("emitDecisionEvent", () => {
   });
 });
 
-// ── piPermissionSystemExtension emits permissions:ready ────────────────────
+// ── emitForwardedDecisionEvent ────────────────────────────────────────────
+
+describe("emitForwardedDecisionEvent", () => {
+  function makeForwardedDecisionEvent(
+    overrides: Partial<PermissionForwardedDecisionEvent> = {},
+  ): PermissionForwardedDecisionEvent {
+    return {
+      requestId: "req-forwarded",
+      source: "tool_call",
+      surface: "bash",
+      value: "git push",
+      forwarding: {
+        requesterAgentName: "Worker",
+        requesterSessionId: "child-session",
+      },
+      responderSessionId: "parent-session",
+      result: "allow",
+      resolution: "user_approved",
+      respondedAt: 1_700_000_000_000,
+      ...overrides,
+    };
+  }
+
+  it("emits on the permissions:forwarded_decision channel", () => {
+    const bus = makeEventBus();
+    emitForwardedDecisionEvent(bus, makeForwardedDecisionEvent());
+    expect(bus.emit).toHaveBeenCalledOnce();
+    expect(bus.emit.mock.calls[0][0]).toBe("permissions:forwarded_decision");
+  });
+
+  it("forwards the correlated response payload unchanged", () => {
+    const bus = makeEventBus();
+    const event = makeForwardedDecisionEvent({
+      result: "deny",
+      resolution: "user_denied",
+    });
+    emitForwardedDecisionEvent(bus, event);
+    expect(bus.emit.mock.calls[0][1]).toEqual(event);
+  });
+
+  it("swallows event bus errors because response delivery is already complete", () => {
+    const bus = {
+      emit: vi.fn(() => {
+        throw new Error("listener failed");
+      }),
+      on: vi.fn().mockReturnValue(() => undefined),
+    };
+
+    expect(() =>
+      emitForwardedDecisionEvent(bus, makeForwardedDecisionEvent()),
+    ).not.toThrow();
+  });
+});
 
 describe("piPermissionSystemExtension ready event wiring", () => {
   let baseDir: string;

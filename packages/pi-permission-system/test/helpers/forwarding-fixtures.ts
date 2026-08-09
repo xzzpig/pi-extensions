@@ -10,8 +10,6 @@
  * role, ParentAuthorizer since #555) and test/authority/forwarded-request-server.test.ts
  * (the serving-down role) — both extracted from `PermissionForwarder` by Phase 8
  * Step 6 (#530).
- * The `{ emit, on }` events mock is not duplicated here — reuse `makeEvents`
- * from `#test/helpers/handler-fixtures`.
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -30,7 +28,7 @@ import {
   type SubagentSessionInfo,
   SubagentSessionRegistry,
 } from "#src/authority/subagent-registry";
-import { makeCheckResult } from "#test/helpers/handler-fixtures";
+import { makeCheckResult, makeEvents } from "#test/helpers/handler-fixtures";
 
 /** Handle over a temp forwarding directory; register `cleanup` in `afterEach`. */
 export interface ForwardingTempDir {
@@ -104,6 +102,7 @@ export function makeServerDeps(
   return {
     forwardingDir: "/tmp/forwarding",
     logger: { review: vi.fn(), debug: vi.fn() },
+    events: makeEvents(),
     policy: { resolve: vi.fn(() => makeCheckResult({ state: "ask" })) },
     escalator: {
       escalate: vi

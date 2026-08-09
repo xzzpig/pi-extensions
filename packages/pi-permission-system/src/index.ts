@@ -149,6 +149,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
   const requestServer = new ForwardedRequestServer({
     forwardingDir: paths.forwardingDir,
     logger,
+    events: pi.events,
     policy: servingPolicy,
     escalator: authorizerSelection,
     // Records a whole-session grant into the same SessionRules the resolver and

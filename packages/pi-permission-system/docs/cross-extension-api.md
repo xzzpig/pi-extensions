@@ -292,18 +292,19 @@ The extension also emits events on Pi's `pi.events` bus so other extensions can 
 ## Stability Guarantee
 
 Fields may be added to any payload, but existing fields will not be removed or renamed without a semver-major version bump.
-The broadcast contract is defined by the published TypeScript types plus package semver — broadcast payloads (`permissions:ready`, `permissions:ui_prompt`, `permissions:decision`) carry no `protocolVersion`.
+The broadcast contract is defined by the published TypeScript types plus package semver — broadcast payloads (`permissions:ready`, `permissions:ui_prompt`, `permissions:decision`, `permissions:forwarded_decision`) carry no `protocolVersion`.
 Consumers should read broadcast payloads defensively (field-presence checks) rather than version-gating — that is robust to any shape skew between independently-versioned sibling extensions.
 
-All three broadcasts are best-effort: a throwing listener cannot block permission handling, session startup, or gate resolution.
+All four broadcasts are best-effort: a throwing listener cannot block permission handling, session startup, or gate resolution.
 
 ## Channel Reference
 
-| Channel                 | Direction | When                              | Payload type              |
-| ----------------------- | --------- | --------------------------------- | ------------------------- |
-| `permissions:ready`     | Broadcast | At `session_start`, after publish | `PermissionsReadyEvent`   |
-| `permissions:ui_prompt` | Broadcast | Before active UI prompt           | `PermissionUiPromptEvent` |
-| `permissions:decision`  | Broadcast | After every gate resolution       | `PermissionDecisionEvent` |
+| Channel                         | Direction | When                                      | Payload type                       |
+| ------------------------------- | --------- | ----------------------------------------- | ---------------------------------- |
+| `permissions:ready`             | Broadcast | At `session_start`, after publish         | `PermissionsReadyEvent`            |
+| `permissions:ui_prompt`         | Broadcast | Before active UI prompt                   | `PermissionUiPromptEvent`          |
+| `permissions:decision`          | Broadcast | After every original gate resolution     | `PermissionDecisionEvent`           |
+| `permissions:forwarded_decision` | Broadcast | After parent response is durably written | `PermissionForwardedDecisionEvent` |
 
 ---
 
@@ -364,8 +365,10 @@ The stability guarantee is additive, so any can be reintroduced in a later minor
 
 ## Decision Broadcasts
 
-Every permission gate resolution emits a `permissions:decision` event, regardless of outcome.
-This is useful for dashboards, telemetry, or audit overlays.
+Every original permission gate resolution emits a `permissions:decision` event,
+regardless of outcome. It is emitted by the process that owns and completes the
+gate, not by the parent that merely answers a forwarded request. This is useful
+for dashboards, telemetry, or audit overlays.
 
 ```typescript
 pi.events.on("permissions:decision", (raw) => {
@@ -400,6 +403,69 @@ pi.events.on("permissions:decision", (raw) => {
 | `user_denied`                 | User denied via dialog                                               |
 | `auto_approved`               | Yolo mode — approved automatically without dialog                    |
 | `confirmation_unavailable`    | State was `ask` but no UI was available — blocked                    |
+
+---
+
+## Forwarded Decision Broadcasts
+
+The serving parent emits `permissions:forwarded_decision` after it has
+successfully persisted the response JSON for a forwarded permission request.
+The event is emitted once for a request ID during the serving session. A
+response-write failure emits no event. Policy `allow`/`deny` responses emit the
+event too, even though they do not produce a `permissions:ui_prompt`.
+
+This is a parent-side response acknowledgement, not a second original-gate
+resolution. The requesting child emits its own `permissions:decision` only
+after it reads the response and completes the original gate. Consumers that
+need to clear a parent UI prompt should correlate this event with the earlier
+`permissions:ui_prompt` by `requestId`, rather than treating it as a
+replacement for `permissions:decision`.
+
+```typescript
+import type {
+  PermissionForwardedDecisionEvent,
+} from "@xzzpig/pi-permission-system";
+
+pi.events.on("permissions:forwarded_decision", (raw) => {
+  const event = raw as Partial<PermissionForwardedDecisionEvent>;
+  if (typeof event.requestId !== "string" ||
+      (event.result !== "allow" && event.result !== "deny")) {
+    return;
+  }
+  clearPendingPrompt(event.requestId);
+});
+```
+
+### Payload Fields
+
+| Field                  | Type                               | Description                                                     |
+| ---------------------- | ---------------------------------- | --------------------------------------------------------------- |
+| `requestId`            | `string`                           | ID shared with the forwarded request and parent UI prompt       |
+| `source`               | `PermissionUiPromptSource`         | Original prompt source from the requesting child                |
+| `surface`              | `string \| null`                   | Original normalized display surface, when known                 |
+| `value`                | `string \| null`                   | Original normalized display value, when known                   |
+| `forwarding`           | `ForwardedPromptContext`           | Requesting child agent and session identity                      |
+| `responderSessionId`   | `string`                           | Parent session that persisted the response                       |
+| `result`               | `"allow" \| "deny"`              | Parent response outcome                                          |
+| `resolution`           | `PermissionForwardedDecisionResolution` | Parent-side policy, user, or availability resolution         |
+| `respondedAt`          | `number`                           | Millisecond timestamp persisted with the response                |
+
+### Resolution Values
+
+| Value                               | Meaning                                        |
+| ----------------------------------- | ---------------------------------------------- |
+| `policy_allow`                      | Parent policy allowed the forwarded request    |
+| `policy_deny`                       | Parent policy denied the forwarded request     |
+| `user_approved`                     | User approved once in the parent UI            |
+| `user_approved_for_session`         | User approved for the requesting child session |
+| `user_approved_for_serving_session` | User approved for the parent serving session   |
+| `user_denied`                       | User denied in the parent UI                   |
+| `auto_approved`                     | Parent authorizer automatically approved       |
+| `confirmation_unavailable`          | Parent could not obtain a usable approval      |
+
+`permissions:forwarded_decision` deliberately does not add a
+`permissions:decision` event in the parent process. This avoids duplicate gate
+telemetry and preserves the existing meaning of `permissions:decision`.
 
 ---
 

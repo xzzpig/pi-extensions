@@ -6,6 +6,11 @@
   "license": "MIT",
   "type": "module",
   "packageManager": "pnpm@11.13.1",
+  "pi": {
+    "extensions": [
+      "./packages/pi-terminal-notifications/extensions/index.ts"
+    ]
+  },
   "engines": {
     "node": ">=24.18.0 <25",
     "pnpm": ">=11.13.1 <12"

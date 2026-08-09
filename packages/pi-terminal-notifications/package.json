@@ -1,0 +1,47 @@
+{
+  "name": "@xzzpig/pi-terminal-notifications",
+  "version": "0.1.0",
+  "description": "Desktop notifications and Herdr blocked-state integration for Pi ask flows.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xzzpig/pi-extensions.git",
+    "directory": "packages/pi-terminal-notifications"
+  },
+  "homepage": "https://github.com/xzzpig/pi-extensions/tree/main/packages/pi-terminal-notifications#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "terminal",
+    "notifications",
+    "herdr"
+  ],
+  "files": [
+    "extensions",
+    "config",
+    "README.md",
+    "package.json"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/index.ts"
+    ]
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

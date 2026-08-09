@@ -5,6 +5,11 @@ import {
 } from "#src/authority/forwarder-context";
 import type { PermissionPromptDecision } from "#src/authority/permission-dialog";
 import {
+  emitForwardedDecisionEvent,
+  type PermissionEventBus,
+  type PermissionForwardedDecisionResolution,
+} from "#src/permission-events";
+import {
   type ForwardedAccessFacts,
   type ForwardedAccessIntent,
   type ForwardedPermissionRequest,
@@ -63,6 +68,8 @@ export interface ServingPolicy {
 export interface ForwardedRequestServerDeps {
   forwardingDir: string;
   logger: DebugReviewLogger;
+  /** Event bus used for persisted forwarded-request response broadcasts. */
+  events: PermissionEventBus;
   /** Recorded-authority resolution for a forwarded `ForwardedAccessIntent`. */
   policy: ServingPolicy;
   /** Escalation seam to the serving session's selected `Authorizer` on `ask`. */
@@ -74,6 +81,13 @@ export interface ForwardedRequestServerDeps {
   recorder: SessionApprovalRecorder;
   /** In-process subagent registry, read only by the one-hop canary. */
   registry?: SubagentSessionRegistry;
+  /** Injected only for deterministic response-write failure tests. */
+  writeResponse?: typeof writeJsonFileAtomic;
+}
+
+interface ResolvedForwardedDecision {
+  decision: PermissionPromptDecision;
+  resolution: PermissionForwardedDecisionResolution;
 }
 
 // ── Module-private helpers ────────────────────────────────────────────────
@@ -169,14 +183,19 @@ export class ForwardedRequestServer implements InboxProcessor {
   private readonly escalator: AskEscalator;
   private readonly recorder: SessionApprovalRecorder;
   private readonly registry: SubagentSessionRegistry | undefined;
+  private readonly events: PermissionEventBus;
+  private readonly writeResponse: typeof writeJsonFileAtomic;
+  private readonly emittedRequestIds = new Set<string>();
 
   constructor(deps: ForwardedRequestServerDeps) {
     this.forwardingDir = deps.forwardingDir;
     this.logger = deps.logger;
+    this.events = deps.events;
     this.policy = deps.policy;
     this.escalator = deps.escalator;
     this.recorder = deps.recorder;
     this.registry = deps.registry;
+    this.writeResponse = deps.writeResponse ?? writeJsonFileAtomic;
   }
 
   /** Drain and respond to this session's forwarded-permission inbox. */
@@ -264,7 +283,7 @@ export class ForwardedRequestServer implements InboxProcessor {
       requestPath,
     };
 
-    const decision = await this.resolveDecision(
+    const resolvedDecision = await this.resolveDecision(
       request,
       forwardedPermissionLogDetails,
     );
@@ -274,7 +293,12 @@ export class ForwardedRequestServer implements InboxProcessor {
       location,
       requestPath,
       currentSessionId,
-      this.applyGrantScope(request, decision, forwardedPermissionLogDetails),
+      this.applyGrantScope(
+        request,
+        resolvedDecision.decision,
+        forwardedPermissionLogDetails,
+      ),
+      resolvedDecision.resolution,
     );
   }
 
@@ -323,6 +347,7 @@ export class ForwardedRequestServer implements InboxProcessor {
     requestPath: string,
     currentSessionId: string,
     decision: PermissionPromptDecision,
+    resolution: PermissionForwardedDecisionResolution,
   ): void {
     const responsePath = join(location.responsesDir, `${request.id}.json`);
     this.logger.review(
@@ -340,14 +365,15 @@ export class ForwardedRequestServer implements InboxProcessor {
         denialReason: decision.denialReason ?? null,
       },
     );
+    const response: ForwardedPermissionResponse = {
+      approved: decision.approved,
+      state: decision.state,
+      denialReason: decision.denialReason,
+      responderSessionId: currentSessionId,
+      respondedAt: Date.now(),
+    };
     try {
-      writeJsonFileAtomic(this.logger, responsePath, {
-        approved: decision.approved,
-        state: decision.state,
-        denialReason: decision.denialReason,
-        responderSessionId: currentSessionId,
-        respondedAt: Date.now(),
-      } satisfies ForwardedPermissionResponse);
+      this.writeResponse(this.logger, responsePath, response);
     } catch (error) {
       logPermissionForwardingError(
         this.logger,
@@ -357,11 +383,44 @@ export class ForwardedRequestServer implements InboxProcessor {
       return;
     }
 
+    this.emitForwardedDecisionOnce(request, response, resolution);
+
     safeDeleteFile(
       this.logger,
       requestPath,
       `${location.label} forwarded permission request`,
     );
+  }
+
+  /**
+   * Broadcast the persisted parent response at most once per forwarded request.
+   */
+  private emitForwardedDecisionOnce(
+    request: ForwardedPermissionRequest,
+    response: ForwardedPermissionResponse,
+    resolution: PermissionForwardedDecisionResolution,
+  ): void {
+    if (this.emittedRequestIds.has(request.id)) {
+      return;
+    }
+
+    // Mark first so a synchronous event listener cannot re-enter inbox
+    // processing and emit a second event for the same forwarded request.
+    this.emittedRequestIds.add(request.id);
+    emitForwardedDecisionEvent(this.events, {
+      requestId: request.id,
+      source: request.source ?? "tool_call",
+      surface: request.surface ?? null,
+      value: request.value ?? null,
+      forwarding: {
+        requesterAgentName: request.requesterAgentName || null,
+        requesterSessionId: request.requesterSessionId || null,
+      },
+      responderSessionId: response.responderSessionId,
+      result: response.approved ? "allow" : "deny",
+      resolution,
+      respondedAt: response.respondedAt,
+    });
   }
 
   /**
@@ -376,30 +435,45 @@ export class ForwardedRequestServer implements InboxProcessor {
   private async resolveDecision(
     request: ForwardedPermissionRequest,
     logDetails: Record<string, unknown>,
-  ): Promise<PermissionPromptDecision> {
+  ): Promise<ResolvedForwardedDecision> {
     const state = request.accessIntent
       ? this.policy.resolve(request.accessIntent).state
       : "ask";
 
     if (state === "allow") {
       this.logger.review("forwarded_permission.auto_approved", logDetails);
-      return { approved: true, state: "approved" };
+      return {
+        decision: { approved: true, state: "approved" },
+        resolution: "policy_allow",
+      };
     }
     if (state === "deny") {
       this.logger.review("forwarded_permission.auto_denied", logDetails);
-      return { approved: false, state: "denied" };
+      return {
+        decision: { approved: false, state: "denied" },
+        resolution: "policy_deny",
+      };
     }
 
     this.logger.review("forwarded_permission.prompted", logDetails);
     try {
-      return await this.escalator.escalate(buildForwardedAskDetails(request));
+      const decision = await this.escalator.escalate(
+        buildForwardedAskDetails(request),
+      );
+      return {
+        decision,
+        resolution: resolutionForPromptDecision(decision),
+      };
     } catch (error) {
       logPermissionForwardingError(
         this.logger,
         `Failed to escalate forwarded permission request '${request.id}'`,
         error,
       );
-      return { approved: false, state: "denied" };
+      return {
+        decision: { approved: false, state: "denied" },
+        resolution: "confirmation_unavailable",
+      };
     }
   }
 
@@ -428,5 +502,28 @@ export class ForwardedRequestServer implements InboxProcessor {
           `serving session '${currentSessionId}' (multi-hop or misrouted).`,
       );
     }
+  }
+}
+
+function resolutionForPromptDecision(
+  decision: PermissionPromptDecision,
+): PermissionForwardedDecisionResolution {
+  if (decision.autoApproved) {
+    return "auto_approved";
+  }
+  if (decision.confirmationUnavailable) {
+    return "confirmation_unavailable";
+  }
+
+  switch (decision.state) {
+    case "approved":
+      return "user_approved";
+    case "approved_for_session":
+      return "user_approved_for_session";
+    case "approved_for_serving_session":
+      return "user_approved_for_serving_session";
+    case "denied":
+    case "denied_with_reason":
+      return "user_denied";
   }
 }

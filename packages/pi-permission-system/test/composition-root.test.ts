@@ -37,7 +37,10 @@ import { getSubagentSessionRegistry } from "#src/authority/subagent-registry";
 import { getGlobalConfigPath } from "#src/config-paths";
 import { DEFAULT_EXTENSION_CONFIG } from "#src/extension-config";
 import piPermissionSystemExtension from "#src/index";
-import { PERMISSIONS_READY_CHANNEL } from "#src/permission-events";
+import {
+  PERMISSIONS_FORWARDED_DECISION_CHANNEL,
+  PERMISSIONS_READY_CHANNEL,
+} from "#src/permission-events";
 import { getPermissionsService } from "#src/service";
 import { makeFakePi } from "#test/helpers/make-fake-pi";
 
@@ -200,9 +203,17 @@ async function approveForwardedRequest(
     }
     const requestFile = files[0];
     if (requestFile) {
-      const request = JSON.parse(
-        readFileSync(join(location.requestsDir, requestFile), "utf8"),
-      ) as ForwardedPermissionRequest;
+      let request: ForwardedPermissionRequest;
+      try {
+        request = JSON.parse(
+          readFileSync(join(location.requestsDir, requestFile), "utf8"),
+        ) as ForwardedPermissionRequest;
+      } catch (error) {
+        throw new Error(
+          `Forwarded permission request '${requestFile}' was not valid JSON.`,
+          { cause: error },
+        );
+      }
       mkdirSync(location.responsesDir, { recursive: true });
       writeFileSync(
         join(location.responsesDir, `${request.id}.json`),
@@ -951,6 +962,10 @@ describe("forwarded grant-scope selection round-trip", () => {
     const selectLog: string[][] = [];
 
     const parentBus = createEventBus();
+    const forwardedDecisions: unknown[] = [];
+    parentBus.on(PERMISSIONS_FORWARDED_DECISION_CHANNEL, (event) => {
+      forwardedDecisions.push(event);
+    });
     const parentPi = makeFakePi({ events: parentBus, toolNames: ["demo"] });
     piPermissionSystemExtension(parentPi as unknown as ExtensionAPI);
     const childPi = makeFakePi({
@@ -979,6 +994,13 @@ describe("forwarded grant-scope selection round-trip", () => {
       makeChildCtx(childCwd, childSessionId),
     )) as { block?: true };
     expect(firstResult.block).toBeUndefined();
+    expect(forwardedDecisions).toEqual([
+      expect.objectContaining({
+        responderSessionId: parentSessionId,
+        result: "allow",
+        resolution: "user_approved_for_serving_session",
+      }),
+    ]);
     // One serve = main dialog + scope dialog.
     expect(selectLog).toHaveLength(2);
 
@@ -990,6 +1012,18 @@ describe("forwarded grant-scope selection round-trip", () => {
       makeChildCtx(childCwd, childSessionId),
     )) as { block?: true };
     expect(secondResult.block).toBeUndefined();
+    expect(forwardedDecisions).toEqual([
+      expect.objectContaining({
+        responderSessionId: parentSessionId,
+        result: "allow",
+        resolution: "user_approved_for_serving_session",
+      }),
+      expect.objectContaining({
+        responderSessionId: parentSessionId,
+        result: "allow",
+        resolution: "policy_allow",
+      }),
+    ]);
     expect(selectLog).toHaveLength(2);
 
     // 3. The parent's own `demo` is session-approved by the same grant.

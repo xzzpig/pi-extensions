@@ -6,6 +6,7 @@ pnpm-lock.yaml
 flake.lock
 .pi/goals
 .pi/goal_events.jsonl
+.pi-subagents
 
 # Upstream-derived subtree formatted with biome, not prettier.
 packages/pi-permission-system

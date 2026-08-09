@@ -25,6 +25,13 @@ export const PERMISSIONS_UI_PROMPT_CHANNEL = "permissions:ui_prompt";
 /** Emitted after every permission gate resolution. */
 export const PERMISSIONS_DECISION_CHANNEL = "permissions:decision";
 
+/**
+ * Emitted by a UI-serving session after it successfully persists a response
+ * for a forwarded subagent permission request.
+ */
+export const PERMISSIONS_FORWARDED_DECISION_CHANNEL =
+  "permissions:forwarded_decision";
+
 // ── permissions:ready ──────────────────────────────────────────────────────
 
 /**
@@ -117,6 +124,55 @@ export interface PermissionDecisionEvent {
   matchedPattern: string | null;
 }
 
+// ── permissions:forwarded_decision ────────────────────────────────────────
+
+/**
+ * How the serving session reached a persisted forwarded-request response.
+ *
+ * This is deliberately distinct from {@link PermissionDecisionResolution}:
+ * `permissions:decision` describes the original gate's final outcome in the
+ * requester process, while this describes the serving session's response.
+ */
+export type PermissionForwardedDecisionResolution =
+  | "policy_allow"
+  | "policy_deny"
+  | "user_approved"
+  | "user_approved_for_session"
+  | "user_approved_for_serving_session"
+  | "user_denied"
+  | "auto_approved"
+  | "confirmation_unavailable";
+
+/**
+ * Payload emitted on `permissions:forwarded_decision` after a serving session
+ * durably writes its response for a forwarded permission request.
+ *
+ * This is not a second gate-resolution event. The requesting subagent emits
+ * its own `permissions:decision` after it reads the response and completes
+ * the original gate. Consumers that track the parent UI interaction should
+ * use this event's `requestId` to resolve the earlier `ui_prompt` event.
+ */
+export interface PermissionForwardedDecisionEvent {
+  /** Unique ID shared with the forwarded request and parent `ui_prompt`. */
+  requestId: string;
+  /** Original prompt source from the requesting subagent. */
+  source: PermissionUiPromptSource;
+  /** Normalized display surface from the requesting subagent, when known. */
+  surface: string | null;
+  /** Normalized display value from the requesting subagent, when known. */
+  value: string | null;
+  /** Requesting subagent identity, or null when a legacy request omitted it. */
+  forwarding: ForwardedPromptContext;
+  /** Session that durably wrote the forwarding response. */
+  responderSessionId: string;
+  /** Parent response outcome. */
+  result: "allow" | "deny";
+  /** Parent-side policy, user, or availability resolution. */
+  resolution: PermissionForwardedDecisionResolution;
+  /** Millisecond timestamp persisted with the response. */
+  respondedAt: number;
+}
+
 // ── Emit helpers ───────────────────────────────────────────────────────────
 
 /**
@@ -163,5 +219,23 @@ export function emitDecisionEvent(
   } catch {
     // Broadcasts are best-effort. A throwing listener must not block the
     // permission gate from resolving.
+  }
+}
+
+/**
+ * Emit a `permissions:forwarded_decision` broadcast.
+ *
+ * Call only after the forwarding response has been persisted. The event is
+ * observational, so listener failures must not affect the requester response.
+ */
+export function emitForwardedDecisionEvent(
+  events: PermissionEventBus,
+  event: PermissionForwardedDecisionEvent,
+): void {
+  try {
+    events.emit(PERMISSIONS_FORWARDED_DECISION_CHANNEL, event);
+  } catch {
+    // Forwarded-decision broadcasts are observational. A listener failure
+    // must not affect the response already written for the requester.
   }
 }

@@ -39,7 +39,7 @@ Permission enforcement extension for the [Pi](https://pi.mariozechner.at/) codin
 - **Guards external paths** — prompts before file tools or bash commands reach outside `cwd`
 - **Fails closed** — an internal gate error blocks the tool (with a `gate_error` review-log entry), and an unparseable bash command — or an indirection wrapper that hides the gated command (`bash -c`/`eval`, `sudo`, `env`, `xargs`, `find -exec`, …) — prompts (`ask`) rather than passing silently
 - **Forwards prompts from subagents** — `ask` policies work even in non-UI execution contexts
-- **Broadcasts UI prompt events** — `permissions:ui_prompt` fires only when the permission system is about to invoke the active user-facing permission UI
+- **Broadcasts permission lifecycle events** — `permissions:ui_prompt` announces an imminent parent UI prompt, `permissions:decision` reports an original gate result, and `permissions:forwarded_decision` confirms a parent response persisted for a forwarded request
 - **Native [`@gotgenes/pi-subagents`](https://github.com/gotgenes/pi-subagents) integration** — in-process child sessions register with the permission system automatically, enabling per-agent policy enforcement and `ask`-state forwarding to the parent UI without configuration
 
 ## Install
@@ -160,7 +160,7 @@ If you relied on the old permissive behavior for bash, set an explicit permissiv
 | ------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
 | [docs/configuration.md](docs/configuration.md)                                                                                 | Full policy reference, runtime knobs, per-agent overrides, recipes                            |
 | [docs/session-approvals.md](docs/session-approvals.md)                                                                         | Session-scoped rules, pattern suggestions, bash arity table                                   |
-| [docs/cross-extension-api.md](docs/cross-extension-api.md)                                                                     | Cross-extension service accessor, event bus integration, prompt and decision broadcasts       |
+| [docs/cross-extension-api.md](docs/cross-extension-api.md)                                                                     | Cross-extension service accessor and permission lifecycle event broadcasts              |
 | [docs/subagent-integration.md](docs/subagent-integration.md)                                                                   | Permission forwarding, coexistence with subagent extensions                                   |
 | [docs/guides/permission-frontmatter-for-subagent-extensions.md](docs/guides/permission-frontmatter-for-subagent-extensions.md) | Convention guide for subagent extension authors                                               |
 | [docs/opencode-compatibility.md](docs/opencode-compatibility.md)                                                               | OpenCode compatibility — shared concepts, divergences, porting guide                          |

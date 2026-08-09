@@ -17,8 +17,8 @@ import type { ToolInputFormatter } from "./tool-input-formatter-registry";
 import type { PermissionCheckResult, PermissionState } from "./types";
 
 export type {
-  Authorizer,
-  AuthorizerVerdict,
+	Authorizer,
+	AuthorizerVerdict,
 } from "./authority/authorizer";
 
 /**
@@ -33,21 +33,24 @@ export type {
  * as the gate decisions, keying to a gate entry by `requestId`.
  */
 export interface AuthorizerLog {
-  review(event: string, details?: Record<string, unknown>): void;
-  debug(event: string, details?: Record<string, unknown>): void;
+	review(event: string, details?: Record<string, unknown>): void;
+	debug(event: string, details?: Record<string, unknown>): void;
 }
 export type { PromptPermissionDetails } from "./authority/permission-prompter";
 export type {
-  ForwardedPromptContext,
-  PermissionDecisionEvent,
-  PermissionsReadyEvent,
-  PermissionUiPromptEvent,
-  PermissionUiPromptSource,
+	ForwardedPromptContext,
+	PermissionDecisionEvent,
+	PermissionForwardedDecisionEvent,
+	PermissionForwardedDecisionResolution,
+	PermissionsReadyEvent,
+	PermissionUiPromptEvent,
+	PermissionUiPromptSource,
 } from "./permission-events";
 export {
-  PERMISSIONS_DECISION_CHANNEL,
-  PERMISSIONS_READY_CHANNEL,
-  PERMISSIONS_UI_PROMPT_CHANNEL,
+	PERMISSIONS_DECISION_CHANNEL,
+	PERMISSIONS_FORWARDED_DECISION_CHANNEL,
+	PERMISSIONS_READY_CHANNEL,
+	PERMISSIONS_UI_PROMPT_CHANNEL,
 } from "./permission-events";
 export type { PermissionCheckResult, PermissionState, ToolInputFormatter };
 
@@ -61,35 +64,35 @@ const SERVICE_KEY = Symbol.for("@gotgenes/pi-permission-system:service");
  * registration surface.
  */
 export interface PermissionQuery {
-  /**
-   * Query the permission policy for a surface and value.
-   *
-   * @param surface   - Permission surface: "bash", "read", "mcp", "skill",
-   *                    "external_directory", etc.
-   * @param value     - The value to evaluate: command string, tool name, skill
-   *                    name, or path. Omit or pass `undefined` for a
-   *                    surface-level query.
-   * @param agentName - Optional agent name for per-agent policy resolution.
-   * @returns Full check result including state, matched pattern, and origin.
-   */
-  checkPermission(
-    surface: string,
-    value?: string,
-    agentName?: string,
-  ): PermissionCheckResult;
+	/**
+	 * Query the permission policy for a surface and value.
+	 *
+	 * @param surface   - Permission surface: "bash", "read", "mcp", "skill",
+	 *                    "external_directory", etc.
+	 * @param value     - The value to evaluate: command string, tool name, skill
+	 *                    name, or path. Omit or pass `undefined` for a
+	 *                    surface-level query.
+	 * @param agentName - Optional agent name for per-agent policy resolution.
+	 * @returns Full check result including state, matched pattern, and origin.
+	 */
+	checkPermission(
+		surface: string,
+		value?: string,
+		agentName?: string,
+	): PermissionCheckResult;
 
-  /**
-   * Query the tool-level permission state for pre-filtering tools before
-   * creating a child session.
-   *
-   * Returns `"deny"` | `"allow"` | `"ask"` based on the composed policy.
-   * Does not consider command-level rules (e.g. per-bash-command patterns) —
-   * use `checkPermission` for runtime invocation gates.
-   *
-   * @param toolName  - Tool name (e.g. `"bash"`, `"read"`, `"my-extension:tool"`).
-   * @param agentName - Optional agent name for per-agent policy resolution.
-   */
-  getToolPermission(toolName: string, agentName?: string): PermissionState;
+	/**
+	 * Query the tool-level permission state for pre-filtering tools before
+	 * creating a child session.
+	 *
+	 * Returns `"deny"` | `"allow"` | `"ask"` based on the composed policy.
+	 * Does not consider command-level rules (e.g. per-bash-command patterns) —
+	 * use `checkPermission` for runtime invocation gates.
+	 *
+	 * @param toolName  - Tool name (e.g. `"bash"`, `"read"`, `"my-extension:tool"`).
+	 * @param agentName - Optional agent name for per-agent policy resolution.
+	 */
+	getToolPermission(toolName: string, agentName?: string): PermissionState;
 }
 
 /**
@@ -100,74 +103,74 @@ export interface PermissionQuery {
  * rules internally.
  */
 export interface PermissionsService extends PermissionQuery {
-  /**
-   * Register a custom preview formatter for a specific tool name.
-   *
-   * The formatter is consulted first inside `ToolPreviewFormatter.formatToolInputForPrompt`;
-   * returning `undefined` falls through to the built-in switch (and ultimately
-   * the JSON default).
-   *
-   * Only one formatter may be registered per tool name — a second call for the
-   * same name throws.  The returned disposer unregisters the formatter.
-   *
-   * @param toolName  - Exact tool name to register for (e.g. `"mcp"`, `"my-server:run"`).
-   * @param formatter - Receives the raw `input` record; return a string to use
-   *                    as the prompt preview, or `undefined` to decline.
-   */
-  registerToolInputFormatter(
-    toolName: string,
-    formatter: ToolInputFormatter,
-  ): () => void;
+	/**
+	 * Register a custom preview formatter for a specific tool name.
+	 *
+	 * The formatter is consulted first inside `ToolPreviewFormatter.formatToolInputForPrompt`;
+	 * returning `undefined` falls through to the built-in switch (and ultimately
+	 * the JSON default).
+	 *
+	 * Only one formatter may be registered per tool name — a second call for the
+	 * same name throws.  The returned disposer unregisters the formatter.
+	 *
+	 * @param toolName  - Exact tool name to register for (e.g. `"mcp"`, `"my-server:run"`).
+	 * @param formatter - Receives the raw `input` record; return a string to use
+	 *                    as the prompt preview, or `undefined` to decline.
+	 */
+	registerToolInputFormatter(
+		toolName: string,
+		formatter: ToolInputFormatter,
+	): () => void;
 
-  /**
-   * Register a custom access-intent extractor for a specific tool name.
-   *
-   * The extractor declares the filesystem path a tool will access so the
-   * cross-cutting `path` and `external_directory` gates can see it. Use it for
-   * tools whose path lives under a non-standard key — built-in file tools and
-   * any tool exposing `input.path` (plus MCP via `input.arguments.path`) are
-   * already covered by convention without registration.
-   *
-   * The extractor receives the raw `input` record and returns the path string,
-   * or `undefined` to decline. Only one extractor may be registered per tool
-   * name — a second call for the same name throws. The returned disposer
-   * unregisters the extractor.
-   *
-   * @param toolName  - Exact tool name to register for (e.g. `"ffgrep"`).
-   * @param extractor - Receives the raw `input` record; return the path string,
-   *                    or `undefined` to decline.
-   */
-  registerToolAccessExtractor(
-    toolName: string,
-    extractor: ToolAccessExtractor,
-  ): () => void;
+	/**
+	 * Register a custom access-intent extractor for a specific tool name.
+	 *
+	 * The extractor declares the filesystem path a tool will access so the
+	 * cross-cutting `path` and `external_directory` gates can see it. Use it for
+	 * tools whose path lives under a non-standard key — built-in file tools and
+	 * any tool exposing `input.path` (plus MCP via `input.arguments.path`) are
+	 * already covered by convention without registration.
+	 *
+	 * The extractor receives the raw `input` record and returns the path string,
+	 * or `undefined` to decline. Only one extractor may be registered per tool
+	 * name — a second call for the same name throws. The returned disposer
+	 * unregisters the extractor.
+	 *
+	 * @param toolName  - Exact tool name to register for (e.g. `"ffgrep"`).
+	 * @param extractor - Receives the raw `input` record; return the path string,
+	 *                    or `undefined` to decline.
+	 */
+	registerToolAccessExtractor(
+		toolName: string,
+		extractor: ToolAccessExtractor,
+	): () => void;
 
-  /**
-   * Register a named live-authority chain link (ADR 0007 §4).
-   *
-   * A link reviews an `ask` and returns `allow` / `deny` (with an optional
-   * teaching `reason`) / `defer`. It is handed a narrow, session-scoped
-   * {@link PermissionQuery} at `authorize` time so it can query the
-   * deterministic engine at gate parity. Register from a `permissions:ready`
-   * handler so registration is robust to load order and survives `/reload`.
-   *
-   * Registration alone grants **no authority**: the link decides nothing until
-   * the operator names it in the `authorizerChain` config (opt-in activation),
-   * and the chain owner caps every verdict with the bounded-delegation
-   * checkpoint (an `allow` on an excluded surface downgrades to `defer`). Only
-   * one link may be registered per name — a second call for the same name
-   * throws. The returned disposer unregisters the link.
-   *
-   * @param name      - Operator-facing link name referenced from `authorizerChain`.
-   * @param authorize - The link's decision callback
-   *                    (`(details, query, log) => verdict`); `log` is an
-   *                    {@link AuthorizerLog} for recording a decision trail to
-   *                    the shared permission review log.
-   */
-  registerAuthorizer(
-    name: string,
-    authorize: Authorizer["authorize"],
-  ): () => void;
+	/**
+	 * Register a named live-authority chain link (ADR 0007 §4).
+	 *
+	 * A link reviews an `ask` and returns `allow` / `deny` (with an optional
+	 * teaching `reason`) / `defer`. It is handed a narrow, session-scoped
+	 * {@link PermissionQuery} at `authorize` time so it can query the
+	 * deterministic engine at gate parity. Register from a `permissions:ready`
+	 * handler so registration is robust to load order and survives `/reload`.
+	 *
+	 * Registration alone grants **no authority**: the link decides nothing until
+	 * the operator names it in the `authorizerChain` config (opt-in activation),
+	 * and the chain owner caps every verdict with the bounded-delegation
+	 * checkpoint (an `allow` on an excluded surface downgrades to `defer`). Only
+	 * one link may be registered per name — a second call for the same name
+	 * throws. The returned disposer unregisters the link.
+	 *
+	 * @param name      - Operator-facing link name referenced from `authorizerChain`.
+	 * @param authorize - The link's decision callback
+	 *                    (`(details, query, log) => verdict`); `log` is an
+	 *                    {@link AuthorizerLog} for recording a decision trail to
+	 *                    the shared permission review log.
+	 */
+	registerAuthorizer(
+		name: string,
+		authorize: Authorizer["authorize"],
+	): () => void;
 }
 
 /**
@@ -180,7 +183,7 @@ export interface PermissionsService extends PermissionQuery {
  * working: a reloaded parent re-publishes its fresh service.
  */
 export function publishPermissionsService(service: PermissionsService): void {
-  (globalThis as Record<symbol, unknown>)[SERVICE_KEY] = service;
+	(globalThis as Record<symbol, unknown>)[SERVICE_KEY] = service;
 }
 
 /**
@@ -188,9 +191,9 @@ export function publishPermissionsService(service: PermissionsService): void {
  * permission-system extension has not loaded (or has been unloaded).
  */
 export function getPermissionsService(): PermissionsService | undefined {
-  return (globalThis as Record<symbol, unknown>)[SERVICE_KEY] as
-    | PermissionsService
-    | undefined;
+	return (globalThis as Record<symbol, unknown>)[SERVICE_KEY] as
+		| PermissionsService
+		| undefined;
 }
 
 /**
@@ -207,9 +210,9 @@ export function getPermissionsService(): PermissionsService | undefined {
  *   shutdown cannot wipe the new generation's freshly published service.
  */
 export function unpublishPermissionsService(service: PermissionsService): void {
-  if (getPermissionsService() !== service) {
-    return;
-  }
-  // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- Symbol-keyed global property; Map.delete() is not applicable
-  delete (globalThis as Record<symbol, unknown>)[SERVICE_KEY];
+	if (getPermissionsService() !== service) {
+		return;
+	}
+	// eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- Symbol-keyed global property; Map.delete() is not applicable
+	delete (globalThis as Record<symbol, unknown>)[SERVICE_KEY];
 }
