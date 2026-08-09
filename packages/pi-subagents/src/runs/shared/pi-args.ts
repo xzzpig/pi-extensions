@@ -289,6 +289,16 @@ export function projectLaunchResolvedChildExtensions(
 export function resolvePermissionSystemExtension(): string | undefined {
 	const agentDir = getAgentDir();
 	const candidates = [
+		// @xzzpig fork takes priority so child processes inherit the same
+		// permission system the parent session loads from settings.json.
+		// When only the upstream package is installed, behavior is unchanged.
+		path.join(
+			agentDir,
+			"npm",
+			"node_modules",
+			"@xzzpig",
+			"pi-permission-system",
+		),
 		// npm-scoped package (most common)
 		path.join(
 			agentDir,
@@ -571,7 +581,7 @@ export function buildPiArgs(input: BuildPiArgsInput): BuildPiArgsResult {
 		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagent-"));
 		const stem = (input.promptFileStem ?? "prompt").replace(/[^\w.-]/g, "_");
 		const promptPath = path.join(tempDir, `${stem}.md`);
-		// Inject <active_agent> tag so @gotgenes/pi-permission-system can
+		// Inject <active_agent> tag so the permission-system extension can
 		// resolve per-agent policy inside the child session.
 		const taggedPrompt = input.childAgentName
 			? `<active_agent name="${escapeXmlAttr(input.childAgentName)}"/>\n\n${input.systemPrompt}`

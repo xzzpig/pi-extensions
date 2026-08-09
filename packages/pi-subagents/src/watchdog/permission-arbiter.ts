@@ -112,7 +112,7 @@ export function createWatchdogPermissionArbiter(options: WatchdogPermissionArbit
 					tools: [tool],
 				},
 				convertToLlm,
-				streamFunction: streamFn,
+				streamFn: streamFn,
 				getApiKey: (providerName) => providerName === selection.model.provider ? auth.apiKey : undefined,
 				beforeToolCall: async ({ toolCall }) => toolCall.name === tool.name ? undefined : { block: true, reason: `Permission arbiter tool '${toolCall.name}' is not allowed.` },
 				toolExecution: "sequential",

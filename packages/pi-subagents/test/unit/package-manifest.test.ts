@@ -24,9 +24,9 @@ const expectedHostPeerRanges = {
 	"@earendil-works/pi-tui": "*",
 } satisfies Record<(typeof hostPeerPackages)[number], string>;
 const expectedHostDevVersions = {
-	"@earendil-works/pi-agent-core": "0.81.0",
-	"@earendil-works/pi-ai": "0.81.0",
-	"@earendil-works/pi-tui": "0.81.0",
+	"@earendil-works/pi-agent-core": "0.83.0",
+	"@earendil-works/pi-ai": "0.83.0",
+	"@earendil-works/pi-tui": "0.83.0",
 } satisfies Record<Exclude<(typeof hostPeerPackages)[number], "@earendil-works/pi-coding-agent">, string>;
 
 function collectSourceFiles(dir: string): string[] {
@@ -64,28 +64,28 @@ test("published extension APIs use supported package entrypoints", async () => {
 		"./pi-args": "./src/api/pi-args.ts",
 		"./shared-types": "./src/api/shared-types.ts",
 	});
-	const backgroundWork = await import("pi-subagents/background-work");
+	const backgroundWork = await import("@xzzpig/pi-subagents/background-work");
 	assert.equal(backgroundWork.BACKGROUND_WORK_PROTOCOL_VERSION, 1);
 	assert.equal(backgroundWork.BACKGROUND_WORK_REGISTRY_KEY, "pi-subagents.background-work.v1");
-	const externalRuns = await import("pi-subagents/external-runs");
+	const externalRuns = await import("@xzzpig/pi-subagents/external-runs");
 	assert.equal(externalRuns.EXTERNAL_RUN_REGISTRY_VERSION, 1);
 	assert.equal(typeof externalRuns.registerExternalRunProvider, "function");
-	const capability = await import("pi-subagents/capability-ceiling");
+	const capability = await import("@xzzpig/pi-subagents/capability-ceiling");
 	assert.equal(capability.SUBAGENT_CAPABILITY_CEILING_VERSION, 1);
 	assert.equal(capability.SUBAGENT_CAPABILITY_CEILING_REGISTRY_KEY, "pi-subagents.capability-ceiling.v1");
-	const delegation = await import("pi-subagents/delegation");
+	const delegation = await import("@xzzpig/pi-subagents/delegation");
 	assert.equal(delegation.SUBAGENT_DELEGATION_REQUEST_EVENT, "prompt-template:subagent:request");
-	const preflight = await import("pi-subagents/preflight");
+	const preflight = await import("@xzzpig/pi-subagents/preflight");
 	assert.equal(preflight.SUBAGENT_LAUNCH_CONTRACT_VERSION, 2);
 	assert.equal(typeof preflight.resolveSubagentLaunchContract, "function");
-	const controlChannel = await import("pi-subagents/control-channel");
+	const controlChannel = await import("@xzzpig/pi-subagents/control-channel");
 	assert.equal(typeof controlChannel.requestAsyncStop, "function");
-	const intercomBridge = await import("pi-subagents/intercom-bridge");
+	const intercomBridge = await import("@xzzpig/pi-subagents/intercom-bridge");
 	assert.equal(typeof intercomBridge.resolveIntercomSessionTarget, "function");
-	const piArgs = await import("pi-subagents/pi-args");
+	const piArgs = await import("@xzzpig/pi-subagents/pi-args");
 	assert.equal(typeof piArgs.resolvePiLaunchToolPlan, "function");
 	assert.equal("buildPiArgs" in piArgs, false);
-	const sharedTypes = await import("pi-subagents/shared-types");
+	const sharedTypes = await import("@xzzpig/pi-subagents/shared-types");
 	assert.equal(typeof sharedTypes.wrapForkTask, "function");
 	assert.equal(typeof sharedTypes.DEFAULT_FORK_PREAMBLE, "string");
 	assert.equal("TEMP_ROOT_DIR" in sharedTypes, false);
