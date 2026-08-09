@@ -1,0 +1,13 @@
+{
+  "$schema": "../schemas/subtree-metadata.schema.json",
+  "name": "pi-tool-display",
+  "prefix": "packages/pi-tool-display",
+  "source": "https://github.com/MasuRii/pi-tool-display.git",
+  "remote": "upstream-pi-tool-display",
+  "ref": "main",
+  "version": "0.5.0",
+  "upstreamCommit": "91cef7580078371f8dc49a8607222807ad6a424d",
+  "squash": true,
+  "lastSyncedAt": "2026-08-09T02:30:00.000Z",
+  "notes": "Forked from MasuRii/pi-tool-display; local bashLivePreviewMode (tail live preview for running bash commands) feature intentionally diverges from upstream."
+}

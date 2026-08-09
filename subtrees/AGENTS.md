@@ -9,7 +9,7 @@ The non-example fields are:
 
 | Field            | Meaning                                                      |
 | ---------------- | ------------------------------------------------------------ |
-| `name`           | Local `pi-*` package and record name.                        |
+| `name`           | Local record/directory name, unscoped `pi-*` (see below).   |
 | `prefix`         | Local subtree path, exactly `packages/<name>`.               |
 | `source`         | Upstream Git source used by the local remote.                |
 | `remote`         | Local remote, exactly `upstream-<name>`.                     |
@@ -21,6 +21,14 @@ The non-example fields are:
 
 [`template.json.example`](template.json.example) shows the shape without
 pretending that an upstream repository has been imported.
+
+### Forked package naming
+
+Every upstream-derived package is a local fork (二开) and publishes its npm
+name as `@xzzpig/pi-*` while the directory, subtree prefix, and record `name`
+stay unscoped `pi-*` (e.g. directory `packages/pi-tool-display`, npm name
+`@xzzpig/pi-tool-display`). These two names intentionally differ; do not
+write the `@xzzpig` scope into `subtrees/*.json`.
 
 When direnv loads the project, `env/ensure-upstreams.mjs` executes the shared
 schema loader and validates all active records before adding any missing

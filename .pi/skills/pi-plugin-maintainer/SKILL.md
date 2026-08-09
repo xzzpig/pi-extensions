@@ -26,8 +26,9 @@ change. Keep unrelated packages and upstream subtrees untouched.
 
 ## Create a plugin
 
-Create a new package directory manually. The name must match
-`pi-[a-z0-9][a-z0-9-]*` and the directory must equal the package name.
+Create a new package directory manually. The directory must match
+`pi-[a-z0-9][a-z0-9-]*`; the `package.json` `name` uses the repo-wide scoped
+form `@xzzpig/pi-*` (directory and npm name intentionally differ).
 
 ```bash
 mkdir -p packages/pi-my-plugin/extensions
@@ -37,7 +38,7 @@ Write `packages/pi-my-plugin/package.json`:
 
 ```json
 {
-  "name": "pi-my-plugin",
+  "name": "@xzzpig/pi-my-plugin",
   "version": "0.1.0",
   "description": "A pi extension package.",
   "license": "MIT",
@@ -81,8 +82,13 @@ Write a short `packages/pi-my-plugin/README.md`.
 
 ### Naming and manifest rules
 
-- The directory name and `package.json` `name` must be identical and start
-  with `pi-`.
+- The directory name must start with `pi-` (`packages/pi-*`), and the
+  `package.json` `name` must be the scoped `@xzzpig/pi-*` form — this
+  monorepo publishes every package under the `@xzzpig` scope, so installs
+  use `pi install npm:@xzzpig/<name>`.
+- Upstream-derived (forked, 二开) packages follow the same rule: the fork's
+  npm name is `@xzzpig/pi-*`, never the upstream's own package name. See the
+  pi-upstream-subtree skill for the import/rename workflow.
 - `pi.extensions` must list at least one entry pointing inside the package.
 - Pi core packages imported by extension code must appear in
   `peerDependencies` (not `dependencies`).
@@ -98,7 +104,7 @@ Install dependencies, type-check, and format:
 
 ```bash
 pnpm install
-pnpm --filter pi-my-plugin run typecheck
+pnpm --filter @xzzpig/pi-my-plugin run typecheck
 pnpm exec prettier --check .
 ```
 
@@ -125,8 +131,8 @@ Inspect the packed contents before publishing:
 
 ```bash
 mkdir -p artifacts
-pnpm --filter pi-my-plugin pack --pack-destination artifacts
-tar -tf artifacts/pi-my-plugin-*.tgz
+pnpm --filter @xzzpig/pi-my-plugin pack --pack-destination artifacts
+tar -tf artifacts/xzzpig-pi-my-plugin-*.tgz
 ```
 
 Confirm that the archive includes the declared extension resources and package
@@ -137,6 +143,7 @@ need coordinated versions.
 ## Change discipline
 
 This skill is the workflow — do not invoke skill scripts directly. Do not
-create a package whose name or directory does not start with `pi-`. Do not
+create a package whose directory does not start with `pi-` or whose
+`package.json` `name` is not `@xzzpig/pi-*`. Do not
 edit upstream-derived files without following the upstream subtree skill. Do
 not add credentials to package manifests, metadata, or packed artifacts.

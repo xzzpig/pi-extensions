@@ -10,3 +10,6 @@ flake.lock
 
 # Upstream-derived subtree formatted with biome, not prettier.
 packages/pi-permission-system
+
+# Upstream-derived subtree with mixed tabs/spaces formatting, not prettier-clean.
+packages/pi-tool-display

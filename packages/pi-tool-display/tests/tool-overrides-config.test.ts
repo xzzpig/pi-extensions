@@ -553,7 +553,7 @@ test("bash render keeps the running result area empty until output exists", asyn
 	);
 });
 
-test("bash render shows live partial output once streaming begins", async () => {
+test("bash render shows live tail output once streaming begins", async () => {
 	const config = buildConfig({
 		bashOutputMode: "summary",
 		previewLines: 2,
@@ -568,7 +568,7 @@ test("bash render shows live partial output once streaming begins", async () => 
 			text: "alpha\nbeta\ngamma\n",
 			isPartial: true,
 		}),
-		"alpha\nbeta\n... (1 more line • Ctrl+O to expand)",
+		"beta\ngamma\n... (1 earlier line • Ctrl+O to expand)",
 	);
 });
 
@@ -588,7 +588,46 @@ test("bash live partial output respects opencode collapse settings", async () =>
 			text: "alpha\nbeta\ngamma\n",
 			isPartial: true,
 		}),
-		"alpha\n... (2 more lines • Ctrl+O to expand)",
+		"gamma\n... (2 earlier lines • Ctrl+O to expand)",
+	);
+});
+
+test("bash live tail preview shows no hint when output fits the limit", async () => {
+	const config = buildConfig({
+		bashOutputMode: "summary",
+		previewLines: 3,
+	});
+	const { api, registeredTools, eventHandlers } = createExtensionApiStub();
+	registerToolDisplayOverrides(api, () => config);
+	await eventHandlers.before_agent_start?.();
+
+	const bashTool = registeredTools.find((tool) => tool.name === "bash");
+	assert.equal(
+		renderToolResult(bashTool, {
+			text: "alpha\nbeta\n",
+			isPartial: true,
+		}),
+		"alpha\nbeta",
+	);
+});
+
+test("bash live partial output shows the head when configured", async () => {
+	const config = buildConfig({
+		bashOutputMode: "summary",
+		previewLines: 2,
+		bashLivePreviewMode: "head",
+	});
+	const { api, registeredTools, eventHandlers } = createExtensionApiStub();
+	registerToolDisplayOverrides(api, () => config);
+	await eventHandlers.before_agent_start?.();
+
+	const bashTool = registeredTools.find((tool) => tool.name === "bash");
+	assert.equal(
+		renderToolResult(bashTool, {
+			text: "alpha\nbeta\ngamma\n",
+			isPartial: true,
+		}),
+		"alpha\nbeta\n... (1 more line • Ctrl+O to expand)",
 	);
 });
 

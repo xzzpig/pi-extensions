@@ -44,10 +44,23 @@ test("config normalization clamps invalid values and migrates legacy read overri
   assert.equal(config.previewLines, 80);
   assert.equal(config.expandedPreviewMaxLines, 0);
   assert.equal(config.bashCollapsedLines, 80);
+  assert.equal(config.bashLivePreviewMode, DEFAULT_TOOL_DISPLAY_CONFIG.bashLivePreviewMode);
   assert.equal(config.diffViewMode, "unified");
   assert.equal(config.diffSplitMinWidth, 70);
   assert.equal(config.diffCollapsedLines, 240);
   assert.equal(config.diffWordWrap, false);
+});
+
+test("bashLivePreviewMode defaults to tail and normalizes invalid values", () => {
+  const config = normalizeToolDisplayConfig({
+    bashLivePreviewMode: "middle",
+  });
+  assert.equal(config.bashLivePreviewMode, "tail");
+
+  const head = normalizeToolDisplayConfig({
+    bashLivePreviewMode: "head",
+  });
+  assert.equal(head.bashLivePreviewMode, "head");
 });
 
 test("config load reports parse errors and falls back to defaults", () => {

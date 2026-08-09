@@ -71,6 +71,7 @@ function configsEqual(a: ToolDisplayConfig, b: ToolDisplayConfig): boolean {
 		a.expandedPreviewMaxLines === b.expandedPreviewMaxLines &&
 		a.bashOutputMode === b.bashOutputMode &&
 		a.bashCollapsedLines === b.bashCollapsedLines &&
+		a.bashLivePreviewMode === b.bashLivePreviewMode &&
 		a.diffViewMode === b.diffViewMode &&
 		a.diffIndicatorMode === b.diffIndicatorMode &&
 		a.diffSplitMinWidth === b.diffSplitMinWidth &&

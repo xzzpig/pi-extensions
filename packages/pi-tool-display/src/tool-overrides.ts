@@ -411,6 +411,39 @@ function buildPreviewText(
   return text;
 }
 
+function formatEarlierLinesHint(omitted: number, expanded: boolean, theme: RenderTheme): string {
+  if (omitted <= 0) {
+    return "";
+  }
+  const hint = expanded ? "" : " • Ctrl+O to expand";
+  return `\n${theme.fg("muted", `... (${omitted} earlier ${pluralize(omitted, "line")}${hint})`)}`;
+}
+
+/**
+ * Tail-style preview: shows the last `maxLines` lines, with a hint for the
+ * lines omitted from the head. Used for live partial bash output so long
+ * running commands keep the most recent output visible while streaming.
+ */
+function buildTailPreviewText(
+  lines: string[],
+  maxLines: number,
+  theme: RenderTheme,
+  expanded: boolean,
+): string {
+  if (lines.length === 0) {
+    return theme.fg("muted", "↳ (no output)");
+  }
+
+  const limit = Math.max(0, maxLines);
+  const shown = lines.slice(-limit);
+  const omitted = Math.max(0, lines.length - shown.length);
+  let text = shown
+    .map((line) => theme.fg("toolOutput", sanitizeAnsiForThemedOutput(line)))
+    .join("\n");
+  text += formatEarlierLinesHint(omitted, expanded, theme);
+  return text;
+}
+
 function prepareOutputLines(
   rawText: string,
   options: ToolRenderResultOptions,
@@ -1045,6 +1078,16 @@ function renderBashLivePreview(
   const prepared = prepareBashLivePreview(rawOutput, options, config);
   if (!prepared) {
     return textResult("");
+  }
+  if (config.bashLivePreviewMode === "tail") {
+    let text = buildTailPreviewText(prepared.lines, prepared.maxLines, theme, options.expanded);
+    if (config.showTruncationHints) {
+      text += formatBashTruncationHints(details, theme);
+    }
+    if (options.expanded) {
+      text += formatExpandedPreviewCapHint(prepared.lines, config, theme);
+    }
+    return textResult(text);
   }
   return renderBashPreviewWithHints(prepared.lines, prepared.maxLines, config, theme, options, details);
 }

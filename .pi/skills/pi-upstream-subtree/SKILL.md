@@ -32,7 +32,7 @@ in [`schemas/subtree-metadata.schema.json`](../../../schemas/subtree-metadata.sc
 and documented in [`subtrees/AGENTS.md`](../../../subtrees/AGENTS.md). A valid
 record must contain:
 
-- `name`: package name matching `pi-[a-z0-9][a-z0-9-]*`.
+- `name`: local record/directory name matching `pi-[a-z0-9][a-z0-9-]*` (unscoped). This is subtree bookkeeping only — NOT the published npm name (see "Forked package npm naming").
 - `prefix`: exactly `packages/<name>`.
 - `source`: upstream Git source.
 - `remote`: exactly `upstream-<name>`.
@@ -57,6 +57,39 @@ After adding or changing a record, run:
 ```bash
 direnv reload
 ```
+
+## Forked package npm naming (二开包命名)
+
+Every package imported from upstream is a locally forked (二开) package. It
+keeps the unscoped `pi-*` name for the directory, subtree prefix, and metadata
+record, but the npm package name in `package.json` MUST be the scoped
+`@xzzpig/pi-*` form:
+
+| Where              | Format         | Example                     |
+| ------------------ | -------------- | --------------------------- |
+| Directory / prefix | `packages/pi-*` | `packages/pi-tool-display`  |
+| Metadata `name`    | `pi-*`         | `pi-tool-display`           |
+| npm `package.json` `name` | `@xzzpig/pi-*` | `@xzzpig/pi-tool-display` |
+
+This makes every forked package installable as `pi install npm:@xzzpig/pi-*`,
+keeps the local fork clearly distinguishable from the upstream package on npm,
+and matches the repo-wide convention in `README.md`. Upstream ships its own
+name (e.g. `@gotgenes/pi-permission-system`); the fork MUST NOT keep it.
+Rename the npm name in a separate commit immediately after the import, before
+any further local changes:
+
+```bash
+# name=pi-tool-display → npm name @xzzpig/pi-tool-display
+jq --arg n "@xzzpig/${name}" '.name = $n' "packages/${name}/package.json" \
+  > "packages/${name}/package.json.tmp" && \
+  mv "packages/${name}/package.json.tmp" "packages/${name}/package.json"
+# Fix README and code references to the upstream name, then:
+git add "packages/${name}"
+git commit -m "chore: rename ${name} npm package to @xzzpig/${name}"
+```
+
+Keep the scope OUT of `subtrees/*.json` records: the schema validates `name`
+against the unscoped `pi-*` pattern and rejects `@xzzpig/pi-*` there.
 
 ## Add an upstream plugin
 
@@ -104,8 +137,9 @@ git add "subtrees/${name}.json"
 git commit -m "chore: add ${name} upstream subtree"
 ```
 
-After the import, adapt the local `package.json` and Pi manifest in a separate
-commit when the upstream layout is not already a valid `pi-*` package.
+After the import, rename the npm package to `@xzzpig/<name>` in a separate
+commit (see "Forked package npm naming" above) and adapt the Pi manifest in
+the same commit when the upstream layout is not already a valid package.
 Confirm the helper accepts the record:
 
 ```bash
@@ -162,7 +196,8 @@ the new commit, and `lastSyncedAt` to the current timestamp. Commit the result.
 
 1. Let the subtree pull stop; do not delete or regenerate the metadata.
 2. Resolve conflicts under `packages/<name>` while preserving the local
-   `pi-*` package contract.
+   `@xzzpig/pi-*` npm name and the `pi-*` package contract (never adopt the
+   upstream's own package name).
 3. Commit the resolved subtree merge.
 4. Record the exact resolved upstream commit:
 
@@ -198,7 +233,9 @@ For every upstream change:
 
 ```bash
 git status --short --branch
-pnpm --filter "${name}" run typecheck 2>/dev/null || true
+# npm name must be the scoped fork name, e.g. @xzzpig/pi-tool-display
+jq -e --arg n "@xzzpig/${name}" '.name == $n' "packages/${name}/package.json"
+pnpm --filter "@xzzpig/${name}" run typecheck 2>/dev/null || true
 pnpm exec prettier --check .
 direnv reload
 ```
