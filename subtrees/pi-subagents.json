@@ -1,0 +1,13 @@
+{
+  "$schema": "../schemas/subtree-metadata.schema.json",
+  "name": "pi-subagents",
+  "prefix": "packages/pi-subagents",
+  "source": "https://github.com/nicobailon/pi-subagents.git",
+  "remote": "upstream-pi-subagents",
+  "ref": "23ba0b61727b67c76ec1b53d9fcd9b0a9005be8d",
+  "version": "0.45.0",
+  "upstreamCommit": "23ba0b61727b67c76ec1b53d9fcd9b0a9005be8d",
+  "squash": true,
+  "lastSyncedAt": "2026-08-10T03:11:50+08:00",
+  "notes": "Forked from nicobailon/pi-subagents; local fix adds @xzzpig/pi-permission-system candidate to resolvePermissionSystemExtension() (intentionally diverges from upstream)."
+}
