@@ -12,3 +12,6 @@ coverage/
 # pi goal state is session metadata, not project configuration.
 .pi/goals/
 .pi/goal_events.jsonl
+
+# pi-subagents runtime artifacts (child run dirs created during delegation).
+.pi-subagents/
