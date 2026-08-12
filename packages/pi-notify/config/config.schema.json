@@ -1,0 +1,190 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/xzzpig/pi-extensions/main/packages/pi-notify/config/config.schema.json",
+  "title": "@xzzpig/pi-notify configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "description": "Layered pi-notify configuration. String values may contain dotenv-expand 13 placeholders ($VAR, ${VAR:-default}); strict value constraints such as the 64-char topic pattern are enforced at runtime after expansion.",
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "version": {
+      "const": 1
+    },
+    "enabled": {
+      "type": "boolean"
+    },
+    "herdr": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "channels": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/channel"
+      }
+    }
+  },
+  "$defs": {
+    "eventId": {
+      "enum": [
+        "agent-completed",
+        "agent-error",
+        "input-required",
+        "permission-required",
+        "context-compacted",
+        "task-completed",
+        "integration-error"
+      ]
+    },
+    "protocol": {
+      "enum": ["osc9", "osc99", "osc777"]
+    },
+    "priority": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "httpUrlOrNull": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^https?://"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "channel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "enum": ["osc", "ntfy"]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/eventId"
+          },
+          "uniqueItems": true
+        },
+        "osc": {
+          "$ref": "#/$defs/osc"
+        },
+        "ntfy": {
+          "$ref": "#/$defs/ntfy"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "osc"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ntfy": false
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "ntfy"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "osc": false
+            }
+          }
+        }
+      ]
+    },
+    "osc": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fallback": {
+          "$ref": "#/$defs/protocol"
+        },
+        "termPrograms": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/protocol"
+          }
+        }
+      }
+    },
+    "ntfy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "serverUrl": {
+          "type": "string",
+          "pattern": "^https?://"
+        },
+        "topic": {
+          "type": "string",
+          "pattern": "^[-_A-Za-z0-9]+$",
+          "maxLength": 64
+        },
+        "token": {
+          "type": "string"
+        },
+        "priority": {
+          "$ref": "#/$defs/priority"
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "icon": {
+          "$ref": "#/$defs/httpUrlOrNull"
+        },
+        "eventOptions": {
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/eventId"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/eventOption"
+          }
+        }
+      }
+    },
+    "eventOption": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "priority": {
+          "$ref": "#/$defs/priority"
+        },
+        "icon": {
+          "$ref": "#/$defs/httpUrlOrNull"
+        }
+      }
+    }
+  }
+}

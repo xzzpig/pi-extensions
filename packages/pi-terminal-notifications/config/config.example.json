@@ -1,8 +1,0 @@
-{
-  "$schema": "./config.schema.json",
-  "fallback": "osc99",
-  "termPrograms": {
-    "WezTerm": "osc777",
-    "MyTerminal": "osc9"
-  }
-}

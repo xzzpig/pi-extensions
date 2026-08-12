@@ -13,11 +13,11 @@ install only what you need.
 Packages can be installed from npm after a release, or from a local checkout
 while developing changes.
 
-| Package                                                                     | What it does                                                                                                                                                               | Install                                            |
-| --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
-| [`@xzzpig/pi-permission-system`](./packages/pi-permission-system)           | Permission enforcement for the Pi coding agent; local fork of `@gotgenes/pi-permission-system` with configurable wrapper flooring.                                         | `pi install npm:@xzzpig/pi-permission-system`      |
-| [`@xzzpig/pi-terminal-notifications`](./packages/pi-terminal-notifications) | Desktop notifications and Herdr blocked-state integration for Pi ask and permission prompts.                                                                               | `pi install npm:@xzzpig/pi-terminal-notifications` |
-| [`@xzzpig/pi-tool-display`](./packages/pi-tool-display)                     | OpenCode-style compact tool rendering and edit/write diff visualization; local fork of `MasuRii/pi-tool-display` with a tail-style live preview for running bash commands. | `pi install npm:@xzzpig/pi-tool-display`           |
+| Package                                                           | What it does                                                                                                                                                               | Install                                       |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| [`@xzzpig/pi-permission-system`](./packages/pi-permission-system) | Permission enforcement for the Pi coding agent; local fork of `@gotgenes/pi-permission-system` with configurable wrapper flooring.                                         | `pi install npm:@xzzpig/pi-permission-system` |
+| [`@xzzpig/pi-notify`](./packages/pi-notify)                       | Cross-device notifications for Pi: OSC terminal notifications, ntfy push channels, semantic Pi events, and Herdr blocked-state integration.                                | `pi install npm:@xzzpig/pi-notify`            |
+| [`@xzzpig/pi-tool-display`](./packages/pi-tool-display)           | OpenCode-style compact tool rendering and edit/write diff visualization; local fork of `MasuRii/pi-tool-display` with a tail-style live preview for running bash commands. | `pi install npm:@xzzpig/pi-tool-display`      |
 
 ## Install an extension
 
@@ -25,7 +25,7 @@ Install published packages:
 
 ```bash
 pi install npm:@xzzpig/pi-permission-system
-pi install npm:@xzzpig/pi-terminal-notifications
+pi install npm:@xzzpig/pi-notify
 pi install npm:@xzzpig/pi-tool-display
 ```
 
@@ -39,14 +39,14 @@ pi install ./packages/pi-permission-system
 pi -e ./packages/pi-permission-system/src/index.ts
 ```
 
-To load the terminal-notifications extension from a Git checkout during local development, use a resource filter:
+To load the notify extension from a Git checkout during local development, use a resource filter:
 
 ```json
 {
   "packages": [
     {
       "source": "git:github.com/xzzpig/pi-extensions@main",
-      "extensions": ["packages/pi-terminal-notifications/extensions/index.ts"]
+      "extensions": ["packages/pi-notify/extensions/index.ts"]
     }
   ]
 }

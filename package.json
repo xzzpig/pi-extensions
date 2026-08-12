@@ -8,7 +8,7 @@
   "packageManager": "pnpm@11.13.1",
   "pi": {
     "extensions": [
-      "./packages/pi-terminal-notifications/extensions/index.ts"
+      "./packages/pi-notify/extensions/index.ts"
     ]
   },
   "engines": {

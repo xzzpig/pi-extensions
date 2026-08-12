@@ -1,14 +1,14 @@
 {
-  "name": "@xzzpig/pi-terminal-notifications",
-  "version": "0.1.1",
-  "description": "Desktop notifications and Herdr blocked-state integration for Pi ask flows.",
+  "name": "@xzzpig/pi-notify",
+  "version": "0.1.0",
+  "description": "Cross-device notifications for Pi: OSC terminal notifications, ntfy push channels, semantic Pi events, and Herdr blocked-state integration.",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/xzzpig/pi-extensions.git",
-    "directory": "packages/pi-terminal-notifications"
+    "directory": "packages/pi-notify"
   },
-  "homepage": "https://github.com/xzzpig/pi-extensions/tree/main/packages/pi-terminal-notifications#readme",
+  "homepage": "https://github.com/xzzpig/pi-extensions/tree/main/packages/pi-notify#readme",
   "publishConfig": {
     "access": "public"
   },
@@ -16,16 +16,25 @@
   "keywords": [
     "pi-package",
     "pi-extension",
-    "terminal",
     "notifications",
+    "ntfy",
+    "terminal",
     "herdr"
   ],
   "files": [
+    "api.ts",
     "extensions",
     "config",
+    "assets",
     "README.md",
     "package.json"
   ],
+  "exports": {
+    ".": "./api.ts",
+    "./api": "./api.ts",
+    "./extensions/*": "./extensions/*",
+    "./package.json": "./package.json"
+  },
   "pi": {
     "extensions": [
       "./extensions/index.ts"
@@ -34,6 +43,9 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "dotenv-expand": "13.0.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"

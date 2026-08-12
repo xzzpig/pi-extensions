@@ -1,0 +1,57 @@
+{
+  "$schema": "https://raw.githubusercontent.com/xzzpig/pi-extensions/main/packages/pi-notify/config/config.schema.json",
+  "$comment": "Global pi-notify config. Place at ~/.pi/agent/extensions/pi-notify/config.json. Trusted projects may overlay specific channels with <cwd>/.pi/pi-notify.json (partial objects merge by channel id).",
+  "version": 1,
+  "enabled": true,
+  "herdr": {
+    "enabled": true
+  },
+  "channels": [
+    {
+      "id": "terminal",
+      "type": "osc",
+      "events": [
+        "agent-completed",
+        "agent-error",
+        "input-required",
+        "permission-required",
+        "task-completed",
+        "integration-error"
+      ],
+      "osc": {
+        "fallback": "osc9",
+        "termPrograms": {
+          "MyTerminal": "osc777"
+        }
+      }
+    },
+    {
+      "id": "phone",
+      "type": "ntfy",
+      "events": [
+        "agent-completed",
+        "agent-error",
+        "input-required",
+        "permission-required",
+        "task-completed",
+        "integration-error"
+      ],
+      "ntfy": {
+        "serverUrl": "https://ntfy.sh",
+        "topic": "${PI_NOTIFY_TOPIC}",
+        "token": "${PI_NOTIFY_TOKEN}",
+        "priority": 3,
+        "timeoutMs": 5000,
+        "eventOptions": {
+          "agent-error": {
+            "priority": 5
+          },
+          "permission-required": {
+            "priority": 4,
+            "icon": null
+          }
+        }
+      }
+    }
+  ]
+}
