@@ -5,6 +5,8 @@ import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Message } from "@earendil-works/pi-ai";
 import { writeAtomicJson } from "../../shared/atomic-json.ts";
+import { createFileCoalescer } from "../../shared/file-coalescer.ts";
+import { isActiveAsyncState, updateActiveRunIndex } from "./active-run-index.ts";
 import { createChildTranscriptWriter, type ChildTranscriptWriter } from "../../shared/child-transcript.ts";
 import { closeSteerInbox, consumeInterruptRequest, consumeSteerRequests, deliverInterruptRequest, deliverStopRequest, deliverTimeoutRequest, enqueueStepSteer, steerAcksDir, steerCapabilityPath, stepSteerInboxDir, watchAsyncControlInbox, type SteerAck, type SteerCapability, type SteerRequest } from "./control-channel.ts";
 import { appendJsonl as appendRawJsonl, formatOutputArtifactContent, getArtifactPaths, writeArtifact, writeMetadata } from "../../shared/artifacts.ts";
@@ -1955,6 +1957,47 @@ function combinedAbortSignal(signals: Array<AbortSignal | undefined>): AbortSign
 	return controller.signal;
 }
 
+async function runSingleStepWithTimeout(
+	step: SubagentStep,
+	ctx: SingleStepContext,
+	parentDeadlineAt?: number,
+): Promise<SingleStepResult> {
+	if (step.timeoutMs === undefined) return runSingleStep(step, ctx);
+
+	const parentRemainingMs = parentDeadlineAt === undefined ? undefined : Math.max(0, parentDeadlineAt - Date.now());
+	const timeoutMs = parentRemainingMs === undefined ? step.timeoutMs : Math.min(step.timeoutMs, parentRemainingMs);
+	const timeoutMessage = parentRemainingMs !== undefined && parentRemainingMs <= step.timeoutMs
+		? ctx.timeoutMessage
+		: `Subagent timed out after ${step.timeoutMs}ms.`;
+	const timeoutController = new AbortController();
+	let timeoutAction: (() => void) | undefined;
+	let timeoutTriggered = false;
+	const triggerTimeout = (): void => {
+		if (timeoutTriggered) return;
+		timeoutTriggered = true;
+		timeoutController.abort();
+		timeoutAction?.();
+	};
+	const registerTimeout = (action: (() => void) | undefined): void => {
+		timeoutAction = action;
+		ctx.registerTimeout?.(action ? triggerTimeout : undefined);
+		if (action && timeoutTriggered) action();
+	};
+	const timer = setTimeout(triggerTimeout, timeoutMs);
+	timer.unref?.();
+	try {
+		return await runSingleStep(step, {
+			...ctx,
+			registerTimeout,
+			timeoutSignal: combinedAbortSignal([ctx.timeoutSignal, timeoutController.signal]),
+			timeoutMessage,
+		});
+	} finally {
+		clearTimeout(timer);
+		ctx.registerTimeout?.(undefined);
+	}
+}
+
 async function runSubagent(
 	config: SubagentRunConfig,
 	onWriterProcess?: (writer: { state: "none" | "spawning" } | { state: "running"; pid: number }) => void,
@@ -2139,6 +2182,7 @@ async function runSubagent(
 
 	fs.mkdirSync(asyncDir, { recursive: true });
 	writeAtomicJson(statusPath, statusPayload);
+	updateActiveRunIndex(asyncDir, statusPayload.state);
 	let pendingParallelUsageCost: CostSummary = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
 	const currentUsageTotals = (): CostSummary => {
 		const cost = results.reduce<CostSummary>((sum, result) => ({
@@ -2211,10 +2255,24 @@ async function runSubagent(
 		for (const node of graph.nodes) updateNode(node);
 		statusPayload.workflowGraph = graph;
 	};
-	const writeStatusPayload = (): void => {
+	let lastIndexedActiveState = isActiveAsyncState(statusPayload.state);
+	const writeStatusPayloadNow = (): void => {
 		refreshWorkflowGraph();
 		writeAtomicJson(statusPath, statusPayload);
+		const activeState = isActiveAsyncState(statusPayload.state);
+		if (activeState !== lastIndexedActiveState) {
+			updateActiveRunIndex(asyncDir, statusPayload.state);
+			lastIndexedActiveState = activeState;
+		}
 		emitNestedSelfEvent(statusPayload.state === "running" || statusPayload.state === "queued" ? "subagent.nested.updated" : "subagent.nested.completed");
+	};
+	const statusWriteCoalescer = createFileCoalescer(writeStatusPayloadNow, 100);
+	const writeStatusPayload = (immediate = true): void => {
+		if (immediate || statusPayload.state !== "running" || statusPayload.activityState !== undefined) {
+			if (!statusWriteCoalescer.flush(statusPath)) writeStatusPayloadNow();
+			return;
+		}
+		statusWriteCoalescer.schedule(statusPath);
 	};
 	const updateExternalProcess = (index: number, process: ExternalProcessStatus): void => {
 		requiredStatusStep(statusPayload, index).externalProcess = process;
@@ -2287,7 +2345,7 @@ async function runSubagent(
 			const nestedAsyncDir = run.asyncDir ?? resolveNestedAsyncDir(config.nestedRoute.rootRunId, run);
 			if (!nestedAsyncDir) continue;
 			try {
-				deliverInterruptRequest(omitUndefinedProperties({ asyncDir: nestedAsyncDir, pid: run.pid, source: "ancestor-interrupt" }));
+				deliverInterruptRequest({ asyncDir: nestedAsyncDir, source: "ancestor-interrupt" });
 			} catch (error) {
 				appendJsonl(eventsPath, JSON.stringify({
 					type: "subagent.nested.interrupt_failed",
@@ -2742,7 +2800,7 @@ async function runSubagent(
 			step.lastActivityAt = now;
 			statusPayload.lastActivityAt = now;
 			statusPayload.lastUpdate = now;
-			writeStatusPayload();
+			writeStatusPayload(false);
 			return;
 		}
 		if (event.type === "tool_execution_start" && event.toolName) {
@@ -2878,7 +2936,7 @@ async function runSubagent(
 		statusPayload.lastActivityAt = now;
 		statusPayload.lastUpdate = now;
 		maybeEmitActiveLongRunning(flatIndex, now);
-		writeStatusPayload();
+		writeStatusPayload(false);
 	};
 	const updateRunnerActivityState = (now: number): boolean => {
 		if (!controlConfig.enabled) return false;
@@ -3449,7 +3507,7 @@ async function runSubagent(
 				writeStatusPayload();
 				appendJsonl(eventsPath, JSON.stringify({ type: "subagent.step.started", ts: taskStartTime, runId: id, stepIndex: fi, agent: task.agent }));
 				flushPendingStepSteers(fi);
-				const singleResult = await runSingleStep(task, compactOptional<SingleStepContext>({
+				const singleResult = await runSingleStepWithTimeout(task, compactOptional<SingleStepContext>({
 					previousOutput, placeholder, cwd, sessionEnabled,
 					outputs,
 					sessionDir: config.sessionDir ? path.join(config.sessionDir, `dynamic-${stepIndex}-${taskIdx}`) : undefined,
@@ -3479,7 +3537,7 @@ async function runSubagent(
 					onWriterProcess,
 					onExternalProcess: (process) => updateExternalProcess(fi, process),
 					skipAcceptance: () => timedOut || stopped,
-				}));
+				}), config.deadlineAt);
 				const taskEndTime = Date.now();
 				const childInterrupted = singleResult.interrupted === true;
 				const childStopped = singleResult.stopped === true;
@@ -3831,7 +3889,7 @@ async function runSubagent(
 						const { taskForRun, taskCwd } = prepareParallelTaskRun(task, cwd, worktreeSetup, taskIdx);
 						flushPendingStepSteers(fi);
 
-						const singleResult = await runSingleStep(taskForRun, compactOptional<SingleStepContext>({
+						const singleResult = await runSingleStepWithTimeout(taskForRun, compactOptional<SingleStepContext>({
 							previousOutput, placeholder, cwd: taskCwd, sessionEnabled,
 							outputs,
 							sessionDir: taskSessionDir,
@@ -3861,7 +3919,7 @@ async function runSubagent(
 							onWriterProcess,
 							onExternalProcess: (process) => updateExternalProcess(fi, process),
 							skipAcceptance: () => timedOut || stopped,
-						}));
+						}), config.deadlineAt);
 						if (task.sessionFile) {
 							latestSessionFile = task.sessionFile;
 						}
@@ -4120,7 +4178,7 @@ async function runSubagent(
 			}));
 
 			flushPendingStepSteers(flatIndex);
-			const singleResult = await runSingleStep(seqStep, compactOptional<SingleStepContext>({
+			const singleResult = await runSingleStepWithTimeout(seqStep, compactOptional<SingleStepContext>({
 				previousOutput, placeholder, cwd, sessionEnabled,
 				outputs: statusPayload.mode === "single" ? undefined : outputs,
 				sessionDir: config.sessionDir,
@@ -4150,7 +4208,7 @@ async function runSubagent(
 				onWriterProcess,
 				onExternalProcess: (process) => updateExternalProcess(flatIndex, process),
 				skipAcceptance: () => timedOut || stopped,
-			}));
+			}), config.deadlineAt);
 			if (seqStep.sessionFile) {
 				latestSessionFile = seqStep.sessionFile;
 			}
@@ -4439,6 +4497,7 @@ async function runSubagent(
 			statusPayload.error = `Step failed: ${failedStep.agent}`;
 		}
 	}
+	writeStatusPayload();
 	try {
 		writeAtomicJson(resultPath, {
 			lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
@@ -4592,7 +4651,6 @@ async function runSubagent(
 			console.error(`Failed to write process-terminal candidate for '${id}':`, error);
 		}
 	}
-	writeStatusPayload();
 }
 
 async function waitForStartupControl(

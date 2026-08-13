@@ -30,6 +30,8 @@ import { drainOutstandingWork } from "../background/auto-drain.ts";
 const SUBAGENT_INHERIT_PROJECT_CONTEXT_ENV = "PI_SUBAGENT_INHERIT_PROJECT_CONTEXT";
 const SUBAGENT_INHERIT_SKILLS_ENV = "PI_SUBAGENT_INHERIT_SKILLS";
 export const SUBAGENT_INTERCOM_SESSION_NAME_ENV = "PI_SUBAGENT_INTERCOM_SESSION_NAME";
+const STEERING_LEGACY_SETTLE_FALLBACK_MS = 1000;
+const STEERING_SAFETY_POLL_INTERVAL_MS = 5000;
 
 const STRUCTURED_OUTPUT_INSTRUCTIONS = [
 	"This subagent step has a strict structured output contract.",
@@ -330,7 +332,13 @@ function registerToolBudget(pi: ExtensionAPI, budget: ResolvedToolBudget | undef
 
 export function registerSteeringInbox(
 	pi: ExtensionAPI,
-	deps: { watch?: typeof fs.watch; nativeRealpath?: (filePath: string) => string } = {},
+	deps: {
+		watch?: typeof fs.watch;
+		nativeRealpath?: (filePath: string) => string;
+		legacySettleFallbackMs?: number;
+		safetyPollIntervalMs?: number;
+		timers?: Pick<typeof globalThis, "setInterval" | "clearInterval">;
+	} = {},
 ): void {
 	const steerInbox = process.env[SUBAGENT_STEER_INBOX_ENV]?.trim();
 	if (!steerInbox) return;
@@ -343,11 +351,15 @@ export function registerSteeringInbox(
 	let disposed = false;
 	let agentRunning = false;
 	let inTurn = false;
+	let awaitingSettlement = false;
 	let flushing = false;
 	let started = false;
 	let canSteer = typeof sendUserMessage === "function";
 	let watcher: fs.FSWatcher | undefined;
 	let interval: NodeJS.Timeout | undefined;
+	let safetyInterval: NodeJS.Timeout | undefined;
+	let settleFallback: NodeJS.Timeout | undefined;
+	const legacySettleFallbackMs = deps.legacySettleFallbackMs ?? STEERING_LEGACY_SETTLE_FALLBACK_MS;
 	const acknowledge = (request: SteerRequest, state: "delivered" | "queued" | "failed", message: string, deliveryStatus?: SteerDeliveryStatus): void => {
 		if (!ackDir || !Number.isInteger(childIndex) || childIndex < 0) return;
 		writeSteerAckAt(steerAckPathFromDir(ackDir, request.id), {
@@ -375,7 +387,8 @@ export function registerSteeringInbox(
 					continue;
 				}
 				const requestedMode = request.mode ?? "steer";
-				const delivery = requestedMode === "follow_up" || (requestedMode === "auto" && inTurn) ? "followUp" as const : "steer" as const;
+				const autoCanUseIdle = requestedMode === "auto" && !agentRunning && !awaitingSettlement;
+				const delivery = requestedMode === "follow_up" || (requestedMode === "auto" && (inTurn || awaitingSettlement)) ? "followUp" as const : "steer" as const;
 				const pendingFollowUps = [...pending.values()].reduce((count, entries) => count + entries.filter((entry) => entry.deliveryStatus === "queued").length, 0);
 				if (delivery === "followUp" && queued.length + pendingFollowUps >= MAX_STEER_QUEUE_SIZE) {
 					acknowledge(request, "failed", `Follow-up queue is full (${MAX_STEER_QUEUE_SIZE} messages).`);
@@ -386,7 +399,7 @@ export function registerSteeringInbox(
 				entries.push({ request, deliveryStatus: delivery === "followUp" ? "queued" : "delivered" });
 				pending.set(formatted, entries);
 				try {
-					sendUserMessage(formatted, requestedMode === "auto" && !agentRunning ? undefined : { deliverAs: delivery });
+					sendUserMessage(formatted, autoCanUseIdle ? undefined : { deliverAs: delivery });
 				} catch (error) {
 					entries.pop();
 					if (entries.length === 0) pending.delete(formatted);
@@ -426,28 +439,95 @@ export function registerSteeringInbox(
 			return;
 		}
 		started = true;
+		const startPolling = (): void => {
+			if (interval || disposed) return;
+			interval = (deps.timers?.setInterval ?? setInterval)(flush, 250) as NodeJS.Timeout;
+			interval.unref?.();
+		};
+		const startSafetyPolling = (): void => {
+			if (safetyInterval || disposed) return;
+			safetyInterval = (deps.timers?.setInterval ?? setInterval)(flush, deps.safetyPollIntervalMs ?? STEERING_SAFETY_POLL_INTERVAL_MS) as NodeJS.Timeout;
+			safetyInterval.unref?.();
+		};
 		try {
 			watcher = (deps.watch ?? fs.watch)(resolveWatchPath(steerInbox, deps.nativeRealpath), () => flush());
-			watcher.on("error", () => {});
+			watcher.on("error", startPolling);
+			startSafetyPolling();
 		} catch {
 			watcher = undefined;
+			startPolling();
 		}
-		interval = setInterval(flush, 250);
-		interval.unref?.();
 	};
 	const activate = (): undefined => {
 		start();
 		flush();
 		return undefined;
 	};
+	const clearSettleFallback = (): void => {
+		if (!settleFallback) return;
+		clearTimeout(settleFallback);
+		settleFallback = undefined;
+	};
+	const markSettled = (): undefined => {
+		clearSettleFallback();
+		agentRunning = false;
+		inTurn = false;
+		awaitingSettlement = false;
+		return activate();
+	};
+	const armLegacySettleFallback = (): void => {
+		clearSettleFallback();
+		settleFallback = setTimeout(() => {
+			settleFallback = undefined;
+			if (disposed || !awaitingSettlement) return;
+			agentRunning = false;
+			inTurn = false;
+			awaitingSettlement = false;
+			activate();
+		}, legacySettleFallbackMs);
+		settleFallback.unref?.();
+	};
 
 	const onRuntimeEvent = pi.on as unknown as (event: string, handler: (event: unknown, ctx?: unknown) => unknown) => void;
 	// Register input before the watcher so an accepted extension input cannot race request dispatch.
 	onRuntimeEvent("input", onInput);
 	onRuntimeEvent("session_start", () => start());
-	onRuntimeEvent("agent_start", () => { agentRunning = true; return activate(); });
-	onRuntimeEvent("agent_end", () => { agentRunning = false; inTurn = false; return activate(); });
+	onRuntimeEvent("agent_start", () => {
+		clearSettleFallback();
+		agentRunning = true;
+		awaitingSettlement = false;
+		return activate();
+	});
+	onRuntimeEvent("agent_end", (event) => {
+		inTurn = false;
+		if ((event as { willRetry?: unknown } | undefined)?.willRetry === true) {
+			clearSettleFallback();
+			agentRunning = true;
+			awaitingSettlement = true;
+			return activate();
+		}
+		agentRunning = true;
+		awaitingSettlement = true;
+		armLegacySettleFallback();
+		return activate();
+	});
+	onRuntimeEvent("agent_settled", markSettled);
+	onRuntimeEvent("session_compact", () => {
+		const unresolved = [...pending.values()].flat();
+		pending.clear();
+		for (const entry of unresolved) {
+			try {
+				writeSteerRequestToDir(steerInbox, { ...entry.request, mode: "follow_up" });
+			} catch (error) {
+				acknowledge(entry.request, "failed", `Could not retry steering after compaction: ${error instanceof Error ? error.message : String(error)}`);
+			}
+		}
+		return activate();
+	});
 	onRuntimeEvent("turn_start", () => {
+		clearSettleFallback();
+		agentRunning = true;
+		awaitingSettlement = false;
 		inTurn = true;
 		const next = queued.findIndex((entry) => entry.ready);
 		if (next >= 0) {
@@ -466,9 +546,14 @@ export function registerSteeringInbox(
 	}
 	onRuntimeEvent("session_shutdown", () => {
 		for (const entry of queued) acknowledge(entry.request, "failed", "Run ended before queued follow-up delivery.", "queued");
+		for (const entries of pending.values()) {
+			for (const entry of entries) acknowledge(entry.request, "failed", "Run ended before Pi confirmed steering input delivery.");
+		}
 		disposed = true;
+		clearSettleFallback();
 		try { watcher?.close(); } catch {}
-		if (interval) clearInterval(interval);
+		if (interval) (deps.timers?.clearInterval ?? clearInterval)(interval);
+		if (safetyInterval) (deps.timers?.clearInterval ?? clearInterval)(safetyInterval);
 	});
 }
 

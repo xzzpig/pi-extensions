@@ -28,6 +28,14 @@ Controls the parent-facing `subagent` tool description registered at startup. `f
 
 `custom` reads `subagent-tool-description.md` from the project config directory, then from `~/.pi/agent/subagent-tool-description.md`. Missing, empty, unreadable, or oversized custom files fall back to the full description. Custom templates may use `{{fullDescription}}`, `{{compactDescription}}`, `{{safetyGuidance}}`, `{{agentDir}}`, and `{{projectConfigDir}}`; the safety guidance is always present so custom prose cannot remove the runtime guardrails. Restart Pi after changing the mode or custom file.
 
+## `legacyChainControls`
+
+```json
+{ "legacyChainControls": true }
+```
+
+Defaults to `false`. The default registered model-facing tool schema and description omit the legacy `append-step` `step` schema and legacy checkpoint controls. This does not change runtime support for existing durable legacy chains. Set this to `true` before directly managing a legacy chain with `append-step`, `approve-checkpoint`, or `reject-checkpoint`.
+
 ## `inlineToolDisplay`
 
 ```json
@@ -59,6 +67,25 @@ Controls the persistent, navigable FleetView. The default is `true`. Set it to `
 ```
 
 Places the persistent FleetView either `"belowEditor"` or `"aboveEditor"`. The default is `"belowEditor"`; invalid values fall back to `"belowEditor"`.
+
+## `fleetKeybindings`
+
+```json
+{
+  "fleetKeybindings": {
+    "pageUp": ["u"],
+    "pageDown": ["d"],
+    "selectFirst": ["g"],
+    "selectLast": ["G"]
+  }
+}
+```
+
+Customizes only the full Fleet inspector opened by `/subagents-fleet` or FleetView inspection. It does not change Pi's global keybindings or the compact persistent FleetView.
+
+Each action accepts a non-empty array of key strings. Configured actions replace their defaults. Unset actions keep the defaults: `selectUp` is `up`/`k`, `selectDown` is `down`/`j`, `scrollUp` is `K`, `scrollDown` is `J`, `pageUp` is `pageUp`, `pageDown` is `pageDown`, `selectFirst` is `home`, `selectLast` is `end`, `toggleTools` is `x`/`X`/`ctrl+o`, `refresh` is `r`/`R`, `steer` is `s`, `stop` is `D`, `inspect` is `H`, and `close` is `escape`/`ctrl+c`/`q`.
+
+Prompt modes keep their fixed keys. For example, `Esc` still cancels steer text or stop confirmation even when the Fleet-level close binding is changed.
 
 ## `asyncWidget`
 
@@ -114,7 +141,7 @@ A user may explicitly call `subagent({ action: "grant-spawn-budget", additional:
 { "scheduledRuns": { "enabled": false, "maxPending": 20 } }
 ```
 
-Durable schedules are enabled by default and stored per project under `.pi-subagents/schedules/<id>/`. See [missions.md](missions.md#schedules) for usage.
+Durable schedules are enabled by default and stored per project under `.pi/subagents/schedules/<id>/`. See [missions.md](missions.md#schedules) for usage.
 
 Set `storeRoot` to keep durable schedules outside project repositories. It must be an absolute path or a `~/` path, which expands from the user home directory. Each project is stored under a hash of its resolved working directory, so projects do not share schedules.
 
@@ -122,7 +149,7 @@ Set `storeRoot` to keep durable schedules outside project repositories. It must 
 { "scheduledRuns": { "storeRoot": "~/.local/share/pi-subagents/schedules" } }
 ```
 
-When `storeRoot` is omitted, schedules remain at `<cwd>/.pi-subagents/schedules`.
+When `storeRoot` is omitted, schedules remain at `<cwd>/.pi/subagents/schedules`.
 
 ## `parallel`
 
@@ -226,7 +253,7 @@ stdin is a JSON object with `repoRoot`, `worktreePath`, `agentCwd`, `branch`, `i
 {
   "missions": {
     "enabled": true,
-    "directory": ".pi-subagents/missions",
+    "directory": ".pi/subagents/missions",
     "globalIndex": true,
     "retainTerminal": 200
   }
@@ -264,15 +291,15 @@ Each fixed action resolves to `"auto"`, `"confirm"`, or `"forbid"`. This is inte
 
 Controls where subagent artifact files (inputs, outputs, transcripts, metadata) are stored:
 
-- `"project"` (default): writes to `<cwd>/.pi-subagents/artifacts/`.
+- `"project"` (default): writes to `<cwd>/.pi/subagents/artifacts/`.
 - `"session"`: stores artifacts under pi's session directory (`~/.pi/agent/sessions/<session>/subagent-artifacts/`), keeping the working directory clean.
 - `"temp"`: uses the OS temp directory.
 
-This preference also controls the default chain scratch directory. `"project"` uses `<cwd>/.pi-subagents/chain-runs/`, while `"session"` and `"temp"` use the user-scoped temp chain directory.
+This preference also controls the default chain scratch directory. `"project"` uses `<cwd>/.pi/subagents/chain-runs/`, while `"session"` and `"temp"` use the user-scoped temp chain directory.
 
 The `"session"` option uses the same directory that `cleanupAllArtifactDirs` already scans for age-based cleanup, so artifacts are still cleaned up automatically. Temporary chain directories are cleaned up separately after 24 hours.
 
-When a project-scoped launch runs from an npm package directory, pi-subagents warns if package settings can include `.pi-subagents/` in the published package. Add `.pi-subagents/` to `.npmignore` (or `.gitignore` when no `.npmignore` exists), use a `files` allowlist that does not include `.pi-subagents/`, or select `"session"` or `"temp"`.
+When a project-scoped launch runs from an npm package directory, pi-subagents warns if package settings can include `.pi/subagents/` in the published package. Add `.pi/subagents/` to `.npmignore` (or `.gitignore` when no `.npmignore` exists), use a `files` allowlist that does not include `.pi/subagents/`, or select `"session"` or `"temp"`.
 
 ## `completionBatch`
 

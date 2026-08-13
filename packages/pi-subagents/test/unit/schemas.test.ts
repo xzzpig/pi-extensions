@@ -195,11 +195,17 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.ok(properties?.output, "output remains a workflow child default");
 	});
 
-	it("removes legacy top-level orchestration parameters", () => {
+	it("omits legacy chain controls by default and includes them when enabled", () => {
 		for (const name of ["tasks", "chain", "concurrency", "chainDir"]) {
 			assert.equal((SubagentParams?.properties as Record<string, unknown> | undefined)?.[name], undefined, `${name} should not be public`);
 		}
-		const stepSchema = (SubagentParams?.properties as Record<string, JsonSchemaNode> | undefined)?.step;
+
+		const trimmed = (schemas.createSubagentParamsSchema as (options?: { legacyChainControls?: boolean }) => SubagentParamsSchema)();
+		assert.equal(trimmed.properties?.step, undefined);
+		assert.doesNotMatch(JSON.stringify(trimmed), /append-step|approve-checkpoint|reject-checkpoint/);
+
+		const full = (schemas.createSubagentParamsSchema as (options: { legacyChainControls: boolean }) => SubagentParamsSchema)({ legacyChainControls: true });
+		const stepSchema = (full.properties as Record<string, JsonSchemaNode> | undefined)?.step;
 		assert.equal(stepSchema?.type, "object");
 		assert.match(String(stepSchema?.description ?? ""), /append-step.*only/i);
 	});
@@ -227,11 +233,13 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.ok(maxRuntimeSchema, "maxRuntimeMs schema should exist");
 		assert.equal(timeoutSchema.minimum, 1);
 		assert.equal(maxRuntimeSchema.minimum, 1);
-		assert.match(String(timeoutSchema.description ?? ""), /foreground and async\/background/i);
-		assert.match(String(timeoutSchema.description ?? ""), /async workflows have no default timeout/i);
+		assert.match(String(timeoutSchema.description ?? ""), /foreground runs and async children/i);
+		assert.match(String(timeoutSchema.description ?? ""), /async children default to 30m/i);
+		assert.match(String(timeoutSchema.description ?? ""), /async composites have no default parent deadline/i);
 		assert.doesNotMatch(String(timeoutSchema.description ?? ""), /foreground-only/i);
 		assert.match(String(maxRuntimeSchema.description ?? ""), /timeoutMs/i);
-		assert.match(String(maxRuntimeSchema.description ?? ""), /async workflows have no default timeout/i);
+		assert.match(String(maxRuntimeSchema.description ?? ""), /async children default to 30m/i);
+		assert.match(String(maxRuntimeSchema.description ?? ""), /async composites have no default parent deadline/i);
 		assert.equal(turnBudgetSchema?.properties?.maxTurns?.minimum, 1);
 		assert.equal(turnBudgetSchema?.properties?.graceTurns?.minimum, 0);
 		assert.equal(toolBudgetSchema?.properties?.soft?.minimum, 1);
@@ -367,8 +375,8 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.ok(SubagentParams, "SubagentParams schema should exist");
 		const schema = SubagentParams as unknown as JsonSchemaNode;
 		const serialized = JSON.stringify(schema);
-		// Mission, inspector, and inline workflow fields intentionally expanded the public tool surface.
-		assert.ok(serialized.length < 17_000, `expected compact schema under 17k chars, got ${serialized.length}`);
+		// Mission, inspector, inline workflow, and guide fields intentionally expanded the public tool surface.
+		assert.ok(serialized.length < 17_100, `expected compact schema under 17.1k chars, got ${serialized.length}`);
 		assert.equal(serialized.includes('"$ref"'), false);
 		assert.equal(serialized.includes('"$defs"'), false);
 		assert.equal(serialized.split("Optional acceptance policy.").length - 1, 1);
@@ -380,6 +388,10 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.match(acceptanceDescription, /changed-files/);
 		assert.match(acceptanceDescription, /manual-notes/);
 		assert.match(acceptanceDescription, /\{ level: "checked", evidence: \["commands-run", "changed-files"\] \}/);
+		const missionDescription = String((schema.properties as Record<string, JsonSchemaNode> | undefined)?.mission?.description ?? "");
+		assert.match(missionDescription, /exactly one non-empty title or summary/);
+		assert.match(missionDescription, /goal may only be true/);
+		assert.match(missionDescription, /requires budget\.tokens/);
 
 		const nestedDescriptionPaths: string[] = [];
 		const stack: Array<{ path: string; value: unknown }> = [{ path: "SubagentParams", value: schema }];

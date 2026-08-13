@@ -969,6 +969,8 @@ export interface WaitCompletion {
 	mode?: string;
 	state?: string;
 	success?: boolean;
+	/** Versioned bounded output archive retained with the durable completion replay. */
+	archivePath?: string;
 	results?: WaitCompletionChild[];
 }
 
@@ -1045,6 +1047,7 @@ export interface Details {
 			operation: "run" | "status";
 			key: string;
 			state: "started" | "completed" | "failed" | "reused";
+			agent?: string;
 			runId?: string;
 			phase?: string;
 			label?: string;
@@ -1287,6 +1290,8 @@ export interface AsyncStatus {
 	context?: "fresh" | "fork" | "mixed";
 	isNested?: boolean;
 	state: "queued" | "running" | "complete" | "failed" | "paused" | "stopped" | "rejected";
+	/** Display-only dismissal marker for a reload-orphaned workflow. */
+	displayDismissedAt?: number;
 	error?: string;
 	activityState?: ActivityState;
 	lastActivityAt?: number;
@@ -1538,6 +1543,12 @@ export interface ForegroundChildControl {
 
 export interface ForegroundRunControl {
 	runId: string;
+	/** Workflow shell that owns this live foreground child, when applicable. */
+	parentWorkflowRunId?: string;
+	/** Stable workflow lane key for this live foreground child. */
+	workflowKey?: string;
+	/** Private control root used to steer a live workflow-owned child. */
+	workflowSteeringDir?: string;
 	/** Originating parent session; required for public fleet projection. */
 	sessionId?: string;
 	mode: SubagentRunMode;
@@ -1607,6 +1618,8 @@ export interface SubagentState {
 	fleetJobs?: Map<string, AsyncJobState>;
 	/** Suppress dynamic status widgets while the fleet overlay owns the viewport. */
 	fleetInspectorOpen?: boolean;
+	/** Temporarily suppress dynamic widgets while Pi compacts the session. */
+	widgetsSuspended?: boolean;
 	foregroundRuns?: Map<string, ForegroundResumeRun>;
 	foregroundControls: Map<string, ForegroundRunControl>;
 	lastForegroundControlId: string | null;
@@ -1673,6 +1686,10 @@ export interface RunSyncOptions {
 	permissions?: import("../runs/shared/permissions.ts").PermissionConfig;
 	/** Session id of the direct parent session for permission-system ask forwarding. */
 	parentSessionId?: string;
+	/** Private prompt-runtime steering transport for workflow-owned foreground children. */
+	steerInboxDir?: string;
+	steerCapabilityPath?: string;
+	steerAckDir?: string;
 	/** Resolved launch context for this child. */
 	context?: "fresh" | "fork";
 	cwd?: string;
@@ -1780,16 +1797,40 @@ export interface ScheduledRunsConfig {
 
 export type FleetViewPlacement = "aboveEditor" | "belowEditor";
 
+export const FLEET_KEYBINDING_ACTIONS = [
+	"close",
+	"scrollUp",
+	"scrollDown",
+	"selectUp",
+	"selectDown",
+	"selectFirst",
+	"selectLast",
+	"pageUp",
+	"pageDown",
+	"refresh",
+	"steer",
+	"inspect",
+	"stop",
+	"toggleTools",
+] as const;
+
+export type FleetKeybindingAction = typeof FLEET_KEYBINDING_ACTIONS[number];
+export type FleetKeybindingsConfig = Partial<Record<FleetKeybindingAction, string[]>>;
+
 export interface ExtensionConfig {
 	asyncByDefault?: boolean;
 	/** Show the Claude Code-style navigable fleet. Defaults to true. */
 	fleetView?: boolean;
 	/** Place the persistent FleetView above or below the editor. Defaults to belowEditor. */
 	fleetViewPlacement?: FleetViewPlacement;
+	/** Local keybindings for the full Fleet inspector. */
+	fleetKeybindings?: FleetKeybindingsConfig;
 	/** Show the under-editor async runs widget. Defaults to true, including when FleetView is enabled. */
 	asyncWidget?: boolean;
 	/** Tool description variant registered for the parent-facing subagent tool. Defaults to full. */
 	toolDescriptionMode?: ToolDescriptionMode;
+	/** Include legacy append-step and checkpoint controls in the registered tool schema. Defaults to false. */
+	legacyChainControls?: boolean;
 	/** Inline chat rendering for the subagent tool. Defaults to rich. */
 	inlineToolDisplay?: InlineToolDisplay;
 	forceTopLevelAsync?: boolean;
@@ -1813,8 +1854,10 @@ export interface ExtensionConfig {
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
 	worktreeBaseDir?: string;
-	/** Where to store subagent artifact files. Defaults to "project" (cwd/.pi-subagents). Set to "session" for pi session dir, or "temp" for OS temp. */
+	/** Where to store subagent artifact files. Defaults to "project" (cwd/.pi/subagents). Set to "session" for pi session dir, or "temp" for OS temp. */
 	artifactDir?: ArtifactDirPreference;
+	/** Artifact cleanup retention. Set cleanupDays to 0 to disable cleanup. */
+	artifactConfig?: Pick<ArtifactConfig, "cleanupDays">;
 	intercomBridge?: IntercomBridgeConfig;
 	proactiveSkillSubagents?: ProactiveSkillSubagentsConfig | false;
 	scheduledRuns?: ScheduledRunsConfig;
@@ -1922,7 +1965,7 @@ export const SLASH_SUBAGENT_CANCEL_EVENT = "subagent:slash:cancel";
 export const POLL_INTERVAL_MS = 250;
 export const MAX_WIDGET_JOBS = 4;
 export const DEFAULT_SUBAGENT_MAX_DEPTH = 2;
-export const SUBAGENT_ACTIONS = ["list", "get", "models", "children.list", "create", "update", "delete", "eject", "disable", "enable", "reset", "mission.create", "mission.list", "mission.show", "mission.update", "mission.attach-run", "mission.close", "worktree.discard", "refine", "refine.show", "refine.rollback", "inspector.open", "inspector.status", "inspector.close", "project.open", "project.status", "project.close", "status", "grant-spawn-budget", "interrupt", "resume", "steer", "stop", "append-step", "approve-checkpoint", "reject-checkpoint", "doctor", "watchdog.status", "watchdog.check", "watchdog.configure", "watchdog.recommend-model", "schedule.create", "schedule.list", "schedule.show", "schedule.history", "schedule.pause", "schedule.resume", "schedule.run", "schedule.run-due", "schedule.delete"] as const;
+export const SUBAGENT_ACTIONS = ["list", "get", "models", "children.list", "guide", "create", "update", "delete", "eject", "disable", "enable", "reset", "mission.create", "mission.list", "mission.show", "mission.update", "mission.resolve-decision", "mission.attach-run", "mission.close", "worktree.discard", "refine", "refine.show", "refine.rollback", "inspector.open", "inspector.status", "inspector.close", "project.open", "project.status", "project.close", "status", "grant-spawn-budget", "interrupt", "resume", "steer", "stop", "dismiss", "append-step", "approve-checkpoint", "reject-checkpoint", "doctor", "watchdog.status", "watchdog.check", "watchdog.configure", "watchdog.recommend-model", "schedule.create", "schedule.list", "schedule.show", "schedule.history", "schedule.pause", "schedule.resume", "schedule.run", "schedule.run-due", "schedule.delete"] as const;
 
 export const DEFAULT_FORK_PREAMBLE =
 	"You are a delegated subagent running from a fork of the parent session. " +

@@ -144,6 +144,12 @@ function isStaleExtensionContextError(error: unknown): boolean {
 			|| error.message.includes("Extension context no longer active"));
 }
 
+function foregroundDescription(control: { parentWorkflowRunId?: string; workflowKey?: string }, description: string | undefined): string | undefined {
+	if (!control.parentWorkflowRunId) return description;
+	const workflow = `workflow child: ${control.parentWorkflowRunId}${control.workflowKey ? ` (${control.workflowKey})` : ""}`;
+	return description ? `${workflow} · ${description}` : workflow;
+}
+
 export function collectFleetStatusEntries(state: SubagentState): FleetStatusEntry[] {
 	const entries: FleetStatusEntry[] = [];
 	for (const control of state.foregroundControls.values()) {
@@ -154,7 +160,7 @@ export function collectFleetStatusEntries(state: SubagentState): FleetStatusEntr
 					key: `foreground-active:${control.runId}:${child.index}`,
 					agent: child.agent,
 					...(modelThinking ? { modelThinking } : {}),
-					description: child.description,
+					description: foregroundDescription(control, child.description),
 					startedAt: child.startedAt,
 					tokens: child.tokens ?? 0,
 					state: "running",
@@ -170,7 +176,7 @@ export function collectFleetStatusEntries(state: SubagentState): FleetStatusEntr
 			key: `foreground-active:${control.runId}:${control.currentIndex ?? 0}`,
 			agent: control.currentAgent ?? control.mode,
 			...(modelThinking ? { modelThinking } : {}),
-			description: control.description,
+			description: foregroundDescription(control, control.description),
 			startedAt: control.startedAt,
 			tokens: control.tokens ?? 0,
 			state: "running",
@@ -301,26 +307,22 @@ export class SubagentFleetStatus {
 	refresh(): void {
 		const ctx = this.getActiveUiContext();
 		if (!ctx) return;
+		if (this.state.widgetsSuspended) {
+			this.clearWidget();
+			return;
+		}
 		this.entries = collectFleetStatusEntries(this.state);
 		this.clampSelection();
 		if (this.inspectorOpen || this.state.fleetInspectorOpen) {
 			this.lastRenderKey = "";
-			if (this.widgetRegistered) {
-				ctx.ui.setWidget(FLEET_STATUS_WIDGET_KEY, undefined);
-				this.widgetRegistered = false;
-				this.tui = undefined;
-			}
+			this.clearWidget();
 			return;
 		}
 		if (this.entries.length === 0) {
 			this.active = false;
 			this.selectedKey = "main";
 			this.lastRenderKey = "";
-			if (this.widgetRegistered) {
-				ctx.ui.setWidget(FLEET_STATUS_WIDGET_KEY, undefined);
-				this.widgetRegistered = false;
-				this.tui = undefined;
-			}
+			this.clearWidget();
 			return;
 		}
 
@@ -350,6 +352,7 @@ export class SubagentFleetStatus {
 	}
 
 	handleKey(data: string): { consume?: boolean; data?: string } | undefined {
+		if (this.state.widgetsSuspended) return undefined;
 		const ctx = this.getActiveUiContext();
 		if (!ctx || this.entries.length === 0 || isKeyRelease(data)) return undefined;
 		if (this.inspectorOpen) return undefined;
@@ -528,6 +531,13 @@ export class SubagentFleetStatus {
 			this.clearUiRegistration();
 			return undefined;
 		}
+	}
+
+	private clearWidget(): void {
+		if (!this.widgetRegistered) return;
+		this.ui?.setWidget(FLEET_STATUS_WIDGET_KEY, undefined);
+		this.widgetRegistered = false;
+		this.tui = undefined;
 	}
 
 	private clearUiRegistration(): void {

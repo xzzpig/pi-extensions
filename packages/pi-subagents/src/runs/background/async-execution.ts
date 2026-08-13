@@ -15,7 +15,7 @@ import { appendAgentRefinementOverlay } from "../../agents/agent-refinements.ts"
 import { writePrivateAtomicJson } from "../../shared/atomic-json.ts";
 import { applyThinkingSuffix, projectLaunchResolvedChildExtensions, resolvePiLaunchToolPlan } from "../shared/pi-args.ts";
 import { injectOutputPathSystemPrompt, injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
-import { buildChainInstructions, isCheckpointStep, isDynamicParallelStep, isParallelStep, resolveChainPath, resolveStepBehavior, suppressProgressForReadOnlyTask, writeInitialProgressFile, type ChainStep, type ResolvedStepBehavior, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
+import { buildChainInstructions, isCheckpointStep, isDynamicParallelStep, isParallelStep, resolveChainPath, resolveExistingReadPaths, resolveStepBehavior, suppressProgressForReadOnlyTask, writeInitialProgressFile, type ChainStep, type ResolvedStepBehavior, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
 import type { RunnerStep } from "../shared/parallel-utils.ts";
 import type { ContextMode } from "../shared/context-mode.ts";
 import { resolvePiPackageRoot } from "../shared/pi-spawn.ts";
@@ -127,6 +127,8 @@ interface AsyncExecutionContext {
 	/** Whether the parent session has an interactive UI. */
 	interactive?: boolean;
 }
+
+export const DEFAULT_ASYNC_TIMEOUT_MS = 30 * 60 * 1000;
 
 interface AsyncChainParams {
 	chain: ChainStep[];
@@ -668,6 +670,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		if (resolvedToolBudget.error) throw new AsyncStartValidationError(resolvedToolBudget.error);
 		const stepCwd = resolveChildCwd(runnerCwd, s.cwd);
 		const instructionCwd = behaviorCwd ?? stepCwd;
+		const readExistenceCwd = behaviorCwd ? stepCwd : instructionCwd;
 		let behavior = suppressProgressForReadOnlyTask(resolvedBehavior ?? resolveStepBehavior(a, buildStepOverrides(s), chainSkills), s.task, originalTask);
 		const inheritedRelativeParallelOutput = parallelOutputNamespace && s.output === undefined && typeof behavior.output === "string" && !path.isAbsolute(behavior.output);
 		if (inheritedRelativeParallelOutput && parallelOutputNamespace.taskIndex !== undefined) {
@@ -698,7 +701,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		}
 		systemPrompt = appendAgentRefinementOverlay(systemPrompt, { cwd: stepCwd, agentName: a.name });
 
-		const readInstructions = buildChainInstructions({ ...behavior, output: false, progress: false }, instructionCwd, false);
+		const readInstructions = buildChainInstructions({ ...behavior, output: false, progress: false }, instructionCwd, false, undefined, readExistenceCwd);
 		const isFirstProgressAgent = behavior.progress && !progressPrecreated && !progressInstructionCreated;
 		if (behavior.progress) progressInstructionCreated = true;
 		const progressInstructions = buildChainInstructions({ ...behavior, output: false, reads: false }, progressDir, isFirstProgressAgent);
@@ -776,6 +779,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			outputMode: behavior.outputMode,
 			sessionFile,
 			maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, a.maxSubagentDepth),
+			timeoutMs: a.defaultTimeoutMs ?? DEFAULT_ASYNC_TIMEOUT_MS,
 			waitToolEnabled: params.waitToolEnabled,
 			effectiveAcceptance: resolveEffectiveAcceptance({
 				explicit: s.acceptance,
@@ -1197,6 +1201,10 @@ export function executeAsyncChain(
 /**
  * Execute a single agent asynchronously
  */
+export function workflowAwaitedAsyncResultPath(asyncDir: string): string {
+	return path.join(asyncDir, "workflow-result.json");
+}
+
 export function executeAsyncSingle(
 	id: string,
 	params: AsyncSingleParams,
@@ -1292,8 +1300,9 @@ export function executeAsyncSingle(
 	// Reads: caller override > agent defaultReads > none. `~`/`~/` expand to home;
 	// absolute paths pass through; relative paths resolve against the child cwd.
 	const reads = params.reads !== undefined ? params.reads : agentConfig.defaultReads ?? false;
-	const readsInstruction = Array.isArray(reads) && reads.length > 0
-		? `[Read from: ${reads.map((f) => resolveChainPath(f, runnerCwd)).join(", ")}]\n\n`
+	const readPaths = Array.isArray(reads) ? resolveExistingReadPaths(reads, runnerCwd) : [];
+	const readsInstruction = readPaths.length > 0
+		? `[Read from: ${readPaths.join(", ")}]\n\n`
 		: "";
 	const taskText = readsInstruction + taskWithOutputInstruction;
 	const primaryModel = externalRunner ? undefined : resolveSubagentModelOverride(
@@ -1395,7 +1404,7 @@ export function executeAsyncSingle(
 		...(params.acceptance !== undefined ? { acceptance: params.acceptance } : {}),
 		...(controlConfig ? { controlConfig } : {}),
 		...(deadlineAt !== undefined ? { absoluteDeadlineAt: deadlineAt } : {}),
-		...(initialTurnBudget ? { initialTurnBudget } : {}),
+		...(initialTurnBudget ? { initialTurnBudget: { maxTurns: initialTurnBudget.maxTurns, graceTurns: initialTurnBudget.graceTurns } } : {}),
 		...(resolvedToolBudget.budget ? { initialToolBudget: resolvedToolBudget.budget } : {}),
 		maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, agentConfig.maxSubagentDepth),
 		...(maxOutput ? { maxOutput } : {}),
@@ -1456,7 +1465,9 @@ export function executeAsyncSingle(
 						...(resolvedToolBudget.budget ? { toolBudget: resolvedToolBudget.budget } : {}),
 					},
 				],
-				resultPath: inheritedNestedRoute ? nestedResultsPath(inheritedNestedRoute.rootRunId, id) : path.join(DIRS.results, `${id}.json`),
+				resultPath: params.parentWorkflowRunId !== undefined && params.revivalLease !== undefined
+					? workflowAwaitedAsyncResultPath(asyncDir)
+					: inheritedNestedRoute ? nestedResultsPath(inheritedNestedRoute.rootRunId, id) : path.join(DIRS.results, `${id}.json`),
 				cwd: runnerCwd,
 				placeholder: "{previous}",
 				maxOutput,

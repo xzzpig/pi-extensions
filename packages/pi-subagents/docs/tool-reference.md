@@ -29,14 +29,15 @@ Parameters and actions for the `subagent` tool. These are what the LLM passes wh
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
 | `agent` | string | - | Agent target for management actions. Workflow child agents are set inside `runs.run` or `runs.all`. |
-| `action` | string | - | Agent management (including `children.list` and `refine`/`refine.show`/`refine.rollback`), mission (`mission.create/list/show/update/attach-run/close`), Herdr inspector (`inspector.open/status/close`), status/control, schedule, watchdog, or doctor action. |
+| `action` | string | - | Agent management (including `guide`, `children.list`, and `refine`/`refine.show`/`refine.rollback`), mission (`mission.create/list/show/update/resolve-decision/attach-run/close`), Herdr inspector (`inspector.open/status/close`), status/control, schedule, watchdog, or doctor action. |
+| `topic` | `overview \| workflows \| agents \| missions \| observability \| tool-reference \| configuration \| models \| watchdog \| extension-api` | `overview` | Packaged guide topic for `action: "guide"`. |
 | `chainName` | string | - | Chain name for management actions. |
 | `config` | object/string | - | Agent or existing durable chain config for management create/update. |
 | `context` | `fresh \| fork` | per-agent default or `fresh` | Explicit `fresh` or `fork` overrides every workflow child. When omitted, each child agent uses its own `defaultContext`; `fork` creates real branched sessions from the parent leaf. Packaged `worker`, `oracle`, and `advisor` default to `fork`. |
 | `missionId` | string | - | Attach a workflow to an existing project mission instead of creating its default enclosing mission. |
-| `mission` | object/false | auto-create | Override the default enclosing mission with `{ title, objective?, goal?, budget?, labels? }`; `goal: true` requires `budget.tokens` and enables continuation notices. Pass `false` for an intentionally ephemeral workflow with no mission for it or its children and no `state` global. Explicit mission persistence failures are strict. |
+| `mission` | object/false | auto-create | Override the default enclosing mission with `{ title \| summary, objective?, goal?, budget?, labels? }`. Set exactly one non-empty `title` or `summary`; `objective` and `labels` are optional. `goal` may only be `true`, requires `budget.tokens`, and enables continuation notices. Pass `false` for an intentionally ephemeral workflow with no mission for it or its children and no `state` global. Explicit mission persistence failures are strict. |
 | `handoffPath` | string | - | Aggregate handoff manifest required by `action: "worktree.discard"`. |
-| `focus` | boolean | true | Focus the newly split pane for `action: "inspector.open"`; not a standalone action. |
+| `focus` | boolean | true | Focus the newly split pane for `action: "inspector.open"` or `action: "project.open"`; not a standalone action. |
 | `view` | `fleet \| transcript` | - | Optional `status` view for the active fleet surface or transcript tail inspection. |
 | `lines` | number | `80` | Maximum transcript lines for `action: "status", view: "transcript"`; capped at 500. |
 | `agentScope` | `user \| project \| both` | `both` | Agent discovery scope. Project wins on collisions. |
@@ -77,19 +78,39 @@ In workflowScript, give each child an explicit output path when later script ste
 
 Workflows get `await state.get(key)` and `await state.set(key, value)` through their default or explicit mission. Use them to share durable JSON values across later workflows attached with the same `missionId`. Each `set` takes the state-file lock and merges its key with the latest on-disk state. Missing keys return `undefined`, and the complete state file has a strict 256 KiB limit. `mission:false` workflows have no `state` global.
 
+### Prompt fragments
+
+Use `await prompts.render(ref, vars?)` to render reusable plain task text. Refs require an explicit scope: `package:<name>` reads the installed package `prompts/` directory, `user:<name>` reads the Pi agent `prompts/` directory, and `project:<name>` reads the current workflow project's config `prompts/` directory. Each ref names a top-level `<name>.md` file. Frontmatter is removed. Scalar string, number, and boolean variables replace matching `{{name}}` placeholders. Unknown placeholders stay unchanged.
+
+Rendering only returns text to the sandbox. It does not give the script filesystem access and does not change child launch parameters, worktree capture, or cleanup. Pass the rendered result explicitly as `task`.
+
 ### Retained children
 
 Completed workflow children from the current parent session stay addressable as retained children. `{ action: "children.list" }` lists up to the last 10 with their run ids. A later workflow continues one by passing `resume` instead of `agent`:
 
 ```js
-{ workflowScript: `return runs.run("continue", { resume: "<retained-run-id>", task: "Apply the follow-up feedback" })` }
+{ workflowScript: `
+  let writer = await runs.run("implement", { agent: "worker", task: "Implement the accepted contract" });
+  for (const pass of [1, 2]) {
+    if (!writer.runId) throw new Error("writer did not return a retained run id");
+    const task = await prompts.render("project:writer-followup", { pass, previous: writer.output });
+    writer = await runs.run("followup-" + pass, { resume: writer.runId, task });
+  }
+  return writer;
+` }
 ```
+
+Inside `workflowScript`, `await runs.run(key, { resume, task })` waits for the revived child to finish and returns its completed output and new `runId`. Each resume can return a new retained run id, so loops must continue from the latest returned `runId`. Top-level `{ action: "resume" }` remains detached and returns a background-run receipt.
 
 `resume` and `agent` are mutually exclusive. The revived child keeps its stored agent, model, and tool contract. `gate` is rejected on retained resume items because resume uses the retained child contract.
 
 ## Management actions
 
-Agent definitions are not loaded into context by default. Management actions let the LLM discover, inspect, create, update, and delete agents and chains at runtime.
+### Guide
+
+`{ action: "guide" }` reads the packaged `README.md` from the installed version. Pass `topic` to read its packaged `docs/<topic>.md` file instead. Valid topics are `overview`, `workflows`, `agents`, `missions`, `observability`, `tool-reference`, `configuration`, `models`, `watchdog`, and `extension-api`. Unknown topics list the valid values and do not change files. Use `/subagents-guide [topic]` for the slash equivalent.
+
+Agent definitions are not loaded into context by default. Management actions let the LLM discover, inspect, create, update, and delete agents and chains at runtime. An unknown action returns safe next steps (`status` and `list`) and may suggest a close non-destructive action. Destructive actions are only named for a near-complete one-character typo, and suggestions never execute an action.
 
 ```ts
 { action: "list" }
@@ -225,7 +246,7 @@ The persisted `steering` ledger retains 20 requests and replaces the old `steerC
 
 ### append-step
 
-`append-step` accepts exactly one `step` object for an existing durable chain for a top-level async chain whose status is still `running`. The step is persisted in the run directory and becomes eligible only after the chain's already-queued steps finish. Completed, failed, rejected, paused, foreground, single, and non-chain runs reject appends.
+`append-step` requires `legacyChainControls: true`. The default registered model-facing schema omits this legacy control surface. When enabled, it accepts exactly one `step` object for an existing durable chain for a top-level async chain whose status is still `running`. The step is persisted in the run directory and becomes eligible only after the chain's already-queued steps finish. Completed, failed, rejected, paused, foreground, single, and non-chain runs reject appends.
 
 ## Acceptance gates
 

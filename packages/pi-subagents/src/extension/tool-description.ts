@@ -18,14 +18,14 @@ export const FULL_SUBAGENT_TOOL_DESCRIPTION = `Run subagents only through { work
 
 EXECUTION:
 • Before executing, use { action: "list" } and run only executable/non-disabled configured agents.
-• WORKFLOW SCRIPT: { workflowScript: "return runs.run('main', {agent:'worker', task:'...'})" }. Every execution is a workflow. Use stable-key runs.run for one child and runs.all for parallel children; ordinary JavaScript provides sequence, branching, filtering, retries, and aggregation. workflowScript is an ordinary JavaScript statement body, so use an explicit return for a useful result. Scripts start asynchronously by default; pass async:false only for a small foreground run. Same-repo foreground workflows default to a live in-chat card; set chatProgress to auto, off, or live-card to control that projection. Workflow-level child controls default onto each runs.run launch, and explicit child fields override them. Use {action:"children.list"} to list up to 10 completed retained children from this parent session, then continue one with runs.run(key, {resume:"run-id", task:"follow-up"}); resume and agent are mutually exclusive, and resume keeps the stored agent/model/tool contract. For repository mutation lanes, set worktree:true on the workflow or individual runs.run/runs.all item for managed isolation; each parallel child gets a separate worktree and handoff artifact. A workflow usageBudget is enforced once across the workflow. Available globals are runs.run, runs.all, runs.status, runs.ref/refs, emit, console, and standard JavaScript only. Workflows get async state.get(key) and state.set(key, JSONValue) through their automatic or explicit mission; mission:false workflows do not have a state global. Scripts cannot access filesystem, shell, arbitrary Pi tools, or host globals.
+• WORKFLOW SCRIPT: { workflowScript: "return runs.run('main', {agent:'worker', task:'...'})" }. Every execution is a workflow. Use stable-key runs.run for one child and runs.all for parallel children; ordinary JavaScript provides sequence, branching, filtering, retries, and aggregation. workflowScript is an ordinary JavaScript statement body, so use an explicit return for a useful result. For task text with Markdown fences or shell blocks, build quoted lines instead of nesting raw template literals: \`const task=["Run:","\`\`\`bash","npm test","\`\`\`"].join("\\n")\`. Scripts start asynchronously by default; pass async:false only for a small foreground run. Same-repo foreground workflows default to a live in-chat card; set chatProgress to auto, off, or live-card to control that projection. Workflow-level child controls default onto each runs.run launch, and explicit child fields override them. Use await prompts.render("package:name" | "user:name" | "project:name", vars?) for reusable plain task text, then pass the result explicitly as task. Use {action:"children.list"} to list up to 10 completed retained children from this parent session, then continue one with runs.run(key, {resume:"run-id", task:"follow-up"}); resume and agent are mutually exclusive, resume keeps the stored agent/model/tool contract, workflow resumes wait for completed output, and loops must continue from each latest returned runId. For repository mutation lanes, set worktree:true on the workflow or individual runs.run/runs.all item for managed isolation; each parallel child gets a separate worktree and handoff artifact. A workflow usageBudget is enforced once across the workflow. Available globals are runs.run, runs.all, runs.status, runs.ref/refs, prompts.render, emit, console, and standard JavaScript only. Workflows get async state.get(key) and state.set(key, JSONValue) through their automatic or explicit mission; mission:false workflows do not have a state global. Scripts cannot access filesystem, shell, arbitrary Pi tools, or host globals.
 • Sequential example: { workflowScript: "const a = await runs.run('analyze', {agent:'agent-a', task:'Analyze the request'}); return (await runs.run('plan', {agent:'agent-b', task:'Plan from: '+a.output})).output" }
 • Parallel example: { workflowScript: "const [a,b] = await runs.all([{key:'correctness',agent:'agent-a',task:'Review correctness'},{key:'tests',agent:'agent-b',task:'Review tests'}]); return {correctness:a.output,tests:b.output}" }
 • Optional context is "fresh" or "fork". timeoutMs/maxRuntimeMs apply to foreground and async workflows; foreground workflows default to 30 minutes and async workflows have no default timeout. Omit acceptance for reviewer/read-only calls; evidence levels end at verified, and acceptance.review.required requests independent writer review.
-• Durable mission attachment is automatic by default. Use missionId to attach an existing mission, mission:{...} to override auto-create, or mission:false for ephemeral work.
+• Durable mission attachment is automatic by default. Use missionId to attach an existing mission, mission:{...} to override auto-create, or mission:false for ephemeral work. A mission object needs exactly one non-empty title or summary; objective and labels are optional. goal may only be true and requires budget:{tokens}.
 
 MANAGEMENT / CONTROL (use action; omit execution fields):
-• list, get, models, children.list, create, update, delete, eject, disable, enable, reset, doctor, grant-spawn-budget, worktree.discard, refine/refine.show/refine.rollback, mission.create/list/show/update/attach-run/close, inspector.open/status/close, project.open/status/close, and watchdog actions remain available.
+• list, get, models, guide, children.list, create, update, delete, eject, disable, enable, reset, doctor, grant-spawn-budget, worktree.discard, refine/refine.show/refine.rollback, mission.create/list/show/update/resolve-decision/attach-run/close, inspector.open/status/close, project.open/status/close, and watchdog actions remain available. Use {action:"guide", topic:"overview"} for packaged current-version help; topics are overview, workflows, agents, missions, observability, tool-reference, configuration, models, watchdog, and extension-api.
 • status, interrupt, stop, resume, and steer manage live or persisted runs. Use status view:"fleet" for an overview or view:"transcript" with id and optional index to tail output.
 • { action: "append-step", id: "...", step: {agent:"agent-c", task:"Use {previous}"} } appends one step to an already-running durable legacy chain. step is control-only, not an execution mode.
 • approve-checkpoint and reject-checkpoint decide a paused durable legacy chain checkpoint.
@@ -37,13 +37,14 @@ export const COMPACT_SUBAGENT_TOOL_DESCRIPTION = `Run subagents only through { w
 
 EXECUTE:
 • Call { action:"list" } first and use only executable/non-disabled agents.
-• SCRIPT {workflowScript:"return runs.run('main', {agent:'worker', task:'...'})"}. Use stable-key runs.run for one child and runs.all for parallel work. Use {action:"children.list"} for the last 10 retained children in this parent session, then runs.run(key,{resume:"run-id",task:"follow-up"}) to continue one with its stored contract. Workflows get async state.get/state.set through their automatic or explicit mission; mission:false does not. Scripts are ordinary JavaScript statement bodies; use explicit return for a useful result. Use JavaScript for sequence, branching, retries, and aggregation. For repository mutation lanes, use worktree:true on the workflow or runs.run/runs.all item for managed isolation. Scripts start async by default; async:false is the foreground escape hatch and auto-enables a same-repo live chat card unless chatProgress is off.
+• SCRIPT {workflowScript:"return runs.run('main', {agent:'worker', task:'...'})"}. Use stable-key runs.run for one child and runs.all for parallel work. Use await prompts.render("package:name" | "user:name" | "project:name", vars?) for reusable task text and pass it explicitly to runs.run. Use {action:"children.list"} for the last 10 retained children in this parent session, then runs.run(key,{resume:"run-id",task:"follow-up"}) to continue one with its stored contract; workflow resumes wait for completion and loops continue from the latest returned runId. Workflows get async state.get/state.set through their automatic or explicit mission; mission:false does not. Scripts are ordinary JavaScript statement bodies; use explicit return for a useful result. For task text with Markdown fences or shell blocks, build quoted lines instead of nesting raw template literals: \`const task=["Run:","\`\`\`bash","npm test","\`\`\`"].join("\\n")\`. Use JavaScript for sequence, branching, retries, and aggregation. For repository mutation lanes, use worktree:true on the workflow or runs.run/runs.all item for managed isolation. Scripts start async by default; async:false is the foreground escape hatch and auto-enables a same-repo live chat card unless chatProgress is off.
 • Example: {workflowScript:"const [a,b]=await runs.all([{key:'a',agent:'agent-a',task:'Implement A',worktree:true},{key:'b',agent:'agent-b',task:'Implement B',worktree:true}]); return [a.output,b.output]"}
 • context can be fresh or fork. timeoutMs/maxRuntimeMs apply to foreground and async workflows; foreground workflows default to 30 minutes and async workflows have no default timeout. Omit acceptance for reviewer/read-only calls.
 
 MANAGE / CONTROL:
-• Use action without execution fields for list/get/models/authoring, refine/refine.show/refine.rollback, mission, watchdog, status, interrupt, stop, resume, steer, script-only scheduling, diagnostics, and other management actions.
+• Use action without execution fields for list/get/models/guide/authoring, refine/refine.show/refine.rollback, mission, watchdog, status, interrupt, stop, resume, steer, script-only scheduling, diagnostics, and other management actions. guide reads shipped current-version docs by topic.
 • append-step uses step:{...} only for an already-running durable legacy chain; step is not an execution mode.
+• A mission object needs exactly one non-empty title or summary; objective and labels are optional. goal may only be true and requires budget:{tokens}.
 
 ASYNC / SAFETY:
 • Omitted async detaches background work. Do not sleep or poll merely to wait; use subagent_wait only when this turn must receive results.
@@ -152,13 +153,30 @@ function withMandatorySafetyGuidance(description: string): string {
 		: SUBAGENT_SAFETY_GUIDANCE;
 }
 
-export function buildSubagentToolDescription(config: Pick<ExtensionConfig, "toolDescriptionMode"> = {}, options?: ToolDescriptionOptions): string {
+const LEGACY_CHAIN_CONTROL_GUIDANCE_LINES = new Set([
+	'• { action: "append-step", id: "...", step: {agent:"agent-c", task:"Use {previous}"} } appends one step to an already-running durable legacy chain. step is control-only, not an execution mode.',
+	"• approve-checkpoint and reject-checkpoint decide a paused durable legacy chain checkpoint.",
+	"• append-step uses step:{...} only for an already-running durable legacy chain; step is not an execution mode.",
+]);
+
+function withoutLegacyChainControlGuidance(description: string): string {
+	return description
+		.split("\n")
+		.filter((line) => !LEGACY_CHAIN_CONTROL_GUIDANCE_LINES.has(line.trim()))
+		.join("\n");
+}
+
+export function buildSubagentToolDescription(config: Pick<ExtensionConfig, "toolDescriptionMode" | "legacyChainControls"> = {}, options?: ToolDescriptionOptions): string {
 	const mode = resolveToolDescriptionMode(config, options);
-	if (mode === "compact") return COMPACT_SUBAGENT_TOOL_DESCRIPTION;
-	if (mode === "custom") {
+	let description: string;
+	if (mode === "compact") description = COMPACT_SUBAGENT_TOOL_DESCRIPTION;
+	else if (mode === "custom") {
 		const custom = loadCustomToolDescription(options);
-		if (custom) return withMandatorySafetyGuidance(custom);
-		warn(options, `${CUSTOM_TOOL_DESCRIPTION_FILE} was not found or valid for toolDescriptionMode "custom"; using full description.`);
-	}
-	return FULL_SUBAGENT_TOOL_DESCRIPTION;
+		if (custom) description = withMandatorySafetyGuidance(custom);
+		else {
+			warn(options, `${CUSTOM_TOOL_DESCRIPTION_FILE} was not found or valid for toolDescriptionMode "custom"; using full description.`);
+			description = FULL_SUBAGENT_TOOL_DESCRIPTION;
+		}
+	} else description = FULL_SUBAGENT_TOOL_DESCRIPTION;
+	return config.legacyChainControls === true ? description : withoutLegacyChainControlGuidance(description);
 }

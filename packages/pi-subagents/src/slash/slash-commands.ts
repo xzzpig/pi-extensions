@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { keyText, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth, type Component, type TUI } from "@earendil-works/pi-tui";
 import { BUILTIN_AGENT_NAMES, discoverAgents } from "../agents/agents.ts";
+import { resolveExistingReadPaths } from "../shared/settings.ts";
 import {
 	DEFAULT_PROVIDER_MODELS_MAX_AGE_DAYS,
 	applySubagentProfile,
@@ -22,6 +23,7 @@ import { SUBAGENT_FANOUT_CHILD_ENV } from "../runs/shared/pi-args.ts";
 import type { SlashSubagentResponse, SlashSubagentUpdate } from "./slash-bridge.ts";
 import { registerPromptWorkflowCommands } from "./prompt-workflows.ts";
 import { openSubagentsAdmin } from "./subagents-admin.ts";
+import { SUBAGENT_GUIDE_TOPICS } from "../extension/subagent-guide.ts";
 import { openSubagentFleet } from "../tui/fleet.ts";
 import {
 	applySlashUpdate,
@@ -40,6 +42,7 @@ import {
 	SLASH_SUBAGENT_UPDATE_EVENT,
 	DIRS,
 	type Details,
+	type FleetKeybindingsConfig,
 	type JsonSchemaObject,
 	type SingleResult,
 	type SubagentState,
@@ -628,6 +631,7 @@ function slashRunWorkflowScript(key: string, child: Record<string, unknown>): st
 export function registerSlashCommands(
 	pi: ExtensionAPI,
 	state: SubagentState,
+	options: { fleetKeybindings?: FleetKeybindingsConfig } = {},
 ): void {
 	let fleetOpen = false;
 	const showFleet = async (ctx: ExtensionContext) => {
@@ -642,7 +646,7 @@ export function registerSlashCommands(
 		}
 		fleetOpen = true;
 		try {
-			await openSubagentFleet(ctx, state, { asyncDirRoot: DIRS.async, resultsDir: DIRS.results });
+			await openSubagentFleet(ctx, state, { asyncDirRoot: DIRS.async, resultsDir: DIRS.results, fleetKeybindings: options.fleetKeybindings });
 		} finally {
 			fleetOpen = false;
 		}
@@ -672,7 +676,8 @@ export function registerSlashCommands(
 
 			let finalTask = task;
 			if (inline.reads && Array.isArray(inline.reads) && inline.reads.length > 0) {
-				finalTask = `[Read from: ${inline.reads.join(", ")}]\n\n${finalTask}`;
+				const existingReads = inline.reads.filter((read) => resolveExistingReadPaths([read], state.baseCwd).length > 0);
+				if (existingReads.length > 0) finalTask = `[Read from: ${existingReads.join(", ")}]\n\n${finalTask}`;
 			}
 			const child: Record<string, unknown> = { agent: agentName, task: finalTask, agentScope: "both" };
 			if (inline.output !== undefined) child.output = inline.output;
@@ -695,6 +700,21 @@ export function registerSlashCommands(
 		description: "Show subagent diagnostics",
 		handler: async (_args, ctx) => {
 			await runSlashSubagent(pi, ctx, { action: "doctor" });
+		},
+	});
+
+	pi.registerCommand("subagents-guide", {
+		description: "Show a packaged subagents guide topic",
+		getArgumentCompletions: (prefix) => prefix.includes(" ") ? null : SUBAGENT_GUIDE_TOPICS
+			.filter((topic) => topic.startsWith(prefix))
+			.map((topic) => ({ value: topic, label: topic })),
+		handler: async (args, ctx) => {
+			const topic = args.trim();
+			if (topic.includes(" ")) {
+				ctx.ui.notify("Usage: /subagents-guide [topic]", "error");
+				return;
+			}
+			await runSlashSubagent(pi, ctx, { action: "guide", ...(topic ? { topic } : {}) });
 		},
 	});
 

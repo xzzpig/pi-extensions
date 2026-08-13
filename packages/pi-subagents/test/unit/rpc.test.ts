@@ -180,6 +180,34 @@ describe("subagent extension RPC bridge", () => {
 		bridge.dispose();
 	});
 
+	it("projects fleet text without control characters or malformed UTF-16", async () => {
+		const events = new FakeEvents();
+		const state = {
+			currentSessionId: "session-123",
+			foregroundControls: new Map(),
+			asyncJobs: new Map([["unicode", {
+				asyncId: "unicode", sessionId: "session-123", status: "running", mode: "single", startedAt: 1,
+				description: "start\n" + "😀".repeat(257),
+				agents: [`worker\ud800broken\udc00${"😀".repeat(45)}`],
+			}]]),
+		} as any;
+		const bridge = registerSubagentRpcBridge({
+			events, getContext: () => ctx("session-123", "session-123"), state,
+			execute: async () => ({ content: [], details: { mode: "management", results: [] } } as any),
+		});
+		const reply = await request(events, "fleet-unicode", "status");
+		const entry = (reply as any).data.fleet.entries[0];
+		const malformedSurrogate = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/u;
+
+		assert.doesNotMatch(entry.agent, malformedSurrogate);
+		assert.doesNotMatch(entry.goal, malformedSurrogate);
+		assert.doesNotMatch(entry.goal, /[\r\n]/);
+		assert.ok(entry.agent.length <= 96);
+		assert.ok(entry.goal.length <= 512);
+		assert.match(entry.agent, /^worker broken/);
+		bridge.dispose();
+	});
+
 	it("projects resolved foreground model, effort, split usage, and goal", async () => {
 		const events = new FakeEvents();
 		const state = {
@@ -592,6 +620,52 @@ describe("subagent extension RPC bridge", () => {
 			assert.equal((reply as { data: { runId?: string; state?: string } }).data.runId, "run-stop");
 			assert.equal((reply as { data: { state?: string } }).data.state, "stopping");
 			assert.equal(fs.existsSync(stopRequestPath(asyncDir)), true);
+
+			bridge.dispose();
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("rejects stop requests for reload-recovered workflows", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-rpc-stop-workflow-"));
+		try {
+			const events = new FakeEvents();
+			const asyncRoot = path.join(root, "runs");
+			const resultsDir = path.join(root, "results");
+			const asyncDir = path.join(asyncRoot, "workflow-run");
+			let killCalls = 0;
+			fs.mkdirSync(asyncDir, { recursive: true });
+			fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({
+				runId: "workflow-run",
+				sessionId: "/sessions/parent.jsonl",
+				mode: "workflow",
+				state: "running",
+				pid: 4242,
+				startedAt: 100,
+				lastUpdate: 100,
+				steps: [{ agent: "worker", status: "running", startedAt: 100 }],
+			}, null, 2), "utf-8");
+			const bridge = registerSubagentRpcBridge({
+				events,
+				getContext: () => ctx(),
+				execute: async () => assert.fail("stop should not call executor"),
+				asyncDirRoot: asyncRoot,
+				resultsDir,
+				kill: () => {
+					killCalls++;
+					return true;
+				},
+				now: () => 150,
+			});
+
+			const reply = await request(events, "stop-workflow", "stop", { id: "workflow-run" });
+
+			assert.equal(reply.success, false);
+			assert.equal((reply as { error: { code: string; message: string } }).error.code, "invalid_state");
+			assert.match((reply as { error: { message: string } }).error.message, /reload recovery cannot stop it safely/);
+			assert.equal(fs.existsSync(stopRequestPath(asyncDir)), false);
+			assert.equal(killCalls, 0);
 
 			bridge.dispose();
 		} finally {

@@ -2,6 +2,85 @@
 
 ## [Unreleased]
 
+## [0.47.1] - 2026-08-12
+
+### Fixed
+- Honor configured artifact cleanup retention days and let `0` disable artifact cleanup. Thanks to @elecnix for #1012.
+- Add a display-only dismiss action for reload-recovered running workflows without claiming or attempting to stop their work (#1010).
+- Stop the bundled reviewer from inheriting chain-only plan/progress reads in ad-hoc review runs. Thanks to @Ostii for #1000.
+- Remove mutation-capable tools from the bundled reviewer so read-only review lanes have a hard launch-time tool boundary (#1007).
+- Show the requested child agent in workflow started trace entries. Thanks to @albertgwo for #1001.
+
+## [0.47.0] - 2026-08-11
+
+### Changed
+- Avoid fully parsing stale cross-session result files during watcher recovery and reduce healthy watcher safety scans.
+- Index active async runs so status restoration no longer scans all historical run directories.
+- Refresh active async job state from filesystem events while reserving polling for slow liveness repair.
+- Add optional strict model-scope enforcement that rejects inherited and fallback models outside the configured allowlist. Thanks to @antonioc-cl for #995.
+- Trim legacy chain-control schema fields and guidance by default, saving 1,319 `o200k_base` tokens from the serialized default tool schema plus description versus `legacyChainControls: true`. Thanks to @tajquitgenius for #977.
+- Move project-scoped pi-subagents storage from `.pi-subagents/` to `.pi/subagents/` for cleaner project roots. Thanks to @yceachan for #971.
+- Clarify the accepted mission launch object contract for tool callers.
+- Reduce repeated async status parsing, workflow trace projection, and constrained widget rendering work.
+- Coalesce rapid running-status writes while keeping terminal and attention status changes durable immediately.
+- Keep parsed async statuses cached beyond 50 runs while preserving per-read freshness checks. Thanks to @bcanvural for #982.
+- Prefer native control inbox watchers over per-process 250 ms polling, with polling retained as a fallback.
+
+### Fixed
+- Omit missing configured read files from child task instructions.
+- Stabilize steering recovery budget coverage around the confirmed paused handoff.
+- Keep timeout-sensitive async acceptance verification coverage off Windows CI where signal delivery is intermittent.
+- Retry transient Windows mission state lock creation failures and stabilize no-session steering recovery coverage.
+- Keep async widget running glyphs moving while children are quiet but active. Thanks to @bcanvural for #983.
+- Let active-session workflows live-steer their workflow-owned foreground children by child or unique workflow identity. Thanks to @youlikemodernart for #988.
+- Accept persisted async recovery descriptors that include internal turn-budget state fields (#985).
+- Add a 30-minute default wall-clock timeout to async children while keeping async composite parents unbounded by default. Thanks to @forrestbthomas for #978 and #979.
+- Keep tool argument previews on one physical terminal line so live widget updates do not leave stacked terminal frames. Thanks to @xz-dev for #972.
+- Recover durable async completions when a healthy native result watcher misses a filesystem event. Thanks to @xz-dev for #973.
+
+## [0.46.0] - 2026-08-11
+
+### Added
+- Add `prompts.render(ref, vars?)` to `workflowScript` for explicitly scoped package, user, and project prompt fragments with simple `{{name}}` interpolation (#960).
+- Expose a versioned `pi-subagents/project-panes` TypeScript API so other Pi extensions can deterministically open, inspect, and close project-owned Herdr panes without invoking the model-facing `subagent` tool. The structured status includes bounded pane runtime state and an opt-in idle-only close guard; Pi project trust remains an explicit human verification step. Thanks to @wiizard-chen for #949.
+- Preserve short-lived completion replay records and bounded output archives so waits can recover consumed async result details after watcher delivery or restart.
+- Add `subagent({ action: "guide" })` and `/subagents-guide [topic]` to read current-version packaged guides.
+- Persist workflow child attempts, status heartbeats, session paths, and artifacts in their enclosing mission, and add explicit mission decision resolution.
+
+### Fixed
+- Suspend subagent status widgets during automatic compaction to prevent duplicate terminal frames.
+- Make live foreground workflow children visible as workflow-owned Fleet rows, route Herdr inspection to their workflow parent, and report their active and needs-attention state to Herdr. Thanks to @lukechen526 for #965.
+- Wait for retained-child resumes inside `workflowScript` to finish and return completed output before the script continues (#961).
+- Keep fork-context workflow children inside their managed worktree by aligning the persisted child session cwd before launch. Thanks to @flopsi for #953.
+- Show the resolved child agent in async workflow status while keeping the workflow key as its stable label. Thanks to @albertgwo for #955.
+- Reject workflow scripts that finish with unawaited child launches and name every launch that was aborted. Thanks to @zig-zag-zig for #957.
+- Reject mismatched completion replay archive paths so stale replay cleanup cannot delete another run's saved output archive.
+- Keep `git-root` project agent and package discovery stable when incidental `.pi` state appears in a nested linked worktree. Thanks to @klajdo-f for #950.
+- Read skill descriptions from YAML block scalars instead of exposing their markers. Thanks to @ashlineldridge for #945.
+- Collapse repeated subagent status snapshots in live widgets so status polling does not overflow the chat.
+- Give invalid `subagent` actions safe next steps and typo suggestions without suggesting destructive actions for ambiguous input.
+- Let the Fleet inspector use extension-local keybindings for terminals that intercept navigation keys. Thanks to @epheien for #940.
+- Restore completed foreground children from a compact Fleet history index after session resume. Thanks to @epheien for #946.
+- Compact noisy repeated subagent live-output lines and bound workflow live-card rows so progress stays readable in the TUI (#947).
+
+## [0.45.2] - 2026-08-10
+
+### Fixed
+- Tell parents to revive resumable failed async runs before reporting failure or launching a replacement. Thanks to @Livan-pro for #938.
+- Persist the actual agent and session file for workflow children when they start so their sessions can resume after a parent restart. Thanks to @Livan-pro for #932.
+- Retry steering requests that remain pending after manual compaction and fail unresolved requests at shutdown. Thanks to @jtac for #933.
+- Omit undefined object fields from `workflowScript` return values so completed `runs.all` results are not discarded when callers include unsupported fields such as `status` (#930).
+- Keep child steering inbox `auto` requests queued between `agent_end` and `agent_settled` so settlement-time guidance is not sent as an idle prompt too early. Thanks to @jtac for #928.
+
+## [0.45.1] - 2026-08-09
+
+### Changed
+- Simplified async workflow activity projection and its regression test to reuse canonical status types.
+
+### Fixed
+- Add actionable guidance when Markdown fence backticks make a `workflowScript` invalid JavaScript.
+- Prevent async interrupt requests from signaling unverified runner PIDs, including the shared host PID stored by workflows. Thanks to @kdasme for #925.
+
 ## [0.45.0] - 2026-08-09
 
 ### Added

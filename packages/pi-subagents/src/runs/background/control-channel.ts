@@ -9,9 +9,8 @@
  * This module adds a portable, file-based control inbox inside the run directory.
  * The parent drops an interrupt request file; the runner watches the inbox and
  * routes the request into its existing graceful `interruptRunner()` (pause +
- * resumable), identically on every platform. The OS signal is kept only as an
- * opportunistic fast-path; its failure is non-fatal because the file inbox is
- * authoritative.
+ * resumable), identically on every platform. The file inbox is authoritative and
+ * avoids signaling a PID that the extension cannot prove belongs to the runner.
  */
 
 import { randomUUID } from "node:crypto";
@@ -21,15 +20,19 @@ import { writeAtomicJson } from "../../shared/atomic-json.ts";
 import { POLL_INTERVAL_MS } from "../../shared/types.ts";
 import { resolveWatchPath } from "../../shared/utils.ts";
 
-/**
- * Opportunistic fast-path interrupt signal. On Unix `SIGUSR2` is trapped by the
- * runner; on Windows `process.kill(pid, "SIGBREAK")` is not deliverable
- * cross-process and throws `ENOSYS`, so the file inbox below is the real channel.
- */
-export const INTERRUPT_SIGNAL: NodeJS.Signals = process.platform === "win32" ? "SIGBREAK" : "SIGUSR2";
-
 export type ControlChannelFs = Pick<typeof fs, "mkdirSync" | "existsSync" | "rmSync" | "watch" | "readdirSync" | "readFileSync" | "realpathSync">;
+
+function writeJsonToExistingDir(filePath: string, payload: object): void {
+	const tempPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`);
+	try {
+		fs.writeFileSync(tempPath, JSON.stringify(payload, null, 2), { encoding: "utf-8", flag: "wx" });
+		fs.renameSync(tempPath, filePath);
+	} finally {
+		fs.rmSync(tempPath, { force: true });
+	}
+}
 export type ControlChannelTimers = { setInterval: typeof setInterval; clearInterval: typeof clearInterval };
+const CONTROL_SAFETY_POLL_INTERVAL_MS = 5000;
 type KillFn = (pid: number, signal?: NodeJS.Signals | 0) => unknown;
 
 export interface InterruptRequest {
@@ -213,6 +216,13 @@ export function writeSteerRequestToDir(dir: string, request: SteerRequest): stri
 	return requestPath;
 }
 
+export function writeSteerRequestToExistingDir(dir: string, request: SteerRequest): string {
+	if (!validSteerRequest(request)) throw new Error("steer request is malformed or exceeds transport limits.");
+	const requestPath = path.join(dir, steerRequestFileName(request));
+	writeJsonToExistingDir(requestPath, request);
+	return requestPath;
+}
+
 export function writeSteerCapabilityAt(filePath: string, capability: Omit<SteerCapability, "type" | "protocolVersion">): string {
 	assertChildIndex(capability.index);
 	if (!Number.isInteger(capability.pid) || capability.pid <= 0) throw new Error("steer capability pid must be a positive integer.");
@@ -393,6 +403,25 @@ export function consumeSteerCapabilities(asyncDir: string, fsImpl: Pick<typeof f
 	return capabilities;
 }
 
+export function consumeSteerAckFromDir(
+	dir: string,
+	requestId: string,
+	fsImpl: Pick<typeof fs, "existsSync" | "readdirSync" | "readFileSync" | "rmSync"> = fs,
+): SteerAck | undefined {
+	if (!fsImpl.existsSync(dir)) return undefined;
+	let entries: string[];
+	try { entries = fsImpl.readdirSync(dir).filter((name) => name.endsWith(".json")).sort(); } catch { return undefined; }
+	for (const entry of entries) {
+		const target = path.join(dir, entry);
+		let ack: SteerAck | undefined;
+		try { ack = parseSteerAck(JSON.parse(fsImpl.readFileSync(target, "utf-8"))); } catch { ack = undefined; }
+		if (ack?.requestId !== requestId) continue;
+		try { fsImpl.rmSync(target, { force: true }); } catch { return undefined; }
+		return ack;
+	}
+	return undefined;
+}
+
 export function consumeSteerAcks(asyncDir: string, fsImpl: Pick<typeof fs, "existsSync" | "readdirSync" | "readFileSync" | "rmSync"> = fs): SteerAck[] {
 	const root = path.join(controlInboxDir(asyncDir), STEER_ACKS_DIR);
 	if (!fsImpl.existsSync(root)) return [];
@@ -545,38 +574,13 @@ export function consumeCheckpointDecisionRequest(
 	return undefined;
 }
 
-/**
- * Parent side: portable interrupt = authoritative file request + best-effort OS
- * signal. The signal is only a latency optimization on Unix; ENOSYS on Windows
- * is swallowed because the file inbox is authoritative there. Other signal
- * failures are surfaced because they usually mean the runner is not alive to
- * consume the request.
- */
+/** Parent side: write the authoritative portable interrupt request. */
 export function deliverInterruptRequest(input: {
 	asyncDir: string;
-	pid?: number;
-	kill?: KillFn;
-	signal?: NodeJS.Signals;
 	now?: () => number;
 	source?: string;
 }): void {
-	const requestPath = requestAsyncInterrupt(input.asyncDir, input.source ? { source: input.source } : {}, { now: input.now });
-	if (typeof input.pid === "number" && input.pid > 0) {
-		try {
-			(input.kill ?? process.kill)(input.pid, input.signal ?? INTERRUPT_SIGNAL);
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException | undefined)?.code === "ENOSYS") {
-				// File inbox is authoritative when custom cross-process signals are unavailable.
-				return;
-			}
-			try {
-				fs.rmSync(requestPath, { force: true });
-			} catch {
-				// Best effort cleanup; the caller still gets the signal failure.
-			}
-			throw error;
-		}
-	}
+	requestAsyncInterrupt(input.asyncDir, input.source ? { source: input.source } : {}, { now: input.now });
 }
 
 export function deliverTimeoutRequest(input: {
@@ -618,9 +622,9 @@ export function deliverCheckpointDecisionRequest(input: {
 
 /**
  * Runner side: watch the control inbox and route interrupt requests into
- * `onInterrupt`. Uses `fs.watch` when available plus an interval poll as a
- * portable safety net (covers filesystems/platforms where `fs.watch` is
- * unreliable). Fires once per distinct request. Returns a disposer.
+ * `onInterrupt`. Uses `fs.watch` when available and starts interval polling
+ * only when native watching is unavailable or fails. Fires once per distinct
+ * request. Returns a disposer.
  */
 export function watchAsyncControlInbox(
 	asyncDir: string,
@@ -633,6 +637,7 @@ export function watchAsyncControlInbox(
 		onSteerCapability?: (capability: SteerCapability) => void;
 		onSteerAck?: (ack: SteerAck) => void;
 		pollIntervalMs?: number;
+		safetyPollIntervalMs?: number;
 		fs?: ControlChannelFs;
 		timers?: ControlChannelTimers;
 	},
@@ -666,27 +671,63 @@ export function watchAsyncControlInbox(
 	// Handle a request that may have arrived before the watcher started.
 	check();
 
-	let watcher: fs.FSWatcher | undefined;
-	try {
-		watcher = fsImpl.watch(resolveWatchPath(dir, fsImpl.realpathSync.native), () => check());
-		watcher.on?.("error", () => {
-			// fs.watch can emit on transient FS errors; the interval poll keeps us live.
+	const watchers: fs.FSWatcher[] = [];
+	const watchedDirs = new Set<string>();
+	let interval: ReturnType<typeof setInterval> | undefined;
+	let safetyInterval: ReturnType<typeof setInterval> | undefined;
+	const startPolling = (): void => {
+		if (interval || disposed) return;
+		interval = timers.setInterval(check, opts.pollIntervalMs ?? POLL_INTERVAL_MS);
+		interval.unref?.();
+	};
+	const startSafetyPolling = (): void => {
+		if (safetyInterval || disposed) return;
+		safetyInterval = timers.setInterval(check, opts.safetyPollIntervalMs ?? CONTROL_SAFETY_POLL_INTERVAL_MS);
+		safetyInterval.unref?.();
+	};
+	const watchDir = (target: string, create = false): void => {
+		if (disposed || watchedDirs.has(target)) return;
+		if (create) fsImpl.mkdirSync(target, { recursive: true });
+		const watcher = fsImpl.watch(resolveWatchPath(target, fsImpl.realpathSync.native), () => {
+			watchExistingSteerAckDirs();
+			check();
 		});
+		watcher.on?.("error", startPolling);
+		watchers.push(watcher);
+		watchedDirs.add(target);
+	};
+	const watchExistingSteerAckDirs = (): void => {
+		const ackRoot = path.join(dir, STEER_ACKS_DIR);
+		let entries: string[];
+		try {
+			entries = fsImpl.readdirSync(ackRoot).filter((name) => /^\d+$/.test(name));
+		} catch {
+			return;
+		}
+		for (const entry of entries) watchDir(path.join(ackRoot, entry));
+	};
+	try {
+		watchDir(dir);
+		watchDir(steerRequestsDir(asyncDir), true);
+		watchDir(steerCapabilitiesDir(asyncDir), true);
+		watchDir(path.join(dir, STEER_ACKS_DIR), true);
+		watchExistingSteerAckDirs();
+		startSafetyPolling();
 	} catch {
-		watcher = undefined;
+		startPolling();
 	}
-
-	const interval = timers.setInterval(check, opts.pollIntervalMs ?? POLL_INTERVAL_MS);
-	interval.unref?.();
 
 	return () => {
 		if (disposed) return;
 		disposed = true;
-		try {
-			watcher?.close();
-		} catch {
-			// ignore
+		for (const watcher of watchers) {
+			try {
+				watcher.close();
+			} catch {
+				// ignore
+			}
 		}
-		timers.clearInterval(interval);
+		if (interval) timers.clearInterval(interval);
+		if (safetyInterval) timers.clearInterval(safetyInterval);
 	};
 }

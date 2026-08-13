@@ -91,12 +91,13 @@ describe("PI_CODING_AGENT_DIR runtime paths", () => {
 
 		process.env.PI_CODING_AGENT_DIR = agentDir;
 		const configPath = path.join(agentDir, "extensions", "subagent", "config.json");
-		writeFile(configPath, JSON.stringify({ asyncByDefault: true, maxSubagentDepth: 3, artifactDir: "session" }));
+		writeFile(configPath, JSON.stringify({ asyncByDefault: true, maxSubagentDepth: 3, artifactDir: "session", artifactConfig: { cleanupDays: 9007199254740991 } }));
 
 		const config = loadConfig();
 		assert.equal(config.asyncByDefault, true);
 		assert.equal(config.maxSubagentDepth, 3);
 		assert.equal(config.artifactDir, "session");
+		assert.equal(config.artifactConfig?.cleanupDays, Number.MAX_SAFE_INTEGER);
 	});
 
 	it("discovers user agents, chains, and settings under the configured agent dir", () => {
@@ -204,6 +205,9 @@ Package skill content.
 		fs.utimesSync(artifactPath, oldTime, oldTime);
 
 		cleanupAllArtifactDirs(0);
+		assert.equal(fs.existsSync(artifactPath), true);
+
+		cleanupAllArtifactDirs(1 / 24 / 60 / 60 / 1000);
 		assert.equal(fs.existsSync(artifactPath), false);
 	});
 
@@ -223,6 +227,18 @@ Package skill content.
 		writeFile(configPath, JSON.stringify({ artifactDir: "workspace" }));
 
 		assert.throws(() => updateConfig((config) => config), /config\.artifactDir must be "project", "session", or "temp"/);
+	});
+
+	it("loads and validates Fleet keybinding config", () => {
+		const configPath = path.join(agentDir, "extensions", "subagent", "config.json");
+		writeFile(configPath, JSON.stringify({ fleetKeybindings: { pageUp: ["u"], pageDown: ["d"] } }));
+		assert.deepEqual(loadConfig().fleetKeybindings, { pageUp: ["u"], pageDown: ["d"] });
+
+		writeFile(configPath, JSON.stringify({ fleetKeybindings: { missing: ["m"] } }));
+		assert.throws(() => updateConfig((config) => config), /config\.fleetKeybindings\.missing is not a supported Fleet action/);
+
+		writeFile(configPath, JSON.stringify({ fleetKeybindings: { pageUp: [""] } }));
+		assert.throws(() => updateConfig((config) => config), /config\.fleetKeybindings\.pageUp entries must be non-empty strings/);
 	});
 
 	it("hardens and redacts existing run history while recording", () => {
