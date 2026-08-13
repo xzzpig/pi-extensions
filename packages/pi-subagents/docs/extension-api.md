@@ -58,10 +58,10 @@ The DTO intentionally never exposes run, async, or tool IDs. Clients must ignore
 
 ## Launch contract preflight
 
-Use `pi-subagents/preflight` when an extension needs to inspect the resolved child launch contract before deciding whether to run anything:
+Use `@xzzpig/pi-subagents/preflight` when an extension needs to inspect the resolved child launch contract before deciding whether to run anything:
 
 ```ts
-import { resolveSubagentLaunchContract } from "pi-subagents/preflight";
+import { resolveSubagentLaunchContract } from "@xzzpig/pi-subagents/preflight";
 
 const result = await resolveSubagentLaunchContract({
   agent: "reviewer",
@@ -107,7 +107,7 @@ import {
   SUBAGENT_DELEGATION_RESPONSE_EVENT,
   type SubagentDelegationRequest,
   type SubagentDelegationResponse,
-} from "pi-subagents/delegation";
+} from "@xzzpig/pi-subagents/delegation";
 
 const request: SubagentDelegationRequest = {
   requestId: crypto.randomUUID(),
@@ -163,14 +163,14 @@ Constraints:
 - The caller selects a configured agent, but agent discovery and effective tools remain package-owned. A request cannot grant arbitrary tools, and tool restrictions are not an operating-system sandbox.
 - The detached RPC remains async-only; this API is foreground-only.
 
-Unversioned prompt-template payloads with `requestId`, `agent`, `task`, `context`, `model`, and `cwd` are rejected as legacy direct delegation. New integrations must use the structured owned-leaf request above. `pi-subagents/delegation` is the canonical contract for extension integrations.
+Unversioned prompt-template payloads with `requestId`, `agent`, `task`, `context`, `model`, and `cwd` are rejected as legacy direct delegation. New integrations must use the structured owned-leaf request above. `@xzzpig/pi-subagents/delegation` is the canonical contract for extension integrations.
 
 ## Capability ceilings
 
 Parent extensions can enforce an out-of-band, session-scoped capability ceiling without adding a model-visible field to `subagent`:
 
 ```ts
-import { registerSubagentCapabilityCeiling } from "pi-subagents/capability-ceiling";
+import { registerSubagentCapabilityCeiling } from "@xzzpig/pi-subagents/capability-ceiling";
 
 const restriction = registerSubagentCapabilityCeiling({
   sessionId: ctx.sessionManager.getSessionId(),
@@ -204,7 +204,7 @@ Schedules created while a ceiling is active are rejected until durable schedule 
 Other Pi extensions can make their current-session jobs visible to `subagent_wait` through the process-local provider contract:
 
 ```ts
-import { registerBackgroundWorkProvider } from "pi-subagents/background-work";
+import { registerBackgroundWorkProvider } from "@xzzpig/pi-subagents/background-work";
 
 const dispose = registerBackgroundWorkProvider({
   name: "my-background-extension",
@@ -278,7 +278,7 @@ import {
   openProjectPane,
   getProjectPaneStatus,
   closeProjectPane,
-} from "pi-subagents/project-panes";
+} from "@xzzpig/pi-subagents/project-panes";
 
 const opened = await openProjectPane({ cwd: "/path/to/repo", focus: false });
 const status = await getProjectPaneStatus({ cwd: "/path/to/repo" });

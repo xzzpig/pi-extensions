@@ -4,10 +4,10 @@
   "prefix": "packages/pi-subagents",
   "source": "https://github.com/nicobailon/pi-subagents.git",
   "remote": "upstream-pi-subagents",
-  "ref": "23ba0b61727b67c76ec1b53d9fcd9b0a9005be8d",
-  "version": "0.45.0",
-  "upstreamCommit": "23ba0b61727b67c76ec1b53d9fcd9b0a9005be8d",
+  "ref": "v0.47.1",
+  "version": "0.47.1",
+  "upstreamCommit": "5d158bf6c8f63855a1b89d135f0cec528e4fde91",
   "squash": true,
-  "lastSyncedAt": "2026-08-10T03:11:50+08:00",
-  "notes": "Forked from nicobailon/pi-subagents; local fix adds @xzzpig/pi-permission-system candidate to resolvePermissionSystemExtension() (intentionally diverges from upstream)."
+  "lastSyncedAt": "2026-08-13T07:52:53.000Z",
+  "notes": "Forked from nicobailon/pi-subagents; local compatibility fixes preserve @xzzpig/pi-permission-system priority in resolvePermissionSystemExtension() and Pi SDK 0.83 streamFn option naming (intentionally diverges from upstream)."
 }

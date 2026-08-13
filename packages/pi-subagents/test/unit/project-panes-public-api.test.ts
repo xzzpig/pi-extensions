@@ -13,7 +13,7 @@ import {
 	projectPaneBindingPath,
 	readProjectPaneBinding,
 	type ProjectPaneCommandClient,
-} from "pi-subagents/project-panes";
+} from "@xzzpig/pi-subagents/project-panes";
 
 describe("public project-panes package export", () => {
 	it("exposes the versioned extension-to-extension lifecycle surface", () => {
@@ -105,7 +105,7 @@ describe("public project-panes package export", () => {
 				assert.equal(binding.error.bindingPath, bindingPath);
 			}
 			let clientCalled = false;
-			const manager = createProjectPaneManager({ client: { run: async () => { clientCalled = true; return { ok: true, data: {} }; } } });
+			const manager = createProjectPaneManager({ client: { run: async <T>() => { clientCalled = true; return { ok: true, data: {} as T }; } } });
 			const status = await manager.status({ cwd: root });
 			assert.equal(status.ok, false);
 			if (!status.ok) {
@@ -227,7 +227,7 @@ describe("public project-panes package export", () => {
 			assert.equal(binding.ok, false);
 			if (!binding.ok) assert.equal(binding.error.code, "INVALID_BINDING");
 			let clientCalled = false;
-			const manager = createProjectPaneManager({ client: { run: async () => { clientCalled = true; return { ok: true, data: {} }; } } });
+			const manager = createProjectPaneManager({ client: { run: async <T>() => { clientCalled = true; return { ok: true, data: {} as T }; } } });
 			const status = await manager.status({ cwd: root });
 			assert.equal(status.ok, false);
 			if (!status.ok) assert.equal(status.error.code, "INVALID_BINDING");

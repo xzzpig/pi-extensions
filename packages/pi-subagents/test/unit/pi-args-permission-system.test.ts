@@ -177,6 +177,21 @@ describe("resolvePermissionSystemExtension", () => {
 		}
 	});
 
+	it("prefers the @xzzpig installation when both package variants are available", () => {
+		const { agentDir } = createFixture();
+		const forkDir = path.join(agentDir, "npm", "node_modules", "@xzzpig", "pi-permission-system");
+		const upstreamDir = path.join(agentDir, "npm", "node_modules", "@gotgenes", "pi-permission-system");
+		for (const [dir, name] of [
+			[forkDir, "@xzzpig/pi-permission-system"],
+			[upstreamDir, "@gotgenes/pi-permission-system"],
+		]) {
+			fs.mkdirSync(path.join(dir, "src"), { recursive: true });
+			fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({ name, pi: { extensions: ["./src/index.ts"] } }));
+			fs.writeFileSync(path.join(dir, "src", "index.ts"), "export default () => {};");
+		}
+		assert.equal(resolvePermissionSystemExtension(), path.join(forkDir, "src", "index.ts"));
+	});
+
 	it("returns extension path when fully installed", () => {
 		const { agentDir } = createFixture();
 		process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -243,7 +258,7 @@ describe("resolvePiLaunchToolPlan with permission system", () => {
 			inheritSkills: false,
 		});
 		const extensionArgs = args.filter(
-			(arg, index) => args[index - 1] === "--extension",
+			(_arg, index) => args[index - 1] === "--extension",
 		);
 		assert.ok(
 			extensionArgs.includes(path.join(extDir, "src", "index.ts")),

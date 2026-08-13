@@ -36,7 +36,7 @@ In an interactive chat, do not call `subagent_wait()` merely to wait after launc
 - `subagent_wait({ id: "..." })` — block on one async or remembered detached foreground run (id or prefix). Provider items are not selected through this parameter.
 - `subagent_wait({ timeoutMs })` — cap the block; active work keeps running if it elapses.
 
-Providers are discovered through the `pi-subagents/background-work` registry and must return stable item IDs with exact owning session IDs. Child agents receive no provider automatically: keep `subagent_wait` in the child `tools` allowlist and load provider extensions through `extensions` or `subagentOnlyExtensions`.
+Providers are discovered through the `@xzzpig/pi-subagents/background-work` registry and must return stable item IDs with exact owning session IDs. Child agents receive no provider automatically: keep `subagent_wait` in the child `tools` allowlist and load provider extensions through `extensions` or `subagentOnlyExtensions`.
 
 For non-interactive fleet orchestration, `subagent_wait()` can keep N workers in flight: launch N, wait for the next completion, react to the result, launch a replacement if needed, then wait again. Use `subagent_wait({ all: true })` only when you intentionally want to drain the fleet to zero. If the turn ends first, headless `agent_end` auto-drain still waits for exact current-session work. In an interactive session, return to the user instead of holding the turn open just to await completion.
 

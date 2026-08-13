@@ -90,7 +90,7 @@ test("published extension APIs use supported package entrypoints", async () => {
 	assert.equal(typeof sharedTypes.wrapForkTask, "function");
 	assert.equal(typeof sharedTypes.DEFAULT_FORK_PREAMBLE, "string");
 	assert.equal("TEMP_ROOT_DIR" in sharedTypes, false);
-	const projectPanes = await import("pi-subagents/project-panes");
+	const projectPanes = await import("@xzzpig/pi-subagents/project-panes");
 	assert.equal(projectPanes.PROJECT_PANES_API_VERSION, 1);
 	assert.equal(typeof projectPanes.openProjectPane, "function");
 	assert.equal(typeof projectPanes.getProjectPaneStatus, "function");
