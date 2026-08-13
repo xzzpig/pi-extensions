@@ -9,7 +9,7 @@ The non-example fields are:
 
 | Field            | Meaning                                                      |
 | ---------------- | ------------------------------------------------------------ |
-| `name`           | Local record/directory name, unscoped `pi-*` (see below).   |
+| `name`           | Local record/directory name, unscoped `pi-*` (see below).    |
 | `prefix`         | Local subtree path, exactly `packages/<name>`.               |
 | `source`         | Upstream Git source used by the local remote.                |
 | `remote`         | Local remote, exactly `upstream-<name>`.                     |
@@ -21,6 +21,15 @@ The non-example fields are:
 
 [`template.json.example`](template.json.example) shows the shape without
 pretending that an upstream repository has been imported.
+
+### Tracking invariant
+
+The JSON record alone does not preserve a synchronizable subtree history. Import
+an upstream package only with `git subtree add --squash`; update one only with
+`git subtree pull --squash`. Do not substitute an archive extraction, file copy,
+`rsync`, patch application, or ordinary `git merge`: those approaches may match
+the files but omit the squash parent and `git-subtree-dir` /
+`git-subtree-split` trailers required for later pulls.
 
 ### Forked package naming
 

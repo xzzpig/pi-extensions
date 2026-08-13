@@ -13,6 +13,26 @@ records against the schema, enforces ref consistency, and exports
 `PI_UPSTREAM_*` variables. All synchronization is performed by the explicit
 git commands below.
 
+## Tracking and commit invariants
+
+Synchronize upstream content only with `git subtree`:
+
+- First import: `git subtree add --prefix="packages/<name>" --squash <remote> <commit>`.
+- Existing subtree: `git subtree pull --prefix="packages/<name>" --squash <remote> <commit>`.
+
+Never replace the subtree prefix through `git archive`, ordinary `git merge`,
+`cp`, `rsync`, extraction, generated patches, or a manual file replacement.
+Those approaches can reproduce the files while losing the squash parent and
+`git-subtree-dir` / `git-subtree-split` trailers required for future pulls. If
+`git subtree` cannot complete safely, stop and resolve that blocker rather than
+falling back to a file-copy update.
+
+An explicit user request to add, import, pull, synchronize, or update an
+upstream subtree authorizes the local commits required by this workflow. That
+includes the `git subtree` commit and an immediately following fork or metadata
+commit when necessary. It does not authorize push, publication, unrelated
+commits, or history rewrites.
+
 ## Establish the root and inspect state
 
 ```bash
@@ -22,8 +42,9 @@ direnv allow
 git status --short --branch
 ```
 
-`add`, `pull`, `record`, `split`, and `push` require a clean worktree. Resolve
-or commit unrelated changes before invoking them.
+`add`, `pull`, `record`, `split`, and `push` require a clean worktree. Do not
+fold unrelated changes into a subtree synchronization; stop or handle them
+under separate authorization before running the workflow.
 
 ## Metadata contract
 
@@ -65,11 +86,11 @@ keeps the unscoped `pi-*` name for the directory, subtree prefix, and metadata
 record, but the npm package name in `package.json` MUST be the scoped
 `@xzzpig/pi-*` form:
 
-| Where              | Format         | Example                     |
-| ------------------ | -------------- | --------------------------- |
-| Directory / prefix | `packages/pi-*` | `packages/pi-tool-display`  |
-| Metadata `name`    | `pi-*`         | `pi-tool-display`           |
-| npm `package.json` `name` | `@xzzpig/pi-*` | `@xzzpig/pi-tool-display` |
+| Where                     | Format          | Example                    |
+| ------------------------- | --------------- | -------------------------- |
+| Directory / prefix        | `packages/pi-*` | `packages/pi-tool-display` |
+| Metadata `name`           | `pi-*`          | `pi-tool-display`          |
+| npm `package.json` `name` | `@xzzpig/pi-*`  | `@xzzpig/pi-tool-display`  |
 
 This makes every forked package installable as `pi install npm:@xzzpig/pi-*`,
 keeps the local fork clearly distinguishable from the upstream package on npm,
@@ -112,6 +133,9 @@ git remote add "upstream-${name}" "$source"
 git fetch "upstream-${name}" "$ref"
 commit=$(git rev-parse FETCH_HEAD)
 git subtree add --prefix="packages/${name}" --squash "upstream-${name}" "$commit"
+test "$(git rev-list --parents -n 1 HEAD | wc -w)" -eq 3
+git show -s --format=%B HEAD^2 | grep -Fx "git-subtree-dir: packages/${name}"
+git show -s --format=%B HEAD^2 | grep -Fx "git-subtree-split: ${commit}"
 
 # Record accepted ref.
 git config --local "remote.upstream-${name}.pi-ref" "$ref"
@@ -132,7 +156,7 @@ cat > "subtrees/${name}.json" <<EOF
 }
 EOF
 
-# Commit metadata and subtree together.
+# Record metadata in a follow-up local commit after the tracked subtree merge.
 git add "subtrees/${name}.json"
 git commit -m "chore: add ${name} upstream subtree"
 ```
@@ -158,10 +182,14 @@ commit=$(git rev-parse FETCH_HEAD)
 ```
 
 If `$commit` equals the current `upstreamCommit` in the record, the subtree
-is already synchronized. Otherwise:
+is already synchronized. Otherwise, pull through `git subtree` and verify that
+its squash parent preserves tracking trailers before making later commits:
 
 ```bash
 git subtree pull --prefix="packages/${name}" --squash "upstream-${name}" "$commit"
+test "$(git rev-list --parents -n 1 HEAD | wc -w)" -eq 3
+git show -s --format=%B HEAD^2 | grep -Fx "git-subtree-dir: packages/${name}"
+git show -s --format=%B HEAD^2 | grep -Fx "git-subtree-split: ${commit}"
 ```
 
 Then update the record:
@@ -186,6 +214,9 @@ new_ref=develop
 git fetch "upstream-${name}" "$new_ref"
 commit=$(git rev-parse FETCH_HEAD)
 git subtree pull --prefix="packages/${name}" --squash "upstream-${name}" "$commit"
+test "$(git rev-list --parents -n 1 HEAD | wc -w)" -eq 3
+git show -s --format=%B HEAD^2 | grep -Fx "git-subtree-dir: packages/${name}"
+git show -s --format=%B HEAD^2 | grep -Fx "git-subtree-split: ${commit}"
 git config --local "remote.upstream-${name}.pi-ref" "$new_ref"
 ```
 
@@ -197,8 +228,9 @@ the new commit, and `lastSyncedAt` to the current timestamp. Commit the result.
 1. Let the subtree pull stop; do not delete or regenerate the metadata.
 2. Resolve conflicts under `packages/<name>` while preserving the local
    `@xzzpig/pi-*` npm name and the `pi-*` package contract (never adopt the
-   upstream's own package name).
-3. Commit the resolved subtree merge.
+   upstream's own package name). Do not replace the subtree with copied files.
+3. Complete the subtree merge and verify its squash-parent trailers before
+   making later fork or metadata commits.
 4. Record the exact resolved upstream commit:
 
 ```bash
@@ -240,6 +272,15 @@ pnpm exec prettier --check .
 direnv reload
 ```
 
+For a successful `git subtree pull`, verify its second parent before adding
+later commits:
+
+```bash
+git show -s --format='%P%n%B' HEAD
+git show -s --format=%B HEAD^2 | grep -Fx "git-subtree-dir: packages/${name}"
+git show -s --format=%B HEAD^2 | grep -Fx "git-subtree-split: ${commit}"
+```
+
 Use an isolated local upstream repository to test new workflow behavior. Cover
 first add, repeated direnv initialization, upstream updates, conflict
-resolution, ref change tracking, and schema enforcement.
+resolution, ref change tracking, trailer preservation, and schema enforcement.

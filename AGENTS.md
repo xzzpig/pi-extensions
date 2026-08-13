@@ -41,9 +41,11 @@ commits, or pushes.
 - Keep repository-specific metadata outside imported subtree prefixes.
 - Do not commit credentials, generated environment state, or fake upstream
   records. Never silently overwrite an existing `upstream-*` remote.
-- Never run `git commit` or `git push` unless the user explicitly asks for it.
-  Leave changes staged/unstaged in the working tree and report what to review;
-  history rewrites and remote pushes require an explicit, per-operation request.
+- Never run `git push` unless the user explicitly asks for it. `git commit`
+  also requires explicit authorization, except that an explicit request to add,
+  pull, synchronize, or update an upstream subtree authorizes the local commits
+  required by the `pi-upstream-subtree` workflow. That exception never
+  authorizes a push, publication, unrelated commits, or a history rewrite.
 
 ## Verification
 
