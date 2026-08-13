@@ -15,6 +15,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import type { MockPi } from "../support/helpers.ts";
+import { discoverAgents } from "../../src/agents/agents.ts";
 import {
 	createEventBus,
 	createMockPi,
@@ -406,7 +407,7 @@ describe("parallel agent execution", { skip: !piAvailable ? "pi packages not ava
 
 		const runId = result.details?.runId;
 		assert.ok(runId, "expected run id in details");
-		const outputPath = path.join(tempDir, ".pi-subagents", "artifacts", "outputs", runId, "parallel-output.md");
+		const outputPath = path.join(tempDir, ".pi/subagents", "artifacts", "outputs", runId, "parallel-output.md");
 		assert.equal(result.isError, undefined);
 		assert.equal(fs.readFileSync(outputPath, "utf-8"), "Saved report");
 		assert.equal(result.details?.results?.[0]?.savedOutputPath, outputPath);
@@ -485,7 +486,7 @@ describe("parallel agent execution", { skip: !piAvailable ? "pi packages not ava
 
 		const runId = result.details?.runId;
 		assert.ok(runId, "expected run id in details");
-		const outputPath = path.join(tempDir, ".pi-subagents", "artifacts", "outputs", runId, "parallel-file-only.md");
+		const outputPath = path.join(tempDir, ".pi/subagents", "artifacts", "outputs", runId, "parallel-file-only.md");
 		const text = result.content[0]?.text ?? "";
 		assert.equal(result.isError, undefined);
 		assert.match(text, /Output saved to:/);
@@ -553,7 +554,7 @@ describe("parallel agent execution", { skip: !piAvailable ? "pi packages not ava
 
 			const runId = result.details?.runId;
 			assert.ok(runId, "expected run id in details");
-			const outputDir = path.join(tempDir, ".pi-subagents", "artifacts", "outputs", runId);
+			const outputDir = path.join(tempDir, ".pi/subagents", "artifacts", "outputs", runId);
 			const firstOutputPath = path.join(outputDir, "parallel-0", "0-echo", "context.md");
 			const secondOutputPath = path.join(outputDir, "parallel-0", "1-echo", "context.md");
 			assert.equal(result.isError, undefined);
@@ -587,25 +588,63 @@ describe("parallel agent execution", { skip: !piAvailable ? "pi packages not ava
 		assert.equal(fs.existsSync(path.join(tempDir, "false")), false);
 	});
 
-	it("top-level parallel reads are injected once with chain-style prefix", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		mockPi.onCall({ output: "Read done" });
-		const executor = makeExecutor();
+	it("top-level parallel reviewer runs do not inherit bundled chain artifact reads", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		fs.writeFileSync(path.join(tempDir, "plan.md"), "chain plan");
+		fs.writeFileSync(path.join(tempDir, "progress.md"), "chain progress");
+		mockPi.onCall({ output: "Review done" });
+		const reviewer = discoverAgents(tempDir, "project").agents.find((agent) => agent.name === "reviewer");
+		assert.ok(reviewer, "expected bundled reviewer");
+		assert.equal(reviewer.defaultReads, undefined);
+		const executor = makeExecutor([reviewer]);
 
 		await executor.execute(
-			"parallel-reads",
-			{ tasks: [{ agent: "echo", task: "Inspect", reads: ["a.md", "b.md"] }] },
+			"parallel-reviewer-without-chain-artifacts",
+			{ tasks: [{ agent: "reviewer", task: "Review the supplied files." }] },
 			new AbortController().signal,
 			undefined,
 			makeMinimalCtx(tempDir),
 		);
 
-		const args = readLastCallArgs();
-		const taskArg = args.at(-1) ?? "";
-		assert.ok(taskArg.startsWith(`Task: [Read from: ${path.join(tempDir, "a.md")}, ${path.join(tempDir, "b.md")}]
+		const taskArg = readLastCallArgs().at(-1) ?? "";
+		assert.doesNotMatch(taskArg, /\[Read from:/);
+		assert.doesNotMatch(taskArg, /plan\.md|progress\.md/);
+	});
+
+	it("top-level parallel reads include existing files and omit missing files", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		fs.writeFileSync(path.join(tempDir, "a.md"), "context");
+		mockPi.onCall({ output: "Read done" });
+		const executor = makeExecutor();
+
+		await executor.execute(
+			"parallel-reads",
+			{ tasks: [{ agent: "echo", task: "Inspect", reads: ["a.md", "missing.md"] }] },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		const taskArg = readLastCallArgs().at(-1) ?? "";
+		assert.ok(taskArg.startsWith(`Task: [Read from: ${path.join(tempDir, "a.md")}]
 
 Inspect
 
 ## Acceptance Contract`));
+		assert.doesNotMatch(taskArg, /missing\.md/);
+	});
+
+	it("top-level parallel omits the read prefix when all files are missing", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "Read done" });
+		const executor = makeExecutor();
+
+		await executor.execute(
+			"parallel-missing-reads",
+			{ tasks: [{ agent: "echo", task: "Inspect", reads: ["missing.md"] }] },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		assert.doesNotMatch(readLastCallArgs().at(-1) ?? "", /\[Read from:/);
 	});
 
 	it("top-level parallel defaultProgress uses isolated run storage", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -628,7 +667,7 @@ Inspect
 		);
 		const runId = result.details?.runId;
 		assert.ok(runId, "expected run id in details");
-		const expectedProgressPath = path.join(tempDir, ".pi-subagents", "artifacts", "progress", runId, "progress.md");
+		const expectedProgressPath = path.join(tempDir, ".pi/subagents", "artifacts", "progress", runId, "progress.md");
 
 		const args = readLastCallArgs();
 		const taskArg = args.at(-1) ?? "";

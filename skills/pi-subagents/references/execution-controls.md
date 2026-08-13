@@ -68,11 +68,11 @@ subagent({
 })
 ```
 
-Scripts run in a timed worker with only `runs.run`, `runs.all`, `runs.status`, `runs.ref/refs`, `emit`, captured `console`, and standard JavaScript. Mission-attached workflows also get `await state.get(key)` and `await state.set(key, value)` for durable JSON state shared across workflows on the same mission; `mission: false` workflows have no `state` global. Stable keys are required. Child launches follow ordinary single-agent execution controls. Give each child a distinct decision and output path when reports must outlive the workflow, then consume the aggregate workflow result before opening individual reports.
+Scripts run in a timed worker with only `runs.run`, `runs.all`, `runs.status`, `runs.ref/refs`, `prompts.render`, `emit`, captured `console`, and standard JavaScript. `await prompts.render("package:<name>" | "user:<name>" | "project:<name>", vars?)` reads a named Markdown fragment through the host resolver, applies simple scalar `{{name}}` interpolation, and returns plain task text. It does not give the script filesystem access. Pass the rendered text explicitly as `task` to `runs.run`. Mission-attached workflows also get `await state.get(key)` and `await state.set(key, value)` for durable JSON state shared across workflows on the same mission; `mission: false` workflows have no `state` global. Stable keys are required. Child launches follow ordinary single-agent execution controls. Give each child a distinct decision and output path when reports must outlive the workflow, then consume the aggregate workflow result before opening individual reports.
 
 For one host-run verification command, pass `gate: "npm test"` on a `runs.run`/`runs.all` item (or at the top level as a workflow default). It is shorthand for verified acceptance with that single command: the runtime executes it on the host, records the result as evidence, and memoizes it per tracked workspace state and effective environment. `gate` cannot be combined with `acceptance`; use explicit `acceptance.verify` for multiple commands or custom criteria.
 
-Completed workflow children from this parent session stay addressable as retained children. `subagent({ action: "children.list" })` lists up to the last 10 with run ids, and a later workflow continues one with `runs.run(key, { resume: "<run-id>", task: "follow-up" })`. `resume` and `agent` are mutually exclusive, the revived child keeps its stored agent/model/tool contract, and `gate` is rejected on retained resume items.
+Completed workflow children from this parent session stay addressable as retained children. `subagent({ action: "children.list" })` lists up to the last 10 with run ids, and a later workflow continues one with `runs.run(key, { resume: "<run-id>", task: "follow-up" })`. Inside `workflowScript`, awaiting that call waits for the revived child to finish and returns its completed output and new `runId`; top-level `{ action: "resume" }` remains detached. A follow-up loop can render each task with `await prompts.render(...)`. Assign each returned child result back to the loop variable because every resume can return a new retained `runId`; always resume the latest returned id. `resume` and `agent` are mutually exclusive, the revived child keeps its stored agent/model/tool contract, and `gate` is rejected on retained resume items.
 
 ### Async/background
 
@@ -158,7 +158,7 @@ A cooperating terminal runtime can register read-only external records through `
 
 ### Scheduled subagent runs
 
-Schedules are durable project records under `.pi-subagents/schedules/`. They are enabled by default; set `{ "scheduledRuns": { "enabled": false } }` in `~/.pi/agent/extensions/subagent/config.json` to disable them. Only schedule explicit work the user asked for.
+Schedules are durable project records under `.pi/subagents/schedules/`. They are enabled by default; set `{ "scheduledRuns": { "enabled": false } }` in `~/.pi/agent/extensions/subagent/config.json` to disable them. Only schedule explicit work the user asked for.
 
 ```typescript
 // One-shot reviewer
@@ -235,7 +235,7 @@ The subagent watchdog is an **opt-in** adversarial change reviewer. It is not th
 
 When enabled, it reviews actual repo edits at safe `agent_end` boundaries only if
 the final worktree state changed during that turn. Unchanged or reverted diffs and
-generated `.pi-subagents/` / temp artifacts do not trigger review. Writing children
+generated `.pi/subagents/` / temp artifacts do not trigger review. Writing children
 can review their own worktree; the parent can still review the aggregate diff after
 child changes land. Enabled watchdogs also run changed-file TypeScript/JavaScript
 LSP diagnostics before the model pass when `typescript-language-server` is available.
@@ -298,7 +298,7 @@ Routing rule:
 - Several projects with independent work: one async `workflowScript` whose child keys include repo slugs and whose child calls set explicit `cwd`; keep publication and merge decisions serial per repo.
 - Different project, substantial or long-running work: open a project-owned Herdr pane rooted there when a separate visible project session is useful, then give that project Pi session a narrow mission/result contract. Do not model it as ordinary child nesting, and do not expect existing headless runs to move into the pane.
 
-Project panes run a separate Pi session from the target directory. Subagents launched inside that pane use that project's config, agents, skills, files, git state, and mission records. The pane binding lives under `<projectRoot>/.pi-subagents/project-panes/herdr.json`. For ordinary headless delegation to another repo, prefer explicit `cwd` first; reserve project panes for visible or persistent project ownership.
+Project panes run a separate Pi session from the target directory. Subagents launched inside that pane use that project's config, agents, skills, files, git state, and mission records. The pane binding lives under `<projectRoot>/.pi/subagents/project-panes/herdr.json`. For ordinary headless delegation to another repo, prefer explicit `cwd` first; reserve project panes for visible or persistent project ownership.
 
 ```typescript
 subagent({ action: "mission.create", mission: { title: "Ship auth refresh", objective: "Implement and validate refresh handling" } })
@@ -340,7 +340,7 @@ single-writer pattern instead.
 
 Git worktrees start from tracked files, so ignored or untracked build state
 such as `node_modules` may be absent. The clean-check ignores pi-subagents'
-own `.pi-subagents/` runtime state, including default mission records, but still
+own `.pi/subagents/` runtime state, including default mission records, but still
 rejects ordinary source/config changes. `pi-subagents` attempts to symlink the
 root checkout's `node_modules` into each managed worktree when it exists, but
 agents should still treat dependency setup as an explicit bootstrap step before

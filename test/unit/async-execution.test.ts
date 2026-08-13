@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { buildAsyncRunnerSteps, formatAsyncStartedMessage, resolveAsyncRunnerLogPaths } from "../../src/runs/background/async-execution.ts";
+import { buildAsyncRunnerSteps, DEFAULT_ASYNC_TIMEOUT_MS, formatAsyncStartedMessage, resolveAsyncRunnerLogPaths } from "../../src/runs/background/async-execution.ts";
 import type { AgentConfig } from "../../src/agents/agents.ts";
 
 const agent = (name: string, toolBudget?: AgentConfig["toolBudget"]): AgentConfig => ({
@@ -70,6 +70,30 @@ describe("async runner execution", () => {
 		assert.deepEqual(result.steps[0]?.toolBudget, { hard: 3, block: ["find"] });
 		assert.equal(result.steps[0]?.waitToolEnabled, false);
 		assert.deepEqual(result.steps[1]?.toolBudget, { hard: 2, block: ["grep"] });
+	});
+
+	it("assigns default and agent-level deadlines to async serial and parallel children", () => {
+		const result = buildAsyncRunnerSteps("timeout-run", {
+			chain: [
+				{ agent: "default-worker", task: "default serial timeout" },
+				{
+					parallel: [
+						{ agent: "default-worker", task: "default parallel timeout" },
+						{ agent: "custom-worker", task: "custom parallel timeout" },
+					],
+				},
+			],
+			agents: [agent("default-worker"), { ...agent("custom-worker"), defaultTimeoutMs: 7_000 }],
+			ctx,
+			asyncDir: path.join(process.cwd(), ".tmp-async-timeout-test"),
+			maxSubagentDepth: 2,
+		});
+
+		assert.ok("steps" in result, "expected successful step build");
+		assert.equal(result.steps[0]?.timeoutMs, DEFAULT_ASYNC_TIMEOUT_MS);
+		const parallel = result.steps[1];
+		assert.ok(parallel && "parallel" in parallel && Array.isArray(parallel.parallel));
+		assert.deepEqual(parallel.parallel.map((step) => step.timeoutMs), [DEFAULT_ASYNC_TIMEOUT_MS, 7_000]);
 	});
 
 	it("uses agent tool budget before config default when no run override exists", () => {

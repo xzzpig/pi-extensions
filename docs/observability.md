@@ -37,7 +37,7 @@ FleetView replaces the legacy above-editor async widget by default. Successful b
 
 `/subagents-fleet` opens the live fleet inspector with current-session foreground work, recent async children, structured Markdown/tool transcripts, and completed output/session paths.
 
-Keys:
+Default keys:
 
 - `↑`/`↓` or `j`/`k` — select a child
 - `Shift+K`/`Shift+J` — scroll one line
@@ -48,6 +48,8 @@ Keys:
 - `s` — compose an acknowledged message to a selected live async child; Tab cycles `steer`, `follow_up`, and `auto`
 - `D` — stop a selected child's top-level async run after confirmation
 - `H` — open the selected active async child in a Herdr inspector pane (Herdr 0.7.5+)
+
+Set `fleetKeybindings` in the extension config to replace inspector-level keys when a terminal intercepts keys such as `PgUp`, `PgDn`, `Home`, or `End`. Prompt modes keep fixed keys such as `Esc`, `Enter`, `Tab`, and stop-confirmation `Y`/`N`.
 
 `Ctrl+Alt+F` opens the same inspector even while a foreground turn is active and slash input is queued.
 
@@ -76,7 +78,11 @@ Async runs write machine-readable lifecycle artifacts for observability and work
 
 For a top-level async run, `details.asyncDir` points at that directory; the final summary is written to Pi's subagent results directory as `<runId>.json`. Nested async runs use the same shape under the nested async root and are discoverable through status projections that read the nested-run registry. These files are append/update artifacts only; interactive foreground behavior is unchanged.
 
-The result file is consumed and deleted once its completion notice is delivered, so `subagent_wait` also surfaces a slim projection of each terminal payload it covered in its own tool-result `details.completions` — run identity, per-child agent/`runId`/success, and artifact paths, without the output text (which stays in the tool-result content). Workflow result files record each child's `runId` explicitly, since a workflow child's `artifactPaths` entry points at its saved output rather than the artifact files keyed by the id. Extensions observing `tool_result` events can read run and artifact identity from there instead of parsing the text summary.
+The result file is consumed and deleted once its completion notice is delivered. Before deletion, the watcher writes a versioned replay record under `<resultsDir>/completion-replay/<runId>.json` and a bounded output archive under `<resultsDir>/output-archives/<runId>.json`. Replay records expire with the completion deduplication window and are best-effort temporary state, not a permanent run ledger.
+
+`subagent_wait` surfaces a slim projection of each terminal payload it covered in its own tool-result `details.completions` — run identity, per-child agent/`runId`/success, artifact paths, and the bounded `archivePath`, without duplicating output text. It reads the replay when watcher delivery or a watcher restart has removed the one-shot result file and in-memory completion state is unavailable. Durable non-blocking wait subscriptions use the same replay in their delivered details. Workflow result files record each child's `runId` explicitly, since a workflow child's `artifactPaths` entry points at its saved output rather than the artifact files keyed by the id. Extensions observing `tool_result` events can read run and artifact identity from there instead of parsing the text summary.
+
+Output archives reference an existing child output artifact or session file when one is available. For children without either file, the archive stores only the tail of result text, bounded to 64 KiB per run, and records whether it was truncated. Replay and archive JSON use `version: 1`; consumers must ignore unknown fields.
 
 Nested fanout status is stored as compact sidecar event/registry metadata and merged into parent status views and result/intercom payloads; full recursive status snapshots are not embedded in parent result files.
 
@@ -120,7 +126,7 @@ Foreground and async runners share bounded child-protocol handling:
 
 ## Chain and debug artifacts
 
-Each chain run creates a scratch directory under its resolved chain root. With the default `artifactDir: "project"`, that root is `<cwd>/.pi-subagents/chain-runs/`. With `artifactDir: "session"` or `"temp"`, it is user-scoped temp storage:
+Each chain run creates a scratch directory under its resolved chain root. With the default `artifactDir: "project"`, that root is `<cwd>/.pi/subagents/chain-runs/`. With `artifactDir: "session"` or `"temp"`, it is user-scoped temp storage:
 
 ```text
 <tmpdir>/pi-subagents-<scope>/chain-runs/{runId}/
@@ -128,7 +134,7 @@ Each chain run creates a scratch directory under its resolved chain root. With t
 
 A run directory may contain files such as `context.md`, `plan.md`, `progress.md`, and `parallel-{stepIndex}/.../output.md`. User-scoped temp chain directories older than 24 hours are cleaned up on extension startup; project-local and explicit persistent roots are not age-scanned.
 
-Debug artifacts live under `{sessionDir}/subagent-artifacts/`, `.pi-subagents/artifacts/` for project-scoped runs, or a user-scoped temp artifact directory. Single-run relative `output` files are saved under `{artifactsDir}/outputs/{runId}/` unless `singleRunOutputBaseDir` is configured. Per task you may see:
+Debug artifacts live under `{sessionDir}/subagent-artifacts/`, `.pi/subagents/artifacts/` for project-scoped runs, or a user-scoped temp artifact directory. Single-run relative `output` files are saved under `{artifactsDir}/outputs/{runId}/` unless `singleRunOutputBaseDir` is configured. Per task you may see:
 
 - `{runId}_{agent}_input.md`
 - `{runId}_{agent}_output.md`
@@ -137,7 +143,7 @@ Debug artifacts live under `{sessionDir}/subagent-artifacts/`, `.pi-subagents/ar
 
 Metadata records timing, usage, exit code, final model, attempted models, fallback attempt outcomes, and the resolved acceptance ledger with its parsed child report.
 
-For npm package projects, project-scoped artifacts need a `.npmignore` rule (or `.gitignore` when no `.npmignore` exists) or a `files` allowlist that does not include `.pi-subagents/`. pi-subagents warns at launch when these package settings can include the artifacts. Use `artifactDir: "session"` or `"temp"` to keep them outside the package worktree.
+For npm package projects, project-scoped artifacts need a `.npmignore` rule (or `.gitignore` when no `.npmignore` exists) or a `files` allowlist that does not include `.pi/subagents/`. pi-subagents warns at launch when these package settings can include the artifacts. Use `artifactDir: "session"` or `"temp"` to keep them outside the package worktree.
 
 ## Sessions
 

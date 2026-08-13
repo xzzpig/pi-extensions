@@ -3,11 +3,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
+import { updateActiveRunIndex } from "../../src/runs/background/active-run-index.ts";
 import { WAIT_TOOL_ENABLED_ENV, resolveWaitToolConfig, waitForSubagents, type SubagentWaitDeps } from "../../src/runs/background/subagent-wait.ts";
 import { recordWaitCompletion } from "../../src/runs/background/wait-completions.ts";
-import type { SubagentState } from "../../src/shared/types.ts";
+import type { AsyncStatus, SubagentState } from "../../src/shared/types.ts";
 
-function writeStatus(asyncRoot: string, runId: string, state: string, extra: object = {}): void {
+function writeStatus(asyncRoot: string, runId: string, state: AsyncStatus["state"], extra: object = {}): void {
 	const dir = path.join(asyncRoot, runId);
 	fs.mkdirSync(dir, { recursive: true });
 	// Use a recent timestamp so the stale-run reconciler doesn't mark a live
@@ -26,6 +27,7 @@ function writeStatus(asyncRoot: string, runId: string, state: string, extra: obj
 		}),
 		"utf-8",
 	);
+	updateActiveRunIndex(dir, state);
 }
 
 function makeState(sessionId: string | null): SubagentState {
@@ -184,6 +186,33 @@ describe("subagent_wait tool", () => {
 			}));
 			assert.equal(result.isError, true);
 			assert.match(textOf(result), /1 failed/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("tells blocking callers to revive resumable failed runs before replacing them", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-revive-first-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const sessionFile = path.join(root, "worker-session.jsonl");
+			fs.writeFileSync(sessionFile, "{}\n", "utf-8");
+			const state = makeState("sess-1");
+			writeStatus(asyncRoot, "run-revive", "running", { sessionId: "sess-1", pid: 999999 });
+			const result = await waitForSubagents({ all: true }, undefined, baseDeps(root, state, {
+				sleep: async () => writeStatus(asyncRoot, "run-revive", "failed", {
+					sessionId: "sess-1",
+					steps: [{ agent: "worker", status: "failed", sessionFile }],
+				}),
+			}));
+
+			assert.equal(result.isError, undefined);
+			const text = textOf(result);
+			assert.match(text, /1 failed/);
+			assert.match(text, /Resume-first/);
+			assert.match(text, /subagent\(\{ action: "resume", id: "run-revive", message:/);
+			assert.match(text, /before reporting failure or launching a replacement/);
+			assert.match(text, /only if revive fails or the user explicitly asks/);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
