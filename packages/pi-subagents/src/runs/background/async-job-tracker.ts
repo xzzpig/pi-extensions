@@ -557,10 +557,13 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		const agents = firstGroupCount && firstGroupCount > 0
 			? rawAgents?.slice(0, firstGroupCount)
 			: rawAgents;
+		const sessionRoot = state.liveAsyncSessionRoots?.get(info.id);
+		state.liveAsyncSessionRoots?.delete(info.id);
 		state.asyncJobs.set(info.id, {
 			asyncId: info.id,
 			asyncDir,
 			...(typeof info.cwd === "string" ? { cwd: path.resolve(info.cwd) } : {}),
+			...(sessionRoot ? { sessionRoot } : {}),
 			status: "queued",
 			pid: typeof info.pid === "number" ? info.pid : undefined,
 			...(typeof info.sessionId === "string" ? { sessionId: info.sessionId } : {}),
@@ -637,6 +640,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		state.asyncJobs.clear();
 		state.fleetJobs?.clear();
 		state.foregroundControls?.clear();
+		state.liveAsyncSessionRoots?.clear();
 		state.lastForegroundControlId = null;
 		state.resultFileCoalescer.clear();
 		if (ctx?.hasUI) {

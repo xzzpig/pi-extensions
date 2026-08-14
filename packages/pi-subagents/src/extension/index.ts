@@ -30,6 +30,7 @@ import { SubagentFleetStatus, resolveFleetViewPlacement } from "../tui/fleet-sta
 import { createSubagentParamsSchema } from "./schemas.ts";
 import { createSubagentExecutor, type SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import { createAsyncJobTracker } from "../runs/background/async-job-tracker.ts";
+import { getActiveAsyncCapacitySnapshot, resolveMaxActiveAsyncRunsPerSession } from "../runs/background/active-async-capacity.ts";
 import { createResultWatcher } from "../runs/background/result-watcher.ts";
 import { createScheduledRunManager } from "../runs/background/scheduled-runs.ts";
 import { registerSlashCommands } from "../slash/slash-commands.ts";
@@ -58,6 +59,7 @@ import { resolveMissionStoreLocation } from "../missions/store.ts";
 import { listRetainedChildren } from "../runs/background/retained-children.ts";
 import {
 	type Details,
+	type MainWindowRendererConfig,
 	type SubagentState,
 	DIRS,
 	DEFAULT_ARTIFACT_CONFIG,
@@ -65,6 +67,7 @@ import {
 	SLASH_TEXT_RESULT_TYPE,
 	SUBAGENT_ASYNC_COMPLETE_EVENT,
 	SUBAGENT_ASYNC_STARTED_EVENT,
+	SUBAGENT_PROCESS_TERMINAL_EVENT,
 	SUBAGENT_CONTROL_EVENT,
 	SUBAGENT_STEERING_NOTICE_EVENT,
 	WIDGET_KEY,
@@ -251,12 +254,13 @@ function rebuildSlashResultContainer(
 	result: AgentToolResult<Details>,
 	options: { expanded: boolean },
 	theme: ExtensionContext["ui"]["theme"],
+	rendererConfig?: MainWindowRendererConfig,
 ): void {
 	container.clear();
 	container.addChild(new Spacer(1));
 	const boxTheme = isSlashResultRunning(result) ? "toolPendingBg" : isSlashResultError(result) ? "toolErrorBg" : "toolSuccessBg";
 	const box = new Box(1, 1, (text: string) => theme.bg(boxTheme, text));
-	box.addChild(renderSubagentResult(result, options, theme));
+	box.addChild(renderSubagentResult(result, options, theme, undefined, rendererConfig));
 	container.addChild(box);
 }
 
@@ -264,6 +268,7 @@ function createSlashResultComponent(
 	details: SlashMessageDetails,
 	options: { expanded: boolean },
 	theme: ExtensionContext["ui"]["theme"],
+	rendererConfig?: MainWindowRendererConfig,
 ): Container {
 	const container = new Container();
 	let lastVersion = -1;
@@ -271,7 +276,7 @@ function createSlashResultComponent(
 		const snapshot = getSlashRenderableSnapshot(details);
 		if (snapshot.version !== lastVersion || isSlashResultRunning(snapshot.result)) {
 			lastVersion = snapshot.version;
-			rebuildSlashResultContainer(container, snapshot.result, options, theme);
+			rebuildSlashResultContainer(container, snapshot.result, options, theme, rendererConfig);
 		}
 		return Container.prototype.render.call(container, width);
 	};
@@ -376,6 +381,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		...(config.authorityPolicy ? { authorityPolicy: config.authorityPolicy } : {}),
 		...(config.missions ? { missionStoreConfig: config.missions } : {}),
 		parentSessionFile: null,
+		trustedSessionRoots: [],
 		subagentInProgress: false,
 		subagentSpawns: {
 			sessionId: null,
@@ -384,6 +390,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			granted: 0,
 			grantHistory: [],
 		},
+		activeAsyncCapacity: { used: 0, limit: resolveMaxActiveAsyncRunsPerSession(config.maxActiveAsyncRunsPerSession) ?? 0 },
 		asyncJobs: new Map(),
 		fleetJobs: new Map(),
 		foregroundRuns: new Map(),
@@ -478,7 +485,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	pi.registerMessageRenderer<SlashMessageDetails>(SLASH_RESULT_TYPE, (message, options, theme) => {
 		const details = resolveSlashMessageDetails(message.details);
 		if (!details) return undefined;
-		return createSlashResultComponent(details, options, theme);
+		return createSlashResultComponent(details, options, theme, config.mainWindowRenderer);
 	});
 
 	pi.registerMessageRenderer<undefined>(SLASH_TEXT_RESULT_TYPE, (message, _options, _theme) => {
@@ -578,22 +585,24 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		},
 
 		renderCall(args, theme) {
+			const gap = " ".repeat(config.mainWindowRenderer?.horizontalSpacing ?? 1);
+			const title = theme.fg("toolTitle", theme.bold("subagent"));
 			if (args.action) {
 				const target = args.agent || args.chainName || "";
 				return new Text(
-					`${theme.fg("toolTitle", theme.bold("subagent "))}${args.action}${target ? ` ${theme.fg("accent", target)}` : ""}`,
+					`${title}${gap}${args.action}${target ? `${gap}${theme.fg("accent", target)}` : ""}`,
 					0, 0,
 				);
 			}
 			if (args.workflowScript)
 				return new Text(
-					`${theme.fg("toolTitle", theme.bold("subagent "))}${formatWorkflowManifest(args.workflowScript, args.async, false)}`,
+					`${title}${gap}${formatWorkflowManifest(args.workflowScript, args.async, false)}`,
 					0,
 					0,
 				);
-			const asyncLabel = args.async === true ? theme.fg("warning", " [async]") : "";
+			const asyncLabel = args.async === true ? `${gap}${theme.fg("warning", "[async]")}` : "";
 			return new Text(
-				`${theme.fg("toolTitle", theme.bold("subagent "))}${theme.fg("accent", args.agent || "?")}${asyncLabel}`,
+				`${title}${gap}${theme.fg("accent", args.agent || "?")}${asyncLabel}`,
 				0,
 				0,
 			);
@@ -604,7 +613,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			const renderedResult = { ...result, isError: context.isError };
 			return summaryInlineToolDisplay
 				? renderSubagentSummary(renderedResult, options, theme)
-				: renderSubagentResult(renderedResult, options, theme);
+				: renderSubagentResult(renderedResult, options, theme, undefined, config.mainWindowRenderer);
 		},
 
 	};
@@ -677,12 +686,17 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	};
 	const asyncCompleteHandler = (payload: unknown) => {
 		handleComplete(payload);
+		refreshActiveAsyncCapacity();
 		scheduledRunManager.handleAsyncCompletion(payload);
 		fleetStatus?.refresh();
 	};
 	const eventUnsubscribes = [
 		pi.events.on(SUBAGENT_ASYNC_STARTED_EVENT, asyncStartedHandler),
 		pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, asyncCompleteHandler),
+		pi.events.on(SUBAGENT_PROCESS_TERMINAL_EVENT, () => {
+			refreshActiveAsyncCapacity();
+			fleetStatus?.refresh();
+		}),
 		pi.events.on(SUBAGENT_CONTROL_EVENT, controlEventHandler),
 		pi.events.on(SUBAGENT_STEERING_NOTICE_EVENT, steeringNoticeHandler),
 		herdrStatusBridge.dispose,
@@ -728,12 +742,28 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		fleetStatus?.refresh();
 	};
 
+	const refreshActiveAsyncCapacity = () => {
+		if (!state.currentSessionId) {
+			state.activeAsyncCapacity = { used: 0, limit: resolveMaxActiveAsyncRunsPerSession(config.maxActiveAsyncRunsPerSession) ?? 0 };
+			return;
+		}
+		state.activeAsyncCapacity = getActiveAsyncCapacitySnapshot(
+			state.currentSessionId,
+			resolveMaxActiveAsyncRunsPerSession(config.maxActiveAsyncRunsPerSession),
+			{ liveWorkflowRunIds: new Set(state.workflowControllers?.keys() ?? []) },
+		);
+	};
+
 	const resetSessionState = (ctx: ExtensionContext, recovering: boolean) => {
 		state.widgetsSuspended = false;
 		state.baseCwd = ctx.cwd;
 		goalTurnId = 0;
 		state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
 		state.parentSessionFile = ctx.sessionManager.getSessionFile();
+		state.trustedSessionRoots = [...new Set([
+			...(config.defaultSessionDir ? [path.resolve(expandTilde(config.defaultSessionDir))] : []),
+			...(state.parentSessionFile ? [getSubagentSessionRoot(state.parentSessionFile)] : []),
+		])];
 		state.subagentSpawns = {
 			sessionId: state.currentSessionId,
 			count: 0,
@@ -753,6 +783,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			}
 		}
 		state.lastUiContext = ctx;
+		refreshActiveAsyncCapacity();
 		cleanupSessionArtifacts(ctx);
 		state.foregroundControls.clear();
 		state.lastForegroundControlId = null;

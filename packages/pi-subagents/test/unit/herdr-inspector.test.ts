@@ -11,7 +11,7 @@ import { formatInspectorDashboard, submitInspectorControl } from "../../src/insp
 import { createProjectPaneManager, handleHerdrProjectPaneAction, readHerdrProjectPaneBinding } from "../../src/inspectors/herdr/project-panes.ts";
 import { consumeSteerRequests, consumeStopRequest } from "../../src/runs/background/control-channel.ts";
 import { PI_SUBAGENT_PI_BINARY_ENV } from "../../src/runs/shared/pi-spawn.ts";
-import type { AsyncStatus } from "../../src/shared/types.ts";
+import type { AsyncStatus, SubagentState } from "../../src/shared/types.ts";
 
 function fakeChild(): EventEmitter & { stdout: PassThrough; stderr: PassThrough; kill(): boolean } {
 	const child = new EventEmitter() as EventEmitter & { stdout: PassThrough; stderr: PassThrough; kill(): boolean };
@@ -76,6 +76,7 @@ describe("Herdr inspector", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-herdr-inspector-"));
 		try {
 			const { asyncDir } = writeRun(root);
+			const sessionRoot = path.join(root, "sessions");
 			const missionDir = path.join(root, "other-project", ".pi/subagents", "missions");
 			fs.writeFileSync(path.join(asyncDir, "mission.json"), JSON.stringify({
 				schemaVersion: 1,
@@ -99,6 +100,7 @@ describe("Herdr inspector", () => {
 				asyncDirRoot: root,
 				resultsDir: path.join(root, "results"),
 				client,
+				sessionRoots: [sessionRoot],
 				runnerPath: path.join(root, "runner.ts"),
 				now: () => new Date("2026-01-01T00:00:00.000Z"),
 			});
@@ -112,12 +114,67 @@ describe("Herdr inspector", () => {
 			const runCall = calls.find((args) => args[0] === "pane" && args[1] === "run" && args[2] === "w1:p9");
 			assert.ok(runCall);
 			assert.match(runCall[3] ?? "", /--allow-steer.*true.*--allow-stop.*true/);
+			assert.match(runCall[3] ?? "", /--session-roots.*sessions/);
 
 			const closed = await handleHerdrInspectorAction("inspector.close", { dir: asyncDir }, { cwd: root, asyncDirRoot: root, client });
 			assert.equal(closed.isError, undefined, text(closed));
 			assert.match(text(closed), /subagent run was not stopped/);
 			assert.equal(readHerdrInspectorBinding(asyncDir), undefined);
 			assert.ok(calls.some((args) => args.join(" ") === "pane close w1:p9"));
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("passes live parent-owned custom session roots to standalone inspectors", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-herdr-custom-session-"));
+		try {
+			const { asyncDir, status } = writeRun(root);
+			const sessionRoot = path.join(root, "custom-sessions");
+			status.steps![0] = { ...status.steps![0], sessionFile: path.join(sessionRoot, "run-0", "session.jsonl") };
+			fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify(status), "utf-8");
+			const calls: string[][] = [];
+			const client: HerdrClient = {
+				run: async <T>(args: string[]) => {
+					calls.push(args);
+					if (args[0] === "--version") return { ok: true, data: "herdr 0.7.5" as T };
+					if (args[0] === "pane" && args[1] === "split") return { ok: true, data: { pane: { pane_id: "w1:p11" } } as T };
+					return { ok: true, data: {} as T };
+				},
+			};
+			const state = {
+				asyncJobs: new Map([["run-123", { asyncId: "run-123", asyncDir, status: "running", sessionRoot }]]),
+				foregroundControls: new Map(),
+				lastForegroundControlId: null,
+				baseCwd: root,
+				currentSessionId: "session-1",
+			} as unknown as SubagentState;
+
+			const opened = await handleHerdrInspectorAction("inspector.open", { id: "run-123" }, {
+				cwd: root,
+				asyncDirRoot: root,
+				client,
+				state,
+				runnerPath: path.join(root, "runner.ts"),
+			});
+			assert.equal(opened.isError, undefined, text(opened));
+			const runCall = calls.find((args) => args[0] === "pane" && args[1] === "run" && args[2] === "w1:p11");
+			assert.match(runCall?.[3] ?? "", /--session-roots/);
+			assert.match(runCall?.[3] ?? "", /custom-sessions/);
+
+			state.asyncJobs.clear();
+			fs.rmSync(path.join(asyncDir, "inspectors"), { recursive: true, force: true });
+			calls.length = 0;
+			const reopened = await handleHerdrInspectorAction("inspector.open", { id: "run-123" }, {
+				cwd: root,
+				asyncDirRoot: root,
+				client,
+				state,
+				runnerPath: path.join(root, "runner.ts"),
+			});
+			assert.equal(reopened.isError, undefined, text(reopened));
+			const untrustedRunCall = calls.find((args) => args[0] === "pane" && args[1] === "run" && args[2] === "w1:p11");
+			assert.doesNotMatch(untrustedRunCall?.[3] ?? "", /custom-sessions/);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
@@ -174,6 +231,27 @@ describe("Herdr inspector", () => {
 			assert.throws(() => submitInspectorControl({ asyncDir, runId: "run-123", refreshMs: 1_500 }, "reply decision-1 yes"), /parent Pi session/);
 			assert.throws(() => submitInspectorControl({ asyncDir, runId: "run-123", refreshMs: 1_500, allowSteer: false }, "steer bypass"), /Authority policy/);
 			assert.throws(() => submitInspectorControl({ asyncDir, runId: "run-123", refreshMs: 1_500, allowStop: false }, "stop"), /Authority policy/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("renders trusted child session fallback and refuses untrusted roots", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-herdr-session-"));
+		try {
+			const { asyncDir, status } = writeRun(root);
+			const sessionRoot = path.join(root, "sessions");
+			const sessionFile = path.join(sessionRoot, "child.jsonl");
+			fs.mkdirSync(sessionRoot, { recursive: true });
+			fs.writeFileSync(sessionFile, `${JSON.stringify({ role: "assistant", content: "session fallback text" })}\n`, "utf-8");
+			status.steps![0] = { ...status.steps![0], recentOutput: [], sessionFile };
+
+			const trusted = formatInspectorDashboard({ status, asyncDir, sessionRoots: [sessionRoot] });
+			assert.match(trusted, /assistant: session fallback text/);
+			assert.doesNotMatch(trusted, /without a trusted root/);
+
+			const untrusted = formatInspectorDashboard({ status, asyncDir });
+			assert.match(untrusted, /without a trusted root/);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}

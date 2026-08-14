@@ -52,24 +52,26 @@ describe("slash subagent bridge requester context", () => {
     await done;
   });
 
-  it("rejects direct execution inputs before executor dispatch", async () => {
+  it("lowers structured single-child execution before executor dispatch", async () => {
     const events = eventBus();
-    let executeCalls = 0;
+    let executedParams: any;
     registerSlashSubagentBridge({
       events,
       getContext: () => ({ cwd: "/repo" }) as any,
-      execute: async () => {
-        executeCalls++;
-        return { content: [{ type: "text", text: "unexpected" }], details: { mode: "single", results: [] } } as any;
+      execute: async (_id, params) => {
+        executedParams = params;
+        return { content: [{ type: "text", text: "ok" }], details: { mode: "workflow", results: [] } } as any;
       },
     });
 
     const done = new Promise<void>((resolve, reject) => {
       events.on(RESPONSE, (data: any) => {
         try {
-          assert.equal(data.isError, true);
-          assert.match(data.errorText, /Direct execution was removed/);
-          assert.equal(executeCalls, 0);
+          assert.equal(data.isError, false);
+          assert.equal(executedParams.agent, undefined);
+          assert.equal(executedParams.task, undefined);
+          assert.equal(executedParams.async, false);
+          assert.match(executedParams.workflowScript, /runs\.run\("main", \{"agent":"worker","task":"work"\}\)/);
           resolve();
         } catch (error) {
           reject(error);
@@ -77,7 +79,7 @@ describe("slash subagent bridge requester context", () => {
       });
     });
 
-    events.emit(REQUEST, { requestId: "legacy-single", params: { agent: "worker", task: "work" } });
+    events.emit(REQUEST, { requestId: "structured-single", params: { agent: "worker", task: "work", async: false } });
     await done;
   });
 

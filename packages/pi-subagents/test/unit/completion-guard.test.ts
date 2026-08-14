@@ -28,7 +28,7 @@ test("implementation task with no mutation triggers the completion guard", () =>
 	const result = evaluateCompletionMutationGuard({
 		agent: "worker",
 		task: "Implement the approved fix",
-		messages: [assistantText("Plan: update the files...")],
+		messages: [assistantText("No better current-scope change is needed.")],
 	});
 
 	assert.deepEqual(result, {
@@ -36,6 +36,87 @@ test("implementation task with no mutation triggers the completion guard", () =>
 		attemptedMutation: false,
 		triggered: true,
 	});
+});
+
+function revivedTask(followUp: string): string {
+	return [
+		"You are reviving a previous subagent conversation.",
+		"",
+		"Original run: abc123",
+		"Original agent: worker",
+		"Original session file: /tmp/session.jsonl",
+		"",
+		"Use the stored session context as background. Answer the orchestrator's follow-up below. Do not assume the original child process is still alive.",
+		"",
+		"Follow-up:",
+		followUp,
+	].join("\n");
+}
+
+const implementationChallengeTask = revivedTask("Run implementation challenge pass two and implement any better current-scope change.");
+
+test("implementation challenges may complete with an explicit no-better-change report", () => {
+	const result = evaluateCompletionMutationGuard({
+		agent: "worker",
+		task: implementationChallengeTask,
+		messages: [assistantText("No better current-scope change is needed.")],
+	});
+
+	assert.deepEqual(result, {
+		expectedMutation: true,
+		attemptedMutation: false,
+		triggered: false,
+	});
+});
+
+test("revived implementation tasks that mention implementation challenge remain guarded", () => {
+	const result = evaluateCompletionMutationGuard({
+		agent: "worker",
+		task: revivedTask("Fix the implementation challenge completion guard bug."),
+		messages: [assistantText("No better current-scope change is needed.")],
+	});
+
+	assert.deepEqual(result, {
+		expectedMutation: true,
+		attemptedMutation: false,
+		triggered: true,
+	});
+});
+
+test("implementation challenge reports with negated or uncertain no-better-change claims remain guarded", () => {
+	for (const report of [
+		"I cannot say no better current-scope change is needed.",
+		"The previous message said \"No better current-scope change is needed\", but I disagree.",
+		"The prior report stated no better current-scope change is needed.",
+		"I don't think no better current-scope change is needed.",
+		"I dont think no better current-scope change is needed.",
+		"I do not think no better current-scope change is needed.",
+		"I cant say no better current-scope change is needed.",
+		"It is unclear whether no better current-scope change is needed.",
+		"No better current-scope change is needed. I cannot confirm the rest.",
+		"No better current-scope change is needed. I don't confirm the rest.",
+		"No better current-scope change is needed. This isn't confirmed.",
+		"No better current-scope change is needed. I couldn't confirm the rest.",
+		"No better current-scope change is needed. It won't be confirmed.",
+		"No better current-scope change is needed. This is not confirmed.",
+		"No better current-scope change is needed. I am uncertain.",
+		"Maybe no better current-scope change is needed.",
+	]) {
+		assert.equal(evaluateCompletionMutationGuard({
+			agent: "worker",
+			task: implementationChallengeTask,
+			messages: [assistantText(report)],
+		}).triggered, true, report);
+	}
+
+	assert.equal(evaluateCompletionMutationGuard({
+		agent: "worker",
+		task: implementationChallengeTask,
+		messages: [
+			assistantText("No better current-scope change is needed."),
+			assistantText("I cannot confirm the rest."),
+		],
+	}).triggered, true);
 });
 
 test("declared read-only builtin tools suppress implementation-word false positives", () => {
@@ -51,6 +132,24 @@ test("declared read-only builtin tools suppress implementation-word false positi
 		attemptedMutation: false,
 		triggered: false,
 	});
+});
+
+test("hyphenated fix adjectives in review tasks do not trigger the completion guard", () => {
+	const result = evaluateCompletionMutationGuard({
+		agent: "worker",
+		task: "Return a review with the top 2-3 must-fix items.",
+		messages: [assistantText("Review: findings with severity labels.")],
+	});
+
+	assert.deepEqual(result, {
+		expectedMutation: false,
+		attemptedMutation: false,
+		triggered: false,
+	});
+	assert.equal(
+		expectsImplementationMutation("worker", "Return a review with the top 2-3 must-fix items."),
+		false,
+	);
 });
 
 test("read-only issue drafting tasks do not trigger on suggested fix wording", () => {

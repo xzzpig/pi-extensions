@@ -77,6 +77,7 @@ Supported override fields: `description`, `model`, `fallbackModels`, `thinking`,
 
 - `description` replaces the discovered description for builtin and custom agents, which lets list output show deployment-specific routing or model metadata.
 - Use `defaultContext: false` or `acceptanceRole: false` to clear an inherited override.
+- Use `tools: "inherit"` on a builtin when that one role should omit its bundled tool allowlist and receive Pi's normal builtins and ambient extensions. This keeps strict tools as the default for other builtins.
 - Project overrides beat user overrides.
 - Matching user and project agents also receive override fields that their frontmatter leaves unset, so a shared project config agent can keep the persona while local settings choose the model.
 

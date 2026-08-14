@@ -131,11 +131,11 @@ function hostCall(method, args, observation) {
     : promise;
 }
 
-function runHostCall(key, params, collectFailure) {
+function runHostCall(key, params, collectFailure, batch) {
   const callId = ++nextCallId;
   const promise = new Promise((resolve, reject) => {
     pending.set(callId, { resolve, reject });
-    parentPort.postMessage({ type: "call", callId, method: "run", args: { key, params, ...(collectFailure ? { collectFailure: true } : {}) } });
+    parentPort.postMessage({ type: "call", callId, method: "run", args: { key, params, ...(collectFailure ? { collectFailure: true } : {}), ...(batch ? { batch } : {}) } });
   });
   return { key, callId, promise };
 }
@@ -188,7 +188,8 @@ const runs = Object.freeze({
       calls.push({ key, params });
     }
     for (const { key, params } of calls) runFingerprints.set(key, stableRunJson(params));
-    const launched = calls.map(({ key, params }) => runHostCall(key, params, true));
+    const batch = { id: "batch-" + (++nextCallId), calls };
+    const launched = calls.map(({ key, params }) => runHostCall(key, params, true, batch));
     return trackRunObservation(launched.map(({ key, callId }) => ({ key, callId })), Promise.all(launched.map(({ promise }) => promise)));
   },
   status(keyOrRunId) { return hostCall("status", { keyOrRunId }); },
@@ -331,7 +332,7 @@ export interface WorkflowScriptChildResult {
 export interface WorkflowScriptTraceEntry {
 	operation: "run" | "status";
 	key: string;
-	state: "started" | "completed" | "failed" | "reused";
+	state: "started" | "completed" | "failed" | "stopped" | "reused";
 	/** Canonical child agent name when resolved launch or result data is available. */
 	agent?: string;
 	runId?: string;
@@ -363,7 +364,8 @@ export interface RunWorkflowScriptOptions {
 	script: string;
 	timeoutMs?: number;
 	signal?: AbortSignal;
-	launch: (key: string, params: Record<string, unknown>, signal: AbortSignal) => Promise<WorkflowScriptChildResult>;
+	admit?: (calls: Array<{ key: string; params: Record<string, unknown> }>) => void | Promise<void>;
+	launch: (key: string, params: Record<string, unknown>, signal: AbortSignal, admission: { admitted: boolean }) => Promise<WorkflowScriptChildResult>;
 	status: (keyOrRunId: string, signal: AbortSignal) => Promise<WorkflowScriptChildResult>;
 	state?: {
 		get: (key: string) => unknown | Promise<unknown>;
@@ -490,6 +492,8 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 	const children = new Map<string, WorkflowScriptChildResult>();
 	const childOrder: string[] = [];
 	const launches = new Map<string, { fingerprint: string; promise: Promise<WorkflowScriptChildResult>; observed: boolean }>();
+	const stoppedLaunches = new Set<string>();
+	const batchAdmissions = new Map<string, Promise<void>>();
 	const observedRunCalls = new Set<number>();
 	const childController = new AbortController();
 	let settled = false;
@@ -516,7 +520,30 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			else if (completionError) reject(new WorkflowScriptError(completionError.message, partial()));
 			else resolve({ value: outcome.value, ...partial() });
 		};
-		const onAbort = () => finish({ error: new Error("Workflow script aborted.") });
+		const onAbort = () => {
+			const signalReason = options.signal?.reason;
+			const error = signalReason instanceof Error
+				? signalReason
+				: typeof signalReason === "string"
+					? new Error(signalReason)
+					: new Error("Workflow script aborted.");
+			for (const key of launches.keys()) {
+				if (children.has(key)) continue;
+				stoppedLaunches.add(key);
+				const started = trace.findLast((entry) => entry.operation === "run" && entry.key === key && entry.state === "started");
+				trace.push({
+					operation: "run",
+					key,
+					state: "stopped",
+					...(started?.agent ? { agent: started.agent } : {}),
+					...(started?.phase ? { phase: started.phase } : {}),
+					...(started?.label ? { label: started.label } : {}),
+					error: error.message,
+				});
+			}
+			traceChanged();
+			finish({ error });
+		};
 		const timer = options.timeoutMs === undefined
 			? undefined
 			: setTimeout(() => finish({ error: new Error(`Workflow script timed out after ${options.timeoutMs}ms.`) }), options.timeoutMs);
@@ -528,6 +555,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			if (!settled && code !== 0) finish({ error: new Error(`Workflow worker exited with code ${code}.`) });
 		});
 		worker.on("message", (message: Record<string, unknown>) => {
+			if (settled) return;
 			if (message.type === "emit") {
 				try {
 					assertWorkflowJsonValue(message.value, "emit");
@@ -614,7 +642,9 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 				const target = known?.runId ?? keyOrRunId;
 				trace.push({ operation: "status", key: keyOrRunId, state: "started", ...(known?.runId ? { runId: known.runId } : {}) });
 				traceChanged();
+				if (settled) return;
 				respond(options.status(target, childController.signal).then((result) => {
+					if (settled) return result;
 					trace.push({ operation: "status", key: keyOrRunId, state: result.ok ? "completed" : "failed", ...(result.runId ? { runId: result.runId } : {}), ...(!result.ok ? { error: result.output } : {}) });
 					traceChanged();
 					if (!result.ok) throw new Error(`Status '${keyOrRunId}' failed: ${result.output}`);
@@ -677,11 +707,33 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			}
 
 			const startedAt = Date.now();
-			childOrder.push(key);
-			trace.push({ operation: "run", key, state: "started", ...workflowStringMetadata(params) });
-			traceChanged();
-			const promise = Promise.resolve().then(() => options.launch(key, { ...params, async: params.async ?? false }, childController.signal)).then((result) => {
+			const batch = isRecord(message.args.batch) && typeof message.args.batch.id === "string" && Array.isArray(message.args.batch.calls)
+				? { id: message.args.batch.id, calls: message.args.batch.calls.filter((call): call is { key: string; params: Record<string, unknown> } => isRecord(call) && typeof call.key === "string" && isRecord(call.params)) }
+				: undefined;
+			let admission = batch ? batchAdmissions.get(batch.id) : undefined;
+			if (!admission) {
+				const seenKeys = new Set<string>();
+				const calls = (batch?.calls ?? [{ key, params }]).filter((call) => {
+					if (seenKeys.has(call.key) || launches.has(call.key) || call.params.resume !== undefined) return false;
+					seenKeys.add(call.key);
+					return true;
+				});
+				admission = Promise.resolve().then(() => {
+					if (settled) return;
+					return options.admit?.(calls);
+				});
+				if (batch) batchAdmissions.set(batch.id, admission);
+			}
+			const promise = admission.then(() => {
+				if (settled || stoppedLaunches.has(key)) {
+					const reason = childController.signal.reason;
+					const text = reason instanceof Error ? reason.message : typeof reason === "string" ? reason : "Workflow script aborted.";
+					return { key, ok: false, output: text, error: text, artifactPaths: [] };
+				}
+				return options.launch(key, { ...params, async: params.async ?? false }, childController.signal, { admitted: true });
+			}).then((result) => {
 				const normalized = !result.ok && !result.error ? { ...result, error: result.output } : result;
+				if (stoppedLaunches.has(key)) return normalized;
 				children.set(key, normalized);
 				trace.push({ operation: "run", key, state: normalized.ok ? "completed" : "failed", durationMs: Date.now() - startedAt, ...workflowStringMetadata(params), ...(normalized.agent ? { agent: normalized.agent } : {}), ...(normalized.runId ? { runId: normalized.runId } : {}), ...(!normalized.ok ? { error: normalized.error ?? normalized.output } : {}) });
 				traceChanged();
@@ -689,12 +741,16 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			}, (error: unknown) => {
 				const text = error instanceof Error ? error.message : String(error);
 				const failure: WorkflowScriptChildResult = { key, ok: false, output: text, error: text, artifactPaths: [] };
+				if (stoppedLaunches.has(key)) return failure;
 				children.set(key, failure);
 				trace.push({ operation: "run", key, state: "failed", durationMs: Date.now() - startedAt, ...workflowStringMetadata(params), error: text });
 				traceChanged();
 				return failure;
 			});
 			launches.set(key, { fingerprint, promise, observed: callObserved });
+			childOrder.push(key);
+			trace.push({ operation: "run", key, state: "started", ...workflowStringMetadata(params) });
+			traceChanged();
 			respond(deliver(promise));
 		});
 

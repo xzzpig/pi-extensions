@@ -10,6 +10,7 @@ import { writeAtomicJson } from "../../shared/atomic-json.ts";
 import { DIRS, type Details, type SubagentState } from "../../shared/types.ts";
 import { readStatus } from "../../shared/utils.ts";
 import { resolveSubagentRunId } from "../../runs/background/run-id-resolver.ts";
+import { resolveNodeExecutable } from "../../shared/node-executable.ts";
 import { createHerdrClient, detectHerdr, type HerdrClient, type HerdrErrorCode, type HerdrResult } from "./client.ts";
 
 export const HERDR_INSPECTOR_ACTIONS = ["inspector.open", "inspector.status", "inspector.close"] as const;
@@ -45,6 +46,7 @@ interface InspectorDeps {
 	client?: HerdrClient;
 	missions?: MissionStoreConfig;
 	authorityPolicy?: AuthorityPolicyConfig;
+	sessionRoots?: string[];
 	cwd: string;
 	signal?: AbortSignal;
 	now?: () => Date;
@@ -89,8 +91,8 @@ function shellQuote(value: string): string {
 	return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-function inspectorCommand(input: { runnerPath: string; asyncDir: string; runId: string; index?: number; missionPath?: string; allowSteer: boolean; allowStop: boolean }): string {
-	const args = [process.execPath, input.runnerPath, "--async-dir", input.asyncDir, "--run-id", input.runId, "--allow-steer", String(input.allowSteer), "--allow-stop", String(input.allowStop)];
+function inspectorCommand(input: { runnerPath: string; asyncDir: string; runId: string; index?: number; missionPath?: string; allowSteer: boolean; allowStop: boolean; sessionRoots: string[] }): string {
+	const args = [resolveNodeExecutable(), input.runnerPath, "--async-dir", input.asyncDir, "--run-id", input.runId, "--allow-steer", String(input.allowSteer), "--allow-stop", String(input.allowStop), "--session-roots", JSON.stringify(input.sessionRoots)];
 	if (input.index !== undefined) args.push("--index", String(input.index));
 	if (input.missionPath) args.push("--mission-path", input.missionPath);
 	return `${process.platform === "win32" ? "& " : ""}${args.map(shellQuote).join(" ")}`;
@@ -112,6 +114,12 @@ function pathWithin(base: string, candidate: string): boolean {
 	const resolvedBase = path.resolve(base);
 	const resolvedCandidate = path.resolve(candidate);
 	return resolvedCandidate === resolvedBase || resolvedCandidate.startsWith(`${resolvedBase}${path.sep}`);
+}
+
+function herdrSessionRoots(target: { runId: string }, deps: InspectorDeps): string[] {
+	const roots = deps.sessionRoots ?? deps.state?.trustedSessionRoots ?? [];
+	const job = deps.state?.asyncJobs.get(target.runId) ?? deps.state?.fleetJobs?.get(target.runId);
+	return [...new Set([...roots, ...(job?.sessionRoot ? [job.sessionRoot] : [])])];
 }
 
 function isTrustedAsyncDir(asyncDir: string, deps: InspectorDeps): boolean {
@@ -204,6 +212,7 @@ export async function handleHerdrInspectorAction(action: HerdrInspectorAction, p
 		missionPath: mission?.path,
 		allowSteer: resolveAuthorityDecision({ action: "steerRun", policy: deps.authorityPolicy }) === "auto",
 		allowStop: resolveAuthorityDecision({ action: "stopRun", policy: deps.authorityPolicy }) === "auto",
+		sessionRoots: herdrSessionRoots(target, deps),
 	});
 	const started = await client.run(["pane", "run", paneId, command], { timeoutMs: 15_000, signal: deps.signal });
 	if (started.ok === false) {

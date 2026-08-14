@@ -20,11 +20,12 @@ import { waitForSubagents } from "../../src/runs/background/subagent-wait.ts";
 import { writeAtomicJson } from "../../src/shared/atomic-json.ts";
 import { CHILD_WATCHDOG_STATUS_EVENT } from "../../src/watchdog/child-status.ts";
 import { MAX_CHILD_PENDING_LINE_BYTES, MAX_CHILD_STDERR_BYTES } from "../../src/runs/shared/child-protocol.ts";
-import { SUBAGENT_ASYNC_STARTED_EVENT, SUBAGENT_LIFECYCLE_ARTIFACT_VERSION } from "../../src/shared/types.ts";
+import { SUBAGENT_ASYNC_STARTED_EVENT, SUBAGENT_LIFECYCLE_ARTIFACT_VERSION, TEMP_ARTIFACTS_DIR } from "../../src/shared/types.ts";
 import { registerSubagentCapabilityCeiling } from "../../src/api/capability-ceiling.ts";
 import { resolveSubagentLaunchContract } from "../../src/api/preflight.ts";
 import { discoverAgents } from "../../src/agents/agents.ts";
 import { runSync } from "../../src/runs/foreground/execution.ts";
+import { ACTIVE_ASYNC_CAPACITY_DIR, acquireActiveAsyncCapacity, activeAsyncCapacitySessionKey } from "../../src/runs/background/active-async-capacity.ts";
 
 interface LaunchResolvedExtensions {
 	version?: number;
@@ -80,7 +81,7 @@ interface AsyncResultPayload {
 	totalCost?: { inputTokens: number; outputTokens: number; costUsd: number };
 	usageBudget?: UsageBudgetState;
 	checkpoint?: { name?: string; status?: string };
-	results: Array<{ agent?: string; launchContractDigest?: string; launchResolvedExtensions?: LaunchResolvedExtensions; runtimeAcknowledgedExtensions?: RuntimeAcknowledgedExtensions; output?: string; outputState?: "present" | "absent" | "unknown"; success?: boolean; error?: string; protocolError?: { code?: string; stream?: string; limitBytes?: number; observedBytes?: number }; timedOut?: boolean; stopped?: boolean; turnBudget?: { maxTurns: number; graceTurns: number; outcome: string; turnCount: number; wrapUpRequestedAtTurn?: number; terminationDeferredAtTurn?: number; exceededAtTurn?: number }; turnBudgetExceeded?: boolean; wrapUpRequested?: boolean; model?: string; attemptedModels?: string[]; modelAttempts?: Array<{ success?: boolean; error?: string }>; totalCost?: { inputTokens: number; outputTokens: number; costUsd: number }; structuredOutput?: unknown; agentContract?: { version: 1 }; execution?: { status?: string; success?: boolean; exitCode?: number }; effects?: { fileMutation?: { status?: string; expected?: boolean; attempted?: boolean } }; intercomTarget?: string; acceptance?: { status?: string; effectiveAcceptance?: { level?: string }; childReport?: unknown; runtimeChecks?: Array<{ id?: string; status?: string; message?: string }> }; artifactPaths?: { outputPath?: string; inputPath?: string; metadataPath?: string }; outputSaveError?: string; metadataSaveError?: string; capabilityCeiling?: { version?: number; allowedTools?: string[]; denyExtensions?: boolean; sources?: string[] }; capabilityAudit?: { effectiveTools?: string[]; removedTools?: string[]; extensionsDenied?: boolean } }>;
+	results: Array<{ agent?: string; launchContractDigest?: string; launchResolvedExtensions?: LaunchResolvedExtensions; runtimeAcknowledgedExtensions?: RuntimeAcknowledgedExtensions; output?: string; outputState?: "present" | "absent" | "unknown"; success?: boolean; error?: string; protocolError?: { code?: string; stream?: string; limitBytes?: number; observedBytes?: number }; timedOut?: boolean; stopped?: boolean; turnBudget?: { maxTurns: number; graceTurns: number; outcome: string; turnCount: number; wrapUpRequestedAtTurn?: number; terminationDeferredAtTurn?: number; exceededAtTurn?: number }; turnBudgetExceeded?: boolean; wrapUpRequested?: boolean; model?: string; attemptedModels?: string[]; modelAttempts?: Array<{ success?: boolean; error?: string }>; totalCost?: { inputTokens: number; outputTokens: number; costUsd: number }; structuredOutput?: unknown; agentContract?: { version: 1 }; execution?: { status?: string; success?: boolean; exitCode?: number }; effects?: { fileMutation?: { status?: string; expected?: boolean; attempted?: boolean } }; intercomTarget?: string; acceptance?: { status?: string; effectiveAcceptance?: { level?: string }; childReport?: unknown; runtimeChecks?: Array<{ id?: string; status?: string; message?: string }> }; artifactPaths?: { outputPath?: string; inputPath?: string; metadataPath?: string; transcriptPath?: string }; outputSaveError?: string; metadataSaveError?: string; capabilityCeiling?: { version?: number; allowedTools?: string[]; denyExtensions?: boolean; sources?: string[] }; capabilityAudit?: { effectiveTools?: string[]; removedTools?: string[]; extensionsDenied?: boolean } }>;
 	outputs?: Record<string, { text?: string; structured?: unknown }>;
 	workflowGraph?: { nodes?: Array<{ kind?: string; label?: string; phase?: string; status?: string; acceptanceStatus?: string; error?: string; outputName?: string; structured?: boolean; children?: Array<{ label?: string; outputName?: string; itemKey?: string; status?: string; acceptanceStatus?: string; error?: string }> }> };
 	parallelHandoff?: { version?: number; path?: string; groupCount?: number; childCount?: number; changedPatches?: number; cleanupState?: string };
@@ -496,6 +497,17 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(status.endedAt !== undefined, true);
 	});
 
+	it("persists intercom detach receipts on failed async steps", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ output: "Detached for intercom coordination before task completion.", exitCode: -2 });
+		const id = `async-intercom-detach-${Date.now().toString(36)}`;
+		launchProtocolTest(id);
+		await waitForAsyncResultFile(id);
+		const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "status.json"), "utf-8")) as AsyncStatusPayload;
+		assert.equal(status.state, "failed");
+		assert.equal(status.error, "Step failed: worker");
+		assert.equal(status.steps?.[0]?.error, "Detached for intercom coordination before task completion.");
+	});
+
 	it("persists absent output provenance when async lifecycle text is synthetic", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		mockPi.onCall({ jsonl: [mockAssistantMessage("", "tool_use")], stderr: "mock child failure", exitCode: 1 });
 		const id = `async-output-absent-${Date.now().toString(36)}`;
@@ -560,18 +572,26 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		});
 		const id = `async-launch-digest-${Date.now().toString(36)}`;
 		const privateExtension = path.join(tempDir, "extensions", "private-extension.ts");
+		const recoveryAgentConfig = makeAgent("worker", { completionGuard: false, extensions: [privateExtension], tools: ["read"], systemPrompt: "Base prompt" });
 		const launch = executeAsyncSingle(id, {
 			agent: "worker",
 			task: "Exercise launch digest reporting",
-			agentConfig: makeAgent("worker", { completionGuard: false, extensions: [privateExtension] }),
+			agentConfig: { ...recoveryAgentConfig, tools: ["read", "intercom", "contact_supervisor"], systemPrompt: "Base prompt\n\nIntercom orchestration channel:" },
+			recoveryAgentConfig,
 			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
 			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
 			shareEnabled: false,
 			sessionRoot: path.join(tempDir, "sessions"),
 			maxSubagentDepth: 2,
 			acceptance: false,
+			intercomBridge: { mode: "off" },
 		});
 		assert.match(launch.details.launchContractDigest ?? "", /^[a-f0-9]{64}$/);
+		const recovery = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "recovery-descriptor.json"), "utf-8")) as { runFanoutBudget?: { rootRunId?: string; limit?: number }; intercomBridge?: { mode?: string }; tools?: string[]; systemPrompt?: string };
+		assert.deepEqual(recovery.runFanoutBudget && { rootRunId: recovery.runFanoutBudget.rootRunId, limit: recovery.runFanoutBudget.limit }, { rootRunId: id, limit: 64 });
+		assert.deepEqual(recovery.intercomBridge, { mode: "off" });
+		assert.deepEqual(recovery.tools, ["read"]);
+		assert.equal(recovery.systemPrompt, "Base prompt");
 		const payload = await readAsyncPayload(id);
 		const status = await waitForAsyncState(id, (candidate) => candidate.state === "complete" && candidate.runtimeAcknowledgedExtensions !== undefined);
 		assert.equal(payload.launchContractDigest, launch.details.launchContractDigest);
@@ -794,6 +814,44 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		} finally {
 			handle.dispose();
 		}
+	});
+
+	it("redacts async task text from durable artifacts, transcripts, and metadata", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ output: "async redaction complete" });
+		const id = `async-prompt-redaction-${Date.now().toString(36)}`;
+		const sentinel = "ASYNC_RAW_PROMPT_SENTINEL_1021";
+		executeAsyncSingle(id, {
+			agent: "worker",
+			task: `Handle ${sentinel} without persisting it`,
+			agentConfig: makeAgent("worker", { completionGuard: false }),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: { enabled: true, includeInput: true, includeOutput: true, includeJsonl: false, includeTranscript: true, includeMetadata: true, cleanupDays: 7 },
+			artifactsDir: path.join(tempDir, ".pi/subagents", "artifacts"),
+			shareEnabled: false,
+			maxSubagentDepth: 2,
+			acceptance: false,
+		});
+
+		await waitForMockPiCall(mockPi, 0);
+		const callFile = fs.readdirSync(mockPi.dir).find((name) => name.endsWith(".json"));
+		assert.ok(callFile);
+		const call = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")) as { args?: string[] };
+		assert.match(call.args?.join("\n") ?? "", new RegExp(sentinel));
+
+		const payload = await readAsyncPayload(id);
+		const artifactPaths = payload.results[0]?.artifactPaths;
+		assert.ok(artifactPaths?.inputPath);
+		assert.ok(artifactPaths.metadataPath);
+		assert.ok(artifactPaths.transcriptPath);
+		const inputText = fs.readFileSync(artifactPaths.inputPath, "utf-8");
+		const transcriptText = fs.readFileSync(artifactPaths.transcriptPath, "utf-8");
+		const metadataText = fs.readFileSync(artifactPaths.metadataPath, "utf-8");
+		assert.doesNotMatch(inputText, new RegExp(sentinel));
+		assert.doesNotMatch(transcriptText, new RegExp(sentinel));
+		assert.doesNotMatch(metadataText, new RegExp(sentinel));
+		assert.match(inputText, /\[prompt redacted\]/);
+		assert.match(transcriptText, /\[prompt redacted\]/);
+		assert.equal((JSON.parse(metadataText) as { task?: string }).task, "[prompt redacted]");
 	});
 
 	it("background writes a failure stub to output artifacts when no output was produced", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
@@ -1531,8 +1589,8 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.match(singleResult.content[0]?.text ?? "", /Do not run sleep timers or polling loops/);
 		assert.match(singleResult.content[0]?.text ?? "", /call subagent_wait\(\)/i);
 		assert.match(singleResult.content[0]?.text ?? "", /non-interactive run: Pi auto-drains current-session background work at agent_end/);
-		assert.equal(startedEvent(singleId).task, wrappedTask.slice(0, 50));
-		assert.equal(startedEvent(singleId).goal, rawGoal.slice(0, 120));
+		assert.equal(startedEvent(singleId).task, "[prompt redacted]");
+		assert.equal(startedEvent(singleId).goal, "[prompt redacted]");
 		await waitForAsyncResultFile(singleId, 30_000);
 
 		mockPi.onCall({ output: "interactive done" });
@@ -1562,7 +1620,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.match(parallelResult.content[0]?.text ?? "", /Async parallel:/);
 		assert.match(parallelResult.content[0]?.text ?? "", /Do not run sleep timers or polling loops/);
 		assert.match(parallelResult.content[0]?.text ?? "", /call subagent_wait\(\)/i);
-		assert.equal(startedEvent(parallelId).goal, "Do one");
+		assert.equal(startedEvent(parallelId).goal, "[prompt redacted]");
 		const parallelResultPath = await waitForAsyncResultFile(parallelId, 10_000);
 		const parallelPayload = JSON.parse(fs.readFileSync(parallelResultPath, "utf-8")) as { agent?: string; mode?: string };
 		assert.equal(parallelPayload.mode, "parallel");
@@ -1581,8 +1639,8 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.match(chainResult.content[0]?.text ?? "", /Async chain:/);
 		assert.match(chainResult.content[0]?.text ?? "", /Do not run sleep timers or polling loops/);
 		const chainEvent = startedEvent(chainId);
-		assert.equal(chainEvent.task, chainChildTask.slice(0, 50));
-		assert.equal(chainEvent.goal, chainGoal.slice(0, 120));
+		assert.equal(chainEvent.task, "[prompt redacted]");
+		assert.equal(chainEvent.goal, "[prompt redacted]");
 		await waitForAsyncResultFile(chainId, 10_000);
 	});
 
@@ -1719,7 +1777,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(status.sessionId, "session-123");
 		assert.equal(status.steps?.[0]?.acceptance?.status, "review-required");
 		assert.equal(status.steps?.[0]?.acceptance?.evidenceStatus, "checked");
-		const outputPath = path.join(tempDir, ".pi/subagents", "artifacts", "outputs", asyncId, "async-top-output.md");
+		const outputPath = path.join(TEMP_ARTIFACTS_DIR, "outputs", asyncId, "async-top-output.md");
 		const outputDeadline = Date.now() + 5_000;
 		while (!fs.existsSync(outputPath)) {
 			if (Date.now() > outputDeadline) {
@@ -1732,7 +1790,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.ok(callFile, "expected a recorded mock pi call");
 		const args = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")).args as string[];
 		const taskArg = args.at(-1) ?? "";
-		const progressPath = path.join(tempDir, ".pi/subagents", "artifacts", "progress", asyncId, "progress.md");
+		const progressPath = path.join(TEMP_ARTIFACTS_DIR, "progress", asyncId, "progress.md");
 		assert.ok(taskArg.includes(`[Read from: ${path.join(tempDir, "input.md")}]`));
 		assert.ok(taskArg.includes(`Update progress at: ${progressPath}`));
 		assert.ok(taskArg.includes(`Write your findings to exactly this path: ${outputPath}`));
@@ -1763,7 +1821,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			assert.equal(payload.success, true);
 			assert.equal(payload.results[0]?.output?.split("\n\nOutput saved to:")[0], "first async report");
 			assert.equal(payload.results[1]?.output?.split("\n\nOutput saved to:")[0], "second async report");
-			const outputDir = path.join(tempDir, ".pi/subagents", "artifacts", "outputs", launch.details?.asyncId as string);
+			const outputDir = path.join(TEMP_ARTIFACTS_DIR, "outputs", launch.details?.asyncId as string);
 			const authoritativePaths = [
 				path.join(outputDir, "parallel-0", "0-worker", "context.md"),
 				path.join(outputDir, "parallel-0", "1-worker", "context.md"),
@@ -1832,7 +1890,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 
 		const payload = await readAsyncPayload(launch.details?.asyncId as string);
 		assert.equal(payload.success, true);
-		const outputDir = path.join(tempDir, ".pi/subagents", "artifacts", "outputs", launch.details?.asyncId as string);
+		const outputDir = path.join(TEMP_ARTIFACTS_DIR, "outputs", launch.details?.asyncId as string);
 		assert.equal(fs.readFileSync(path.join(outputDir, "first.md"), "utf-8"), "first explicit report");
 		assert.equal(fs.readFileSync(path.join(outputDir, "second.md"), "utf-8"), "second explicit report");
 		assert.ok(payload.results[0]?.artifactPaths?.outputPath?.endsWith("_worker_0_output.md"));
@@ -2571,7 +2629,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			const args = await waitForMockPiArgs(mockPi, 0);
 			const taskArg = args.at(-1) ?? "";
 			assert.match(taskArg, new RegExp(`\\[Read from: ${escapeRegExp(path.join(worktreeCwd, "input.md"))}\\]`));
-			assert.ok(taskArg.includes(`Write your findings to exactly this path: ${path.join(repoDir, ".pi/subagents", "artifacts", "outputs", asyncId, "report.md")}`));
+			assert.ok(taskArg.includes(`Write your findings to exactly this path: ${path.join(TEMP_ARTIFACTS_DIR, "outputs", asyncId, "report.md")}`));
 			const resultPath = await waitForAsyncResultFile(asyncId, 90_000);
 			const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
 			const status = await waitForAsyncState(asyncId, (candidate) => candidate.state === "complete");
@@ -3563,6 +3621,55 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(payload.success, true);
 		assert.equal(payload.results[0].model, "github-copilot/gpt-5-mini");
 		assert.deepEqual(payload.results[0].attemptedModels, ["github-copilot/gpt-5-mini"]);
+	});
+
+	it("rejects an over-cap top-level async launch before creating run artifacts", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
+		fs.rmSync(path.join(ACTIVE_ASYNC_CAPACITY_DIR, activeAsyncCapacitySessionKey("session-cap")), { recursive: true, force: true });
+		const state = {
+			baseCwd: tempDir,
+			currentSessionId: "session-cap",
+			asyncJobs: new Map(),
+			fleetJobs: new Map(),
+			foregroundControls: new Map(),
+			lastForegroundControlId: null,
+		};
+		const occupied = acquireActiveAsyncCapacity({
+			sessionId: "session-cap",
+			limit: 1,
+			runId: "held-run",
+			kind: "runner",
+			asyncDir: path.join(tempDir, "held-run"),
+		});
+		assert.ok(occupied);
+		occupied.markStarted("held-runner");
+		const rejectedAsyncDir = path.join(ASYNC_DIR, "cap-rejected");
+		const rejectedResultPath = path.join(RESULTS_DIR, "cap-rejected.json");
+		fs.rmSync(rejectedAsyncDir, { recursive: true, force: true });
+		fs.rmSync(rejectedResultPath, { force: true });
+		const executor = createSubagentExecutor!({
+			pi: { events: createEventBus(), getSessionName: () => undefined },
+			state,
+			config: { maxActiveAsyncRunsPerSession: 1, artifactDir: "project" },
+			asyncByDefault: false,
+			tempArtifactsDir: tempDir,
+			getSubagentSessionRoot: () => path.join(tempDir, "sessions"),
+			expandTilde: (p: string) => p,
+			discoverAgents: () => ({ agents: [makeAgent("worker")] }),
+		});
+		const context = makeMinimalCtx(tempDir);
+		context.sessionManager.getSessionFile = () => null;
+		context.sessionManager.getSessionId = () => "session-cap";
+		const previousDepth = process.env.PI_SUBAGENT_DEPTH;
+		process.env.PI_SUBAGENT_DEPTH = "0";
+		const result = await executor.execute("cap-rejected", { agent: "worker", task: "Must not start", async: true }, new AbortController().signal, undefined, context);
+		if (previousDepth === undefined) delete process.env.PI_SUBAGENT_DEPTH;
+		else process.env.PI_SUBAGENT_DEPTH = previousDepth;
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.type === "text" ? result.content[0].text : "", /Active async run capacity exhausted: 1\/1 used/);
+		assert.equal(fs.existsSync(rejectedAsyncDir), false);
+		assert.equal(fs.existsSync(rejectedResultPath), false);
+		assert.equal(fs.existsSync(path.join(tempDir, ".pi", "subagents")), false);
+		fs.rmSync(path.join(ACTIVE_ASYNC_CAPACITY_DIR, activeAsyncCapacitySessionKey("session-cap")), { recursive: true, force: true });
 	});
 
 	it("scheduled executor launches retain the live active session ownership", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {

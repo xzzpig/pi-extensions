@@ -2,6 +2,57 @@
 
 ## [Unreleased]
 
+## [0.49.0] - 2026-08-13
+
+### Added
+- Run a single child with `{ agent, task? }` when a full workflow script is not needed (#1059).
+- Adjust FleetView spacing and collapsed result height from the main window. Thanks to @pierre-mgmt for #1048.
+- Inspect async run state with `debug.run`, without exposing prompts, secrets, or transcripts (#1037).
+- Let builtin role overrides keep Pi's normal tools and extensions with `tools: "inherit"`. Thanks to @estanexanavsem for #1047 and @davidarny for #1049.
+- Add simple terminal examples for FleetView, the async widget, and inline tool display. Thanks to @czottmann for #1050.
+
+### Changed
+- Clean up active-run limits and artifact packaging code without changing behavior.
+
+### Fixed
+- Trust live Herdr session roots only when the parent executor registered them for that async run.
+- Let a workflow child disable the intercom bridge for one run with `intercomBridge: { mode: "off" }`, while normal async completion still works. Thanks to @jaudiger for #1072.
+- Recover sibling children after a detached workflow fails (#1066).
+- Show child session transcripts in standalone Herdr inspectors when the transcript is in a trusted session folder (#1069).
+- Keep watchdog reviews, permission checks, Prompt Audit rewriting, and completion intent checks on the authenticated provider stream across the Pi 0.81 and 0.84 APIs. Thanks to @nuzayets for #1067.
+- Mark children stopped by a parent workflow as stopped, not failed, and keep the stop reason (#1060).
+- Keep subagent artifacts and automatic mission records out of project worktrees by default, so read-only workflows leave the tree clean (#1062).
+- Make parents wait at dependency barriers after async launches, so child results are available before dependent work continues. Thanks to @exuanbo for #1045.
+- Keep wait callers alive for intercom replies instead of reviving a detached wrapper. Thanks to @yayamaz for #1053.
+- Keep workflow summary reports separate from child reports, and reject report path collisions before launch (#1038).
+- Accept no-edit implementation challenge passes when the writer says the current solution is already best (#1054).
+- Make the mutation guard safer for LLM intent checks, long tasks, and provider authentication. Thanks to @MarcusNeufeldt for #1044.
+- Launch Herdr inspector panes with Node when Pi runs as a standalone executable. Thanks to @kevinpita for #1051.
+- Sanitize async, nested, and result transcript output before showing it in terminal views. Thanks to @riesbri for #1046.
+
+## [0.48.0] - 2026-08-13
+
+### Added
+- Limit each run to 64 child launches by default, so accidental fan-out loops stop before they create too many children. Thanks to @asjer for #1031.
+- Add an optional limit for how many top-level async runs one session can have active at the same time. Fleet, status, RPC, and doctor now show the limit and current usage. Thanks to @asjer for #1029.
+- Add a live Prompt Audit drawer to Fleet for foreground children owned by the current session. It shows the prompt on screen without saving it to status files, history, transcripts, metadata, results, progress, or run artifacts (#1021).
+- Add a global `timeoutMs` setting for default run deadlines on foreground launches and plain single-agent async runs. It applies when a launch or agent does not set its own timeout, and it prevents long foreground fan-outs from falling back to the built-in 30-minute limit. Composite async runs stay unbounded at the top level. Thanks to @shaharmor for #1018.
+- Add `PI_SUBAGENT_TASK_DELIVERY=auto|file` for hosts that block child processes when the task text appears in the command line. File mode writes the task to a temporary `task.md` and passes that path instead. Thanks to @yanqianglu for #1028.
+- Retry with file-based task delivery after a child exits with no activity, which helps recover from endpoint protection tools that block long command lines. Thanks to @yanqianglu for #1028.
+
+### Fixed
+- Open Fleet Prompt Audit with the original task visible by default, and show a short task summary in the normal Fleet detail pane (#1021).
+- Use the full task text when caching LLM intent decisions, so similar tasks with the same prefix cannot share the wrong answer.
+- Stop async Pi writer processes as full process groups, and only mark process cleanup as proven after the process tree has actually exited. Thanks to @asjer for #1030.
+- Explain when a mission belongs to another worktree, including both the current project root and the mission directory (#1024).
+- Keep the configured output reference when explicit acceptance rejects a foreground child, so useful reports remain available (#1023).
+- Reject worktree base directories inside the agent extensions directory, including symlinked paths (#1014).
+- Make unnamed intercom fallback targets match pi-intercom's registered name length, so subagents without a custom session name can still reach their parent. Thanks to @mystery4f for #1017.
+- Stop treating phrases like "must-fix items" or "should-fix tests" as instructions to edit files during read-only review tasks. Thanks to @MarcusNeufeldt for #1020.
+- Add an optional LLM check before the mutation guard fails a foreground single, parallel, or chain child that made no edits. If the task was actually read-only, the run now completes instead of failing. Thanks to @MarcusNeufeldt for #1020.
+- Accept empty strings inside acceptance-report string arrays instead of rejecting the full report. Thanks to @hjiang for #1015.
+- Let single external-CLI workflow children start without inheriting a Pi model, so model-less external runners do not fail preflight. Thanks to @twosunnus for #1016.
+
 ## [0.47.1] - 2026-08-12
 
 ### Fixed

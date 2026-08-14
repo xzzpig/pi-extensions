@@ -328,6 +328,7 @@ export interface FileMutationEffect {
 	expected: boolean;
 	attempted: boolean;
 	message?: string;
+	resolvedBy?: "llm-intent-arbiter";
 }
 
 export interface EffectsProjection {
@@ -343,6 +344,7 @@ export type ProcessTerminalReason =
 	| "runner-candidate-missing"
 	| "runner-instance-mismatch"
 	| "writer-close-unverified"
+	| "process-tree-unverified"
 	| "canonical-session-unavailable"
 	| "canonical-session-lease-active"
 	| "canonical-session-release-unverified"
@@ -357,6 +359,19 @@ export interface RunnerProcessInstanceExitV1 {
 	signal: string | null;
 }
 
+export type ProcessTreeTerminalV1 =
+	| {
+		state: "observed";
+		mechanism: "posix-process-group";
+		processGroupId: number;
+		verifiedAt: number;
+	}
+	| {
+		state: "unknown";
+		reason: "unsupported-platform" | "signal-failed" | "verification-failed";
+		diagnostic?: string;
+	};
+
 export interface PiWriterProcessInstanceExitV1 {
 	processInstanceId: string;
 	kind: "pi-writer";
@@ -364,6 +379,7 @@ export interface PiWriterProcessInstanceExitV1 {
 	closeObservedAt: number;
 	exitCode: number | null;
 	signal: string | null;
+	processTree: ProcessTreeTerminalV1;
 }
 
 export type ProcessInstanceExitV1 = RunnerProcessInstanceExitV1 | PiWriterProcessInstanceExitV1;
@@ -462,9 +478,30 @@ export interface SteeringNotice {
 	currentSessionId?: string;
 }
 
+export interface RunFanoutBudgetDescriptor {
+	version: 1;
+	rootRunId: string;
+	directory: string;
+	limit: number;
+	parentPath?: string;
+}
+
+export interface RunFanoutBudgetSnapshot {
+	used: number;
+	limit: number;
+	remaining: number;
+}
+
+export interface RunFanoutRejection extends RunFanoutBudgetSnapshot {
+	code: "RUN_FANOUT_LIMIT";
+	path: string;
+	requested: number;
+}
+
 export interface SteeringRecoveryDescriptor {
 	version: 1;
 	launchContractDigest?: string;
+	runFanoutBudget: RunFanoutBudgetDescriptor;
 	sourceRunId: string;
 	agentContract?: AgentContract;
 	agent: string;
@@ -491,6 +528,8 @@ export interface SteeringRecoveryDescriptor {
 	structuredOutputSchema?: JsonSchemaObject;
 	acceptance?: AcceptanceInput;
 	controlConfig?: ResolvedControlConfig;
+	/** Raw per-run bridge override. Omitted descriptors continue to use global config. */
+	intercomBridge?: IntercomBridgeConfig;
 	absoluteDeadlineAt?: number;
 	initialTurnBudget?: ResolvedTurnBudget;
 	initialToolBudget?: ResolvedToolBudget;
@@ -1024,6 +1063,9 @@ export interface Details {
 	// Aggregated cost across all agents in the run
 	totalCost?: CostSummary;
 	spawnBudget?: SpawnBudgetSnapshot;
+	runFanoutBudget?: RunFanoutBudgetSnapshot;
+	runFanoutRejection?: RunFanoutRejection;
+	activeAsyncCapacity?: ActiveAsyncCapacitySnapshot;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	capabilityAudit?: SubagentCapabilityAudit;
 	parallelHandoff?: ParallelHandoffReference;
@@ -1046,7 +1088,7 @@ export interface Details {
 		trace: Array<{
 			operation: "run" | "status";
 			key: string;
-			state: "started" | "completed" | "failed" | "reused";
+			state: "started" | "completed" | "failed" | "stopped" | "reused";
 			agent?: string;
 			runId?: string;
 			phase?: string;
@@ -1219,6 +1261,8 @@ export interface AsyncStartedEvent {
 	asyncDir?: string;
 	/** Parent-resolved launch directory, used as a trusted artifact root while this session is live. */
 	cwd?: string;
+	/** Parent-resolved child session root, used only while this session owns the live run. */
+	sessionRoot?: string;
 	pid?: number;
 	sessionId?: string;
 	mode?: SubagentRunMode;
@@ -1323,6 +1367,8 @@ export interface AsyncStatus {
 	workflowGraph?: WorkflowGraphSnapshot;
 	checkpoint?: ChainCheckpointState;
 	processTerminal?: ProcessTerminalV1;
+	runFanoutBudget?: RunFanoutBudgetSnapshot;
+	runFanoutBudgetDescriptor?: RunFanoutBudgetDescriptor;
 	launchContractDigest?: string;
 	launchResolvedExtensions?: LaunchResolvedChildExtensionsV1;
 	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1;
@@ -1342,6 +1388,10 @@ export interface AsyncStatus {
 		phase?: string;
 		label?: string;
 		workflowKey?: string;
+		/** Child run identity for workflow capacity reconciliation. */
+		runId?: string;
+		/** True only when this workflow child owns a detached async runner. */
+		async?: boolean;
 		parentWorkflowRunId?: string;
 		outputName?: string;
 		structured?: boolean;
@@ -1416,6 +1466,8 @@ export interface AsyncJobState {
 	asyncDir: string;
 	/** Parent-resolved launch directory retained for trusted live artifact lookup. */
 	cwd?: string;
+	/** Parent-resolved child session root retained for trusted live transcript lookup. */
+	sessionRoot?: string;
 	status: "queued" | "running" | "complete" | "failed" | "paused" | "stopped" | "rejected";
 	/** Short caller-facing task/goal shown in fleet surfaces when available. */
 	description?: string;
@@ -1574,6 +1626,12 @@ export interface ForegroundRunControl {
 	toolCount?: number;
 	/** Independently tracked children for foreground parallel work and fleet inspection. */
 	activeChildren?: Map<number, ForegroundChildControl>;
+	/** Live Prompt Audit redo callback. It is current-session memory only. */
+	promptAuditRedo?: (index: number, guidance: string) => Promise<{ text: string; isError?: boolean }>;
+	/** Memory-only source run for Prompt Audit redo. */
+	sourceRunId?: string;
+	/** Memory-only replacement run started by Prompt Audit redo. */
+	supersededByRunId?: string;
 	/** Scheduling owners that may still launch another child. Removal is safe only at zero. */
 	schedulingOwners?: number;
 	nestedRoute?: NestedRouteInfo;
@@ -1593,6 +1651,12 @@ export interface WaitSubscriptionRecord {
 	expiresAt: number;
 }
 
+export interface ActiveAsyncCapacitySnapshot {
+	used: number;
+	/** Zero means the opt-in cap is disabled. */
+	limit: number;
+}
+
 export interface SubagentState {
 	baseCwd: string;
 	currentSessionId: string | null;
@@ -1603,6 +1667,10 @@ export interface SubagentState {
 	/** Runtime mission-store snapshot used by optional inspector context. */
 	missionStoreConfig?: MissionStoreConfig;
 	parentSessionFile?: string | null;
+	/** Extension-owned roots trusted for child session transcript reads. */
+	trustedSessionRoots?: string[];
+	/** Live async session roots created by this parent executor, keyed by run id. */
+	liveAsyncSessionRoots?: Map<string, string>;
 	/** Last valid parent session model observed for this session; used when continuation contexts omit ctx.model. */
 	lastParentModel?: { provider: string; id: string };
 	subagentInProgress?: boolean;
@@ -1613,6 +1681,8 @@ export interface SubagentState {
 		granted?: number;
 		grantHistory?: SpawnBudgetGrant[];
 	};
+	/** Current-session top-level async capacity projection. */
+	activeAsyncCapacity?: ActiveAsyncCapacitySnapshot;
 	asyncJobs: Map<string, AsyncJobState>;
 	/** Current-session active and recent async runs for the native fleet inspector. */
 	fleetJobs?: Map<string, AsyncJobState>;
@@ -1730,9 +1800,12 @@ export interface RunSyncOptions {
 	/** Effective parent wait-tool setting propagated to the child runtime. */
 	waitToolEnabled?: boolean;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
+	runFanoutBudget?: RunFanoutBudgetDescriptor;
 	nestedRoute?: NestedRouteInfo;
 	/** Override the agent's default model (format: "provider/id" or just "id") */
 	modelOverride?: string;
+	/** LLM intent arbiter for the completion mutation guard (rescues read-only review runs). */
+	llmIntentArbiter?: import("../runs/shared/llm-intent-arbiter.ts").TaskMutationArbiter;
 	/** Override the agent's default thinking level for this run */
 	thinkingOverride?: AgentConfig["thinking"];
 	/** Registry models available for heuristic bare-model resolution */
@@ -1756,6 +1829,8 @@ export interface RunSyncOptions {
 		dynamic?: boolean;
 		dynamicGroup?: boolean;
 	};
+	/** Private live callback for the exact child prompt after runtime acceptance injection. */
+	onEffectivePrompt?: (prompt: string) => void;
 }
 
 export type IntercomBridgeMode = "off" | "fork-only" | "always";
@@ -1817,6 +1892,13 @@ export const FLEET_KEYBINDING_ACTIONS = [
 export type FleetKeybindingAction = typeof FLEET_KEYBINDING_ACTIONS[number];
 export type FleetKeybindingsConfig = Partial<Record<FleetKeybindingAction, string[]>>;
 
+export interface MainWindowRendererConfig {
+	/** Unit of horizontal space in main chat subagent call/result rows. Omit to preserve current spacing. Set 0 for no extra padding. */
+	horizontalSpacing?: number;
+	/** Maximum collapsed rich-result rows. Expanded output is not capped. */
+	compactResultMaxLines?: number;
+}
+
 export interface ExtensionConfig {
 	asyncByDefault?: boolean;
 	/** Show the Claude Code-style navigable fleet. Defaults to true. */
@@ -1833,6 +1915,8 @@ export interface ExtensionConfig {
 	legacyChainControls?: boolean;
 	/** Inline chat rendering for the subagent tool. Defaults to rich. */
 	inlineToolDisplay?: InlineToolDisplay;
+	/** Density controls for the main chat subagent call/result renderer. */
+	mainWindowRenderer?: MainWindowRendererConfig;
 	forceTopLevelAsync?: boolean;
 	waitTool?: WaitToolConfig;
 	defaultSessionDir?: string;
@@ -1840,8 +1924,22 @@ export interface ExtensionConfig {
 	maxSubagentDepth?: number;
 	/** Optional cumulative session cap. Unset or 0 means unlimited. */
 	maxSubagentSpawnsPerSession?: number;
+	/** Cumulative logical-child cap for one top-level run tree. Defaults to 64. */
+	maxSubagentSpawnsPerRun?: number;
+	/** Optional active top-level async run cap per parent session. Unset or 0 means unlimited. */
+	maxActiveAsyncRunsPerSession?: number;
 	/** Global cap on simultaneously-running subagent tasks within a single run. Defaults to 20. */
 	globalConcurrencyLimit?: number;
+	/**
+	 * Global default runtime deadline in milliseconds. It replaces the built-in
+	 * 30-minute backstop for single, parallel, and chain launches (foreground, plus
+	 * plain single-agent async runs) when neither the call (`timeoutMs`/`maxRuntimeMs`)
+	 * nor the selected agent provides a timeout. Explicit call values and agent
+	 * frontmatter defaults still win. Composite async runs (chain/parallel/workflow)
+	 * stay unbounded at the top level by design — their children are bounded individually.
+	 * Must be a positive integer; invalid values are ignored.
+	 */
+	timeoutMs?: number;
 	control?: ControlConfig;
 	completionBatch?: CompletionBatchConfig;
 	turnBudget?: TurnBudgetConfig;
@@ -1854,7 +1952,7 @@ export interface ExtensionConfig {
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
 	worktreeBaseDir?: string;
-	/** Where to store subagent artifact files. Defaults to "project" (cwd/.pi/subagents). Set to "session" for pi session dir, or "temp" for OS temp. */
+	/** Where to store subagent artifact files. Defaults to "session" (the pi session directory, or OS temp when unavailable). Set to "project" for cwd/.pi/subagents. */
 	artifactDir?: ArtifactDirPreference;
 	/** Artifact cleanup retention. Set cleanupDays to 0 to disable cleanup. */
 	artifactConfig?: Pick<ArtifactConfig, "cleanupDays">;
@@ -1878,7 +1976,7 @@ export const DEFAULT_MAX_OUTPUT: Required<MaxOutputConfig> = {
 
 export const DEFAULT_ARTIFACT_CONFIG: ArtifactConfig = {
 	enabled: true,
-	dir: "project",
+	dir: "session",
 	includeInput: true,
 	includeOutput: true,
 	includeJsonl: false,
@@ -1965,7 +2063,7 @@ export const SLASH_SUBAGENT_CANCEL_EVENT = "subagent:slash:cancel";
 export const POLL_INTERVAL_MS = 250;
 export const MAX_WIDGET_JOBS = 4;
 export const DEFAULT_SUBAGENT_MAX_DEPTH = 2;
-export const SUBAGENT_ACTIONS = ["list", "get", "models", "children.list", "guide", "create", "update", "delete", "eject", "disable", "enable", "reset", "mission.create", "mission.list", "mission.show", "mission.update", "mission.resolve-decision", "mission.attach-run", "mission.close", "worktree.discard", "refine", "refine.show", "refine.rollback", "inspector.open", "inspector.status", "inspector.close", "project.open", "project.status", "project.close", "status", "grant-spawn-budget", "interrupt", "resume", "steer", "stop", "dismiss", "append-step", "approve-checkpoint", "reject-checkpoint", "doctor", "watchdog.status", "watchdog.check", "watchdog.configure", "watchdog.recommend-model", "schedule.create", "schedule.list", "schedule.show", "schedule.history", "schedule.pause", "schedule.resume", "schedule.run", "schedule.run-due", "schedule.delete"] as const;
+export const SUBAGENT_ACTIONS = ["list", "get", "models", "children.list", "guide", "create", "update", "delete", "eject", "disable", "enable", "reset", "mission.create", "mission.list", "mission.show", "mission.update", "mission.resolve-decision", "mission.attach-run", "mission.close", "worktree.discard", "refine", "refine.show", "refine.rollback", "inspector.open", "inspector.status", "inspector.close", "project.open", "project.status", "project.close", "status", "debug.run", "grant-spawn-budget", "interrupt", "resume", "steer", "stop", "dismiss", "append-step", "approve-checkpoint", "reject-checkpoint", "doctor", "watchdog.status", "watchdog.check", "watchdog.configure", "watchdog.recommend-model", "schedule.create", "schedule.list", "schedule.show", "schedule.history", "schedule.pause", "schedule.resume", "schedule.run", "schedule.run-due", "schedule.delete"] as const;
 
 export const DEFAULT_FORK_PREAMBLE =
 	"You are a delegated subagent running from a fork of the parent session. " +
@@ -2055,6 +2153,19 @@ export function resolveMaxSubagentSpawnsPerSession(configMaxSpawns?: number): nu
 	if (envMaxSpawns !== undefined) return envMaxSpawns === 0 ? undefined : envMaxSpawns;
 	const configuredMaxSpawns = normalizeMaxSubagentSpawnsPerSession(configMaxSpawns);
 	return configuredMaxSpawns === 0 ? undefined : configuredMaxSpawns;
+}
+
+export const DEFAULT_MAX_SUBAGENT_SPAWNS_PER_RUN = 64;
+
+export function normalizeMaxSubagentSpawnsPerRun(value: unknown): number | undefined {
+	const normalized = normalizeNonNegativeInteger(value);
+	return normalized !== undefined && normalized > 0 ? normalized : undefined;
+}
+
+export function resolveMaxSubagentSpawnsPerRun(configMaxSpawns?: number): number {
+	return normalizeMaxSubagentSpawnsPerRun(process.env.PI_SUBAGENT_MAX_SPAWNS_PER_RUN)
+		?? normalizeMaxSubagentSpawnsPerRun(configMaxSpawns)
+		?? DEFAULT_MAX_SUBAGENT_SPAWNS_PER_RUN;
 }
 
 // ============================================================================

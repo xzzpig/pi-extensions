@@ -11,6 +11,8 @@ export interface PublicSubagentExecutionParams {
 	workflowScript?: unknown;
 	resume?: unknown;
 	clarify?: unknown;
+	runFanoutBudget?: unknown;
+	runFanoutAdmitted?: unknown;
 }
 
 export type PublicSubagentExecutionMode = "workflow" | "management";
@@ -24,6 +26,9 @@ export type PublicSubagentExecutionNormalization<T> =
  * Internal runs.run children and structured owned delegation bypass this boundary.
  */
 export function normalizePublicSubagentExecution<T extends PublicSubagentExecutionParams>(params: T): PublicSubagentExecutionNormalization<T> {
+	if (params.runFanoutBudget !== undefined || params.runFanoutAdmitted !== undefined) {
+		return { ok: false, error: "Public execution does not accept internal run fan-out fields.", mode: params.workflowScript !== undefined ? "workflow" : "management" };
+	}
 	const action = params.action;
 	if (action !== undefined && (typeof action !== "string" || !action.trim())) {
 		return { ok: false, error: "action must be a non-empty management/control action, or omit action and use workflowScript.", mode: "management" };
@@ -42,7 +47,7 @@ export function normalizePublicSubagentExecution<T extends PublicSubagentExecuti
 	if (normalizedAction !== undefined) {
 		const legacyAction = normalizedAction.toLowerCase();
 		if (legacyAction === "single") {
-			return { ok: false, error: "Direct execution was removed. Use workflowScript: \"return runs.run('main', { agent, task })\".", mode: "workflow" };
+			return { ok: false, error: "action='single' is not supported. Omit action and pass { agent, task } for one child.", mode: "workflow" };
 		}
 		if (legacyAction === "parallel" || legacyAction === "tasks" || legacyAction === "chain") {
 			return { ok: false, error: "Legacy top-level chain and parallel inputs were removed; use workflowScript.", mode: "workflow" };
@@ -59,13 +64,39 @@ export function normalizePublicSubagentExecution<T extends PublicSubagentExecuti
 		if (params.workflowScript !== undefined) {
 			return { ok: false, error: "workflowScript execution must omit action; only schedule.create accepts action with workflowScript.", mode: "management" };
 		}
+		if (params.task !== undefined) {
+			return { ok: false, error: "Structured single-child task cannot be combined with a management/control action.", mode: "management" };
+		}
 		return { ok: true, params: { ...params, action: normalizedAction } };
 	}
-	if (params.agent !== undefined || params.task !== undefined || params.step !== undefined) {
-		return { ok: false, error: "Direct execution was removed. Use workflowScript: \"return runs.run('main', { agent, task })\".", mode: "workflow" };
+	if (params.step !== undefined) {
+		return { ok: false, error: "step is only available with action='append-step'; it is not an execution mode.", mode: "workflow" };
+	}
+	if (params.workflowScript !== undefined && (params.agent !== undefined || params.task !== undefined)) {
+		return { ok: false, error: "Structured single-child execution cannot be combined with workflowScript.", mode: "workflow" };
+	}
+	if (params.agent !== undefined || params.task !== undefined) {
+		if (typeof params.agent !== "string" || !params.agent.trim()) {
+			return { ok: false, error: "Structured single-child execution requires agent to be a non-empty string.", mode: "workflow" };
+		}
+		if (params.task !== undefined && typeof params.task !== "string") {
+			return { ok: false, error: "Structured single-child task must be a string when provided.", mode: "workflow" };
+		}
+		const { agent: _agent, task: _task, ...workflowDefaults } = params;
+		const child = {
+			agent: params.agent.trim(),
+			...(params.task !== undefined ? { task: params.task } : {}),
+		};
+		return {
+			ok: true,
+			params: {
+				...workflowDefaults,
+				workflowScript: `console.info("Converted structured single-child request to workflow runs.run('main', ...)."); return runs.run("main", ${JSON.stringify(child)})`,
+			} as T,
+		};
 	}
 	if (typeof params.workflowScript !== "string" || !params.workflowScript.trim()) {
-		return { ok: false, error: "Execution requires a non-empty workflowScript. Direct execution was removed; use workflowScript: \"return runs.run('main', { agent, task })\".", mode: "workflow" };
+		return { ok: false, error: "Execution requires either { agent, task? } for one child or a non-empty workflowScript for orchestration.", mode: "workflow" };
 	}
 	return { ok: true, params };
 }

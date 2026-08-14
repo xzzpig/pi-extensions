@@ -16,6 +16,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { MockPi } from "../support/helpers.ts";
 import { discoverAgents } from "../../src/agents/agents.ts";
+import { getLivePromptAudit } from "../../src/runs/foreground/prompt-audit.ts";
+import { TEMP_ARTIFACTS_DIR } from "../../src/shared/types.ts";
 import {
 	createEventBus,
 	createMockPi,
@@ -217,9 +219,9 @@ describe("parallel agent execution", { skip: !piAvailable ? "pi packages not ava
 		const control = [...state.foregroundControls.values()][0];
 		assert.ok(control);
 		assert.deepEqual([...control.activeChildren.values()].map((child) => child.description), [
-			"Review correctness",
-			"Review quality",
-			"Review tests",
+			"reviewer child",
+			"reviewer child",
+			"reviewer child",
 		]);
 		assert.equal(control.activeChildren.size, 3);
 
@@ -260,6 +262,43 @@ describe("parallel agent execution", { skip: !piAvailable ? "pi packages not ava
 		assert.ok(updateIndexes.includes(0));
 		assert.ok(updateIndexes.includes(1));
 		assert.ok(updateIndexes.every((index) => Number.isInteger(index)));
+	});
+
+	it("stores redo contracts for worktree-isolated parallel children as fresh managed worktree launches", { skip: !createSubagentExecutor || process.platform === "win32" ? "executor unavailable or worktree paths differ on Windows" : undefined }, async () => {
+		git(["init"]);
+		git(["config", "user.email", "test@example.com"]);
+		git(["config", "user.name", "Test User"]);
+		fs.writeFileSync(path.join(tempDir, "tracked.txt"), "base\n", "utf-8");
+		git(["add", "tracked.txt"]);
+		git(["commit", "-m", "initial"]);
+		mockPi.onCall({ output: "Worktree task complete", delay: 1000 });
+		const state = { baseCwd: tempDir, currentSessionId: null, asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null };
+		const executor = makeExecutor([makeAgent("echo")], state);
+		const executionPromise = executor.execute(
+			"foreground-worktree-redo-contract",
+			{ tasks: [{ agent: "echo", task: "Work in isolation" }], worktree: true },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		let control = [...state.foregroundControls.values()][0];
+		let audit = control ? getLivePromptAudit(control, 0) : undefined;
+		for (let attempt = 0; attempt < 100 && !audit; attempt++) {
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			control = [...state.foregroundControls.values()][0];
+			audit = control ? getLivePromptAudit(control, 0) : undefined;
+		}
+		assert.ok(control);
+		assert.ok(audit);
+		assert.equal(audit.rerun?.params.agent, "echo");
+		assert.equal(audit.rerun?.params.task, "Work in isolation");
+		assert.equal(audit.rerun?.params.worktree, true);
+		assert.equal(audit.rerun?.params.cwd, undefined);
+		assert.equal(audit.rerun?.params.tasks, undefined);
+
+		const result = await executionPromise;
+		assert.equal(result.isError, undefined);
 	});
 
 	it("publishes a durable handoff before cleaning foreground parallel worktrees", { skip: !createSubagentExecutor || process.platform === "win32" ? "executor unavailable or worktree paths differ on Windows" : undefined }, async () => {
@@ -407,7 +446,7 @@ describe("parallel agent execution", { skip: !piAvailable ? "pi packages not ava
 
 		const runId = result.details?.runId;
 		assert.ok(runId, "expected run id in details");
-		const outputPath = path.join(tempDir, ".pi/subagents", "artifacts", "outputs", runId, "parallel-output.md");
+		const outputPath = path.join(TEMP_ARTIFACTS_DIR, "outputs", runId, "parallel-output.md");
 		assert.equal(result.isError, undefined);
 		assert.equal(fs.readFileSync(outputPath, "utf-8"), "Saved report");
 		assert.equal(result.details?.results?.[0]?.savedOutputPath, outputPath);
@@ -486,7 +525,7 @@ describe("parallel agent execution", { skip: !piAvailable ? "pi packages not ava
 
 		const runId = result.details?.runId;
 		assert.ok(runId, "expected run id in details");
-		const outputPath = path.join(tempDir, ".pi/subagents", "artifacts", "outputs", runId, "parallel-file-only.md");
+		const outputPath = path.join(TEMP_ARTIFACTS_DIR, "outputs", runId, "parallel-file-only.md");
 		const text = result.content[0]?.text ?? "";
 		assert.equal(result.isError, undefined);
 		assert.match(text, /Output saved to:/);
@@ -554,7 +593,7 @@ describe("parallel agent execution", { skip: !piAvailable ? "pi packages not ava
 
 			const runId = result.details?.runId;
 			assert.ok(runId, "expected run id in details");
-			const outputDir = path.join(tempDir, ".pi/subagents", "artifacts", "outputs", runId);
+			const outputDir = path.join(TEMP_ARTIFACTS_DIR, "outputs", runId);
 			const firstOutputPath = path.join(outputDir, "parallel-0", "0-echo", "context.md");
 			const secondOutputPath = path.join(outputDir, "parallel-0", "1-echo", "context.md");
 			assert.equal(result.isError, undefined);
@@ -667,7 +706,7 @@ Inspect
 		);
 		const runId = result.details?.runId;
 		assert.ok(runId, "expected run id in details");
-		const expectedProgressPath = path.join(tempDir, ".pi/subagents", "artifacts", "progress", runId, "progress.md");
+		const expectedProgressPath = path.join(path.dirname(parentSessionFile), "subagent-artifacts", "progress", runId, "progress.md");
 
 		const args = readLastCallArgs();
 		const taskArg = args.at(-1) ?? "";

@@ -51,6 +51,8 @@ export interface IntercomBridgeDiagnostic {
 
 interface ResolveIntercomBridgeInput {
 	config: ExtensionConfig["intercomBridge"];
+	/** Per-run config replaces the global config when supplied. */
+	override?: IntercomBridgeConfig;
 	context: "fresh" | "fork" | undefined;
 	orchestratorTarget?: string;
 	cwd?: string;
@@ -63,7 +65,10 @@ export function resolveIntercomSessionTarget(sessionName: string | undefined, se
 	if (trimmedName) return trimmedName;
 	const fallbackSessionId = intercomSessionId?.trim() || sessionId;
 	const normalizedSessionId = fallbackSessionId.startsWith("session-") ? fallbackSessionId.slice("session-".length) : fallbackSessionId;
-	return `${DEFAULT_INTERCOM_TARGET_PREFIX}-${normalizedSessionId.slice(0, 8)}`;
+	// NOTE: keep slice length in sync with pi-intercom's resolveIntercomPresenceName
+	// (index.ts: DEFAULT_UNNAMED_SESSION_ALIAS_PREFIX + slice(0, 18)); mismatched lengths
+	// make fallback orchestrator targets unresolvable ("Session not found").
+	return `${DEFAULT_INTERCOM_TARGET_PREFIX}-${normalizedSessionId.slice(0, 18)}`;
 }
 
 function sanitizeIntercomTargetPart(value: string): string {
@@ -140,7 +145,7 @@ export function diagnoseIntercomBridge(input: ResolveIntercomBridgeInput): Inter
 }
 
 export function resolveIntercomBridge(input: ResolveIntercomBridgeInput): IntercomBridgeState {
-	const config = resolveIntercomBridgeConfig(input.config);
+	const config = resolveIntercomBridgeConfig(input.override !== undefined ? input.override : input.config);
 	const mode = config.mode;
 	const orchestratorTarget = input.orchestratorTarget?.trim();
 	const agentDir = path.resolve(input.agentDir ?? defaultAgentDir());
