@@ -14,6 +14,7 @@ import { ParentAuthorizer } from "#src/authority/approval-escalator";
 import {
   type ForwardedPermissionRequest,
   PERMISSION_FORWARDING_SERVING_GRACE_MS,
+  SUBAGENT_PARENT_SESSION_ENV_CANDIDATES,
 } from "#src/authority/permission-forwarding";
 import { ServingSessionRegistry } from "#src/authority/serving-registry";
 import {
@@ -358,20 +359,27 @@ const forwardedAsk = {
 
 describe("ParentAuthorizer abandonment", () => {
   test("reports an unresolvable target as unavailable, not user-denied", async () => {
-    const authorizer = new ParentAuthorizer(
-      makeForwarderContext({ hasUI: false, sessionId: "child-session" }),
-      makeParentAuthorizerDeps({
-        registry: makeSubagentRegistry("child-session"),
-      }),
-    );
+    for (const key of SUBAGENT_PARENT_SESSION_ENV_CANDIDATES) {
+      vi.stubEnv(key, "");
+    }
+    try {
+      const authorizer = new ParentAuthorizer(
+        makeForwarderContext({ hasUI: false, sessionId: "child-session" }),
+        makeParentAuthorizerDeps({
+          registry: makeSubagentRegistry("child-session"),
+        }),
+      );
 
-    await expect(authorizer.authorize({ ...forwardedAsk })).resolves.toEqual({
-      approved: false,
-      state: "denied",
-      confirmationUnavailable: true,
-      denialReason:
-        "Could not resolve a parent session to forward this permission request to",
-    });
+      await expect(authorizer.authorize({ ...forwardedAsk })).resolves.toEqual({
+        approved: false,
+        state: "denied",
+        confirmationUnavailable: true,
+        denialReason:
+          "Could not resolve a parent session to forward this permission request to",
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   test("reports unusable forwarding directories as unavailable", async () => {
