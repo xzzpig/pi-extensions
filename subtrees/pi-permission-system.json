@@ -2,12 +2,13 @@
   "$schema": "../schemas/subtree-metadata.schema.json",
   "name": "pi-permission-system",
   "prefix": "packages/pi-permission-system",
+  "upstreamPath": "packages/pi-permission-system",
   "source": "https://github.com/gotgenes/pi-packages.git",
   "remote": "upstream-pi-permission-system",
-  "ref": "pi-permission-system-v24.0.0",
-  "version": "24.0.0",
-  "upstreamCommit": "776ebcc764ca6c720b1f7eb430007de06f145b5f",
+  "ref": "pi-permission-system-v25.2.0",
+  "version": "25.2.0",
+  "upstreamCommit": "87d69d292f4415443c9d3df17d14738d6a9c2347",
   "squash": true,
-  "lastSyncedAt": "2026-08-08T12:00:00.000Z",
+  "lastSyncedAt": "2026-08-14T20:11:09+08:00",
   "notes": "Forked from gotgenes/pi-packages; local wrapper-floor rework (fallback mode) intentionally diverges from upstream."
 }

@@ -55,6 +55,7 @@ record must contain:
 
 - `name`: local record/directory name matching `pi-[a-z0-9][a-z0-9-]*` (unscoped). This is subtree bookkeeping only — NOT the published npm name (see "Forked package npm naming").
 - `prefix`: exactly `packages/<name>`.
+- `upstreamPath` (optional): relative directory inside a monorepo source. Omit it when the plugin is the source repository root.
 - `source`: upstream Git source.
 - `remote`: exactly `upstream-<name>`.
 - `ref`: branch, tag, or commit-ish.
@@ -171,6 +172,66 @@ direnv reload
 ```
 
 ## Pull upstream changes
+
+### Upstream subdirectory
+
+When a plugin lives below the root of a monorepo, set `upstreamPath` in its
+metadata. `upstreamCommit` MUST remain the exact commit from `source`; never
+replace it with the derived split commit. The split commit belongs only in the
+`git-subtree-split` trailer and makes the local prefix synchronizable.
+
+For each update, use this sequence before the regular record update:
+
+1. Fetch the tag or branch through the metadata remote and save its root commit.
+2. In a clean local mirror of `source`, create a split branch for
+   `upstreamPath` at that root commit. Do not run `git subtree split` against
+   the local fork, because it would include local divergence.
+3. Fetch that split branch through a separate local transport remote, then use
+   `git subtree pull --squash` from the split branch into the local `prefix`.
+   The metadata `remote` remains the source remote, never the local split
+   transport.
+4. Verify the split tree equals `<upstreamCommit>:<upstreamPath>`, verify the
+   squash trailer names the split commit, and update metadata with the root
+   commit, `upstreamPath`, ref, version, and timestamp.
+
+```bash
+name=pi-upstream-plugin
+ref=v1.2.3
+upstream_path=packages/pi-upstream-plugin
+source_mirror=/absolute/path/to/clean/upstream-mirror
+split_remote=local-pi-upstream-plugin-split
+
+git fetch "upstream-${name}" "$ref"
+upstream_commit=$(git rev-parse FETCH_HEAD)
+
+# The mirror's origin must be the same source as the metadata record.
+git -C "$source_mirror" fetch origin "$ref"
+test "$(git -C "$source_mirror" rev-parse FETCH_HEAD)" = "$upstream_commit"
+split_branch="split-${name}-${upstream_commit:0:12}"
+git -C "$source_mirror" subtree split \
+  --prefix="$upstream_path" \
+  --branch="$split_branch" \
+  "$upstream_commit"
+split_commit=$(git -C "$source_mirror" rev-parse "$split_branch")
+test "$(git -C "$source_mirror" rev-parse "${split_commit}^{tree}")" = \
+  "$(git -C "$source_mirror" rev-parse "${upstream_commit}:${upstream_path}")"
+
+# A local transport remote is only a carrier for the derived split branch.
+if git remote get-url "$split_remote" >/dev/null 2>&1; then
+  test "$(git remote get-url "$split_remote")" = "$source_mirror"
+else
+  git remote add "$split_remote" "$source_mirror"
+fi
+git fetch "$split_remote" "$split_branch"
+git subtree pull --prefix="packages/${name}" --squash "$split_remote" "$split_branch"
+test "$(git rev-list --parents -n 1 HEAD | wc -w)" -eq 3
+git show -s --format=%B HEAD^2 | grep -Fx "git-subtree-dir: packages/${name}"
+git show -s --format=%B HEAD^2 | grep -Fx "git-subtree-split: ${split_commit}"
+```
+
+Then write `upstreamPath: "$upstream_path"` and `upstreamCommit:
+"$upstream_commit"` into the record. For a ref change, set
+`remote.upstream-${name}.pi-ref` to the new ref before `direnv reload`.
 
 ### Same ref
 

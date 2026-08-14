@@ -11,6 +11,7 @@ The non-example fields are:
 | ---------------- | ------------------------------------------------------------ |
 | `name`           | Local record/directory name, unscoped `pi-*` (see below).    |
 | `prefix`         | Local subtree path, exactly `packages/<name>`.               |
+| `upstreamPath`   | Optional relative directory inside a monorepo source.        |
 | `source`         | Upstream Git source used by the local remote.                |
 | `remote`         | Local remote, exactly `upstream-<name>`.                     |
 | `ref`            | Branch, tag, or commit-ish used for synchronization.         |
@@ -21,6 +22,11 @@ The non-example fields are:
 
 [`template.json.example`](template.json.example) shows the shape without
 pretending that an upstream repository has been imported.
+
+The metadata's `upstreamCommit` always identifies a commit in `source`. When
+`upstreamPath` is set, its subtree trailer records a derived split commit; use
+both values to reproduce the imported source directory at that exact upstream
+revision.
 
 ### Tracking invariant
 

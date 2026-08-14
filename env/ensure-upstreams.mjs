@@ -99,6 +99,7 @@ function emitEnvironment(records) {
       VERSION: record.version ?? "",
       COMMIT: record.upstreamCommit,
       PREFIX: record.prefix,
+      UPSTREAM_PATH: record.upstreamPath ?? "",
     };
     for (const [field, value] of Object.entries(values)) {
       lines.push(`export PI_UPSTREAM_${key}_${field}=${shellQuote(value)}`);
