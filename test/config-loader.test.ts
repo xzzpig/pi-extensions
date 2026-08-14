@@ -318,6 +318,20 @@ describe("loadUnifiedConfig", () => {
     expect(result.issues.length).toBeGreaterThan(0);
   });
 
+  it("parses forwardingTimeoutMs when a valid positive integer is present", () => {
+    const configPath = join(tempDir, "config.json");
+    writeFileSync(configPath, JSON.stringify({ forwardingTimeoutMs: 120_000 }));
+    const result = loadUnifiedConfig(configPath);
+    expect(result.config.forwardingTimeoutMs).toBe(120_000);
+  });
+
+  it("rejects a non-positive forwardingTimeoutMs", () => {
+    const configPath = join(tempDir, "config.json");
+    writeFileSync(configPath, JSON.stringify({ forwardingTimeoutMs: 0 }));
+    const result = loadUnifiedConfig(configPath);
+    expect(result.issues.length).toBeGreaterThan(0);
+  });
+
   it("parses toolInputPreviewMaxLength when a valid positive integer is present", () => {
     const configPath = join(tempDir, "config.json");
     writeFileSync(

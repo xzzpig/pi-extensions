@@ -6,6 +6,8 @@
   "yoloMode": false,
   "doublePressToConfirm": true,
 
+  "forwardingTimeoutMs": 600000,
+
   "toolInputPreviewMaxLength": 400,
   "toolTextSummaryMaxLength": 120,
 

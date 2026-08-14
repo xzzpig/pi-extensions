@@ -31,6 +31,14 @@
       "default": true,
       "type": "boolean"
     },
+    "forwardingTimeoutMs": {
+      "description": "How long a subagent waits for the parent session to answer a forwarded permission request, in milliseconds. Omit to use the default (600000, ten minutes).",
+      "markdownDescription": "How long a subagent waits for the parent session to answer a forwarded permission request, in milliseconds.\n\nOmit to use the default (`600000`, ten minutes). A child whose in-process parent is not draining its inbox at all gives up in a couple of seconds regardless of this value, so lower it only to bound how long you are willing to leave an *unanswered* prompt pending.",
+      "default": 600000,
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
     "toolInputPreviewMaxLength": {
       "description": "Maximum character length of the inline-JSON tool-input preview shown in permission prompts. Omit to use the default (200). Set to a large value to disable truncation.",
       "markdownDescription": "Maximum character length of the inline-JSON tool-input preview shown in permission prompts.\n\nOmit to use the default (200). Set to a large value (e.g. `10000`) to effectively disable truncation and see the full input.",

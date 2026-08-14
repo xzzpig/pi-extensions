@@ -5,6 +5,65 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [25.2.0](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v25.1.0...pi-permission-system-v25.2.0) (2026-08-14)
+
+
+### Features
+
+* **pi-permission-system:** record which chain links were consulted on each ask ([8bb52ff](https://github.com/gotgenes/pi-packages/commit/8bb52ffe26cfb0c995e8299ebe737a09f1717c57)), closes [#727](https://github.com/gotgenes/pi-packages/issues/727)
+
+
+### Bug Fixes
+
+* **pi-permission-system:** stop reporting a delegated subagent chain as unregistered links ([2a1c082](https://github.com/gotgenes/pi-packages/commit/2a1c08292131e9f7dd71adeac380a997ccc0069a)), closes [#727](https://github.com/gotgenes/pi-packages/issues/727)
+
+
+### Documentation
+
+* **pi-permission-system:** document one-chain-per-node adjudication semantics ([c36980a](https://github.com/gotgenes/pi-packages/commit/c36980ae2cf6d1b115b4b3f20e9513dac61c3d1b)), closes [#727](https://github.com/gotgenes/pi-packages/issues/727)
+
+## [25.1.0](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v25.0.0...pi-permission-system-v25.1.0) (2026-08-13)
+
+
+### Features
+
+* **pi-permission-system:** add a process-global serving-session registry ([2939982](https://github.com/gotgenes/pi-packages/commit/2939982f80669a65df356f17e8110174ff96e68a)), closes [#719](https://github.com/gotgenes/pi-packages/issues/719)
+* **pi-permission-system:** announce the session serving forwarded requests ([74c0259](https://github.com/gotgenes/pi-packages/commit/74c0259141e616b1cb7760427e507fac518ba2e4)), closes [#719](https://github.com/gotgenes/pi-packages/issues/719)
+* **pi-permission-system:** make the forwarding timeout configurable ([fc6190d](https://github.com/gotgenes/pi-packages/commit/fc6190de23eb6347a135bf85e45f3060ac9b6868)), closes [#719](https://github.com/gotgenes/pi-packages/issues/719)
+
+
+### Bug Fixes
+
+* **pi-permission-system:** carry the denial reason into the unavailable block message ([1a0b289](https://github.com/gotgenes/pi-packages/commit/1a0b2894854576d2a171e98a10939c2c4c56794b)), closes [#719](https://github.com/gotgenes/pi-packages/issues/719)
+* **pi-permission-system:** fail fast when no session serves a forwarded request ([5241df0](https://github.com/gotgenes/pi-packages/commit/5241df0d6986fa66e1f21ccab6de956ac9d630ce)), closes [#719](https://github.com/gotgenes/pi-packages/issues/719)
+* **pi-permission-system:** report forwarding failures as unavailable, not user-denied ([6c37d27](https://github.com/gotgenes/pi-packages/commit/6c37d2778c0be51423b9b80569205ce68a0ac977)), closes [#719](https://github.com/gotgenes/pi-packages/issues/719)
+
+
+### Documentation
+
+* **pi-permission-system:** document forwarding liveness and the timeout field ([e493991](https://github.com/gotgenes/pi-packages/commit/e493991d67eb4e305a8a50346b1affed39ecbd96)), closes [#719](https://github.com/gotgenes/pi-packages/issues/719)
+
+## [25.0.0](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v24.0.0...pi-permission-system-v25.0.0) (2026-08-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* **pi-permission-system:** a bash command referencing `$HOME` or `${HOME}` now reaches the `external_directory` gate whether or not the target exists, so a policy with `external_directory: {"*": "ask"}` prompts for commands that previously ran silently. Allow the directory explicitly to restore the old behavior — e.g. `"external_directory": {"~/.cargo/registry/*": "allow"}`. The token shown in prompts, review-log entries, and derived session-approval patterns is now the expanded path rather than the `$HOME/...` spelling; this makes the prompt agree with the approval pattern, which was already derived from the expanded form.
+
+### Features
+
+* **pi-permission-system:** expand ${HOME} alongside $HOME in path patterns ([3ebbd41](https://github.com/gotgenes/pi-packages/commit/3ebbd418e5b85a6dfbc1865c69f62c1f9a3cb144)), closes [#694](https://github.com/gotgenes/pi-packages/issues/694)
+
+
+### Bug Fixes
+
+* **pi-permission-system:** resolve $HOME and $PWD expansions in bash path tokens ([8cbc7ee](https://github.com/gotgenes/pi-packages/commit/8cbc7ee011a3e06dcf047bfe8a467db3aa487721)), closes [#694](https://github.com/gotgenes/pi-packages/issues/694)
+
+
+### Documentation
+
+* **pi-permission-system:** record resolved shell expansions in ADR 0009 and user docs ([caaf5ec](https://github.com/gotgenes/pi-packages/commit/caaf5ec02ef2f7df1e2a922dba0a9afdc121b191)), closes [#694](https://github.com/gotgenes/pi-packages/issues/694)
+
 ## [24.0.0](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v23.0.3...pi-permission-system-v24.0.0) (2026-07-26)
 
 

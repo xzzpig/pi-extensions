@@ -15,7 +15,10 @@ function makeParams(
     logContext: { source: "test" },
     messages: {
       denyReason: "Denied by policy.",
-      unavailableReason: "No interactive UI available.",
+      unavailableReason: (d) =>
+        d.denialReason
+          ? `No interactive UI available. Reason: ${d.denialReason}`
+          : "No interactive UI available.",
       userDeniedReason: (d) =>
         d.denialReason
           ? `User denied. Reason: ${d.denialReason}.`
@@ -87,6 +90,22 @@ describe("applyPermissionGate", () => {
       });
       await applyPermissionGate(params);
       expect(params.writeLog).not.toHaveBeenCalled();
+    });
+
+    it("passes the decision's denial reason to the unavailable message", async () => {
+      const params = makeParams({
+        state: "ask",
+        promptForApproval: vi.fn().mockResolvedValue({
+          ...unavailableDecision,
+          denialReason: "Session 'parent-1' did not answer within 600s.",
+        }),
+      });
+      const result = await applyPermissionGate(params);
+      expect(result).toEqual({
+        action: "block",
+        reason:
+          "No interactive UI available. Reason: Session 'parent-1' did not answer within 600s.",
+      });
     });
   });
 

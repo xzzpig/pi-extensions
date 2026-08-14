@@ -187,6 +187,13 @@ export const unifiedConfigSchema = z
         "Require a confirming second press of a decision hotkey (`y`/`s`/`n`/`r`) in the inline permission dialog before it commits — the first press arms the action and shows a `Press y again to approve.` hint.\n\nApplies to interactive **TUI** sessions only; the non-TUI (RPC/frontend) prompt keeps its single-select flow. Set to `false` to commit decisions on the first hotkey press.",
       default: true,
     }),
+    forwardingTimeoutMs: z.number().int().min(1).optional().meta({
+      description:
+        "How long a subagent waits for the parent session to answer a forwarded permission request, in milliseconds. Omit to use the default (600000, ten minutes).",
+      markdownDescription:
+        "How long a subagent waits for the parent session to answer a forwarded permission request, in milliseconds.\n\nOmit to use the default (`600000`, ten minutes). A child whose in-process parent is not draining its inbox at all gives up in a couple of seconds regardless of this value, so lower it only to bound how long you are willing to leave an *unanswered* prompt pending.",
+      default: 600000,
+    }),
     toolInputPreviewMaxLength: z.number().int().min(1).optional().meta({
       description:
         "Maximum character length of the inline-JSON tool-input preview shown in permission prompts. Omit to use the default (200). Set to a large value to disable truncation.",

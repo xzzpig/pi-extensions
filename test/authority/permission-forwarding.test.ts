@@ -4,7 +4,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   createPermissionForwardingLocation,
   isForwardedPermissionRequestForSession,
-  resolvePermissionForwardingTargetSessionId,
+  resolvePermissionForwardingTarget,
   SUBAGENT_PARENT_SESSION_ENV_CANDIDATES,
   SUBAGENT_PARENT_SESSION_ENV_KEY,
 } from "#src/authority/permission-forwarding";
@@ -36,32 +36,32 @@ describe("SUBAGENT_PARENT_SESSION_ENV_CANDIDATES", () => {
   });
 });
 
-describe("resolvePermissionForwardingTargetSessionId", () => {
-  test("hasUI=true returns the current session ID (UI host owns forwarding)", () => {
+describe("resolvePermissionForwardingTarget", () => {
+  test("hasUI=true returns the current session ID as its own target", () => {
     expect(
-      resolvePermissionForwardingTargetSessionId({
+      resolvePermissionForwardingTarget({
         hasUI: true,
         isSubagent: false,
         currentSessionId: "parent-session-abc",
         env: {},
       }),
-    ).toBe("parent-session-abc");
+    ).toEqual({ sessionId: "parent-session-abc", source: "self" });
   });
 
   test("hasUI=true with isSubagent=true still returns current session ID", () => {
     expect(
-      resolvePermissionForwardingTargetSessionId({
+      resolvePermissionForwardingTarget({
         hasUI: true,
         isSubagent: true,
         currentSessionId: "session-xyz",
         env: { PI_AGENT_ROUTER_PARENT_SESSION_ID: "other" },
       }),
-    ).toBe("session-xyz");
+    ).toEqual({ sessionId: "session-xyz", source: "self" });
   });
 
   test("hasUI=false, isSubagent=false returns null", () => {
     expect(
-      resolvePermissionForwardingTargetSessionId({
+      resolvePermissionForwardingTarget({
         hasUI: false,
         isSubagent: false,
         currentSessionId: "session-xyz",
@@ -72,7 +72,7 @@ describe("resolvePermissionForwardingTargetSessionId", () => {
 
   test("isSubagent=true, no candidates set returns null", () => {
     expect(
-      resolvePermissionForwardingTargetSessionId({
+      resolvePermissionForwardingTarget({
         hasUI: false,
         isSubagent: true,
         currentSessionId: "session-xyz",
@@ -83,18 +83,18 @@ describe("resolvePermissionForwardingTargetSessionId", () => {
 
   test("isSubagent=true, PI_AGENT_ROUTER_PARENT_SESSION_ID set returns its value", () => {
     expect(
-      resolvePermissionForwardingTargetSessionId({
+      resolvePermissionForwardingTarget({
         hasUI: false,
         isSubagent: true,
         currentSessionId: "session-xyz",
         env: { PI_AGENT_ROUTER_PARENT_SESSION_ID: "parent-session-abc" },
       }),
-    ).toBe("parent-session-abc");
+    ).toEqual({ sessionId: "parent-session-abc", source: "env" });
   });
 
   test("isSubagent=true, PI_SUBAGENT_PARENT_SESSION resolves when PI_AGENT_ROUTER_PARENT_SESSION_ID is absent", () => {
     expect(
-      resolvePermissionForwardingTargetSessionId({
+      resolvePermissionForwardingTarget({
         hasUI: false,
         isSubagent: true,
         currentSessionId: "session-xyz",
@@ -102,12 +102,12 @@ describe("resolvePermissionForwardingTargetSessionId", () => {
           PI_SUBAGENT_PARENT_SESSION: "parent-from-convention",
         },
       }),
-    ).toBe("parent-from-convention");
+    ).toEqual({ sessionId: "parent-from-convention", source: "env" });
   });
 
   test("isSubagent=true, PI_AGENT_ROUTER_PARENT_SESSION_ID takes precedence over PI_SUBAGENT_PARENT_SESSION", () => {
     expect(
-      resolvePermissionForwardingTargetSessionId({
+      resolvePermissionForwardingTarget({
         hasUI: false,
         isSubagent: true,
         currentSessionId: "session-xyz",
@@ -116,12 +116,12 @@ describe("resolvePermissionForwardingTargetSessionId", () => {
           PI_SUBAGENT_PARENT_SESSION: "parent-from-convention",
         },
       }),
-    ).toBe("parent-from-router");
+    ).toEqual({ sessionId: "parent-from-router", source: "env" });
   });
 
   test("isSubagent=true, candidate value is empty string returns null", () => {
     expect(
-      resolvePermissionForwardingTargetSessionId({
+      resolvePermissionForwardingTarget({
         hasUI: false,
         isSubagent: true,
         currentSessionId: "session-xyz",
@@ -132,7 +132,7 @@ describe("resolvePermissionForwardingTargetSessionId", () => {
 
   test("isSubagent=true, candidate value is 'unknown' returns null", () => {
     expect(
-      resolvePermissionForwardingTargetSessionId({
+      resolvePermissionForwardingTarget({
         hasUI: false,
         isSubagent: true,
         currentSessionId: "session-xyz",
@@ -144,15 +144,15 @@ describe("resolvePermissionForwardingTargetSessionId", () => {
   test("env defaults to process.env when omitted", () => {
     vi.stubEnv("PI_AGENT_ROUTER_PARENT_SESSION_ID", "env-session-abc");
     expect(
-      resolvePermissionForwardingTargetSessionId({
+      resolvePermissionForwardingTarget({
         hasUI: false,
         isSubagent: true,
       }),
-    ).toBe("env-session-abc");
+    ).toEqual({ sessionId: "env-session-abc", source: "env" });
   });
 });
 
-describe("resolvePermissionForwardingTargetSessionId — registry resolution", () => {
+describe("resolvePermissionForwardingTarget — registry resolution", () => {
   const childSessionId = "child-session-abc";
 
   test("returns parentSessionId from registry when env vars are absent", () => {
@@ -161,14 +161,14 @@ describe("resolvePermissionForwardingTargetSessionId — registry resolution", (
     });
 
     expect(
-      resolvePermissionForwardingTargetSessionId({
+      resolvePermissionForwardingTarget({
         hasUI: false,
         isSubagent: true,
         sessionId: childSessionId,
         registry,
         env: {},
       }),
-    ).toBe("parent-from-registry");
+    ).toEqual({ sessionId: "parent-from-registry", source: "registry" });
   });
 
   test("registry takes priority over env vars", () => {
@@ -177,49 +177,49 @@ describe("resolvePermissionForwardingTargetSessionId — registry resolution", (
     });
 
     expect(
-      resolvePermissionForwardingTargetSessionId({
+      resolvePermissionForwardingTarget({
         hasUI: false,
         isSubagent: true,
         sessionId: childSessionId,
         registry,
         env: { PI_AGENT_ROUTER_PARENT_SESSION_ID: "parent-from-env" },
       }),
-    ).toBe("parent-from-registry");
+    ).toEqual({ sessionId: "parent-from-registry", source: "registry" });
   });
 
   test("falls through to env vars when registry entry has no parentSessionId", () => {
     const registry = makeSubagentRegistry(childSessionId, {}); // no parentSessionId
 
     expect(
-      resolvePermissionForwardingTargetSessionId({
+      resolvePermissionForwardingTarget({
         hasUI: false,
         isSubagent: true,
         sessionId: childSessionId,
         registry,
         env: { PI_AGENT_ROUTER_PARENT_SESSION_ID: "parent-from-env" },
       }),
-    ).toBe("parent-from-env");
+    ).toEqual({ sessionId: "parent-from-env", source: "env" });
   });
 
   test("falls through to env vars when sessionId is not in registry", () => {
     const registry = makeSubagentRegistry(childSessionId); // empty
 
     expect(
-      resolvePermissionForwardingTargetSessionId({
+      resolvePermissionForwardingTarget({
         hasUI: false,
         isSubagent: true,
         sessionId: childSessionId,
         registry,
         env: { PI_AGENT_ROUTER_PARENT_SESSION_ID: "parent-from-env" },
       }),
-    ).toBe("parent-from-env");
+    ).toEqual({ sessionId: "parent-from-env", source: "env" });
   });
 
   test("returns null when registry entry has no parentSessionId and no env vars set", () => {
     const registry = makeSubagentRegistry(childSessionId, {}); // no parentSessionId
 
     expect(
-      resolvePermissionForwardingTargetSessionId({
+      resolvePermissionForwardingTarget({
         hasUI: false,
         isSubagent: true,
         sessionId: childSessionId,
@@ -231,13 +231,13 @@ describe("resolvePermissionForwardingTargetSessionId — registry resolution", (
 
   test("omitting registry preserves existing behaviour", () => {
     expect(
-      resolvePermissionForwardingTargetSessionId({
+      resolvePermissionForwardingTarget({
         hasUI: false,
         isSubagent: true,
         sessionId: childSessionId,
         env: { PI_AGENT_ROUTER_PARENT_SESSION_ID: "parent-from-env" },
       }),
-    ).toBe("parent-from-env");
+    ).toEqual({ sessionId: "parent-from-env", source: "env" });
   });
 });
 
@@ -246,7 +246,7 @@ describe("resolvePermissionForwardingTargetSessionId — registry resolution", (
 // ---------------------------------------------------------------------------
 
 test("Permission forwarding resolves the parent interactive session from subagent runtime env", () => {
-  const targetSessionId = resolvePermissionForwardingTargetSessionId({
+  const target = resolvePermissionForwardingTarget({
     hasUI: false,
     isSubagent: true,
     currentSessionId: "child-session",
@@ -255,18 +255,18 @@ test("Permission forwarding resolves the parent interactive session from subagen
     },
   });
 
-  expect(targetSessionId).toBe("parent-session");
+  expect(target).toEqual({ sessionId: "parent-session", source: "env" });
 });
 
 test("Permission forwarding does not guess a target session when subagent runtime env is missing", () => {
-  const targetSessionId = resolvePermissionForwardingTargetSessionId({
+  const target = resolvePermissionForwardingTarget({
     hasUI: false,
     isSubagent: true,
     currentSessionId: "child-session",
     env: {},
   });
 
-  expect(targetSessionId).toBe(null);
+  expect(target).toBe(null);
 });
 
 test("Permission forwarding uses session-scoped directories per interactive session", () => {
@@ -301,11 +301,11 @@ test("Permission forwarding request routing only matches the intended UI session
 });
 
 test("Permission forwarding rejects unresolved sentinel session ids", () => {
-  const targetSessionId = resolvePermissionForwardingTargetSessionId({
+  const target = resolvePermissionForwardingTarget({
     hasUI: true,
     isSubagent: false,
     currentSessionId: "unknown",
   });
 
-  expect(targetSessionId).toBe(null);
+  expect(target).toBe(null);
 });

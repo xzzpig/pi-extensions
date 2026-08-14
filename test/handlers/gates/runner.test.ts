@@ -382,6 +382,29 @@ describe("GateRunner — descriptor path", () => {
       }
     });
 
+    it("carries an unavailable decision's denial reason into the block message", async () => {
+      const { runner } = makeGateRunner({
+        resolveResult: makeCheckResult({ state: "ask", matchedPattern: "*" }),
+        escalate: vi.fn().mockResolvedValue({
+          approved: false,
+          state: "denied",
+          confirmationUnavailable: true,
+          denialReason: "Session 'parent-1' is not serving forwarded requests",
+        }),
+      });
+      const ctx: DenialContext = {
+        kind: "tool",
+        check: makeCheckResult({ state: "ask", matchedPattern: "*" }),
+      };
+      const result = await runner.run(makeDenialDescriptor(ctx), null, "tc-1");
+      expect(result.action).toBe("block");
+      if (result.action === "block") {
+        expect(result.reason).toContain(
+          "Reason: Session 'parent-1' is not serving forwarded requests.",
+        );
+      }
+    });
+
     it("uses denialContext to format userDeniedReason with extension tag", async () => {
       const { runner } = makeGateRunner({
         resolveResult: makeCheckResult({ state: "ask", matchedPattern: "*" }),
