@@ -52,7 +52,8 @@ describe("resolveIntercomSessionTarget", () => {
 	});
 
 	it("uses the current pi-intercom runtime id for unnamed fallback when present", () => {
-		assert.equal(resolveIntercomSessionTarget(undefined, "session-12345678", "session-stableabcdef"), "subagent-chat-stableab");
+		assert.equal(resolveIntercomSessionTarget(undefined, "session-12345678", "session-stableabcdef"), "subagent-chat-stableabcdef");
+		assert.equal(resolveIntercomSessionTarget(undefined, "session-12345678", "session-abcdefghijklmnopqrst"), "subagent-chat-abcdefghijklmnopqr");
 	});
 });
 
@@ -101,6 +102,19 @@ describe("resolveIntercomBridge", () => {
 		assert.equal(bridge.resultDelivery, false);
 		assert.equal(bridge.orchestratorTarget, "main");
 		assert.equal(bridge.extensionDir, NATIVE_INTERCOM_EXTENSION_DIR);
+	});
+
+	it("uses a per-run override instead of the global config", () => {
+		const bridge = resolveIntercomBridge({
+			config: { mode: "always", resultDelivery: true },
+			override: { mode: "off" },
+			context: "fresh",
+			orchestratorTarget: "main",
+		});
+
+		assert.equal(bridge.active, false);
+		assert.equal(bridge.mode, "off");
+		assert.equal(bridge.resultDelivery, false);
 	});
 
 	it("can disable external grouped-result delivery without disabling supervisor coordination", () => {

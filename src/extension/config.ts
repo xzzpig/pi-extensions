@@ -46,6 +46,25 @@ function validateArtifactConfig(value: unknown): void {
 	}
 }
 
+function validateMainWindowRendererConfig(value: unknown): void {
+	if (value === undefined) return;
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("config.mainWindowRenderer must be a JSON object");
+	const rendererConfig = value as Record<string, unknown>;
+	if (rendererConfig.horizontalSpacing !== undefined
+		&& (typeof rendererConfig.horizontalSpacing !== "number"
+			|| !Number.isInteger(rendererConfig.horizontalSpacing)
+			|| rendererConfig.horizontalSpacing < 0
+			|| rendererConfig.horizontalSpacing > 4)) {
+		throw new Error("config.mainWindowRenderer.horizontalSpacing must be an integer from 0 to 4");
+	}
+	if (rendererConfig.compactResultMaxLines !== undefined
+		&& (typeof rendererConfig.compactResultMaxLines !== "number"
+			|| !Number.isInteger(rendererConfig.compactResultMaxLines)
+			|| rendererConfig.compactResultMaxLines < 1)) {
+		throw new Error("config.mainWindowRenderer.compactResultMaxLines must be a positive integer");
+	}
+}
+
 function validateConfig(config: Record<string, unknown>): void {
 	if (config.artifactDir !== undefined && !ARTIFACT_DIR_PREFERENCES.has(config.artifactDir as ArtifactDirPreference)) {
 		throw new Error(`config.artifactDir must be "project", "session", or "temp"`);
@@ -53,12 +72,19 @@ function validateConfig(config: Record<string, unknown>): void {
 	if (config.legacyChainControls !== undefined && typeof config.legacyChainControls !== "boolean") {
 		throw new Error("config.legacyChainControls must be a boolean");
 	}
+	if (config.maxActiveAsyncRunsPerSession !== undefined
+		&& (typeof config.maxActiveAsyncRunsPerSession !== "number"
+			|| !Number.isInteger(config.maxActiveAsyncRunsPerSession)
+			|| config.maxActiveAsyncRunsPerSession < 0)) {
+		throw new Error("config.maxActiveAsyncRunsPerSession must be a non-negative integer");
+	}
 	validateMissionStoreConfig(config.missions);
 	validateAuthorityPolicy(config.authorityPolicy);
 	validatePermissionConfig(config.permissions);
 	validateScheduledRunsConfig(config.scheduledRuns);
 	validateFleetKeybindingsConfig(config.fleetKeybindings);
 	validateArtifactConfig(config.artifactConfig);
+	validateMainWindowRendererConfig(config.mainWindowRenderer);
 }
 
 export function getConfigPath(): string {

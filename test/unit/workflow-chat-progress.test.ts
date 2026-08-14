@@ -215,6 +215,7 @@ describe("workflow chat progress rendering", () => {
 						{ operation: "run", key: "scout", state: "completed", runId: "run-scout", phase: "Validation", label: "Found renderer seam", durationMs: 12 },
 						{ operation: "run", key: "tests", state: "started", phase: "Validation", label: "focused integration suite" },
 						{ operation: "run", key: "review", state: "failed", phase: "Validation", label: "fresh-context UX review", error: "needs fixes" },
+						{ operation: "run", key: "stale", state: "stopped", phase: "Validation", label: "superseded exact-head review", error: "Workflow stopped by user." },
 					],
 					emits: [],
 					console: [],
@@ -228,6 +229,36 @@ describe("workflow chat progress rendering", () => {
 		assert.match(text, /complete\s+scout Found renderer seam/);
 		assert.match(text, /running\s+tests focused integration suite/);
 		assert.match(text, /failed\s+review fresh-context UX review .* needs fixes/);
+		assert.match(text, /stopped\s+stale superseded exact-head review .* Workflow stopped by user/);
+	});
+
+	it("applies main-window density settings to collapsed workflow live cards", () => {
+		const trace = Array.from({ length: 10 }, (_, index) => ({
+			operation: "run" as const,
+			key: `step-${index}`,
+			state: "started" as const,
+			label: `review ${index}`,
+		}));
+		const result = {
+			content: [{ type: "text" as const, text: "Workflow running." }],
+			details: {
+				mode: "workflow" as const,
+				runId: "wf_density",
+				results: [],
+				chatProgress: { mode: "live-card" as const, repoRelation: "same" as const, repoLabel: "pi-subagents" },
+				workflow: { trace, emits: [], console: [] },
+			},
+		};
+
+		const compact = renderSubagentResult(result, { expanded: false }, theme as any, undefined, { horizontalSpacing: 0, compactResultMaxLines: 3 }).render(120);
+		assert.equal(compact.length, 3);
+		assert.match(compact[1]!, /^Repo   pi-subagents\s*$/);
+		assert.match(compact[2]!, /rows hidden/);
+
+		const expanded = renderSubagentResult(result, { expanded: true }, theme as any, undefined, { horizontalSpacing: 0, compactResultMaxLines: 3 }).render(120);
+		assert.ok(expanded.length > 3);
+		assert.match(expanded[1]!, /^  Repo   pi-subagents\s*$/);
+		assert.doesNotMatch(expanded.join("\n"), /rows hidden · .* expands/);
 	});
 
 	it("bounds workflow live-card rows and keeps old failed children visible", () => {

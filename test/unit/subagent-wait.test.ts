@@ -218,6 +218,32 @@ describe("subagent_wait tool", () => {
 		}
 	});
 
+	it("tells blocking callers to reply and wait for intercom-detached failed runs", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-intercom-detach-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const sessionFile = path.join(root, "worker-session.jsonl");
+			fs.writeFileSync(sessionFile, "{}\n", "utf-8");
+			const state = makeState("sess-1");
+			writeStatus(asyncRoot, "run-detached", "running", { sessionId: "sess-1", pid: 999999 });
+			const result = await waitForSubagents({ all: true }, undefined, baseDeps(root, state, {
+				sleep: async () => writeStatus(asyncRoot, "run-detached", "failed", {
+					sessionId: "sess-1",
+					error: "Step failed: worker",
+					steps: [{ agent: "worker", status: "failed", sessionFile, error: "Detached for intercom coordination before task completion." }],
+				}),
+			}));
+
+			const text = textOf(result);
+			assert.match(text, /Reply to the supervisor request first/);
+			assert.match(text, /wait with subagent_wait/);
+			assert.match(text, /do not resume or launch a replacement/);
+			assert.doesNotMatch(text, /Resume-first/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("surfaces terminal completion payloads from the result file in details.completions", async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-completions-file-"));
 		try {

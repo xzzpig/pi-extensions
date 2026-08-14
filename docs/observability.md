@@ -4,7 +4,7 @@ Where running subagents show up, how to inspect them, and the files and events t
 
 ## Foreground runs
 
-Foreground runs stream progress in the conversation while they run. They default to a generous 30-minute wall-clock timeout when neither the call nor the selected agent provides a timeout; explicit `timeoutMs`/`maxRuntimeMs` and agent defaults win.
+Foreground runs stream progress in the conversation while they run. They default to a generous 30-minute wall-clock timeout when neither the call nor the selected agent provides a timeout; a global [`timeoutMs`](configuration.md#timeoutms) config replaces that default, and explicit `timeoutMs`/`maxRuntimeMs` and agent defaults win.
 
 Live progress shows compact detail for single, chain, and parallel modes: current tool, recent output, token counts, aggregate cost, duration, activity freshness, current-tool duration, and chain graph metadata when available.
 
@@ -23,13 +23,37 @@ subagent({ action: "status", id: "..." })      // one run
 
 Or ask naturally: "Show me the current async runs."
 
+The under-editor async widget gives a short view while work runs. Its expand key follows your Pi keybinding:
+
+```text
+async subagent worker · background
+● worker
+  ● Step 1/1: worker · running
+    ⎿  read: src/auth.ts | 2.0s
+    Press configured-expand-key for live detail
+```
+
 To inspect one background child in text, use `subagent({ action: "status", id: "...", view: "transcript" })`; add `index` for a specific child in a parallel or chain run.
 
 ## FleetView
 
 In the TUI, a persistent FleetView below the editor keeps active work visible as a compact summary. Set `fleetViewPlacement` to `"aboveEditor"` to move it above the editor.
 
-When the focused editor is empty, press `↓` or `←` to expand the summary into `main` plus active children with task, elapsed time, and token totals. Then use `↑`/`↓` or `j`/`k` to select a child and `Enter` to inspect it. Printable navigation keys are never intercepted before activation.
+```text
+2 active agents · ↓ 4.2k tokens · ↓/← to inspect
+```
+
+After you expand it:
+
+```text
+↑↓/jk select · enter inspect · esc back
+
+> main
+    scout · running                  1m 12s · ↓ 2.8k tokens
+    reviewer · running                 38s · ↓ 1.4k tokens
+```
+
+When the focused editor is empty, press `↓` or `←` to expand the summary into `main` plus active children with agent name, state, elapsed time, and token totals. Then use `↑`/`↓` or `j`/`k` to select a child and `Enter` to inspect it. Printable navigation keys are never intercepted before activation.
 
 FleetView replaces the legacy above-editor async widget by default. Successful background completions stay quiet so inactive Pi tabs are not marked unread, while failed or paused completions still notify the originating session. Parallel runs show every active child independently. Chains with parallel groups keep their grouped shape in progress and results, so failed or paused agents stay visible next to completed ones. When a child is explicitly allowed to fan out with `tools: subagent`, its nested runs appear under that parent child in the main status tree instead of being hidden inside the child process.
 
@@ -126,7 +150,7 @@ Foreground and async runners share bounded child-protocol handling:
 
 ## Chain and debug artifacts
 
-Each chain run creates a scratch directory under its resolved chain root. With the default `artifactDir: "project"`, that root is `<cwd>/.pi/subagents/chain-runs/`. With `artifactDir: "session"` or `"temp"`, it is user-scoped temp storage:
+Each chain run creates a scratch directory under its resolved chain root. With the default `artifactDir: "session"` or with `"temp"`, it is user-scoped temp storage. With `artifactDir: "project"`, the root is `<cwd>/.pi/subagents/chain-runs/`:
 
 ```text
 <tmpdir>/pi-subagents-<scope>/chain-runs/{runId}/

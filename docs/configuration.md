@@ -44,6 +44,29 @@ Defaults to `false`. The default registered model-facing tool schema and descrip
 
 Controls the `subagent` tool result shown inline in chat. The default, `"rich"`, shows live child activity and expands to detailed output. `"summary"` keeps the inline result at one stable row for running, completed, failed, stopped, and paused runs; it does not animate, show elapsed time, preview child output, or change when Pi's expand key is pressed. FleetView remains available for live progress and detailed inspection.
 
+## `mainWindowRenderer`
+
+```json
+{
+  "mainWindowRenderer": {
+    "horizontalSpacing": 0,
+    "compactResultMaxLines": 4
+  }
+}
+```
+
+Controls only the main chat `subagent` call/result renderer. It does not change child execution, orchestration, FleetView, artifacts, transcripts, or model-facing content.
+
+`horizontalSpacing` is an integer from `0` to `4`. The default preserves current spacing. Set it to `0` to remove the extra spaces before compact result details and between parts of the call row.
+
+`compactResultMaxLines` is a positive integer. It caps only collapsed rich-result rows and adds an expand hint when rows are hidden. Expanded output remains uncapped.
+
+With `"summary"`, a tool result looks like this:
+
+```text
+✓ reviewer · completed
+```
+
 ## `asyncByDefault`
 
 ```json
@@ -115,6 +138,18 @@ This is different from `waitTool.enabled=false`, which returns immediately witho
 
 Forces depth-0 internal single, parallel, and chain runs into background mode and bypasses launch UI by forcing `clarify: false`. Nested calls keep their own inherited settings.
 
+## `timeoutMs`
+
+```json
+{ "timeoutMs": 3600000 }
+```
+
+Global default runtime deadline, in milliseconds, for subagent runs. It replaces the built-in 30-minute backstop for foreground launches (single, parallel, chain, and workflowScript) and plain single-agent async runs whenever no call-level `timeoutMs`/`maxRuntimeMs` applies. For single-agent launches, selected agent frontmatter `timeoutMs` still wins. This only moves the *default*.
+
+Use it when foreground orchestration or plain async single-agent runs need a longer default than 30 minutes. It does not set async composite top-level deadlines, and it does not replace async fan-out child deadlines.
+
+Composite async runs (async chains, parallel tasks, and scripted workflows) stay unbounded at the top level by design. Their runner children are bounded individually by their own agent or runner defaults, so this value does not cap them. Must be a positive integer no greater than `2147483647` (the largest delay a Node.js timer can honor, roughly 24.8 days); invalid or out-of-range values are ignored and the built-in defaults apply.
+
 ## `globalConcurrencyLimit`
 
 ```json
@@ -131,9 +166,31 @@ Caps simultaneously running children inside existing durable legacy multi-child 
 
 Optionally caps the total number of child subagent launches during one parent session, including completed and failed children, parallel task counts, static chain steps, and bounded dynamic fanout children. Sessions are unlimited by default. Set this value to `0` to disable a configured cap. `PI_SUBAGENT_MAX_SPAWNS_PER_SESSION` overrides the config for a process and follows the same positive-cap/zero-unlimited semantics.
 
-`subagent({ action: "status" })`, fleet status, and `subagent({ action: "doctor" })` expose used, effective limit, remaining capacity, grants, and the remaining grant allowance. Static chains and parallel calls fail before creating run artifacts or starting partial work when their declared capacity cannot fit. Later retries or unbounded dynamic work are not guaranteed by that preflight.
+`subagent({ action: "status" })`, fleet status, and `subagent({ action: "doctor" })` expose used, effective limit, remaining capacity, grants, and the remaining grant allowance for this budget. A user may explicitly call `subagent({ action: "grant-spawn-budget", additional: 10 })` from the root interactive parent after all children settle and confirm the native prompt. Grants are additive: they never erase cumulative usage, are rejected for unlimited sessions and child/headless callers, and total granted capacity cannot exceed the original configured cap. Compaction remains part of the same logical parent session and does not reset usage or grants; starting a new parent session does.
 
-A user may explicitly call `subagent({ action: "grant-spawn-budget", additional: 10 })` from the root interactive parent after all children settle and confirm the native prompt. Grants are additive: they never erase cumulative usage, are rejected for unlimited sessions and child/headless callers, and total granted capacity cannot exceed the original configured cap. Compaction remains part of the same logical parent session and does not reset usage or grants; starting a new parent session does.
+## `maxSubagentSpawnsPerRun`
+
+```json
+{ "maxSubagentSpawnsPerRun": 64 }
+```
+
+Caps cumulative logical child admissions in one top-level run tree. The default is `64`. `PI_SUBAGENT_MAX_SPAWNS_PER_RUN` overrides the config when it is a positive integer. Invalid, zero, or missing values fall back to the configured positive value or `64`.
+
+The budget counts single launches, expanded `tasks`/`count`, static chain steps and parallel groups, actual dynamic `expand` items, appended chain steps, workflow children, and nested child calls. Static and materialized dynamic groups are admitted atomically. Startup retries, model fallback, and retained-child resume reuse the original logical child claim. Claims are never released or refunded. This cap is independent from the session-wide cumulative spawn budget and `globalConcurrencyLimit`.
+
+## `maxActiveAsyncRunsPerSession`
+
+```json
+{ "maxActiveAsyncRunsPerSession": 4 }
+```
+
+Optionally caps concurrently active top-level async runs owned by one parent session. Unset or `0` keeps the existing unlimited behavior. A positive integer reserves one slot before an async single, parallel, chain, or workflow creates run artifacts or starts children. Foreground runs and nested/workflow children do not reserve another slot.
+
+Queued, running, paused, and needs-attention runs retain capacity. Runner-backed slots release only after terminal logical state and matching observed process-terminal proof from #1030. Missing, malformed, or unknown cleanup proof retains the slot. A terminal async workflow releases after its controller is gone and every launched child is accounted for: awaited foreground children are covered by workflow settlement, while actual background children still require observed process-terminal proof. Resume transfers the source slot without a second charge. Dismissal and history cleanup do not release capacity.
+
+This limit bounds current top-level async load. It is separate from cumulative `maxSubagentSpawnsPerSession`, `maxSubagentSpawnsPerRun`, and `globalConcurrencyLimit`.
+
+`subagent({ action: "status" })`, fleet status, and `subagent({ action: "doctor" })` expose used, effective limit, and remaining active capacity. Static chains and parallel calls fail before creating run artifacts or starting partial work when their declared capacity cannot fit. Later retries or unbounded dynamic work are not guaranteed by that preflight.
 
 ## `scheduledRuns`
 
@@ -196,6 +253,16 @@ export PI_SUBAGENT_PI_BINARY=/path/to/pi-or-wrapper
 
 Overrides the command used to launch child Pi processes. Package wrappers can set this to their own `pi`/agent binary so subagents inherit wrapper flags, environment setup, and bundled resources without relying on `PATH` ordering. Empty or whitespace-only values are ignored.
 
+## `PI_SUBAGENT_TASK_DELIVERY`
+
+```bash
+export PI_SUBAGENT_TASK_DELIVERY=file   # auto | file (default: auto)
+```
+
+Controls how the task text reaches the child Pi process. `auto` (default) passes short tasks as an inline argv token and writes tasks longer than 8000 characters to a temp `task.md` referenced as `@<path>`. `file` always uses a temp file, keeping the task out of argv entirely.
+
+Use `file` on hosts where endpoint protection (EDR) pre-execution scanning denies child processes whose command line embeds a long natural-language task — that denial surfaces as an immediate zero-activity `SIGKILL`. Independently of this setting, startup retries automatically escalate to file delivery after an unexplained zero-activity `SIGKILL`. Empty, whitespace-only, or unrecognized values fall back to `auto`.
+
 ## `intercomBridge`
 
 ```json
@@ -253,7 +320,6 @@ stdin is a JSON object with `repoRoot`, `worktreePath`, `agentCwd`, `branch`, `i
 {
   "missions": {
     "enabled": true,
-    "directory": ".pi/subagents/missions",
     "globalIndex": true,
     "retainTerminal": 200
   }
@@ -262,7 +328,8 @@ stdin is a JSON object with `repoRoot`, `worktreePath`, `agentCwd`, `branch`, `i
 
 Automatic missions are enabled by default for ordinary launches with a task. Use per-launch `mission: false` for intentionally ephemeral work, or set `enabled: false` to disable automatic creation globally; explicit mission actions and `missionId`/`mission` launch fields still work.
 
-- `directory` may be absolute, `~/...`, or project-relative.
+- Mission records default to a project-keyed directory under pi's agent directory (`~/.pi/agent/missions/projects/<project-hash>/`). This keeps the project worktree clean.
+- `directory` may be absolute, `~/...`, or project-relative. Set it to `.pi/subagents/missions` to opt in to project-scoped records.
 - `retainTerminal` is a positive count (default `200`); pruning removes only the oldest completed, failed, or cancelled records and their pointers, never planned, active, waiting, needs-decision, or corrupt records.
 - The user-global index contains pointers only; missing-record pointers self-heal when globally listed. Set `globalIndex: false` to disable writes or `globalIndexDir` to redirect it.
 
@@ -291,11 +358,11 @@ Each fixed action resolves to `"auto"`, `"confirm"`, or `"forbid"`. This is inte
 
 Controls where subagent artifact files (inputs, outputs, transcripts, metadata) are stored:
 
-- `"project"` (default): writes to `<cwd>/.pi/subagents/artifacts/`.
-- `"session"`: stores artifacts under pi's session directory (`~/.pi/agent/sessions/<session>/subagent-artifacts/`), keeping the working directory clean.
+- `"project"`: writes to `<cwd>/.pi/subagents/artifacts/`.
+- `"session"` (default): stores artifacts under pi's session directory (`~/.pi/agent/sessions/<session>/subagent-artifacts/`), keeping the working directory clean. It falls back to the OS temp directory when no session file exists.
 - `"temp"`: uses the OS temp directory.
 
-This preference also controls the default chain scratch directory. `"project"` uses `<cwd>/.pi/subagents/chain-runs/`, while `"session"` and `"temp"` use the user-scoped temp chain directory.
+This preference also controls the default chain scratch directory. `"project"` uses `<cwd>/.pi/subagents/chain-runs/`, while the default `"session"` and `"temp"` use the user-scoped temp chain directory.
 
 The `"session"` option uses the same directory that `cleanupAllArtifactDirs` already scans for age-based cleanup, so artifacts are still cleaned up automatically. Temporary chain directories are cleaned up separately after 24 hours.
 

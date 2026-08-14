@@ -135,6 +135,20 @@ describe("scripted workflow runtime", () => {
 		assert.deepEqual(emitSnapshots, [1]);
 	});
 
+	it("passes a per-run intercom bridge override to the host launch", async () => {
+		let launchParams: Record<string, unknown> | undefined;
+		await runWorkflowScript({
+			script: `return runs.run("isolated", { agent: "worker", task: "Run", intercomBridge: { mode: "off" } });`,
+			async launch(key, params) {
+				launchParams = params;
+				return { key, ok: true, output: "done", artifactPaths: [] };
+			},
+			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+		});
+
+		assert.deepEqual(launchParams?.intercomBridge, { mode: "off" });
+	});
+
 	it("renders prompt text before passing it explicitly to a child", async () => {
 		let launchTask: unknown;
 		const result = await runWorkflowScript({
@@ -748,6 +762,113 @@ describe("scripted workflow runtime", () => {
 		assert.equal(childAborted, true);
 	});
 
+	it("ignores a queued child launch message after workflow abort", async () => {
+		const originalOn = Worker.prototype.on;
+		const controller = new AbortController();
+		let launchCount = 0;
+		let deliverCapturedRunMessage: (() => void) | undefined;
+		let markRunMessageCaptured!: () => void;
+		const runMessageCaptured = new Promise<void>((resolve) => { markRunMessageCaptured = resolve; });
+
+		(Worker.prototype as unknown as { on: typeof Worker.prototype.on }).on = function (event: string | symbol, listener: (...args: unknown[]) => void) {
+			if (event !== "message") return originalOn.call(this, event, listener);
+			const wrapped = (message: Record<string, unknown>) => {
+				if (message.type === "call" && message.method === "run") {
+					deliverCapturedRunMessage = () => listener.call(this, message);
+					markRunMessageCaptured();
+					return;
+				}
+				listener.call(this, message);
+			};
+			return originalOn.call(this, event, wrapped);
+		};
+
+		try {
+			const workflow = runWorkflowScript({
+				script: `await runs.run("late", { agent: "worker", task: "wait" });`,
+				signal: controller.signal,
+				async launch(key) {
+					launchCount += 1;
+					return { key, ok: true, output: "too late", artifactPaths: [] };
+				},
+				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+			});
+
+			await runMessageCaptured;
+			controller.abort(new Error("Workflow stopped by user."));
+			await assert.rejects(workflow, (error: unknown) => error instanceof WorkflowScriptError && error.message === "Workflow stopped by user.");
+			deliverCapturedRunMessage?.();
+			await new Promise((resolve) => queueMicrotask(resolve));
+			assert.equal(launchCount, 0);
+		} finally {
+			Worker.prototype.on = originalOn;
+		}
+	});
+
+	it("marks a child stopped when abort fires during the started trace callback", async () => {
+		const controller = new AbortController();
+		let admitCount = 0;
+		let launchCount = 0;
+
+		await assert.rejects(
+			runWorkflowScript({
+				script: `await runs.run("slow", { agent: "worker", task: "wait" });`,
+				signal: controller.signal,
+				onTrace(trace) {
+					const started = trace.some((entry) => entry.operation === "run" && entry.key === "slow" && entry.state === "started");
+					if (started && !controller.signal.aborted) controller.abort(new Error("Workflow stopped by user."));
+				},
+				admit() {
+					admitCount += 1;
+				},
+				async launch(key) {
+					launchCount += 1;
+					return { key, ok: true, output: "done", artifactPaths: [] };
+				},
+				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+			}),
+			(error: unknown) => error instanceof WorkflowScriptError
+				&& error.message === "Workflow stopped by user."
+				&& error.partial.trace.some((entry) => entry.operation === "run" && entry.key === "slow" && entry.state === "stopped")
+				&& !error.partial.trace.some((entry) => entry.operation === "run" && entry.key === "slow" && entry.state === "failed"),
+		);
+		await new Promise((resolve) => queueMicrotask(resolve));
+		assert.equal(admitCount, 0);
+		assert.equal(launchCount, 0);
+	});
+
+	it("does not launch a child after admission settles following workflow abort", async () => {
+		const controller = new AbortController();
+		let launchCount = 0;
+		let resolveAdmission!: () => void;
+		let markAdmissionStarted!: () => void;
+		const admissionStarted = new Promise<void>((resolve) => { markAdmissionStarted = resolve; });
+
+		const workflow = runWorkflowScript({
+			script: `await runs.run("slow", { agent: "worker", task: "wait" });`,
+			signal: controller.signal,
+			admit() {
+				markAdmissionStarted();
+				return new Promise<void>((resolve) => { resolveAdmission = resolve; });
+			},
+			async launch(key) {
+				launchCount += 1;
+				return { key, ok: true, output: "done", artifactPaths: [] };
+			},
+			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+		});
+
+		await admissionStarted;
+		controller.abort(new Error("Workflow stopped by user."));
+		await assert.rejects(workflow, (error: unknown) => error instanceof WorkflowScriptError
+			&& error.message === "Workflow stopped by user."
+			&& error.partial.trace.some((entry) => entry.operation === "run" && entry.key === "slow" && entry.state === "stopped")
+			&& !error.partial.trace.some((entry) => entry.operation === "run" && entry.key === "slow" && entry.state === "failed"));
+		resolveAdmission();
+		await new Promise((resolve) => queueMicrotask(resolve));
+		assert.equal(launchCount, 0);
+	});
+
 	it("drops a child response that settles after the workflow aborts", async () => {
 		const workerPrototype = Worker.prototype as unknown as { postMessage(value: unknown, ...args: unknown[]): void };
 		const originalPostMessage = workerPrototype.postMessage;
@@ -773,8 +894,11 @@ describe("scripted workflow runtime", () => {
 				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
 			});
 			await launchStarted;
-			controller.abort();
-			await assert.rejects(workflow, (error: unknown) => error instanceof WorkflowScriptError && /aborted/.test(error.message));
+			controller.abort(new Error("Workflow stopped by user."));
+			await assert.rejects(workflow, (error: unknown) => error instanceof WorkflowScriptError
+				&& error.message === "Workflow stopped by user."
+				&& error.partial.trace.some((entry) => entry.operation === "run" && entry.key === "slow" && entry.state === "stopped" && entry.error === "Workflow stopped by user.")
+				&& !error.partial.trace.some((entry) => entry.operation === "run" && entry.key === "slow" && entry.state === "failed"));
 			workflowSettled = true;
 			resolveLaunch({ key: "slow", ok: true, output: "done", artifactPaths: [], results: [] });
 			await new Promise((resolve) => queueMicrotask(resolve));
@@ -782,5 +906,62 @@ describe("scripted workflow runtime", () => {
 		} finally {
 			workerPrototype.postMessage = originalPostMessage;
 		}
+	});
+
+	it("does not dispatch status after abort fires during the status started trace callback", async () => {
+		const controller = new AbortController();
+		let statusCount = 0;
+
+		await assert.rejects(
+			runWorkflowScript({
+				script: `await runs.status("probe");`,
+				signal: controller.signal,
+				onTrace(trace) {
+					const started = trace.some((entry) => entry.operation === "status" && entry.key === "probe" && entry.state === "started");
+					if (started && !controller.signal.aborted) controller.abort(new Error("Workflow stopped by user."));
+				},
+				async launch(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+				async status(key) {
+					statusCount += 1;
+					return { key, ok: true, output: "done", artifactPaths: [] };
+				},
+			}),
+			(error: unknown) => error instanceof WorkflowScriptError
+				&& error.message === "Workflow stopped by user."
+				&& error.partial.trace.some((entry) => entry.operation === "status" && entry.key === "probe" && entry.state === "started")
+				&& !error.partial.trace.some((entry) => entry.operation === "status" && entry.key === "probe" && entry.state === "completed"),
+		);
+		await new Promise((resolve) => queueMicrotask(resolve));
+		assert.equal(statusCount, 0);
+	});
+
+	it("drops a status response that settles after the workflow aborts", async () => {
+		const controller = new AbortController();
+		let traceLengths: number[] = [];
+		let resolveStatus!: (result: { key: string; ok: true; output: string; artifactPaths: string[] }) => void;
+		let markStatusStarted!: () => void;
+		const statusStarted = new Promise<void>((resolve) => { markStatusStarted = resolve; });
+
+		const workflow = runWorkflowScript({
+			script: `await runs.status("probe");`,
+			signal: controller.signal,
+			onTrace(trace) { traceLengths.push(trace.length); },
+			async launch(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+			status(key) {
+				markStatusStarted();
+				return new Promise((resolve) => { resolveStatus = resolve; });
+			},
+		});
+
+		await statusStarted;
+		controller.abort(new Error("Workflow stopped by user."));
+		await assert.rejects(workflow, (error: unknown) => error instanceof WorkflowScriptError
+			&& error.message === "Workflow stopped by user."
+			&& error.partial.trace.some((entry) => entry.operation === "status" && entry.key === "probe" && entry.state === "started")
+			&& !error.partial.trace.some((entry) => entry.operation === "status" && entry.key === "probe" && entry.state === "completed"));
+		const finalTraceLength = traceLengths.at(-1);
+		resolveStatus({ key: "probe", ok: true, output: "done", artifactPaths: [] });
+		await new Promise((resolve) => queueMicrotask(resolve));
+		assert.equal(traceLengths.at(-1), finalTraceLength);
 	});
 });

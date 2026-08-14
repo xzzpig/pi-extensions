@@ -182,14 +182,14 @@ Package skill content.
 	});
 
 	it("records private redacted run history and cleans session artifacts under the configured agent dir", () => {
-		const task = "Inspect customer ACME token=SECRET";
+		const task = "PROMPT_AUDIT_SENTINEL_1021 Inspect customer ACME token=SECRET";
 		recordRun("env-agent", task, 0, 42);
 		const historyPath = path.join(agentDir, "run-history.jsonl");
 		assert.equal(fs.existsSync(historyPath), true);
 		assertPrivateHistoryModes(historyPath);
 
 		const rawHistory = fs.readFileSync(historyPath, "utf-8");
-		assert.doesNotMatch(rawHistory, /Inspect customer|ACME|SECRET/);
+		assert.doesNotMatch(rawHistory, /PROMPT_AUDIT_SENTINEL_1021|Inspect customer|ACME|SECRET/);
 		assert.match(rawHistory, /"task":"\[redacted\]"/);
 		assert.match(rawHistory, /"taskHash":"[a-f0-9]{64}"/);
 
@@ -214,7 +214,7 @@ Package skill content.
 	it("resolves configured artifact directory preferences", () => {
 		const sessionFile = path.join(agentDir, "sessions", "session-1", "session.jsonl");
 
-		assert.equal(getArtifactsDir(sessionFile, cwd), getProjectArtifactsDir(cwd));
+		assert.equal(getArtifactsDir(sessionFile, cwd), path.join(path.dirname(sessionFile), "subagent-artifacts"));
 		assert.equal(getArtifactsDir(sessionFile, cwd, "project"), getProjectArtifactsDir(cwd));
 		assert.equal(getArtifactsDir(sessionFile, cwd, "session"), path.join(path.dirname(sessionFile), "subagent-artifacts"));
 		assert.equal(getArtifactsDir(sessionFile, cwd, "temp"), TEMP_ARTIFACTS_DIR);
@@ -239,6 +239,18 @@ Package skill content.
 
 		writeFile(configPath, JSON.stringify({ fleetKeybindings: { pageUp: [""] } }));
 		assert.throws(() => updateConfig((config) => config), /config\.fleetKeybindings\.pageUp entries must be non-empty strings/);
+	});
+
+	it("loads and validates main-window renderer density config", () => {
+		const configPath = path.join(agentDir, "extensions", "subagent", "config.json");
+		writeFile(configPath, JSON.stringify({ mainWindowRenderer: { horizontalSpacing: 0, compactResultMaxLines: 4 } }));
+		assert.deepEqual(loadConfig().mainWindowRenderer, { horizontalSpacing: 0, compactResultMaxLines: 4 });
+
+		writeFile(configPath, JSON.stringify({ mainWindowRenderer: { horizontalSpacing: -1 } }));
+		assert.throws(() => updateConfig((config) => config), /config\.mainWindowRenderer\.horizontalSpacing must be an integer from 0 to 4/);
+
+		writeFile(configPath, JSON.stringify({ mainWindowRenderer: { compactResultMaxLines: 0 } }));
+		assert.throws(() => updateConfig((config) => config), /config\.mainWindowRenderer\.compactResultMaxLines must be a positive integer/);
 	});
 
 	it("hardens and redacts existing run history while recording", () => {
