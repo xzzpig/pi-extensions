@@ -36,7 +36,7 @@ See [migration/0644-project-trust-gating.md](migration/0644-project-trust-gating
 4. Project agent frontmatter
 
 The `permission` object uses deep-shallow merge: string-vs-string replaces; both-object shallow-merges pattern maps; string-vs-object the override wins entirely.
-Scalar fields (`debugLog`, `permissionReviewLog`, `yoloMode`, `doublePressToConfirm`) use simple replacement.
+Scalar fields (`debugLog`, `permissionReviewLog`, `yoloMode`, `doublePressToConfirm`, `forwardingTimeoutMs`) use simple replacement.
 
 **Invalid higher-precedence scope fails closed.**
 If a non-global scope (project config, global agent frontmatter, or project agent frontmatter) is present but fails to load or validate, it no longer contributes an empty scope that silently inherits the lower scope's rules.
@@ -57,6 +57,7 @@ This clamp is deny-preserving and, like `yoloMode`, applied at composition; when
   "permissionReviewLog": true,
   "yoloMode": false,
   "doublePressToConfirm": true,
+  "forwardingTimeoutMs": 600000,
   "toolInputPreviewMaxLength": 400,
   "toolTextSummaryMaxLength": 120,
   "piInfrastructureReadPaths": [],
@@ -98,16 +99,17 @@ This clamp is deny-preserving and, like `yoloMode`, applied at composition; when
 
 ## Runtime Knobs
 
-| Key                         | Default | Description                                                                                                                                                                                        |
-| --------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `debugLog`                  | `false` | Enables verbose diagnostic logging to `logs/pi-permission-system-debug.jsonl`                                                                                                                      |
-| `permissionReviewLog`       | `true`  | Enables the permission request/denial review log at `logs/pi-permission-system-permission-review.jsonl`. Records bash command strings verbatim — see [Log file sensitivity](#log-file-sensitivity) |
-| `yoloMode`                  | `false` | Auto-approves `ask` results instead of prompting when yolo mode is enabled                                                                                                                         |
-| `doublePressToConfirm`      | `true`  | Requires a confirming second press of a decision hotkey in the inline TUI dialog (see below). TUI sessions only; set to `false` for single-press.                                                  |
-| `toolInputPreviewMaxLength` | `200`   | Max characters of inline JSON shown in permission prompts for tool inputs. Omit to use the default. Set to a large value to disable truncation.                                                    |
-| `toolTextSummaryMaxLength`  | `80`    | Max characters of inline pattern/path summaries (grep patterns, find globs, ls paths) in permission prompts. Omit to use the default.                                                              |
-| `piInfrastructureReadPaths` | `[]`    | Extra directories to auto-allow for reads, bypassing the `external_directory` gate. Supports `~`/`$HOME` expansion and wildcard patterns (`*`, `?`).                                               |
-| `authorizerChain`           | `[]`    | Ordered names of registered live-authority chain links to consult before the terminal authorizer (see [Authorizer chain](#authorizer-chain--case-by-case-decision-links)).                         |
+| Key                         | Default  | Description                                                                                                                                                                                        |
+| --------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `debugLog`                  | `false`  | Enables verbose diagnostic logging to `logs/pi-permission-system-debug.jsonl`                                                                                                                      |
+| `permissionReviewLog`       | `true`   | Enables the permission request/denial review log at `logs/pi-permission-system-permission-review.jsonl`. Records bash command strings verbatim — see [Log file sensitivity](#log-file-sensitivity) |
+| `yoloMode`                  | `false`  | Auto-approves `ask` results instead of prompting when yolo mode is enabled                                                                                                                         |
+| `doublePressToConfirm`      | `true`   | Requires a confirming second press of a decision hotkey in the inline TUI dialog (see below). TUI sessions only; set to `false` for single-press.                                                  |
+| `forwardingTimeoutMs`       | `600000` | How long a subagent waits for the parent session to answer a forwarded permission request, in milliseconds. A child whose in-process parent is not draining its inbox gives up in ~2 s regardless. |
+| `toolInputPreviewMaxLength` | `200`    | Max characters of inline JSON shown in permission prompts for tool inputs. Omit to use the default. Set to a large value to disable truncation.                                                    |
+| `toolTextSummaryMaxLength`  | `80`     | Max characters of inline pattern/path summaries (grep patterns, find globs, ls paths) in permission prompts. Omit to use the default.                                                              |
+| `piInfrastructureReadPaths` | `[]`     | Extra directories to auto-allow for reads, bypassing the `external_directory` gate. Supports `~`/`$HOME`/`${HOME}` expansion and wildcard patterns (`*`, `?`).                                     |
+| `authorizerChain`           | `[]`     | Ordered names of registered live-authority chain links to consult before the terminal authorizer (see [Authorizer chain](#authorizer-chain--case-by-case-decision-links)).                         |
 
 Both logs write to `~/.pi/agent/extensions/pi-permission-system/logs/`.
 No debug output is printed to the terminal.
@@ -136,7 +138,7 @@ Non-TUI contexts (RPC / frontend-driven sessions) keep the single-select prompt 
 ### `piInfrastructureReadPaths` patterns
 
 Each entry is either a plain directory prefix or a wildcard pattern.
-Plain entries match any path that starts with the given directory (after `~`/`$HOME` expansion).
+Plain entries match any path that starts with the given directory (after `~`/`$HOME`/`${HOME}` expansion).
 Wildcard entries use `*` (any characters, including `/`) and `?` (exactly one character).
 `*` and `**` are equivalent — both cross directory boundaries.
 
@@ -212,6 +214,18 @@ Deny and defer are never capped.
 The excluded surface is the **gate** surface the rule fired on, not the tool name displayed in the prompt — so a `write` blocked by a `path` rule is capped.
 This holds for an ask forwarded up from a subagent exactly as it does for a local one.
 See [migration/0635-forwarded-ask-delegation-envelope.md](migration/0635-forwarded-ask-delegation-envelope.md).
+
+When a **subagent** raises the ask, the chain runs one hop up.
+The subagent forwards the request to the session serving it, and that session resolves it against its own rules and then runs *its* chain over the same evidence — so your configured links do review a subagent's asks, in the session you are watching.
+The subagent itself resolves no links (an extension cannot register one in a child session at all), and records `authorizer_chain_delegated` in the review log to say so.
+
+Three review-log records make the chain observable, all keyed by the ask's `requestId`:
+
+| Record                               | Meaning                                                                                                  |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| `authorizer_chain_resolved`          | the links consulted on this ask, recorded before they run — a link that defers otherwise leaves no trace |
+| `authorizer_chain_delegated`         | the ask came from a relaying subagent node; the named links were deliberately not run here               |
+| `authorizer_chain_unregistered_link` | a configured name had no registered link — a real misconfiguration; the ask still reaches the terminal   |
 
 Extension authors: register a link from a `permissions:ready` handler via `getPermissionsService().registerAuthorizer(name, authorize)`; the callback receives the ask details and a narrow, session-scoped `PermissionQuery` (`checkPermission` / `getToolPermission`) so it can consult the deterministic engine at gate parity.
 Registration returns a disposer, and only one link may hold a given name.
@@ -588,9 +602,22 @@ The pattern is stored and displayed as written (`~/.cargo/registry/*`) in logs a
 For caches you only ever **read**, `piInfrastructureReadPaths` is a lighter alternative — it auto-allows read-only tools (`read`, `find`, `grep`, `ls`) and bypasses the gate entirely, but it does not cover `write`/`edit` or bash.
 Use `external_directory` when the allowance must apply to every tool.
 
-Bash commands are also covered: the extension extracts path-like tokens from the command string and applies the same gate when any resolve outside `ctx.cwd`.
-Quoted strings are stripped first to reduce false positives.
-This is a best-effort heuristic — variable expansion and escaped quotes are not parsed, and relative paths inside subshells are not yet resolved against a per-subshell working directory. (The separate `bash` command-pattern surface does evaluate commands nested inside substitutions and subshells; see that section.) OS device paths (`/dev/null`, `/dev/stdin`, `/dev/stdout`, `/dev/stderr`) are always excluded.
+Bash commands are also covered: the extension parses the command and applies the same gate to every token that resolves outside `ctx.cwd`.
+Quoting is understood, so `ls "$HOME/x"` and `ls $HOME/x` are treated alike.
+
+What the bash projection resolves:
+
+- Absolute, home-relative (`~/`), parent-traversal (`../`), and separator-bearing tokens, plus redirect targets (`> out.txt`) and values embedded in long options (`--file=/tmp/patterns`).
+- The plain shell variables `$HOME` / `${HOME}` and `$PWD` / `${PWD}`, so `$HOME/x` is gated exactly as `~/x` and the literal absolute spelling, whether or not the target exists.
+- Relative tokens, against the working directory produced by folding literal current-shell `cd` commands.
+- A bare token (`cat id_rsa`) when it names an existing filesystem entry.
+
+What it deliberately does not resolve: any other variable (`$CONFIG_DIR`), a command substitution (`$(cmd)`), an expansion carrying an operator (`${HOME:-/tmp}`), and a variable reached through an assignment (`CURRENT="$HOME"; ls "$CURRENT"`).
+A non-literal `cd` (`cd "$DIR"`) makes the working directory unknown, after which relative tokens are kept literal rather than resolved against a guess.
+Commands whose payload is opaque (`bash -c`, `eval`, `sudo`, `xargs`) are floored to `ask` instead of projected.
+The governing record is [ADR 0009](https://github.com/gotgenes/pi-packages/blob/main/packages/pi-permission-system/docs/decisions/0009-bash-path-projection-completeness-contract.md), which states what the projection guarantees and which gaps are accepted residuals rather than bugs.
+
+(The separate `bash` command-pattern surface does evaluate commands nested inside substitutions and subshells; see that section.) OS device paths (`/dev/null`, `/dev/stdin`, `/dev/stdout`, `/dev/stderr`) are always excluded.
 
 #### Symlinked paths
 
@@ -645,8 +672,9 @@ To allow-list such a path, write the rule using the path as typed — for exampl
 
 ### Home Directory Expansion in Patterns
 
-Pattern keys in any permission surface can start with `~/` or `$HOME/` (or be exactly `~` / `$HOME`).
+Pattern keys in any permission surface can start with `~/`, `$HOME/`, or `${HOME}/` (or be exactly `~`, `$HOME`, or `${HOME}`).
 They are expanded to the OS home directory at match time, so configs are portable across machines and users.
+A prefix is recognized only when it stands alone or precedes a separator, so a longer name (`~username`, `$HOMEDIR`) and a braced expansion carrying an operator (`${HOME:-/tmp}`) are left alone.
 
 ```jsonc
 {
@@ -662,7 +690,7 @@ They are expanded to the OS home directory at match time, so configs are portabl
 The pattern is stored and displayed as written (e.g. `~/development/*`) in logs and approval dialogs.
 
 Path **values** supplied by tool calls and bash commands are expanded the same way.
-This means `~/...`, `$HOME/...`, and the fully-expanded absolute form all match a single home-anchored pattern: a `read` tool called with path `~/.ssh/config`, `$HOME/.ssh/config`, or `/Users/me/.ssh/config` is all caught by a `"~/.ssh/*": "deny"` rule.
+This means `~/...`, `$HOME/...`, `${HOME}/...`, and the fully-expanded absolute form all match a single home-anchored pattern: a `read` tool called with path `~/.ssh/config`, `$HOME/.ssh/config`, `${HOME}/.ssh/config`, or `/Users/me/.ssh/config` is all caught by a `"~/.ssh/*": "deny"` rule.
 
 ---
 

@@ -16,14 +16,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { vi } from "vitest";
 
+import type { ParentAuthorizerDeps } from "#src/authority/approval-escalator";
 import type { ForwardedRequestServerDeps } from "#src/authority/forwarded-request-server";
 import type { ForwarderContext } from "#src/authority/forwarder-context";
 import {
   createPermissionForwardingLocation,
   type ForwardedAccessIntent,
   type ForwardedPermissionRequest,
+  PERMISSION_FORWARDING_TIMEOUT_MS,
   type PermissionForwardingLocation,
 } from "#src/authority/permission-forwarding";
+import type { ServingLookup } from "#src/authority/serving-registry";
 import {
   type SubagentSessionInfo,
   SubagentSessionRegistry,
@@ -113,6 +116,37 @@ export function makeServerDeps(
     ...overrides,
   };
 }
+
+/**
+ * Builds `ParentAuthorizerDeps` with a silent logger.
+ *
+ * `forwardingDir` and `registry` are the two a test almost always supplies
+ * (from `createForwardingTempDir` and `makeSubagentRegistry`); everything else
+ * defaults so a new dep lands here once rather than at every construction site.
+ *
+ * `serving` defaults to a registry that reports every session as serving, so a
+ * test exercising the ordinary round trip is not accidentally fast-failed; a
+ * test targeting the unserved path passes an empty `ServingSessionRegistry`.
+ * `getTimeoutMs` defaults to the production value — override it with a small
+ * number to exercise the timeout without waiting it out.
+ */
+export function makeParentAuthorizerDeps(
+  overrides: Partial<ParentAuthorizerDeps> = {},
+): ParentAuthorizerDeps {
+  return {
+    forwardingDir: "/tmp/forwarding",
+    logger: { review: vi.fn(), debug: vi.fn() },
+    serving: alwaysServing,
+    getTimeoutMs: () => PERMISSION_FORWARDING_TIMEOUT_MS,
+    ...overrides,
+  };
+}
+
+/** A `ServingLookup` that answers "yes" for any session (the non-fast-fail default). */
+const alwaysServing: ServingLookup = {
+  isServing: () => true,
+  servingIds: () => [],
+};
 
 /**
  * Builds a well-formed `ForwardedAccessIntent` (ADR 0008 §2) for request /

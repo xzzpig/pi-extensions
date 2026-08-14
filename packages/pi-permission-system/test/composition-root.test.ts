@@ -6,9 +6,9 @@
  * completeness, shared-instance contracts across factory invocations, teardown,
  * service↔gate registry sharing, and `ready`-after-publish ordering.
  *
- * Every test runs the factory, which mutates two process-global `Symbol.for()`
+ * Every test runs the factory, which mutates three process-global `Symbol.for()`
  * slots and reads `PI_CODING_AGENT_DIR`. The shared `beforeEach`/`afterEach`
- * isolate the agent dir to a tmpdir and clear both global slots so factory runs
+ * isolate the agent dir to a tmpdir and clear every global slot so factory runs
  * do not leak across tests.
  */
 import {
@@ -32,6 +32,7 @@ import {
   createPermissionForwardingLocation,
   type ForwardedPermissionRequest,
 } from "#src/authority/permission-forwarding";
+import { getServingSessionRegistry } from "#src/authority/serving-registry";
 import { SUBAGENT_CHILD_SESSION_CREATED } from "#src/authority/subagent-lifecycle-events";
 import { getSubagentSessionRegistry } from "#src/authority/subagent-registry";
 import { getGlobalConfigPath } from "#src/config-paths";
@@ -47,6 +48,9 @@ import { makeFakePi } from "#test/helpers/make-fake-pi";
 const SERVICE_KEY = Symbol.for("@gotgenes/pi-permission-system:service");
 const SUBAGENT_REGISTRY_KEY = Symbol.for(
   "@gotgenes/pi-permission-system:subagent-registry",
+);
+const SERVING_REGISTRY_KEY = Symbol.for(
+  "@gotgenes/pi-permission-system:serving-registry",
 );
 
 /** The six events the factory must register a handler for. */
@@ -67,12 +71,14 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // Drop both process-global slots so factory runs do not leak across tests.
+  // Drop every process-global slot so factory runs do not leak across tests.
   const store = globalThis as Record<symbol, unknown>;
   // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- Symbol-keyed global property
   delete store[SERVICE_KEY];
   // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- Symbol-keyed global property
   delete store[SUBAGENT_REGISTRY_KEY];
+  // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- Symbol-keyed global property
+  delete store[SERVING_REGISTRY_KEY];
   vi.unstubAllEnvs();
   rmSync(agentDir, { recursive: true, force: true });
 });
@@ -277,6 +283,12 @@ describe("subagent registry sharing across factory instances", () => {
       parentSessionId,
     });
 
+    // This test answers the forwarded request by hand instead of running the
+    // parent's poll timer, so state what that timer would have published:
+    // the parent is draining its inbox. Without it the child correctly
+    // abandons the request as unserved (#719).
+    getServingSessionRegistry().markServing(parentSessionId);
+
     // The child fires an external-directory read with no UI. With the shared
     // registry it detects itself as a subagent and forwards; the simulated
     // parent approves.
@@ -304,6 +316,56 @@ describe("subagent registry sharing across factory instances", () => {
 
     const result = (await firePromise) as { block?: true };
     expect(result.block).toBeUndefined();
+
+    rmSync(childCwd, { recursive: true, force: true });
+    rmSync(externalDir, { recursive: true, force: true });
+  });
+
+  // The #719 failure mode: the child forwards correctly, but nothing drains
+  // the parent's inbox. Before the serving registry it waited out the full
+  // ten-minute timeout and reported the block as a user denial.
+  it("blocks promptly when no session is draining the parent's inbox", async () => {
+    writeGlobalConfig({
+      permission: { "*": "allow", external_directory: "ask" },
+    });
+
+    const childCwd = mkdtempSync(join(tmpdir(), "pi-perm-child-cwd-"));
+    const externalDir = mkdtempSync(join(tmpdir(), "pi-perm-external-"));
+    const parentSessionId = "parent-session-2";
+    const childSessionId = "child-session-2";
+
+    const parentBus = createEventBus();
+    piPermissionSystemExtension(
+      makeFakePi({ events: parentBus }) as unknown as ExtensionAPI,
+    );
+    const childPi = makeFakePi({
+      events: createEventBus(),
+      toolNames: ["read"],
+    });
+    piPermissionSystemExtension(childPi as unknown as ExtensionAPI);
+
+    parentBus.emit(SUBAGENT_CHILD_SESSION_CREATED, {
+      sessionId: childSessionId,
+      parentSessionId,
+    });
+    // Deliberately no markServing: nobody is polling the parent's inbox.
+
+    const result = (await childPi.fire(
+      "tool_call",
+      {
+        toolName: "read",
+        toolCallId: "child-external-read",
+        input: { path: join(externalDir, "secret.txt") },
+      },
+      makeChildCtx(childCwd, childSessionId),
+    )) as { block?: true; reason?: string };
+
+    expect(result.block).toBe(true);
+    expect(result.reason).toContain("no interactive UI is available");
+    expect(result.reason).toContain(
+      `Session '${parentSessionId}' is not serving forwarded permission requests.`,
+    );
+    expect(result.reason).not.toContain("User denied");
 
     rmSync(childCwd, { recursive: true, force: true });
     rmSync(externalDir, { recursive: true, force: true });

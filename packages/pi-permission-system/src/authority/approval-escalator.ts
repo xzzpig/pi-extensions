@@ -26,11 +26,13 @@ import {
   type ForwardedPromptDisplay,
   type ForwardedSessionApproval,
   PERMISSION_FORWARDING_POLL_INTERVAL_MS,
-  PERMISSION_FORWARDING_TIMEOUT_MS,
+  PERMISSION_FORWARDING_SERVING_GRACE_MS,
   type PermissionForwardingLocation,
-  resolvePermissionForwardingTargetSessionId,
+  type PermissionForwardingTarget,
+  resolvePermissionForwardingTarget,
   SUBAGENT_PARENT_SESSION_ENV_CANDIDATES,
 } from "#src/authority/permission-forwarding";
+import type { ServingLookup } from "#src/authority/serving-registry";
 import type { SubagentSessionRegistry } from "#src/authority/subagent-registry";
 import { buildUiPrompt } from "#src/permission-ui-prompt";
 import type { DebugReviewLogger } from "#src/session-logger";
@@ -85,7 +87,28 @@ export interface ParentAuthorizerDeps {
   forwardingDir: string;
   /** In-process subagent session registry for forwarding target resolution. */
   registry?: SubagentSessionRegistry;
+  /** Whether the resolved target is draining its inbox (in-process targets only). */
+  serving: ServingLookup;
+  /** How long to wait for the target's answer, read live so config edits apply. */
+  getTimeoutMs: () => number;
   logger: DebugReviewLogger;
+}
+
+/**
+ * Deny because no authority ever ruled — the request was never delivered,
+ * never answered, or answered unreadably.
+ *
+ * `confirmationUnavailable` is what keeps this out of the "User denied …"
+ * message (#719): a user who was never asked denied nothing. `denialReason`
+ * names which path gave up, and the gate renders it to the model.
+ */
+function abandon(denialReason: string): PermissionPromptDecision {
+  return {
+    approved: false,
+    state: "denied",
+    confirmationUnavailable: true,
+    denialReason,
+  };
 }
 
 /**
@@ -103,6 +126,8 @@ export interface ParentAuthorizerDeps {
 export class ParentAuthorizer implements TerminalAuthorizer {
   private readonly forwardingDir: string;
   private readonly registry: SubagentSessionRegistry | undefined;
+  private readonly serving: ServingLookup;
+  private readonly getTimeoutMs: () => number;
   private readonly logger: DebugReviewLogger;
 
   constructor(
@@ -111,6 +136,8 @@ export class ParentAuthorizer implements TerminalAuthorizer {
   ) {
     this.forwardingDir = deps.forwardingDir;
     this.registry = deps.registry;
+    this.serving = deps.serving;
+    this.getTimeoutMs = deps.getTimeoutMs;
     this.logger = deps.logger;
   }
 
@@ -137,7 +164,7 @@ export class ParentAuthorizer implements TerminalAuthorizer {
     facts: ForwardedRequestFacts,
   ): Promise<PermissionPromptDecision> {
     const requesterSessionId = getSessionId(ctx);
-    const targetSessionId = resolvePermissionForwardingTargetSessionId({
+    const target = resolvePermissionForwardingTarget({
       hasUI: ctx.hasUI,
       // Invariant: selectAuthorizer only selects ParentAuthorizer for a
       // no-UI subagent context, so this is always true — no detection dep
@@ -149,7 +176,7 @@ export class ParentAuthorizer implements TerminalAuthorizer {
       registry: this.registry,
     });
 
-    if (!targetSessionId) {
+    if (!target) {
       logPermissionForwardingError(
         this.logger,
         `Permission forwarding target session could not be resolved. ` +
@@ -158,27 +185,31 @@ export class ParentAuthorizer implements TerminalAuthorizer {
           `ask its maintainer to set PI_SUBAGENT_PARENT_SESSION in the child process environment ` +
           `(see https://github.com/gotgenes/pi-permission-system/issues/143).`,
       );
-      return { approved: false, state: "denied" };
+      return abandon(
+        "Could not resolve a parent session to forward this permission request to",
+      );
     }
 
     const location = ensurePermissionForwardingLocation(
       this.logger,
       this.forwardingDir,
-      targetSessionId,
+      target.sessionId,
     );
     if (!location) {
       logPermissionForwardingError(
         this.logger,
-        `Permission forwarding is unavailable because session-scoped directories could not be prepared for '${targetSessionId}'`,
+        `Permission forwarding is unavailable because session-scoped directories could not be prepared for '${target.sessionId}'`,
       );
-      return { approved: false, state: "denied" };
+      return abandon(
+        `Permission forwarding directories could not be prepared for session '${target.sessionId}'`,
+      );
     }
 
     const request = this.buildForwardedRequest(
       ctx,
       facts,
       requesterSessionId,
-      targetSessionId,
+      target.sessionId,
     );
     const requestPath = join(location.requestsDir, `${request.id}.json`);
     const responsePath = join(location.responsesDir, `${request.id}.json`);
@@ -187,7 +218,7 @@ export class ParentAuthorizer implements TerminalAuthorizer {
       requestId: request.id,
       requesterAgentName: request.requesterAgentName,
       requesterSessionId: request.requesterSessionId,
-      targetSessionId,
+      targetSessionId: target.sessionId,
       requestPath,
       responsePath,
     });
@@ -200,7 +231,8 @@ export class ParentAuthorizer implements TerminalAuthorizer {
         `Failed to write forwarded permission request '${requestPath}'`,
         error,
       );
-      return { approved: false, state: "denied" };
+      cleanupPermissionForwardingLocationIfEmpty(this.logger, location);
+      return abandon("The forwarded permission request could not be written");
     }
 
     return this.pollForForwardedResponse(
@@ -208,6 +240,7 @@ export class ParentAuthorizer implements TerminalAuthorizer {
       request,
       requestPath,
       responsePath,
+      target,
     );
   }
 
@@ -262,9 +295,12 @@ export class ParentAuthorizer implements TerminalAuthorizer {
     request: ForwardedPermissionRequest,
     requestPath: string,
     responsePath: string,
+    target: PermissionForwardingTarget,
   ): Promise<PermissionPromptDecision> {
     const { id: requestId, requesterAgentName, targetSessionId } = request;
-    const deadline = Date.now() + PERMISSION_FORWARDING_TIMEOUT_MS;
+    const timeoutMs = this.getTimeoutMs();
+    const deadline = Date.now() + timeoutMs;
+    let unservedSince: number | null = null;
 
     while (Date.now() < deadline) {
       if (existsSync(responsePath)) {
@@ -281,18 +317,28 @@ export class ParentAuthorizer implements TerminalAuthorizer {
           targetSessionId,
           responsePath,
         });
-        safeDeleteFile(
-          this.logger,
-          responsePath,
-          "forwarded permission response",
+        this.discardRequest(location, requestPath, responsePath);
+        return (
+          response ??
+          abandon("The parent session's permission response could not be read")
         );
-        safeDeleteFile(
-          this.logger,
-          requestPath,
-          "forwarded permission request",
+      }
+
+      unservedSince = this.checkServingLiveness(target, unservedSince);
+      if (
+        unservedSince !== null &&
+        Date.now() - unservedSince >= PERMISSION_FORWARDING_SERVING_GRACE_MS
+      ) {
+        this.logger.review("forwarded_permission.no_serving_session", {
+          requestId,
+          requesterSessionId: request.requesterSessionId,
+          targetSessionId,
+          servingSessionIds: this.serving.servingIds(),
+        });
+        this.discardRequest(location, requestPath);
+        return abandon(
+          `Session '${target.sessionId}' is not serving forwarded permission requests`,
         );
-        cleanupPermissionForwardingLocationIfEmpty(this.logger, location);
-        return response ?? { approved: false, state: "denied" };
       }
 
       await sleep(PERMISSION_FORWARDING_POLL_INTERVAL_MS);
@@ -308,8 +354,51 @@ export class ParentAuthorizer implements TerminalAuthorizer {
       targetSessionId,
       responsePath,
     });
+    this.discardRequest(location, requestPath);
+    return abandon(
+      `Session '${target.sessionId}' did not answer within ${timeoutMs / 1000}s`,
+    );
+  }
+
+  /**
+   * Track how long the target has looked unserved, or `null` while it looks fine.
+   *
+   * Only an in-process target (`source: "registry"`) can be judged: a target in
+   * another process shares no serving registry with this one, so its absence
+   * from the registry says nothing (#719, follow-up in #721).
+   */
+  private checkServingLiveness(
+    target: PermissionForwardingTarget,
+    unservedSince: number | null,
+  ): number | null {
+    if (target.source !== "registry") {
+      return null;
+    }
+    if (this.serving.isServing(target.sessionId)) {
+      return null;
+    }
+    return unservedSince ?? Date.now();
+  }
+
+  /**
+   * Drop this exchange's files and, if nothing else is pending, its directories.
+   *
+   * Deleting the request is what makes an abandonment final: a request left
+   * behind would be answered by the parent long after the child gave up.
+   */
+  private discardRequest(
+    location: PermissionForwardingLocation,
+    requestPath: string,
+    responsePath?: string,
+  ): void {
+    if (responsePath) {
+      safeDeleteFile(
+        this.logger,
+        responsePath,
+        "forwarded permission response",
+      );
+    }
     safeDeleteFile(this.logger, requestPath, "forwarded permission request");
     cleanupPermissionForwardingLocationIfEmpty(this.logger, location);
-    return { approved: false, state: "denied" };
   }
 }

@@ -28,6 +28,8 @@ export interface PermissionSystemExtensionConfig {
   doublePressToConfirm: boolean;
   /** Additional directories to auto-allow for reads as Pi infrastructure. */
   piInfrastructureReadPaths?: string[];
+  /** How long a subagent waits for the parent's answer to a forwarded ask, in ms. Defaults to 600000. */
+  forwardingTimeoutMs?: number;
   /** Max length of the inline-JSON input preview shown in permission prompts. Defaults to 200. */
   toolInputPreviewMaxLength?: number;
   /** Max length of inline pattern/path summaries (grep/find/ls) in permission prompts. Defaults to 80. */
@@ -80,6 +82,9 @@ export function normalizePermissionSystemConfig(
   };
   if (raw.piInfrastructureReadPaths !== undefined) {
     result.piInfrastructureReadPaths = raw.piInfrastructureReadPaths;
+  }
+  if (raw.forwardingTimeoutMs !== undefined) {
+    result.forwardingTimeoutMs = raw.forwardingTimeoutMs;
   }
   if (raw.toolInputPreviewMaxLength !== undefined) {
     result.toolInputPreviewMaxLength = raw.toolInputPreviewMaxLength;

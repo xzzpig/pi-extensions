@@ -133,7 +133,11 @@ export class GateRunner {
     // Construct messages from the centralized formatter.
     const messages = {
       denyReason: formatDenyReason(descriptor.denialContext),
-      unavailableReason: formatUnavailableReason(descriptor.denialContext),
+      unavailableReason: (decision: PermissionPromptDecision) =>
+        formatUnavailableReason(
+          descriptor.denialContext,
+          decision.denialReason,
+        ),
       userDeniedReason: (decision: PermissionPromptDecision) =>
         formatUserDeniedReason(descriptor.denialContext, decision.denialReason),
     };

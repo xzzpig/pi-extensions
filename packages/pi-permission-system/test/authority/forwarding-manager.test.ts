@@ -1,11 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ForwardingManager } from "#src/authority/forwarding-manager";
+import { ServingSessionRegistry } from "#src/authority/serving-registry";
 import type { SubagentDetector } from "#src/authority/subagent-detection";
 
 // ── Mocks ─────────────────────────────────────────────────────────────────
 
 const mockProcessInbox = vi.fn((): Promise<void> => Promise.resolve());
 const mockIsSubagent = vi.fn((): boolean => false);
+const mockReview = vi.fn();
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -27,8 +29,15 @@ function makeDetection(): SubagentDetector {
   return { isSubagent: mockIsSubagent };
 }
 
-function makeManager() {
-  return new ForwardingManager(makeDetection(), makeForwarder());
+function makeManager(
+  serving: ServingSessionRegistry = new ServingSessionRegistry(),
+) {
+  return new ForwardingManager({
+    detection: makeDetection(),
+    forwarder: makeForwarder(),
+    serving,
+    logger: { review: mockReview, debug: vi.fn() },
+  });
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────
@@ -40,6 +49,7 @@ describe("ForwardingManager", () => {
     mockIsSubagent.mockReturnValue(false);
     mockProcessInbox.mockReset();
     mockProcessInbox.mockResolvedValue(undefined);
+    mockReview.mockReset();
   });
 
   afterEach(() => {
@@ -180,6 +190,78 @@ describe("ForwardingManager", () => {
       manager.start(ctx);
 
       expect(mockIsSubagent).toHaveBeenCalledWith(ctx);
+    });
+  });
+
+  describe("serving announcement", () => {
+    it("marks the polled session as serving", () => {
+      const serving = new ServingSessionRegistry();
+      makeManager(serving).start(makeCtx({ sessionId: "sess-1" }));
+
+      expect(serving.servingIds()).toEqual(["sess-1"]);
+    });
+
+    it("logs the polled session id once per session", () => {
+      const manager = makeManager();
+      const ctx = makeCtx({ sessionId: "sess-1" });
+      manager.start(ctx);
+      manager.start(ctx);
+
+      expect(mockReview).toHaveBeenCalledExactlyOnceWith(
+        "forwarded_permission.serving_started",
+        { sessionId: "sess-1" },
+      );
+    });
+
+    it("clears the mark on stop()", () => {
+      const serving = new ServingSessionRegistry();
+      const manager = makeManager(serving);
+      manager.start(makeCtx({ sessionId: "sess-1" }));
+      manager.stop();
+
+      expect(serving.servingIds()).toEqual([]);
+    });
+
+    it("logs serving_stopped only when it was serving", () => {
+      const manager = makeManager();
+      manager.stop();
+      expect(mockReview).not.toHaveBeenCalled();
+
+      manager.start(makeCtx({ sessionId: "sess-1" }));
+      mockReview.mockClear();
+      manager.stop();
+
+      expect(mockReview).toHaveBeenCalledExactlyOnceWith(
+        "forwarded_permission.serving_stopped",
+        { sessionId: "sess-1" },
+      );
+    });
+
+    it("moves the mark when the session id changes", () => {
+      const serving = new ServingSessionRegistry();
+      const manager = makeManager(serving);
+      manager.start(makeCtx({ sessionId: "sess-1" }));
+      manager.start(makeCtx({ sessionId: "sess-2" }));
+
+      expect(serving.servingIds()).toEqual(["sess-2"]);
+    });
+
+    it("clears the mark when a later context no longer qualifies", () => {
+      const serving = new ServingSessionRegistry();
+      const manager = makeManager(serving);
+      manager.start(makeCtx({ sessionId: "sess-1" }));
+      manager.start(makeCtx({ sessionId: "sess-1", hasUI: false }));
+
+      expect(serving.servingIds()).toEqual([]);
+    });
+
+    it("never marks a session it does not poll", () => {
+      const serving = new ServingSessionRegistry();
+      makeManager(serving).start(
+        makeCtx({ sessionId: "sess-1", hasUI: false }),
+      );
+
+      expect(serving.servingIds()).toEqual([]);
     });
   });
 });

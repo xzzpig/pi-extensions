@@ -129,6 +129,18 @@ describe("normalizePermissionSystemConfig", () => {
 		expect(result.doublePressToConfirm).toBe(false);
 	});
 
+	it("includes forwardingTimeoutMs when a valid positive integer is provided", () => {
+		const result = normalizePermissionSystemConfig({
+			forwardingTimeoutMs: 120_000,
+		});
+		expect(result.forwardingTimeoutMs).toBe(120_000);
+	});
+
+	it("omits forwardingTimeoutMs when absent", () => {
+		const result = normalizePermissionSystemConfig({});
+		expect("forwardingTimeoutMs" in result).toBe(false);
+	});
+
 	it("includes toolInputPreviewMaxLength when a valid positive integer is provided", () => {
 		const result = normalizePermissionSystemConfig({
 			toolInputPreviewMaxLength: 400,

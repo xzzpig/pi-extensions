@@ -386,6 +386,25 @@ describe("formatDenyReason", () => {
 // ── formatUnavailableReason ────────────────────────────────────────────────
 
 describe("formatUnavailableReason", () => {
+  test("appends the denial reason when the authority supplied one", () => {
+    expect(
+      formatUnavailableReason(
+        toolCtx(toolCheck("bash", { command: "pwd" })),
+        "Session 'parent-1' is not serving forwarded permission requests",
+      ),
+    ).toBe(
+      "[pi-permission-system] Running bash command 'pwd' requires approval, but no interactive UI is available. Reason: Session 'parent-1' is not serving forwarded permission requests.",
+    );
+  });
+
+  test("omits the reason clause when the authority supplied none", () => {
+    expect(
+      formatUnavailableReason(toolCtx(toolCheck("bash", { command: "pwd" }))),
+    ).toBe(
+      "[pi-permission-system] Running bash command 'pwd' requires approval, but no interactive UI is available.",
+    );
+  });
+
   test("generic tool", () => {
     expect(formatUnavailableReason(toolCtx(toolCheck("write")))).toBe(
       "[pi-permission-system] Using tool 'write' requires approval, but no interactive UI is available.",
