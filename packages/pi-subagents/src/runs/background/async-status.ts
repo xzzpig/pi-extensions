@@ -12,7 +12,7 @@ import { flatToLogicalStepIndex, normalizeParallelGroups } from "./parallel-grou
 import { contextModeLabel, summarizeContextModes, type ContextMode, type ContextSummary } from "../shared/context-mode.ts";
 import { reconcileAsyncRun, reconcileNestedAsyncDescendants } from "./stale-run-reconciler.ts";
 import { readProcessTerminal, sanitizeProcessTerminal } from "./process-terminal.ts";
-import { ACTIVE_RUN_INDEX_DIR, isActiveAsyncState, readActiveRunIndex, releaseActiveRunIndex, updateActiveRunIndex } from "./active-run-index.ts";
+import { ACTIVE_RUN_INDEX_DIR, DEFAULT_STALE_TERMINAL_ACTIVE_MARKER_MS, activeRunMarkerAgeMs, isActiveAsyncState, readActiveRunIndex, releaseActiveRunIndex, updateActiveRunIndex } from "./active-run-index.ts";
 
 interface AsyncRunStepSummary {
 	index: number;
@@ -25,6 +25,7 @@ interface AsyncRunStepSummary {
 	structured?: boolean;
 	checkpoint?: ChainCheckpointState;
 	status: AsyncJobStep["status"];
+	runner?: AsyncJobStep["runner"];
 	activityState?: ActivityState;
 	lastActivityAt?: number;
 	currentTool?: string;
@@ -128,6 +129,7 @@ interface AsyncRunListOptions {
 	now?: () => number;
 	reconcile?: boolean;
 	runId?: string;
+	includeNested?: boolean;
 }
 
 function getErrorMessage(error: unknown): string {
@@ -253,6 +255,7 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string 
 			...(step.structured ? { structured: step.structured } : {}),
 			...(step.checkpoint ? { checkpoint: step.checkpoint } : {}),
 			status: step.status,
+			...(step.runner ? { runner: step.runner } : {}),
 			...(stepActivityState ? { activityState: stepActivityState } : {}),
 			...(stepLastActivityAt ? { lastActivityAt: stepLastActivityAt } : {}),
 			...(step.currentTool ? { currentTool: step.currentTool } : {}),
@@ -383,6 +386,7 @@ export function listAsyncRuns(asyncDirRoot: string, options: AsyncRunListOptions
 		&& options.states !== undefined
 		&& options.states.length > 0
 		&& options.states.every(isActiveAsyncState);
+	const includeNested = options.includeNested !== false;
 	try {
 		if (options.runId !== undefined) {
 			const resolution = resolveTargetedAsyncRun(asyncDirRoot, options.runId, options.sessionId);
@@ -443,6 +447,7 @@ export function listAsyncRuns(asyncDirRoot: string, options: AsyncRunListOptions
 	// entirely when no active runs match.
 	let nestedRouteIndex: Map<string, NestedRoute> | undefined;
 	const resolveNestedRoute = (rootRunId: string): NestedRoute | undefined => {
+		if (!includeNested) return undefined;
 		if (usedActiveIndex) return findNestedRouteForRootId(rootRunId);
 		if (!nestedRouteIndex) nestedRouteIndex = buildNestedRouteIndex();
 		return nestedRouteIndex.get(rootRunId);
@@ -459,7 +464,7 @@ export function listAsyncRuns(asyncDirRoot: string, options: AsyncRunListOptions
 		}
 		if (usedActiveIndex && !isActiveAsyncState(status.state)) {
 			const processTerminal = readProcessTerminal(asyncDir, { runId: status.runId, runnerProcessInstanceId: status.processTerminal?.runnerProcessInstanceId });
-			if (processTerminal?.state === "observed") releaseActiveRunIndex(asyncDir);
+			if (processTerminal?.state === "observed" || (activeRunMarkerAgeMs(asyncDir, options.now?.()) ?? 0) > DEFAULT_STALE_TERMINAL_ACTIVE_MARKER_MS) releaseActiveRunIndex(asyncDir);
 		}
 		if (status.displayDismissedAt !== undefined) continue;
 		// Filter before the nested-route lookup: the lookup builds an index over
@@ -470,7 +475,7 @@ export function listAsyncRuns(asyncDirRoot: string, options: AsyncRunListOptions
 		if (options.sessionId && status.sessionId !== options.sessionId) continue;
 		const nestedWarnings: string[] = [];
 		let nestedRoute: NestedRoute | undefined;
-		if (options.reconcile !== false) {
+		if (options.reconcile !== false && includeNested) {
 			try {
 				nestedRoute = resolveNestedRoute(status.runId || path.basename(asyncDir));
 				if (nestedRoute) reconcileNestedAsyncDescendants(nestedRoute, { resultsDir: options.resultsDir, kill: options.kill, now: options.now });

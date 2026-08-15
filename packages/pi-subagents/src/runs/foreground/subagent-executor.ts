@@ -101,6 +101,7 @@ import { stopAsyncRun } from "./async-stop-action.ts";
 import { dismissRecoveredWorkflow } from "./async-dismiss-action.ts";
 import { reconcileAsyncRun } from "../background/stale-run-reconciler.ts";
 import { resolveAsyncRootResultPath, waitForImportedAsyncRoot } from "../background/chain-root-attachment.ts";
+import { resultFilePath, writeAsyncResultFile } from "../background/result-files.ts";
 import { attachRootChildrenToSteps, createNestedRoute, findNestedControlResult, resolveInheritedNestedRouteFromEnv, resolveNestedAsyncDir, resolveNestedParentAddressFromEnv, snapshotNestedEventFiles, updateForegroundNestedProjection, writeNestedControlRequest, writeNestedEvent, type NestedRunResolutionScope } from "../shared/nested-events.ts";
 import { resolveSubagentRunId, type ResolvedSubagentRunId } from "../background/run-id-resolver.ts";
 import { formatNestedRunStatusLines } from "../shared/nested-render.ts";
@@ -108,7 +109,7 @@ import { inspectSubagentStatus } from "../background/run-status.ts";
 import { applyForceTopLevelAsyncOverride } from "../background/top-level-async.ts";
 import { handleMissionAction, MISSION_ACTIONS } from "../../missions/actions.ts";
 import { attachMissionToLaunchResult, prepareMissionLaunch, writeMissionAsyncBinding, type MissionLaunchBinding } from "../../missions/lifecycle.ts";
-import { updateMission } from "../../missions/store.ts";
+import { MissionNotFoundError, updateMission } from "../../missions/store.ts";
 import type { MissionWorkflowChildUpdate } from "../../missions/types.ts";
 import { createMissionWorkflowState } from "../../missions/workflow-state.ts";
 import { resolveAuthorityDecision } from "../../policy/authority.ts";
@@ -307,6 +308,8 @@ export interface SubagentParamsLike {
 	foregroundOnly?: boolean;
 	timeoutMs?: number;
 	maxRuntimeMs?: number;
+	/** Optional hard per-tool-call timeout (ms). Known-fast tools also have a default. */
+	toolTimeoutMs?: number;
 	turnBudget?: TurnBudgetConfig;
 	/** Internal-only strict turn-boundary enforcement for versioned foreground delegation. */
 	enforceHardTurnLimit?: boolean;
@@ -409,6 +412,8 @@ interface ExecutionContextData {
 	nestedRoute?: NestedRouteInfo;
 	timeoutMs?: number;
 	deadlineAt?: number;
+	/** Raw global config.toolTimeoutMs, for per-step resolution in async runners. */
+	configToolTimeoutMs?: number;
 	turnBudget?: ResolvedTurnBudget;
 	toolBudget?: ResolvedToolBudget;
 	usageBudget?: UsageBudgetConfig;
@@ -2506,16 +2511,19 @@ function resolveStaticLaunchSummary(input: {
 	thinkingOverrideForTask: ForkThinkingOverrideForTask;
 }): StaticLaunchSummary {
 	const agentConfig = input.agents.find((agent) => agent.name === input.agent);
-	const model = resolveEffectiveSubagentModel(
-		input.explicitModel,
-		agentConfig?.model,
-		input.parentModel,
-		input.availableModels,
-		input.currentProvider,
-		input.modelScope === undefined ? {} : { scope: input.modelScope },
-	);
-	const thinkingOverride = input.thinkingOverrideForTask(input.agent, input.index, model);
-	const thinking = resolveEffectiveThinking(model, thinkingOverride ?? agentConfig?.thinking);
+	const externalRunner = agentConfig?.runner?.type === "external-cli";
+	const model = externalRunner
+		? undefined
+		: resolveEffectiveSubagentModel(
+			input.explicitModel,
+			agentConfig?.model,
+			input.parentModel,
+			input.availableModels,
+			input.currentProvider,
+			input.modelScope === undefined ? {} : { scope: input.modelScope },
+		);
+	const thinkingOverride = externalRunner ? undefined : input.thinkingOverrideForTask(input.agent, input.index, model);
+	const thinking = externalRunner ? undefined : resolveEffectiveThinking(model, thinkingOverride ?? agentConfig?.thinking);
 	return {
 		agent: input.agent,
 		...(model ? { model } : {}),
@@ -2798,6 +2806,8 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			toolBudget: data.toolBudget,
 			usageBudget: data.usageBudget,
 			configToolBudget: data.configToolBudget,
+			callToolTimeoutMs: data.params?.toolTimeoutMs,
+			configToolTimeoutMs: data.configToolTimeoutMs,
 			capabilityCeiling: data.capabilityCeiling,
 			runFanoutBudget: data.runFanoutBudget,
 			globalConcurrencyLimit: deps.config.globalConcurrencyLimit,
@@ -2845,6 +2855,8 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			toolBudget: data.toolBudget,
 			usageBudget: data.usageBudget,
 			configToolBudget: data.configToolBudget,
+			callToolTimeoutMs: data.params?.toolTimeoutMs,
+			configToolTimeoutMs: data.configToolTimeoutMs,
 			capabilityCeiling: data.capabilityCeiling,
 			runFanoutBudget: data.runFanoutBudget,
 			globalConcurrencyLimit: deps.config.globalConcurrencyLimit,
@@ -2871,8 +2883,8 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		const externalRunnerWithoutExplicitModel = a.runner?.type === "external-cli"
 			&& params.model === undefined
 			&& (a.model === undefined || (a.modelSource?.type === "subagents.defaultModel" && a.model === a.modelSource.model));
-		const modelOverride = externalRunnerWithoutExplicitModel
-			? undefined
+		const modelOverride = a.runner?.type === "external-cli"
+			? params.model ?? (externalRunnerWithoutExplicitModel ? undefined : a.model)
 			: resolveEffectiveSubagentModel(params.model as string | undefined, a.model, parentModel, availableModels, currentProvider, data.modelScope === undefined ? {} : { scope: data.modelScope });
 		return executeAsyncSingle(id, compactOptional<Parameters<typeof executeAsyncSingle>[1]>({
 			agent: params.agent!,
@@ -2916,6 +2928,8 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			toolBudget: data.toolBudget,
 			usageBudget: data.usageBudget,
 			configToolBudget: data.configToolBudget,
+			toolTimeoutMs: data.params?.toolTimeoutMs,
+			configToolTimeoutMs: data.configToolTimeoutMs,
 			capabilityCeiling: data.capabilityCeiling,
 			runFanoutBudget: data.runFanoutBudget,
 			parentWorkflowRunId: params.workflowParentRunId,
@@ -3005,6 +3019,8 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		toolBudget: data.toolBudget,
 		usageBudget: data.usageBudget,
 		configToolBudget: data.configToolBudget,
+		callToolTimeoutMs: data.params?.toolTimeoutMs,
+		configToolTimeoutMs: data.configToolTimeoutMs,
 		permissions: deps.config.permissions,
 		globalConcurrencyLimit: deps.config.globalConcurrencyLimit,
 		capabilityCeiling: data.capabilityCeiling,
@@ -3072,6 +3088,8 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 				toolBudget: data.toolBudget,
 				usageBudget: data.usageBudget,
 				configToolBudget: data.configToolBudget,
+				callToolTimeoutMs: data.params?.toolTimeoutMs,
+				configToolTimeoutMs: data.configToolTimeoutMs,
 				capabilityCeiling: data.capabilityCeiling,
 				runFanoutBudget: data.runFanoutBudget,
 				globalConcurrencyLimit: deps.config.globalConcurrencyLimit,
@@ -3159,6 +3177,10 @@ interface ForegroundParallelRunInput {
 	worktreeSetup?: WorktreeSetup;
 	timeoutMs?: number;
 	deadlineAt?: number;
+	/** Per-call per-tool timeout, resolved separately for each task's agent. */
+	toolTimeoutMs?: number;
+	/** Raw global config.toolTimeoutMs, used by each task's resolver. */
+	configToolTimeoutMs?: number;
 	turnBudget?: ResolvedTurnBudget;
 	usageBudget?: UsageBudgetConfig;
 	toolBudgets: (ResolvedToolBudget | undefined)[];
@@ -3535,6 +3557,8 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 					share: input.shareEnabled || undefined,
 					maxOutput: input.maxOutput,
 					timeoutMs: input.timeoutMs,
+					toolTimeoutMs: input.toolTimeoutMs,
+					configToolTimeoutMs: input.configToolTimeoutMs,
 					turnBudget: input.turnBudget,
 					...(model ? { model } : {}),
 					...(effectiveSkills !== undefined ? { skill: effectiveSkills } : {}),
@@ -3614,6 +3638,8 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 			acceptanceContext: { mode: "parallel" },
 			onEffectivePrompt: input.foregroundControl ? (prompt) => updateLiveEffectivePrompt(input.foregroundControl!, index, prompt) : undefined,
 			timeoutMs: input.timeoutMs,
+			toolTimeoutMs: input.toolTimeoutMs,
+			configToolTimeoutMs: input.configToolTimeoutMs,
 			deadlineAt: input.deadlineAt,
 			turnBudget: input.turnBudget,
 			toolBudget: input.toolBudgets[index],
@@ -3741,7 +3767,9 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		...(task.model !== undefined ? { model: task.model } : {}),
 	}));
 	const modelOverrides: (string | undefined)[] = tasks.map((_, i) =>
-		resolveEffectiveSubagentModel(behaviorOverrides[i]?.model, agentConfigs[i]?.model, parentModel, availableModels, currentProvider, data.modelScope === undefined ? {} : { scope: data.modelScope }),
+		agentConfigs[i]?.runner?.type === "external-cli"
+			? undefined
+			: resolveEffectiveSubagentModel(behaviorOverrides[i]?.model, agentConfigs[i]?.model, parentModel, availableModels, currentProvider, data.modelScope === undefined ? {} : { scope: data.modelScope }),
 	);
 
 	if (params.clarify === true && ctx.hasUI) {
@@ -3776,7 +3804,9 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 		for (let i = 0; i < result.behaviorOverrides.length; i++) {
 			const override = result.behaviorOverrides[i];
 			if (override?.model !== undefined) {
-				modelOverrides[i] = resolveEffectiveSubagentModel(override.model, agentConfigs[i]?.model, parentModel, availableModels, currentProvider, data.modelScope === undefined ? {} : { scope: data.modelScope });
+				modelOverrides[i] = agentConfigs[i]?.runner?.type === "external-cli"
+					? undefined
+					: resolveEffectiveSubagentModel(override.model, agentConfigs[i]?.model, parentModel, availableModels, currentProvider, data.modelScope === undefined ? {} : { scope: data.modelScope });
 				behaviorOverrides[i]!.model = override.model;
 			}
 			if (override?.output !== undefined) behaviorOverrides[i]!.output = override.output;
@@ -3863,6 +3893,8 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 					usageBudget: data.usageBudget,
 					toolBudget: data.toolBudget,
 					configToolBudget: data.configToolBudget,
+					callToolTimeoutMs: data.params?.toolTimeoutMs,
+					configToolTimeoutMs: data.configToolTimeoutMs,
 					globalConcurrencyLimit: deps.config.globalConcurrencyLimit,
 					runFanoutBudget: data.runFanoutBudget,
 				}));
@@ -3983,6 +4015,8 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			worktreeSetup,
 			timeoutMs: data.timeoutMs,
 			deadlineAt,
+			toolTimeoutMs: data.params?.toolTimeoutMs,
+			configToolTimeoutMs: data.configToolTimeoutMs,
 			turnBudget: data.turnBudget,
 			usageBudget: data.usageBudget,
 			toolBudgets,
@@ -4377,6 +4411,8 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 			},
 			timeoutMs: data.timeoutMs,
 			deadlineAt,
+			toolTimeoutMs: params.toolTimeoutMs,
+			configToolTimeoutMs: data.configToolTimeoutMs,
 			turnBudget: data.turnBudget,
 			enforceHardTurnLimit: params.enforceHardTurnLimit,
 			toolBudget: effectiveToolBudget.toolBudget,
@@ -4455,8 +4491,15 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	}
 
 	if (r.detached) {
+		const statusRecovery = `subagent({ action: "status", id: "${runId}" }) to recover the result; do not resume or launch a replacement while it remains detached.`;
+		const blockingRecovery = `subagent_wait({ id: "${runId}" }). Use ${statusRecovery}`;
+		const message = r.detachedReason === "intercom coordination"
+			? `Detached for intercom coordination: ${params.agent}. Reply to the supervisor request first, then wait with ${blockingRecovery}`
+			: r.detachedReason === "user request"
+				? `Detached at user request: ${params.agent}. The child continues independently. Register a completion wake-up with subagent_wait({ id: "${runId}", nonBlocking: true }), or use ${statusRecovery}`
+				: `Detached before task completion: ${params.agent}. Wait with ${blockingRecovery}`;
 		return {
-			content: [{ type: "text", text: `Detached for intercom coordination: ${params.agent}. Reply to the supervisor request first, then wait with subagent_wait({ id: "${runId}" }). Use subagent({ action: "status", id: "${runId}" }) to recover the result; do not resume or launch a replacement while it remains detached.` }],
+			content: [{ type: "text", text: message }],
 			details,
 		};
 	}
@@ -4500,17 +4543,28 @@ function duplicateSubagentCallResult(params: SubagentParamsLike): AgentToolResul
 
 const workflowLaunchObservers = new WeakMap<object, (launch: { agent: string; sessionFile?: string; async: boolean; runId?: string }) => void>();
 
+/**
+ * Terminal-mission retention can remove a mission while its children still
+ * report. Remember it to prevent later heartbeats from warning repeatedly.
+ */
+const missionsMissingFromStore = new Set<string>();
+
 function recordMissionWorkflowChild(
 	binding: MissionLaunchBinding | undefined,
 	workflowRunId: string,
 	key: string,
 	update: Omit<MissionWorkflowChildUpdate, "workflowRunId" | "key">,
 ): void {
-	if (!binding) return;
+	if (!binding || missionsMissingFromStore.has(binding.missionId)) return;
 	const { task: _task, ...durableUpdate } = update;
 	try {
 		updateMission(binding.location, binding.missionId, { upsertWorkflowChildren: [{ workflowRunId, key, ...durableUpdate }] });
 	} catch (error) {
+		if (error instanceof MissionNotFoundError) {
+			missionsMissingFromStore.add(binding.missionId);
+			console.warn(`[pi-subagents] Mission '${binding.missionId}' is no longer in the mission store; stopped recording its workflow children. Terminal-mission retention can prune a mission while its run is still active.`);
+			return;
+		}
 		console.warn(`[pi-subagents] Failed to record mission workflow child '${key}': ${error instanceof Error ? error.message : String(error)}`);
 	}
 }
@@ -4580,6 +4634,7 @@ function workflowChildResult(key: string, result: AgentToolResult<Details>): Wor
 		...(result.details.runId || result.details.asyncId ? { runId: result.details.runId ?? result.details.asyncId } : {}),
 		output,
 		...(!ok ? { error: receiptOutput || output || "Child run failed." } : {}),
+		...(detached ? { detached: true } : {}),
 		...(structured.length === 1 ? { structuredOutput: structured[0] } : structured.length > 1 ? { structuredOutput: structured } : {}),
 		artifactPaths: [...artifactPaths],
 		results: result.details.results,
@@ -4888,7 +4943,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			if (workflowRunId) {
 				const toolCallId = _id;
 				const asyncDir = path.join(DIRS.async, workflowRunId);
-				const resultPath = path.join(DIRS.results, `${workflowRunId}.json`);
+				const resultPath = resultFilePath(DIRS.results, workflowRunId);
 				const statusPath = path.join(asyncDir, "status.json");
 				const eventsPath = path.join(asyncDir, "events.jsonl");
 				const startedAt = Date.now();
@@ -4927,7 +4982,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					status.lastUpdate = Date.now();
 					writeAtomicJson(statusPath, status);
 					if (indexedState !== status.state) {
-						updateActiveRunIndex(asyncDir, status.state);
+						updateActiveRunIndex(asyncDir, status.state, status.toolCallId);
 						indexedState = status.state;
 					}
 					const job = deps.state.asyncJobs.get(workflowRunId);
@@ -4952,6 +5007,17 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						job.workflow = status.workflow;
 					}
 				};
+				const writeWorkflowResult = (payload: Record<string, unknown>): boolean => {
+					try {
+						writeAsyncResultFile(resultPath, payload);
+						return true;
+					} catch (error) {
+						const message = `Failed to write async workflow result ${resultPath}: ${error instanceof Error ? error.message : String(error)}`;
+						console.error(message, error);
+						appendWorkflowEvent({ type: "subagent.workflow.result_write_failed", error: message });
+						return false;
+					}
+				};
 				const projectWorkflowActivity = () => {
 					const steps = status.steps ?? [];
 					const runningSteps = steps.filter((step) => step.status === "running");
@@ -4973,7 +5039,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 					status.toolCount = toolCounts.length > 0 ? toolCounts.reduce((total, count) => total + count, 0) : undefined;
 					status.currentStep = runningSteps.length === 1 ? steps.indexOf(runningSteps[0]!) : undefined;
 				};
-				const workflowJob: AsyncJobState = { asyncId: workflowRunId, asyncDir, cwd: workflowCwd, status: "running", sessionId: currentSessionId ?? undefined, mode: "workflow", agents: [], steps: [], startedAt, updatedAt: startedAt, ...(timeout !== undefined ? { timeoutMs: timeout, deadlineAt: startedAt + timeout } : {}), workflow: status.workflow };
+				const workflowJob: AsyncJobState = { asyncId: workflowRunId, asyncDir, toolCallId, cwd: workflowCwd, status: "running", sessionId: currentSessionId ?? undefined, mode: "workflow", agents: [], steps: [], startedAt, updatedAt: startedAt, ...(timeout !== undefined ? { timeoutMs: timeout, deadlineAt: startedAt + timeout } : {}), workflow: status.workflow };
 				deps.state.asyncJobs.set(workflowRunId, workflowJob);
 				deps.state.fleetJobs ??= new Map();
 				deps.state.fleetJobs.set(workflowRunId, workflowJob);
@@ -5012,12 +5078,16 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 									? "completed"
 									: entry.state === "stopped"
 										? "stopped"
-										: "failed";
+										: entry.state === "detached"
+											? "paused"
+											: "failed";
 							if (existing) {
 								existing.status = mapped;
 								if (entry.agent) existing.agent = entry.agent;
 								if (entry.runId) existing.runId = entry.runId;
 								if (entry.state === "failed" && !entry.runId && existing.async === undefined) existing.async = false;
+								if (entry.state === "detached") existing.activityState = "needs_attention";
+								else if (existing.status !== "running") delete existing.activityState;
 								if (entry.state === "stopped") existing.stopped = true;
 								else delete existing.stopped;
 								if (entry.error === undefined) delete existing.error;
@@ -5034,6 +5104,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 									startedAt: Date.now(),
 									...(entry.runId ? { runId: entry.runId } : {}),
 									...(entry.state === "failed" && !entry.runId ? { async: false } : {}),
+									...(entry.state === "detached" ? { activityState: "needs_attention" as const } : {}),
 									...(entry.state === "stopped" ? { stopped: true } : {}),
 								};
 								status.steps?.push(step);
@@ -5156,18 +5227,28 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						const resultSummary = appendWorkflowOutputWarning(summary, outputWarning);
 						const workflowUsage = sumResultsUsage(workflowResults);
 						status = { ...status, state: "complete", endedAt: Date.now(), workflow: { value: workflow.value, trace: workflow.trace, emits: workflow.emits, console: workflow.console }, totalTokens: { input: workflowUsage.input, output: workflowUsage.output, total: workflowUsage.input + workflowUsage.output }, totalCost: sumResultsCost(workflowResults) };
-						writeAtomicJson(resultPath, { id: workflowRunId, runId: workflowRunId, toolCallId, agent: "workflow", mode: "workflow", success: true, state: "complete", summary: resultSummary, output: resultSummary, results: workflow.children.map((child) => ({ workflowKey: child.key, ...(child.agent ? { agent: child.agent } : {}), ...(child.runId ? { runId: child.runId } : {}), output: child.output, outputState: child.output.trim() || child.structuredOutput !== undefined ? "present" : "absent", structuredOutput: child.structuredOutput, success: child.ok, ...(child.artifactPaths[0] ? { artifactPaths: { outputPath: child.artifactPaths[0] } } : {}) })), workflow: status.workflow, asyncDir, cwd: workflowCwd, sessionId: currentSessionId, timestamp: Date.now(), durationMs: Date.now() - startedAt });
+						if (!writeWorkflowResult({ id: workflowRunId, runId: workflowRunId, toolCallId, agent: "workflow", mode: "workflow", success: true, state: "complete", summary: resultSummary, output: resultSummary, results: workflow.children.map((child) => ({ workflowKey: child.key, ...(child.agent ? { agent: child.agent } : {}), ...(child.runId ? { runId: child.runId } : {}), output: child.output, outputState: child.output.trim() || child.structuredOutput !== undefined ? "present" : "absent", structuredOutput: child.structuredOutput, success: child.ok, ...(child.artifactPaths[0] ? { artifactPaths: { outputPath: child.artifactPaths[0] } } : {}) })), workflow: status.workflow, asyncDir, cwd: workflowCwd, sessionId: currentSessionId, timestamp: Date.now(), durationMs: Date.now() - startedAt })) return;
 						persist();
-						appendWorkflowEvent({ type: "subagent.workflow.completed", state: "complete" });
+						appendWorkflowEvent({ type: "subagent.workflow.completed", state: status.state, ...(status.error ? { error: status.error } : {}) });
 					} catch (error) {
 						const partial = error instanceof WorkflowScriptError ? error.partial : { trace: [], emits: [], console: [], children: [] };
 						const stopped = controller.signal.aborted;
-						status = compactOptional<AsyncStatus>({ ...status, state: stopped ? "stopped" : "failed", stopped: stopped || undefined, error: error instanceof Error ? error.message : String(error), endedAt: Date.now(), workflow: { trace: partial.trace, emits: partial.emits, console: partial.console } });
-						const outputWarning = writeWorkflowAggregateOutput(workflowAggregateOutputPath, status.error ?? "Workflow failed.");
-						const resultSummary = appendWorkflowOutputWarning(status.error ?? "Workflow failed.", outputWarning);
-						writeAtomicJson(resultPath, { id: workflowRunId, runId: workflowRunId, toolCallId, agent: "workflow", mode: "workflow", success: false, state: status.state, summary: resultSummary, error: status.error, stopped: status.stopped, results: partial.children.map((child) => ({ workflowKey: child.key, ...(child.agent ? { agent: child.agent } : {}), ...(child.runId ? { runId: child.runId } : {}), output: child.output, outputState: child.output.trim() || child.structuredOutput !== undefined ? "present" : "absent", structuredOutput: child.structuredOutput, success: child.ok, ...(child.artifactPaths[0] ? { artifactPaths: { outputPath: child.artifactPaths[0] } } : {}) })), workflow: status.workflow, asyncDir, cwd: workflowCwd, sessionId: currentSessionId, timestamp: Date.now(), durationMs: Date.now() - startedAt });
+						const detachedChildKeys = new Set(partial.children.filter((child) => child.detached).map((child) => child.key));
+						const hasRealFailedChild = partial.children.some((child) => !child.ok && !child.detached);
+						const pauseForDetached = !stopped && error instanceof WorkflowScriptError && error.errorKind === "detached-child" && detachedChildKeys.size > 0 && !hasRealFailedChild;
+						const state = stopped ? "stopped" : pauseForDetached ? "paused" : "failed";
+						for (const step of status.steps ?? []) {
+							if (step.workflowKey && detachedChildKeys.has(step.workflowKey)) {
+								step.status = "paused";
+								step.activityState = "needs_attention";
+							}
+						}
+						status = compactOptional<AsyncStatus>({ ...status, state, stopped: stopped || undefined, activityState: pauseForDetached ? "needs_attention" : undefined, error: error instanceof Error ? error.message : String(error), endedAt: Date.now(), workflow: { trace: partial.trace, emits: partial.emits, console: partial.console } });
+						const outputWarning = writeWorkflowAggregateOutput(workflowAggregateOutputPath, status.error ?? (pauseForDetached ? "Workflow paused." : "Workflow failed."));
+						const resultSummary = appendWorkflowOutputWarning(status.error ?? (pauseForDetached ? "Workflow paused." : "Workflow failed."), outputWarning);
+						if (!writeWorkflowResult({ id: workflowRunId, runId: workflowRunId, toolCallId, agent: "workflow", mode: "workflow", success: false, state: status.state, summary: resultSummary, error: status.error, stopped: status.stopped, activityState: status.activityState, results: partial.children.map((child) => ({ workflowKey: child.key, ...(child.agent ? { agent: child.agent } : {}), ...(child.runId ? { runId: child.runId } : {}), output: child.output, outputState: child.output.trim() || child.structuredOutput !== undefined ? "present" : "absent", structuredOutput: child.structuredOutput, success: child.ok, ...(child.detached ? { detached: true } : {}), ...(child.artifactPaths[0] ? { artifactPaths: { outputPath: child.artifactPaths[0] } } : {}) })), workflow: status.workflow, asyncDir, cwd: workflowCwd, sessionId: currentSessionId, timestamp: Date.now(), durationMs: Date.now() - startedAt })) return;
 						persist();
-						appendWorkflowEvent({ type: "subagent.workflow.completed", state: status.state, error: status.error });
+						appendWorkflowEvent({ type: "subagent.workflow.completed", state: status.state, error: status.error, ...(status.activityState ? { activityState: status.activityState } : {}) });
 					} finally {
 						deps.state.workflowControllers?.delete(workflowRunId);
 						deps.state.activeAsyncCapacity = workflowCapacity?.reconcile(new Set(deps.state.workflowControllers?.keys() ?? []))
@@ -6013,6 +6094,10 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			const parentModel = requestParentModel;
 			prepareForkThinking = (agentName, index, modelOverride) => {
 				const agentConfig = agents.find((agent) => agent.name === agentName);
+				if (agentConfig?.runner?.type === "external-cli") {
+					forkThinkingRequirements.set(index, true);
+					return;
+				}
 				const primaryModel = resolveEffectiveSubagentModel(
 					modelOverride,
 					agentConfig?.model,
@@ -6249,6 +6334,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			usageBudget: usageBudget.budget,
 			allowZeroToolBudget,
 			configToolBudget: configToolBudget.toolBudget,
+			configToolTimeoutMs: deps.config.toolTimeoutMs,
 			contextPolicy,
 			modelScope,
 			parentModel: requestParentModel,

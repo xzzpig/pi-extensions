@@ -33,6 +33,7 @@ describe("async run status inspection", () => {
 			fs.writeFileSync(sessionFile, "", "utf-8");
 			fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({
 				runId: "run-stale",
+				sessionId: "session-current",
 				mode: "single",
 				state: "running",
 				pid: 12345,
@@ -201,6 +202,41 @@ describe("async run status inspection", () => {
 			assert.match(text, /RIGHT_CHILD_RECENT/);
 			assert.doesNotMatch(text, /WRONG_CHILD_OUTPUT/);
 			assert.doesNotMatch(text, new RegExp(`Transcript tail from ${wrongOutputPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("does not advertise an output artifact that was never written", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-run-status-transcript-phantom-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const asyncDir = path.join(asyncRoot, "run-phantom-output");
+			fs.mkdirSync(asyncDir, { recursive: true });
+			// A workflow run orchestrates children elsewhere and never writes output-<index>.log itself.
+			fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({
+				runId: "run-phantom-output",
+				mode: "workflow",
+				state: "running",
+				startedAt: 100,
+				lastUpdate: 200,
+				currentStep: 0,
+				steps: [{ agent: "delegate", status: "running", startedAt: 100, recentOutput: ["CHILD_RECENT"] }],
+			}, null, 2), "utf-8");
+
+			const result = inspectSubagentStatus({ id: "run-phantom-output", view: "transcript" }, {
+				asyncDirRoot: asyncRoot,
+				resultsDir: path.join(root, "results"),
+				kill: () => true,
+				now: () => 250,
+			});
+
+			const text = textContent(result);
+			assert.equal(result.isError, undefined);
+			assert.doesNotMatch(text, /Output: .*output-0\.log/);
+			// The status.json fallback still supplies the transcript body.
+			assert.match(text, /Recent output from status\.json:/);
+			assert.match(text, /CHILD_RECENT/);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
@@ -668,6 +704,7 @@ describe("async run status inspection", () => {
 			}, null, 2), "utf-8");
 			fs.writeFileSync(path.join(nestedAsyncDir, "status.json"), JSON.stringify({
 				runId: "nested-stale",
+				sessionId: "session-nested",
 				mode: "single",
 				state: "running",
 				pid: 54321,
@@ -919,6 +956,45 @@ describe("async run status inspection", () => {
 			assert.match(text, /Revive workflow child 'review': subagent\(\{ action: "resume", id: "child-review", message: "\.\.\." \}\)/);
 			assert.match(text, /Revive workflow child 'write': subagent\(\{ action: "resume", id: "child-write", message: "\.\.\." \}\)/);
 			assert.doesNotMatch(text, /id: "workflow-parent", index:/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps supervisor-detached workflow children out of generic revive guidance", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-run-status-workflow-detached-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const asyncDir = path.join(asyncRoot, "workflow-detached");
+			const sessionFile = path.join(root, "detached.jsonl");
+			fs.mkdirSync(asyncDir, { recursive: true });
+			fs.writeFileSync(sessionFile, "", "utf-8");
+			fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({
+				runId: "workflow-detached",
+				mode: "workflow",
+				state: "paused",
+				activityState: "needs_attention",
+				error: "Run 'detaches' detached for intercom coordination. Reply to the supervisor request first, then wait with subagent_wait({ id: \"child-detached\" }). Use subagent({ action: \"status\", id: \"child-detached\" }) to recover the result; do not resume or launch a replacement while it remains detached.",
+				startedAt: 100,
+				lastUpdate: 200,
+				steps: [{
+					agent: "worker",
+					workflowKey: "detaches",
+					runId: "child-detached",
+					status: "paused",
+					activityState: "needs_attention",
+					sessionFile,
+				}],
+			}, null, 2), "utf-8");
+
+			const result = inspectSubagentStatus({ id: "workflow-detached" }, { asyncDirRoot: asyncRoot, resultsDir: path.join(root, "results") });
+			const text = textContent(result);
+			assert.match(text, /Reply to the supervisor request first/);
+			assert.match(text, /wait with subagent_wait\(\{ id: "child-detached" \}\)/);
+			assert.match(text, /do not resume or launch a replacement while it remains detached/);
+			assert.match(text, /Recovery workflow child 'detaches'/);
+			assert.doesNotMatch(text, /Revive workflow child 'detaches'/);
+			assert.doesNotMatch(text, /action: "resume", id: "child-detached"/);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}

@@ -2,6 +2,45 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-16
+
+### Changed
+- Synced the fork with upstream pi-subagents v0.50.0 while preserving local compatibility fixes (@xzzpig/pi-permission-system priority in resolvePermissionSystemExtension(), Pi SDK 0.83 streamFn option naming).
+
+## [0.50.0] - 2026-08-15
+
+### Added
+- Add optional Orca progress tabs with bounded, sanitized mirrors for native Pi and external CLI children. Thanks to @hyein-cbio for #1080.
+- Show caller-owned external jobs in FleetView through a bounded push/cache API, without polling or exposing managed controls. Thanks to @ssyram for #1083.
+- Add a bounded current-status snapshot for async runs in RPC surfaces, without replaying terminal history. Thanks to @yanqianglu for #1078.
+- Add an optional `foregroundDetachShortcut` binding and show it in the running single-subagent card, so foreground work can be moved to the background without editing package source. Thanks to @Lewis-E for #1097.
+
+### Changed
+- Clarify retained-child resumability and native supervisor coordination guidance. Thanks to @ELA718 for #1126.
+- Clarify that completed retained writers should use `resume`, while `steer` with `mode: "follow_up"` only queues text for the next revival (#1104).
+- Treat oracle/advisor consultation prompts as supervisor-backed dialogue when material unknowns remain (#1102).
+- Show explicit resumable and not-resumable states, with fallback guidance, in retained child listings (#1101).
+- Reduce reload work for large async histories by indexing the async result inbox by session, observer, and tool-call id instead of scanning every old result file. Stale terminal active markers now age out, and replay cleanup scans run less often.
+
+### Fixed
+- Keep Orca progress tabs from treating write-stream backpressure as mirror truncation.
+- Stop advertising an `output-<index>.log` artifact in run transcripts when that file was never written, so workflow runs no longer point at a path that cannot exist. Thanks to @lbijeau for #1124.
+- Keep FleetView working when a session file path is longer than a short identity, instead of failing external-job inspection on every poll. Thanks to @albertgwo for #1121 and @Don-Yin for #1122.
+- Keep structured single-child runs from overriding output paths in the task, while preserving explicit and agent-configured outputs. Thanks to @pasemes for #1119.
+- Keep no-edit confirmations guarded after later changes retract a prior implementation (#1115).
+- Remove the native generic `intercom` compatibility fallback from supervisor coordination while preserving `contact_supervisor`, `subagent_supervisor`, and external `intercom` providers. Thanks to @jaudiger for #1107.
+- Report an actionable project-settings override when duplicate ambient Pi extensions prevent a child from starting (#1114).
+- Keep the FleetView overlay refreshed while open and count active leaf agents in the compact summary. Thanks to @Don-Yin for #1108.
+- Keep user-requested foreground detaches from showing supervisor-response recovery guidance. Thanks to @Lewis-E for #1109.
+- Reject configured subagent models that are not in the active host model registry before spawning a child, instead of forwarding an invalid `--model` argument to Pi. Thanks to @DresvyanskiyDenis for #1093.
+- Start Herdr inspector and project pane commands with a shell-safe executable token, including paths that need quoting in Nushell. Thanks to @Rival for #1092.
+- Stop `agentContract.version` from using an `enum` on an integer, which Gemini's function-calling schema subset rejects. Integer bounds express the same constraint and are valid everywhere. Thanks to @MarcusNeufeldt for #1095.
+- Show supervisor-detached workflow children as paused and needing attention instead of failed while preserving recovery guidance (#1096).
+- Show workflow-owned foreground children and recursive nested runs as a bounded tree in FleetView. Thanks to @expoli for #1086.
+- Warn once, instead of on every heartbeat, when a long-running workflow child outlives its mission record. Thanks to @albertgwo for #1079.
+- Keep deleted-schedule timers from exiting Pi and re-arm recurring schedules after unexpected timer fire failures. Thanks to @albertgwo for #1084.
+- Count native `await` use of `runs.run`, `runs.all`, and launch-containing Promise combinators as consumed without allowing fire-and-forget launches. Thanks to @kebinzhi for #1082.
+
 ## [0.3.0] - 2026-08-14
 
 ### Changed
@@ -15,6 +54,7 @@
 - Inspect async run state with `debug.run`, without exposing prompts, secrets, or transcripts (#1037).
 - Let builtin role overrides keep Pi's normal tools and extensions with `tools: "inherit"`. Thanks to @estanexanavsem for #1047 and @davidarny for #1049.
 - Add simple terminal examples for FleetView, the async widget, and inline tool display. Thanks to @czottmann for #1050.
+- Add per-tool-call wedge protection with `toolTimeoutMs` call → agent → config → environment precedence. Known-fast built-in tools get a five-minute default, long-running tools get attention notices without a hard default, matching `toolCallId` timers survive parallel tool completions, and supervisor waits (`contact_supervisor`, `intercom`, `subagent_wait`) remain exempt. Thanks to @forrestbthomas for #1077.
 
 ### Changed
 - Clean up active-run limits and artifact packaging code without changing behavior.

@@ -72,7 +72,7 @@ Scripts run in a timed worker with only `runs.run`, `runs.all`, `runs.status`, `
 
 For one host-run verification command, pass `gate: "npm test"` on a `runs.run`/`runs.all` item (or at the top level as a workflow default). It is shorthand for verified acceptance with that single command: the runtime executes it on the host, records the result as evidence, and memoizes it per tracked workspace state and effective environment. `gate` cannot be combined with `acceptance`; use explicit `acceptance.verify` for multiple commands or custom criteria.
 
-Completed workflow children from this parent session stay addressable as retained children. `subagent({ action: "children.list" })` lists up to the last 10 with run ids, and a later workflow continues one with `runs.run(key, { resume: "<run-id>", task: "follow-up" })`. Inside `workflowScript`, awaiting that call waits for the revived child to finish and returns its completed output and new `runId`; top-level `{ action: "resume" }` remains detached. A follow-up loop can render each task with `await prompts.render(...)`. Assign each returned child result back to the loop variable because every resume can return a new retained `runId`; always resume the latest returned id. `resume` and `agent` are mutually exclusive, the revived child keeps its stored agent/model/tool contract, and `gate` is rejected on retained resume items.
+Completed workflow children from this parent session stay addressable as retained children. `subagent({ action: "children.list" })` lists up to the last 10 with run ids and reports each row as `resumable` or `not resumable` with a reason. Resume only rows reported `resumable`. For a retained-child challenge, use `resume` instead of `steer` when the child is complete. If no retained child is resumable, launch a same-role fallback challenge and label it as fallback. A later workflow continues a resumable child with `runs.run(key, { resume: "<run-id>", task: "follow-up" })`. Inside `workflowScript`, awaiting that call waits for the revived child to finish and returns its completed output and new `runId`; top-level `{ action: "resume" }` remains detached. A follow-up loop can render each task with `await prompts.render(...)`. Assign each returned child result back to the loop variable because every resume can return a new retained `runId`; always resume the latest returned id. `resume` and `agent` are mutually exclusive, the revived child keeps its stored agent/model/tool contract, and `gate` is rejected on retained resume items.
 
 ### Async/background
 
@@ -287,7 +287,7 @@ Use `mission.update` while work runs to record decisions, artifacts, labels, sum
 - **Use `missionId` for follow-up work.** Attach later work to an existing objective with `missionId`; attachment re-marks the mission active. `missionId` and `mission` are mutually exclusive. Explicit attachment fails before launch if the mission is missing, while automatic missions degrade to `details.missionWarning` without blocking the run.
 - **Keep `state` small.** Mission `state` is JSON coordination across workflows on the same mission. Keys use the same format as run keys, values must be JSON, and the whole state file is capped at 256 KiB. Each `set` merges one key under a file lock. Put large content in artifact files and store paths in state. In goal missions, write `state.set("nextReadyAction", "...")` so the next idle-turn notice names the exact ready step.
 - **Use artifacts and receipts as evidence.** Mission-backed launches already record run artifacts such as async `status.json`, `events.jsonl`, child output paths, and handoff manifests. Add `mission.update` artifacts only for extra durable outputs such as `patch`, `review`, or `note` files. Add receipts for external outcomes: `pull_request`, `ci`, `deployment`, or `release`; each receipt needs an absolute URL. Receipts are evidence, not authority to merge, deploy, or release.
-- **Treat decisions as append-only.** `mission.update` `decisions` can only add open decisions. No tool action resolves one. In a goal mission, an unresolved decision becomes the fallback next ready action in each notice. Use decisions sparingly there; record them for escalation and audit, steer goal continuation through `state.nextReadyAction`, and close the mission when the question is settled.
+- **Resolve decisions explicitly.** `mission.update` `decisions` can only add open decisions; `mission.update` itself cannot resolve one — use the `mission.resolve-decision` action (decision `id` plus a non-empty `summary`) to settle and close it. In a goal mission, an unresolved decision becomes the fallback next ready action in each notice. Use decisions sparingly there; record them for escalation and audit, steer goal continuation through `state.nextReadyAction`, and close the mission when the question is settled.
 - **Close missions when done.** `mission.close` takes `missionStatus` `completed`, `failed`, or `cancelled` plus a concise `summary`, and ends any goal loop. Goal notices go only to the owning session and stop silently at `budget-exhausted` without closing or claiming success, so close explicitly. Terminal missions are pruned beyond configured retention, so store durable outputs as artifacts, receipts, and summary before closing.
 
 After compaction, restart, or confusing history, recover from durable state first: `mission.list` in the project, `mission.list` with `missionScope: "global"` for the user-local cross-project pointer index, then `mission.show` for the relevant mission. `mission.show` refreshes linked async status when available and returns warnings instead of hiding the mission if a linked status file is temporarily unreadable. Use the linked run ids with normal `status`, `steer`, `resume`, or `stop` actions. Project mission JSON remains authoritative over chat history.
@@ -305,6 +305,7 @@ subagent({ action: "mission.create", mission: { title: "Ship auth refresh", obje
 subagent({ workflowScript: `return runs.run("main", { agent: "worker", task: "Implement the approved plan" })`, missionId: "<mission-id>" })
 subagent({ workflowScript: `return runs.run("main", { agent: "scout", task: "Quickly answer whether this file exists" })`, mission: false })
 subagent({ action: "mission.list", missionScope: "global" })
+subagent({ action: "mission.resolve-decision", missionId: "<mission-id>", id: "<decision-id>", summary: "Settled: ship the v2 API; no schema freeze needed." })
 subagent({ action: "project.open", cwd: "/path/to/other-repo", message: "Own this mission for the project and report back with receipts." })
 subagent({ action: "project.status", cwd: "/path/to/other-repo" })
 subagent({ action: "project.close", cwd: "/path/to/other-repo" })
@@ -381,7 +382,7 @@ Use `oracle` as a smart-friend escalation when the parent needs help with trajec
 
 This is separate from optional external completion delivery. Set `intercomBridge.resultDelivery: true` only when an external listener consumes and acknowledges `subagent:result-intercom` grouped results. It does not deliver results by itself, and it does not change native supervisor asks or progress updates.
 
-Most agents should not call generic `intercom` directly unless bridge instructions provide a target and `contact_supervisor` is unavailable. Do not invent a target. Prefer the tool from the injected bridge instructions.
+Generic `intercom` is external or provider-supplied only. Native supervisor coordination injects `contact_supervisor`, not generic `intercom`. Use generic `intercom` only when external bridge instructions provide an explicit safe target. Do not invent a target. Prefer the tool from the injected bridge instructions.
 
 Use `contact_supervisor` with `reason: "need_decision"` when:
 - a subagent is blocked on a decision
@@ -423,6 +424,6 @@ Or inspects unresolved asks first:
 subagent_supervisor({ action: "pending" })
 ```
 
-If no external `pi-intercom` tool owns the `intercom` name, native supervisor coordination may also expose `intercom` as a compatibility fallback. Prefer `subagent_supervisor` for parent replies because it never overrides installed `pi-intercom`.
+Native supervisor coordination does not expose generic `intercom` as a fallback. Use `subagent_supervisor` for parent replies.
 
 If intercom messages do not show up, run `subagent({ action: "doctor" })` or `/subagents-doctor`.

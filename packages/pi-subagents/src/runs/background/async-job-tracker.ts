@@ -125,6 +125,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		return {
 			asyncId: run.id,
 			asyncDir: run.asyncDir,
+			toolCallId: run.toolCallId,
 			status: run.state,
 			sessionId: run.sessionId,
 			activityState: run.activityState,

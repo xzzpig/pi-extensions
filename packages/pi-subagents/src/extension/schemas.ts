@@ -93,7 +93,7 @@ const AcceptanceOverride = Type.Unsafe({
 });
 
 const AgentContractOverride = Type.Object({
-	version: Type.Integer({ enum: [1], description: "Enable compatibility behavior for this run/child." }),
+	version: Type.Integer({ minimum: 1, maximum: 1, description: "Enable compatibility behavior for this run/child." }),
 }, { additionalProperties: false, description: "Compatibility behavior. Omit for the default behavior." });
 
 const ChainGateOverride = Type.String({
@@ -327,6 +327,7 @@ const SubagentParamProperties = {
 	async: Type.Optional(Type.Boolean({ description: "Run in background (default: false, or per config)" })),
 	timeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Timeout. Foreground and single async runs use config timeoutMs, else 30m; async composites have no default parent deadline. Alias maxRuntimeMs." })),
 	maxRuntimeMs: Type.Optional(Type.Integer({ minimum: 1, description: "Alias timeoutMs. Foreground and single async runs use config timeoutMs, else 30m; async composites have no default parent deadline." })),
+	toolTimeoutMs: Type.Optional(Type.Integer({ minimum: 1, description: "Optional hard per-tool-call timeout in milliseconds; known-fast built-in tools have a five-minute default." })),
 	turnBudget: Type.Optional(TurnBudgetOverride),
 	toolBudget: Type.Optional(ToolBudgetOverride),
 	usageBudget: Type.Optional(UsageBudgetOverride),
