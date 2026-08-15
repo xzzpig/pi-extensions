@@ -16,37 +16,22 @@ import {
   TOOL_INPUT_PREVIEW_MAX_LENGTH,
   TOOL_TEXT_SUMMARY_MAX_LENGTH,
 } from "#src/tool-input-preview";
-import {
-  resolveToolPreviewLimits,
-  ToolPreviewFormatter,
-  type ToolPreviewFormatterOptions,
-} from "#src/tool-preview-formatter";
+import { resolveToolPreviewLimits } from "#src/tool-preview-formatter";
 import type { PermissionCheckResult } from "#src/types";
+import {
+  makeToolPreviewFormatter as makeFormatter,
+  makePermissionCheckResult,
+} from "#test/helpers/presentation-fixtures";
 
 const mockedStringify = vi.mocked(safeJsonStringify);
 
-function makeFormatter(
-  overrides: Partial<ToolPreviewFormatterOptions> = {},
-): ToolPreviewFormatter {
-  return new ToolPreviewFormatter({
-    toolInputPreviewMaxLength: TOOL_INPUT_PREVIEW_MAX_LENGTH,
-    toolTextSummaryMaxLength: TOOL_TEXT_SUMMARY_MAX_LENGTH,
-    toolInputLogPreviewMaxLength: TOOL_INPUT_LOG_PREVIEW_MAX_LENGTH,
-    ...overrides,
-  });
-}
-
+// This file's subject is the allow-path preview, so the wrapper defaults to
+// `allow`.
 function makeResult(
   toolName: string,
   overrides: Partial<PermissionCheckResult> = {},
 ): PermissionCheckResult {
-  return {
-    toolName,
-    state: "allow",
-    source: "tool",
-    origin: "builtin",
-    ...overrides,
-  };
+  return makePermissionCheckResult(toolName, { state: "allow", ...overrides });
 }
 
 beforeEach(() => {
@@ -220,28 +205,14 @@ describe("ToolPreviewFormatter.formatToolInputForPrompt — custom formatter sea
 
   test("uses a custom formatter's string result verbatim, bypassing the switch", () => {
     const lookup = makeLookup("my-tool", "custom preview");
-    const f = new ToolPreviewFormatter(
-      {
-        toolInputPreviewMaxLength: TOOL_INPUT_PREVIEW_MAX_LENGTH,
-        toolTextSummaryMaxLength: TOOL_TEXT_SUMMARY_MAX_LENGTH,
-        toolInputLogPreviewMaxLength: TOOL_INPUT_LOG_PREVIEW_MAX_LENGTH,
-      },
-      lookup,
-    );
+    const f = makeFormatter({}, lookup);
     expect(f.formatToolInputForPrompt("my-tool", {})).toBe("custom preview");
   });
 
   test("falls through to the built-in switch when custom formatter returns undefined", () => {
     mockedStringify.mockReturnValue('{"x":1}');
     const lookup = makeLookup("unknown-tool", undefined);
-    const f = new ToolPreviewFormatter(
-      {
-        toolInputPreviewMaxLength: TOOL_INPUT_PREVIEW_MAX_LENGTH,
-        toolTextSummaryMaxLength: TOOL_TEXT_SUMMARY_MAX_LENGTH,
-        toolInputLogPreviewMaxLength: TOOL_INPUT_LOG_PREVIEW_MAX_LENGTH,
-      },
-      lookup,
-    );
+    const f = makeFormatter({}, lookup);
     // Falls through to JSON default for unknown tools
     expect(f.formatToolInputForPrompt("unknown-tool", { x: 1 })).toContain(
       '{"x":1}',
@@ -250,14 +221,7 @@ describe("ToolPreviewFormatter.formatToolInputForPrompt — custom formatter sea
 
   test("custom formatter for a built-in tool overrides the built-in preview", () => {
     const lookup = makeLookup("read", "custom read summary");
-    const f = new ToolPreviewFormatter(
-      {
-        toolInputPreviewMaxLength: TOOL_INPUT_PREVIEW_MAX_LENGTH,
-        toolTextSummaryMaxLength: TOOL_TEXT_SUMMARY_MAX_LENGTH,
-        toolInputLogPreviewMaxLength: TOOL_INPUT_LOG_PREVIEW_MAX_LENGTH,
-      },
-      lookup,
-    );
+    const f = makeFormatter({}, lookup);
     // Would normally use formatReadInputForPrompt; custom overrides it
     expect(f.formatToolInputForPrompt("read", { path: "/foo.ts" })).toBe(
       "custom read summary",
@@ -265,11 +229,7 @@ describe("ToolPreviewFormatter.formatToolInputForPrompt — custom formatter sea
   });
 
   test("absent lookup preserves current behaviour for all tool types", () => {
-    const f = new ToolPreviewFormatter({
-      toolInputPreviewMaxLength: TOOL_INPUT_PREVIEW_MAX_LENGTH,
-      toolTextSummaryMaxLength: TOOL_TEXT_SUMMARY_MAX_LENGTH,
-      toolInputLogPreviewMaxLength: TOOL_INPUT_LOG_PREVIEW_MAX_LENGTH,
-    });
+    const f = makeFormatter();
     // Built-in path still works
     expect(f.formatToolInputForPrompt("read", { path: "/foo.ts" })).toContain(
       "/foo.ts",

@@ -17,11 +17,13 @@ vi.mock("node:fs", () => ({
   default: { realpathSync: (p: string) => p },
 }));
 
+import type { ExternalPathDisclosure } from "#src/denial-messages";
 import { formatDenyReason } from "#src/denial-messages";
 import { extractExternalPathsFromBashCommand as extractWithNormalizer } from "#src/handlers/gates/bash-path-extractor";
-import { formatBashExternalDirectoryAskPrompt } from "#src/handlers/gates/external-directory-messages";
 import { pathFlavorForPlatform, win32PathFlavor } from "#src/path/path-flavor";
 import { PathNormalizer } from "#src/path-normalizer";
+import { renderLegacyMessage } from "#src/presentation/legacy-message";
+import { buildBashExternalDirectoryAskPayload } from "#src/presentation/path-ask-payload";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -920,47 +922,63 @@ describe("extractExternalPathsFromBashCommand", () => {
   });
 });
 
-describe("formatBashExternalDirectoryAskPrompt", () => {
-  test("includes command, external paths, and CWD", () => {
-    const result = formatBashExternalDirectoryAskPrompt(
-      "cat /etc/hosts",
-      [{ path: "/etc/hosts" }],
-      "/projects/my-app",
+describe("the bash external-directory ask prompt", () => {
+  /** Render the ask the gate raises, through the transitional message render. */
+  function renderAsk(facts: {
+    command: string;
+    externalPaths: ExternalPathDisclosure[];
+    cwd: string;
+    agentName?: string;
+  }): string {
+    return renderLegacyMessage(
+      buildBashExternalDirectoryAskPayload({
+        ...facts,
+        agentName: facts.agentName ?? null,
+        toolName: "bash",
+      }),
     );
+  }
+
+  test("includes command, external paths, and CWD", () => {
+    const result = renderAsk({
+      command: "cat /etc/hosts",
+      externalPaths: [{ path: "/etc/hosts" }],
+      cwd: "/projects/my-app",
+    });
     expect(result).toContain("cat /etc/hosts");
     expect(result).toContain("/etc/hosts");
     expect(result).toContain("/projects/my-app");
   });
 
   test("includes agent name when provided", () => {
-    const result = formatBashExternalDirectoryAskPrompt(
-      "cat /etc/hosts",
-      [{ path: "/etc/hosts" }],
-      "/projects/my-app",
-      "my-agent",
-    );
+    const result = renderAsk({
+      command: "cat /etc/hosts",
+      externalPaths: [{ path: "/etc/hosts" }],
+      cwd: "/projects/my-app",
+      agentName: "my-agent",
+    });
     expect(result).toContain("my-agent");
   });
 
   test("shows multiple external paths", () => {
-    const result = formatBashExternalDirectoryAskPrompt(
-      "diff /etc/hosts /var/log/syslog",
-      [{ path: "/etc/hosts" }, { path: "/var/log/syslog" }],
-      "/projects/my-app",
-    );
+    const result = renderAsk({
+      command: "diff /etc/hosts /var/log/syslog",
+      externalPaths: [{ path: "/etc/hosts" }, { path: "/var/log/syslog" }],
+      cwd: "/projects/my-app",
+    });
     expect(result).toContain("/etc/hosts");
     expect(result).toContain("/var/log/syslog");
   });
 
   test("discloses the resolved target per path when it differs", () => {
-    const result = formatBashExternalDirectoryAskPrompt(
-      "cat demo-symlink-passwd /etc/hosts",
-      [
+    const result = renderAsk({
+      command: "cat demo-symlink-passwd /etc/hosts",
+      externalPaths: [
         { path: "demo-symlink-passwd", resolvedPath: "/etc/passwd" },
         { path: "/etc/hosts" },
       ],
-      "/projects/my-app",
-    );
+      cwd: "/projects/my-app",
+    });
     expect(result).toBe(
       "Current agent requested bash command 'cat demo-symlink-passwd /etc/hosts' which references path(s) outside working directory '/projects/my-app': demo-symlink-passwd (resolves to '/etc/passwd'), /etc/hosts. Allow this external directory access?",
     );

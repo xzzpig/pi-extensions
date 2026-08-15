@@ -196,6 +196,21 @@ describe("describePathGate", () => {
     });
   });
 
+  it("emits a path payload naming the matched rule", () => {
+    const resolver = makeResolver(
+      makeCheckResult({ state: "ask", matchedPattern: "*.env" }),
+    );
+    const result = describePathGate(
+      makeTcc(),
+      resolver,
+      normalizer,
+    ) as GateDescriptor;
+
+    expect(result.promptDetails.payload.kind).toBe("path");
+    expect(result.promptDetails.payload.request.value).toBe(".env");
+    expect(result.promptDetails.payload.request.matchedPattern).toBe("*.env");
+  });
+
   it("descriptor decision uses surface 'path' and the file path as value", () => {
     const resolver = makeResolver(
       makeCheckResult({ state: "deny", matchedPattern: "*.env" }),

@@ -12,7 +12,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { EXTENSION_TAG } from "#src/denial-messages";
-import { formatExternalDirectoryAskPrompt } from "#src/handlers/gates/external-directory-messages";
+import { renderLegacyMessage } from "#src/presentation/legacy-message";
+import { buildExternalDirectoryAskPayload } from "#src/presentation/path-ask-payload";
 import type { PermissionCheckResult } from "#src/types";
 import {
   ALL_PATH_BEARING_TOOLS,
@@ -44,14 +45,15 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
 // ── Regression guard: helper presence ──────────────────────────────────────
 
 describe("external_directory helper regression guard", () => {
-  it("formatExternalDirectoryAskPrompt is a callable function", () => {
-    expect(typeof formatExternalDirectoryAskPrompt).toBe("function");
+  it("the external-directory ask names the path it gates", () => {
     expect(
-      formatExternalDirectoryAskPrompt(
-        "read",
-        "/outside/file",
-        undefined,
-        "/project",
+      renderLegacyMessage(
+        buildExternalDirectoryAskPayload({
+          toolName: "read",
+          pathValue: "/outside/file",
+          cwd: "/project",
+          agentName: null,
+        }),
       ),
     ).toContain("/outside/file");
   });

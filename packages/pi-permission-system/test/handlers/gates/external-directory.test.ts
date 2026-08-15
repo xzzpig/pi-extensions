@@ -148,6 +148,23 @@ describe("describeExternalDirectoryGate", () => {
     });
   });
 
+  it("emits an external_directory payload carrying the escaped boundary", () => {
+    const result = gateUnderTest(
+      makeTcc({ input: { path: "/outside/project/file.ts" } }),
+      ["/test/agent"],
+    ) as GateDescriptor;
+
+    expect(result.promptDetails.payload.kind).toBe("external_directory");
+    expect(result.promptDetails.payload.request.value).toBe(
+      "/outside/project/file.ts",
+    );
+    expect(result.promptDetails.payload.evidence).toContainEqual({
+      label: "working directory",
+      text: "/test/project",
+      detail: null,
+    });
+  });
+
   it("carries a precomputed preCheck and an empty input (matching is done by the gate)", () => {
     const result = gateUnderTest(
       makeTcc({ input: { path: "/outside/project/file.ts" } }),

@@ -164,6 +164,25 @@ describe("describeBashExternalDirectoryGate", () => {
     });
   });
 
+  it("emits a bash_external_directory payload listing every escaping path", async () => {
+    const resolver = makeResolver(makeCheckResult("ask"));
+    const result = (await describeGate(
+      makeTcc({ input: { command: "cat /outside/a.ts" } }),
+      resolver,
+    )) as GateDescriptor;
+
+    expect(result.promptDetails.payload.kind).toBe("bash_external_directory");
+    // The command is the decision value; the paths it reaches are evidence.
+    expect(result.promptDetails.payload.request.value).toBe(
+      "cat /outside/a.ts",
+    );
+    expect(result.promptDetails.payload.evidence).toContainEqual({
+      label: "external path",
+      text: "/outside/a.ts",
+      detail: null,
+    });
+  });
+
   it("returns GateBypass when all external paths are session-covered", async () => {
     const resolver = makeResolver(
       makeCheckResult("allow", { source: "session" }),

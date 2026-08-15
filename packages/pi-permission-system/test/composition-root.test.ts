@@ -1165,3 +1165,85 @@ describe("forwarded grant-scope selection round-trip", () => {
     rmSync(childCwd, { recursive: true, force: true });
   });
 });
+
+describe("yolo grants asks synthesized after resolution", () => {
+  // The composition-stage ask→allow rewrite cannot reach a floor applied to a
+  // parsed command unit, so under yolo the wrapper and unparseable sentinels
+  // used to prompt anyway (#712). These drive the real factory end to end.
+  async function runBashCommand(
+    config: Record<string, unknown>,
+    command: string,
+  ): Promise<{ blocked: boolean; prompts: string[] }> {
+    writeGlobalConfig(config);
+    const cwd = mkdtempSync(join(tmpdir(), "pi-perm-yolo-cwd-"));
+    const pi = makeFakePi({ toolNames: ["bash"] });
+    piPermissionSystemExtension(pi as unknown as ExtensionAPI);
+
+    const prompts: string[] = [];
+    const { ctx } = makeUiCtx(cwd, prompts);
+    await fireSessionStart(pi, ctx);
+
+    const result = (await pi.fire(
+      "tool_call",
+      { toolName: "bash", toolCallId: "yolo-1", input: { command } },
+      ctx,
+    )) as { block?: true };
+
+    rmSync(cwd, { recursive: true, force: true });
+    return { blocked: result.block === true, prompts };
+  }
+
+  const permissiveBash = {
+    permission: { "*": "allow", bash: { "*": "allow" } },
+  };
+
+  it("auto-approves an indirection wrapper under yolo", async () => {
+    const outcome = await runBashCommand(
+      { ...permissiveBash, yoloMode: true },
+      "git status | xargs grep foo",
+    );
+
+    expect(outcome).toEqual({ blocked: false, prompts: [] });
+  });
+
+  it("still floors an indirection wrapper to a prompt with yolo off", async () => {
+    const outcome = await runBashCommand(
+      { ...permissiveBash, yoloMode: false, wrapperFloors: "always" },
+      "git status | xargs grep foo",
+    );
+
+    expect(outcome.blocked).toBe(false);
+    expect(outcome.prompts).toHaveLength(1);
+    expect(outcome.prompts[0]).toContain("<indirection-bash-wrapper>");
+  });
+
+  it("auto-approves an unparseable command under yolo", async () => {
+    const outcome = await runBashCommand(
+      { ...permissiveBash, yoloMode: true },
+      "> out.txt",
+    );
+
+    expect(outcome).toEqual({ blocked: false, prompts: [] });
+  });
+
+  it("blocks a denied wrapper under yolo", async () => {
+    const outcome = await runBashCommand(
+      {
+        permission: { "*": "allow", bash: { "*": "allow", "xargs*": "deny" } },
+        yoloMode: true,
+      },
+      "git status | xargs grep foo",
+    );
+
+    expect(outcome).toEqual({ blocked: true, prompts: [] });
+  });
+
+  it("blocks a denied unparseable command under yolo", async () => {
+    const outcome = await runBashCommand(
+      { permission: { "*": "allow", bash: { "*": "deny" } }, yoloMode: true },
+      "> out.txt",
+    );
+
+    expect(outcome).toEqual({ blocked: true, prompts: [] });
+  });
+});

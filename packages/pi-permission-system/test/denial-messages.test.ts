@@ -8,34 +8,29 @@ import {
   formatUserDeniedReason,
 } from "#src/denial-messages";
 import type { PermissionCheckResult } from "#src/types";
+import { makePermissionCheckResult } from "#test/helpers/presentation-fixtures";
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+// This file's subject is denial text, so both wrappers default to `deny`.
 
 function toolCheck(
   toolName: string,
   overrides: Partial<PermissionCheckResult> = {},
 ): PermissionCheckResult {
-  return {
-    toolName,
-    state: "deny",
-    source: "tool",
-    origin: "builtin",
-    ...overrides,
-  };
+  return makePermissionCheckResult(toolName, { state: "deny", ...overrides });
 }
 
 function mcpCheck(
   target: string,
   overrides: Partial<PermissionCheckResult> = {},
 ): PermissionCheckResult {
-  return {
-    toolName: "mcp",
+  return makePermissionCheckResult("mcp", {
     target,
     state: "deny",
     source: "mcp",
-    origin: "builtin",
     ...overrides,
-  };
+  });
 }
 
 function toolCtx(

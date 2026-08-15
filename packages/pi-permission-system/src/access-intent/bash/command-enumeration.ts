@@ -1,4 +1,9 @@
+import {
+	EXECUTION_HOST_TYPES,
+	forEachNestedExecution,
+} from "#src/access-intent/bash/nested-execution";
 import type { TSNode } from "#src/access-intent/bash/parser";
+import { type CommandWord, executedUnitOf } from "#src/access-intent/bash/wrapper-analysis";
 import type { BashCommandContext } from "#src/types";
 
 // ── Command type ─────────────────────────────────────────────────────────────
@@ -52,6 +57,12 @@ interface WrapperClassification {
 	 * unit ride a permissive rule.
 	 */
 	readonly unresolved: boolean;
+	/**
+	 * The command this wrapper actually runs, for display (#713). Absent for
+	 * an ordinary command and for a wrapper whose inner command cannot be
+	 * established.
+	 */
+	readonly executedUnit?: string;
 }
 
 export interface BashCommand {
@@ -78,6 +89,13 @@ export interface BashCommand {
 	 * whose inner commands were resolved.
 	 */
 	readonly payloadUnresolved?: boolean;
+	/**
+	 * The command this wrapper unit actually runs (#713). Display-only — it is
+	 * never gated on its own, so the wrapper floor still applies per
+	 * {@link payloadUnresolved}. Absent for an ordinary command and for a
+	 * wrapper whose inner command cannot be established.
+	 */
+	readonly executedUnit?: string;
 }
 
 /**
@@ -104,33 +122,17 @@ const COMMAND_ENUM_DESCEND = new Set([
 ]);
 
 /**
- * Named node types skipped during command enumeration: redirect targets,
- * comments, and heredoc bodies — none is a command to evaluate.
+ * Named node types skipped during command enumeration: comments and heredoc
+ * terminators — neither is a command nor can host one. A redirect and a
+ * heredoc body are deliberately NOT listed here. Neither is a command, but
+ * each can host a substitution that really executes, so both are
+ * {@link EXECUTION_HOST_TYPES} members instead — conflating the two questions
+ * ("is this a command?" and "can this host one?") is the bypass #741 fixed.
  * Anonymous tokens (chain operators `&&`/`;`/`|`, substitution and subshell
  * delimiters `$(`/`)`/`` ` ``/`(`) are filtered by the `isNamed` guard, not
  * listed here.
  */
-const COMMAND_ENUM_SKIP = new Set([
-	"file_redirect",
-	"heredoc_redirect",
-	"herestring_redirect",
-	"comment",
-	"heredoc_body",
-	"heredoc_end",
-	"file_descriptor",
-]);
-
-/**
- * Nested execution contexts whose interior commands really execute and must be
- * evaluated too: command substitution (`$(…)`, backticks) and process
- * substitution (`<(…)`/`>(…)`).
- * Subshells (`( … )`) are handled separately because they are also emitted
- * whole.
- */
-const NESTED_EXECUTION_CONTEXTS = new Map<string, BashCommandContext>([
-	["command_substitution", "command_substitution"],
-	["process_substitution", "process_substitution"],
-]);
+const COMMAND_ENUM_SKIP = new Set(["comment", "heredoc_end"]);
 
 /**
  * Enumerate the command units of a bash program, in source order.
@@ -182,6 +184,14 @@ function collectCommandsInto(
 	if (!node.isNamed) return;
 	if (COMMAND_ENUM_SKIP.has(node.type)) return;
 
+	if (EXECUTION_HOST_TYPES.has(node.type)) {
+		// Not a command itself, but its subtree can host one that really runs
+		// (`> $(rm x)`, `< <(rm c)`, an interpolating heredoc body). Emit only
+		// what it hosts (#741).
+		collectHostedCommands(node, out);
+		return;
+	}
+
 	if (node.type === "command") {
 		const classification = classifyWrapperCommand(node, parseProgram);
 		out.push(
@@ -191,6 +201,7 @@ function collectCommandsInto(
 				classification && {
 					kind: classification.kind,
 					unresolved: classification.unresolved,
+					executedUnit: classification.executedUnit,
 				},
 			),
 		);
@@ -213,8 +224,9 @@ function collectCommandsInto(
 			}
 		}
 		// A command's text already contains any substitution; descend its subtree
-		// to ALSO emit the inner commands of command/process substitutions.
-		collectSubstitutionCommands(node, out);
+		// to ALSO emit the inner commands of command/process substitutions and
+		// of redirect/heredoc hosts (#741).
+		collectHostedCommands(node, out);
 		return;
 	}
 
@@ -237,15 +249,22 @@ function collectCommandsInto(
 function makeUnit(
 	text: string,
 	context: BashCommandContext | undefined,
-	wrapper?: { kind: WrapperKind; unresolved?: boolean },
+	wrapper?: {
+		kind: WrapperKind;
+		unresolved?: boolean;
+		executedUnit?: string;
+	},
 ): BashCommand {
 	return {
 		text,
-		...(context !== undefined ? { context } : null),
+		...(context === undefined ? null : { context }),
 		...(wrapper
 			? {
 					wrapperKind: wrapper.kind,
 					...(wrapper.unresolved ? { payloadUnresolved: true } : null),
+					...(wrapper.executedUnit === undefined
+						? null
+						: { executedUnit: wrapper.executedUnit }),
 				}
 			: null),
 	};
@@ -396,43 +415,44 @@ function classifyWrapperCommand(
 	const { commandName, args } = readWrapperCommand(node);
 	if (commandName === undefined) return undefined;
 
+	let classification: WrapperClassification | undefined;
 	if (commandName === "eval") {
-		return classifyOpaquePayload(args, parseProgram);
-	}
-	if (SHELL_WRAPPER_NAMES.has(commandName)) {
+		classification = classifyOpaquePayload(args, parseProgram);
+	} else if (SHELL_WRAPPER_NAMES.has(commandName)) {
 		const cArgIndex = findShortFlagC(args);
-		if (cArgIndex !== undefined) {
-			return classifyOpaquePayload(args.slice(cArgIndex + 1), parseProgram);
+		if (cArgIndex === undefined) {
+			// A bare shell invocation (`sh foo.sh`) runs a script file as its
+			// command name; it is an ordinary command, not a wrapper.
+			return undefined;
 		}
-		// A bare shell invocation (`sh foo.sh`) runs a script file as its command
-		// name; it is an ordinary command, not a wrapper.
-		return undefined;
-	}
-	if (INDIRECTION_WRAPPER_NAMES.has(commandName)) {
+		classification = classifyOpaquePayload(args.slice(cArgIndex + 1), parseProgram);
+	} else if (INDIRECTION_WRAPPER_NAMES.has(commandName)) {
 		const spec = INDIRECTION_WRAPPER_SPECS[commandName] ?? {};
-		if (spec.inlinePayloadFlag !== undefined) {
-			const flagIndex = args.findIndex(
-				(arg) => arg.text === spec.inlinePayloadFlag,
-			);
-			if (flagIndex !== -1) {
-				return classifyOpaquePayload(
-					args.slice(flagIndex + 1, flagIndex + 2),
-					parseProgram,
-				);
+		if (spec.inlinePayloadFlag === undefined) {
+			classification = classifyIndirection(node, args, spec);
+		} else {
+			const flagIndex = args.findIndex((arg) => arg.text === spec.inlinePayloadFlag);
+			if (flagIndex === -1) {
+				classification = classifyIndirection(node, args, spec);
+			} else {
+				classification = classifyOpaquePayload(args.slice(flagIndex + 1, flagIndex + 2), parseProgram);
 			}
 		}
-		return classifyIndirection(node, args, spec);
-	}
-	if (EXEC_CONDITIONAL_WRAPPERS.has(commandName)) {
+	} else if (EXEC_CONDITIONAL_WRAPPERS.has(commandName)) {
 		const execFlags = EXEC_CONDITIONAL_WRAPPERS.get(commandName);
 		if (execFlags === undefined) return undefined;
 		const flagIndex = args.findIndex((arg) => execFlags.has(arg.text));
 		if (flagIndex === -1) return undefined; // bare search runs no subcommand
-		return classifyIndirection(node, args.slice(flagIndex + 1), {
-			skipPositionals: 0,
-		});
+		classification = classifyIndirection(node, args.slice(flagIndex + 1), { skipPositionals: 0 });
+	} else {
+		return undefined;
 	}
-	return undefined;
+
+	// #713: display-only field naming the command this wrapper actually runs.
+	// It is never gated on its own — the wrapper floor still applies per
+	// `payloadUnresolved` / `wrapperFloors`.
+	const executedUnit = executedUnitOf(commandUnitText(node), readCommandWords(node));
+	return executedUnit === null ? classification : { ...classification, executedUnit };
 }
 
 /**
@@ -637,15 +657,34 @@ function descendCommandChildren(
  * A substitution can nest under `command_name` (when the whole command is
  * `$(…)`) or under an argument, so the entire subtree is searched.
  */
-function collectSubstitutionCommands(node: TSNode, out: BashCommand[]): void {
+/**
+ * Enumerate the commands of every nested execution context in a subtree, each
+ * tagged with the context it was found in. The traversal itself lives in
+ * `nested-execution.ts` so the bash path surface shares one definition of what
+ * counts as a nested execution (#741); this function supplies the
+ * command-surface interpretation of each one found.
+ */
+function collectHostedCommands(node: TSNode, out: BashCommand[]): void {
+	forEachNestedExecution(node, (contextNode, context) => {
+		descendCommandChildren(contextNode, context, undefined, out);
+	});
+}
+
+/**
+ * A `command` node's words — its `command_name` followed by its arguments —
+ * each carrying its offset into the unit text {@link commandUnitText} produces
+ * (relative to the first non-`variable_assignment` child). Used to answer the
+ * upstream #713 display question via {@link executedUnitOf}.
+ */
+function readCommandWords(node: TSNode): CommandWord[] {
+	const words: CommandWord[] = [];
+	let unitStart: number | undefined;
 	for (let i = 0; i < node.childCount; i++) {
 		const child = node.child(i);
-		if (!child) continue;
-		const nestedContext = NESTED_EXECUTION_CONTEXTS.get(child.type);
-		if (nestedContext) {
-			descendCommandChildren(child, nestedContext, undefined, out);
-		} else {
-			collectSubstitutionCommands(child, out);
-		}
+		if (!child?.isNamed) continue;
+		if (child.type === "variable_assignment") continue;
+		unitStart ??= child.startIndex;
+		words.push({ text: child.text, offset: child.startIndex - unitStart });
 	}
+	return words;
 }

@@ -36,6 +36,26 @@ describe("BashProgram", () => {
       realpathSync.mockImplementation((p: string) => p);
     });
 
+    describe("operands of nested commands hosted in a redirect (#741)", () => {
+      it("projects the operand of a redirect-hosted command", async () => {
+        const program = await BashProgram.parse(
+          "echo hi > $(cat /etc/shadow)",
+          normalizer,
+        );
+        expect(program.pathRuleCandidates().map(({ token }) => token)).toEqual([
+          "/etc/shadow",
+        ]);
+      });
+
+      it("does not promote a bare inner token that names nothing", async () => {
+        const program = await BashProgram.parse(
+          "echo hi > $(rm nonexistent-file)",
+          normalizer,
+        );
+        expect(program.pathRuleCandidates()).toEqual([]);
+      });
+    });
+
     it("adds absolute and relative policy values for relative tokens", async () => {
       const program = await BashProgram.parse("cat src/foo.ts", normalizer);
       const candidates = program.pathRuleCandidates();
@@ -283,6 +303,30 @@ describe("BashProgram", () => {
       expect(program.externalPaths().map((p) => p.value())).toContain(
         "/etc/hosts",
       );
+    });
+
+    describe("operands of nested commands hosted in a redirect (#741)", () => {
+      it.each([
+        ["a redirect destination", "echo hi > $(cat /etc/shadow)"],
+        ["an appending destination", "echo hi >> $(cat /etc/shadow)"],
+        ["an input process substitution", "cat < <(cat /etc/shadow)"],
+        ["a concatenated destination", "echo hi > ${DIR}/$(cat /etc/shadow)"],
+      ])("projects an operand hosted in %s", async (_label, command) => {
+        const program = await BashProgram.parse(command, normalizer);
+        expect(program.externalPaths().map((p) => p.value())).toContain(
+          "/etc/shadow",
+        );
+      });
+
+      it("still projects a plain redirect destination", async () => {
+        const program = await BashProgram.parse(
+          "echo hi > /etc/passwd",
+          normalizer,
+        );
+        expect(program.externalPaths().map((p) => p.value())).toContain(
+          "/etc/passwd",
+        );
+      });
     });
 
     describe("bare tokens escaping the tree via symlink (#645)", () => {
@@ -895,6 +939,97 @@ describe("BashProgram", () => {
       expect(program.commands()).toEqual([{ text: "npm install" }]);
     });
 
+    describe("commands hosted in a redirect target (#741)", () => {
+      it.each([
+        ["echo hi > $(rm x)", "echo hi", "rm x"],
+        ["echo hi >> $(rm b)", "echo hi", "rm b"],
+        ["echo hi 2> `rm d`", "echo hi", "rm d"],
+        ["echo hi &> $(rm q)", "echo hi", "rm q"],
+      ])("descends into %s", async (command, enclosing, inner) => {
+        const program = await BashProgram.parse(command, normalizer);
+        expect(program.commands()).toEqual([
+          { text: enclosing },
+          { text: inner, context: "command_substitution" },
+        ]);
+      });
+
+      it("descends into a process substitution read as input", async () => {
+        const program = await BashProgram.parse("cat < <(rm c)", normalizer);
+        expect(program.commands()).toEqual([
+          { text: "cat" },
+          { text: "rm c", context: "process_substitution" },
+        ]);
+      });
+
+      it("descends into a substitution concatenated into the destination", async () => {
+        const program = await BashProgram.parse(
+          "echo hi > ${DIR}/$(rm z)",
+          normalizer,
+        );
+        expect(program.commands()).toEqual([
+          { text: "echo hi" },
+          { text: "rm z", context: "command_substitution" },
+        ]);
+      });
+
+      it("descends into a redirect on a chained command", async () => {
+        const program = await BashProgram.parse(
+          "cd /p && echo hi > $(rm x)",
+          normalizer,
+        );
+        expect(program.commands()).toEqual([
+          { text: "cd /p" },
+          { text: "echo hi" },
+          { text: "rm x", context: "command_substitution" },
+        ]);
+      });
+
+      it("leaves a plain redirect destination unenumerated", async () => {
+        const program = await BashProgram.parse(
+          "echo hi > out.txt",
+          normalizer,
+        );
+        expect(program.commands()).toEqual([{ text: "echo hi" }]);
+      });
+    });
+
+    describe("commands hosted in a heredoc body (#741)", () => {
+      it("descends into an interpolating heredoc body", async () => {
+        const program = await BashProgram.parse(
+          "cat <<EOF\n$(rm e)\nEOF",
+          normalizer,
+        );
+        expect(program.commands()).toEqual([
+          { text: "cat" },
+          { text: "rm e", context: "command_substitution" },
+        ]);
+      });
+
+      it.each([
+        ["single-quoted", "cat <<'EOF'\n$(rm e)\nEOF"],
+        ["double-quoted", 'cat <<"EOF"\n$(rm e)\nEOF'],
+      ])("leaves a %s heredoc body literal, since it does not interpolate", async (_label, command) => {
+        const program = await BashProgram.parse(command, normalizer);
+        expect(program.commands()).toEqual([{ text: "cat" }]);
+      });
+
+      it("descends into a herestring substitution", async () => {
+        const program = await BashProgram.parse("cat <<< $(rm x)", normalizer);
+        expect(program.commands()).toEqual([
+          { text: "cat <<< $(rm x)" },
+          { text: "rm x", context: "command_substitution" },
+        ]);
+      });
+
+      it("leaves a heredoc body carrying no substitution unenumerated", async () => {
+        const program = await BashProgram.parse(
+          "cat <<EOF\nplain text\nEOF",
+          normalizer,
+        );
+        expect(program.commands()).toEqual([{ text: "cat" }]);
+      });
+    });
+
     it("descends into command substitution, tagging the inner command", async () => {
       const program = await BashProgram.parse("echo $(rm -rf foo)", normalizer);
       expect(program.commands()).toEqual([
@@ -1031,7 +1166,7 @@ describe("BashProgram", () => {
       ])("flags %s as opaque and re-parses its payload as an inner unit", async (command, text, inner) => {
         const program = await BashProgram.parse(command, normalizer);
         expect(program.commands()).toEqual([
-          { text, wrapperKind: "opaque-payload" },
+          { text, wrapperKind: "opaque-payload", executedUnit: inner },
           { text: inner, context: "wrapper_payload" },
         ]);
       });
@@ -1042,7 +1177,11 @@ describe("BashProgram", () => {
           normalizer,
         );
         expect(program.commands()).toEqual([
-          { text: 'bash -c "rm -rf /"', wrapperKind: "opaque-payload" },
+          {
+            text: 'bash -c "rm -rf /"',
+            wrapperKind: "opaque-payload",
+            executedUnit: "rm -rf /",
+          },
           { text: "rm -rf /", context: "wrapper_payload" },
         ]);
       });
@@ -1053,7 +1192,11 @@ describe("BashProgram", () => {
           normalizer,
         );
         expect(program.commands()).toEqual([
-          { text: 'eval "cd /tmp && rm -rf /"', wrapperKind: "opaque-payload" },
+          {
+            text: 'eval "cd /tmp && rm -rf /"',
+            wrapperKind: "opaque-payload",
+            executedUnit: "cd /tmp && rm -rf /",
+          },
           { text: "cd /tmp", context: "wrapper_payload" },
           { text: "rm -rf /", context: "wrapper_payload" },
         ]);
@@ -1098,7 +1241,7 @@ describe("BashProgram", () => {
       ])("flags %s as an indirection wrapper and emits its inner command", async (command, text, inner) => {
         const program = await BashProgram.parse(command, normalizer);
         expect(program.commands()).toEqual([
-          { text, wrapperKind: "indirection" },
+          { text, wrapperKind: "indirection", executedUnit: inner },
           { text: inner, context: "wrapper_indirection" },
         ]);
       });
@@ -1112,6 +1255,7 @@ describe("BashProgram", () => {
           {
             text: "timeout -k 5 570 nix eval .#x --json",
             wrapperKind: "indirection",
+            executedUnit: "nix eval .#x --json",
           },
           { text: "nix eval .#x --json", context: "wrapper_indirection" },
         ]);
@@ -1130,7 +1274,11 @@ describe("BashProgram", () => {
           normalizer,
         );
         expect(program.commands()).toEqual([
-          { text: "sudo aws s3 ls", wrapperKind: "indirection" },
+          {
+            text: "sudo aws s3 ls",
+            wrapperKind: "indirection",
+            executedUnit: "aws s3 ls",
+          },
           { text: "aws s3 ls", context: "wrapper_indirection" },
         ]);
       });
@@ -1146,18 +1294,18 @@ describe("BashProgram", () => {
     });
     describe("exec-conditional wrappers (find/fd)", () => {
       it.each([
-        ["find . -exec rm {} \\;", "rm {} \\;"],
-        ["find . -execdir rm {} \\;", "rm {} \\;"],
-        ["find . -ok rm {} \\;", "rm {} \\;"],
-        ["find . -okdir rm {} \\;", "rm {} \\;"],
-        ["fd -x rm", "rm"],
-        ["fd --exec rm", "rm"],
-        ["fd -X rm", "rm"],
-        ["fd --exec-batch rm", "rm"],
-      ])("flags %s as an indirection wrapper and emits the exec'd command", async (command, inner) => {
+        ["find . -exec rm {} \\;", "rm {} \\;", "rm {}"],
+        ["find . -execdir rm {} \\;", "rm {} \\;", "rm {}"],
+        ["find . -ok rm {} \\;", "rm {} \\;", "rm {}"],
+        ["find . -okdir rm {} \\;", "rm {} \\;", "rm {}"],
+        ["fd -x rm", "rm", "rm"],
+        ["fd --exec rm", "rm", "rm"],
+        ["fd -X rm", "rm", "rm"],
+        ["fd --exec-batch rm", "rm", "rm"],
+      ])("flags %s as an indirection wrapper and emits the exec'd command", async (command, inner, executedUnit) => {
         const program = await BashProgram.parse(command, normalizer);
         expect(program.commands()).toEqual([
-          { text: command, wrapperKind: "indirection" },
+          { text: command, wrapperKind: "indirection", executedUnit },
           { text: inner, context: "wrapper_indirection" },
         ]);
       });
@@ -1169,6 +1317,32 @@ describe("BashProgram", () => {
       ])("does not flag a bare %s search", async (command) => {
         const program = await BashProgram.parse(command, normalizer);
         expect(program.commands()).toEqual([{ text: command }]);
+      });
+    });
+
+    describe("executed unit", () => {
+      it.each([
+        ['bash -c "rm -rf /"', "rm -rf /"],
+        ["sudo aws s3 rm", "aws s3 rm"],
+        ["sudo -u root aws s3 rm", "aws s3 rm"],
+        ["timeout 10 grep foo", "grep foo"],
+        ["find . -name x -exec grep foo {} \\;", "grep foo {}"],
+        ["sudo timeout 5 xargs grep foo", "grep foo"],
+      ])("names what %s actually runs", async (command, executedUnit) => {
+        const program = await BashProgram.parse(command, normalizer);
+        expect(program.commands()[0].executedUnit).toBe(executedUnit);
+      });
+
+      it("is absent for an ordinary command", async () => {
+        const program = await BashProgram.parse("grep foo", normalizer);
+        expect(program.commands()).toEqual([{ text: "grep foo" }]);
+      });
+
+      it("is absent when the wrapper names no inner command", async () => {
+        const program = await BashProgram.parse("xargs", normalizer);
+        expect(program.commands()).toEqual([
+          { text: "xargs", wrapperKind: "indirection", payloadUnresolved: true },
+        ]);
       });
     });
   });

@@ -12,7 +12,11 @@ import type { SessionApprovalRecorder } from "#src/session-approval-recorder";
 import type { PermissionCheckResult } from "#src/types";
 import type { GateDescriptor, GateResult } from "./descriptor";
 import { isGateBypass } from "./descriptor";
-import { buildDecisionEvent, deriveResolution } from "./helpers";
+import {
+  buildDecisionEvent,
+  deriveResolution,
+  resolveYoloGrant,
+} from "./helpers";
 import type { GateOutcome } from "./types";
 
 // ── GateRunner class ───────────────────────────────────────────────────────
@@ -32,6 +36,11 @@ export class GateRunner {
     private readonly recorder: SessionApprovalRecorder,
     private readonly prompter: AskEscalator,
     private readonly reporter: DecisionReporter,
+    /**
+     * Live yolo reader, read per gate so a mid-session config change takes
+     * effect — the same closure `PermissionManager` receives.
+     */
+    private readonly isYoloEnabled: () => boolean,
   ) {}
 
   /**
@@ -105,11 +114,12 @@ export class GateRunner {
       return { action: "allow" };
     }
 
-    // 2b. Yolo fast-path — a composition-stage ask→allow rewrite records
-    // origin "yolo" on the matched rule. Auto-approve without prompting,
-    // preserving today's single auto_approved review entry + decision event
-    // so review-log parity holds (#526).
-    if (check.state === "allow" && check.origin === "yolo") {
+    // 2b. Yolo fast-path — the composition-stage ask→allow rewrite (origin
+    // "yolo" on the matched rule, #526) or, under yolo, an ask synthesized
+    // after resolution (#712). Auto-approve without prompting, preserving the
+    // single auto_approved review entry + decision event so log parity holds.
+    const yoloGrant = resolveYoloGrant(check, this.isYoloEnabled());
+    if (yoloGrant) {
       this.reporter.writeReviewLog("permission_request.auto_approved", {
         ...descriptor.logContext,
         agentName,
@@ -118,10 +128,10 @@ export class GateRunner {
       this.reporter.emitDecision(
         buildDecisionEvent(
           descriptor.decision,
-          check,
+          yoloGrant,
           agentName,
           "allow",
-          deriveResolution(check.state, "allow", false, false, true),
+          deriveResolution(yoloGrant.state, "allow", false, false, true),
         ),
       );
       return { action: "allow" };

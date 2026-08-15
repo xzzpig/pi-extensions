@@ -359,11 +359,66 @@ describe("processInbox — recorded-authority resolution", () => {
         matchValues: ["git push"],
         boundaryValue: null,
       },
+      payload: {
+        kind: "forwarded",
+        request: {
+          requester: {
+            agentName: "Explore",
+            forwarded: true,
+            sessionId: "child-session",
+          },
+          surface: "bash",
+          toolName: null,
+          invokedToolName: null,
+          value: "git push",
+          matchedPattern: null,
+          commandContext: null,
+          executedUnit: null,
+        },
+        evidence: [
+          { label: "requested", text: "Allow git push?", detail: null },
+        ],
+        annotations: [],
+      },
     });
     expect(readResponse(temp, "req-ask")).toMatchObject({
       approved: true,
       state: "approved",
     });
+  });
+
+  test("keeps requester cwd and principal out of the escalated payload (#635)", async () => {
+    temp = createForwardingTempDir("parent-session");
+    temp.writeRequest({
+      id: "req-ask",
+      surface: "bash",
+      value: "git push",
+      accessIntent: makeForwardedAccessIntent({
+        requesterCwd: "/child/cwd",
+        principal: { sessionId: "child-session", agentName: "Explore" },
+      }),
+    });
+
+    const escalate = vi
+      .fn()
+      .mockResolvedValue({ approved: true, state: "approved" });
+    const server = new ForwardedRequestServer(
+      makeServerDeps({
+        forwardingDir: temp.forwardingDir,
+        policy: { resolve: () => makeCheckResult({ state: "ask" }) },
+        escalator: { escalate },
+      }),
+    );
+
+    await server.processInbox(
+      makeForwarderContext({ hasUI: true, sessionId: "parent-session" }),
+    );
+
+    // The payload is a disclosure boundary too: requester identity reaches an
+    // Authorizer through `details.forwarding`, never smuggled in as evidence.
+    const serialized = JSON.stringify(escalate.mock.calls[0][0].payload);
+    expect(serialized).not.toContain("/child/cwd");
+    expect(serialized).not.toContain("principal");
   });
 
   test("floors a request with no fields at all (fully legacy) to escalation without consulting the policy", async () => {

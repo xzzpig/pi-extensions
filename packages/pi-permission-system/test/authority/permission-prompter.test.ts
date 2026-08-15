@@ -6,6 +6,7 @@ import {
   type PermissionPrompterDeps,
   type PromptPermissionDetails,
 } from "#src/authority/permission-prompter";
+import { makePromptDetails } from "#test/helpers/prompt-details-fixtures";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -19,17 +20,20 @@ function makeAuthorizer(
   };
 }
 
+/**
+ * This file's semantic defaults over the shared structural fixture: the review
+ * entries assert `agentName` and `toolName` on a no-override call.
+ */
 function makeDetails(
   overrides?: Partial<PromptPermissionDetails>,
 ): PromptPermissionDetails {
-  return {
+  return makePromptDetails({
     requestId: "req-123",
-    source: "tool_call",
     agentName: "test-agent",
     message: "Allow read?",
     toolName: "read",
     ...overrides,
-  };
+  });
 }
 
 function makeDeps(
@@ -210,6 +214,24 @@ describe("PermissionPrompter", () => {
           toolInputPreview: null,
         }),
       );
+    });
+
+    it("does not persist the payload, so log growth stays bounded", async () => {
+      const logger = { review: vi.fn() };
+      const prompter = new PermissionPrompter(makeDeps({ logger }));
+      const authorizer = makeAuthorizer({ approved: true, state: "approved" });
+
+      await prompter.prompt(authorizer, makeDetails());
+
+      // ADR 0010 bounds what the logs accumulate; a complete payload written on
+      // every ask would defeat that bound. The log renders the payload under
+      // its own limits instead — today, as the derived `message`.
+      const [, entry] = logger.review.mock.calls[0] as [
+        string,
+        Record<string, unknown>,
+      ];
+      expect(entry).not.toHaveProperty("payload");
+      expect(entry.message).toBe("Allow read?");
     });
   });
 });

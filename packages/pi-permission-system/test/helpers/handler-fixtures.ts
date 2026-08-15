@@ -242,18 +242,20 @@ export function makeHandler(overrides?: {
   shellTools?: ShellToolsConfig;
   /** Override `wrapperFloors` in the session config (fallback by default). */
   wrapperFloors?: WrapperFloors;
+  /** Standing yolo setting for the runner's residual-ask grant (#712). */
+  yolo?: boolean;
 }) {
   const configStore =
     overrides?.shellTools !== undefined || overrides?.wrapperFloors !== undefined
       ? makeConfigStore({
           current: vi.fn().mockReturnValue({
             ...DEFAULT_EXTENSION_CONFIG,
-            ...(overrides?.shellTools !== undefined
-              ? { shellTools: overrides.shellTools }
-              : null),
-            ...(overrides?.wrapperFloors !== undefined
-              ? { wrapperFloors: overrides.wrapperFloors }
-              : null),
+            ...(overrides?.shellTools === undefined
+              ? null
+              : { shellTools: overrides.shellTools }),
+            ...(overrides?.wrapperFloors === undefined
+              ? null
+              : { wrapperFloors: overrides.wrapperFloors }),
           }),
         })
       : undefined;
@@ -310,13 +312,13 @@ export function makeHandler(overrides?: {
 
   const events = makeEvents();
   const toolRegistry =
-    overrides?.tools !== undefined
-      ? makeToolRegistry({
+    overrides?.tools === undefined
+      ? makeToolRegistry(overrides?.toolRegistry)
+      : makeToolRegistry({
           getAll: vi
             .fn()
             .mockReturnValue(overrides.tools.map((name) => ({ name }))),
-        })
-      : makeToolRegistry(overrides?.toolRegistry);
+        });
 
   const recorder = new SessionRules();
   const pipeline = new ToolCallGatePipeline(resolver, session);
@@ -327,7 +329,13 @@ export function makeHandler(overrides?: {
       .fn<AskEscalator["escalate"]>()
       .mockResolvedValue({ approved: true, state: "approved" }),
   };
-  const runner = new GateRunner(resolver, recorder, prompter, reporter);
+  const runner = new GateRunner(
+    resolver,
+    recorder,
+    prompter,
+    reporter,
+    () => overrides?.yolo ?? false,
+  );
   const handler = new PermissionGateHandler(
     session,
     toolRegistry,

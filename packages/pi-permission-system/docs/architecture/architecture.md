@@ -366,6 +366,28 @@ sequenceDiagram
     Note over Gate: No prompt needed
 ```
 
+## Prompt presentation
+
+What a prompt must show, what a renderer may elide, and what bounds its size are settled by [ADR 0011](../decisions/0011-prompt-presentation-contract.md).
+The contract in one line: **the payload is complete, and elision is a property of a render, never of the payload**.
+
+A gate emits structured facts rather than a sentence.
+The payload's `request` group — requester and forwarded-ness, tool name and invoked tool name, gate surface and matched rule, the decision-relevant value, and for bash the unit that will actually run — is never elided by any renderer.
+`evidence` is complete on the payload and elided to fit each renderer's budget, with the elision marked but uncounted; an operator must still be able to reach the complete information while the decision is pending.
+The dialog is bounded by a row budget plus a per-field width cap, the review log by its own configured limits, and the `permissions:ui_prompt` broadcast receives the `request` facts only — the narrowest renderer, because the bus is the one channel an extension observes without the operator having named it.
+Denial text is a fifth render of the same facts under one extra rule: it identifies the call rather than reproducing it, since the agent already holds its own tool input.
+
+The payload exists, and the human-facing renderers are bounded.
+Every gate emits a `PromptPayload` (`src/presentation/`), and `PromptPermissionDetails` requires one, so the six former assembly sites are gone.
+`renderPromptDialog` renders it for the inline dialog and the `select`/`input` fallback under `promptMaxRows` plus `promptFieldMaxWidth`, and `Ctrl+O` expands the dialog to the complete request.
+The cap applies to the `request` facts too: never elided means never *omitted* — a long one is shortened, marked, and reachable in full rather than dropped.
+Without that reading a bounded render is unreachable, since the decision-relevant value is itself the pathological field in the reported case ([#710]).
+A fact an adjacent line already states is not repeated — a bash ask's gate surface is its tool name, and a path ask's is the word its value line is labelled with — so the render spends a line only where it adds something.
+That is a redundancy rule, not an elision: the fact is still on screen, which is what §3 requires.
+
+The wire, the broadcast, and the review log still read the flat `message` that `renderLegacyMessage` derives from the payload, so `toolInputPreviewMaxLength` and `toolTextSummaryMaxLength` still bound the non-bash previews the payload carries as evidence.
+ADR 0011 records what each dependent item becomes under the contract.
+
 ## Two-phase checking
 
 ### Phase 1: Tool filtering (`before_agent_start`)
@@ -533,7 +555,7 @@ The bounded-delegation checkpoint reads the same facts, so a forwarded ask is ca
 
 A **cross-extension broadcast** — `permissions:ui_prompt` / `permissions:decision` on `pi.events` — receives the minimum needed to stay correlatable, because any loaded extension can observe it.
 
-Fidelity up, disclosure down.
+Maximum fidelity to the decider; minimum disclosure to the observer.
 Requester identity (`requesterCwd`, `principal`) crosses to neither: it is the serving node's own resolution input (ADR 0008 §3) and stays on the wire object, with the ask details carrying only the `forwarding` provenance.
 
 ### yolo is recorded authority
@@ -548,7 +570,12 @@ const effective = yolo
 ```
 
 This is faithful to current behavior exactly: explicit `deny` rules are not `ask`, so they pass through untouched — yolo suppresses prompts but **preserves hard denies**.
-It honors principle 5 (defaults are rules; no side-channel fallbacks): `evaluate()` runs pure over the rewritten ruleset, and the decision path loses all yolo knowledge (`shouldAutoApprovePermissionState` and `canResolveAskPermissionRequest`'s yolo arm dissolve).
+It honors principle 5 (defaults are rules; no side-channel fallbacks): `evaluate()` runs pure over the rewritten ruleset, and the prompt path loses all yolo knowledge (`shouldAutoApprovePermissionState` and `canResolveAskPermissionRequest`'s yolo arm dissolve).
+
+The ruleset is the whole story for asks the ruleset produces.
+An `ask` synthesized *after* resolution is not one: the bash wrapper floor (#481, #490) and the fail-closed `<unparseable-bash-command>` sentinel (#452) are properties of a parsed command unit, not of a pattern, so there is no rule for the rewrite to touch and they reached the prompter under yolo (#712).
+The reconciliation has exactly one home — `resolveYoloGrant` at `GateRunner`'s auto-approve fast path, the single choke point every gate passes through before escalating — so the contract "an `ask` never reaches `PermissionPrompter` under yolo" holds structurally for whatever floor is added next.
+It is the same deny-preserving shape as the rewrite: a `deny` is not an `ask`, so it matches neither arm.
 A future "disable everything" mode — overriding denies too — would be a *different*, deliberately named operation: appending a final `{ surface: "*", pattern: "*", action: "allow" }` rule (last-match-wins).
 It is not built, and it would be requested by name, never conflated with yolo.
 
@@ -730,15 +757,17 @@ src/
 │   ├── path-surfaces.ts      Static surface/tool lookup sets: `PATH_BEARING_TOOLS`, `READ_ONLY_PATH_BEARING_TOOLS`, `PATH_SURFACES`
 │   └── bash/
 │       ├── parser.ts           Lazy tree-sitter-bash parser: `TSNode` interface (exported), `getParser = memoizeAsyncWithRetry(initParser)` (exported); `warmBashParser()` / `getWarmBashParser(): TSParser | null` / `resetWarmBashParser()` (test-only) expose the resolved parser synchronously after a `before_agent_start` warm-up so the advisory bash path can decompose at gate parity
-│       ├── node-text.ts        Quote-aware AST node-text resolver: `resolveNodeText` (pure), `SKIP_SUBTREE_TYPES` (heredoc/comment sentinel set), `ARG_NODE_TYPES` (argument-value node-type set); delegates expansion nodes to `shell-variable-expansion.ts`, falling back to the node's literal text
+│       ├── node-text.ts        Quote-aware AST node-text resolver: `resolveNodeText` (pure), `SKIP_SUBTREE_TYPES` (node types whose *text* is never an argument — heredoc/comment), `ARG_NODE_TYPES` (argument-value node-type set); delegates expansion nodes to `shell-variable-expansion.ts`, falling back to the node's literal text
+│       ├── nested-execution.ts Shared nested-execution vocabulary for both bash surfaces: `NESTED_EXECUTION_CONTEXTS` (substitution node type → `BashCommandContext`), `EXECUTION_HOST_TYPES` (node types that are not commands or argument values but whose subtree can host a command that really runs — redirects, heredoc/herestring bodies), and `forEachNestedExecution(node, visit)`, which searches strictly within a subtree and does not descend past a context it finds. Constraint: the command surface and the path surface must share one definition of a nested execution, or a command gated on one surface escapes the other (#741)
 │       ├── shell-variable-expansion.ts Pure plain-reference resolver: `resolvePlainVariableExpansion(node): string | null` — `$HOME`/`${HOME}` → `os.homedir()`, `$PWD`/`${PWD}` → `.` (the base-relative marker, so the resolver's existing `resolveBase` applies it after `cd` folding). Plainness is structural (exactly one `variable_name` child, otherwise only delimiters), so an operator form (`${HOME:-/tmp}`, `${#HOME}`) is rejected without enumerating bash's expansion operators. Constraint: the resolvable set is closed at `HOME`/`PWD` — widening it is an ADR 0009 amendment, and the expansion vocabulary lives only here, never in the classifiers
-│       ├── token-collection.ts Bash argument/flag tokenizer: `collectPathCandidateTokens`, `collectCommandTokens`, `collectRedirectTokens`, `extractCommandName` (exported); private `PATTERN_FIRST_COMMANDS` table and pattern/generic collectors, plus `collectEmbeddedOptionValues` — emits the inline value of an `--opt=value` argument as its own token, read from the argument nodes (a pattern-first collector classifies a flag and never emits it), so an option-embedded path is classified by the ordinary shape rules without per-command option tables (#645)
-│       ├── command-enumeration.ts Bash command enumerator: `collectCommands` (exported) + the descend/skip/wrapper tables; owns the `BashCommand` interface including the `wrapperKind` discriminant (`"opaque-payload"` for `bash -c`/`eval`, `"indirection"` for sudo/env/xargs/find -exec/…); strips leading `variable_assignment` prefixes from command units
+│       ├── token-collection.ts Bash argument/flag tokenizer: `collectPathCandidateTokens`, `collectCommandTokens`, `collectRedirectTokens`, `extractCommandName` (exported); private `PATTERN_FIRST_COMMANDS` table and pattern/generic collectors, plus `collectEmbeddedOptionValues` — emits the inline value of an `--opt=value` argument as its own token, read from the argument nodes (a pattern-first collector classifies a flag and never emits it), so an option-embedded path is classified by the ordinary shape rules without per-command option tables (#645). Also projects the operands of a command hosted in a redirect destination or an interpolating heredoc body; the `EXECUTION_HOST_TYPES` dispatch sits above the `SKIP_SUBTREE_TYPES` check because `heredoc_body` is in both sets and the host reading must win — its prose stays out of the path surface while its substitution's operands enter it (#741)
+│       ├── command-enumeration.ts Bash command enumerator: `collectCommands` (exported) + the descend/skip tables and the node→`CommandWord` adapter; owns the `BashCommand` interface including the `wrapperKind` discriminant and the display-only `executedUnit`; strips leading `variable_assignment` prefixes from command units. Constraint: `COMMAND_ENUM_SKIP` holds only genuinely inert types (`comment`, `heredoc_end`) — a node that is not a command but can host one belongs in `EXECUTION_HOST_TYPES`, and conflating the two questions is the bypass #741 fixed
+│       ├── wrapper-analysis.ts Pure word-based wrapper interpretation: `classifyWrapperWords` (the `WrapperKind` discriminant — `"opaque-payload"` for `bash -c`/`eval`, `"indirection"` for sudo/env/xargs/find -exec/…) and `executedUnitOf` (the command a wrapper actually runs), over the shared wrapper vocabulary. Constraint: both answers read one vocabulary — the shape that floors a unit to `ask` and the shape that names its inner command cannot drift. `executedUnitOf` is display-only and fails to `null` rather than to a guess, so it never weakens a gate
 │       ├── bash-path-resolver.ts  `BashPathResolver` class (constructed with a `PathNormalizer` and an optional `workdir`): `resolve(rootNode): ResolvedBashPaths` walks the AST once, tagging each path-candidate token with the `EffectiveBase` in force at its position, and returns `{ externalPaths: AccessPath[], ruleCandidates: BashPathRuleCandidate[] }`; routes every path through the injected `PathNormalizer`. Both projections fall back to the shared `probeBareToken` for a token the shape gates reject, admitting it only when `normalizer.entryExists` confirms it names a real entry and the effective base is known; `projectRuleCandidates` passes `this.normalizer.flavor` so a win32 backslash-relative token is recognized like its `/` form; `projectExternalPaths` decides outside-cwd from the `AccessPath`'s canonical boundary via `collectIfExternal`, treating a literal-only bash token as unconditionally external. Constraint: consults no ruleset — candidacy is a filesystem question and the decision belongs to the gates (ADR 0009). The subtlest region in the package
 │       ├── msys-bash-tokens.ts  Pure win32 bash-token shape classifier: `classifyWin32BashToken(token): BashTokenShape` (`device` | `drive-mount` with translated `windowsPath` | `posix-absolute` | `plain`); no filesystem, no `process.platform` read; the return type of `PathFlavor.bashTokenShape`, consumed by `PathNormalizer.forBashToken`/`interpretBashCdTarget`
 │       ├── token-classification.ts Pure token classifiers: `classifyTokenAsPathCandidate` (strict: `/`, `~/`, `..`, Windows drive-letter), `classifyTokenAsRuleCandidate(token, flavor)` (broader: also dot-files, relative paths, the drive-letter backslash form, and — under the win32 flavor — a backslash-relative token), and `classifyBareTokenCandidate(token)` (prelude-only: returns any token whose shape does not rule out a path, for the resolver to probe). Constraint: policy-free — no classifier consults the ruleset (ADR 0009)
 │       ├── sync-commands.ts    `parseBashCommandsSync(command): BashCommand[] | null` — warm-parser-backed synchronous command enumeration; returns `null` in the pre-warm window so the advisory bash path falls back to whole-string matching
-│       └── program.ts         Born-ready `BashProgram` value object: `parse(command, normalizer, options?)` eagerly resolves all three slices at construction; parameter-free getters `commands()`, `externalPaths(): AccessPath[]`, `pathRuleCandidates()`. `commands()` splits the chain AND descends into command/process substitutions and subshells, tagging each nested command with its execution `context`, stripping any leading `variable_assignment` prefix, and flagging wrapper units with a `wrapperKind` so their decision floors to `ask`
+│       └── program.ts         Born-ready `BashProgram` value object: `parse(command, normalizer, options?)` eagerly resolves all three slices at construction; parameter-free getters `commands()`, `externalPaths(): AccessPath[]`, `pathRuleCandidates()`. `commands()` splits the chain AND descends into command/process substitutions and subshells — wherever they appear, including a redirect destination and an interpolating heredoc body (#741) — tagging each nested command with its execution `context`, stripping any leading `variable_assignment` prefix, and flagging wrapper units with a `wrapperKind` so their decision floors to `ask`
 ├── handlers/                 Handler classes with narrow constructor injection
 │   ├── index.ts              Barrel re-exports
 │   ├── lifecycle.ts          SessionLifecycleHandler (session: `PermissionSession` + resolver + serviceLifecycle + audit); writes the decision-audit summary on `session_shutdown`
@@ -748,20 +777,19 @@ src/
 │   └── gates/               Pure descriptor factories + runner
 │       ├── types.ts          GateOutcome, ToolCallContext
 │       ├── descriptor.ts     GateDescriptor (with DenialContext), GateBypass, GateResult types
-│       ├── runner.ts         GateRunner class — constructed with `ScopedPermissionResolver`, `SessionApprovalRecorder`, `AskEscalator` (the single-method ask-escalation seam), plus `DecisionReporter`; `run(gate, agentName, toolCallId)` dispatches null / bypass / descriptor
+│       ├── runner.ts         GateRunner class — constructed with `ScopedPermissionResolver`, `SessionApprovalRecorder`, `AskEscalator` (the single-method ask-escalation seam), `DecisionReporter`, plus a live `isYoloEnabled` reader (read per gate; the sole place a post-resolution ask is reconciled with yolo); `run(gate, agentName, toolCallId)` dispatches null / bypass / descriptor
 │       ├── tool-call-gate-pipeline.ts `ToolCallGateInputs` interface (`getActiveSkillEntries`, `getInfrastructureReadDirs`, `getToolPreviewLimits`, `getPathNormalizer`, `getShellToolAliases`) + `ToolCallGatePipeline` class — constructed with `ScopedPermissionResolver` + `ToolCallGateInputs`; owns bash-command extraction + the single `BashProgram.parse`, `ToolPreviewFormatter` construction, the infra-dir list, the six gate producers, and the run loop; `evaluate(tcc, runner)` returns the first block outcome or allow
 │       ├── skill-input-gate-pipeline.ts `SkillInputGateInputs` + `GateNotifier` interfaces + `SkillInputGatePipeline` class — owns the raw `checkPermission` pre-check, deny notify, `describeSkillInputGate` descriptor, request-id mint, and `runner.run`; `evaluate(skillName, agentName, notifier, runner)` makes the `input` path symmetric with the `tool_call` path
-│       ├── helpers.ts        deriveDecisionValue, deriveResolution, buildDecisionEvent
+│       ├── helpers.ts        deriveDecisionValue, deriveResolution, buildDecisionEvent, resolveYoloGrant (the standing yolo grant covering a resolved check — a ruleset-rewritten allow or, under yolo, a residual ask)
 │       ├── skill-read.ts     describeSkillReadGate - pure descriptor factory
 │       ├── skill-input.ts    describeSkillInputGate - pure descriptor factory; takes a pre-computed check result so the runner reuses the caller's check
 │       ├── external-directory.ts describeExternalDirectoryGate - pure descriptor/bypass factory; builds an `AccessPath`, delegates policy resolution to `resolveExternalDirectoryPolicy`, uses `accessPath.boundaryValue()` for the outside-CWD boundary and infra-read checks, and discloses `accessPath.resolvedAlias()` when it names a location distinct from the typed path
-│       ├── external-directory-messages.ts External-directory ask-prompt formatting; both tool and bash prompts append `(resolves to '<canonical>')` via the shared `resolvesToSuffix` helper when the resolved path differs from the displayed one
 │       ├── external-directory-policy.ts Shared external-directory policy check for both gates: `resolveExternalDirectoryPolicy(path, resolver, agentName)` emits an `access-path` `AccessIntent` on the `external_directory` surface; `selectUncoveredExternalPaths(paths, resolver, agentName)` resolves a set, keeps the not-allowed entries, and selects the worst via `pickMostRestrictive`
 │       ├── bash-external-directory.ts describeBashExternalDirectoryGate - pure descriptor/bypass factory over the injected `BashProgram` (`externalPaths()`); delegates the per-path alias matching and worst-uncovered selection to `selectUncoveredExternalPaths`
 │       ├── bash-path.ts      describeBashPathGate - pure descriptor/bypass factory for bash path rules over the injected `BashProgram` (`pathRuleCandidates()`); evaluates each candidate's `AccessPath` via an `access-path` `AccessIntent` and selects the worst uncovered token via `pickMostRestrictive`, keeping the raw token for prompts/logs/approvals and `path.value()` for the approval pattern
 │       ├── candidate-check.ts `pickMostRestrictive` - pure deny > ask > allow selection over PermissionCheckResults (first-wins on ties); shared by the bash gates and the external-directory policy helper
 │       ├── bash-path-extractor.ts Thin facade (`extractExternalPathsFromBashCommand`) over `BashProgram`
-│       ├── bash-command.ts   `resolveBashCommandCheck` - pure combiner over caller-supplied `BashCommand[]` units, checks each unit on the `bash` surface, tags the winning result with the offending command's execution `context`, selects via `pickMostRestrictive`; when empty, resolves the whole command only for a trivially-empty command and otherwise fails closed to a synthetic `ask` with the `<unparseable-bash-command>` sentinel
+│       ├── bash-command.ts   `resolveBashCommandCheck` - pure combiner over caller-supplied `BashCommand[]` units, checks each unit on the `bash` surface, tags the winning result with the offending command's execution `context`, selects via `pickMostRestrictive`; when empty, resolves the whole command only for a trivially-empty command and otherwise returns an explicit `deny` covering it, else fails closed to a synthetic `ask` with the `<unparseable-bash-command>` sentinel
 │       ├── path.ts           describePathGate - pure descriptor factory for cross-cutting path rules; builds an `AccessPath` and emits an `access-path` `AccessIntent` on the `path` surface so it matches the canonical (symlink-resolved) form like `external_directory`
 │       ├── tool.ts           describeToolGate - pure descriptor factory for the per-tool gate; for path-bearing built-in tools the pipeline builds an `AccessPath` and emits an `access-path` intent on the tool-name surface so per-tool rules match lexical ∪ canonical, and the session-approval value derives from `accessPath.value()`; bash/MCP/extension tools keep the raw `tool` intent
 │       └── index.ts          Barrel re-exports
@@ -794,7 +822,16 @@ src/
 ├── system-prompt-sanitizer.ts Narrow Available tools section + filter guidelines to the active set
 ├── skill-prompt-sanitizer.ts  Skill prompt filtering by policy
 ├── denial-messages.ts         Centralized denial message formatter - DenialContext type, EXTENSION_TAG, formatDenyReason/formatUnavailableReason/formatUserDeniedReason
-├── permission-prompts.ts      User-facing ask-prompt formatting + pre-check error messages
+├── permission-prompts.ts      Agent-facing pre-check reasons (missing tool name, unknown tool) refused before any permission check runs
+├── presentation/             Prompt presentation: the payload a gate emits, and the renders over it (ADR 0011)
+│   ├── prompt-payload.ts     `PromptPayload` (the `kind` discriminant, the `request` invariant core, the complete `evidence` list, the `annotations` slot) + `localRequester`/`findEvidence`/`allEvidence`. Constraint: the payload is complete by contract — it never truncates and never decides what a human sees, so elision is a property of a render (ADR 0011 §2)
+│   ├── tool-ask-payload.ts   `buildToolAskPayload` — the bash, MCP, and generic-tool asks; carries the invoked tool name when a shell alias re-exposes bash (#574) and the wrapper's executed unit (#713)
+│   ├── path-ask-payload.ts   `buildPathAskPayload`, `buildExternalDirectoryAskPayload`, `buildBashExternalDirectoryAskPayload` — each escaping path carries its canonical alias as that evidence entry's `detail`, so a bounded render cannot show a path while eliding what it resolves to
+│   ├── skill-ask-payload.ts  `buildSkillAskPayload`, `buildSkillPathAskPayload` — the skill is the decision-relevant value (it is what the policy names); a skill read carries the path it was reached through as evidence
+│   ├── forwarded-ask-payload.ts `buildForwardedAskPayload` — the serving node's payload for an ask forwarded up from a subagent; carries the child's still-pre-rendered sentence as one evidence entry until the payload replaces `message` on the wire
+│   ├── dialog-renderer.ts    `renderPromptDialog(payload, budget, paint)` — the bounded render for the inline dialog and the `select`/`input` fallback: aligned one-fact-per-line layout, a per-field width cap, a row budget over the evidence, and whole-token highlighting of the flagged element. Also `RenderBudget`/`DEFAULT_RENDER_BUDGET`/`resolveRenderBudget` (the configured budget) and `completeViewBudget` (the complete view). Constraint: the row budget bounds evidence and the field cap bounds the core — a core fact is shortened, never dropped (ADR 0011 §3 over §5)
+│   ├── line-fitting.ts       `fitLinesToWidth` — wrap-then-truncate to a terminal width, so each line is one visual row; shared by the `ctx.ui.custom` dialog, whose contract requires it, and by the renderer, which cannot count rows before wrapping
+│   └── legacy-message.ts     `renderLegacyMessage(payload)` — the single producer of the flat `message` string the wire, the broadcast, and the review log still read, rendered from the payload alone. Transitional: it goes when the last `message` reader does
 ├── tool-input-preview.ts              Pure tool-input text utilities (truncation, line counting, count formatting), serialization + default constants; `serializeToolInputPreview` (prompt, unredacted) and `serializeRedactedToolInputPreview` (log) are separate entry points because the input is flattened to a string before the writer sees its keys
 ├── tool-input-prompt-formatters.ts    Pure per-tool prompt formatters (edit/write/read) + getPromptPath helper
 ├── tool-preview-formatter.ts          ToolPreviewFormatter class - config-dependent prompt + log formatting; seam-first dispatch consults ToolInputFormatterLookup before built-in switch
@@ -837,6 +874,200 @@ src/
 └── types.ts                   Core type definitions; the config-shape types (PermissionState, FlatPermissionConfig, etc.) are re-exported from config-schema.ts; domain type guards `isPermissionState`, `isDenyWithReason`
 ```
 
+## Improvement roadmap — Phase 13: The prompt-presentation seam
+
+### Findings (planned 2026-08-15)
+
+The declared candidate is [ADR 0011](../decisions/0011-prompt-presentation-contract.md) (the prompt-presentation contract), whose Staging section assigns its decomposition to this planning pass.
+The cause is a structural fusion of presentation with decision-making, recorded in the [Prompt presentation](#prompt-presentation) section above: six sites assemble a flat prompt `message` string (`formatAskPrompt`'s three branches, the skill prompts, the external-directory prompts, `formatPathAskPrompt`, the per-tool previews, and the parent-side forwarded prefix) that travels unchanged to every consumer — the inline dialog, the `select`/`input` fallback, the review log, the `permissions:ui_prompt` broadcast, and the forwarded wire.
+Because the payload is a pre-rendered sentence, elision is a payload property rather than a render property: the bash branch has no cap, nothing bounds height ([#710]), a forwarded ask is assembled twice under two configs, and every denial path echoes unbounded input into the agent's context.
+The phase implements the contract's staged first step — the complete payload and the renderer seam — so [#710] is fixed by construction and [#713] becomes a conformance requirement of the payload's invariant core rather than a separate enhancement.
+
+Corroboration (fallow + sweeps, 2026-08-15): health 88 (A; deductions are unit size and coupling), dead code 0, duplication 0.2% (the documented intentional `literalTextOf`/`resolveNodeText` pair plus one new 16-line internal clone in `token-collection.ts`).
+The repeated-discriminator sweep found no new family — survivors are validation-edge `typeof` guards, per-node AST dispatch, and boundary translation, idiomatic per the taxonomy.
+The `value-guards.ts` refactoring target remains rejected (healthy high-fan-in leaf).
+The craftsmanship scout re-refuted all three fallow giant-test flags (nested `describe` trees of small behavior-named tests, unchanged since Phase 12) and found one concentrated cluster: six duplicated local test factories (`PermissionCheckResult` builders and `ToolPreviewFormatter` options literals) across `denial-messages.test.ts`, `permission-prompts.test.ts`, and `tool-preview-formatter.test.ts` — exactly the presentation test files the spine rewrites, so the extraction rides Step 1 as a tidy-first prep commit.
+Directory check: the spine rewrites the ~8 cohesive presentation modules at the flat `src/` root, so per the recorded reorg convention this phase seeds `src/presentation/` and the touched modules reach their final home the first time.
+
+Open-issue sweep dispositions (user-decided):
+
+- [#710] — adopted as Step 2 (the bounded local renderers are its fix by construction); closed with it.
+- PR [#738] (highlight the flagged element in TUI prompts) — swept in during Step 1 planning, having been filed the day before this phase was scoped.
+  Highlighting is a **render** concern under ADR 0011, so its intent is adopted in Step 2's dialog renderer with authorship credited, and the PR closes as superseded rather than being rebased — the same disposition [#716] received.
+  Both were adopted and credited when Step 2 landed.
+- [#713] — its inner-command fact enters the payload in Step 1 and becomes visible in every render in Step 2 (the `runs` line); it closed with Step 2.
+- [#721] / [#735] — adopted as Step 5: out-of-process forwarding liveness; [#735]'s scenario 1 (dead parent) is resolved by it, while scenario 2 (a parent whose turn is occupied) stays with the [#722] diagnosis, which remains open and out of scope.
+- [#726] — adopted as Step 6 (decision provenance).
+- [#732] — adopted as Step 7 (model-judge `agentDir` fix).
+- [#655] — adopted as Step 8 (`deriveApprovalPattern` flavor injection).
+- [#620] — deferred with recorded rationale: one phase old, non-gating, the `registerAuthorizer` seam it consumes exists, and the phase's capacity goes to the presentation spine; [#698] and [#706] express user demand for the same capability and fold into it when it is scheduled.
+- [#519] — kept open with recorded rationale (not a silent re-defer): still externally blocked on Pi SDK `UIContext` evolution; it closes or schedules when the SDK ships the capability.
+- [#639] — deferred to a later phase: first sweep since filing, and its policy-model design budget does not fit alongside the presentation spine.
+- [#742] — swept out of scope this phase by composition decision (first explicit sweep); it is the last member of the #306/#741 nested-command bypass family and is a strong candidate for the next phase's spine or an independent step.
+- Feature issues [#736], [#720], [#691], [#688], [#687], [#686], [#680], [#658], [#610], [#609], [#604], [#603], [#699] — out of scope for a structural phase; [#654] and [#648] become downstream packages over the annotator and evidence-formatter seams per ADR 0011 §8, which are themselves deferred until the payload exists.
+
+Trajectory: Phase 12's maximum step priority was 20; this phase's is 20 (Step 1).
+No decline, so the regular rotation continues.
+
+### Health metrics
+
+| Metric                                                                  | Baseline (2026-08-15) | Phase 13 target |
+| ----------------------------------------------------------------------- | --------------------- | --------------- |
+| Flat-assembler sites (`formatAskPrompt` references in `src/`)           | 4                     | 0 ✅            |
+| Forwarded-wire `message: string` field (`permission-forwarding.ts`)     | 1                     | 0               |
+| Broadcast `message: string` field (`permission-ui-prompt.ts`)           | 1                     | 0               |
+| `src/presentation/` domain directory present                            | 0                     | 1 ✅            |
+| Forwarding-liveness module present (`authority/forwarding-liveness.ts`) | 0                     | 1               |
+| `decidedBy` provenance sites in `src/`                                  | 0                     | ≥ 1             |
+| Model-judge resolves `agentDir` via `getAgentDir` (`config-loader.ts`)  | 0                     | ≥ 1             |
+| Ambient `node:path` import in `session-rules.ts`                        | 1                     | 0               |
+| fallow health score                                                     | 88 (A)                | ≥ 88            |
+| Production duplication                                                  | 0.2%                  | ≤ 0.2%          |
+| Dead exports                                                            | 0                     | 0               |
+
+Recompute commands (run from the repo root):
+
+- Flat-assembler sites: `grep -rn "formatAskPrompt" packages/pi-permission-system/src --include="*.ts" | wc -l`
+- Wire message field: `grep -c "message: string" packages/pi-permission-system/src/authority/permission-forwarding.ts`
+- Broadcast message field: `grep -c "message: string" packages/pi-permission-system/src/permission-ui-prompt.ts`
+- Presentation directory: `ls packages/pi-permission-system/src | grep -c presentation`
+- Liveness module: `ls packages/pi-permission-system/src/authority | grep -c "forwarding-liveness"`
+- Provenance sites: `grep -rn "decidedBy" packages/pi-permission-system/src | wc -l`
+- Model-judge agentDir: `grep -c "getAgentDir" packages/pi-permission-model-judge/src/config-loader.ts`
+- Ambient path import: `grep -c "node:path" packages/pi-permission-system/src/session-rules.ts`
+- Health/duplication/dead exports: `pnpm fallow health --score --workspace @gotgenes/pi-permission-system` / `pnpm fallow dupes --workspace @gotgenes/pi-permission-system` / `pnpm fallow dead-code --workspace @gotgenes/pi-permission-system`
+
+The presentation-directory, liveness-module, `decidedBy`, and `getAgentDir` rows grep for names the phase has not created yet; the step that creates each (Steps 1, 5, 6, 7 respectively) must either use the roadmap's name or update the metric row in the same commit.
+
+### Steps
+
+#### ✅ Step 1: `PromptPayload` and its builders — the assembly sites become one payload ([#744])
+
+**Cause:** presentation is fused with decision-making — each gate renders its facts into a sentence at the point of decision, so no consumer downstream can render under its own budget; the flat `message` string is the fusion made concrete.
+
+- **Smell:** Category C (coupling/boundary flaw — the payload/render boundary does not exist).
+- **Target:** new `src/presentation/prompt-payload.ts` (the `PromptPayload` type per ADR 0011 §2 — `request` invariant core, `evidence`, `annotations` slot — plus builders); `permission-prompts.ts`, `handlers/gates/external-directory-messages.ts`, and the skill-prompt formatting migrate into `src/presentation/` as payload builders; the gate descriptors emit the payload alongside the facts they already compute; `PromptPermissionDetails` carries it; `message` is derived *from* the payload during the transition (lift-and-shift, no consumer changes yet).
+  The payload's `request.executedUnit` carries the inner command of an unstrippable wrapper — [#713]'s fact, entering here.
+  Tidy-first prep commit: extract the scout's duplicated fixtures (`makePermissionCheckResult`, a shared `ToolPreviewFormatter` factory) into `test/helpers/` and migrate the three presentation test files.
+- **Outcome:** every ask has a complete structured payload; `grep -rn "formatAskPrompt" packages/pi-permission-system/src --include="*.ts" | wc -l` goes 4 → 0; `ls packages/pi-permission-system/src | grep -c presentation` goes 0 → 1; behavior is unchanged (the derived `message` is byte-compatible or near-compatible, pinned by existing tests).
+- **Landed:** both metrics hit their targets, and `message` is byte-identical — every former assembler's string assertion now runs against `renderLegacyMessage`, which reads the payload alone, so the suite is the proof the payload is complete.
+  `PromptPermissionDetails.payload` is **required**, making "every ask carries a complete payload" a compile-time guarantee rather than a convention.
+  Planning found a **sixth** assembler the issue and ADR 0011 both omit — `formatPathAskPrompt`, with two consumers — and found that [#713]'s fact had no source at all: `classifyWrapperCommand` only flagged a wrapper, so the new `wrapper-analysis.ts` resolves what one actually runs.
+  Three departures from ADR 0011 §2's illustrative type are documented at their declarations: a `kind` discriminant, `| null` over `| undefined` (the payload goes on the JSON wire in Step 3), and `commandContext` as a request fact.
+- **Impact 5 / Risk 2 / Priority 20.**
+
+Release: batch "presentation-payload"
+
+#### ✅ Step 2: Bounded local renderers — the dialog and fallback render the payload under a budget ([#710])
+
+**Cause:** same cause, consumed at the human's decision surface — with no renderer layer, the dialog shows whatever the assembler produced, so a subagent's oversized tool input takes over the parent's viewport and the operator decides blind or scrolls away the transcript.
+
+- **Smell:** Category C, with the user-visible symptom filed as the [#710] bug.
+- **Target:** new `src/presentation/dialog-renderer.ts` rendering the payload for the inline TUI dialog and the `select`/`input` fallback under a row budget plus a per-field width cap (ADR 0011 §5), with marked elision and a reachable complete view (§4); [#716]'s aligned one-fact-per-line rendering intent adopted here; the invariant core (§3) — including `executedUnit` — always visible, which closes [#713]; the row-budget config field follows the established `config-schema.ts` → `extension-config.ts` → `mergeUnifiedConfigs()` path (the #332/#347 drop class) with `pnpm run gen:schema`.
+- **Outcome:** a forwarded ask with pathological input renders within the budget with the complete view reachable; [#710] and [#713] close; the local prompt path no longer reads `details.message`.
+- **Landed:** the reported ask — a 200-line here-string, measured at 202 rows locally and 205 forwarded, identically at widths 80/120/160 — renders inside the 24-row default with its request facts intact.
+  Planning settled the reading that makes that possible: §3's "never elided" means never *omitted*, so the field cap applies to the core and §5's own here-string rationale is coherent with it.
+  The row budget therefore bounds evidence and the field cap bounds the core, with an entry admitted whole or dropped.
+  `Ctrl+O` gained the dialog's own expansion alongside its host forward ([#642]) rather than a second binding, and the hint names it only when the render dropped something.
+  PR [#738]'s highlight target is derived from the payload rather than carried as a `PromptPermissionDetails` field, so it cannot drift from the rendered text.
+- **Impact 5 / Risk 3 / Priority 15.**
+
+Release: batch "presentation-payload"
+
+#### Step 3: The cross-boundary swap — payload replaces `message` on the wire and the broadcast ([#745])
+
+**Cause:** same cause at the two cross-boundary contracts — the forwarded wire relays the child's prose (assembled under the child's config) and the broadcast ships the full sentence to any unconsented observer, so consistency across local and forwarded asks is structurally unattainable and the bus over-discloses.
+
+- **Smell:** Category C (boundary flaw), with the ADR 0011 §6 broadcast narrowing as the disclosure fix.
+- **Target:** `src/authority/permission-forwarding.ts` (the request carries the payload, `message` removed), `src/authority/approval-escalator.ts` (child serializes it), `src/authority/forwarded-request-server.ts` (serving renders the child's facts under the parent's budget; a version-skewed request without a payload renders from whatever fields it carries, never empty — ADR 0011 §9), `src/permission-ui-prompt.ts` (broadcast narrowed to the `request` facts; forwarded provenance retained in full), soft-deprecation of `toolInputPreviewMaxLength`/`toolTextSummaryMaxLength` via the config-issue channel (§5).
+  Breaking: `feat!:` with a migration note naming the payload fields that supersede `message` on both contracts.
+- **Outcome:** `grep -c "message: string"` goes 1 → 0 in both `permission-forwarding.ts` and `permission-ui-prompt.ts`; a forwarded ask renders identically in kind to a local one; the bus discloses request facts and verdicts only.
+- **Impact 4 / Risk 3 / Priority 12.**
+
+Release: batch "presentation-contract"
+
+#### Step 4: The agent-facing and review-log renderers ([#746])
+
+**Cause:** the same unbounded payload that took over the viewport is echoed verbatim into the agent's context on every denial (the human's constraint is rows; the agent's is tokens), and the review log persists prompt wording as a side effect of assembly rather than as a configured render.
+
+- **Smell:** Category C, plus the log-growth concern of `docs/decisions/0010-permission-log-secret-exposure.md`.
+- **Target:** `denial-messages.ts` migrates to `src/presentation/agent-renderer.ts` under ADR 0011 §7 — the agent renderer identifies the call (surface, matched pattern, verdict, the human's typed reason) and never reproduces its input; the review-log write path (`permission-prompter.ts` / `session-logger.ts`) renders the payload under its existing configured limits instead of persisting `message`.
+- **Outcome:** denial text is structurally bounded (no raw-command interpolation on any denial path); the review log's growth is a configured decision; key-name redaction unchanged.
+- **Impact 3 / Risk 2 / Priority 12.**
+
+Release: batch "presentation-contract"
+
+#### Step 5: Out-of-process forwarding liveness ([#721], fixes [#735] scenario 1)
+
+**Cause:** the forwarding timeout conflates "a human is deliberating" with "nobody is home" — for an out-of-process child (which shares no `globalThis` with its parent) the 10-minute `PERMISSION_FORWARDING_TIMEOUT_MS` is the only signal, so every ask forwarded to a dead parent burns the full timeout and reports a denial the user never made.
+The in-process serving registry (#719) already made the two distinguishable for in-process children; the filesystem channel lacks the equivalent.
+
+- **Smell:** Category C (lifecycle/boundary flaw at the cross-process edge).
+- **Target:** new `src/authority/forwarding-liveness.ts` (a filesystem liveness signal — [#721] names two candidate mechanisms, claim artifact or serving heartbeat; `/plan-issue` picks on ergonomics), `src/authority/forwarding-manager.ts` (serving node maintains the signal), `src/authority/approval-escalator.ts` (child fast-fails on absent/stale liveness after a short grace, with a path-naming `denialReason` and `confirmationUnavailable`, matching the in-process judgement's safe direction).
+- **Outcome:** a child forwarding to a target no live session is draining abandons in seconds instead of 600, resolving [#735] scenario 1; scenario 2 stays with [#722]; `ls packages/pi-permission-system/src/authority | grep -c "forwarding-liveness"` goes 0 → 1.
+- **Impact 4 / Risk 3 / Priority 12.**
+
+Release: independent
+
+#### Step 6: Decision provenance — `decidedBy` on permission decisions ([#726])
+
+**Cause:** the decision path knows what decided (human prompt, session approval, config rule, authorizer link, auto-allow, timeout) and discards it before the log write, so an audit cannot distinguish a human approval from an auto-approval — the decision-provenance principle: record what decided and on what basis, not only the outcome.
+
+- **Smell:** Category C (a fact established at the decision point dies before its consumer).
+- **Target:** a `decidedBy` discriminated union threaded from the decision sites (`GateRunner`'s fast paths, `PermissionPrompter`, the `Authorizer` chain, `ForwardedRequestServer`) into the review-log entries and decision events; lands after Step 4 so the provenance fields ride the new log renderer rather than the retiring `message` shape.
+- **Outcome:** every `permission_request.*` and decision event names its decider with enough detail to reconstruct the decision; `grep -rn "decidedBy" packages/pi-permission-system/src | wc -l` goes 0 → ≥ 1.
+- **Impact 3 / Risk 1 / Priority 15.**
+
+Release: independent
+
+#### Step 7: Model-judge honors `PI_CODING_AGENT_DIR` ([#732])
+
+**Cause:** `pi-permission-model-judge` recomputes the global config scope from a hardcoded `~/.pi/agent` instead of the SDK's `getAgentDir()`, so the two packages disagree about where the global scope lives whenever `PI_CODING_AGENT_DIR` is set — and the configured judge silently never registers, indistinguishable in the review log from "not installed".
+
+- **Smell:** Category F (cross-package divergence on a single source of truth).
+- **Target:** `packages/pi-permission-model-judge/src/config-loader.ts` resolves `agentDir` via `getAgentDir()` from `@earendil-works/pi-coding-agent`, as pi-permission-system does.
+- **Outcome:** both packages read the global scope from the same directory; `grep -c "getAgentDir" packages/pi-permission-model-judge/src/config-loader.ts` goes 0 → ≥ 1; ships as a `fix:` in the model-judge component.
+- **Impact 3 / Risk 1 / Priority 15.**
+
+Release: independent
+
+#### Step 8: `deriveApprovalPattern` takes the injected `PathFlavor` ([#655])
+
+**Cause:** `deriveApprovalPattern` (`session-rules.ts`) reads `node:path`'s ambient `dirname`/`sep`, bypassing the injected `PathFlavor` that owns every other platform decision — the one surviving violation of the #562/#510 invariant, producing mixed-separator patterns on a real Windows host and untestable win32 behavior on POSIX CI.
+
+- **Smell:** Category C (ambient platform read; decide-once violation).
+- **Target:** `src/session-rules.ts` — derive the pattern through the flavor's `impl`/separator, threading the flavor from the call sites that already hold a `PathNormalizer`.
+- **Outcome:** `grep -c "node:path" packages/pi-permission-system/src/session-rules.ts` goes 1 → 0; a win32 unit test can pin the derived pattern; `refactor:` (hidden type — cuts no release on its own).
+- **Impact 2 / Risk 1 / Priority 10.**
+
+Release: independent
+
+### Step dependency diagram
+
+```mermaid
+flowchart TD
+    S1["✅ Step 1 (#744): PromptPayload + builders"] --> S2["✅ Step 2 (#710): bounded local renderers"]
+    S2 --> S3["Step 3 (#745): cross-boundary swap (feat!)"]
+    S2 --> S4["Step 4 (#746): agent + review-log renderers"]
+    S4 --> S6["Step 6: decidedBy provenance (#726)"]
+    S5["Step 5: forwarding liveness (#721)"]
+    S7["Step 7: model-judge agentDir (#732)"]
+    S8["Step 8: deriveApprovalPattern flavor (#655)"]
+```
+
+### Parallel tracks
+
+- **Track A — prompt-presentation spine:** Steps 1 → 2 → {3, 4}.
+- **Track B — forwarding liveness:** Step 5 (touches `authority/` forwarding files only; disjoint from Track A apart from `approval-escalator.ts`, which Track A's Step 3 also edits — land Step 5 before or after Step 3, not concurrently).
+- **Track C — decision provenance:** Step 6, after Step 4.
+- **Track D — independent fixes:** Steps 7 and 8, any time.
+
+### Release batches
+
+- **Batch "presentation-payload":** Steps 1, 2 (ship together; tail = Step 2; release vehicle = Step 2's `fix:` for [#710] — Step 1 is a hidden `refactor:`).
+- **Batch "presentation-contract":** Steps 3, 4 (ship together; tail = Step 4; release vehicle = Step 3's `feat!:` breaking release with the `message`-replacement migration note).
+- Independently releasable: Step 5 (`fix:`), Step 6 (`feat:`), Step 7 (`fix:`, model-judge component), Step 8 (`refactor:` — hidden type, batches into the next release).
+
 ## Refactoring history
 
 The architecture above is the product of twelve completed improvement phases.
@@ -873,4 +1104,39 @@ Each phase's findings, numbered plan, dependency diagram, and health metrics are
 [#502]: https://github.com/gotgenes/pi-packages/issues/502
 [#509]: https://github.com/gotgenes/pi-packages/issues/509
 [#555]: https://github.com/gotgenes/pi-packages/issues/555
+[#710]: https://github.com/gotgenes/pi-packages/issues/710
+[#713]: https://github.com/gotgenes/pi-packages/issues/713
+[#716]: https://github.com/gotgenes/pi-packages/pull/716
+[#738]: https://github.com/gotgenes/pi-packages/pull/738
+[#721]: https://github.com/gotgenes/pi-packages/issues/721
+[#722]: https://github.com/gotgenes/pi-packages/issues/722
+[#726]: https://github.com/gotgenes/pi-packages/issues/726
+[#732]: https://github.com/gotgenes/pi-packages/issues/732
+[#735]: https://github.com/gotgenes/pi-packages/issues/735
+[#736]: https://github.com/gotgenes/pi-packages/issues/736
+[#742]: https://github.com/gotgenes/pi-packages/issues/742
+[#744]: https://github.com/gotgenes/pi-packages/issues/744
+[#745]: https://github.com/gotgenes/pi-packages/issues/745
+[#746]: https://github.com/gotgenes/pi-packages/issues/746
+[#645]: https://github.com/gotgenes/pi-packages/issues/645
+[#642]: https://github.com/gotgenes/pi-packages/issues/642
+[#655]: https://github.com/gotgenes/pi-packages/issues/655
+[#658]: https://github.com/gotgenes/pi-packages/issues/658
+[#680]: https://github.com/gotgenes/pi-packages/issues/680
+[#686]: https://github.com/gotgenes/pi-packages/issues/686
+[#687]: https://github.com/gotgenes/pi-packages/issues/687
+[#688]: https://github.com/gotgenes/pi-packages/issues/688
+[#691]: https://github.com/gotgenes/pi-packages/issues/691
+[#698]: https://github.com/gotgenes/pi-packages/issues/698
+[#699]: https://github.com/gotgenes/pi-packages/issues/699
+[#706]: https://github.com/gotgenes/pi-packages/issues/706
+[#720]: https://github.com/gotgenes/pi-packages/issues/720
+[#639]: https://github.com/gotgenes/pi-packages/issues/639
+[#648]: https://github.com/gotgenes/pi-packages/issues/648
+[#654]: https://github.com/gotgenes/pi-packages/issues/654
+[#603]: https://github.com/gotgenes/pi-packages/issues/603
+[#604]: https://github.com/gotgenes/pi-packages/issues/604
+[#609]: https://github.com/gotgenes/pi-packages/issues/609
+[#610]: https://github.com/gotgenes/pi-packages/issues/610
+[#519]: https://github.com/gotgenes/pi-packages/issues/519
 [ADR-0002]: https://github.com/gotgenes/pi-packages/blob/main/packages/pi-subagents/docs/decisions/0002-extensions-on-a-minimal-core.md

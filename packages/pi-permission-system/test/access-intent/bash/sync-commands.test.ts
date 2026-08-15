@@ -42,14 +42,22 @@ describe("parseBashCommandsSync", () => {
 
     it("flags an opaque wrapper and re-parses its payload as an inner unit", () => {
       expect(parseBashCommandsSync('bash -c "rm -rf /"')).toEqual([
-        { text: 'bash -c "rm -rf /"', wrapperKind: "opaque-payload" },
+        {
+          text: 'bash -c "rm -rf /"',
+          wrapperKind: "opaque-payload",
+          executedUnit: "rm -rf /",
+        },
         { text: "rm -rf /", context: "wrapper_payload" },
       ]);
     });
 
     it("emits an indirection wrapper's inner command as its own unit", () => {
       expect(parseBashCommandsSync("sudo aws s3 ls")).toEqual([
-        { text: "sudo aws s3 ls", wrapperKind: "indirection" },
+        {
+          text: "sudo aws s3 ls",
+          wrapperKind: "indirection",
+          executedUnit: "aws s3 ls",
+        },
         { text: "aws s3 ls", context: "wrapper_indirection" },
       ]);
     });

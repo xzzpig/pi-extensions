@@ -512,6 +512,16 @@ describe("mergeUnifiedConfigs", () => {
     expect(merged.doublePressToConfirm).toBe(false);
   });
 
+  it("replaces the prompt-budget scalars (project wins)", () => {
+    const merged = mergeUnifiedConfigs(
+      { promptMaxRows: 24, promptFieldMaxWidth: 400 },
+      { promptMaxRows: 10 },
+    );
+
+    expect(merged.promptMaxRows).toBe(10);
+    expect(merged.promptFieldMaxWidth).toBe(400);
+  });
+
   it("returns base unchanged when override is empty", () => {
     const base = {
       debugLog: true,
