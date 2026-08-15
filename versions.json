@@ -1,7 +1,7 @@
 {
   "pi-notify": "0.1.0",
-  "pi-permission-system": "0.1.1",
-  "pi-subagents": "0.2.0",
+  "pi-permission-system": "0.2.0",
+  "pi-subagents": "0.3.0",
   "pi-tool-display": "0.1.0",
   "pi-goal-x": "0.1.0"
 }

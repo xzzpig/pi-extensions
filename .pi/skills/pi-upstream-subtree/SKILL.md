@@ -265,6 +265,22 @@ git add "subtrees/${name}.json"
 git commit -m "chore: update ${name} subtree"
 ```
 
+### Fork package versioning
+
+`subtrees/<name>.json` records the upstream release version, while
+`packages/<name>/package.json` and root `versions.json` record the independent
+`@xzzpig/<name>` fork release. Never copy the upstream package's `version` into
+the fork manifest automatically.
+
+After every upstream sync, compare the old and new upstream release:
+
+- An upstream major or minor release with user-visible changes increments the
+  fork's minor version and resets its patch component (`0.x` forks use the
+  minor component for breaking upstream changes).
+- An upstream patch-only release increments the fork's patch version.
+- Update `package.json`, `versions.json`, and any package-local lockfile
+  version fields together, then add a local changelog entry.
+
 ### Ref change (explicit override)
 
 Do not edit `ref` in the JSON and reload direnv; the helper rejects it. To

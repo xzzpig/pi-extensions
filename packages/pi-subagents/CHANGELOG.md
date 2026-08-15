@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-14
+
+### Changed
+- Synced the fork with upstream pi-subagents v0.49.0 while preserving local compatibility fixes.
+
 ## [0.49.0] - 2026-08-13
 
 ### Added

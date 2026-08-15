@@ -100,7 +100,17 @@ Write a short `packages/pi-my-plugin/README.md`.
 
 ## Validate a change
 
-Install dependencies, type-check, and format:
+### Version consistency
+
+For every package, `versions.json` MUST match the package's `package.json`
+version. When a package maintains a package-local lockfile, its root package
+version fields MUST match as well. Upstream-derived forks keep an independent
+`@xzzpig/pi-*` version line; the upstream release version belongs in the
+subtree metadata record and MUST NOT replace the fork version automatically.
+
+When preparing a fork release after an upstream sync, follow the versioning
+rules in the pi-upstream-subtree skill and add a changelog entry before running
+validation.
 
 ```bash
 pnpm install
