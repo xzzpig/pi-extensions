@@ -24,9 +24,9 @@ const expectedHostPeerRanges = {
 	"@earendil-works/pi-tui": "*",
 } satisfies Record<(typeof hostPeerPackages)[number], string>;
 const expectedHostDevVersions = {
-	"@earendil-works/pi-agent-core": "0.83.0",
-	"@earendil-works/pi-ai": "0.83.0",
-	"@earendil-works/pi-tui": "0.83.0",
+	"@earendil-works/pi-agent-core": "0.84.2",
+	"@earendil-works/pi-ai": "0.84.2",
+	"@earendil-works/pi-tui": "0.84.2",
 } satisfies Record<Exclude<(typeof hostPeerPackages)[number], "@earendil-works/pi-coding-agent">, string>;
 
 function collectSourceFiles(dir: string): string[] {
