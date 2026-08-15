@@ -77,7 +77,7 @@ The settings menu controls task support, verification contracts, subtask depth, 
 Install from npm:
 
 ```bash
-pi install npm:pi-goal-x
+pi install npm:@xzzpig/pi-goal-x
 ```
 
 Install from a local checkout:

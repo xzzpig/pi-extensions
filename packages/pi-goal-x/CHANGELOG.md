@@ -2,6 +2,14 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.1.0] — 2026-08-15
+
+Local `@xzzpig/pi-goal-x` fork of upstream pi-goal-x 0.27.4 (imported as a tracked subtree).
+
+### Fixed
+
+- Esc pressed while any TUI overlay is visible (e.g. the pi-subagents fleet inspector, pi's own selectors) no longer pauses the active goal. The terminal-input handler now yields to the focused overlay via `TUI.hasOverlay()` before the Escape-to-pause branch, matching the existing `goalModalDepth` guard semantics; the key still passes through to the overlay so closing it behaves normally.
+
 ## [0.27.4] — 2026-08-11
 
 ### Fixed
@@ -14,7 +22,7 @@ All notable changes to pi-goal-x are documented here.
   clearing the scrollback and forcing the viewport to the bottom every time
   the agent wrote. The widget now **sizes itself against the measured dock
   chrome**: it renders the sibling dock containers (pending + status + editor
-  + footer) at the current width and caps itself at
+  - footer) at the current width and caps itself at
   `terminalRows − (measuredChrome + 1)`, so the widget's block plus the
   chrome never exceeds the terminal — chat appends and status/spinner ticks
   become in-place diffs, never wipes, and scrolling up to read the chat
@@ -974,7 +982,7 @@ committed before/after harness all ship together as the one version after the
 
 ### Fixed
 
-- **`addWrappedPipe` overflow in questionnaire** — `addWrappedPipe` in `goal-questionnaire.ts` was wrapping content at the full terminal width then prepending `│   ` (4 visible chars) to continuation lines, causing a terminal-width overflow crash (visibleWidth > safeWidth). Fixed by wrapping at `safeWidth - pipeWidth` so continuation lines with the pipe prefix stay within bounds.
+- **`addWrappedPipe` overflow in questionnaire** — `addWrappedPipe` in `goal-questionnaire.ts` was wrapping content at the full terminal width then prepending `│` (4 visible chars) to continuation lines, causing a terminal-width overflow crash (visibleWidth > safeWidth). Fixed by wrapping at `safeWidth - pipeWidth` so continuation lines with the pipe prefix stay within bounds.
 
 - **Escape dialog header overflow** — the header text `"Audit interrupted by Escape  (continue = default)"` (53 visible chars) was not truncated to `innerWidth` at narrow terminal widths, causing overflow. Fixed by adding `truncateToWidth()` to the header line.
 
@@ -1008,15 +1016,15 @@ committed before/after harness all ship together as the one version after the
 ### Added
 
 - **Hidden TUI debug mode** — Ctrl+Shift+X toggles a debug panel in the goal widget with raw goal field display, task tree summary, and legend. Ctrl+Shift+N creates/removes a test goal (writes to `.pi/goals/debug/`), Ctrl+Shift+T injects sample tasks, Ctrl+Shift+R starts a mock completion audit, and Ctrl+Shift+O opens the proposal confirmation dialog with a realistic proposal built from typed `GoalTask[]` objects through the real rendering pipeline.
-- **`addWrappedPipe` helper** — pipe-prefixed (`│   `) lines that wrap now prepend `│   ` to every continuation line so wrapped text stays inside the ASCII box.
+- **`addWrappedPipe` helper** — pipe-prefixed (`│`) lines that wrap now prepend `│` to every continuation line so wrapped text stays inside the ASCII box.
 - **Task checkbox detection inside pipe sections** — `│   [x] t1: ...` lines are now properly detected as task checkboxes (not misinterpreted as key-value pairs) and render with per-status coloring inside the box.
 
 ### Changed
 
 - **MAX_CONTEXT_LINES removal** — the 12-line truncation cap (`MAX_CONTEXT_LINES = 12`) is removed from `goal-questionnaire.ts`. The full proposal is now visible without truncation. Replaced `addContextWrapped` with `renderContextLines` that renders every line with per-line styling.
 - **Enriched confirmation dialog** — `buildDraftConfirmationText` and `buildTweakConfirmationText` now emit `─── Section Name ───` markers that `renderContextLines` converts to full-width box-drawing borders (`┌─ Section Name padding─┐`). Task checkbox items get per-status coloring (`[x]` success green, `[ ]` warning yellow) with item titles in muted. Goal structure lines (`=== Goal ===`, `Objective:`, `Success criteria:`, `Boundaries:`, `Constraints:`, `Verification contract:`, `If blocked:`) are detected and styled as accent.
-- **Pipe prefix for all objective content** — `buildDraftConfirmationText` and `buildTweakConfirmationText` now prefix every objective line with `│   ` (except lines already starting with `│`). Task checkbox lines and box-drawing borders inside the objective text now appear inside the ASCII box with consistent indentation.
-- **Debug proposal task lines** — `renderDebugTaskLines` output in the debug Ctrl+Shift+O dialog is now prefixed with `│   ` to match the box layout.
+- **Pipe prefix for all objective content** — `buildDraftConfirmationText` and `buildTweakConfirmationText` now prefix every objective line with `│` (except lines already starting with `│`). Task checkbox lines and box-drawing borders inside the objective text now appear inside the ASCII box with consistent indentation.
+- **Debug proposal task lines** — `renderDebugTaskLines` output in the debug Ctrl+Shift+O dialog is now prefixed with `│` to match the box layout.
 
 ## [0.17.0] — 2026-05-29
 

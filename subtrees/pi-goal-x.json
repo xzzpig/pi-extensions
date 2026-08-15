@@ -1,0 +1,12 @@
+{
+  "$schema": "../schemas/subtree-metadata.schema.json",
+  "name": "pi-goal-x",
+  "prefix": "packages/pi-goal-x",
+  "source": "https://github.com/tmonk/pi-goal-x.git",
+  "remote": "upstream-pi-goal-x",
+  "ref": "v0.27.4",
+  "version": "0.27.4",
+  "upstreamCommit": "a2b6568b615c639c76a1924ec2731e9a933876ce",
+  "squash": true,
+  "lastSyncedAt": "2026-08-15T22:44:44+08:00"
+}

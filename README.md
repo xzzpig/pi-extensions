@@ -18,6 +18,7 @@ while developing changes.
 | [`@xzzpig/pi-permission-system`](./packages/pi-permission-system) | Permission enforcement for the Pi coding agent; local fork of `@gotgenes/pi-permission-system` with configurable wrapper flooring.                                         | `pi install npm:@xzzpig/pi-permission-system` |
 | [`@xzzpig/pi-notify`](./packages/pi-notify)                       | Cross-device notifications for Pi: OSC terminal notifications, ntfy push channels, semantic Pi events, and Herdr blocked-state integration.                                | `pi install npm:@xzzpig/pi-notify`            |
 | [`@xzzpig/pi-tool-display`](./packages/pi-tool-display)           | OpenCode-style compact tool rendering and edit/write diff visualization; local fork of `MasuRii/pi-tool-display` with a tail-style live preview for running bash commands. | `pi install npm:@xzzpig/pi-tool-display`      |
+| [`@xzzpig/pi-goal-x`](./packages/pi-goal-x)                       | Durable goal mode with tasks, auto-continue, and independent completion audit; local fork of `tmonk/pi-goal-x` with a TUI-overlay guard so Esc in other extensions' overlays never pauses the goal. | `pi install npm:@xzzpig/pi-goal-x`            |
 
 ## Install an extension
 

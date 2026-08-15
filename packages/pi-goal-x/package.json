@@ -1,6 +1,6 @@
 {
-  "name": "pi-goal-x",
-  "version": "0.27.4",
+  "name": "@xzzpig/pi-goal-x",
+  "version": "0.1.0",
   "description": "Goal mode extension for pi: durable long-running objectives, five model tools, structured tasks, independent completion audit, Sisyphus mode, auto-continue, and a status overlay.",
   "license": "MIT",
   "author": "pi-goal-x contributors",
@@ -53,7 +53,8 @@
     "bench:naf": "node --import ./experiments/bench/bench-adapter-hooks.mjs --experimental-strip-types ./experiments/bench/run-bench.mjs",
     "bench:gate:naf": "node --experimental-strip-types ./experiments/bench/b6-gate.mjs naf",
     "test:e2e": "node scripts/run-unit-tests.mjs e2e",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=0.83.0 <0.85.0",

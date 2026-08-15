@@ -1,4 +1,5 @@
 import { type AgentToolResult, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { TUI } from "@earendil-works/pi-tui";
 import { FOCUS_ENTRY, STATE_ENTRY, GOAL_EVENT_ENTRY, goalDetails } from "./goal-format.ts";
 import { loadGoalSettings, loadGoalSettingsFileConfig } from "./goal-settings.ts";
 import {
@@ -77,6 +78,8 @@ export interface GoalCore {
 	debugMode: boolean;
 	terminalInputUnsubscribe: (() => void) | null;
 	goalWidgetComponentRef: { current: GoalWidgetComponent | null };
+	/** Host TUI instance captured when the goal widget factory runs; null before the first render or in headless contexts. Used to observe TUI-wide overlay state so foreign overlays (pi-subagents fleet, pi selectors) own Escape while open. */
+	goalTui: TUI | null;
 	goalService: GoalService;
 	runtime: GoalRuntime;
 	accounting: GoalAccounting;
@@ -555,6 +558,7 @@ export function createGoalCore(
 	}
 
 	const goalWidgetComponentRef: { current: GoalWidgetComponent | null } = { current: null };
+	const goalTuiRef: { current: TUI | null } = { current: null };
 	let widgetRegistered = false;
 
 	function clearGoalWidget(ctx: ExtensionContext): void {
@@ -562,6 +566,7 @@ export function createGoalCore(
 		ctx.ui.setWidget(GOAL_WIDGET_KEY, undefined);
 		widgetRegistered = false;
 		goalWidgetComponentRef.current = null;
+		goalTuiRef.current = null;
 	}
 
 	/**
@@ -659,6 +664,9 @@ export function createGoalCore(
 						getExpanded: () => dashboardExpanded,
 						getLedgerEvents: () => readGoalLedger(ctx).events,
 						getAuditResult: () => auditResult,
+						onTui: (tui) => {
+							goalTuiRef.current = tui;
+						},
 					}),
 					{ placement: "aboveEditor" },
 				);
@@ -689,6 +697,9 @@ export function createGoalCore(
 					getExpanded: () => dashboardExpanded,
 					getLedgerEvents: () => readGoalLedger(ctx).events,
 					getAuditResult: () => auditResult,
+					onTui: (tui) => {
+						goalTuiRef.current = tui;
+					},
 				}),
 				{ placement: "aboveEditor" },
 			);
@@ -986,6 +997,9 @@ export function createGoalCore(
 			return dashboardExpanded;
 		},
 		goalWidgetComponentRef,
+		get goalTui() {
+			return goalTuiRef.current;
+		},
 		goalService,
 		runtime,
 		accounting,

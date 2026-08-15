@@ -126,8 +126,12 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 			// goal picker, task-list overlay, escape dialog) owns every key while
 			// it is open: never intercept — otherwise Escape would pause the goal
 			// before the dialog could process it (bn-l pattern). Depth counter so
-			// nested goal modals remain guarded.
-			if (core.goalModalDepth > 0) return undefined;
+			// nested goal modals remain guarded. The same applies to any other
+			// extension's TUI overlay (pi-subagents fleet inspector, pi's own
+			// selectors, ...): while an overlay is visible, Escape belongs to the
+			// focused overlay component, not to the goal — intercepting it would
+			// pause the goal while the user is merely closing the overlay.
+			if (core.goalModalDepth > 0 || core.goalTui?.hasOverlay?.()) return undefined;
 			if (matchesKey(data, "escape") && core.auditProgress) {
 				core.abortAudit(ctx);
 				return { consume: true };

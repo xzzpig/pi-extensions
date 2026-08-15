@@ -81,8 +81,12 @@ export function makeGoalWidgetFactory(opts: {
 	getExpanded?: () => boolean;
 	getLedgerEvents?: () => GoalLedgerEvent[];
 	getAuditResult?: () => AuditResultView | null;
+	/** Called with the host TUI instance when the factory runs, so goal-widget.ts can observe TUI-wide overlay state (any extension's overlays block goal ESC handling). */
+	onTui?: (tui: TUI) => void;
 }) {
-	return (tui: TUI, theme: Theme) => new GoalWidgetComponent({
+	return (tui: TUI, theme: Theme) => {
+		opts.onTui?.(tui);
+		return new GoalWidgetComponent({
 		tui,
 		theme,
 		getGoal: opts.getGoal,
@@ -94,7 +98,8 @@ export function makeGoalWidgetFactory(opts: {
 		getExpanded: opts.getExpanded,
 		getLedgerEvents: opts.getLedgerEvents,
 		getAuditResult: opts.getAuditResult,
-	});
+		});
+	};
 }
 
 export interface AuditorWidgetProgress {
