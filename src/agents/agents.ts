@@ -130,6 +130,7 @@ export interface AgentConfig {
 	defaultContext?: AgentDefaultContext;
 	defaultAsync?: boolean;
 	defaultTimeoutMs?: number;
+	defaultToolTimeoutMs?: number;
 	defaultTurnBudget?: TurnBudgetConfig;
 	defaultAcceptance?: AcceptanceInput;
 	acceptanceRole?: AcceptanceRole;
@@ -1582,6 +1583,14 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 			}
 			defaultTimeoutMs = parsed;
 		}
+		let defaultToolTimeoutMs: number | undefined;
+		if (frontmatter.toolTimeoutMs !== undefined) {
+			const parsed = Number(frontmatter.toolTimeoutMs);
+			if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 2_147_483_647) {
+				throw new Error(`Agent '${localName}' has invalid toolTimeoutMs frontmatter; expected a positive integer no larger than 2147483647.`);
+			}
+			defaultToolTimeoutMs = parsed;
+		}
 		let defaultTurnBudget: TurnBudgetConfig | undefined;
 		if (frontmatter.turnBudget !== undefined && frontmatter.turnBudget.trim()) {
 			const parsed = JSON.parse(frontmatter.turnBudget) as unknown;
@@ -1648,6 +1657,7 @@ function loadAgentsFromDir(dir: string, source: AgentSource): AgentConfig[] {
 			...(defaultContext !== undefined ? { defaultContext } : {}),
 			...(defaultAsync !== undefined ? { defaultAsync } : {}),
 			...(defaultTimeoutMs !== undefined ? { defaultTimeoutMs } : {}),
+			...(defaultToolTimeoutMs !== undefined ? { defaultToolTimeoutMs } : {}),
 			...(defaultTurnBudget !== undefined ? { defaultTurnBudget } : {}),
 			...(defaultAcceptance !== undefined ? { defaultAcceptance } : {}),
 			...(acceptanceRole !== undefined ? { acceptanceRole } : {}),

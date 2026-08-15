@@ -8,6 +8,7 @@ import { intersectSubagentCapabilityCeilings, parseSubagentCapabilityCeiling, ty
 import { validateRunFanoutBudgetDescriptor } from "../shared/run-fanout-budget.ts";
 import { resolveTurnBudgetConfig } from "../shared/turn-budget.ts";
 import { reconcileAsyncRun } from "./stale-run-reconciler.ts";
+import { resultFilePath } from "./result-files.ts";
 
 export interface AsyncResumeParams {
 	id?: string;
@@ -172,7 +173,7 @@ function prefixedRunIds(dir: string, prefix: string, suffix = ""): string[] {
 }
 
 function exactResultPath(resultsDir: string, runId: string): string | null {
-	const resultPath = path.join(resultsDir, `${runId}.json`);
+	const resultPath = resultFilePath(resultsDir, runId);
 	assertInsideRoot(resultsDir, resultPath, "Async result file");
 	return fs.existsSync(resultPath) ? resultPath : null;
 }
@@ -182,10 +183,7 @@ export function findAsyncRunPrefixMatches(prefix: string, asyncDirRoot: string, 
 	if (!requestedId) return [];
 	const asyncRoot = path.resolve(asyncDirRoot);
 	const resultRoot = path.resolve(resultsDir);
-	const matchingIds = [...new Set([
-		...prefixedRunIds(asyncRoot, requestedId),
-		...prefixedRunIds(resultRoot, requestedId, ".json"),
-	])].sort();
+	const matchingIds = prefixedRunIds(asyncRoot, requestedId).sort();
 	return matchingIds.map((id) => {
 		const asyncDir = path.join(asyncRoot, id);
 		assertInsideRoot(asyncRoot, asyncDir, "Async run directory");

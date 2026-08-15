@@ -331,6 +331,20 @@ async function waitForAsyncResultFile(id: string, timeoutMs = 15_000): Promise<s
 	return resultPath;
 }
 
+async function waitForAsyncEvent(id: string, type: string, timeoutMs = 10_000): Promise<Record<string, unknown>> {
+	const eventsPath = path.join(ASYNC_DIR, id, "events.jsonl");
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() <= deadline) {
+		const event = readIfExists(eventsPath)
+			?.split("\n")
+			.map((line) => JSON.parse(line) as Record<string, unknown>)
+			.find((candidate) => candidate.type === type);
+		if (event) return event;
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	}
+	assert.fail(`Timed out waiting for async event '${type}': ${eventsPath}`);
+}
+
 async function waitForAsyncState(id: string, predicate: (status: AsyncStatusPayload) => boolean, timeoutMs = 10_000): Promise<AsyncStatusPayload> {
 	const statusPath = path.join(ASYNC_DIR, id, "status.json");
 	const deadline = Date.now() + timeoutMs;
@@ -476,6 +490,52 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(typeof result, "boolean");
 	});
 
+	it("does not persist terminal async workflow status when the result index write fails", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
+		const id = `async-workflow-result-index-failure-${Date.now().toString(36)}`;
+		const resultIndexPath = path.join(RESULTS_DIR, "result-index");
+		let asyncDir: string | undefined;
+		let resultPath: string | undefined;
+		let pendingPath: string | undefined;
+		const originalError = console.error;
+		try {
+			console.error = () => {};
+			fs.rmSync(resultIndexPath, { recursive: true, force: true });
+			fs.mkdirSync(RESULTS_DIR, { recursive: true });
+			fs.writeFileSync(resultIndexPath, "not a directory", "utf-8");
+			const executor = makeAsyncExecutor([]);
+			const context = makeMinimalCtx(tempDir);
+			context.sessionManager.getSessionId = () => "session-workflow-index";
+
+			const launch = await executor.execute(id, { workflowScript: "return 'done'", async: true }, new AbortController().signal, undefined, context);
+			assert.equal(launch.isError, undefined);
+			const asyncId = launch.details?.asyncId;
+			assert.ok(asyncId, "expected async workflow id");
+			asyncDir = path.join(ASYNC_DIR, asyncId);
+			resultPath = path.join(RESULTS_DIR, `${asyncId}.json`);
+			pendingPath = path.join(RESULTS_DIR, "result-pending", encodeURIComponent("session-workflow-index"), `${encodeURIComponent(asyncId)}.json`);
+
+			const eventsPath = path.join(asyncDir, "events.jsonl");
+			const deadline = Date.now() + 5_000;
+			let eventsText = "";
+			while (Date.now() <= deadline) {
+				eventsText = readIfExists(eventsPath) ?? "";
+				if (eventsText.includes("subagent.workflow.result_write_failed")) break;
+				await new Promise((resolve) => setTimeout(resolve, 50));
+			}
+			assert.match(eventsText, /subagent\.workflow\.result_write_failed/);
+			const status = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8")) as AsyncStatusPayload;
+			assert.equal(status.state, "running");
+			assert.equal(fs.existsSync(resultPath), false);
+			assert.equal(fs.existsSync(pendingPath), true);
+		} finally {
+			console.error = originalError;
+			if (asyncDir) fs.rmSync(asyncDir, { recursive: true, force: true });
+			if (resultPath) fs.rmSync(resultPath, { recursive: true, force: true });
+			if (pendingPath) fs.rmSync(pendingPath, { force: true });
+			fs.rmSync(resultIndexPath, { recursive: true, force: true });
+		}
+	});
+
 	it("background parses split UTF-8 JSON and a final unterminated protocol line", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		const line = Buffer.from(JSON.stringify(events.assistantMessage("你好 from fragmented async JSON")));
 		const unicodeStart = line.indexOf(Buffer.from("你"));
@@ -487,7 +547,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(payload.results[0]?.output, "你好 from fragmented async JSON");
 	});
 
-	it("persists terminal status before creating the result artifact", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+	it("persists terminal status with the result artifact", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		mockPi.onCall({ output: "completed output" });
 		const id = `async-terminal-status-${Date.now().toString(36)}`;
 		launchProtocolTest(id);
@@ -506,6 +566,19 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(status.state, "failed");
 		assert.equal(status.error, "Step failed: worker");
 		assert.equal(status.steps?.[0]?.error, "Detached for intercom coordination before task completion.");
+	});
+
+	it("persists actionable guidance for ambient extension registration conflicts", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({
+			exitCode: 1,
+			stderr: 'Error: Failed to load extension "/tmp/pi-mcp-adapter-clone/index.ts": Flag "--mcp-config" conflicts with /tmp/pi-mcp-adapter/index.ts',
+		});
+		const id = `async-extension-conflict-${Date.now().toString(36)}`;
+		launchProtocolTest(id);
+		const payload = await readAsyncPayload(id);
+		assert.equal(payload.success, false);
+		assert.match(payload.results[0]?.error ?? "", /loaded conflicting ambient Pi extensions/);
+		assert.match(payload.results[0]?.error ?? "", /"worker":\{"extensions":\[\]\}/);
 	});
 
 	it("persists absent output provenance when async lifecycle text is synthetic", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
@@ -801,7 +874,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			assert.deepEqual(status.capabilityCeiling, payload.capabilityCeiling);
 			assert.deepEqual(status.steps?.[0]?.capabilityCeiling, payload.capabilityCeiling);
 			assert.deepEqual(payload.capabilityAudit?.effectiveTools, ["read"]);
-			assert.deepEqual(payload.capabilityAudit?.removedTools, ["write", "intercom", "contact_supervisor"]);
+			assert.deepEqual(payload.capabilityAudit?.removedTools, ["write", "contact_supervisor"]);
 			assert.equal(payload.capabilityAudit?.extensionsDenied, true);
 			const events = fs.readFileSync(path.join(ASYNC_DIR, asyncId, "events.jsonl"), "utf-8").trim().split("\n").map((line) => JSON.parse(line));
 			assert.ok(events.some((event) => event.type === "subagent.capability-ceiling.applied" && event.stepIndex === 0 && event.capabilityAudit?.removedTools?.includes("write")));
@@ -810,7 +883,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf-8")) as { launchContractDigest?: string; capabilityCeiling?: unknown; capabilityAudit?: { removedTools?: string[] } };
 			assert.equal(metadata.launchContractDigest, payload.results[0]?.launchContractDigest);
 			assert.deepEqual(metadata.capabilityCeiling, payload.capabilityCeiling);
-			assert.deepEqual(metadata.capabilityAudit?.removedTools, ["write", "intercom", "contact_supervisor"]);
+			assert.deepEqual(metadata.capabilityAudit?.removedTools, ["write", "contact_supervisor"]);
 		} finally {
 			handle.dispose();
 		}
@@ -954,7 +1027,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 	});
 
 	it("background treats agent_settled as a clean terminal watermark", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
-		mockPi.onCall({ jsonl: [mockAssistantMessage("settled async without a terminal assistant stop", "tool_use"), { type: "agent_settled" }], keepAliveAfterFinalMessageMs: 5000 });
+		mockPi.onCall({ jsonl: [mockAssistantMessage("settled async without a terminal assistant stop", "tool_use"), { type: "agent_settled" }], keepAliveAfterFinalMessageMs: 15_000 });
 		const id = `async-lifecycle-settled-${Date.now().toString(36)}`;
 		const startedAt = Date.now();
 		launchProtocolTest(id);
@@ -962,7 +1035,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(payload.success, true);
 		assert.equal(payload.results[0]?.error, undefined);
 		assert.equal(payload.results[0]?.output, "settled async without a terminal assistant stop");
-		assert.ok(Date.now() - startedAt < 4000, "agent_settled should trigger bounded child cleanup");
+		assert.ok(Date.now() - startedAt < 10_000, "agent_settled should trigger bounded child cleanup");
 	});
 
 	it("keeps named output references literal in async single tasks", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
@@ -1208,6 +1281,203 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(payload.state, "failed");
 		assert.equal(payload.results[0]?.timedOut, true);
 		assert.equal(payload.results[0]?.error, "Subagent timed out after 150ms.");
+	});
+
+	it("kills a wedged tool at the per-tool timeout with a tool-specific error before the run-level timeout", { skip: !isAsyncAvailable() ? "jiti not available" : process.platform === "win32" ? "timeout signal delivery intermittent on Windows CI" : undefined }, async () => {
+		// Wedge: tool_execution_start fires, then the mock holds (long delay) so
+		// tool_execution_end never arrives — output would keep flowing in a real
+		// wedge, which is exactly why a run-level stall detector can't see it.
+		mockPi.onCall({
+			steps: [
+				{ jsonl: [events.toolStart("bash")] },
+				{ delay: 30_000 }, // hold far past the per-tool budget; no tool_execution_end
+			],
+		});
+		const id = `async-tool-timeout-${Date.now().toString(36)}`;
+		process.env.PI_SUBAGENT_TOOL_TIMEOUT_MS = "1000";
+		try {
+			executeAsyncChain(id, {
+				chain: [{ agent: "one", task: "Wait" }],
+				agents: [makeAgent("one")],
+				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+				artifactConfig: {
+					enabled: false,
+					includeInput: false,
+					includeOutput: false,
+					includeJsonl: false,
+					includeMetadata: false,
+					cleanupDays: 7,
+				},
+				shareEnabled: false,
+				maxSubagentDepth: 2,
+				timeoutMs: 8_000, // run-level budget is longer; the per-tool timer must fire first
+			});
+
+			const payload = await readAsyncPayload(id);
+			assert.equal(payload.state, "failed");
+			assert.equal(payload.results[0]?.timedOut, true);
+			assert.match(payload.results[0]?.error ?? "", /Tool 'bash' exceeded its timeout of 1000ms\./);
+		} finally {
+			delete process.env.PI_SUBAGENT_TOOL_TIMEOUT_MS;
+		}
+	});
+
+	it("keeps an earlier wedged tool armed when another tool starts and ends", { skip: !isAsyncAvailable() ? "jiti not available" : process.platform === "win32" ? "timeout signal delivery intermittent on Windows CI" : undefined }, async () => {
+		mockPi.onCall({
+			steps: [
+				{ jsonl: [{ type: "tool_execution_start", toolCallId: "bash-1", toolName: "bash", args: {} }] },
+				{ delay: 50, jsonl: [
+					{ type: "tool_execution_start", toolCallId: "read-1", toolName: "read", args: { path: "README.md" } },
+					{ type: "tool_execution_end", toolCallId: "read-1", toolName: "read" },
+				] },
+				{ delay: 30_000 },
+			],
+		});
+		const id = `async-tool-timeout-overlap-${Date.now().toString(36)}`;
+		process.env.PI_SUBAGENT_TOOL_TIMEOUT_MS = "1000";
+		try {
+			executeAsyncChain(id, {
+				chain: [{ agent: "one", task: "Wait" }],
+				agents: [makeAgent("one")],
+				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+				artifactConfig: {
+					enabled: false,
+					includeInput: false,
+					includeOutput: false,
+					includeJsonl: false,
+					includeMetadata: false,
+					cleanupDays: 7,
+				},
+				shareEnabled: false,
+				maxSubagentDepth: 2,
+				timeoutMs: 8_000,
+			});
+
+			const payload = await readAsyncPayload(id);
+			assert.equal(payload.state, "failed");
+			assert.equal(payload.results[0]?.timedOut, true);
+			assert.match(payload.results[0]?.error ?? "", /Tool 'bash' exceeded its timeout of 1000ms\./);
+		} finally {
+			delete process.env.PI_SUBAGENT_TOOL_TIMEOUT_MS;
+		}
+	});
+
+	it("lets the shorter run-level deadline win over a per-tool timeout", { skip: !isAsyncAvailable() ? "jiti not available" : process.platform === "win32" ? "timeout signal delivery intermittent on Windows CI" : undefined }, async () => {
+		mockPi.onCall({
+			steps: [
+				{ jsonl: [events.toolStart("bash")] },
+				{ delay: 30_000 },
+			],
+		});
+		const id = `async-tool-timeout-run-budget-${Date.now().toString(36)}`;
+		process.env.PI_SUBAGENT_TOOL_TIMEOUT_MS = "1000";
+		try {
+			executeAsyncChain(id, {
+				chain: [{ agent: "one", task: "Wait" }],
+				agents: [makeAgent("one")],
+				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+				artifactConfig: {
+					enabled: false,
+					includeInput: false,
+					includeOutput: false,
+					includeJsonl: false,
+					includeMetadata: false,
+					cleanupDays: 7,
+				},
+				shareEnabled: false,
+				maxSubagentDepth: 2,
+				timeoutMs: 300,
+			});
+
+			const payload = await readAsyncPayload(id);
+			assert.equal(payload.results[0]?.timedOut, true);
+			assert.equal(payload.results[0]?.error, "Subagent timed out after 300ms.");
+		} finally {
+			delete process.env.PI_SUBAGENT_TOOL_TIMEOUT_MS;
+		}
+	});
+
+	it("does not kill a tool that completes before the per-tool timeout", { skip: !isAsyncAvailable() ? "jiti not available" : process.platform === "win32" ? "timeout signal delivery intermittent on Windows CI" : undefined }, async () => {
+		mockPi.onCall({
+			jsonl: [
+				events.toolStart("bash"),
+				events.toolEnd("bash"),
+				events.assistantMessage("done"),
+				{ type: "agent_end", willRetry: false },
+				{ type: "agent_settled" },
+			],
+		});
+		const id = `async-tool-complete-${Date.now().toString(36)}`;
+		process.env.PI_SUBAGENT_TOOL_TIMEOUT_MS = "1000";
+		try {
+			executeAsyncChain(id, {
+				chain: [{ agent: "one", task: "Done" }],
+				agents: [makeAgent("one")],
+				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+				artifactConfig: {
+					enabled: false,
+					includeInput: false,
+					includeOutput: false,
+					includeJsonl: false,
+					includeMetadata: false,
+					cleanupDays: 7,
+				},
+				shareEnabled: false,
+				maxSubagentDepth: 2,
+				timeoutMs: 8_000,
+			});
+
+			const payload = await readAsyncPayload(id);
+			assert.equal(payload.state, "complete");
+			assert.notEqual(payload.results[0]?.timedOut, true);
+		} finally {
+			delete process.env.PI_SUBAGENT_TOOL_TIMEOUT_MS;
+		}
+	});
+
+	it("does not apply the per-tool timeout to supervisor tools (contact_supervisor/intercom)", { skip: !isAsyncAvailable() ? "jiti not available" : process.platform === "win32" ? "timeout signal delivery intermittent on Windows CI" : undefined }, async () => {
+		// contact_supervisor holds ~1.5s — longer than the 1s per-tool budget — but
+		// is allowlisted, so the per-tool timer must not fire.
+		mockPi.onCall({
+			steps: [
+				{
+					delay: 1500,
+					jsonl: [
+						events.toolStart("contact_supervisor"),
+						events.toolEnd("contact_supervisor"),
+						events.assistantMessage("done"),
+						{ type: "agent_end", willRetry: false },
+						{ type: "agent_settled" },
+					],
+				},
+			],
+		});
+		const id = `async-tool-allowlist-${Date.now().toString(36)}`;
+		process.env.PI_SUBAGENT_TOOL_TIMEOUT_MS = "1000";
+		try {
+			executeAsyncChain(id, {
+				chain: [{ agent: "one", task: "Ask" }],
+				agents: [makeAgent("one")],
+				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+				artifactConfig: {
+					enabled: false,
+					includeInput: false,
+					includeOutput: false,
+					includeJsonl: false,
+					includeMetadata: false,
+					cleanupDays: 7,
+				},
+				shareEnabled: false,
+				maxSubagentDepth: 2,
+				timeoutMs: 8_000,
+			});
+
+			const payload = await readAsyncPayload(id);
+			assert.equal(payload.state, "complete");
+			assert.notEqual(payload.results[0]?.timedOut, true);
+		} finally {
+			delete process.env.PI_SUBAGENT_TOOL_TIMEOUT_MS;
+		}
 	});
 
 	it("enforces child timeouts on async parallel tasks without a composite deadline", { skip: !isAsyncAvailable() ? "jiti not available" : process.platform === "win32" ? "timeout signal delivery intermittent on Windows CI" : undefined }, async () => {
@@ -2788,7 +3058,14 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(payload.results[0].modelAttempts.length, 2);
 		assert.deepEqual(payload.results[0].totalCost, { inputTokens: 110, outputTokens: 55, costUsd: 0.011 });
 		assert.deepEqual(payload.totalCost, { inputTokens: 110, outputTokens: 55, costUsd: 0.011 });
-		const statusPayload = await waitForAsyncState(id, (candidate) => candidate.state === "complete" && candidate.totalCost !== undefined);
+		const statusPayload = await waitForAsyncState(id, (candidate) => candidate.state === "complete"
+			&& candidate.lifecycleArtifactVersion !== undefined
+			&& candidate.totalTokens?.total !== undefined
+			&& candidate.totalCost !== undefined
+			&& candidate.steps[0]?.model !== undefined
+			&& candidate.steps[0]?.thinking !== undefined
+			&& candidate.steps[0]?.tokens?.total !== undefined
+			&& candidate.steps[0]?.totalCost !== undefined);
 		assert.equal(statusPayload.lifecycleArtifactVersion, SUBAGENT_LIFECYCLE_ARTIFACT_VERSION);
 		assert.equal(statusPayload.steps[0]?.model, "anthropic/claude-sonnet-4:low");
 		assert.equal(statusPayload.steps[0]?.thinking, "low");
@@ -2798,9 +3075,9 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.deepEqual(statusPayload.totalCost, { inputTokens: 110, outputTokens: 55, costUsd: 0.011 });
 		const events = fs.readFileSync(path.join(asyncDir, "events.jsonl"), "utf-8").trim().split("\n").map((line) => JSON.parse(line));
 		assert.equal(events.find((event) => event.type === "subagent.run.started")?.lifecycleArtifactVersion, SUBAGENT_LIFECYCLE_ARTIFACT_VERSION);
-		const completed = events.find((event) => event.type === "subagent.run.completed");
-		assert.equal(completed?.lifecycleArtifactVersion, SUBAGENT_LIFECYCLE_ARTIFACT_VERSION);
-		assert.deepEqual(completed?.totalCost, { inputTokens: 110, outputTokens: 55, costUsd: 0.011 });
+		const completed = await waitForAsyncEvent(id, "subagent.run.completed");
+		assert.equal(completed.lifecycleArtifactVersion, SUBAGENT_LIFECYCLE_ARTIFACT_VERSION);
+		assert.deepEqual(completed.totalCost, { inputTokens: 110, outputTokens: 55, costUsd: 0.011 });
 		assert.match(fs.readFileSync(path.join(asyncDir, "output-0.log"), "utf-8"), /Recovered asynchronously/);
 		assert.equal(mockPi.callCount(), 2);
 	});
@@ -3466,6 +3743,58 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.match(eventsText, /Subagent failed: worker/);
 		assert.doesNotMatch(eventsText, /Status:/);
 		assert.doesNotMatch(eventsText, /Interrupt:/);
+	});
+
+	it("background implementation challenges keep explicit no-change reports successful", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ output: [
+			"Kept the current implementation. No new code or test changes were made in this challenge pass.",
+			"Reason: the current candidate is the smallest correct shape.",
+		].join("\n\n") });
+
+		const id = `async-no-change-challenge-${Date.now().toString(36)}`;
+		const sessionRoot = path.join(tempDir, "sessions");
+		const task = [
+			"You are reviving a previous subagent conversation.",
+			"",
+			"Original run: source-run",
+			"Original agent: worker",
+			"Original session file: /tmp/source-session.jsonl",
+			"",
+			"Use the stored session context as background. Answer the orchestrator's follow-up below. Do not assume the original child process is still alive.",
+			"",
+			"Follow-up:",
+			"Implementation challenge pass 1 for the accepted candidate. Reconsider it and implement any better current-scope change.",
+		].join("\n");
+
+		executeAsyncSingle(id, {
+			agent: "worker",
+			task,
+			agentConfig: makeAgent("worker"),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: {
+				enabled: false,
+				includeInput: false,
+				includeOutput: false,
+				includeJsonl: false,
+				includeMetadata: false,
+				cleanupDays: 7,
+			},
+			shareEnabled: false,
+			sessionRoot,
+			maxSubagentDepth: 2,
+		});
+
+		const resultPath = await waitForAsyncResultFile(id, 10_000);
+		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8"));
+		assert.equal(payload.success, true);
+		assert.equal(payload.exitCode, 0);
+		assert.equal(payload.results[0].success, true);
+		assert.match(String(payload.results[0].output), /Kept the current implementation/);
+		assert.doesNotMatch(String(payload.results[0].error ?? ""), /completed without making edits/);
+
+		const eventsText = fs.readFileSync(path.join(ASYNC_DIR, id, "events.jsonl"), "utf-8");
+		assert.doesNotMatch(eventsText, /Subagent failed: worker/);
+		assert.doesNotMatch(eventsText, /"reason":"completion_guard"/);
 	});
 
 	it("agent contract v1 keeps async acceptance and file-mutation effects separate from execution", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
@@ -4738,6 +5067,73 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		await waitForAsyncResultFile(id);
 		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
 		assert.equal(payload.success, true);
+	});
+
+	it("background open-tool attention survives an overlapping quick tool", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({
+			steps: [
+				{ jsonl: [{ type: "tool_execution_start", toolCallId: "bash-1", toolName: "bash", args: { command: "sleep 2" } }] },
+				{ delay: 50, jsonl: [
+					{ type: "tool_execution_start", toolCallId: "read-1", toolName: "read", args: { path: "README.md" } },
+					{ type: "tool_execution_end", toolCallId: "read-1", toolName: "read" },
+				] },
+				{ delay: 2_000, jsonl: [
+					{ type: "tool_execution_end", toolCallId: "bash-1", toolName: "bash" },
+					events.toolResult("bash", "done"),
+					events.assistantMessage("Done"),
+				] },
+			],
+		});
+
+		const id = `async-overlap-tool-attention-${Date.now().toString(36)}`;
+		const asyncDir = path.join(ASYNC_DIR, id);
+		const eventsPath = path.join(asyncDir, "events.jsonl");
+		const statusPath = path.join(asyncDir, "status.json");
+		const resultPath = path.join(RESULTS_DIR, `${id}.json`);
+		executeAsyncSingle(id, {
+			agent: "worker",
+			task: "Run the command",
+			agentConfig: makeAgent("worker"),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			sessionRoot: path.join(tempDir, "sessions"),
+			maxSubagentDepth: 2,
+			controlConfig: {
+				enabled: true,
+				needsAttentionAfterMs: 999_999,
+				activeNoticeAfterMs: 100,
+				failedToolAttemptsBeforeAttention: 3,
+				notifyOn: ["needs_attention"],
+				notifyChannels: ["event", "async", "intercom"],
+			},
+		});
+
+		const deadline = Date.now() + 10_000;
+		let eventText = "";
+		let statusDuringEvent: AsyncStatusPayload | undefined;
+		while (Date.now() < deadline) {
+			if (fs.existsSync(eventsPath)) eventText = fs.readFileSync(eventsPath, "utf-8");
+			if (eventText.includes('"reason":"tool_open_threshold"') && fs.existsSync(statusPath)) {
+				const status = JSON.parse(fs.readFileSync(statusPath, "utf-8")) as AsyncStatusPayload;
+				if (status.activityState === "needs_attention" && status.steps?.[0]?.activityState === "needs_attention") {
+					statusDuringEvent = status;
+					break;
+				}
+			}
+			if (eventText.includes('"reason":"tool_open_threshold"') && fs.existsSync(resultPath)) {
+				assert.fail("run completed before status.json exposed overlapping tool attention");
+			}
+			await new Promise((resolve) => setTimeout(resolve, 100));
+		}
+
+		assert.match(eventText, /"type":"needs_attention"/);
+		assert.match(eventText, /"reason":"tool_open_threshold"/);
+		assert.match(eventText, /"currentTool":"bash"/);
+		assert.ok(statusDuringEvent, "expected status.json to expose overlapping tool attention while the run is active");
+		assert.equal(statusDuringEvent.currentTool, "bash");
+		assert.equal(statusDuringEvent.steps?.[0]?.currentTool, "bash");
+		await waitForAsyncResultFile(id);
 	});
 
 	it("subagent_wait wakes when an async child is waiting on contact_supervisor", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {

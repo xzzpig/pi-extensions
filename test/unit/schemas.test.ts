@@ -225,6 +225,17 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.doesNotMatch(description, /orchestration\./);
 	});
 
+	it("keeps agentContract.version as integer bounds without an enum (Gemini schema subset)", () => {
+		const agentContract = (SubagentParams?.properties as Record<string, JsonSchemaNode> | undefined)?.agentContract;
+		assert.ok(agentContract, "agentContract schema should exist");
+		const version = (agentContract.properties as Record<string, JsonSchemaNode> | undefined)?.version;
+		assert.ok(version, "agentContract.version schema should exist");
+		assert.equal(version.type, "integer");
+		assert.equal(version.minimum, 1);
+		assert.equal(version.maximum, 1);
+		assert.equal(version.enum, undefined);
+	});
+
 	it("documents workflow timeout aliases and turn budget", () => {
 		const timeoutSchema = SubagentParams?.properties?.timeoutMs;
 		const maxRuntimeSchema = SubagentParams?.properties?.maxRuntimeMs;
@@ -377,8 +388,8 @@ describe("SubagentParams schema", { skip: !schemasAvailable ? "typebox not avail
 		assert.ok(SubagentParams, "SubagentParams schema should exist");
 		const schema = SubagentParams as unknown as JsonSchemaNode;
 		const serialized = JSON.stringify(schema);
-		// Mission, inspector, inline workflow, and guide fields intentionally expanded the public tool surface.
-		assert.ok(serialized.length < 17_100, `expected compact schema under 17.1k chars, got ${serialized.length}`);
+		// Mission, inspector, inline workflow, guide, and toolTimeoutMs fields intentionally expanded the public tool surface.
+		assert.ok(serialized.length < 17_400, `expected compact schema under 17.4k chars, got ${serialized.length}`);
 		assert.equal(serialized.includes('"$ref"'), false);
 		assert.equal(serialized.includes('"$defs"'), false);
 		assert.equal(serialized.split("Optional acceptance policy.").length - 1, 1);

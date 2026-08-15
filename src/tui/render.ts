@@ -28,6 +28,7 @@ import { formatNestedAggregate } from "../runs/shared/nested-render.ts";
 import { aggregateStepStatus, formatActivityLabel, formatAgentRunningLabel, formatParallelOutcome } from "../shared/status-format.ts";
 import { contextModeBadge, contextModePrefix } from "../runs/shared/context-mode.ts";
 import { buildWorkflowChatProgressRows, type WorkflowChatProgressRow } from "../workflows/chat-progress.ts";
+import { encodeAsyncStatusSnapshotWidget } from "../runs/background/async-status-snapshot.ts";
 
 type Theme = ExtensionContext["ui"]["theme"];
 
@@ -69,6 +70,22 @@ function liveDetailKeyText(): string {
 
 function liveDetailHintText(): string {
 	return `Press ${liveDetailKeyText()} for live detail`;
+}
+
+function foregroundSingleHintText(shortcut?: string): string {
+	if (!shortcut) return liveDetailHintText();
+	const label = shortcut
+		.split("+")
+		.map((part) => {
+			const normalized = part.trim().toLowerCase();
+			if (normalized === "ctrl") return "Ctrl";
+			if (normalized === "alt") return "Alt";
+			if (normalized === "shift") return "Shift";
+			if (normalized === "super") return "Super";
+			return normalized.length === 1 ? normalized.toUpperCase() : part.trim();
+		})
+		.join("+");
+	return `${liveDetailHintText()} · ${label} to run in background`;
 }
 
 function getTermWidth(): number {
@@ -341,7 +358,7 @@ function visibleWorkflowRows(rows: WorkflowChatProgressRow[]): { rows: WorkflowC
 		selected.add(row.key);
 	};
 	for (const row of [...rows].reverse()) {
-		if (row.state === "failed") add(row);
+		if (row.state === "failed" || row.state === "detached") add(row);
 	}
 	for (const row of [...rows].reverse()) add(row);
 	return {
@@ -1585,10 +1602,21 @@ export function renderWidget(ctx: ExtensionContext, jobs: AsyncJobState[]): void
 		return;
 	}
 	if (!ctx.hasUI) return;
+	if ((ctx as { mode?: string }).mode === "rpc") {
+		ctx.ui.setWidget(WIDGET_KEY, encodeAsyncStatusSnapshotWidget(jobs));
+		return;
+	}
 	ctx.ui.setWidget(WIDGET_KEY, buildWidgetComponent(jobs, ctx.ui.getToolsExpanded?.() ?? false));
 }
 
-function renderSingleCompact(d: Details, r: Details["results"][number], theme: Theme, layout: MainWindowRenderLayout, frame?: number): Component {
+function renderSingleCompact(
+	d: Details,
+	r: Details["results"][number],
+	theme: Theme,
+	layout: MainWindowRenderLayout,
+	frame?: number,
+	foregroundDetachShortcut?: string,
+): Component {
 	const output = r.truncation?.text || getSingleResultOutput(r);
 	const progress = r.progress || r.progressSummary;
 	const isRunning = isResultRunning(r);
@@ -1613,7 +1641,7 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 		for (const nestedLine of formatNestedWidgetLines(r.children, theme, width, false, progressSnapshotNow)) {
 			c.addChild(new Text(truncLine(`${detailIndent}${nestedLine}`, width), 0, 0));
 		}
-		c.addChild(new Text(truncLine(theme.fg("accent", `${detailIndent}${liveDetailHintText()}`), width), 0, 0));
+		c.addChild(new Text(truncLine(theme.fg("accent", `${detailIndent}${foregroundSingleHintText(foregroundDetachShortcut)}`), width), 0, 0));
 		if (r.artifactPaths) c.addChild(new Text(truncLine(theme.fg("dim", `${detailIndent}output: ${shortenPath(r.artifactPaths.outputPath)}`), width), 0, 0));
 		return c;
 	}
@@ -1635,7 +1663,7 @@ function renderSingleCompact(d: Details, r: Details["results"][number], theme: T
 function workflowRowGlyph(row: WorkflowChatProgressRow, theme: Theme, frame?: number): string {
 	if (row.state === "running") return theme.fg("accent", runningGlyph(frame));
 	if (row.state === "complete") return theme.fg("success", "✓");
-	if (row.state === "stopped") return theme.fg("warning", "■");
+	if (row.state === "detached" || row.state === "stopped") return theme.fg("warning", "■");
 	return theme.fg("error", "✗");
 }
 
@@ -1643,12 +1671,13 @@ function workflowRowStateLabel(row: WorkflowChatProgressRow, theme: Theme): stri
 	const label = (row.state === "complete" ? "complete" : row.state).padEnd(8);
 	if (row.state === "running") return theme.fg("accent", label);
 	if (row.state === "complete") return theme.fg("success", label);
-	if (row.state === "stopped") return theme.fg("warning", label);
+	if (row.state === "detached" || row.state === "stopped") return theme.fg("warning", label);
 	return theme.fg("error", label);
 }
 
-function workflowOverallState(rows: WorkflowChatProgressRow[], hasTerminalValue: boolean, isError?: boolean): "running" | "complete" | "failed" {
+function workflowOverallState(rows: WorkflowChatProgressRow[], hasTerminalValue: boolean, isError?: boolean): "running" | "complete" | "failed" | "paused" {
 	if (isError || rows.some((row) => row.state === "failed")) return "failed";
+	if (rows.some((row) => row.state === "detached")) return "paused";
 	if ((rows.length > 0 && rows.every((row) => row.state === "complete")) || hasTerminalValue) return "complete";
 	return "running";
 }
@@ -1657,7 +1686,7 @@ function renderWorkflowChatProgress(d: Details, result: AgentToolResult<Details>
 	const workflow = d.workflow;
 	const rows = workflow ? buildWorkflowChatProgressRows(workflow.trace) : [];
 	const state = workflowOverallState(rows, workflow?.value !== undefined, result.isError);
-	const glyph = state === "running" ? theme.fg("accent", runningGlyph(frame)) : state === "complete" ? theme.fg("success", "✓") : theme.fg("error", "✗");
+	const glyph = state === "running" ? theme.fg("accent", runningGlyph(frame)) : state === "complete" ? theme.fg("success", "✓") : state === "paused" ? theme.fg("warning", "■") : theme.fg("error", "✗");
 	const width = getTermWidth() - 4;
 	const runId = d.runId ? d.runId.slice(0, 12) : "workflow";
 	const repoLabel = d.chatProgress?.repoLabel ?? (d.chatProgress?.repoRelation === "same" ? "same repo" : "other repo");
@@ -1678,7 +1707,7 @@ function renderWorkflowChatProgress(d: Details, result: AgentToolResult<Details>
 		const label = row.label && row.label !== row.key ? ` ${oneLine(row.label)}` : "";
 		const duration = row.durationMs !== undefined ? ` ${theme.fg("dim", `· ${formatDuration(row.durationMs)}`)}` : "";
 		const run = row.runId ? ` ${theme.fg("dim", `[${row.runId.slice(0, 8)}]`)}` : "";
-		const error = row.error ? ` ${theme.fg("error", `· ${compactWorkflowError(row.error)}`)}` : "";
+		const error = row.error ? ` ${theme.fg(row.state === "detached" ? "warning" : "error", `· ${compactWorkflowError(row.error)}`)}` : "";
 		c.addChild(new Text(truncLine(`${rowIndent}${workflowRowGlyph(row, theme, frame)} ${status} ${theme.bold(row.key)}${label}${run}${duration}${error}`, width), 0, 0));
 	}
 	if (workflow?.emits.length) c.addChild(new Text(truncLine(theme.fg("dim", `${rowIndent}Emits  ${workflow.emits.length}`), width), 0, 0));
@@ -1844,6 +1873,7 @@ export function renderSubagentResult(
 	theme: Theme,
 	frame?: number,
 	rendererConfig?: MainWindowRendererConfig,
+	foregroundDetachShortcut?: string,
 ): Component {
 	const layout = resolveMainWindowRenderLayout(rendererConfig);
 	const compact = (component: Component): Component => capCompactMainWindowResult(component, layout, theme, !options.expanded);
@@ -1877,8 +1907,9 @@ export function renderSubagentResult(
 
 	if (d.mode === "single" && d.results.length === 1) {
 		const r = d.results[0];
+		const detachableShortcut = d.asyncId || d.background ? undefined : foregroundDetachShortcut;
 		if (!r) return compact(renderMultiCompact(d, theme, layout, frame));
-		if (!expanded) return compact(renderSingleCompact(d, r, theme, layout, frame));
+		if (!expanded) return compact(renderSingleCompact(d, r, theme, layout, frame, detachableShortcut));
 		const isRunning = isResultRunning(r);
 		const contextBadge = contextModeBadge(theme, r.context ?? d.context);
 		const output = r.truncation?.text || getSingleResultOutput(r);
@@ -1918,7 +1949,7 @@ export function renderSubagentResult(
 			if (liveStatusLine) {
 				c.addChild(new Text(fit(theme.fg("accent", liveStatusLine)), 0, 0));
 			}
-			c.addChild(new Text(fit(theme.fg("accent", liveDetailHintText())), 0, 0));
+			c.addChild(new Text(fit(theme.fg("accent", foregroundSingleHintText(detachableShortcut))), 0, 0));
 			if (r.artifactPaths) {
 				c.addChild(new Text(fit(theme.fg("dim", `Artifacts: ${shortenPath(r.artifactPaths.outputPath)}`)), 0, 0));
 			}

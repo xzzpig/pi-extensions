@@ -1,6 +1,6 @@
 {
   "name": "pi-subagents",
-  "version": "0.49.0",
+  "version": "0.50.0",
   "description": "Pi extension for single-agent delegation and scripted multi-agent workflows",
   "author": "Nico Bailon",
   "license": "MIT",
