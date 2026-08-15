@@ -140,6 +140,21 @@ describe("normalizePermissionSystemConfig", () => {
     expect("forwardingTimeoutMs" in result).toBe(false);
   });
 
+  it("includes the prompt-budget knobs when provided", () => {
+    const result = normalizePermissionSystemConfig({
+      promptMaxRows: 12,
+      promptFieldMaxWidth: 80,
+    });
+    expect(result.promptMaxRows).toBe(12);
+    expect(result.promptFieldMaxWidth).toBe(80);
+  });
+
+  it("omits the prompt-budget knobs when absent, leaving the renderer's defaults", () => {
+    const result = normalizePermissionSystemConfig({});
+    expect("promptMaxRows" in result).toBe(false);
+    expect("promptFieldMaxWidth" in result).toBe(false);
+  });
+
   it("includes toolInputPreviewMaxLength when a valid positive integer is provided", () => {
     const result = normalizePermissionSystemConfig({
       toolInputPreviewMaxLength: 400,

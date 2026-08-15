@@ -3,20 +3,25 @@ import { LocalUserAuthorizer } from "#src/authority/local-user-authorizer";
 import type { PermissionPromptDecision } from "#src/authority/permission-dialog";
 import type { requestPermissionDecision } from "#src/authority/permission-prompt-component";
 import type { PromptPermissionDetails } from "#src/authority/permission-prompter";
+import { makePromptDetails } from "#test/helpers/prompt-details-fixtures";
+import { makePromptPreferences } from "#test/helpers/prompt-view-fixtures";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
+/**
+ * This file's semantic defaults over the shared structural fixture: several
+ * cases assert `agentName` and `toolName` on a no-override call.
+ */
 function makeDetails(
   overrides?: Partial<PromptPermissionDetails>,
 ): PromptPermissionDetails {
-  return {
+  return makePromptDetails({
     requestId: "req-123",
-    source: "tool_call",
     agentName: "test-agent",
     message: "Allow read?",
     toolName: "read",
     ...overrides,
-  };
+  });
 }
 
 /** A `PermissionPromptUi` double; the tool-expansion accessors go unused here. */
@@ -50,7 +55,7 @@ function makeDeps(
       ui,
       mode: "tui" as const,
       events,
-      getPromptPreferences: () => ({ doublePressToConfirm: true }),
+      getPromptPreferences: () => makePromptPreferences(),
       requestPermissionDecision: decisionFn,
     },
     events,
@@ -108,16 +113,17 @@ describe("LocalUserAuthorizer", () => {
     });
   });
 
-  it("calls requestPermissionDecision with the threaded view, title, and message", async () => {
+  it("calls requestPermissionDecision with the threaded view, title, and payload", async () => {
     const { deps, ui, decisionFn } = makeDeps();
     const authorizer = new LocalUserAuthorizer(deps);
+    const details = makeDetails();
 
-    await authorizer.authorize(makeDetails());
+    await authorizer.authorize(details);
 
     expect(decisionFn).toHaveBeenCalledWith(
-      { mode: "tui", ui, doublePressToConfirm: true },
+      { mode: "tui", ui, ...makePromptPreferences() },
       "Permission Required",
-      "Allow read?",
+      details.payload,
       undefined,
     );
   });
@@ -133,7 +139,7 @@ describe("LocalUserAuthorizer", () => {
     expect(decisionFn).toHaveBeenCalledWith(
       expect.anything(),
       expect.any(String),
-      expect.any(String),
+      expect.anything(),
       { sessionLabel: "Yes, for 'read' tool" },
     );
   });
@@ -155,7 +161,7 @@ describe("LocalUserAuthorizer", () => {
       ui,
       mode: "tui",
       events,
-      getPromptPreferences: () => ({ doublePressToConfirm: true }),
+      getPromptPreferences: () => makePromptPreferences(),
       requestPermissionDecision: decisionFn,
     });
 
@@ -201,20 +207,19 @@ describe("LocalUserAuthorizer", () => {
     it("uses the '(Subagent)' dialog title when the ask is forwarded", async () => {
       const { deps, ui, decisionFn } = makeDeps();
       const authorizer = new LocalUserAuthorizer(deps);
+      const details = makeDetails({
+        forwarding: {
+          requesterAgentName: "Explore",
+          requesterSessionId: "child-session",
+        },
+      });
 
-      await authorizer.authorize(
-        makeDetails({
-          forwarding: {
-            requesterAgentName: "Explore",
-            requesterSessionId: "child-session",
-          },
-        }),
-      );
+      await authorizer.authorize(details);
 
       expect(decisionFn).toHaveBeenCalledWith(
-        { mode: "tui", ui, doublePressToConfirm: true },
+        { mode: "tui", ui, ...makePromptPreferences() },
         "Permission Required (Subagent)",
-        "Allow read?",
+        details.payload,
         undefined,
       );
     });
@@ -238,7 +243,7 @@ describe("LocalUserAuthorizer", () => {
       expect(decisionFn).toHaveBeenCalledWith(
         expect.anything(),
         "Permission Required (Subagent)",
-        expect.any(String),
+        expect.anything(),
         {
           sessionScope: {
             subagentLabel: "This subagent ('Explore') only",
@@ -265,7 +270,7 @@ describe("LocalUserAuthorizer", () => {
       expect(decisionFn).toHaveBeenCalledWith(
         expect.anything(),
         expect.any(String),
-        expect.any(String),
+        expect.anything(),
         undefined,
       );
     });

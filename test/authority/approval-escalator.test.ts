@@ -22,6 +22,7 @@ import {
   makeParentAuthorizerDeps,
   makeSubagentRegistry,
 } from "#test/helpers/forwarding-fixtures";
+import { makePromptDetails } from "#test/helpers/prompt-details-fixtures";
 
 // ── Local poll helper ────────────────────────────────────────────────────
 //
@@ -69,14 +70,15 @@ describe("ParentAuthorizer", () => {
         }),
       );
 
-      const decisionPromise = authorizer.authorize({
-        requestId: "unused-by-parent-authorizer",
-        source: "tool_call",
-        agentName: "Explore",
-        message: "Allow git push?",
-        toolName: "bash",
-        command: "git push",
-      });
+      const decisionPromise = authorizer.authorize(
+        makePromptDetails({
+          requestId: "unused-by-parent-authorizer",
+          agentName: "Explore",
+          message: "Allow git push?",
+          toolName: "bash",
+          command: "git push",
+        }),
+      );
 
       const request = await waitForRequestFile(temp.location.requestsDir);
       expect(request.targetSessionId).toBe("parent-session");
@@ -120,15 +122,16 @@ describe("ParentAuthorizer", () => {
         }),
       );
 
-      const decisionPromise = authorizer.authorize({
-        requestId: "unused-by-parent-authorizer",
-        source: "tool_call",
-        agentName: "Explore",
-        message: "Allow git push?",
-        toolName: "bash",
-        command: "git push",
-        sessionApproval: { surface: "bash", patterns: ["git *"] },
-      });
+      const decisionPromise = authorizer.authorize(
+        makePromptDetails({
+          requestId: "unused-by-parent-authorizer",
+          agentName: "Explore",
+          message: "Allow git push?",
+          toolName: "bash",
+          command: "git push",
+          sessionApproval: { surface: "bash", patterns: ["git *"] },
+        }),
+      );
 
       const request = await waitForRequestFile(temp.location.requestsDir);
       expect(request.sessionApproval).toEqual({
@@ -169,19 +172,20 @@ describe("ParentAuthorizer", () => {
         }),
       );
 
-      const decisionPromise = authorizer.authorize({
-        requestId: "unused-by-parent-authorizer",
-        source: "tool_call",
-        agentName: "Explore",
-        message: "Allow this path access?",
-        toolName: "read",
-        path: "src/foo.ts",
-        accessIntent: {
-          surface: "path",
-          matchValues: ["/worktree/issue-42/src/foo.ts", "src/foo.ts"],
-          boundaryValue: "/worktree/issue-42/src/foo.ts",
-        },
-      });
+      const decisionPromise = authorizer.authorize(
+        makePromptDetails({
+          requestId: "unused-by-parent-authorizer",
+          agentName: "Explore",
+          message: "Allow this path access?",
+          toolName: "read",
+          path: "src/foo.ts",
+          accessIntent: {
+            surface: "path",
+            matchValues: ["/worktree/issue-42/src/foo.ts", "src/foo.ts"],
+            boundaryValue: "/worktree/issue-42/src/foo.ts",
+          },
+        }),
+      );
 
       const request = await waitForRequestFile(temp.location.requestsDir);
       // The display fields still ride the same request alongside the structured
@@ -231,13 +235,14 @@ describe("ParentAuthorizer", () => {
         }),
       );
 
-      const decisionPromise = authorizer.authorize({
-        requestId: "unused-by-parent-authorizer",
-        source: "tool_call",
-        agentName: "Explore",
-        message: "Allow read?",
-        toolName: "read",
-      });
+      const decisionPromise = authorizer.authorize(
+        makePromptDetails({
+          requestId: "unused-by-parent-authorizer",
+          agentName: "Explore",
+          message: "Allow read?",
+          toolName: "read",
+        }),
+      );
 
       const request = await waitForRequestFile(temp.location.requestsDir);
       expect(request.accessIntent).toBeUndefined();
@@ -271,13 +276,14 @@ describe("ParentAuthorizer", () => {
         }),
       );
 
-      const decisionPromise = authorizer.authorize({
-        requestId: "unused-by-parent-authorizer",
-        source: "tool_call",
-        agentName: "Explore",
-        message: "Allow read?",
-        toolName: "read",
-      });
+      const decisionPromise = authorizer.authorize(
+        makePromptDetails({
+          requestId: "unused-by-parent-authorizer",
+          agentName: "Explore",
+          message: "Allow read?",
+          toolName: "read",
+        }),
+      );
 
       const request = await waitForRequestFile(temp.location.requestsDir);
       expect(request.sessionApproval).toBeUndefined();
@@ -311,13 +317,14 @@ describe("ParentAuthorizer", () => {
         }),
       );
 
-      const decisionPromise = authorizer.authorize({
-        requestId: "unused-by-parent-authorizer",
-        source: "tool_call",
-        agentName: "Explore",
-        message: "Allow read?",
-        toolName: "read",
-      });
+      const decisionPromise = authorizer.authorize(
+        makePromptDetails({
+          requestId: "unused-by-parent-authorizer",
+          agentName: "Explore",
+          message: "Allow read?",
+          toolName: "read",
+        }),
+      );
 
       const request = await waitForRequestFile(temp.location.requestsDir);
       writeFileSync(
@@ -348,13 +355,12 @@ describe("ParentAuthorizer", () => {
 // "no authority could answer" block message, and `denialReason` says which
 // path (#719).
 
-const forwardedAsk = {
+const forwardedAsk = makePromptDetails({
   requestId: "unused-by-parent-authorizer",
-  source: "tool_call",
   agentName: "Explore",
   message: "Allow pwd?",
   toolName: "bash",
-} as const;
+});
 
 describe("ParentAuthorizer abandonment", () => {
   test("reports an unresolvable target as unavailable, not user-denied", async () => {

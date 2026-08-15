@@ -5,6 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [25.3.0](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v25.2.2...pi-permission-system-v25.3.0) (2026-08-15)
+
+
+### Features
+
+* **pi-permission-system:** add promptMaxRows and promptFieldMaxWidth ([8dbca30](https://github.com/gotgenes/pi-packages/commit/8dbca303f55769222f6a829d3fc7a1d7461cd334)), closes [#710](https://github.com/gotgenes/pi-packages/issues/710)
+* **pi-permission-system:** expand the permission dialog to the complete request on Ctrl+O ([b741513](https://github.com/gotgenes/pi-packages/commit/b7415137236d6245a41f95255d17425127739a97)), closes [#710](https://github.com/gotgenes/pi-packages/issues/710)
+* **pi-permission-system:** render permission prompts as bounded, aligned fact lines ([2bd18c5](https://github.com/gotgenes/pi-packages/commit/2bd18c57003bdfbd0f95ad2c309e5387031164a0))
+
+
+### Documentation
+
+* **pi-permission-system:** distinguish the redundancy rule from elision ([5b26a46](https://github.com/gotgenes/pi-packages/commit/5b26a466191e5cc4395c2cebba22732c3d867bff)), closes [#710](https://github.com/gotgenes/pi-packages/issues/710)
+* **pi-permission-system:** document the bounded permission dialog ([68fcf58](https://github.com/gotgenes/pi-packages/commit/68fcf583f740cbcd8c5224db96fff85a74a2b0f2)), closes [#710](https://github.com/gotgenes/pi-packages/issues/710)
+
+## [25.2.2](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v25.2.1...pi-permission-system-v25.2.2) (2026-08-15)
+
+
+### Bug Fixes
+
+* **pi-permission-system:** gate commands hosted in bash redirect targets ([1015bb8](https://github.com/gotgenes/pi-packages/commit/1015bb879234d1d96595b9f995ca88037588e16f)), closes [#741](https://github.com/gotgenes/pi-packages/issues/741)
+* **pi-permission-system:** gate commands hosted in interpolating heredoc bodies ([48978d2](https://github.com/gotgenes/pi-packages/commit/48978d2016c67aa90f291db55d98908ba930f0d1)), closes [#741](https://github.com/gotgenes/pi-packages/issues/741)
+* **pi-permission-system:** project path operands of heredoc-hosted nested commands ([8e2fbee](https://github.com/gotgenes/pi-packages/commit/8e2fbee404677d02c7cc565cf23d1e778994d5f0)), closes [#741](https://github.com/gotgenes/pi-packages/issues/741)
+* **pi-permission-system:** project path operands of redirect-hosted nested commands ([12164f3](https://github.com/gotgenes/pi-packages/commit/12164f3b61b6a4b50281d84b6d741a3736516991)), closes [#741](https://github.com/gotgenes/pi-packages/issues/741)
+
+
+### Documentation
+
+* **pi-permission-system:** document hosted nested-command evaluation ([f24b338](https://github.com/gotgenes/pi-packages/commit/f24b338a42855f96038fdf2efdfe440cef8501c8)), closes [#741](https://github.com/gotgenes/pi-packages/issues/741)
+
+## [25.2.1](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v25.2.0...pi-permission-system-v25.2.1) (2026-08-15)
+
+
+### Bug Fixes
+
+* **pi-permission-system:** auto-approve residual synthetic asks under yolo ([e1706d3](https://github.com/gotgenes/pi-packages/commit/e1706d3ea6497e4ce32d715af6034aea7dd4d0fc))
+* **pi-permission-system:** honor an explicit bash deny for an unparseable command ([2e45633](https://github.com/gotgenes/pi-packages/commit/2e45633fa000c9c67ed62acaaf571f50c45a0d88))
+
+
+### Documentation
+
+* **pi-permission-system:** describe the gate-level yolo grant ([8a8e4a7](https://github.com/gotgenes/pi-packages/commit/8a8e4a72bd52e37efef573ccf023e967206eaf1e)), closes [#712](https://github.com/gotgenes/pi-packages/issues/712)
+
 ## [25.2.0](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v25.1.0...pi-permission-system-v25.2.0) (2026-08-14)
 
 

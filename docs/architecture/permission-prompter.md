@@ -12,7 +12,8 @@
 3. **Review log — outcome** — write `permission_request.approved` or `permission_request.denied` with the final decision state and any denial reason.
    The denied entry's `resolution` is the decision state, or `confirmation_unavailable` when the decision carries that marker — a `DenyingAuthorizer` denial, i.e. no live authority was reachable (a no-UI, non-subagent session) ([#556]).
 
-Yolo-mode auto-approval is resolved upstream, at the composition stage (`PermissionManager.check`'s `rewriteAsksToYolo`) — an `ask` never reaches this class under yolo, so `PermissionPrompter` has no yolo-mode knowledge.
+Yolo-mode auto-approval is resolved upstream: at the composition stage (`PermissionManager.check`'s `rewriteAsksToYolo`) for a rule-driven ask, and at `GateRunner`'s auto-approve fast path (`resolveYoloGrant`) for an ask synthesized after resolution, which no rule rewrite can reach ([#712]).
+An `ask` never reaches this class under yolo, so `PermissionPrompter` has no yolo-mode knowledge.
 
 ## Why a class instead of a free function
 
@@ -77,3 +78,4 @@ The Authorizer spine is entirely behind that seam.
 
 [#555]: https://github.com/gotgenes/pi-packages/issues/555
 [#556]: https://github.com/gotgenes/pi-packages/issues/556
+[#712]: https://github.com/gotgenes/pi-packages/issues/712

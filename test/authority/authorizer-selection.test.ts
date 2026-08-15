@@ -23,6 +23,7 @@ import {
   registerLink as register,
 } from "#test/helpers/authorizer-fixtures";
 import { makeAuthorizerLog } from "#test/helpers/authorizer-log-fixtures";
+import { makePromptDetails as makeDetails } from "#test/helpers/prompt-details-fixtures";
 
 // ── Test helpers ──────────────────────────────────────────────────────────
 
@@ -46,21 +47,11 @@ function makeCtx(overrides: Partial<ExtensionContext> = {}): ExtensionContext {
   } as unknown as ExtensionContext;
 }
 
-function makeDetails(): PromptPermissionDetails {
-  return {
-    requestId: "req-1",
-    source: "tool_call",
-    agentName: null,
-    message: "Allow this?",
-  };
-}
-
 /** Details whose gate-computed surface drives the delegation envelope. */
 function makeDetailsOn(surface: string): PromptPermissionDetails {
-  return {
-    ...makeDetails(),
+  return makeDetails({
     accessIntent: { surface, matchValues: ["/v"], boundaryValue: null },
-  };
+  });
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────

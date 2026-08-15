@@ -236,6 +236,8 @@ export function makeHandler(overrides?: {
   tools?: string[];
   /** Inject `shellTools` aliases into the session config (#574). */
   shellTools?: ShellToolsConfig;
+  /** Standing yolo setting for the runner's residual-ask grant (#712). */
+  yolo?: boolean;
 }) {
   const configStore =
     overrides?.shellTools !== undefined
@@ -316,7 +318,13 @@ export function makeHandler(overrides?: {
       .fn<AskEscalator["escalate"]>()
       .mockResolvedValue({ approved: true, state: "approved" }),
   };
-  const runner = new GateRunner(resolver, recorder, prompter, reporter);
+  const runner = new GateRunner(
+    resolver,
+    recorder,
+    prompter,
+    reporter,
+    () => overrides?.yolo ?? false,
+  );
   const handler = new PermissionGateHandler(
     session,
     toolRegistry,

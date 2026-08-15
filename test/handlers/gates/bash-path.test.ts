@@ -129,6 +129,9 @@ describe("describeBashPathGate", () => {
       pathValue: ".env",
     });
     expect(result.promptDetails.message).toContain(".env");
+    // The bash path gate asks about the offending token, not the command.
+    expect(result.promptDetails.payload.kind).toBe("path");
+    expect(result.promptDetails.payload.request.value).toBe(".env");
   });
 
   it("descriptor decision uses surface 'path'", async () => {

@@ -81,6 +81,17 @@ describe("describeSkillInputGate", () => {
     });
   });
 
+  it("emits a skill payload naming the skill as the decision value", () => {
+    const descriptor = describeSkillInputGate(
+      "librarian",
+      "code-agent",
+      makeSkillCheck("ask"),
+    );
+
+    expect(descriptor.promptDetails.payload.kind).toBe("skill");
+    expect(descriptor.promptDetails.payload.request.value).toBe("librarian");
+  });
+
   it("includes a non-empty message in promptDetails", () => {
     const descriptor = describeSkillInputGate(
       "librarian",

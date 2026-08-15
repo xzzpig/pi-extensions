@@ -5,6 +5,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { loadAndMergeConfigs } from "#src/config-loader";
 import { normalizePermissionSystemConfig } from "#src/extension-config";
+import {
+  DEFAULT_RENDER_BUDGET,
+  resolveRenderBudget,
+} from "#src/presentation/dialog-renderer";
 
 /**
  * Full-pipeline seam tests: write a temp config.json → loadAndMergeConfigs →
@@ -48,6 +52,27 @@ describe("config pipeline seam", () => {
 
     expect(config.debugLog).toBe(true);
     expect(config.toolInputPreviewMaxLength).toBe(1000);
+  });
+
+  it("dialog budget fields survive the full pipeline and resolve to a render budget", () => {
+    writeGlobal({ promptMaxRows: 12, promptFieldMaxWidth: 80 });
+
+    const mergeResult = loadAndMergeConfigs(agentDir, cwd, extensionRoot);
+    const config = normalizePermissionSystemConfig(mergeResult.merged);
+
+    expect(config.promptMaxRows).toBe(12);
+    expect(config.promptFieldMaxWidth).toBe(80);
+    expect(resolveRenderBudget(config)).toEqual({
+      maxRows: 12,
+      fieldMaxWidth: 80,
+    });
+  });
+
+  it("falls back to the default render budget when the config names neither field", () => {
+    const mergeResult = loadAndMergeConfigs(agentDir, cwd, extensionRoot);
+    const config = normalizePermissionSystemConfig(mergeResult.merged);
+
+    expect(resolveRenderBudget(config)).toEqual(DEFAULT_RENDER_BUDGET);
   });
 
   it("text summary length field survives the full pipeline", () => {

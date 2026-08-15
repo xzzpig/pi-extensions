@@ -123,6 +123,15 @@ describe("describeSkillReadGate", () => {
     });
   });
 
+  it("emits a skill_read payload keeping the skill as the decision value", () => {
+    const result = describeSkillReadGate(makeTcc(), normalizer, () => [
+      makeSkillEntry({ name: "my-skill" }),
+    ])!;
+
+    expect(result.promptDetails.payload.kind).toBe("skill_read");
+    expect(result.promptDetails.payload.request.value).toBe("my-skill");
+  });
+
   it("denialContext contains the skill name and read path", () => {
     const result = describeSkillReadGate(makeTcc(), normalizer, () => [
       makeSkillEntry({ name: "librarian" }),

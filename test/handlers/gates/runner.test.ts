@@ -102,6 +102,65 @@ describe("GateRunner — descriptor path", () => {
     );
   });
 
+  it("auto-approves a residual synthetic ask under yolo without prompting", async () => {
+    const { runner, deps } = makeGateRunner({
+      yolo: true,
+      resolveResult: makeCheckResult({
+        state: "ask",
+        source: "bash",
+        toolName: "bash",
+        matchedPattern: "<indirection-bash-wrapper>",
+      }),
+    });
+
+    const result = await runner.run(makeDescriptor(), null, "tc-1");
+
+    expect(result).toEqual({ action: "allow" });
+    expect(deps.escalate).not.toHaveBeenCalled();
+    expect(deps.reporter.writeReviewLog).toHaveBeenCalledWith(
+      "permission_request.auto_approved",
+      expect.objectContaining({ resolution: "auto_approved" }),
+    );
+    expect(deps.reporter.emitDecision).toHaveBeenCalledWith(
+      expect.objectContaining({
+        result: "allow",
+        resolution: "auto_approved",
+        origin: "yolo",
+        matchedPattern: "<indirection-bash-wrapper>",
+      }),
+    );
+  });
+
+  it("blocks an explicit deny under yolo without prompting", async () => {
+    const { runner, deps } = makeGateRunner({
+      yolo: true,
+      resolveResult: makeCheckResult({ state: "deny", matchedPattern: "rm *" }),
+    });
+
+    const result = await runner.run(makeDescriptor(), null, "tc-1");
+
+    expect(result).toMatchObject({ action: "block" });
+    expect(deps.escalate).not.toHaveBeenCalled();
+  });
+
+  it("reads the yolo setting per run, so a mid-session toggle takes effect", async () => {
+    let yolo = false;
+    const { runner, deps } = makeGateRunner({
+      isYoloEnabled: () => yolo,
+      resolveResult: makeCheckResult({
+        state: "ask",
+        matchedPattern: "<unparseable-bash-command>",
+      }),
+    });
+
+    await runner.run(makeDescriptor(), null, "tc-1");
+    expect(deps.escalate).toHaveBeenCalledTimes(1);
+
+    yolo = true;
+    await runner.run(makeDescriptor(), null, "tc-2");
+    expect(deps.escalate).toHaveBeenCalledTimes(1);
+  });
+
   it("returns allow and emits user_approved when ask + user approves", async () => {
     const { runner, deps } = makeGateRunner({
       resolveResult: makeCheckResult({ state: "ask", matchedPattern: "*" }),

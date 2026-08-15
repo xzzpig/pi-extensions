@@ -19,6 +19,7 @@ import { ServingSessionRegistry } from "#src/authority/serving-registry";
 import type { SubagentDetector } from "#src/authority/subagent-detection";
 import type { PermissionQuery } from "#src/service";
 import { makeAuthorizerLog } from "#test/helpers/authorizer-log-fixtures";
+import { makePromptPreferences } from "#test/helpers/prompt-view-fixtures";
 
 /** The full constructor bag `AuthorizerSelection` takes (the ctor intersection). */
 export type AuthorizerSelectionTestDeps = SelectionCtorDeps & {
@@ -83,8 +84,7 @@ export function makeAuthorizerSelectionDeps(
       on: vi.fn().mockReturnValue(() => undefined),
     },
     getPromptPreferences:
-      overrides.getPromptPreferences ??
-      (() => ({ doublePressToConfirm: true })),
+      overrides.getPromptPreferences ?? (() => makePromptPreferences()),
     requestPermissionDecision:
       overrides.requestPermissionDecision ??
       vi.fn().mockResolvedValue({ approved: true, state: "approved" }),

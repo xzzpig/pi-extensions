@@ -5,20 +5,12 @@ import type { PermissionPromptDecision } from "#src/authority/permission-dialog"
 import type { PromptPermissionDetails } from "#src/authority/permission-prompter";
 import type { AuthorizerLog, PermissionQuery } from "#src/service";
 import { makeAuthorizerLog } from "#test/helpers/authorizer-log-fixtures";
+import { makePromptDetails as makeDetails } from "#test/helpers/prompt-details-fixtures";
 
 /** A shared review-log seam; identity-comparable for injection assertions. */
 const log = makeAuthorizerLog();
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-
-function makeDetails(): PromptPermissionDetails {
-  return {
-    requestId: "req-1",
-    source: "tool_call",
-    agentName: null,
-    message: "Allow this?",
-  };
-}
 
 /** A narrow PermissionQuery stub; identity-comparable for injection assertions. */
 function makeQuery(): PermissionQuery {

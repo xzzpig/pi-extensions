@@ -115,6 +115,13 @@ describe("describeToolGate", () => {
     // The invoked tool name is preserved for the review log and prompt.
     expect(desc.logContext.toolName).toBe("exec_command");
     expect(desc.promptDetails.toolName).toBe("exec_command");
+    // "Gated as bash, invoked as exec_command" is two facts, and the payload
+    // records both rather than collapsing them.
+    expect(desc.promptDetails.payload.kind).toBe("bash");
+    expect(desc.promptDetails.payload.request.toolName).toBe("bash");
+    expect(desc.promptDetails.payload.request.invokedToolName).toBe(
+      "exec_command",
+    );
   });
 
   it("returns mcp surface with target in decision.value for MCP tools", () => {
