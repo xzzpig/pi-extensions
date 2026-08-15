@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# Cancel superseded runs: a new push/PR update stops the previous run, so
+# runner time is never spent on outdated commits.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Type check
+        run: npm run check
+      - name: Lint
+        run: npm run lint
+      - name: Full test suite
+        run: npm run test:all
+      - name: Test-manifest self-check
+        run: npm run test:selfcheck
+      - name: Package dry run
+        run: npm pack --dry-run
+      - name: Production dependency audit
+        run: npm audit --omit=dev
+      - name: NAF benchmark regression gate
+        run: npm run bench:gate:naf
