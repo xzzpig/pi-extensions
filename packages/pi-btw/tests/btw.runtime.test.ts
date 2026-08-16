@@ -634,7 +634,7 @@ function createHarness(
   function latestWidgetFactory() {
     const widget = [...widgets].reverse().find((entry) => entry.key === "btw" && typeof entry.content === "function");
     if (!widget) throw new Error("Widget not rendered");
-    return widget.content as (tui: unknown, theme: typeof theme) => any;
+    return widget.content as (tui: unknown, theme: unknown) => any;
   }
 
   function startMainSessionInput(text: string) {
@@ -709,7 +709,10 @@ describe("btw runtime behavior", () => {
 
     const options = createAgentSessionMock.mock.calls[0][0];
     expect(options.model).toBe(harness.baseCtx.model);
-    expect(options.modelRegistry).toBe(harness.baseCtx.modelRegistry);
+    // createAgentSession in the catalog-pinned SDK does not accept a
+    // modelRegistry option; BTW resolves auth via ctx.modelRegistry before
+    // creating the session, so the option is intentionally not forwarded.
+    expect(options.modelRegistry).toBeUndefined();
     expect(options.tools).toEqual(["read", "bash", "edit", "write"]);
     expect(options.resourceLoader.getAppendSystemPrompt()[0]).toContain(
       "You are having an aside conversation with the user, separate from their main working session.",

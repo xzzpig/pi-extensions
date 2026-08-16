@@ -183,7 +183,9 @@ function createBtwResourceLoader(
     getThemes: () => ({ themes: [], diagnostics: [] }),
     getAgentsFiles: () => ({ agentsFiles: [] }),
     getSystemPrompt: () => systemPrompt,
+    getSystemPromptSource: () => undefined,
     getAppendSystemPrompt: () => appendSystemPrompt,
+    getAppendSystemPromptSources: () => [],
     extendResources: () => {},
     reload: async () => {},
   };
@@ -1621,7 +1623,6 @@ export default function (pi: ExtensionAPI) {
     const { session } = await createAgentSession({
       sessionManager: SessionManager.inMemory(),
       model: settings.model,
-      modelRegistry: ctx.modelRegistry as AgentSession["modelRegistry"],
       thinkingLevel: settings.thinkingLevel,
       // Match pi's default coding-agent toolset (read/bash/edit/write).
       tools: ["read", "bash", "edit", "write"],
@@ -2177,7 +2178,6 @@ export default function (pi: ExtensionAPI) {
     const { session } = await createAgentSession({
       sessionManager: SessionManager.inMemory(),
       model,
-      modelRegistry: ctx.modelRegistry as AgentSession["modelRegistry"],
       thinkingLevel: "off",
       tools: [],
       resourceLoader: createBtwResourceLoader(ctx, [BTW_SUMMARIZE_SYSTEM_PROMPT]),

@@ -24,6 +24,22 @@ subtree; entries below describe only fork-specific deviations from upstream.
   `tui.mode` is read defensively so the code still compiles against pi-tui
   versions that predate the `mode` property.
 
+- **Type-check against the catalog-pinned pi-coding-agent SDK.** The upstream
+  `btw.ts` referenced APIs that the monorepo's catalog-pinned
+  `@earendil-works/pi-coding-agent@0.83.0` / `pi-tui@0.83.0` no longer (or not
+  yet) expose, so `pnpm --filter @xzzpig/pi-btw run typecheck` failed on a clean
+  import. Resolved the drift without changing runtime behavior:
+  - `createBtwResourceLoader` now implements the two `ResourceLoader` members
+    added by 0.83.0 — `getSystemPromptSource()` (returns `undefined`) and
+    `getAppendSystemPromptSources()` (returns `[]`) — so the inline BTW system
+    prompt still flows via `getSystemPrompt()`/`getAppendSystemPrompt()`.
+  - `createAgentSession({ modelRegistry: ctx.modelRegistry as
+    AgentSession["modelRegistry"] })` referenced a non-existent type/option in
+    both call sites; it is redundant because BTW resolves auth up front via
+    `ctx.modelRegistry.getApiKeyAndHeaders(model)` and the SDK builds its own
+    model runtime. The option is no longer forwarded.
+  - Updated the sub-session creation test to assert the option is not passed.
+
 ### Fork metadata
 
 - Initial fork of upstream `dbachelder/pi-btw` at tag `v0.4.1`
