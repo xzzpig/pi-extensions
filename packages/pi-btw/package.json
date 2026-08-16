@@ -1,5 +1,5 @@
 {
-  "name": "pi-btw",
+  "name": "@xzzpig/pi-btw",
   "version": "0.4.1",
   "description": "A pi extension for parallel side conversations with /btw",
   "type": "module",
@@ -30,6 +30,7 @@
     "access": "public"
   },
   "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest --run"
   },
   "pi": {
@@ -47,7 +48,10 @@
     "@earendil-works/pi-tui": ">=0.74.0 <1"
   },
   "devDependencies": {
-    "typescript": "^6.0.2",
-    "vitest": "^4.1.0"
+    "@earendil-works/pi-coding-agent": "catalog:",
+    "@earendil-works/pi-tui": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
   }
 }

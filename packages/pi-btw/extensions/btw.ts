@@ -10,7 +10,7 @@ import {
   type ExtensionContext,
   type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
-import { type AssistantMessage, type Message, type ThinkingLevel as AiThinkingLevel, type UserMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, Message, ThinkingLevel as AiThinkingLevel, UserMessage } from "@earendil-works/pi-ai";
 import {
   Box,
   Container,
@@ -625,9 +625,9 @@ function upsertToolResultEntry(
 ): void {
   const toolCall = ensureToolCallEntry(state, turnId, toolCallId, toolName, "");
   const existing =
-    toolCall.resultEntryId !== undefined
-      ? state.entries.find((entry) => entry.id === toolCall.resultEntryId && entry.type === "tool-result")
-      : undefined;
+    toolCall.resultEntryId === undefined
+      ? undefined
+      : state.entries.find((entry) => entry.id === toolCall.resultEntryId && entry.type === "tool-result");
 
   if (existing && existing.type === "tool-result") {
     existing.content = content;
@@ -1036,6 +1036,7 @@ class BtwOverlayComponent extends Container implements Focusable {
   private transcriptScrollOffset = 0;
   private transcriptViewportHeight = 8;
   private followTranscript = true;
+  private ownsMouseReporting = false;
   private _focused = false;
   private modeTextValue = "";
   private summaryTextValue = "";
@@ -1089,7 +1090,22 @@ class BtwOverlayComponent extends Container implements Focusable {
     this.hintsText = new Text("", 1, 0);
 
     // Enable SGR mouse reporting so wheel/touchpad events reach handleInput().
-    this.tui.terminal?.write?.("\x1b[?1000h\x1b[?1006h");
+    // In fullscreen (alt-screen) mode pi-tui owns these terminal modes itself
+    // (entered once on start, never re-asserted) and already forwards wheel
+    // events to a focused overlay. Touching them here would conflict: on
+    // dispose() we would write ?1000l ?1006l and permanently disable the very
+    // modes pi-tui relies on to scroll the message view, breaking scrolling
+    // for the rest of the session. Only opt in to mouse reporting in regular
+    // (inline) mode where pi-tui does not manage it.
+    //
+    // `tui.mode` ("regular" | "fullscreen") was added in a later pi-tui than
+    // the catalog-pinned peer; read it defensively so this compiles across
+    // versions and treats an absent/unknown mode as regular (no conflict).
+    const tuiMode = (this.tui as { mode?: "regular" | "fullscreen" }).mode;
+    this.ownsMouseReporting = tuiMode !== "fullscreen";
+    if (this.ownsMouseReporting) {
+      this.tui.terminal?.write?.("\x1b[?1000h\x1b[?1006h");
+    }
 
     const originalHandleInput = this.input.handleInput.bind(this.input);
     this.input.handleInput = (data: string) => {
@@ -1156,7 +1172,12 @@ class BtwOverlayComponent extends Container implements Focusable {
   }
 
   dispose(): void {
-    this.tui.terminal?.write?.("\x1b[?1000l\x1b[?1006l");
+    // Only undo the modes we actually enabled. In fullscreen mode pi-tui owns
+    // mouse reporting; writing the disable sequence here would break message
+    // scrolling until the TUI is restarted.
+    if (this.ownsMouseReporting) {
+      this.tui.terminal?.write?.("\x1b[?1000l\x1b[?1006l");
+    }
   }
 
   private getMouseScrollDelta(data: string): number | null {
@@ -2083,7 +2104,7 @@ export default function (pi: ExtensionAPI) {
 
       const completedTurnId = transcriptState.lastTurnId ?? transcriptState.currentTurnId;
       const streamedThinking =
-        completedTurnId !== null ? findLatestTranscriptEntry(transcriptState, completedTurnId, "thinking")?.text : "";
+        completedTurnId === null ? "" : findLatestTranscriptEntry(transcriptState, completedTurnId, "thinking")?.text;
       const answer = extractAnswer(response);
       const thinking = extractThinking(response) || streamedThinking || "";
 

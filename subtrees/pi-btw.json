@@ -1,0 +1,12 @@
+{
+  "$schema": "../schemas/subtree-metadata.schema.json",
+  "name": "pi-btw",
+  "prefix": "packages/pi-btw",
+  "source": "https://github.com/dbachelder/pi-btw.git",
+  "remote": "upstream-pi-btw",
+  "ref": "v0.4.1",
+  "version": "v0.4.1",
+  "upstreamCommit": "4f858102706910ee9d520a9666832f3103631b61",
+  "squash": true,
+  "lastSyncedAt": "2026-08-16T16:18:30+08:00"
+}
