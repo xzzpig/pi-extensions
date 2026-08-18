@@ -4,6 +4,15 @@ All notable changes to the `@xzzpig/pi-btw` fork are documented here. This
 fork tracks [`dbachelder/pi-btw`](https://github.com/dbachelder/pi-btw) via git
 subtree; entries below describe only fork-specific deviations from upstream.
 
+## 0.5.2
+
+### Fixed
+
+- **Pi package dependency bundling.** BTW now bundles compiled
+  `@xzzpig/pi-components@0.1.1` into its tarball. The published manifest has
+  no pnpm-only `workspace:*` protocol and Pi's npm installer no longer needs a
+  separately installed shared package.
+
 ## 0.5.1
 
 ### Changed

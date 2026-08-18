@@ -1,11 +1,14 @@
 {
   "name": "@xzzpig/pi-btw",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "A pi extension for parallel side conversations with /btw",
   "type": "module",
   "dependencies": {
-    "@xzzpig/pi-components": "workspace:*"
+    "@xzzpig/pi-components": "0.1.1"
   },
+  "bundledDependencies": [
+    "@xzzpig/pi-components"
+  ],
   "license": "MIT",
   "author": "Dan Bachelder",
   "repository": {
@@ -33,6 +36,7 @@
     "access": "public"
   },
   "scripts": {
+    "prepack": "npm --prefix ../pi-components run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest --run"
   },

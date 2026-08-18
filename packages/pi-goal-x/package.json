@@ -1,13 +1,16 @@
 {
   "name": "@xzzpig/pi-goal-x",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Goal mode extension for pi: durable long-running objectives, five model tools, structured tasks, independent completion audit, Sisyphus mode, auto-continue, and a status overlay.",
   "license": "MIT",
   "author": "pi-goal-x contributors",
   "type": "module",
   "dependencies": {
-    "@xzzpig/pi-components": "workspace:*"
+    "@xzzpig/pi-components": "0.1.1"
   },
+  "bundledDependencies": [
+    "@xzzpig/pi-components"
+  ],
   "keywords": [
     "pi-package",
     "pi",
@@ -44,6 +47,7 @@
     "image": "https://github.com/tmonk/pi-goal-x/raw/main/screenshot.png"
   },
   "scripts": {
+    "prepack": "npm --prefix ../pi-components run build",
     "check": "tsc --noEmit",
     "test": "node scripts/run-unit-tests.mjs",
     "test:serial": "node --experimental-strip-types --test --test-concurrency=1 tests/*.test.ts",

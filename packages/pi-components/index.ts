@@ -1,1 +1,1 @@
-export * from "./src/transcript.ts";
+export * from "./src/transcript.js";

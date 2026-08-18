@@ -2,6 +2,15 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.1.2] — 2026-08-18
+
+### Fixed
+
+- **Pi package dependency bundling.** goal-x now bundles compiled
+  `@xzzpig/pi-components@0.1.1` into its tarball. The published manifest has
+  no pnpm-only `workspace:*` protocol and Pi's npm installer no longer needs a
+  separately installed shared package.
+
 ## [0.1.1] — 2026-08-18
 
 ### Added

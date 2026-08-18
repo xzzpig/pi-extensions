@@ -1,6 +1,7 @@
 {
   "name": "@xzzpig/pi-components",
-  "version": "0.1.0",
+  "version": "0.1.1",
+  "private": true,
   "description": "Reusable transcript components for Pi extensions.",
   "license": "MIT",
   "type": "module",
@@ -10,23 +11,27 @@
     "transcript",
     "components"
   ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "files": [
-    "index.ts",
-    "src",
+    "dist",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "exports": {
     ".": {
-      "types": "./index.ts",
-      "default": "./index.ts"
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     },
     "./transcript": {
-      "types": "./src/transcript.ts",
-      "default": "./src/transcript.ts"
+      "types": "./dist/src/transcript.d.ts",
+      "default": "./dist/src/transcript.js"
     }
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest --run"
   },

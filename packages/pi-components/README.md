@@ -1,8 +1,10 @@
 # pi-components
 
-Reusable, side-effect-free Pi TUI primitives for extension authors. This is a
-shared library package, not a Pi extension: install it as a dependency of an
-extension that uses its components.
+Reusable, internal Pi TUI primitives for extension authors. This is a shared
+library package, not a Pi extension: consumer packages bundle it into their
+release tarballs instead of publishing it independently. Bundled artifacts
+expose compiled runtime JavaScript and declarations from `dist/`; the
+TypeScript source remains in this repository for development.
 
 ## Transcript components
 
