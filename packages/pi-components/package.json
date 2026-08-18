@@ -1,0 +1,49 @@
+{
+  "name": "@xzzpig/pi-components",
+  "version": "0.1.0",
+  "description": "Reusable transcript components for Pi extensions.",
+  "license": "MIT",
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi-tui",
+    "transcript",
+    "components"
+  ],
+  "files": [
+    "index.ts",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./index.ts",
+      "default": "./index.ts"
+    },
+    "./transcript": {
+      "types": "./src/transcript.ts",
+      "default": "./src/transcript.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest --run"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": ">=0.83.0 <1",
+    "@earendil-works/pi-coding-agent": ">=0.83.0 <1",
+    "@earendil-works/pi-tui": ">=0.83.0 <1"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.83.0",
+    "@earendil-works/pi-coding-agent": "catalog:",
+    "@earendil-works/pi-tui": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

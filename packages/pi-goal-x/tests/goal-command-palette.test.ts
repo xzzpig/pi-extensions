@@ -3,19 +3,20 @@
  * explicit immediate-creation escape hatch.
  */
 
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { SessionTranscript } from "@xzzpig/pi-components/transcript";
 import goalExtension from "../extensions/goal.ts";
 import { parseGoalFile } from "../extensions/storage/goal-files.ts";
 
 const CURATED_COMMANDS = [
 	"goal", "sisyphus", "goal-direct", "sisyphus-direct", "goal-tweak", "goal-pause", "goal-resume",
-	"goal-clear", "goal-list", "goal-status", "goal-refresh", "goal-recovery", "goal-focus", "goal-unfocus", "goal-settings", "goal-cancel",
+	"goal-clear", "goal-list", "goal-status", "goal-audit", "goal-refresh", "goal-recovery", "goal-focus", "goal-unfocus", "goal-settings", "goal-cancel",
 ];
 
 const REMOVED_COMMANDS = ["goals", "goals-set", "sisyphus-set", "goal-abort"];
@@ -63,18 +64,17 @@ function createHarness(cwd: string) {
 		abort: () => {},
 	} as unknown as ExtensionContext;
 	goalExtension(pi as any, {});
-	return { handlers, commands, ctx, notifications, messages, tools, getActiveTools: () => [...activeTools] };
+	const core = (pi as any)._goalCore;
+	return { handlers, commands, ctx, notifications, messages, tools, core, getActiveTools: () => [...activeTools] };
 }
 
 function activeGoalFiles(cwd: string): string[] {
-	try {
-		return readdirSync(path.join(cwd, ".pi", "goals")).filter((n) => n.startsWith("active_goal_"));
-	} catch {
-		return [];
-	}
+	const goalsDirectory = path.join(cwd, ".pi", "goals");
+	if (!existsSync(goalsDirectory)) return [];
+	return readdirSync(goalsDirectory).filter((name) => name.startsWith("active_goal_"));
 }
 
-test("exactly the fourteen curated commands are registered; legacy commands are absent", () => {
+test("exactly the seventeen curated commands are registered; legacy commands are absent", () => {
 	const cwd = mkdtempSync(path.join(tmpdir(), "goal-palette-"));
 	try {
 		const h = createHarness(cwd);
@@ -86,7 +86,51 @@ test("exactly the fourteen curated commands are registered; legacy commands are 
 		}
 		assert.equal(h.commands.size, CURATED_COMMANDS.length, "no aliases or extras");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("/goal-audit reopens the latest in-memory audit transcript after it closes", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-audit-transcript-"));
+	try {
+		const h = createHarness(cwd);
+		const transcript = new SessionTranscript();
+		transcript.appendCompletedTurn({
+			user: "Review this goal",
+			assistant: "Stored audit output.",
+		});
+		h.core.lastAuditTranscript = transcript;
+
+		let opens = 0;
+		let component: { render(width: number): string[]; handleInput(data: string): void } | undefined;
+		(h.ctx as any).hasUI = true;
+		(h.ctx as any).ui.custom = (factory: any, options: any) => {
+			opens++;
+			component = factory(
+				{ requestRender: () => {} },
+				{
+					fg: (_color: string, value: string) => value,
+					bg: (_color: string, value: string) => value,
+					bold: (value: string) => value,
+				},
+				{},
+				() => {},
+			);
+			options.onHandle({ focus: () => {}, hide: () => {} });
+			return Promise.resolve();
+		};
+
+		await h.commands.get("goal-audit")!.handler("", h.ctx);
+		assert.equal(opens, 1);
+		assert.match(component?.render(100).join("\n") ?? "", /Stored audit output/);
+		component?.handleInput("\x1b");
+		assert.equal(h.core.lastAuditTranscript, transcript);
+
+		await h.commands.get("goal-audit")!.handler("", h.ctx);
+		assert.equal(opens, 2);
+		component?.handleInput("\x1b");
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
 	}
 });
 
@@ -102,7 +146,7 @@ test("/goal <objective> starts guided drafting without creating a goal", async (
 		assert.ok(h.messages.some((message) => message.includes("GOAL CONFIRMATION")), "drafting prompt sent to agent");
 		assert.deepEqual(h.getActiveTools().filter((name) => name.startsWith("goal_") || name === "propose_goal_draft"), ["goal_question", "goal_questionnaire", "propose_goal_draft"]);
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		rmSync(cwd, { recursive: true, force: true });
 	}
 });
 
@@ -115,7 +159,7 @@ test("bare /goal begins a guided draft and asks for an objective", async () => {
 		assert.equal(activeGoalFiles(cwd).length, 0, "no goal created");
 		assert.ok(h.messages.some((message) => message.includes("ask the user what they want")), "draft prompt requests an objective");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		rmSync(cwd, { recursive: true, force: true });
 	}
 });
 
@@ -141,7 +185,7 @@ test("confirmed draft creates the proposed goal and agent-selected task plan tog
 		assert.equal(goal?.taskList?.blockCompletion, true);
 		assert.ok(h.getActiveTools().includes("update_goal"), "execution profile restored after confirmation");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		rmSync(cwd, { recursive: true, force: true });
 	}
 });
 
@@ -159,7 +203,7 @@ test("/goal-direct and /sisyphus-direct create goals immediately", async () => {
 		assert.ok(parsed.some((goal) => goal?.sisyphus === true), "sisyphus direct mode");
 		assert.ok(parsed.some((goal) => goal?.sisyphus === false), "regular direct mode");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		rmSync(cwd, { recursive: true, force: true });
 	}
 });
 
@@ -310,9 +354,5 @@ test("goal-settings: max objective length row defaults to 0 and accepts a config
 });
 
 function readFileSyncSafe(p: string): string | null {
-	try {
-		return readFileSync(p, "utf8");
-	} catch {
-		return null;
-	}
+	return existsSync(p) ? readFileSync(p, "utf8") : null;
 }

@@ -1,8 +1,11 @@
 {
   "name": "@xzzpig/pi-btw",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "A pi extension for parallel side conversations with /btw",
   "type": "module",
+  "dependencies": {
+    "@xzzpig/pi-components": "workspace:*"
+  },
   "license": "MIT",
   "author": "Dan Bachelder",
   "repository": {

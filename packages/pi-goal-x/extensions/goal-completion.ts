@@ -1,4 +1,5 @@
 import { type AgentToolResult, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { SessionTranscript } from "@xzzpig/pi-components/transcript";
 import { GOAL_AUDIT_ENTRY, detailedSummary, goalDetails, type GoalAuditEventDetails } from "./goal-format.ts";
 import {
 	buildCompletionReport,
@@ -236,6 +237,13 @@ if (settings.disabled === true) {
 	core.auditAbortController?.abort(); // Clean up any stale controller
 	const completionAuditController = new AbortController();
 	core.auditAbortController = completionAuditController;
+	const auditTranscript = new SessionTranscript({
+		maxEntries: 600,
+		maxChars: 768 * 1024,
+		maxToolResultChars: 24 * 1024,
+	});
+	core.lastAuditTranscript = auditTranscript;
+	if (ctx.hasUI) core.openAuditTranscript(ctx);
 
 	// P1-6: warm start — seed the auditor with the parent-rendered ledger tail
 	// (recent lifecycle + task evidence) so it does not re-derive session facts.
@@ -259,9 +267,15 @@ if (settings.disabled === true) {
 				elapsedMs: Date.now() - auditStartedAt,
 			};
 			core.goalWidgetComponentRef.current?.invalidate();
+			core.refreshAuditTranscript();
+		},
+		onSessionEvent: (event) => {
+			auditTranscript.apply(event);
+			core.refreshAuditTranscript();
 		},
 	});
 	// Clear abort controller — audit finished on its own
+	core.refreshAuditTranscript();
 	if (core.auditAbortController === completionAuditController) core.auditAbortController = null;
 	// Clear auditor progress display
 	core.stopAuditAnimation();
@@ -277,6 +291,7 @@ if (settings.disabled === true) {
 	// runtime state; exactly one canonical ledger event is appended here after
 	// the user's choice (follow-up Stage 2).
 	if (auditor.error === "Auditor aborted.") {
+		core.closeAuditTranscript();
 		core.auditProgress = null;
 		core.goalWidgetComponentRef.current?.invalidate();
 		core.updateUI(ctx);

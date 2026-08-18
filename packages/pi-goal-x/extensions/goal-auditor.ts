@@ -9,6 +9,7 @@ import {
 	defineTool,
 	SessionManager,
 	SettingsManager,
+	type AgentSessionEvent,
 	type ExtensionContext,
 	type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
@@ -36,6 +37,8 @@ export interface AuditorProgress {
 }
 
 export type AuditorProgressCallback = (progress: AuditorProgress) => void;
+/** Observes every nested auditor session event without affecting audit control flow. */
+export type AuditorSessionEventCallback = (event: AgentSessionEvent) => void;
 
 export interface GoalAuditorResult {
 	approved: boolean;
@@ -284,6 +287,7 @@ export async function runGoalCompletionAuditor(args: {
 	warmContext?: string | null;
 	signal?: AbortSignal;
 	onProgress?: AuditorProgressCallback;
+	onSessionEvent?: AuditorSessionEventCallback;
 	/**
 	 * Optional factory for creating the auditor agent session.
 	 * Exposed for testing so a mock/controllable session can be injected.
@@ -361,6 +365,23 @@ export async function runGoalCompletionAuditor(args: {
 			customTools: [reportProgressTool],
 		} as Parameters<typeof createAgentSession>[0]);
 		const unsubscribe = session.subscribe((event) => {
+			try {
+				args.onSessionEvent?.(event);
+			} catch {
+				// Transcript observers are presentation-only and cannot break the audit.
+			}
+			if (event.type === "auto_retry_start") {
+				progress.phase = "running";
+				progress.label = `Retrying audit (${event.attempt}/${event.maxAttempts})...`;
+				emitProgress();
+				return;
+			}
+			if (event.type === "auto_retry_end") {
+				progress.phase = "running";
+				progress.label = event.success ? "Audit retry succeeded." : "Audit retry failed.";
+				emitProgress();
+				return;
+			}
 			if (event.type === "tool_execution_start") {
 				progress.currentTool = event.toolName;
 				progress.currentToolArgs = typeof event.args === "object" && event.args !== null

@@ -56,6 +56,8 @@ When the agent reports a goal as complete, a separate pi agent reviews the objec
 
 Approved goals are archived as complete. Goals requiring additional work remain open with review feedback.
 
+With an interactive UI, the audit also opens a read-only, non-capturing live transcript overlay. It supports mouse-wheel, `Up`/`Down`, `PgUp`/`PgDn`, `Home`, and `End` scrolling while showing the isolated auditor's native user/assistant/thinking output, tool activity, results, and retries as they arrive. `Esc` or `q` closes only that overlay; the audit itself continues and the completion transaction is unchanged. Use `/goal-audit` to reopen the most recent audit transcript during the current Pi session, including after that audit has finished; it is not written to disk.
+
 ### Visible status
 
 An above-editor widget shows the focused goal: its status, focus state, other open goals, time and token usage, task progress, the current task, and the goal file path.

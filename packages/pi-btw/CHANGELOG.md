@@ -4,6 +4,15 @@ All notable changes to the `@xzzpig/pi-btw` fork are documented here. This
 fork tracks [`dbachelder/pi-btw`](https://github.com/dbachelder/pi-btw) via git
 subtree; entries below describe only fork-specific deviations from upstream.
 
+## 0.5.1
+
+### Changed
+
+- **Shared transcript runtime.** The BTW overlay now consumes
+  `@xzzpig/pi-components` for its bounded session transcript and Pi-native
+  transcript rendering. BTW retains ownership of its composer, side-thread
+  lifecycle, focus controls, and its existing mouse-scroll behavior.
+
 ## 0.5.0
 
 ### Added

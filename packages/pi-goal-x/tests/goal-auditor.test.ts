@@ -460,3 +460,47 @@ test("resolveAuditorModel resolves explicit provider/model and falls back to the
 	} as never, {} as never);
 	assert.equal(unset.model, session);
 });
+
+test("runGoalCompletionAuditor forwards session events without letting observers affect the verdict", async () => {
+	const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-goal-auditor-events-test-"));
+	try {
+		let listener: ((event: unknown) => void) | undefined;
+		const seen: string[] = [];
+		const progressLabels: string[] = [];
+		const mockSession = {
+			abort: () => {},
+			subscribe: (callback: (event: unknown) => void) => {
+				listener = callback;
+				return () => { listener = undefined; };
+			},
+			prompt: async () => {
+				listener?.({ type: "auto_retry_start", attempt: 1, maxAttempts: 3, delayMs: 500, errorMessage: "temporary failure" });
+				listener?.({ type: "tool_execution_start", toolCallId: "read-1", toolName: "read", args: { path: "README.md" } });
+				listener?.({ type: "tool_execution_end", toolCallId: "read-1", toolName: "read", result: { content: [{ type: "text", text: "ok" }] }, isError: false });
+				listener?.({ type: "auto_retry_end", success: true, attempt: 1 });
+				listener?.({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Evidence verified.\n<approved/>" }] } });
+			},
+		};
+
+		const result = await runGoalCompletionAuditor({
+			ctx: { cwd, model: undefined } as any,
+			goal: goal(),
+			detailedSummary: "test",
+			createSession: async () => ({ session: mockSession }) as any,
+			onProgress: (progress) => {
+				if (progress.label) progressLabels.push(progress.label);
+			},
+			onSessionEvent: (event) => {
+				seen.push(event.type);
+				if (event.type === "tool_execution_start") throw new Error("presentation observer failure");
+			},
+		});
+
+		assert.equal(result.approved, true);
+		assert.deepEqual(seen, ["auto_retry_start", "tool_execution_start", "tool_execution_end", "auto_retry_end", "message_end"]);
+		assert.ok(progressLabels.some((label) => label.includes("Retrying audit")));
+		assert.ok(progressLabels.some((label) => label.includes("retry succeeded")));
+	} finally {
+		fs.rmSync(cwd, { recursive: true, force: true });
+	}
+});

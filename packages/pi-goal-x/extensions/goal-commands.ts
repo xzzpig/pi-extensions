@@ -151,7 +151,10 @@ export function registerGoalCommands(core: GoalCore): void {
 		let wasBusy = false;
 		try {
 			wasBusy = !ctx.isIdle();
-		} catch {}
+		} catch (error) {
+			// Older/headless hosts may not expose idle state; default to not busy.
+			void error;
+		}
 		if (detachedGoalId && wasBusy) core.runtime.markTurnStopped(detachedGoalId);
 		core.setFocusedGoalId(null, ctx, "unfocused", { recordLedger: false });
 		core.runningGoalId = null;
@@ -161,7 +164,10 @@ export function registerGoalCommands(core: GoalCore): void {
 		if (detachedGoalId && wasBusy) {
 			try {
 				ctx.abort?.();
-			} catch {}
+			} catch (error) {
+				// Detaching focus must succeed even when the host cannot abort.
+				void error;
+			}
 		}
 		if (!current) {
 			const openCount = core.openGoals().length;
@@ -642,6 +648,12 @@ export function registerGoalCommands(core: GoalCore): void {
 		description: "Show the unified goal dashboard (read-only). Append \"verbose\" for full detail or \"health\" for storage/runtime checks.",
 		handler: async (rawArgs, ctx) => {
 			await showGoalStatus(rawArgs ?? "", ctx);
+		},
+	});
+	pi.registerCommand("goal-audit", {
+		description: "Open the most recent in-memory completion-audit transcript.",
+		handler: async (_rawArgs, ctx) => {
+			core.openAuditTranscript(ctx);
 		},
 	});
 	pi.registerCommand("goal-refresh", {

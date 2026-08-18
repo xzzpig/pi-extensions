@@ -2,6 +2,23 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.1.1] — 2026-08-18
+
+### Added
+
+- **Live completion-auditor transcript.** Interactive audits now expose the
+  independent auditor's native messages, thinking, tool activity, results, and
+  retries in a read-only overlay. `/goal-audit` reopens the most recent audit
+  transcript during the current Pi session without changing audit or completion
+  semantics.
+
+### Fixed
+
+- **Audit transcript scrolling.** The overlay now handles mouse-wheel and
+  touchpad scrolling alongside `Up`/`Down`, `PgUp`/`PgDn`, `Home`, and `End`.
+  In fullscreen mode it reuses Pi's mouse handling; in regular mode it enables
+  and releases only the terminal mouse reporting it owns.
+
 ## [0.1.0] — 2026-08-15
 
 Local `@xzzpig/pi-goal-x` fork of upstream pi-goal-x 0.27.4 (imported as a tracked subtree).
