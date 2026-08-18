@@ -10,6 +10,7 @@ import { DIRS, type AsyncJobState, type Details, type FleetKeybindingAction, typ
 import { decodeUtf8Tail } from "../shared/utf8.ts";
 import { readStatus } from "../shared/utils.ts";
 import { formatAsyncRunTranscript } from "../runs/background/fleet-view.ts";
+import { parseMouseWheelEvent } from "./mouse-events.ts";
 import { listAsyncRuns, type AsyncRunSummary } from "../runs/background/async-status.ts";
 import { steerAsyncRun } from "../runs/foreground/async-steering-action.ts";
 import type { SteerDeliveryMode } from "../runs/background/control-channel.ts";
@@ -22,6 +23,7 @@ import { getLivePromptAudit, type LivePromptAudit, type PromptAuditView } from "
 
 const REFRESH_MS = 750;
 const MIN_REFRESH_MS = 250;
+const WHEEL_SCROLL_LINES = 3;
 const MAX_RECENT_ASYNC_RUNS = 20;
 const MAX_FLEET_HISTORY_CANDIDATES = 100;
 const TRANSCRIPT_LINES = 200;
@@ -700,6 +702,7 @@ export class SubagentFleetComponent implements Component {
 	private detailLineCount = 0;
 	private detailViewportHeight = 8;
 	private bodyHeight = 8;
+	private lastRosterWidth: number | undefined;
 	private expandedTools = false;
 	private promptAuditOpen = false;
 	private promptAuditView: PromptAuditView = "authored";
@@ -904,6 +907,21 @@ export class SubagentFleetComponent implements Component {
 	}
 
 	handleInput(data: string): void {
+		const wheel = parseMouseWheelEvent(data);
+		if (wheel) {
+			// While editing draft text, ignore the wheel to avoid surprising scroll jumps.
+			if (this.steerDraft !== undefined || this.redoGuidanceDraft !== undefined) return;
+			const overRoster = this.lastRosterWidth !== undefined && wheel.x <= this.lastRosterWidth;
+			if (this.promptAuditOpen) {
+				if (overRoster) this.movePromptSelection(wheel.direction);
+				else this.scrollDetail(wheel.direction * WHEEL_SCROLL_LINES);
+			} else if (overRoster) {
+				this.moveSelection(wheel.direction);
+			} else {
+				this.scrollDetail(wheel.direction * WHEEL_SCROLL_LINES);
+			}
+			return;
+		}
 		if (this.promptAuditOpen && this.redoGuidanceDraft !== undefined) {
 			if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
 				this.resetActionInput();
@@ -1209,6 +1227,7 @@ export class SubagentFleetComponent implements Component {
 		const rows = this.tui.terminal?.rows ?? 32;
 		this.bodyHeight = Math.max(2, Math.floor(rows * 0.85) - 6);
 		const rosterWidth = Math.max(22, Math.min(46, Math.floor((innerWidth - 1) * 0.38)));
+		this.lastRosterWidth = rosterWidth;
 		const detailWidth = Math.max(1, innerWidth - rosterWidth - 1);
 		const roster = this.rosterLines(rosterWidth);
 		const detail = this.wrappedDetail(detailWidth);
@@ -1244,10 +1263,10 @@ export class SubagentFleetComponent implements Component {
 		lines.push(this.theme.fg("border", `├${"─".repeat(rosterWidth)}┴${"─".repeat(detailWidth)}┤`));
 		const position = this.snapshot.items.length ? `${this.selected + 1}/${this.snapshot.items.length}` : "0/0";
 		const footer = this.promptAuditOpen
-			? ` j/k child · 1/2/3 view · g redo with guidance · c copy · Esc close Prompt Audit · ${position}`
+			? ` j/k child · 1/2/3 view · g redo with guidance · c copy · wheel ↑↓ · Esc close Prompt Audit · ${position}`
 			: selected?.kind === "external"
-				? ` ${bindingLabel(this.keybindings, "selectUp")}/${bindingLabel(this.keybindings, "selectDown")} job · display-only · ${bindingLabel(this.keybindings, "refresh")} refresh · ${bindingLabel(this.keybindings, "close")} close · ${position}`
-				: ` ${bindingLabel(this.keybindings, "selectUp")}/${bindingLabel(this.keybindings, "selectDown")} agent · p Prompt Audit · ${bindingLabel(this.keybindings, "inspect")} Herdr · ${bindingLabel(this.keybindings, "steer")} steer · ${bindingLabel(this.keybindings, "stop")} stop · ${bindingLabel(this.keybindings, "toggleTools")} tools · ${bindingLabel(this.keybindings, "refresh")} refresh · ${bindingLabel(this.keybindings, "close")} close · ${position}`;
+				? ` ${bindingLabel(this.keybindings, "selectUp")}/${bindingLabel(this.keybindings, "selectDown")} job · display-only · ${bindingLabel(this.keybindings, "refresh")} refresh · wheel ↑↓ · ${bindingLabel(this.keybindings, "close")} close · ${position}`
+				: ` ${bindingLabel(this.keybindings, "selectUp")}/${bindingLabel(this.keybindings, "selectDown")} agent · p Prompt Audit · ${bindingLabel(this.keybindings, "inspect")} Herdr · ${bindingLabel(this.keybindings, "steer")} steer · ${bindingLabel(this.keybindings, "stop")} stop · ${bindingLabel(this.keybindings, "toggleTools")} tools · ${bindingLabel(this.keybindings, "refresh")} refresh · wheel ↑↓ · ${bindingLabel(this.keybindings, "close")} close · ${position}`;
 		lines.push(this.theme.fg("border", "│") + fit(this.theme.fg("dim", footer), innerWidth) + this.theme.fg("border", "│"));
 		lines.push(this.theme.fg("border", `╰${"─".repeat(innerWidth)}╯`));
 		return lines.map((line) => truncateToWidth(line, width));
