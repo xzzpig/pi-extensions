@@ -4,6 +4,26 @@ All notable changes to the `@xzzpig/pi-btw` fork are documented here. This
 fork tracks [`dbachelder/pi-btw`](https://github.com/dbachelder/pi-btw) via git
 subtree; entries below describe only fork-specific deviations from upstream.
 
+## 0.5.0
+
+### Added
+
+- **Overlay renders user/assistant messages with the main-window markdown
+  pipeline.** The BTW popup now renders user and assistant messages through
+  `@earendil-works/pi-coding-agent`'s `UserMessageComponent` /
+  `AssistantMessageComponent` (with `getMarkdownTheme()`), so headings, fenced
+  code blocks with syntax highlighting, lists, tables, and block quotes match
+  the main session instead of leaking raw markdown source. Thinking blocks are
+  rendered with the main-window thinking style. Tool-call/result rows stay
+  textual.
+
+### Changed
+
+- **Raised peer dependency floor to `>=0.83.0 <1`** for
+  `@earendil-works/pi-ai`, `@earendil-works/pi-coding-agent`, and
+  `@earendil-works/pi-tui`: the overlay now statically imports the main-window
+  message components.
+
 ## 0.4.1
 
 ### Fixed

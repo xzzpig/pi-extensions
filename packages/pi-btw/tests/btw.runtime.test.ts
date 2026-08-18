@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { initTheme } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, RegisteredCommand } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import btwExtension from "../extensions/btw";
@@ -98,6 +99,15 @@ const tuiMocks = vi.hoisted(() => {
     clear() {
       this.children = [];
     }
+    render(width: number) {
+      const lines: string[] = [];
+      for (const child of this.children as Array<{ render?: (width: number) => string[] }>) {
+        for (const line of child.render?.(width) ?? []) {
+          lines.push(line);
+        }
+      }
+      return lines;
+    }
   }
 
   class FakeText {
@@ -105,9 +115,20 @@ const tuiMocks = vi.hoisted(() => {
     setText(text: string) {
       this.text = text;
     }
+    render() {
+      return [this.text];
+    }
   }
 
-  class FakeSpacer {}
+  class FakeSpacer {
+    lines: number;
+    constructor(lines = 1) {
+      this.lines = lines;
+    }
+    render() {
+      return Array.from({ length: this.lines }, () => "");
+    }
+  }
   class FakeBox extends FakeContainer {}
 
   return { FakeInput, FakeContainer, FakeText, FakeSpacer, FakeBox };
@@ -430,8 +451,11 @@ function getCustomEntries(entries: SessionEntry[], customType: string): CustomEn
 }
 
 function transcriptText(overlay: any): string {
+  // Render the full dialog at a tall, wide terminal so the fixed-size viewport
+  // (derived from process.stdout.rows) does not clip content under assertion.
+  (process.stdout as any).rows = 100;
   overlay.refresh();
-  return overlay.transcript.children.map((child: any) => child.text).join("\n");
+  return overlay.render(200).join("\n");
 }
 
 function transcriptEntries(overlay: any) {
@@ -687,6 +711,7 @@ function createHarness(
 
 describe("btw runtime behavior", () => {
   beforeEach(() => {
+    initTheme();
     promptStreamMock.mockReset();
     createAgentSessionMock.mockReset();
     sessionManagerInMemoryMock.mockClear();
@@ -1172,7 +1197,7 @@ describe("btw runtime behavior", () => {
 
     const reopened = harness.latestOverlayComponent();
     const transcript = transcriptText(reopened);
-    expect(transcript).toContain("You  first question");
+    expect(transcript).toContain("first question");
     expect(transcript).toContain("Assistant");
     expect(transcript).toContain("First answer");
     expect(reopened.statusText.text).toContain("Ready for a follow-up");
@@ -1195,9 +1220,9 @@ describe("btw runtime behavior", () => {
     expect(threadEntries).toHaveLength(2);
 
     const transcript = transcriptText(overlay);
-    expect(transcript).toContain("You  first question");
+    expect(transcript).toContain("first question");
     expect(transcript).toContain("First answer");
-    expect(transcript).toContain("You  follow-up question");
+    expect(transcript).toContain("follow-up question");
     expect(transcript).toContain("Second answer");
     expect(overlay.statusText.text).toContain("Ready for a follow-up");
   });
@@ -1293,7 +1318,7 @@ describe("btw runtime behavior", () => {
 
     const transcript = transcriptText(overlay);
     expect(transcript).toContain("<bg:toolPendingBg>");
-    expect(transcript).toContain("<italic>Inspecting package.json</italic>");
+    expect(transcript).toContain("Inspecting package.json");
     expect(transcript).toContain("<bold>read</bold>");
     expect(transcript).toContain("package.json");
     expect(transcript).toContain("↳ result");
@@ -1404,10 +1429,48 @@ describe("btw runtime behavior", () => {
     await harness.command("btw", "first question");
 
     const transcript = transcriptText(harness.latestOverlayComponent());
-    expect(transcript).toContain("<bg:userMessageBg>");
-    expect(transcript).toContain("<fg:accent>");
+    // User rows are rendered by the main-window UserMessageComponent: they carry
+    // the real theme background (ANSI) and no fake badge, so they must not look
+    // like an assistant badge row.
+    const userLine = transcript.split("\n").find((line) => line.includes("first question"));
+    expect(userLine).toBeDefined();
+    expect(userLine).toContain("\x1b[48;2;");
+    expect(userLine).not.toContain("<bg:customMessageBg>");
+    // Assistant rows keep the pi-btw badge (fake theme here) plus the
+    // main-window AssistantMessageComponent body.
     expect(transcript).toContain("<bg:customMessageBg>");
     expect(transcript).toContain("<fg:success>");
+    expect(transcript).toContain("First answer");
+  });
+
+  it("renders assistant markdown through the main-window message component", async () => {
+    const harness = createHarness();
+    promptStreamMock.mockImplementation(() => streamAnswer("Hello **world** and `code`"));
+
+    await harness.runSessionStart();
+    await harness.command("btw", "show formatting");
+
+    const transcript = transcriptText(harness.latestOverlayComponent());
+    expect(transcript).toContain("world");
+    expect(transcript).toContain("code");
+    expect(transcript).not.toContain("**world**");
+    expect(transcript).not.toContain("`code`");
+  });
+
+  it("renders fenced code blocks with syntax highlighting and themed fences", async () => {
+    const harness = createHarness();
+    promptStreamMock.mockImplementation(() => streamAnswer("```ts\nconst x = 1;\n```"));
+
+    await harness.runSessionStart();
+    await harness.command("btw", "show code");
+
+    const transcript = transcriptText(harness.latestOverlayComponent());
+    const plain = transcript.replace(/\x1b\[[0-9;]*m/g, "");
+    expect(plain).toContain("```ts");
+    expect(plain).toContain("const x = 1;");
+    expect(plain).toContain("```");
+    // Syntax highlighting emits ANSI color codes inside the code body.
+    expect(transcript).toContain("\x1b[");
   });
 
   it("surfaces missing credentials as an explicit error without creating a thread entry", async () => {
@@ -1552,7 +1615,9 @@ describe("btw runtime behavior", () => {
     expect(emptyLines.at(-1)).not.toContain("<fg:accent>└");
     expect(emptyStateLine).toContain("<fg:border>│</fg:border><fg:dim>No BTW thread yet.");
     expect(emptyStateLine).not.toContain("<fg:border>│</fg:border> <fg:dim>No BTW thread yet.");
-    expect(assistantBodyLine).toContain("<fg:border>│</fg:border>    First answer");
+    expect(assistantBodyLine).toContain("<fg:border>│</fg:border>");
+    expect(assistantBodyLine).toContain("First answer");
+    expect(assistantBodyLine).not.toContain("    First answer");
     expect(inputLine).toContain("<fg:border>│</fg:border>> ");
     expect(inputLine).not.toContain("\x1b_pi:c\x07");
   });
@@ -1585,9 +1650,9 @@ describe("btw runtime behavior", () => {
 
     const postResetOverlay = harness.latestOverlayComponent();
     const postResetTranscript = transcriptText(postResetOverlay);
-    expect(postResetTranscript).not.toContain("You  first question");
+    expect(postResetTranscript).not.toContain("first question");
     expect(postResetTranscript).not.toContain("First answer");
-    expect(postResetTranscript).toContain("You  replacement question");
+    expect(postResetTranscript).toContain("replacement question");
     expect(postResetTranscript).toContain("Replacement answer");
 
     await harness.command("btw:new", "");
@@ -1645,9 +1710,9 @@ describe("btw runtime behavior", () => {
 
     const overlay = harness.latestOverlayComponent();
     const transcript = transcriptText(overlay);
-    expect(transcript).toContain("You  contextual again");
+    expect(transcript).toContain("contextual again");
     expect(transcript).toContain("default:contextual again");
-    expect(transcript).not.toContain("You  tangent start");
+    expect(transcript).not.toContain("tangent start");
     expect(transcript).not.toContain("default:tangent start");
   });
 
@@ -1662,8 +1727,8 @@ describe("btw runtime behavior", () => {
     await harness.runEvent("session_start");
     await harness.command("btw", "");
     let overlay = harness.latestOverlayComponent();
-    expect(transcriptText(overlay)).toContain("You  new q");
-    expect(transcriptText(overlay)).not.toContain("You  old q");
+    expect(transcriptText(overlay)).toContain("new q");
+    expect(transcriptText(overlay)).not.toContain("old q");
 
     await harness.command("btw", "restore-visible");
     expect(harness.overlayHandles).toHaveLength(1);
@@ -1696,9 +1761,9 @@ describe("btw runtime behavior", () => {
     await harness.command("btw", "");
     overlay = harness.latestOverlayComponent();
     const transcript = transcriptText(overlay);
-    expect(transcript).toContain("You  post-clear q");
+    expect(transcript).toContain("post-clear q");
     expect(transcript).toContain("post-clear a");
-    expect(transcript).not.toContain("You  new q");
+    expect(transcript).not.toContain("new q");
   });
 
   it("/btw:clear during active tool execution aborts the prompt, disposes the sub-session, and leaves no partial thread", async () => {
@@ -1749,7 +1814,7 @@ describe("btw runtime behavior", () => {
       await harness.command("btw", "");
       const overlay = harness.latestOverlayComponent();
       const transcript = transcriptText(overlay);
-      expect(transcript).toContain("You  restored q");
+      expect(transcript).toContain("restored q");
       expect(transcript).toContain("restored a");
       expect(overlay['modeText'].text).toContain("BTW tangent");
     }
@@ -1924,7 +1989,7 @@ describe("btw runtime behavior", () => {
     const overlay = harness.latestOverlayComponent();
     overlay.refresh();
     expect(overlay.statusText.text).toContain("Summarize failed. Thread preserved for retry or injection.");
-    expect(transcriptText(overlay)).toContain("You  first question");
+    expect(transcriptText(overlay)).toContain("first question");
     expect(transcriptText(overlay)).toContain("First answer");
     expect(harness.notifications.at(-1)).toEqual({
       message: "Summary model exploded",
@@ -1950,9 +2015,9 @@ describe("btw runtime behavior", () => {
     expect(resets.at(-1)?.data).toMatchObject({ mode: "contextual" });
 
     const transcript = transcriptText(overlay);
-    expect(transcript).not.toContain("You  first question");
+    expect(transcript).not.toContain("first question");
     expect(transcript).not.toContain("First answer");
-    expect(transcript).toContain("You  replacement question");
+    expect(transcript).toContain("replacement question");
     expect(transcript).toContain("Replacement answer");
     expect(overlay['modeText'].text).toContain("BTW");
   });
@@ -1987,9 +2052,9 @@ describe("btw runtime behavior", () => {
     expect(tangentTexts).not.toContain("main session task");
 
     const transcript = transcriptText(overlay);
-    expect(transcript).toContain("You  tangent start");
+    expect(transcript).toContain("tangent start");
     expect(transcript).toContain("default:tangent start");
-    expect(transcript).not.toContain("You  contextual start");
+    expect(transcript).not.toContain("contextual start");
     expect(overlay['modeText'].text).toContain("BTW tangent");
   });
 
@@ -2042,7 +2107,7 @@ describe("btw runtime behavior", () => {
     expect(getCustomEntries(harness.entries, "btw-thread-entry")).toHaveLength(2);
     expect(harness.notifications.some((entry) => entry.message.includes("Unsupported slash input in BTW"))).toBe(false);
     expect(overlay.statusText.text).toContain("Ready for a follow-up");
-    expect(transcriptText(overlay)).toContain("You  /plan do something else");
+    expect(transcriptText(overlay)).toContain("/plan do something else");
     expect(transcriptText(overlay)).toContain("Slash answer");
   });
 
@@ -2074,9 +2139,9 @@ describe("btw runtime behavior", () => {
     expect(getCustomEntries(harness.entries, "btw-thread-reset")).toHaveLength(0);
     expect(harness.sentUserMessages).toHaveLength(0);
     expect(overlay.statusText.text).toContain("Request failed. Thread preserved for retry or follow-up.");
-    expect(transcriptText(overlay)).toContain("You  first question");
+    expect(transcriptText(overlay)).toContain("first question");
     expect(transcriptText(overlay)).toContain("First answer");
-    expect(transcriptText(overlay)).toContain("You  /plan fail loudly");
+    expect(transcriptText(overlay)).toContain("/plan fail loudly");
     expect(transcriptText(overlay)).toContain("❌ Slash dispatch exploded");
     expect(harness.notifications.at(-1)).toEqual({
       message: "Slash dispatch exploded",

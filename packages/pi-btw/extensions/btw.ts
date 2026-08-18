@@ -1,8 +1,11 @@
 import {
+  AssistantMessageComponent,
   buildSessionContext,
   createAgentSession,
   createExtensionRuntime,
+  getMarkdownTheme,
   SessionManager,
+  UserMessageComponent,
   type AgentSession,
   type AgentSessionEvent,
   type ExtensionAPI,
@@ -784,16 +787,124 @@ function getCompletedExchangeCount(entries: BtwTranscript): number {
   return entries.filter((entry) => entry.type === "assistant-text" && !entry.streaming).length;
 }
 
-function buildOverlayTranscript(entries: BtwTranscript, theme: ExtensionContext["ui"]["theme"]): string[] {
-  if (entries.length === 0) {
+const OSC133_ZONE_RE = /\x1b\]133;[A-C]\x07/g;
+
+function stripOsc133Line(line: string): string {
+  return line.replace(OSC133_ZONE_RE, "");
+}
+
+/**
+ * Render entry describing one block of the BTW overlay transcript.
+ * User and assistant messages are rendered with the main-window components
+ * (UserMessageComponent / AssistantMessageComponent) so markdown, thinking,
+ * and code highlighting match the main session; tool blocks stay textual.
+ */
+type OverlayAssistantMessage = NonNullable<ConstructorParameters<typeof AssistantMessageComponent>[0]>;
+
+type OverlayBlock =
+  | { kind: "separator" }
+  | { kind: "user"; text: string }
+  | { kind: "assistant"; message: OverlayAssistantMessage }
+  | { kind: "tool-call"; toolName: string; args: string }
+  | { kind: "tool-result"; content: string; truncated: boolean; isError: boolean; streaming: boolean };
+
+function findLatestTranscriptTextEntry(
+  entries: BtwTranscript,
+  turnId: number,
+  type: "thinking" | "assistant-text",
+): Extract<BtwTranscriptEntry, { type: "thinking" | "assistant-text" }> | undefined {
+  for (let i = entries.length - 1; i >= 0; i--) {
+    const entry = entries[i];
+    if (entry.turnId === turnId && entry.type === type) {
+      return entry as Extract<BtwTranscriptEntry, { type: "thinking" | "assistant-text" }>;
+    }
+  }
+
+  return undefined;
+}
+
+function buildOverlayBlocks(entries: BtwTranscript): OverlayBlock[] {
+  const blocks: OverlayBlock[] = [];
+  // Maps a turn id to the index of its (single) assistant block so streaming
+  // thinking/text updates mutate that block instead of duplicating it.
+  const assistantIndexes = new Map<number, number>();
+
+  const upsertAssistantBlock = (turnId: number, thinking: string, text: string) => {
+    const content: OverlayAssistantMessage["content"] = [];
+    if (thinking) {
+      content.push({ type: "thinking", thinking } as (typeof content)[number]);
+    }
+    if (text) {
+      content.push({ type: "text", text } as (typeof content)[number]);
+    }
+    if (content.length === 0) {
+      return;
+    }
+
+    const message = { role: "assistant", content, stopReason: "stop" } as OverlayAssistantMessage;
+    const existingIndex = assistantIndexes.get(turnId);
+    if (existingIndex !== undefined) {
+      blocks[existingIndex] = { kind: "assistant", message };
+      return;
+    }
+
+    assistantIndexes.set(turnId, blocks.length);
+    blocks.push({ kind: "assistant", message });
+  };
+
+  for (const entry of entries) {
+    switch (entry.type) {
+      case "turn-boundary": {
+        if (entry.phase === "start" && blocks.length > 0) {
+          blocks.push({ kind: "separator" });
+        }
+        break;
+      }
+      case "user-message": {
+        blocks.push({ kind: "user", text: entry.text });
+        break;
+      }
+      case "thinking": {
+        const text = findLatestTranscriptTextEntry(entries, entry.turnId, "assistant-text")?.text ?? "";
+        upsertAssistantBlock(entry.turnId, entry.text, text);
+        break;
+      }
+      case "assistant-text": {
+        const thinking = findLatestTranscriptTextEntry(entries, entry.turnId, "thinking")?.text ?? "";
+        upsertAssistantBlock(entry.turnId, thinking, entry.text);
+        break;
+      }
+      case "tool-call": {
+        blocks.push({ kind: "tool-call", toolName: entry.toolName, args: entry.args });
+        break;
+      }
+      case "tool-result": {
+        blocks.push({
+          kind: "tool-result",
+          content: entry.content,
+          truncated: entry.truncated,
+          isError: entry.isError,
+          streaming: entry.streaming,
+        });
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  return blocks;
+}
+
+function renderOverlayBlocks(blocks: OverlayBlock[], innerWidth: number, theme: ExtensionContext["ui"]["theme"]): string[] {
+  if (blocks.length === 0) {
     return [theme.fg("dim", "No BTW thread yet. Ask a side question to start one.")];
   }
 
   const lines: string[] = [];
-  const userBadge = buildTranscriptBadge(theme, "You", "userMessageBg", "accent");
-  const thinkingBadge = buildTranscriptBadge(theme, "Thinking", "toolPendingBg", "warning");
-  const toolBadge = buildTranscriptBadge(theme, "Tool", "toolPendingBg", "warning");
+  const markdownTheme = getMarkdownTheme();
   const assistantBadge = buildTranscriptBadge(theme, "Assistant", "customMessageBg", "success");
+  const toolBadge = buildTranscriptBadge(theme, "Tool", "toolPendingBg", "warning");
   const separator = theme.fg("borderMuted", "────────────────────────────────────────");
   const blockIndent = "    ";
   const resultIndent = blockIndent;
@@ -840,53 +951,57 @@ function buildOverlayTranscript(entries: BtwTranscript, theme: ExtensionContext[
     }
   };
 
-  for (const entry of entries) {
-    if (entry.type === "turn-boundary") {
-      if (entry.phase === "start" && lines.length > 0) {
+  const renderMessageComponent = (component: { render: (width: number) => string[] }) => {
+    return component.render(innerWidth).map(stripOsc133Line);
+  };
+
+  for (const block of blocks) {
+    switch (block.kind) {
+      case "separator": {
         pushBlankLine();
         lines.push(separator);
+        break;
       }
-      continue;
-    }
-
-    if (entry.type === "user-message") {
-      pushInlineBlock(userBadge, entry.text, { blankBefore: false });
-      continue;
-    }
-
-    if (entry.type === "thinking") {
-      const thinkingHeader = entry.streaming ? `${thinkingBadge} ${theme.fg("warning", "▍")}` : thinkingBadge;
-      pushStackedBlock(thinkingHeader, entry.text, {
-        style: (line) => theme.fg("warning", theme.italic(line)),
-      });
-      continue;
-    }
-
-    if (entry.type === "tool-call") {
-      const toolLabel = theme.fg("warning", theme.bold(entry.toolName));
-      const argsLabel = entry.args ? theme.fg("dim", ` · ${entry.args}`) : "";
-      pushInlineBlock(toolBadge, `${toolLabel}${argsLabel}`);
-      continue;
-    }
-
-    if (entry.type === "tool-result") {
-      const resultHeaderLabel = entry.isError
-        ? theme.fg("error", "↳ error")
-        : entry.streaming
-          ? theme.fg("warning", "↳ streaming result")
-          : theme.fg("dim", "↳ result");
-      const truncationLabel = entry.truncated ? theme.fg("dim", " (truncated)") : "";
-      pushStackedBlock(`${resultHeaderLabel}${truncationLabel}`, entry.content, {
-        blankBefore: false,
-        indent: resultIndent,
-        style: (line) => (entry.isError ? theme.fg("error", line) : theme.fg("dim", line)),
-      });
-      continue;
-    }
-
-    if (entry.type === "assistant-text") {
-      const assistantHeader = entry.streaming ? `${assistantBadge} ${theme.fg("warning", "▍")}` : assistantBadge;
-      pushStackedBlock(assistantHeader, entry.text);
+      case "user": {
+        const rendered = renderMessageComponent(new UserMessageComponent(block.text, markdownTheme, 1));
+        for (const line of rendered) {
+          lines.push(line);
+        }
+        break;
+      }
+      case "assistant": {
+        pushBlankLine();
+        lines.push(assistantBadge);
+        const rendered = renderMessageComponent(
+          new AssistantMessageComponent(block.message, false, markdownTheme, "Thinking", 1),
+        );
+        for (const line of rendered) {
+          lines.push(line);
+        }
+        break;
+      }
+      case "tool-call": {
+        const toolLabel = theme.fg("warning", theme.bold(block.toolName));
+        const argsLabel = block.args ? theme.fg("dim", ` · ${block.args}`) : "";
+        pushInlineBlock(toolBadge, `${toolLabel}${argsLabel}`);
+        break;
+      }
+      case "tool-result": {
+        const resultHeaderLabel = block.isError
+          ? theme.fg("error", "↳ error")
+          : block.streaming
+            ? theme.fg("warning", "↳ streaming result")
+            : theme.fg("dim", "↳ result");
+        const truncationLabel = block.truncated ? theme.fg("dim", " (truncated)") : "";
+        pushStackedBlock(`${resultHeaderLabel}${truncationLabel}`, block.content, {
+          blankBefore: false,
+          indent: resultIndent,
+          style: (line) => (block.isError ? theme.fg("error", line) : theme.fg("dim", line)),
+        });
+        break;
+      }
+      default:
+        break;
     }
   }
 
@@ -1021,7 +1136,6 @@ function buildTranscriptBadge(
 
 class BtwOverlayComponent extends Container implements Focusable {
   private readonly input: Input;
-  private readonly transcript: Container;
   private readonly statusText: Text;
   private readonly modeText: Text;
   private readonly summaryText: Text;
@@ -1034,7 +1148,6 @@ class BtwOverlayComponent extends Container implements Focusable {
   private readonly onUnfocusCallback: () => void;
   private readonly tui: TUI;
   private readonly theme: ExtensionContext["ui"]["theme"];
-  private transcriptLines: string[] = [];
   private transcriptScrollOffset = 0;
   private transcriptViewportHeight = 8;
   private followTranscript = true;
@@ -1077,7 +1190,6 @@ class BtwOverlayComponent extends Container implements Focusable {
 
     this.modeText = new Text("", 1, 0);
     this.summaryText = new Text("", 1, 0);
-    this.transcript = new Container();
     this.statusText = new Text("", 1, 0);
 
     this.input = new Input();
@@ -1148,9 +1260,9 @@ class BtwOverlayComponent extends Container implements Focusable {
     return this.theme.fg("border", `${left}${"─".repeat(innerWidth)}${right}`);
   }
 
-  private wrapTranscript(innerWidth: number): string[] {
+  private wrapTranscript(lines: string[], innerWidth: number): string[] {
     const wrapped: string[] = [];
-    for (const line of this.transcriptLines) {
+    for (const line of lines) {
       if (!line) {
         wrapped.push("");
         continue;
@@ -1248,7 +1360,12 @@ class BtwOverlayComponent extends Container implements Focusable {
   override render(width: number): string[] {
     const dialogWidth = Math.max(24, width);
     const innerWidth = Math.max(22, dialogWidth - 2);
-    const transcriptLines = this.wrapTranscript(innerWidth);
+    // Rebuild the transcript blocks on every render: user/assistant messages
+    // go through the main-window components (markdown-aware), tool blocks stay
+    // textual. Component output is already wrapped to innerWidth, so the extra
+    // wrap below only guards long tool-result lines.
+    const blocks = buildOverlayBlocks(this.readTranscriptEntries());
+    const transcriptLines = this.wrapTranscript(renderOverlayBlocks(blocks, innerWidth, this.theme), innerWidth);
     const dialogHeight = this.getDialogHeight();
     const chromeHeight = BTW_OVERLAY_CHROME_LINES;
     const transcriptHeight = Math.max(6, dialogHeight - chromeHeight);
@@ -1319,12 +1436,6 @@ class BtwOverlayComponent extends Container implements Focusable {
     const active = hasStreamingTranscriptEntry(entries) ? " · streaming" : " · idle";
     this.summaryTextValue = `${exchanges} exchange${exchanges === 1 ? "" : "s"}${active}`;
     this.summaryText.setText(this.summaryTextValue);
-
-    this.transcriptLines = buildOverlayTranscript(entries, this.theme);
-    this.transcript.clear();
-    for (const line of this.transcriptLines) {
-      this.transcript.addChild(new Text(line, 1, 0));
-    }
 
     const status = this.getStatus() ?? "Ready. Enter submits; Escape dismisses without clearing.";
     this.statusTextValue = status;

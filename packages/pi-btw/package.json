@@ -1,6 +1,6 @@
 {
   "name": "@xzzpig/pi-btw",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "description": "A pi extension for parallel side conversations with /btw",
   "type": "module",
   "license": "MIT",
@@ -43,9 +43,9 @@
     "image": "https://raw.githubusercontent.com/dbachelder/pi-btw/main/docs/btw-overlay.png"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": ">=0.74.0 <1",
-    "@earendil-works/pi-coding-agent": ">=0.74.0 <1",
-    "@earendil-works/pi-tui": ">=0.74.0 <1"
+    "@earendil-works/pi-ai": ">=0.83.0 <1",
+    "@earendil-works/pi-coding-agent": ">=0.83.0 <1",
+    "@earendil-works/pi-tui": ">=0.83.0 <1"
   },
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "catalog:",
