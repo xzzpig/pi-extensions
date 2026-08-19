@@ -23,7 +23,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { parseAuditorDecision } from "../extensions/goal-auditor.ts";
+import { parseGoalAuditorStructuredResult } from "../extensions/goal-auditor.ts";
 import { buildCompactionSummary } from "../extensions/goal-compaction.ts";
 import { readGoalLedger, reconstructGoalLedger } from "../extensions/goal-ledger.ts";
 import { resolveSessionFocus } from "../extensions/goal-pool.ts";
@@ -264,7 +264,11 @@ test("golden: legacy paused+autoContinue:true record stays paused through markdo
 		assert.equal(parsed.status, "paused", "parsed legacy record must stay paused");
 		assert.equal(parsed.autoContinue, true, "autoContinue flag survives as data");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try {
+			rmSync(cwd, { recursive: true, force: true });
+		} catch {
+			// Temp fixture cleanup is best effort; a failed cleanup must not mask its assertions.
+		}
 	}
 });
 
@@ -418,16 +422,21 @@ test("golden: compaction summary for an empty session", () => {
 	].join("\n"));
 });
 
-// ── Auditor verdict marker contract ─────────────────────────────────────────
+// ── Structured completion-audit verdict contract ───────────────────────────
 
-test("golden: auditor verdict marker contract is final-line approval/disapproval", () => {
-	// Pins the <approved/> / <disapproved/> marker contract that the completion
-	// audit currently uses. parseAuditorDecision requires the marker to be the
-	// final non-empty line (#20); a prose mention anywhere else is not a verdict.
-	assert.deepEqual(parseAuditorDecision("Looks good\n<approved/>"), { approved: true, disapproved: false });
-	assert.deepEqual(parseAuditorDecision("Nope\n<disapproved/>"), { approved: false, disapproved: true });
-	assert.deepEqual(parseAuditorDecision("confused <approved/> <disapproved/>"), { approved: false, disapproved: false });
-	assert.deepEqual(parseAuditorDecision("no marker"), { approved: false, disapproved: false });
+test("golden: completion audit accepts only a schema-shaped structured verdict", () => {
+	assert.deepEqual(parseGoalAuditorStructuredResult({
+		verdict: "approved",
+		report: "Evidence verified.",
+		findings: [],
+	}), {
+		value: { verdict: "approved", report: "Evidence verified.", findings: [] },
+	});
+	assert.match(parseGoalAuditorStructuredResult("Looks good\n<approved/>").error ?? "", /JSON object/);
+	assert.match(
+		parseGoalAuditorStructuredResult({ verdict: "approved", report: "Evidence verified." }).error ?? "",
+		/findings/,
+	);
 });
 
 // ── Sanity: serializeGoalFile still emits the fixture shape ─────────────────

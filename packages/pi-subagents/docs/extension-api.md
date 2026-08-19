@@ -133,6 +133,26 @@ Boundaries:
 - It is side-effect-free for launch state: it does not create child sessions, temp prompt files, structured-output runtimes, tool-diagnostic files, or run artifacts.
 - Some host-owned facts, such as exact fork snapshots, nested async roots, and live model registries, can only be proven by the Pi host; those appear as `host_required` diagnostics instead of silently pretending to be exact.
 
+## Agent ejection API
+
+Use `@xzzpig/pi-subagents/agent-management` when an extension needs to make a bundled agent editable without parsing model-facing management output:
+
+```ts
+import { ejectAgentDefinition } from "@xzzpig/pi-subagents/agent-management";
+
+const result = ejectAgentDefinition({
+  cwd: ctx.cwd,
+  agent: "reviewer",
+  scope: "project",
+  projectTrusted: ctx.isProjectTrusted(),
+});
+
+if (!result.ok) throw new Error(result.message);
+console.log(result.targetPath, result.verification.launchPreflighted);
+```
+
+The operation never overwrites an existing agent, chain, or conflicting file. Package-relative tool, extension, and skill paths are normalized before writing. After rediscovery, it validates copied skills and the static child launch tool plan; if that check fails, it removes only the new file created by that call and returns `preflight_failed`. Host-dependent checks such as the live model registry and actual child process startup remain the responsibility of the caller's normal launch preflight/execution path.
+
 ## Structured delegation API
 
 Other Pi extensions can ask `pi-subagents` to run one configured foreground leaf agent through the structured delegation API. It uses the established `prompt-template:subagent:*` event family and the same executor as the `subagent` tool; it does not add another launcher.

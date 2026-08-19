@@ -59,6 +59,7 @@ test("published extension APIs use supported package entrypoints", async () => {
 		"./capability-ceiling": "./src/api/capability-ceiling.ts",
 		"./delegation": "./src/api/delegation.ts",
 		"./preflight": "./src/api/preflight.ts",
+		"./agent-management": "./src/api/agent-management.ts",
 		"./control-channel": "./src/api/control-channel.ts",
 		"./intercom-bridge": "./src/api/intercom-bridge.ts",
 		"./pi-args": "./src/api/pi-args.ts",
@@ -82,6 +83,9 @@ test("published extension APIs use supported package entrypoints", async () => {
 	const preflight = await import("@xzzpig/pi-subagents/preflight");
 	assert.equal(preflight.SUBAGENT_LAUNCH_CONTRACT_VERSION, 2);
 	assert.equal(typeof preflight.resolveSubagentLaunchContract, "function");
+	const agentManagement = await import("@xzzpig/pi-subagents/agent-management");
+	assert.equal(agentManagement.AGENT_MANAGEMENT_API_VERSION, 1);
+	assert.equal(typeof agentManagement.ejectAgentDefinition, "function");
 	const controlChannel = await import("@xzzpig/pi-subagents/control-channel");
 	assert.equal(typeof controlChannel.requestAsyncStop, "function");
 	const intercomBridge = await import("@xzzpig/pi-subagents/intercom-bridge");

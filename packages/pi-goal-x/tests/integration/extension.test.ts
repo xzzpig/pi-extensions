@@ -28,6 +28,7 @@ interface Harness {
 	notifies: Array<{ msg: string; level: string }>;
 	activeToolsHistory: string[][];
 	terminalInputHandler: ((data: string) => unknown) | null;
+	core: any;
 }
 
 interface HarnessOptions {
@@ -86,8 +87,9 @@ function createHarness(options: HarnessOptions): Harness {
 	} as unknown as ExtensionContext;
 	goalExtension(pi as any, options.runCompletionAuditor ? { runCompletionAuditor: options.runCompletionAuditor } : {});
 	return {
-		handlers, tools, commands, ctx, notifies, activeToolsHistory,
-		get terminalInputHandler() { return terminalInputHandler; },
+			handlers, tools, commands, ctx, notifies, activeToolsHistory,
+			core: (pi as any)._goalCore,
+			get terminalInputHandler() { return terminalInputHandler; },
 	};
 }
 
@@ -132,7 +134,7 @@ function fixture(opts: { objective?: string; skipAuditor?: boolean; tasksEnabled
 	const sessionEntries = [
 		{ type: "custom", customType: "pi-goal-focus", data: goalFocusDetails(goal.id, "created") },
 	];
-	const cleanup = () => { try { rmSync(cwd, { recursive: true, force: true }); } catch {} };
+	const cleanup = () => { rmSync(cwd, { recursive: true, force: true }); };
 	return { cwd, goal: written, sessionEntries, cleanup };
 }
 
@@ -186,7 +188,7 @@ describe("five-tool handler integration", () => {
 			}
 			assert.ok(getActiveToolsCalls >= 1, "profile install at session_start calls getActiveTools once");
 		} finally {
-			try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+			rmSync(cwd, { recursive: true, force: true });
 		}
 	});
 
@@ -282,6 +284,30 @@ describe("five-tool handler integration", () => {
 			const text = result.content?.[0]?.text ?? "";
 			assert.ok(text.includes("Goal audit rejected"), "rejection feedback");
 			assert.equal(activeGoalFiles(f.cwd).length, 1, "goal stays open");
+		} finally {
+			f.cleanup();
+		}
+	});
+
+	it("D-11/I-06/I-07/I-16: a throwing auditor fails closed and releases completion runtime state", async () => {
+		const f = fixture();
+		try {
+			const h = createHarness({
+				cwd: f.cwd,
+				sessionEntries: f.sessionEntries,
+				runCompletionAuditor: async () => { throw new Error("preflight fixture exploded"); },
+			});
+			await start(h);
+			const update = h.tools.get("update_goal")!;
+			const result = await (update.execute as any)("u-audit-throw", { status: "complete" }, new AbortController().signal, undefined, h.ctx);
+			const text = result.content?.[0]?.text ?? "";
+			assert.match(text, /Goal auditor failed unexpectedly: preflight fixture exploded/);
+			assert.equal(activeGoalFiles(f.cwd).length, 1, "the goal remains active after an auditor failure");
+			const events = ledgerEvents(f.cwd).filter((event) => event.type === "audit_result");
+			assert.equal(events.length, 1, "exactly one audit result is recorded");
+			assert.equal(events[0]?.verdict, "error");
+			assert.equal(h.core.auditAbortController, null);
+			assert.equal(h.core.auditAnimationTimer, null);
 		} finally {
 			f.cleanup();
 		}
@@ -426,7 +452,7 @@ describe("five-tool handler integration", () => {
 			return existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : {};
 		};
 
-		it("displays every one of the nine persisted rows and reflects file values", async () => {
+		it("displays every one of the eleven persisted rows and reflects file values", async () => {
 			const f = fixture();
 			try {
 				writeFileSync(settingsPath(f.cwd), JSON.stringify({
@@ -443,8 +469,9 @@ describe("five-tool handler integration", () => {
 				await start(h);
 				await h.commands.get("goal-settings").handler("", h.ctx);
 				const lines = firstOptions.filter((o) => o.startsWith("  ") && !o.startsWith("  ───"));
-				assert.equal(lines.length, 10, `all ten rows rendered, got: ${lines.join(" | ")}`);
+				assert.equal(lines.length, 11, `all eleven rows rendered, got: ${lines.join(" | ")}`);
 				assert.ok(lines.some((l) => l === "  auditor disabled: true"));
+				assert.ok(lines.some((l) => l === "  auditor agent: goal-auditor"));
 				assert.ok(lines.some((l) => l === "  provider: anthropic"));
 				assert.ok(lines.some((l) => l === "  model: (default)"));
 				assert.ok(lines.some((l) => l === "  thinking_level: high"));
@@ -837,7 +864,7 @@ describe("completion transaction hardening (follow-up Stage 3)", () => {
 			const snapText = snapshot.content?.[0]?.text ?? "";
 			assert.ok(snapText.includes("Status: running"), `goal still open and active: ${snapText.slice(0, 100)}`);
 		} finally {
-			try { chmodSync(goalsDir, 0o755); } catch {}
+			chmodSync(goalsDir, 0o755);
 			f.cleanup();
 		}
 	});

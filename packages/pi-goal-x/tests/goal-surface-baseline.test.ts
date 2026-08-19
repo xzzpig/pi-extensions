@@ -88,7 +88,7 @@ const EXPECTED_REGISTERED_COMMANDS = [
 	"sisyphus-direct",
 	"goal-list",
 	"goal-status",
-	"goal-audit",
+	"goal-subagent-eject",
 	"goal-refresh",
 	"goal-recovery",
 	"goal-focus",

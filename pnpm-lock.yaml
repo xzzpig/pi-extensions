@@ -78,9 +78,9 @@ importers:
 
   packages/pi-goal-x:
     dependencies:
-      '@xzzpig/pi-components':
-        specifier: 0.1.1
-        version: link:../pi-components
+      '@xzzpig/pi-subagents':
+        specifier: 0.4.2
+        version: link:../pi-subagents
     devDependencies:
       '@earendil-works/pi-ai':
         specifier: ^0.84.1

@@ -19,7 +19,7 @@ import {
 import { clearGoalCommandMessage, validateResumeGoal } from "./goal-policy.ts";
 import { invalidateGoalLedgerCache, readGoalLedger } from "./goal-ledger.ts";
 import { buildGoalStatusText } from "./goal-status.ts";
-import { effectiveSettingsReport, envOverrideFor, invalidateGoalSettingsCache } from "./goal-settings.ts";
+import { AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE, DEFAULT_AUDITOR_AGENT, effectiveSettingsReport, envOverrideFor, invalidateGoalSettingsCache } from "./goal-settings.ts";
 import { invalidateGoalPoolCache, mergeGoalPromptFromDisk, readActiveGoalPool } from "./storage/goal-files.ts";
 import { nowIso, type GoalMode, type GoalRecord } from "./goal-record.ts";
 import { clearGoalDrafting, hasActiveDraft, startGoalDrafting } from "./goal-drafting.ts";
@@ -31,6 +31,17 @@ export interface GoalRefreshState {
 	ledgerMalformed: number;
 	/** Stable fingerprint of the effective settings (JSON of the parsed file). */
 	settings: string;
+}
+
+const AGENT_MANAGEMENT_MODULE = "@xzzpig/pi-subagents/agent-management";
+
+interface AgentManagementApi {
+	ejectAgentDefinition(input: {
+		cwd: string;
+		agent: string;
+		scope: "user" | "project";
+		projectTrusted?: boolean;
+	}): { ok: boolean; message: string };
 }
 
 /**
@@ -175,6 +186,48 @@ export function registerGoalCommands(core: GoalCore): void {
 			return;
 		}
 		ctx.ui.notify(`Goal unfocused for this session. It remains open in .pi/goals: ${current.id}`, "info");
+	}
+
+	async function ejectGoalAuditorCommand(rawArgs: string, ctx: ExtensionContext): Promise<void> {
+		const requestedScope = rawArgs.trim().toLowerCase();
+		let scope: "user" | "project" | undefined;
+		if (requestedScope === "global") scope = "user";
+		else if (requestedScope === "project") scope = "project";
+		else if (requestedScope) {
+			ctx.ui.notify("Usage: /goal-subagent-eject global|project", "warning");
+			return;
+		} else if (!ctx.hasUI) {
+			ctx.ui.notify("Usage: /goal-subagent-eject global|project", "warning");
+			return;
+		} else {
+			core.enterGoalModal();
+			try {
+				const selected = await ctx.ui.select("Eject goal auditor", ["Global", "Project"]);
+				if (selected === "Global") scope = "user";
+				else if (selected === "Project") scope = "project";
+				else return;
+			} finally {
+				core.exitGoalModal();
+			}
+		}
+		if (scope === "project" && (typeof ctx.isProjectTrusted !== "function" || !ctx.isProjectTrusted())) {
+			ctx.ui.notify("Project scope ejection requires a trusted project.", "warning");
+			return;
+		}
+		let ejected: { ok: boolean; message: string };
+		try {
+			const management = await import(AGENT_MANAGEMENT_MODULE) as AgentManagementApi;
+			ejected = management.ejectAgentDefinition({
+				cwd: ctx.cwd,
+				agent: "goal-auditor",
+				scope,
+				...(scope === "project" ? { projectTrusted: true } : {}),
+			});
+		} catch (error) {
+			ctx.ui.notify(`Unable to load pi-subagents agent-management API: ${error instanceof Error ? error.message : String(error)}`, "error");
+			return;
+		}
+		ctx.ui.notify(ejected.message, ejected.ok ? "info" : "error");
 	}
 
 	function handleDirectGoalSet(rawObjective: string, ctx: ExtensionContext, mode: GoalMode): void {
@@ -357,15 +410,13 @@ export function registerGoalCommands(core: GoalCore): void {
 	/**
 	 * One declarative row table for the settings menu (follow-up Stage 1).
 	 * Rendering and dispatch both derive from SETTING_ROWS so the displayed
-	 * fields and the selectable fields can never drift apart. Rows are grouped
-	 * into sections (Goal behavior / Task tracking / Completion auditor). All
-	 * eight persisted fields are present and operable.
+	 * fields are present and operable.
 	 */
 	type SettingRow = {
 		key: keyof GoalSettings;
 		label: string;
 		section: "Goal behavior" | "Task tracking" | "Completion auditor";
-		kind: "boolean" | "modelSelector" | "thinking" | "positiveInteger";
+		kind: "boolean" | "modelSelector" | "thinking" | "positiveInteger" | "agentName";
 	};
 
 	const SETTING_ROWS: readonly SettingRow[] = [
@@ -376,6 +427,7 @@ export function registerGoalCommands(core: GoalCore): void {
 		{ key: "disableTasks", label: "disableTasks", section: "Task tracking", kind: "boolean" },
 		{ key: "subtaskDepth", label: "subtaskDepth", section: "Task tracking", kind: "positiveInteger" },
 		{ key: "disabled", label: "auditor disabled", section: "Completion auditor", kind: "boolean" },
+		{ key: "auditorAgent", label: "auditor agent", section: "Completion auditor", kind: "agentName" },
 		{ key: "provider", label: "provider", section: "Completion auditor", kind: "modelSelector" },
 		{ key: "model", label: "model", section: "Completion auditor", kind: "modelSelector" },
 		{ key: "thinkingLevel", label: "thinking_level", section: "Completion auditor", kind: "thinking" },
@@ -385,6 +437,7 @@ export function registerGoalCommands(core: GoalCore): void {
 		if (key === "disabled" || key === "disableTasks" || key === "disableContracts" || key === "autoSelectSingleGoal" || key === "auditorProjectResources") {
 			return config[key] === true ? "true" : "false";
 		}
+		if (key === "auditorAgent") return config.auditorAgent ?? DEFAULT_AUDITOR_AGENT;
 		if (key === "subtaskDepth") return config.subtaskDepth !== undefined ? String(config.subtaskDepth) : "1";
 		if (key === "stallTimeoutMinutes") return config.stallTimeoutMinutes !== undefined ? String(config.stallTimeoutMinutes) : "0";
 		if (key === "objectiveMaxChars") return config.objectiveMaxChars !== undefined ? String(config.objectiveMaxChars) : "0";
@@ -394,7 +447,9 @@ export function registerGoalCommands(core: GoalCore): void {
 	}
 
 	function settingsLines(config: GoalSettings): string[] {
-		return SETTING_ROWS.map((row) => `${row.label}: ${settingsValue(config, row.key)}`);
+		const lines = SETTING_ROWS.map((row) => `${row.label}: ${settingsValue(config, row.key)}`);
+		if (config.auditorProjectResources === true) lines.push(`NOTE: ${AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE}`);
+		return lines;
 	}
 
 	async function handleSettingsMenu(ctx: ExtensionContext): Promise<void> {
@@ -430,6 +485,9 @@ export function registerGoalCommands(core: GoalCore): void {
 					}
 					const envVar = envOverrideFor(row.key);
 					options.push(envVar ? `  ${row.label}: ${settingsValue(config, row.key)} (env: ${envVar} — read-only)` : `  ${row.label}: ${settingsValue(config, row.key)}`);
+				}
+				if (config.auditorProjectResources === true) {
+					options.push(`  Note: ${AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE}`);
 				}
 				options.push("Done");
 				const selected = await ctx.ui.select("Goal settings", options);
@@ -472,7 +530,18 @@ export function registerGoalCommands(core: GoalCore): void {
 				ctx.ui.notify(`Settings saved:\n${settingsLines(loadGoalSettingsFileConfig(ctx.cwd)).join("\n")}`, "info");
 				continue;
 			}
-			if (row.kind === "thinking") {
+				if (row.kind === "agentName") {
+					const input = await ctx.ui.input(`Set ${row.label}`, settingsValue(config, key));
+					if (input === undefined) continue;
+					const next: GoalSettings = { ...config };
+					const agentName = input.trim();
+					if (!agentName || agentName === DEFAULT_AUDITOR_AGENT) delete next.auditorAgent;
+					else next.auditorAgent = agentName;
+					saveSettings(next);
+					ctx.ui.notify(`Settings saved:\n${settingsLines(loadGoalSettingsFileConfig(ctx.cwd)).join("\n")}`, "info");
+					continue;
+				}
+				if (row.kind === "thinking") {
 				const currentValue = settingsValue(config, key);
 				const levels = thinkingLevelChoices(currentValue === "(default)" ? undefined : currentValue);
 				const picked = await ctx.ui.select(`Set ${row.label}`, levels);
@@ -650,10 +719,10 @@ export function registerGoalCommands(core: GoalCore): void {
 			await showGoalStatus(rawArgs ?? "", ctx);
 		},
 	});
-	pi.registerCommand("goal-audit", {
-		description: "Open the most recent in-memory completion-audit transcript.",
-		handler: async (_rawArgs, ctx) => {
-			core.openAuditTranscript(ctx);
+	pi.registerCommand("goal-subagent-eject", {
+		description: "Eject the default completion-auditor agent to global or project scope for customization.",
+		handler: async (rawArgs, ctx) => {
+			await ejectGoalAuditorCommand(rawArgs ?? "", ctx);
 		},
 	});
 	pi.registerCommand("goal-refresh", {

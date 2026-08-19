@@ -2,16 +2,32 @@
 
 All notable changes to pi-goal-x are documented here.
 
-## [0.1.2] — 2026-08-18
+## [Unreleased]
+
+## [0.2.0] — 2026-08-20 (fork release)
+
+### Changed
+
+- **Structured completion delegation.** Goal completion reviews now run through the public `@xzzpig/pi-subagents/delegation` foreground protocol with a fresh `goal-auditor` child, schema-validated `{ verdict, report, findings }` output, precise cancellation, and normal Pi settings/retry behavior. There is no embedded `AgentSession` fallback.
+- **Configurable package auditor.** Goal-X ships `goal-auditor` as a package agent with strict default tools, a child-only progress provider, normal `subagents.agentOverrides`, explicit MCP direct-tool selection, and the `auditorAgent` setting. `auditorProjectResources` remains readable but is deprecated and ignored.
 
 ### Fixed
 
-- **Pi package dependency bundling.** goal-x now bundles compiled
-  `@xzzpig/pi-components@0.1.1` into its tarball. The published manifest has
-  no pnpm-only `workspace:*` protocol and Pi's npm installer no longer needs a
-  separately installed shared package.
+- **Cancellation closure.** Escape or unfocus cancellation now has a bounded fail-closed settlement path, and a structured approval received after cancellation can never complete the goal.
+- **Bare extension loading.** Direct `pi -e .../goal.ts -e .../pi-subagents/index.ts` launches materialize a process-private default `goal-auditor` with an absolute progress-provider path when package discovery cannot supply one, preventing `Unknown agent: goal-auditor` during completion audit.
+- **Auditor progress projection.** The child-only progress provider sends a versioned record in its tool-result text. The foreground `pi-subagents` executor normalizes native `message_end` tool-result events into bounded progress output, so Goal-X restores phase and percentage from `recentOutputLines` rather than display-only tool arguments.
 
-## [0.1.1] — 2026-08-18
+### Removed
+
+- **Goal-owned audit transcripts.** Removed the live transcript overlay, `/goal-audit`, in-memory transcript state, and the `@xzzpig/pi-components` runtime/bundle dependency. Detailed review activity is available from pi-subagents Fleet/transcript; the five-stage dashboard and result cards remain.
+
+### Added
+
+- **`/goal-subagent-eject global|project`.** Ejects the default auditor to user or trusted-project scope without overwriting a definition, chain, or file. The generated definition preserves required package-relative resources and passes discovery/preflight.
+
+
+
+## [0.1.2] — 2026-08-18
 
 ### Added
 

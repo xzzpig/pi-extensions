@@ -76,6 +76,7 @@ interface ProgressSummary {
 	currentToolArgs?: string;
 	currentToolStartedAt?: number;
 	currentPath?: string;
+	recentOutput?: string[];
 	turnCount?: number;
 	tokens?: number;
 	durationMs: number;
@@ -4154,6 +4155,43 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(result.progress.status, "completed");
 		assert.ok(result.progress.durationMs > 0, "should track duration");
 	});
+
+	it("projects tool results from message_end/toolResult and deduplicates a duplicate tool_result_end", async () => {
+		const progressText = "Progress reported: Inspecting workspace... (20%)\npi-goal-x:audit-progress:v1:{\"label\":\"Inspecting workspace...\",\"percentage\":20}";
+		const toolResult = {
+			role: "toolResult" as const,
+			toolCallId: "progress-call-1",
+			toolName: "report_auditor_progress",
+			content: [{ type: "text" as const, text: progressText }],
+			isError: false,
+		};
+		const updates: Array<{ details?: { progress?: ProgressSummary[] } }> = [];
+		mockPi.onCall({
+			jsonl: [
+				{ type: "tool_execution_start", toolCallId: "progress-call-1", toolName: "report_auditor_progress", args: { label: "Inspecting workspace...", percentage: 20 } },
+				{ type: "message_end", message: toolResult },
+				{ type: "tool_result_end", message: toolResult },
+				{ type: "tool_execution_end", toolCallId: "progress-call-1", toolName: "report_auditor_progress" },
+				events.assistantMessage("Done"),
+			],
+		});
+
+		const result = await runSync(tempDir, makeAgentConfigs(["echo"]), "echo", "Report progress", {
+			acceptance: false,
+			onUpdate: (update: { details?: { progress?: ProgressSummary[] } }) => updates.push(update),
+		});
+
+		const progressRecords = result.progress.recentOutput?.filter((line) => line.includes("pi-goal-x:audit-progress:v1:")) ?? [];
+		assert.equal(result.exitCode, 0);
+		assert.equal(progressRecords.length, 1, "duplicate host event shapes must not duplicate the tool result");
+		assert.equal(
+			updates.some((update) => update.details?.progress?.some((entry) => entry.recentOutput?.some((line) => line.includes("Inspecting workspace...")))),
+			true,
+			"live snapshots must expose the actual tool-result text",
+		);
+		assert.equal(result.messages.filter((message) => (message as { role?: string; toolCallId?: string }).role === "toolResult" && (message as { toolCallId?: string }).toolCallId === "progress-call-1").length, 1);
+	});
+
 
 	it("streams progress while a foreground child has not emitted output", async () => {
 		const updates: Array<{ text: string; durationMs: number | undefined }> = [];

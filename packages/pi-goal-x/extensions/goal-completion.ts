@@ -1,5 +1,4 @@
 import { type AgentToolResult, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { SessionTranscript } from "@xzzpig/pi-components/transcript";
 import { GOAL_AUDIT_ENTRY, detailedSummary, goalDetails, type GoalAuditEventDetails } from "./goal-format.ts";
 import {
 	buildCompletionReport,
@@ -7,8 +6,8 @@ import {
 	taskCompletionBlockWarning,
 	validateGoalCompletion,
 } from "./goal-policy.ts";
-import { loadGoalSettings, loadGoalSettingsFileConfig } from "./goal-settings.ts";
-import { runGoalCompletionAuditor } from "./goal-auditor.ts";
+import { loadGoalSettings } from "./goal-settings.ts";
+import { runGoalCompletionAuditor, type GoalAuditorResult } from "./goal-auditor.ts";
 import { nowIso, type GoalRecord } from "./goal-record.ts";
 import { latestEventsForGoal, readGoalLedger } from "./goal-ledger.ts";
 import { mergeGoalPromptFromDisk } from "./storage/goal-files.ts";
@@ -60,10 +59,10 @@ export async function runGoalCompletionFlow(core: GoalCore, ctx: ExtensionContex
 	} catch {
 		// Ledger append failure should not block completion
 	}
-	const settings = loadGoalSettingsFileConfig(ctx.cwd);
+	const settings = loadGoalSettings(ctx.cwd);
 	const auditorLabel = settings.provider || settings.model || settings.thinkingLevel
-		? `${settings.provider ?? "default"}/${settings.model ?? "default"}${settings.thinkingLevel ? `:${settings.thinkingLevel}` : ""}`
-		: "default";
+		? `${settings.auditorAgent ?? "goal-auditor"} (${settings.provider ?? "default"}/${settings.model ?? "default"}${settings.thinkingLevel ? `:${settings.thinkingLevel}` : ""})`
+		: (settings.auditorAgent ?? "goal-auditor");
 
 /**
  * Single transaction for every successful completion commit — audit-approved,
@@ -213,7 +212,7 @@ if (settings.disabled === true) {
 	} catch {
 		// Ledger append failure should not block completion
 	}
-	// Set up auditor progress display (before createAgentSession)
+	// Set up the high-level dashboard before dispatching the delegated child.
 	const auditStartedAt = Date.now();
 	core.auditProgress = {
 		recentOutput: [],
@@ -233,17 +232,11 @@ if (settings.disabled === true) {
 	}, 80);
 	core.auditAnimationTimer?.unref?.();
 
-	// Create a dedicated AbortController for the audit so it can be interrupted via Escape
-	core.auditAbortController?.abort(); // Clean up any stale controller
+	// Create a dedicated AbortController for the audit so Escape can cancel the
+	// exact structured-delegation attempt without touching other child runs.
+	core.auditAbortController?.abort();
 	const completionAuditController = new AbortController();
 	core.auditAbortController = completionAuditController;
-	const auditTranscript = new SessionTranscript({
-		maxEntries: 600,
-		maxChars: 768 * 1024,
-		maxToolResultChars: 24 * 1024,
-	});
-	core.lastAuditTranscript = auditTranscript;
-	if (ctx.hasUI) core.openAuditTranscript(ctx);
 
 	// P1-6: warm start — seed the auditor with the parent-rendered ledger tail
 	// (recent lifecycle + task evidence) so it does not re-derive session facts.
@@ -253,32 +246,37 @@ if (settings.disabled === true) {
 		? `Recent goal events (from the shared ledger):\n${warmTail.map((e) => `- ${e.at} ${e.type}${"taskId" in e ? ` (task ${e.taskId})` : ""}${"evidence" in e && e.evidence ? ` evidence: ${e.evidence}` : ""}`).join("\n")}`
 		: null;
 
-	const auditor = await (core.dependencies.runCompletionAuditor ?? runGoalCompletionAuditor)({
-		ctx,
-		goal: auditTarget,
-		detailedSummary: detailedSummary(auditTarget),
-		completionSummary: completionSummary?.trim() || undefined,
-		settings: loadGoalSettings(ctx.cwd),
-		warmContext,
-		signal: completionAuditController.signal,
-		onProgress: (progress) => {
-			core.auditProgress = {
-				...progress,
-				elapsedMs: Date.now() - auditStartedAt,
-			};
-			core.goalWidgetComponentRef.current?.invalidate();
-			core.refreshAuditTranscript();
-		},
-		onSessionEvent: (event) => {
-			auditTranscript.apply(event);
-			core.refreshAuditTranscript();
-		},
-	});
-	// Clear abort controller — audit finished on its own
-	core.refreshAuditTranscript();
-	if (core.auditAbortController === completionAuditController) core.auditAbortController = null;
-	// Clear auditor progress display
-	core.stopAuditAnimation();
+	let auditor: GoalAuditorResult;
+	try {
+		auditor = await (core.dependencies.runCompletionAuditor ?? runGoalCompletionAuditor)({
+			ctx,
+			events: core.pi.events,
+			goal: auditTarget,
+			detailedSummary: detailedSummary(auditTarget),
+			completionSummary: completionSummary?.trim() || undefined,
+			settings,
+			warmContext,
+			signal: completionAuditController.signal,
+			onProgress: (progress) => {
+				core.auditProgress = {
+					...progress,
+					auditorLabel,
+					elapsedMs: Date.now() - auditStartedAt,
+				};
+				core.goalWidgetComponentRef.current?.invalidate();
+			},
+		});
+	} catch (error) {
+		auditor = {
+			approved: false,
+			disapproved: true,
+			output: "",
+			error: `Goal auditor failed unexpectedly: ${error instanceof Error ? error.message : String(error)}`,
+		};
+	} finally {
+		if (core.auditAbortController === completionAuditController) core.auditAbortController = null;
+		core.stopAuditAnimation();
+	}
 	if (!core.isFocusedOperationCurrent(completionFocus)) {
 		core.auditProgress = null;
 		core.goalWidgetComponentRef.current?.invalidate();
@@ -291,7 +289,6 @@ if (settings.disabled === true) {
 	// runtime state; exactly one canonical ledger event is appended here after
 	// the user's choice (follow-up Stage 2).
 	if (auditor.error === "Auditor aborted.") {
-		core.closeAuditTranscript();
 		core.auditProgress = null;
 		core.goalWidgetComponentRef.current?.invalidate();
 		core.updateUI(ctx);

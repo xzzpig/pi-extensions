@@ -126,6 +126,7 @@ describe("public subagent delegation contract", () => {
 
 	it("runs structured delegation through the concurrent executor and preserves literal text metadata", async () => {
 		const events = new FakeEvents();
+		const toolResultRecord = "pi-goal-x:audit-progress:v1:{\"label\":\"Inspecting workspace...\",\"percentage\":20}";
 		let ordinaryCalls = 0;
 		let observedParams: Record<string, unknown> | undefined;
 		const bridge = registerPromptTemplateDelegationBridge({
@@ -137,7 +138,7 @@ describe("public subagent delegation contract", () => {
 			},
 			executeStructured: async (_id, params, _signal, _ctx, onUpdate) => {
 				observedParams = params as unknown as Record<string, unknown>;
-				onUpdate({ details: { mode: "single", runId: "run-1", results: [{ agent: "reviewer", model: "openai/gpt-5", thinking: "high" }], progress: [{ currentTool: "read" }] } });
+				onUpdate({ details: { mode: "single", runId: "run-1", results: [{ agent: "reviewer", model: "openai/gpt-5", thinking: "high" }], progress: [{ currentTool: "read", recentOutput: [toolResultRecord] }] } });
 				return {
 					details: {
 						mode: "single",
@@ -162,7 +163,16 @@ describe("public subagent delegation contract", () => {
 		const responsePromise = once(events, SUBAGENT_DELEGATION_RESPONSE_EVENT);
 		events.emit(SUBAGENT_DELEGATION_REQUEST_EVENT, textRequest);
 		assert.deepEqual(await startedPromise, { requestId: "attempt-1", ownerRunId: "owner-1", nodeId: "node-1" });
-		assert.deepEqual(await updatePromise, { requestId: "attempt-1", ownerRunId: "owner-1", nodeId: "node-1", runId: "run-1", currentTool: "read", model: "openai/gpt-5" });
+		assert.deepEqual(await updatePromise, {
+			requestId: "attempt-1",
+			ownerRunId: "owner-1",
+			nodeId: "node-1",
+			runId: "run-1",
+			currentTool: "read",
+			recentOutput: toolResultRecord,
+			recentOutputLines: [toolResultRecord],
+			model: "openai/gpt-5",
+		});
 		assert.deepEqual(await responsePromise, {
 			requestId: "attempt-1",
 			ownerRunId: "owner-1",
@@ -319,7 +329,7 @@ describe("public subagent delegation contract", () => {
 		releases.get("first")?.();
 		releases.get("second")?.();
 		while (responses.length < 2) await tick();
-		assert.deepEqual(responses.map(({ ownerRunId, nodeId, status }) => ({ ownerRunId, nodeId, status })).sort((a, b) => a.ownerRunId.localeCompare(b.ownerRunId)), [
+		assert.deepEqual(responses.map(({ ownerRunId, nodeId, status }) => ({ ownerRunId, nodeId, status })).sort((a, b) => (a.ownerRunId ?? "").localeCompare(b.ownerRunId ?? "")), [
 			{ ownerRunId: "owner-1", nodeId: "node-1", status: "completed" },
 			{ ownerRunId: "owner-2", nodeId: "node-2", status: "completed" },
 		]);

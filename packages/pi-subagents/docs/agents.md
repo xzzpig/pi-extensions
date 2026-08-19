@@ -86,7 +86,7 @@ Disable and restore:
 - `disabled: true` hides a builtin from runtime discovery and agent-facing `subagent({ action: "list" })` output.
 - `subagents.disableBuiltins: true` disables all builtins at once.
 - `subagent({ action: "disable", agent: "reviewer" })` writes the override without editing settings by hand; `subagent({ action: "enable", agent: "reviewer" })` removes it.
-- `subagent({ action: "eject", agent: "reviewer" })` copies a bundled builtin or package agent verbatim into the user or project agent dir (default `user`) as an editable custom file that shadows the original.
+- `subagent({ action: "eject", agent: "reviewer" })` copies a bundled builtin or package agent into the user or project agent dir (default `user`) as an editable custom file that shadows the original. Relative resource paths are normalized to stable paths; ejection validates copied skills and launch tool configuration, and removes only the new file when that validation fails.
 - `subagent({ action: "reset", agent: "reviewer" })` deletes the scope's custom agent file and/or settings override entry, restoring the bundled default. It refuses if no bundled default exists (use `delete` for purely custom agents).
 
 `eject`, `disable`, `enable`, and `reset` accept `agentScope: "user" | "project"` and operate in one scope at a time. Project overrides still win over user ones, so a project-scope disable survives a user-scope `enable` until you target the project scope.

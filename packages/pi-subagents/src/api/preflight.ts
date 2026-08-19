@@ -163,11 +163,15 @@ export type SubagentLaunchContractResult =
 
 function packageVersion(): string {
 	const packagePath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "package.json");
-	const parsed = JSON.parse(fs.readFileSync(packagePath, "utf-8")) as { version?: unknown };
-	if (typeof parsed.version !== "string" || !parsed.version.trim()) {
-		throw new Error(`Invalid package version in '${packagePath}'.`);
+	try {
+		const parsed = JSON.parse(fs.readFileSync(packagePath, "utf-8")) as { version?: unknown };
+		if (typeof parsed.version !== "string" || !parsed.version.trim()) {
+			throw new Error("version must be a non-empty string.");
+		}
+		return parsed.version;
+	} catch (error) {
+		throw new Error(`Invalid package version in '${packagePath}': ${error instanceof Error ? error.message : String(error)}`);
 	}
-	return parsed.version;
 }
 
 function stableJson(value: unknown): string {

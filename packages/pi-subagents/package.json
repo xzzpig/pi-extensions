@@ -1,6 +1,6 @@
 {
   "name": "@xzzpig/pi-subagents",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Pi extension for single-agent delegation and scripted multi-agent workflows",
   "author": "Nico Bailon",
   "license": "MIT",
@@ -12,6 +12,7 @@
     "./delegation": "./src/api/delegation.ts",
     "./capability-ceiling": "./src/api/capability-ceiling.ts",
     "./preflight": "./src/api/preflight.ts",
+    "./agent-management": "./src/api/agent-management.ts",
     "./control-channel": "./src/api/control-channel.ts",
     "./intercom-bridge": "./src/api/intercom-bridge.ts",
     "./pi-args": "./src/api/pi-args.ts",

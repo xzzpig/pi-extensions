@@ -9,7 +9,7 @@
  *
  * The file may contain:
  *   disableTasks, disableContracts, subtaskDepth,
- *   provider, model, thinkingLevel, disabled, objectiveMaxChars, keybindings
+ *   provider, model, thinkingLevel, auditorAgent, disabled, objectiveMaxChars, keybindings
  *
  * `keybindings.dashboard` accepts `toggleExpand`, `scrollUp`, and `scrollDown`.
  *
@@ -21,6 +21,9 @@ import * as path from "node:path";
 import type { KeyId } from "@earendil-works/pi-tui";
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+
+export const DEFAULT_AUDITOR_AGENT = "goal-auditor";
+export const AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE = "auditorProjectResources is deprecated and ignored. Configure the selected auditor agent's extensions, subagentOnlyExtensions, skills, and tools instead.";
 
 export interface GoalDashboardKeybindings {
 	toggleExpand: KeyId;
@@ -66,9 +69,11 @@ export interface GoalSettings {
 	provider?: string;
 	model?: string;
 	thinkingLevel?: ThinkingLevel;
+	/** Configured pi-subagents agent name; defaults to goal-auditor. */
+	auditorAgent?: string;
 	disabled?: boolean;
 	autoSelectSingleGoal?: boolean;
-	/** E3: load the project's own skills/extensions into auditor sessions (off by default = isolation). */
+	/** @deprecated Retained for compatibility only; auditor resources now come from the selected agent definition. */
 	auditorProjectResources?: boolean;
 	/** F5: stall detector timeout in minutes (0 = off). */
 	stallTimeoutMinutes?: number;
@@ -121,6 +126,7 @@ const ALLOWED_SETTINGS_KEYS = new Set([
 	"model",
 	"thinkingLevel",
 	"thinking_level",
+	"auditorAgent",
 	"disabled",
 	"autoSelectSingleGoal",
 	"auditorProjectResources",
@@ -222,12 +228,14 @@ export function parseGoalSettings(raw: unknown): GoalSettings {
 	const provider = asNonEmptyString(record.provider);
 	const model = asNonEmptyString(record.model);
 	const thinkingLevel = asThinkingLevel(record.thinkingLevel ?? record.thinking_level);
+	const auditorAgent = asNonEmptyString(record.auditorAgent);
 	if (disableTasks !== undefined) settings.disableTasks = disableTasks;
 	if (disableContracts !== undefined) settings.disableContracts = disableContracts;
 	if (subtaskDepth !== undefined) settings.subtaskDepth = subtaskDepth;
 	if (provider !== undefined) settings.provider = provider;
 	if (model !== undefined) settings.model = model;
 	if (thinkingLevel !== undefined) settings.thinkingLevel = thinkingLevel;
+	if (auditorAgent !== undefined) settings.auditorAgent = auditorAgent;
 	if (record.disabled === true || record.disabled === "true") settings.disabled = true;
 	if (record.autoSelectSingleGoal === true || record.autoSelectSingleGoal === "true") settings.autoSelectSingleGoal = true;
 	if (record.auditorProjectResources === true || record.auditorProjectResources === "true") settings.auditorProjectResources = true;
@@ -275,6 +283,7 @@ export function loadGoalSettings(cwd: string, env: NodeJS.ProcessEnv = process.e
 		provider: fileConfig.provider,
 		model: fileConfig.model,
 		thinkingLevel: fileConfig.thinkingLevel,
+		auditorAgent: fileConfig.auditorAgent ?? DEFAULT_AUDITOR_AGENT,
 		disabled: fileConfig.disabled,
 		autoSelectSingleGoal: fileConfig.autoSelectSingleGoal ?? false,
 		auditorProjectResources: fileConfig.auditorProjectResources ?? false,
@@ -321,7 +330,8 @@ export function effectiveSettingsReport(cwd: string, env: NodeJS.ProcessEnv = pr
 		{ key: "provider", label: "provider", format: (v) => v.provider ?? "(default)" },
 		{ key: "model", label: "model", format: (v) => v.model ?? "(default)" },
 		{ key: "thinkingLevel", label: "thinking_level", format: (v) => v.thinkingLevel ?? "(default)" },
-		{ key: "auditorProjectResources", label: "auditor project resources", format: (v) => (v.auditorProjectResources === true ? "true" : "false") },
+		{ key: "auditorAgent", label: "auditor agent", format: (v) => v.auditorAgent ?? DEFAULT_AUDITOR_AGENT },
+		{ key: "auditorProjectResources", label: "auditor project resources (deprecated; ignored)", format: (v) => (v.auditorProjectResources === true ? "true" : "false") },
 		{ key: "stallTimeoutMinutes", label: "stall timeout (minutes)", format: (v) => String(v.stallTimeoutMinutes ?? 0) },
 		{ key: "objectiveMaxChars", label: "max objective length (0 = none)", format: (v) => String(v.objectiveMaxChars ?? 0) },
 		{ key: "keybindings", label: "dashboard keybindings", format: (v) => `${v.keybindings?.dashboard.toggleExpand ?? DEFAULT_GOAL_KEYBINDINGS.dashboard.toggleExpand}, ${v.keybindings?.dashboard.scrollUp ?? DEFAULT_GOAL_KEYBINDINGS.dashboard.scrollUp}, ${v.keybindings?.dashboard.scrollDown ?? DEFAULT_GOAL_KEYBINDINGS.dashboard.scrollDown}` },
@@ -331,6 +341,9 @@ export function effectiveSettingsReport(cwd: string, env: NodeJS.ProcessEnv = pr
 		const value = row.format(effective);
 		const source = envVar ? `env (${envVar})` : row.key in fileConfig ? "file" : "default";
 		lines.push(`  ${row.label}: ${value} (${source})`);
+	}
+	if (Object.prototype.hasOwnProperty.call(fileConfig, "auditorProjectResources")) {
+		lines.push(`  NOTE: ${AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE}`);
 	}
 	lines.push(`  settings file: ${goalSettingsPath(cwd, env)}`);
 	const fileOverride = envOverrideFor("settingsFile", env);
@@ -347,12 +360,14 @@ export function saveGoalSettingsFileConfig(cwd: string, settings: GoalSettings):
 	const provider = asNonEmptyString(settings.provider);
 	const model = asNonEmptyString(settings.model);
 	const thinkingLevel = asThinkingLevel(settings.thinkingLevel);
+	const auditorAgent = asNonEmptyString(settings.auditorAgent);
 	const disableTasks = asBool(settings.disableTasks);
 	const disableContracts = asBool(settings.disableContracts);
 	const subtaskDepth = asPositiveInt(settings.subtaskDepth);
 	if (provider) clean.provider = provider;
 	if (model) clean.model = model;
 	if (thinkingLevel) clean.thinkingLevel = thinkingLevel;
+	if (auditorAgent && auditorAgent !== DEFAULT_AUDITOR_AGENT) clean.auditorAgent = auditorAgent;
 	if (settings.disabled === true) clean.disabled = true;
 	if (disableTasks === true) clean.disableTasks = true;
 	if (disableContracts === true) clean.disableContracts = true;
@@ -369,6 +384,7 @@ export function saveGoalSettingsFileConfig(cwd: string, settings: GoalSettings):
 	if (clean.provider) persisted.provider = clean.provider;
 	if (clean.model) persisted.model = clean.model;
 	if (clean.thinkingLevel) persisted.thinking_level = clean.thinkingLevel;
+	if (clean.auditorAgent) persisted.auditorAgent = clean.auditorAgent;
 	if (clean.disabled) persisted.disabled = true;
 	if (clean.disableTasks) persisted.disableTasks = true;
 	if (clean.disableContracts) persisted.disableContracts = true;

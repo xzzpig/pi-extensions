@@ -20,7 +20,8 @@ import {
 	saveGoalSettingsFileConfig,
 	effectiveSettingsReport,
 	formatGoalKeybinding,
-	type GoalSettings,
+	DEFAULT_AUDITOR_AGENT,
+	AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE,
 } from "../extensions/goal-settings.ts";
 
 // ── parseGoalSettings ───────────────────────────────────────────────────
@@ -67,6 +68,12 @@ test("parseGoalSettings: autoSelectSingleGoal accepted as bool or string", () =>
 	assert.deepEqual(parseGoalSettings({ autoSelectSingleGoal: "true" }), { autoSelectSingleGoal: true });
 	assert.deepEqual(parseGoalSettings({ autoSelectSingleGoal: false }), {});
 	assert.deepEqual(parseGoalSettings({ autoSelectSingleGoal: "false" }), {});
+});
+
+test("parseGoalSettings: auditorAgent accepts a non-empty agent name", () => {
+	assert.deepEqual(parseGoalSettings({ auditorAgent: "project-auditor" }), { auditorAgent: "project-auditor" });
+	assert.deepEqual(parseGoalSettings({ auditorAgent: "  " }), {});
+	assert.deepEqual(parseGoalSettings({ auditorAgent: 42 }), {});
 });
 
 test("parseGoalSettings: unknown keys rejected", () => {
@@ -189,6 +196,7 @@ test("loadGoalSettings: no file, no env vars -> defaults false", () => {
 		assert.equal(result.disableTasks, false);
 		assert.equal(result.disableContracts, false);
 		assert.equal(result.autoSelectSingleGoal, false, "autoSelectSingleGoal defaults to false");
+		assert.equal(result.auditorAgent, DEFAULT_AUDITOR_AGENT, "auditorAgent resolves to the package default");
 	});
 });
 
@@ -317,7 +325,22 @@ test("effectiveSettingsReport: objectiveMaxChars row shows the effective value a
 	});
 });
 
-// ── Integration: prompt suppression with settings ────────────────────────
+test("saveGoalSettingsFileConfig: auditor agent round-trips and deprecated resources are reported", () => {
+	withTempDir((dir) => {
+		saveGoalSettingsFileConfig(dir, {
+			auditorAgent: "project-auditor",
+			auditorProjectResources: true,
+		});
+		const loaded = loadGoalSettingsFileConfig(dir);
+		assert.equal(loaded.auditorAgent, "project-auditor");
+		assert.equal(loaded.auditorProjectResources, true);
+		assert.equal(loadGoalSettings(dir, {}).auditorAgent, "project-auditor");
+		const report = effectiveSettingsReport(dir, {});
+		assert.ok(report.some((line) => line.includes("auditor agent: project-auditor (file)")));
+		assert.ok(report.some((line) => line.includes(AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE)));
+	});
+});
+
 
 import {
 	goalPrompt,

@@ -1,5 +1,4 @@
 import { type AgentToolResult, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { SessionTranscript } from "@xzzpig/pi-components/transcript";
 import type { TUI } from "@earendil-works/pi-tui";
 import { FOCUS_ENTRY, STATE_ENTRY, GOAL_EVENT_ENTRY, goalDetails } from "./goal-format.ts";
 import { loadGoalSettings, loadGoalSettingsFileConfig } from "./goal-settings.ts";
@@ -44,10 +43,6 @@ import {
 import { buildGoalRunningNotification } from "./widgets/goal-notifications.ts";
 import { GOAL_WIDGET_KEY, GoalWidgetComponent, liveDisplayGoal, makeGoalWidgetFactory, type AuditorWidgetProgress } from "./widgets/goal-widget.ts";
 import type { AuditVerdict } from "./widgets/auditor-dashboard-model.ts";
-import {
-	openAuditorTranscriptOverlay,
-	type AuditorTranscriptOverlay,
-} from "./widgets/auditor-transcript-overlay.ts";
 import { runGoalCompletionAuditor } from "./goal-auditor.ts";
 
 
@@ -70,11 +65,6 @@ export interface GoalCore {
 	auditProgress: AuditorWidgetProgress | null;
 	auditAnimationTimer: ReturnType<typeof setInterval> | null;
 	auditAbortController: AbortController | null;
-	/** Most recent completion-audit transcript, held only for this Pi session. */
-	lastAuditTranscript: SessionTranscript | null;
-	openAuditTranscript(ctx: ExtensionContext): boolean;
-	refreshAuditTranscript(): void;
-	closeAuditTranscript(): void;
 	/** §15.4: finished audit result card shown briefly before the dashboard returns. */
 	auditResult: { verdict: AuditVerdict; report: string; at: string } | null;
 	setAuditResult(verdict: AuditVerdict, report: string): void;
@@ -257,52 +247,6 @@ export function createGoalCore(
 		auditResult = null;
 	}
 	let auditAbortController: AbortController | null = null;
-	let lastAuditTranscript: SessionTranscript | null = null;
-	let auditTranscriptOverlay: AuditorTranscriptOverlay | null = null;
-
-	function auditTranscriptStatus(): string {
-		if (!auditProgress) return "Most recent completion audit. Press Esc to close.";
-		const label = auditProgress.label ?? "Auditing...";
-		return auditProgress.percentage === undefined
-			? label
-			: `${label} (${auditProgress.percentage}%)`;
-	}
-
-	function openAuditTranscript(ctx: ExtensionContext): boolean {
-		if (!lastAuditTranscript) {
-			ctx.ui.notify("No completion audit transcript is available in this Pi session.", "info");
-			return false;
-		}
-		if (!ctx.hasUI || typeof ctx.ui.custom !== "function") {
-			ctx.ui.notify("Completion audit transcripts require an interactive Pi UI.", "warning");
-			return false;
-		}
-
-		let opened: AuditorTranscriptOverlay | null = null;
-		opened = openAuditorTranscriptOverlay(ctx, {
-			transcript: lastAuditTranscript,
-			getStatus: auditTranscriptStatus,
-			onClose: () => {
-				if (auditTranscriptOverlay === opened) auditTranscriptOverlay = null;
-			},
-		});
-		auditTranscriptOverlay = opened;
-		if (!opened) {
-			ctx.ui.notify("Could not open the completion audit transcript.", "error");
-			return false;
-		}
-		return true;
-	}
-
-	function refreshAuditTranscript(): void {
-		auditTranscriptOverlay?.refresh();
-	}
-
-	function closeAuditTranscript(): void {
-		auditTranscriptOverlay?.close();
-		auditTranscriptOverlay = null;
-	}
-
 	let auditAborted = false;
 
 	let goalModalDepth = 0;
@@ -1026,15 +970,6 @@ export function createGoalCore(
 		set auditAbortController(value: AbortController | null) {
 			auditAbortController = value;
 		},
-		get lastAuditTranscript() {
-			return lastAuditTranscript;
-		},
-		set lastAuditTranscript(value: SessionTranscript | null) {
-			lastAuditTranscript = value;
-		},
-		openAuditTranscript,
-		refreshAuditTranscript,
-		closeAuditTranscript,
 		get goalModalDepth() {
 			return goalModalDepth;
 		},

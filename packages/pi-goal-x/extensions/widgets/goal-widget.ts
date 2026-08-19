@@ -87,17 +87,17 @@ export function makeGoalWidgetFactory(opts: {
 	return (tui: TUI, theme: Theme) => {
 		opts.onTui?.(tui);
 		return new GoalWidgetComponent({
-		tui,
-		theme,
-		getGoal: opts.getGoal,
-		getOpenGoalCount: opts.getOpenGoalCount,
-		getAuditorProgress: opts.getAuditorProgress,
-		getSettings: opts.getSettings,
-		getDebugMode: opts.getDebugMode,
-		getStalled: opts.getStalled,
-		getExpanded: opts.getExpanded,
-		getLedgerEvents: opts.getLedgerEvents,
-		getAuditResult: opts.getAuditResult,
+			tui,
+			theme,
+			getGoal: opts.getGoal,
+			getOpenGoalCount: opts.getOpenGoalCount,
+			getAuditorProgress: opts.getAuditorProgress,
+			getSettings: opts.getSettings,
+			getDebugMode: opts.getDebugMode,
+			getStalled: opts.getStalled,
+			getExpanded: opts.getExpanded,
+			getLedgerEvents: opts.getLedgerEvents,
+			getAuditResult: opts.getAuditResult,
 		});
 	};
 }

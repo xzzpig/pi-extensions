@@ -12,6 +12,7 @@ import {
 	defaultInheritProjectContext,
 	defaultInheritSkills,
 	defaultSystemPromptMode,
+	discoverAgents,
 	discoverAgentsAll,
 	buildRuntimeName,
 	frontmatterNameForConfig,
@@ -24,11 +25,12 @@ import {
 import { serializeAgent } from "./agent-serializer.ts";
 import { mergeAgentsForScope } from "./agent-selection.ts";
 import { serializeChain, serializeJsonChain } from "./chain-serializer.ts";
-import { discoverAvailableSkills, resolveSkills } from "./skills.ts";
+import { discoverAvailableSkills, resolveSkills, resolveSkillsWithFallback } from "./skills.ts";
 import {
 	buildProactiveSkillSubagentRecommendationLines,
 } from "./proactive-skills.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
+import { resolvePiLaunchToolPlan } from "../runs/shared/pi-args.ts";
 import { toModelInfo } from "../shared/model-info.ts";
 import { resolveSubagentModelOverride, type ParentModel } from "../runs/shared/model-fallback.ts";
 import { validateToolBudgetConfig } from "../runs/shared/tool-budget.ts";
@@ -37,6 +39,60 @@ import { validateAcceptanceInput } from "../runs/shared/acceptance.ts";
 import type { AcceptanceInput, Details, ExtensionConfig, ToolBudgetConfig } from "../shared/types.ts";
 import { getProjectConfigDir } from "../shared/utils.ts";
 import { capabilityCeilingAgentRestrictionSources, isAgentAllowedByCapabilityCeiling, resolveCurrentSubagentCapabilityCeiling } from "../runs/shared/capability-ceiling.ts";
+
+export const AGENT_MANAGEMENT_API_VERSION = 1 as const;
+
+export type AgentEjectionScope = "user" | "project";
+
+export type AgentEjectionErrorCode =
+	| "invalid_agent"
+	| "untrusted_project"
+	| "missing_project_root"
+	| "missing_source"
+	| "existing_custom"
+	| "name_conflict"
+	| "existing_file"
+	| "source_read_failed"
+	| "resource_missing"
+	| "write_failed"
+	| "rediscovery_failed"
+	| "preflight_failed";
+
+export interface EjectAgentDefinitionInput {
+	cwd: string;
+	agent: string;
+	scope: AgentEjectionScope;
+	/** Direct project-scope API callers must affirm host project trust. */
+	projectTrusted?: boolean;
+}
+
+export interface EjectAgentDefinitionVerification {
+	agent: string;
+	scope: AgentEjectionScope;
+	targetPath: string;
+	source: "builtin" | "package";
+	resourcePaths: string[];
+	launchPreflighted: true;
+}
+
+export type EjectAgentDefinitionResult =
+	| {
+			ok: true;
+			code: "ejected";
+			message: string;
+			agent: string;
+			source: "builtin" | "package";
+			scope: AgentEjectionScope;
+			targetPath: string;
+			verification: EjectAgentDefinitionVerification;
+		}
+	| {
+			ok: false;
+			code: AgentEjectionErrorCode;
+			message: string;
+			scope?: AgentEjectionScope;
+			targetPath?: string;
+		};
 
 type ManagementAction = "list" | "get" | "models" | "create" | "update" | "delete" | "eject" | "disable" | "enable" | "reset";
 type ManagementScope = "user" | "project";
@@ -1108,42 +1164,279 @@ function handleDelete(params: ManagementParams, ctx: ManagementContext): AgentTo
 	return result(`Deleted chain '${target.name}' at ${target.filePath}.`);
 }
 
+function isRelativeAgentResourcePath(value: string): boolean {
+	return value === "." || value === ".." || value.startsWith("./") || value.startsWith("../");
+}
+
+function resolvePortableAgentResources(
+	entries: string[] | undefined,
+	sourceFilePath: string,
+): { entries: string[] | undefined; resourcePaths: string[] } {
+	const baseDir = path.dirname(sourceFilePath);
+	const resourcePaths = (entries ?? [])
+		.filter(isRelativeAgentResourcePath)
+		.map((entry) => path.resolve(baseDir, entry));
+	return {
+		entries: entries?.map((entry) => isRelativeAgentResourcePath(entry) ? path.resolve(baseDir, entry) : entry),
+		resourcePaths,
+	};
+}
+
+function portableEjectedAgentContent(source: AgentConfig): {
+	content?: string;
+	resourcePaths?: string[];
+	error?: EjectAgentDefinitionResult;
+} {
+	let sourceContent: string;
+	try {
+		sourceContent = fs.readFileSync(source.filePath, "utf-8");
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return {
+			error: {
+				ok: false,
+				code: "source_read_failed",
+				message: `Failed to read source agent at ${source.filePath}: ${message}`,
+			},
+		};
+	}
+
+	const extensions = resolvePortableAgentResources(source.extensions, source.filePath);
+	const subagentOnlyExtensions = resolvePortableAgentResources(source.subagentOnlyExtensions, source.filePath);
+	const skillPath = resolvePortableAgentResources(source.skillPath, source.filePath);
+	const tools = resolvePortableAgentResources(source.tools, source.filePath);
+	const resourcePaths = [...new Set([
+		...extensions.resourcePaths,
+		...subagentOnlyExtensions.resourcePaths,
+		...skillPath.resourcePaths,
+		...tools.resourcePaths,
+	])].sort((a, b) => a.localeCompare(b));
+	const missingResources = resourcePaths.filter((resourcePath) => !fs.existsSync(resourcePath));
+	if (missingResources.length > 0) {
+		return {
+			error: {
+				ok: false,
+				code: "resource_missing",
+				message: `Agent '${source.name}' cannot be ejected because its relative resource path(s) do not exist: ${missingResources.join(", ")}.`,
+			},
+		};
+	}
+	if (resourcePaths.length === 0) return { content: sourceContent, resourcePaths };
+
+	const { frontmatter } = parseFrontmatter(sourceContent);
+	const portableAgent: AgentConfig = {
+		...source,
+		...(source.extensions !== undefined ? { extensions: extensions.entries! } : {}),
+		...(source.subagentOnlyExtensions !== undefined ? { subagentOnlyExtensions: subagentOnlyExtensions.entries! } : {}),
+		...(source.skillPath !== undefined ? { skillPath: skillPath.entries! } : {}),
+		...(source.tools !== undefined ? { tools: tools.entries! } : {}),
+	};
+	return {
+		content: serializeAgent(portableAgent, { preserveFrontmatterFields: new Set(Object.keys(frontmatter)) }),
+		resourcePaths,
+	};
+}
+
+function cleanupEjectedFile(targetPath: string, expectedContent: string): void {
+	try {
+		if (fs.readFileSync(targetPath, "utf-8") === expectedContent) fs.unlinkSync(targetPath);
+	} catch {
+		// The service only cleans the file it created during this call.
+	}
+}
+
+function validateEjectedAgentLaunchPreflight(agent: AgentConfig, cwd: string): string | undefined {
+	const resolvedSkills = resolveSkillsWithFallback(
+		agent.skills ?? [],
+		cwd,
+		undefined,
+		agent.skillPath,
+		agent.filePath ? path.dirname(agent.filePath) : cwd,
+	);
+	if (resolvedSkills.missing.length > 0) {
+		return `Missing skills: ${resolvedSkills.missing.join(", ")}`;
+	}
+	try {
+		resolvePiLaunchToolPlan({
+			tools: agent.tools,
+			extensions: agent.extensions,
+			subagentOnlyExtensions: agent.subagentOnlyExtensions,
+			mcpDirectTools: agent.mcpDirectTools,
+			cwd,
+			requireReadTool: resolvedSkills.resolved.length > 0,
+			agentName: agent.name,
+		});
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
+	}
+	return undefined;
+}
+
+/**
+ * Shared extraction of the existing eject handler. It deliberately owns only
+ * agent-definition copying, no-overwrite checks, project-trust input, and
+ * portable package-relative resource paths.
+ */
+export function ejectAgentDefinition(input: EjectAgentDefinitionInput): EjectAgentDefinitionResult {
+	const raw = input.agent.trim();
+	const sanitized = sanitizeName(raw);
+	if (!raw || !sanitized) {
+		return { ok: false, code: "invalid_agent", message: "agent must be a non-empty valid agent name." };
+	}
+	if (input.scope !== "user" && input.scope !== "project") {
+		return { ok: false, code: "invalid_agent", message: "scope must be 'user' or 'project'." };
+	}
+	if (input.scope === "project" && input.projectTrusted !== true) {
+		return {
+			ok: false,
+			code: "untrusted_project",
+			scope: input.scope,
+			message: "Project scope ejection requires a trusted project. Trust the project and retry.",
+		};
+	}
+
+	let discovered: ReturnType<typeof discoverAgentsAll>;
+	try {
+		discovered = discoverAgentsAll(input.cwd);
+	} catch (error) {
+		return {
+			ok: false,
+			code: "rediscovery_failed",
+			scope: input.scope,
+			message: `Unable to discover agents before ejecting: ${error instanceof Error ? error.message : String(error)}`,
+		};
+	}
+	if (input.scope === "project" && discovered.projectDir === null) {
+		return {
+			ok: false,
+			code: "missing_project_root",
+			scope: input.scope,
+			message: "Project scope ejection is not available here: no project config root (.pi or .agents) was found above the cwd.",
+		};
+	}
+
+	const existingCustom = (input.scope === "user" ? discovered.user : discovered.project)
+		.find((candidate) => candidate.name === raw || candidate.name === sanitized);
+	if (existingCustom) {
+		return {
+			ok: false,
+			code: "existing_custom",
+			scope: input.scope,
+			targetPath: existingCustom.filePath,
+			message: `Agent '${existingCustom.name}' is already a custom ${input.scope} agent at ${existingCustom.filePath}. Edit it with { action: "update", agent: "${existingCustom.name}" } or delete it first.`,
+		};
+	}
+	const bundledCandidates = input.scope === "user"
+		? discoverAgents(input.cwd, "user").agents.filter((candidate) => candidate.source === "builtin" || candidate.source === "package")
+		: [...discovered.package, ...discovered.builtin];
+	const source = bundledCandidates.find((candidate) => candidate.name === raw || candidate.name === sanitized);
+	if (!source) {
+		return {
+			ok: false,
+			code: "missing_source",
+			scope: input.scope,
+			message: `Agent '${raw}' not found or is not a bundled/package agent. eject copies a builtin or package agent to ${input.scope} scope so it can be customized. Available: ${availableNames(input.cwd, "agent").join(", ") || "none"}.`,
+		};
+	}
+	const runtimeName = source.name;
+	if (nameExistsInScope(input.cwd, input.scope, runtimeName)) {
+		return {
+			ok: false,
+			code: "name_conflict",
+			scope: input.scope,
+			message: `An agent or chain named '${runtimeName}' already exists in ${input.scope} scope. Remove or rename it first.`,
+		};
+	}
+
+	const targetDir = input.scope === "user" ? discovered.userDir : discovered.projectDir!;
+	const targetPath = path.join(targetDir, `${runtimeName}.md`);
+	if (fs.existsSync(targetPath)) {
+		return {
+			ok: false,
+			code: "existing_file",
+			scope: input.scope,
+			targetPath,
+			message: `File already exists at ${targetPath} but is not a valid agent definition. Remove or rename it first.`,
+		};
+	}
+
+	const portable = portableEjectedAgentContent(source);
+	if (portable.error) return { ...portable.error, scope: input.scope, targetPath };
+	const content = portable.content!;
+	try {
+		fs.mkdirSync(targetDir, { recursive: true });
+		fs.writeFileSync(targetPath, content, { encoding: "utf-8", flag: "wx" });
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return {
+			ok: false,
+			code: "write_failed",
+			scope: input.scope,
+			targetPath,
+			message: `Failed to write ejected agent '${runtimeName}' at ${targetPath}: ${message}`,
+		};
+	}
+
+	const rediscovered = discoverAgentsAll(input.cwd);
+	const copied = (input.scope === "user" ? rediscovered.user : rediscovered.project)
+		.find((candidate) => candidate.name === runtimeName && path.resolve(candidate.filePath) === path.resolve(targetPath));
+	if (!copied) {
+		cleanupEjectedFile(targetPath, content);
+		return {
+			ok: false,
+			code: "rediscovery_failed",
+			scope: input.scope,
+			targetPath,
+			message: `Ejected agent '${runtimeName}' could not be rediscovered at ${targetPath}; no file was kept.`,
+		};
+	}
+
+	const preflightError = validateEjectedAgentLaunchPreflight(copied, input.cwd);
+	if (preflightError) {
+		cleanupEjectedFile(targetPath, content);
+		return {
+			ok: false,
+			code: "preflight_failed",
+			scope: input.scope,
+			targetPath,
+			message: `Ejected agent '${runtimeName}' failed launch preflight at ${targetPath}: ${preflightError}. No file was kept.`,
+		};
+	}
+
+	const sourceKind = source.source as "builtin" | "package";
+	return {
+		ok: true,
+		code: "ejected",
+		message: `Ejected agent '${runtimeName}' from ${sourceKind} to ${input.scope} scope at ${targetPath}. Edit it there to customize; it shadows the bundled ${sourceKind} agent of the same name.`,
+		agent: runtimeName,
+		source: sourceKind,
+		scope: input.scope,
+		targetPath,
+		verification: {
+			agent: copied.name,
+			scope: input.scope,
+			targetPath,
+			source: sourceKind,
+			resourcePaths: portable.resourcePaths ?? [],
+			launchPreflighted: true,
+		},
+	};
+}
+
 function handleEject(params: ManagementParams, ctx: ManagementContext): AgentToolResult<Details> {
 	if (!params.agent) return result("Specify 'agent' for eject.", true);
-	const raw = params.agent.trim();
-	const sanitized = sanitizeName(raw);
 	const parsedScope = actionScope(params.agentScope, "eject");
 	if (parsedScope.error) return parsedScope.error;
 	const scope = parsedScope.scope!;
-	const d = discoverAgentsAll(ctx.cwd);
-	const source = [...d.package, ...d.builtin].find((a) => a.name === raw || a.name === sanitized);
-	if (!source) {
-		return result(`Agent '${raw}' not found or is not a bundled/package agent. eject copies a builtin or package agent to ${scope} scope so it can be customized. Available: ${availableNames(ctx.cwd, "agent").join(", ") || "none"}.`, true);
-	}
-	const runtimeName = source.name;
-	const existingCustom = (scope === "user" ? d.user : d.project).find((a) => a.name === runtimeName);
-	if (existingCustom) {
-		return result(`Agent '${runtimeName}' is already a custom ${scope} agent at ${existingCustom.filePath}. Edit it with { action: "update", agent: "${runtimeName}" } or delete it first.`, true);
-	}
-	if (nameExistsInScope(ctx.cwd, scope, runtimeName)) {
-		return result(`An agent or chain named '${runtimeName}' already exists in ${scope} scope. Remove or rename it first.`, true);
-	}
-	const projectConfigDir = getProjectConfigDir(ctx.cwd);
-	const targetDir = scope === "user" ? d.userDir : d.projectDir ?? path.join(projectConfigDir, "agents");
-	fs.mkdirSync(targetDir, { recursive: true });
-	const targetPath = path.join(targetDir, `${runtimeName}.md`);
-	if (fs.existsSync(targetPath)) {
-		return result(`File already exists at ${targetPath} but is not a valid agent definition. Remove or rename it first.`, true);
-	}
-	let content: string;
-	try {
-		content = fs.readFileSync(source.filePath, "utf-8");
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		return result(`Failed to read source agent at ${source.filePath}: ${message}`, true);
-	}
-	fs.writeFileSync(targetPath, content, "utf-8");
-	return result(`Ejected agent '${runtimeName}' from ${source.source} to ${scope} scope at ${targetPath}. Edit it there to customize; it shadows the bundled ${source.source} agent of the same name.`);
+	const ejected = ejectAgentDefinition({
+		cwd: ctx.cwd,
+		agent: params.agent,
+		scope,
+		// Preserve the existing management-action behavior. Direct public callers
+		// must supply affirmative project trust themselves.
+		...(scope === "project" ? { projectTrusted: true } : {}),
+	});
+	return result(ejected.message, !ejected.ok);
 }
 
 function handleDisable(params: ManagementParams, ctx: ManagementContext): AgentToolResult<Details> {

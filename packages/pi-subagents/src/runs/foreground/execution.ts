@@ -700,6 +700,11 @@ async function runSingleAttempt(
 
 		let activeLongRunningNotified = false;
 		let pendingToolResult: { tool: string; path?: string; mutates: boolean; startedAt?: number } | undefined;
+		// Pi host versions may represent one tool result as either a dedicated
+		// tool_result_end event or a message_end whose message role is toolResult.
+		// Remember correlated ids so normalizing both forms cannot duplicate output.
+		const handledToolResultIds = new Set<string>();
+		const MAX_HANDLED_TOOL_RESULT_IDS = 1024;
 		type ActiveToolCall = { key: string; tool: string; args: string; startedAt: number; path?: string };
 		let activeToolSequence = 0;
 		const activeToolCalls = new Map<string, ActiveToolCall>();
@@ -919,6 +924,53 @@ async function runSingleAttempt(
 			emitUpdateSnapshot(output || "(running...)");
 		};
 
+		const toolResultCallId = (message: Message): string | undefined => {
+			const value = (message as { toolCallId?: unknown }).toolCallId;
+			return typeof value === "string" && value.length > 0 ? value : undefined;
+		};
+
+		const handleToolResult = (message: Message, now: number): void => {
+			const callId = toolResultCallId(message);
+			if (callId) {
+				if (handledToolResultIds.has(callId)) return;
+				if (handledToolResultIds.size >= MAX_HANDLED_TOOL_RESULT_IDS) {
+					const oldest = handledToolResultIds.values().next().value;
+					if (typeof oldest === "string") handledToolResultIds.delete(oldest);
+				}
+				handledToolResultIds.add(callId);
+			}
+			result.messages!.push(message);
+			const resultText = extractTextFromContent(message.content);
+			if (options.toolBudget && pendingToolResult && resultText.includes("Tool budget hard limit reached")) {
+				result.toolBudgetBlocked = true;
+				result.toolBudget = toolBudgetState(options.toolBudget, progress.toolCount, pendingToolResult.tool);
+			}
+			appendRecentOutput(progress, resultText.split("\n").slice(-10));
+			const toolSnapshot = pendingToolResult;
+			pendingToolResult = undefined;
+			if (toolSnapshot?.mutates && didMutatingToolFail(resultText)) {
+				recordMutatingFailure(mutatingFailures, {
+					tool: toolSnapshot.tool,
+					path: toolSnapshot.path,
+					error: resultText.split("\n").find((line) => line.trim())?.trim().slice(0, 180) ?? "mutating tool failed",
+					ts: now,
+				}, mutatingFailureWindowMs);
+				if (shouldEscalateMutatingFailures(mutatingFailures, controlConfig.failedToolAttemptsBeforeAttention)) {
+					emitNeedsAttention(now, {
+						message: `${agent.name} needs attention after repeated mutating tool failures`,
+						reason: "tool_failures",
+						currentTool: toolSnapshot.tool,
+						currentPath: toolSnapshot.path,
+						currentToolDurationMs: toolSnapshot.startedAt ? Math.max(0, now - toolSnapshot.startedAt) : undefined,
+						recentFailureSummary: summarizeRecentMutatingFailures(mutatingFailures),
+					});
+				}
+			} else if (toolSnapshot?.mutates) {
+				resetMutatingFailureState(mutatingFailures);
+			}
+			fireUpdate();
+		};
+
 		const rawStdoutTail = createBoundedByteTail();
 		const processLine = (line: string) => {
 			if (!line.trim()) return;
@@ -1003,80 +1055,55 @@ async function runSingleAttempt(
 			}
 
 			if (evt.type === "message_end" && evt.message) {
-				result.messages!.push(evt.message);
-				if (evt.message.role === "assistant") {
-					result.usage.turns++;
-					progress.turnCount = result.usage.turns;
-					const stopReason = (evt.message as { stopReason?: string }).stopReason;
-					const toolCalls = Array.isArray(evt.message.content)
-						? evt.message.content.filter((part) => (part as { type?: string }).type === "toolCall")
-						: [];
-					const hasToolCall = toolCalls.length > 0;
-					const terminalAssistantStop = stopReason === "stop" && !hasToolCall;
-					const terminalStructuredOutputCall = Boolean(options.structuredOutput)
-						&& toolCalls.length === 1
-						&& (toolCalls[0] as { name?: string }).name === "structured_output";
-					updateTurnBudget(result.usage.turns, terminalAssistantStop || terminalStructuredOutputCall, hasToolCall || Boolean(progress.currentTool));
-					const u = evt.message.usage;
-					if (u) {
-						result.usage.input += u.input || 0;
-						result.usage.output += u.output || 0;
-						result.usage.cacheRead += u.cacheRead || 0;
-						result.usage.cacheWrite += u.cacheWrite || 0;
-						result.usage.cost += u.cost?.total || 0;
-						progress.tokens = result.usage.input + result.usage.output;
-						progress.inputTokens = result.usage.input;
-						progress.outputTokens = result.usage.output;
+				if (evt.message.role === "toolResult") {
+					handleToolResult(evt.message, now);
+				} else {
+					result.messages!.push(evt.message);
+					if (evt.message.role === "assistant") {
+						result.usage.turns++;
+						progress.turnCount = result.usage.turns;
+						const stopReason = (evt.message as { stopReason?: string }).stopReason;
+						const toolCalls = Array.isArray(evt.message.content)
+							? evt.message.content.filter((part) => (part as { type?: string }).type === "toolCall")
+							: [];
+						const hasToolCall = toolCalls.length > 0;
+						const terminalAssistantStop = stopReason === "stop" && !hasToolCall;
+						const terminalStructuredOutputCall = Boolean(options.structuredOutput)
+							&& toolCalls.length === 1
+							&& (toolCalls[0] as { name?: string }).name === "structured_output";
+						updateTurnBudget(result.usage.turns, terminalAssistantStop || terminalStructuredOutputCall, hasToolCall || Boolean(progress.currentTool));
+						const u = evt.message.usage;
+						if (u) {
+							result.usage.input += u.input || 0;
+							result.usage.output += u.output || 0;
+							result.usage.cacheRead += u.cacheRead || 0;
+							result.usage.cacheWrite += u.cacheWrite || 0;
+							result.usage.cost += u.cost?.total || 0;
+							progress.tokens = result.usage.input + result.usage.output;
+							progress.inputTokens = result.usage.input;
+							progress.outputTokens = result.usage.output;
+						}
+						if (evt.message.model) {
+							progress.model = evt.message.model;
+							if (!result.model) result.model = evt.message.model;
+						}
+						if (evt.message.errorMessage) assistantError = evt.message.errorMessage;
+						const assistantText = extractTextFromContent(evt.message.content);
+						appendRecentOutput(progress, assistantText.split("\n").slice(-10));
+						// Final assistant message: start the exit drain window.
+						if (terminalAssistantStop) {
+							if (!evt.message.errorMessage && assistantText.trim()) assistantError = undefined;
+							cleanTerminalAssistantStopReceived ||= !evt.message.errorMessage;
+							applyChildLifecycle(projectChildLifecycle(evt, true));
+						}
 					}
-					if (evt.message.model) {
-						progress.model = evt.message.model;
-						if (!result.model) result.model = evt.message.model;
-					}
-					if (evt.message.errorMessage) assistantError = evt.message.errorMessage;
-					const assistantText = extractTextFromContent(evt.message.content);
-					appendRecentOutput(progress, assistantText.split("\n").slice(-10));
-					// Final assistant message: start the exit drain window.
-					if (terminalAssistantStop) {
-						if (!evt.message.errorMessage && assistantText.trim()) assistantError = undefined;
-						cleanTerminalAssistantStopReceived ||= !evt.message.errorMessage;
-						applyChildLifecycle(projectChildLifecycle(evt, true));
-					}
+					updateActivityState(now);
+					fireUpdate();
 				}
-				updateActivityState(now);
-				fireUpdate();
 			}
 
 			if (evt.type === "tool_result_end" && evt.message) {
-				result.messages!.push(evt.message);
-				const resultText = extractTextFromContent(evt.message.content);
-				if (options.toolBudget && pendingToolResult && resultText.includes("Tool budget hard limit reached")) {
-					result.toolBudgetBlocked = true;
-					result.toolBudget = toolBudgetState(options.toolBudget, progress.toolCount, pendingToolResult.tool);
-				}
-				appendRecentOutput(progress, resultText.split("\n").slice(-10));
-				const toolSnapshot = pendingToolResult;
-				pendingToolResult = undefined;
-				if (toolSnapshot?.mutates && didMutatingToolFail(resultText)) {
-					recordMutatingFailure(mutatingFailures, {
-						tool: toolSnapshot.tool,
-						path: toolSnapshot.path,
-						error: resultText.split("\n").find((line) => line.trim())?.trim().slice(0, 180) ?? "mutating tool failed",
-						ts: now,
-					}, mutatingFailureWindowMs);
-					if (shouldEscalateMutatingFailures(mutatingFailures, controlConfig.failedToolAttemptsBeforeAttention)) {
-						emitNeedsAttention(now, {
-							message: `${agent.name} needs attention after repeated mutating tool failures`,
-							reason: "tool_failures",
-							currentTool: toolSnapshot.tool,
-							currentPath: toolSnapshot.path,
-							currentToolDurationMs: toolSnapshot.startedAt ? Math.max(0, now - toolSnapshot.startedAt) : undefined,
-							recentFailureSummary: summarizeRecentMutatingFailures(mutatingFailures),
-						});
-					}
-				} else if (toolSnapshot?.mutates) {
-					resetMutatingFailureState(mutatingFailures);
-				}
-				fireUpdate();
+				handleToolResult(evt.message, now);
 			}
 		};
 

@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-08-20
+
+### Fixed
+
+- Normalize native `message_end` tool-result events into the foreground progress snapshot, alongside `tool_result_end`, with `toolCallId` de-duplication. This keeps bounded tool-result records available to structured delegation consumers across Pi host event shapes.
+- Verify an ejected agent's copied skills and launch tool plan before reporting success; failed verification removes only the file created by that eject attempt.
+
 ## [0.4.0] - 2026-08-16
 
 ### Changed

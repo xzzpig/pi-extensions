@@ -56,7 +56,12 @@ When the agent reports a goal as complete, a separate pi agent reviews the objec
 
 Approved goals are archived as complete. Goals requiring additional work remain open with review feedback.
 
-With an interactive UI, the audit also opens a read-only, non-capturing live transcript overlay. It supports mouse-wheel, `Up`/`Down`, `PgUp`/`PgDn`, `Home`, and `End` scrolling while showing the isolated auditor's native user/assistant/thinking output, tool activity, results, and retries as they arrive. `Esc` or `q` closes only that overlay; the audit itself continues and the completion transaction is unchanged. Use `/goal-audit` to reopen the most recent audit transcript during the current Pi session, including after that audit has finished; it is not written to disk.
+The review runs as a fresh foreground `goal-auditor` child through
+`@xzzpig/pi-subagents`. The Goal-X widget retains the five-stage summary and
+result card; use `/subagents-fleet` (or the pi-subagents Fleet/transcript
+view) for the child’s detailed messages, thinking, tool activity, retries, and
+terminal result. Goal-X no longer opens or stores a separate audit transcript,
+and `/goal-audit` is not available.
 
 ### Visible status
 
@@ -76,11 +81,15 @@ The settings menu controls task support, verification contracts, subtask depth, 
 
 ## Install
 
-Install from npm:
+Install the compatible subagent runtime as well:
 
 ```bash
+pi install npm:@xzzpig/pi-subagents
 pi install npm:@xzzpig/pi-goal-x
 ```
+
+The two packages must both be loaded in the same Pi process for completion
+reviews. Goal-X deliberately does not register pi-subagents a second time.
 
 Install from a local checkout:
 
@@ -88,11 +97,22 @@ Install from a local checkout:
 pi install .
 ```
 
-Run it once from a local checkout:
+Run it once from a local checkout after installing the subagent runtime:
 
 ```bash
-pi -e .
+pi install ../pi-subagents
+pi install .
 ```
+
+Or run both extensions explicitly from their checkouts. In this mode Goal-X materializes its default `goal-auditor` for the current process, so no separate package installation is required:
+
+```bash
+pi -ne -ns -np \
+  -e ./packages/pi-goal-x/extensions/goal.ts \
+  -e ./packages/pi-subagents/index.ts
+```
+
+The temporary default agent uses an absolute path for its child-only progress provider, so completion audits and the five-stage dashboard work from a bare checkout as well.
 
 ## Choose a goal style
 
@@ -364,6 +384,8 @@ Each session can focus on one goal while the project keeps other goals open.
 /goal-pause                  Pause the focused goal
 /goal-resume                 Resume a paused or blocked goal
 /goal-settings               Open the settings menu
+/goal-subagent-eject global  Eject the default auditor into global/user scope
+/goal-subagent-eject project Eject the default auditor into trusted project scope
 /goal-clear                  Archive the focused goal
 /goal-cancel                 Cancel the current draft
 ```
@@ -376,7 +398,36 @@ Settings are stored in:
 .pi/pi-goal-x-settings.json
 ```
 
-Use `/goal-settings` to configure task lists, verification contracts, subtask depth, automatic goal selection, and completion auditing. Goal objectives have no hard length limit by default; set `objectiveMaxChars` (or `PI_GOAL_OBJECTIVE_MAX_CHARS`, `0` = no limit) to cap objective length across `create_goal`, `propose_goal_draft`, and `/goal-tweak`.
+Use `/goal-settings` to configure task lists, verification contracts, subtask depth, automatic goal selection, the `auditorAgent` name (default `goal-auditor`), and model/thinking overrides. Goal objectives have no hard length limit by default; set `objectiveMaxChars` (or `PI_GOAL_OBJECTIVE_MAX_CHARS`, `0` = no limit) to cap objective length across `create_goal`, `propose_goal_draft`, and `/goal-tweak`.
+
+The selected auditor is a normal pi-subagents agent. Eject the bundled default
+before editing it:
+
+```text
+/goal-subagent-eject global
+/goal-subagent-eject project
+```
+
+`global` writes the user agent scope; `project` requires Pi project trust and
+writes the current project agent scope. Existing agent, chain, or file targets
+are never overwritten. The ejected definition shadows the package default and
+keeps its required progress-provider path portable.
+
+Configure additional skills, extensions, strict ordinary tools, or selected
+`mcp:<server>/<tool>` direct tools in the auditor agent definition or normal
+`subagents.agentOverrides`. The internal `report_auditor_progress` and
+`structured_output` protocol tools remain required; an override that removes
+them fails closed before review starts. `bash` is not an operating-system
+sandbox even though the default prompt asks the auditor to use it only for
+read-only verification.
+
+Completion children read normal global and trusted-project Pi settings, so Pi
+retry, provider timeout, and transport settings apply directly. Runtime-only
+parent provider registrations or credentials are not inherited; use disk/env
+authentication or load the provider extension in the auditor agent. The legacy
+`auditorProjectResources` field is accepted for compatibility but ignored;
+move resource choices to the auditor agent's `extensions`,
+`subagentOnlyExtensions`, `skills`, and `tools`.
 
 Configure the task shortcuts in the same file when the terminal captures the defaults:
 
