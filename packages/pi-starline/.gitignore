@@ -1,0 +1,22 @@
+node_modules/
+.DS_Store
+npm-debug.log*
+.mise.local.toml
+.pi/goals/
+.pi/subagent-schedules/
+.pi/tasks/
+.pi-subagents/
+bun.lock
+bun.lockb
+*.tgz
+.serena/
+
+# Working notes, not product
+PLAN.md
+SPEC.md
+HANDOFF.md
+docs/superpowers/
+
+# Subagent-driven development scratch
+.superpowers/
+scripts/
