@@ -5,5 +5,6 @@
   "pi-subagents": "0.4.1",
   "pi-tool-display": "0.1.0",
   "pi-goal-x": "0.1.2",
-  "pi-btw": "0.5.2"
+  "pi-btw": "0.5.2",
+  "pi-starline": "0.1.0"
 }

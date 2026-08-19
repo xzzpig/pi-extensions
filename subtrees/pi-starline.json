@@ -1,0 +1,12 @@
+{
+  "$schema": "../schemas/subtree-metadata.schema.json",
+  "name": "pi-starline",
+  "prefix": "packages/pi-starline",
+  "source": "https://github.com/Andy8647/pi-starline.git",
+  "remote": "upstream-pi-starline",
+  "ref": "v0.3.1",
+  "version": "v0.3.1",
+  "upstreamCommit": "401101a06dbbf00bc03976c8c978684ec49e8f67",
+  "squash": true,
+  "lastSyncedAt": "2026-08-19T18:35:54+08:00"
+}

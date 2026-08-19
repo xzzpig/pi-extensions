@@ -42,6 +42,9 @@ type RealReceiver = {
 	selectionAnchor: { row: number; col: number } | undefined;
 	selectionFocus: { row: number; col: number } | undefined;
 	previousScreen: string[];
+	// pi-tui >= 0.84.2 reads this in `isOverlayFocused` (tui.ts); the fake
+	// keeps it empty so overlay-focus deferral short-circuits.
+	overlayStack: unknown[];
 	terminal: { write: (data: string) => void };
 	flashes: { flash: (message: string) => void };
 	copySelectionToClipboard: () => void;
@@ -59,6 +62,10 @@ function makeReceiver(previousScreen: string[]): { instance: RealReceiver; writt
 	instance.selectionAnchor = undefined;
 	instance.selectionFocus = undefined;
 	instance.previousScreen = previousScreen;
+	// pi-tui >= 0.84.2 `isOverlayFocused` reads `this.overlayStack.some(...)`;
+	// an empty stack short-circuits the overlay-focus deferral so a detached
+	// receiver with no overlays falls through to normal viewport input.
+	instance.overlayStack = [];
 	instance.terminal = { write: (data: string) => written.push(data) };
 	instance.flashes = { flash: () => {} };
 	instance.renderRequested = false;

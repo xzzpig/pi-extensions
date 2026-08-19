@@ -5,8 +5,8 @@ import { describe, expect, it } from "vitest";
 const pkg = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8"));
 
 describe("package identity", () => {
-	it("publishes as pi-starline under a plain semver version", () => {
-		expect(pkg.name).toBe("pi-starline");
+	it("publishes as @xzzpig/pi-starline under a plain semver version", () => {
+		expect(pkg.name).toBe("@xzzpig/pi-starline");
 		// The publish workflow checks the tag against this field, so pinning an
 		// exact version here would only mean editing two places per release.
 		expect(pkg.version).toMatch(/^\d+\.\d+\.\d+$/);

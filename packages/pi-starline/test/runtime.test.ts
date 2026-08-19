@@ -27,6 +27,11 @@ function makeProject(entries: Array<{ path: string; dir?: boolean }>): {
 	return { cwd, names: entries.map((entry) => entry.path) };
 }
 
+// Ambient env detection (e.g. IN_NIX_SHELL from a Nix/direnv shell) must not
+// shadow file-marker fixtures, so file-marker tests run with an explicit empty
+// environment. Env-marker tests pass their own env explicitly below.
+const CLEAN_ENV: Record<string, string | undefined> = {};
+
 describe("runtimeMetadata", () => {
 	it("covers Starship Nerd Font runtime and language modules with icons and Starship styles", () => {
 		const byName = new Map(runtimeMetadata.map((runtime) => [runtime.name, runtime]));
@@ -70,14 +75,14 @@ describe("runtimeMetadata", () => {
 describe("detectRuntime", () => {
 	it("prefers bun over node when both markers exist", () => {
 		const project = makeProject([{ path: "package.json" }, { path: "bun.lock" }]);
-		const runtime = detectRuntime(project.cwd, project.names);
+		const runtime = detectRuntime(project.cwd, project.names, CLEAN_ENV);
 		if (!runtime) throw new Error("expected runtime");
 		expect(runtime.name).toBe("bun");
 	});
 
 	it("detects deno from config files", () => {
 		const project = makeProject([{ path: "deno.json" }]);
-		const runtime = detectRuntime(project.cwd, project.names);
+		const runtime = detectRuntime(project.cwd, project.names, CLEAN_ENV);
 		if (!runtime) throw new Error("expected runtime");
 		expect(runtime.name).toBe("deno");
 		expect(runtime.style).toBe("green bold");
@@ -85,7 +90,7 @@ describe("detectRuntime", () => {
 
 	it("keeps existing node priority when node and go markers both exist", () => {
 		const project = makeProject([{ path: "package.json" }, { path: "go.mod" }]);
-		const runtime = detectRuntime(project.cwd, project.names);
+		const runtime = detectRuntime(project.cwd, project.names, CLEAN_ENV);
 		if (!runtime) throw new Error("expected runtime");
 		expect(runtime.name).toBe("nodejs");
 	});
@@ -93,7 +98,7 @@ describe("detectRuntime", () => {
 	it("keeps existing runtime detection markers narrow", () => {
 		for (const marker of ["index.js", "script.py", "Main.java", "lib.rs", "main.go"]) {
 			const project = makeProject([{ path: marker }]);
-			expect(detectRuntime(project.cwd, project.names)).toBeUndefined();
+			expect(detectRuntime(project.cwd, project.names, CLEAN_ENV)).toBeUndefined();
 		}
 	});
 
@@ -109,12 +114,12 @@ describe("detectRuntime", () => {
 
 	it("keeps java reachable with a Java-specific marker", () => {
 		const project = makeProject([{ path: ".java-version" }]);
-		expect(detectRuntime(project.cwd, project.names)?.name).toBe("java");
+		expect(detectRuntime(project.cwd, project.names, CLEAN_ENV)?.name).toBe("java");
 	});
 
 	it("detects lua from top-level lua directory", () => {
 		const project = makeProject([{ path: "lua", dir: true }]);
-		const runtime = detectRuntime(project.cwd, project.names);
+		const runtime = detectRuntime(project.cwd, project.names, CLEAN_ENV);
 		if (!runtime) throw new Error("expected runtime");
 		expect(runtime.name).toBe("lua");
 	});
@@ -133,7 +138,7 @@ describe("detectRuntime", () => {
 		["zig", "build.zig", "bold yellow"],
 	])("detects %s projects from Starship markers", (name, marker, style) => {
 		const project = makeProject([{ path: marker }]);
-		const runtime = detectRuntime(project.cwd, project.names);
+		const runtime = detectRuntime(project.cwd, project.names, CLEAN_ENV);
 		if (!runtime) throw new Error("expected runtime");
 		expect(runtime.name).toBe(name);
 		expect(runtime.style).toBe(style);

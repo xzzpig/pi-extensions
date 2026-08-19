@@ -131,10 +131,10 @@ Detects Starship Nerd Font runtime/language modules, uses the Starship Nerd Font
 ## Install
 
 ```bash
-# From npm
-pi install npm:pi-starline
+# From npm (local fork @xzzpig/pi-starline)
+pi install npm:@xzzpig/pi-starline
 
-# From git
+# From upstream git
 pi install git:github.com/Andy8647/pi-starline
 ```
 

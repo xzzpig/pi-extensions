@@ -21,6 +21,7 @@ while developing changes.
 | [`@xzzpig/pi-tool-display`](./packages/pi-tool-display)           | OpenCode-style compact tool rendering and edit/write diff visualization; local fork of `MasuRii/pi-tool-display` with a tail-style live preview for running bash commands.                                                    | `pi install npm:@xzzpig/pi-tool-display`      |
 | [`@xzzpig/pi-goal-x`](./packages/pi-goal-x)                       | Durable goal mode with tasks, auto-continue, and independent completion audit; local fork of `tmonk/pi-goal-x` with a TUI-overlay guard so Esc in other extensions' overlays never pauses the goal.                           | `pi install npm:@xzzpig/pi-goal-x`            |
 | [`@xzzpig/pi-btw`](./packages/pi-btw)                             | Parallel side conversations in a focused `/btw` overlay; local fork of `dbachelder/pi-btw` that avoids clobbering pi-tui's mouse-reporting modes in fullscreen TUI (which broke message scrolling after closing the overlay). | `pi install npm:@xzzpig/pi-btw`               |
+| [`@xzzpig/pi-starline`](./packages/pi-starline)                   | Starship-inspired statusline and Opencode-style editor chrome; local fork of `Andy8647/pi-starline` that runs git probes with `--no-optional-locks` so the statusline never churns `.git/index.lock`.                         | `pi install npm:@xzzpig/pi-starline`          |
 
 ## Install an extension
 

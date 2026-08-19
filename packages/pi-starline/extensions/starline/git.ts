@@ -231,10 +231,14 @@ export function detectGitState(paths: GitStatePaths): {
 
 async function resolveGitPath(cwd: string, pathSpec: string): Promise<string | undefined> {
 	try {
-		const { stdout } = await execFileAsync("git", ["rev-parse", "--git-path", pathSpec], {
-			cwd,
-			timeout: GIT_COMMAND_TIMEOUT_MS,
-		});
+		const { stdout } = await execFileAsync(
+			"git",
+			["--no-optional-locks", "rev-parse", "--git-path", pathSpec],
+			{
+				cwd,
+				timeout: GIT_COMMAND_TIMEOUT_MS,
+			},
+		);
 		const resolved = (typeof stdout === "string" ? stdout : String(stdout)).trim();
 		if (!resolved) return undefined;
 		return resolved.startsWith("/") ? resolved : join(cwd, resolved);
@@ -304,22 +308,26 @@ export async function readGitStatus(
 	const readExactTag = options.readExactTag === true;
 	const readMetrics = options.readMetrics === true;
 	try {
-		const numstatArgs = ["diff", "HEAD", "--numstat"];
+		const numstatArgs = ["--no-optional-locks", "diff", "HEAD", "--numstat"];
 		if (options.ignoreSubmodules) numstatArgs.push("--ignore-submodules=all");
 		const [{ stdout: statusStdout }, stashResult, tagResult, metricsResult] = await Promise.all([
-			execFileAsync("git", ["status", "--porcelain=2", "--branch"], {
+			execFileAsync("git", ["--no-optional-locks", "status", "--porcelain=2", "--branch"], {
 				cwd,
 				timeout: GIT_COMMAND_TIMEOUT_MS,
 			}),
-			execFileAsync("git", ["stash", "list"], {
+			execFileAsync("git", ["--no-optional-locks", "stash", "list"], {
 				cwd,
 				timeout: GIT_COMMAND_TIMEOUT_MS,
 			}).catch(() => ({ stdout: "" })),
 			readExactTag
-				? execFileAsync("git", ["describe", "--tags", "--exact-match", "HEAD"], {
-						cwd,
-						timeout: GIT_COMMAND_TIMEOUT_MS,
-					}).then(
+				? execFileAsync(
+						"git",
+						["--no-optional-locks", "describe", "--tags", "--exact-match", "HEAD"],
+						{
+							cwd,
+							timeout: GIT_COMMAND_TIMEOUT_MS,
+						},
+					).then(
 						(r) => ({ stdout: typeof r.stdout === "string" ? r.stdout : String(r.stdout) }),
 						() => ({ stdout: "" }),
 					)
@@ -369,10 +377,14 @@ export async function readGitStatus(
 
 		// Distinguish not-a-repo vs transient with a cheap rev-parse on the error path.
 		try {
-			const { stdout } = await execFileAsync("git", ["rev-parse", "--is-inside-work-tree"], {
-				cwd,
-				timeout: GIT_COMMAND_TIMEOUT_MS,
-			});
+			const { stdout } = await execFileAsync(
+				"git",
+				["--no-optional-locks", "rev-parse", "--is-inside-work-tree"],
+				{
+					cwd,
+					timeout: GIT_COMMAND_TIMEOUT_MS,
+				},
+			);
 			const inside = (typeof stdout === "string" ? stdout : String(stdout)).trim();
 			if (inside !== "true") return { kind: "not_a_repo" };
 			return { kind: "error" };
@@ -433,10 +445,14 @@ export async function readGitHost(cwd: string): Promise<GitHost | undefined> {
 
 	let host: GitHost | undefined;
 	try {
-		const { stdout } = await execFileAsync("git", ["remote", "get-url", "origin"], {
-			cwd,
-			timeout: GIT_COMMAND_TIMEOUT_MS,
-		});
+		const { stdout } = await execFileAsync(
+			"git",
+			["--no-optional-locks", "remote", "get-url", "origin"],
+			{
+				cwd,
+				timeout: GIT_COMMAND_TIMEOUT_MS,
+			},
+		);
 		host = parseGitRemoteHost(typeof stdout === "string" ? stdout : String(stdout));
 	} catch {
 		host = undefined;
