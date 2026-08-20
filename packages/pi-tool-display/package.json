@@ -1,6 +1,6 @@
 {
   "name": "@xzzpig/pi-tool-display",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Compact tool call rendering, diff visualization, and output truncation extension for Pi coding agent. Fork of MasuRii/pi-tool-display adding a tail-style live preview for running bash commands.",
   "type": "module",
   "main": "./index.ts",

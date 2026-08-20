@@ -56,7 +56,7 @@ environment includes whichever one your install uses.
 
 #### Install
 ```bash
-pi install npm:pi-sandbox
+pi install npm:@xzzpig/pi-sandbox
 ```
 
 #### Configure
@@ -112,6 +112,27 @@ Alt+S                            toggle sandboxing on/off for the session
 ```
 
 ## What it does
+
+### Optional rendering with @xzzpig/pi-tool-display
+
+This fork keeps full control of bash execution and permission handling. When
+the optional `@xzzpig/pi-tool-display` package is also installed, the
+registered bash tool is decorated with pi-tool-display's compact bash
+renderer (spinner + elapsed time, configurable output modes) — execution
+logic is untouched. The decoration is fully optional:
+
+- **Without pi-tool-display** (package not installed, or import failing):
+  bash keeps pi's built-in default rendering and sandbox behavior is
+  unchanged.
+- **With pi-tool-display**: bash shows the compact display while remaining
+  sandboxed. When using a pi-tool-display fork that also overrides the
+  built-in `bash` tool, set `registerToolOverrides.bash` to `false` in its
+  config so pi-tool-display does not register its own (non-sandboxed) bash
+  tool.
+
+There is no hard dependency: the integration uses a guarded dynamic import of
+`pi-tool-display/tool-display-api-consumer` at runtime and never fails the
+extension load when the package is absent.
 
 **Bash commands** are wrapped with `sandbox-exec` (macOS) or `bubblewrap`
 (Linux) to enforce network and filesystem restrictions at the OS level.

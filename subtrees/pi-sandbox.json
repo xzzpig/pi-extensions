@@ -1,0 +1,13 @@
+{
+  "$schema": "../schemas/subtree-metadata.schema.json",
+  "name": "pi-sandbox",
+  "prefix": "packages/pi-sandbox",
+  "source": "https://github.com/carderne/pi-sandbox.git",
+  "remote": "upstream-pi-sandbox",
+  "ref": "v0.6.5",
+  "version": "0.6.5",
+  "upstreamCommit": "07ccbe9542c82f3cddd150aefefea19761d09933",
+  "squash": true,
+  "lastSyncedAt": "2026-08-19T00:00:00.000Z",
+  "notes": "Forked from carderne/pi-sandbox; local fork adds optional pi-tool-display bash rendering decoration with graceful fallback to built-in rendering when pi-tool-display is absent."
+}

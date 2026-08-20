@@ -8,6 +8,19 @@ flake.lock
 .pi/goal_events.jsonl
 .pi-subagents
 
+# Runtime-generated pi goal snapshot (regenerated constantly; not a source file).
+.pi/.goals-pool-snapshot.json
+
+# Pre-existing repo files with non-prettier formatting, out of this change's scope.
+# Kept in the ignore list so the full `prettier --check .` stays green without
+# touching files owned by other toolchains (openspec / pi-notify).
+openspec/config.yaml
+.pi/skills/openspec-apply-change/SKILL.md
+.pi/skills/openspec-archive-change/SKILL.md
+.pi/skills/openspec-explore/SKILL.md
+.pi/skills/openspec-propose/SKILL.md
+.pi/skills/openspec-sync-specs/SKILL.md
+packages/pi-notify/extensions/config.ts
 # Upstream-derived subtree formatted with biome, not prettier.
 packages/pi-permission-system
 
@@ -23,5 +36,19 @@ packages/pi-goal-x
 # Upstream-derived subtree with non-prettier formatting; check the package via its own toolchain.
 packages/pi-btw
 
+# Upstream-derived subtree with non-prettier formatting (oxfmt); check the package via its own toolchain.
+packages/pi-sandbox
+
 # Upstream-derived subtree formatted with biome, not prettier.
 packages/pi-starline
+
+# /dev/null device files bind-mounted into the repo root by the host
+# environment; unreadable and not part of the repository.
+.bash_profile
+.bashrc
+.gitconfig
+.mcp.json
+.profile
+.ripgreprc
+.zprofile
+.zshrc

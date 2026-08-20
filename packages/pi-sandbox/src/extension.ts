@@ -30,6 +30,7 @@ import {
   type SessionAllowances,
   supportsNodeEnvProxy,
 } from "./sandbox-runtime.ts";
+import { maybeDecorateBashForToolDisplay } from "./tool-display-decoration.ts";
 import {
   formatSandboxConfiguration,
   formatSandboxStatus,
@@ -164,10 +165,16 @@ export default function (pi: ExtensionAPI) {
     if (await enableSandbox(ctx, false)) ctx.ui.notify("Sandbox enabled", "info");
   }
 
-  pi.registerTool({
+  const bashTool = {
     ...localBash,
     label: "bash (sandboxed)",
-    async execute(id, params, signal, onUpdate, ctx) {
+    async execute(
+      id: Parameters<typeof localBash.execute>[0],
+      params: Parameters<typeof localBash.execute>[1],
+      signal: Parameters<typeof localBash.execute>[2],
+      onUpdate: Parameters<typeof localBash.execute>[3],
+      ctx: Parameters<typeof localBash.execute>[4],
+    ) {
       const runBash = () => {
         if (!sandboxEnabled || !sandboxInitialized) {
           return localBash.execute(id, params, signal, onUpdate, ctx);
@@ -240,7 +247,9 @@ export default function (pi: ExtensionAPI) {
       }
       return result;
     },
-  });
+  };
+  pi.registerTool(bashTool);
+  void maybeDecorateBashForToolDisplay(bashTool);
 
   pi.on("user_bash", async (event, ctx) => {
     if (!sandboxEnabled || !sandboxInitialized) return;

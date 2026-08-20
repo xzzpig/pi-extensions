@@ -1,6 +1,6 @@
 {
-  "name": "pi-sandbox",
-  "version": "0.6.5",
+  "name": "@xzzpig/pi-sandbox",
+  "version": "0.1.0",
   "description": "OS-level sandboxing for pi with interactive permission prompts",
   "keywords": [
     "pi-package",
@@ -19,14 +19,15 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/carderne/pi-sandbox.git"
+    "url": "git+https://github.com/xzzpig/pi-extensions.git",
+    "directory": "packages/pi-sandbox"
   },
   "author": "Chris Arderne <chris@rdrn.me>",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/carderne/pi-sandbox/issues"
+    "url": "https://github.com/xzzpig/pi-extensions/issues"
   },
-  "homepage": "https://github.com/carderne/pi-sandbox",
+  "homepage": "https://github.com/xzzpig/pi-extensions/tree/main/packages/pi-sandbox#readme",
   "scripts": {
     "fmt": "oxfmt index.ts src test",
     "lint": "oxlint index.ts src test",
@@ -43,10 +44,14 @@
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "^0.80.0",
-    "@earendil-works/pi-tui": "*"
+    "@earendil-works/pi-tui": "*",
+    "@xzzpig/pi-tool-display": ">=0.1.1"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "@xzzpig/pi-tool-display": {
       "optional": true
     }
   },

@@ -104,7 +104,17 @@ Other extensions can opt into `pi-tool-display` rendering without directly depen
 import { decorateToolForDisplay, decorateMcpToolForDisplay } from "pi-tool-display/tool-display-api-consumer";
 ```
 
-`decorateToolForDisplay(tool, adapter)` applies the runtime decoration immediately when `pi-tool-display` is loaded, or queues the decoration until the API becomes available. Use adapter options such as `kind: "read" | "edit" | "mcp" | "generic"` to select the renderer family; `decorateMcpToolForDisplay(tool)` is the shortcut for MCP-style tools.
+`decorateToolForDisplay(tool, adapter)` applies the runtime decoration immediately when `pi-tool-display` is loaded, or queues the decoration until the API becomes available. Use adapter options such as `kind: "read" | "edit" | "bash" | "mcp" | "generic"` to select the renderer family; `decorateMcpToolForDisplay(tool)` is the shortcut for MCP-style tools.
+
+The `"bash"` kind only replaces the tool's `renderCall`/`renderResult` with the compact bash renderer (spinner + elapsed time while running, and the configured `bashOutputMode` result display). Execution (`execute`) is never touched, so the owning extension keeps full control of how commands actually run:
+
+```ts
+import { decorateToolForDisplay } from "pi-tool-display/tool-display-api-consumer";
+
+decorateToolForDisplay(myBashTool, { kind: "bash", overrideExistingRenderers: true });
+```
+
+This is how pi-sandbox forks pass their registered `bash` tool to `pi-tool-display` for rendering while keeping their own sandboxed execution. The decoration is optional: call it the same way without `pi-tool-display` installed and the tool keeps pi's built-in default rendering.
 
 ## Presets
 
@@ -326,6 +336,10 @@ If another extension is already rendering one of the built-in tools:
 3. Use `/tool-display show` to confirm the effective ownership state
 
 Built-in tool overrides (including `bash`) are registered with deferred ownership discovery — the extension discovers which tools it owns via `pi.getAllTools()` during `before_agent_start` before overriding, preventing conflicts with other extensions that also register overrides.
+
+#### Coexisting with pi-sandbox
+
+pi regains only the first registration per tool name across extensions, so a forked pi-sandbox keeps its own `bash` tool (with sandboxed execution and permission prompts) while rendering through `pi-tool-display` via the `kind: "bash"` decoration described under [Tool display adapter API](#tool-display-adapter-api). To avoid `pi-tool-display` also registering its own `bash` tool (which would bypass the sandbox), keep `registerToolOverrides.bash` set to `false` when pi-sandbox is installed.
 
 ### Config not loading
 

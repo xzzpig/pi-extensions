@@ -1,7 +1,7 @@
 export type RuntimeToolDefinition = Record<string, unknown>;
 
 export interface ToolDisplayAdapter {
-  kind?: "read" | "edit" | "mcp" | "generic";
+  kind?: "read" | "edit" | "bash" | "mcp" | "generic";
   overrideExistingRenderers?: boolean;
 }
 

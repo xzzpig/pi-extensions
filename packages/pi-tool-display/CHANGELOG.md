@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `kind: "bash"` decoration kind in the tool display adapter API: decorates a
+  registered bash tool with the compact bash renderer (spinner + elapsed time
+  while running, configurable `bashOutputMode` result display) without touching
+  execution. The bash result rendering logic is shared with the built-in bash
+  tool override.
+
 ## [0.5.0] - 2026-07-03
 
 ### Added

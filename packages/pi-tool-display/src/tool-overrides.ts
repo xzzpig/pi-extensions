@@ -159,7 +159,7 @@ const TOOL_DISPLAY_DECORATED_PROPERTIES = [
   "prepareArguments",
 ] as const;
 
-type ToolDisplayKind = "read" | "edit" | "mcp" | "generic";
+type ToolDisplayKind = "read" | "edit" | "bash" | "mcp" | "generic";
 
 export interface ToolDisplayAdapter {
   id?: string;
@@ -1123,6 +1123,78 @@ function renderBashErrorResult(
   return textResult(text);
 }
 
+function renderBashDisplayResult(
+  result: ToolRenderInput,
+  options: ToolRenderResultOptions,
+  theme: RenderTheme,
+  context: ToolRenderContextLike | undefined,
+  config: ToolDisplayConfig,
+): Text {
+  const details = result.details as BashToolDetails | undefined;
+  const rawOutput = extractTextOutput(result);
+
+  if (options.isPartial) {
+    return renderBashLivePreview(rawOutput, options, config, theme, details);
+  }
+
+  if (isToolError(result, context)) {
+    return renderBashErrorResult(rawOutput, options, config, theme, details);
+  }
+
+  const lines = prepareOutputLines(rawOutput, options);
+
+  if (lines.length === 0) {
+    let text = formatBashNoOutputLine(getStringField(context?.args, "command"), theme);
+    if (config.showTruncationHints) {
+      text += formatBashTruncationHints(details, theme);
+    }
+    return textResult(text);
+  }
+
+  if (config.bashOutputMode === "summary") {
+    if (options.expanded) {
+      const maxLines = getExpandedPreviewLineLimit(lines, config);
+      return renderBashPreviewWithHints(lines, maxLines, config, theme, options, details);
+    }
+
+    let summary = formatBashSummary(
+      lines,
+      details,
+      theme,
+      config.showTruncationHints,
+    );
+    summary += formatExpandHint(theme);
+    if (config.showTruncationHints) {
+      summary += formatBashTruncationHints(details, theme);
+    }
+    return textResult(summary);
+  }
+
+  if (config.bashOutputMode === "preview") {
+    const maxLines = options.expanded
+      ? getExpandedPreviewLineLimit(lines, config)
+      : config.previewLines;
+    return renderBashPreviewWithHints(lines, maxLines, config, theme, options, details);
+  }
+
+  if (!options.expanded && config.bashCollapsedLines === 0) {
+    let hidden = theme.fg("muted", "↳ output hidden");
+    if (config.showTruncationHints) {
+      hidden += formatBashTruncationHints(details, theme);
+    }
+    return textResult(hidden);
+  }
+
+  const maxLines = options.expanded
+    ? lines.length
+    : config.bashCollapsedLines;
+  let text = buildPreviewText(lines, maxLines, theme, options.expanded);
+  if (config.showTruncationHints) {
+    text += formatBashTruncationHints(details, theme);
+  }
+  return textResult(text);
+}
+
 function renderSearchResult(
   result: ToolRenderInput,
   options: ToolRenderResultOptions,
@@ -1345,7 +1417,7 @@ function getAdapterKind(tool: RuntimeToolDefinition, adapter: ToolDisplayAdapter
   if (adapter.kind) {
     return adapter.kind;
   }
-  if (tool.name === "read" || tool.name === "edit") {
+  if (tool.name === "read" || tool.name === "edit" || tool.name === "bash") {
     return tool.name;
   }
   return isMcpToolCandidate(tool) ? "mcp" : "generic";
@@ -1560,6 +1632,9 @@ function installToolDisplayApi(getConfig: ConfigGetter): ToolDisplayApi {
         decorated.renderCall = (args: unknown, theme: RenderTheme) => renderReadDisplayCall(args, theme, resolvedAdapter);
       } else if (kind === "edit" && (overrideExisting || typeof decorated.renderCall !== "function")) {
         decorated.renderCall = (args: unknown, theme: RenderTheme, context: ToolRenderContextLike) => renderEditDisplayCall(args, theme, context, resolvedAdapter, getConfig);
+      } else if (kind === "bash" && (overrideExisting || typeof decorated.renderCall !== "function")) {
+        decorated.renderCall = (args: unknown, theme: RenderTheme, context: ToolRenderContextLike) =>
+          renderBashCall(args, theme, context as never);
       } else if (kind === "mcp" && (overrideExisting || typeof decorated.renderCall !== "function")) {
         decorated.renderCall = (args: unknown, theme: RenderTheme) => {
           const toolName = getTextField(decorated, "name") ?? "mcp";
@@ -1576,6 +1651,9 @@ function installToolDisplayApi(getConfig: ConfigGetter): ToolDisplayApi {
       } else if (kind === "edit" && (overrideExisting || typeof decorated.renderResult !== "function")) {
         decorated.renderResult = (result: ToolRenderInput & { isError?: boolean }, options: ToolRenderResultOptions, theme: RenderTheme, context?: ToolRenderContextLike) =>
           renderEditDisplayResult(result, options, theme, context, resolvedAdapter, getConfig);
+      } else if (kind === "bash" && (overrideExisting || typeof decorated.renderResult !== "function")) {
+        decorated.renderResult = (result: ToolRenderInput, options: ToolRenderResultOptions, theme: RenderTheme, context?: ToolRenderContextLike) =>
+          renderBashDisplayResult(result, options, theme, context, getConfig());
       } else if (kind === "mcp" && (overrideExisting || typeof decorated.renderResult !== "function")) {
         decorated.renderResult = (result: ToolRenderInput, options: ToolRenderResultOptions, theme: RenderTheme) =>
           renderMcpResult(result, options, getConfig(), theme);
@@ -1880,70 +1958,7 @@ export function registerToolDisplayOverrides(
       return renderBashCall(args, theme, context as never);
     },
     renderResult(result, options, theme, context) {
-      const config = getConfig();
-      const details = result.details as BashToolDetails | undefined;
-      const rawOutput = extractTextOutput(result);
-
-      if (options.isPartial) {
-        return renderBashLivePreview(rawOutput, options, config, theme, details);
-      }
-
-      if (isToolError(result, context)) {
-        return renderBashErrorResult(rawOutput, options, config, theme, details);
-      }
-
-      const lines = prepareOutputLines(rawOutput, options);
-
-      if (lines.length === 0) {
-        let text = formatBashNoOutputLine(getStringField(context?.args, "command"), theme);
-        if (config.showTruncationHints) {
-          text += formatBashTruncationHints(details, theme);
-        }
-        return textResult(text);
-      }
-
-      if (config.bashOutputMode === "summary") {
-        if (options.expanded) {
-          const maxLines = getExpandedPreviewLineLimit(lines, config);
-          return renderBashPreviewWithHints(lines, maxLines, config, theme, options, details);
-        }
-
-        let summary = formatBashSummary(
-          lines,
-          details,
-          theme,
-          config.showTruncationHints,
-        );
-        summary += formatExpandHint(theme);
-        if (config.showTruncationHints) {
-          summary += formatBashTruncationHints(details, theme);
-        }
-        return textResult(summary);
-      }
-
-      if (config.bashOutputMode === "preview") {
-        const maxLines = options.expanded
-          ? getExpandedPreviewLineLimit(lines, config)
-          : config.previewLines;
-        return renderBashPreviewWithHints(lines, maxLines, config, theme, options, details);
-      }
-
-      if (!options.expanded && config.bashCollapsedLines === 0) {
-        let hidden = theme.fg("muted", "↳ output hidden");
-        if (config.showTruncationHints) {
-          hidden += formatBashTruncationHints(details, theme);
-        }
-        return textResult(hidden);
-      }
-
-      const maxLines = options.expanded
-        ? lines.length
-        : config.bashCollapsedLines;
-      let text = buildPreviewText(lines, maxLines, theme, options.expanded);
-      if (config.showTruncationHints) {
-        text += formatBashTruncationHints(details, theme);
-      }
-      return textResult(text);
+      return renderBashDisplayResult(result as never, options, theme, context as never, getConfig());
     },
     });
   });
