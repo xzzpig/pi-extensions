@@ -1,0 +1,222 @@
+name: Tests
+
+on:
+  push:
+    branches: ['main']
+  pull_request:
+    branches: ['**']
+
+jobs:
+  integration-tests:
+    name: Tests (${{ matrix.os }} / ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86-64
+            runner: ubuntu-latest
+            os: linux
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            os: linux
+          - arch: x86-64
+            runner: macos-15-large
+            os: macos
+          - arch: arm64
+            runner: macos-14
+            os: macos
+          # Windows legs build srt-win, run the Rust smoke scripts,
+          # then the TS integration suite (test/sandbox/winsrt.test.ts).
+          - arch: x86-64
+            runner: windows-latest
+            os: windows
+          - arch: arm64
+            runner: windows-11-arm
+            os: windows
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          # Node 20 (Active LTS): Node 18 has no official windows-arm64
+          # build, so setup-node fails on the win/arm64 leg. engines is
+          # >=18.0.0 — this only pins the CI test version, not the floor.
+          node-version: '20'
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      # ─── Windows: srt-win helper binary ─────────────────────────────
+      # GitHub-hosted Windows runners run as a member of Administrators
+      # with UAC disabled, so NetLocalGroup* and Fwpm* calls succeed
+      # without an explicit elevation step.
+      - name: Setup Rust (Windows)
+        if: matrix.os == 'windows'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Rust build cache (Windows)
+        if: matrix.os == 'windows'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: vendor/srt-win-src
+          # Shared with release.yml so tag-ref release builds restore
+          # the cache main pushes warm here.
+          shared-key: srt-win
+
+      - name: Build srt-win (Windows)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: |
+          # pwsh does NOT fail the step on a native command's non-zero
+          # exit by default — without this, `cargo test` failing would
+          # be masked by `cargo clippy` exiting 0 on the next line.
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo build  --release --manifest-path vendor/srt-win-src/Cargo.toml
+          cargo test   --release --manifest-path vendor/srt-win-src/Cargo.toml
+          cargo clippy --release --manifest-path vendor/srt-win-src/Cargo.toml --all-targets -- -D warnings
+
+      - name: Smoke-test srt-win install lifecycle (Windows)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: pwsh vendor/srt-win-src/ci/smoke.ps1 vendor\srt-win-src\target\release\srt-win.exe
+
+      - name: Smoke-test srt-win exec (Windows)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: pwsh vendor/srt-win-src/ci/smoke-exec.ps1 vendor\srt-win-src\target\release\srt-win.exe
+
+      - name: Smoke-test srt-win additive-ACE lifecycle (Windows)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        run: pwsh vendor/srt-win-src/ci/smoke-aces.ps1 vendor\srt-win-src\target\release\srt-win.exe
+
+      - name: TS integration tests (Windows)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        env:
+          # Husky's prepare hook chokes on Windows runners; skip it.
+          HUSKY: '0'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          npm ci
+          npm run build
+          bun test test/sandbox/winsrt.test.ts test/sandbox/mux-proxy.test.ts
+
+      - name: Cleanup srt-win state (Windows)
+        if: always() && matrix.os == 'windows'
+        shell: pwsh
+        run: pwsh vendor/srt-win-src/ci/cleanup.ps1 vendor\srt-win-src\target\release\srt-win.exe
+
+      - name: Install system dependencies (Linux)
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap libseccomp-dev gcc socat ripgrep apparmor-profiles zsh
+
+      - name: Enable unprivileged user namespaces (Linux)
+        if: matrix.os == 'linux'
+        run: |
+          # Ubuntu 24.04+ sets kernel.apparmor_restrict_unprivileged_userns=1 which
+          # allows unshare(CLONE_NEWUSER) but grants the new namespace zero
+          # capabilities. Disable it so bwrap and apply-seccomp can nest
+          # namespaces without needing setuid.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+
+          # Verify bwrap can create namespaces
+          echo "Testing bwrap namespace creation..."
+          bwrap --ro-bind / / --unshare-net true && echo "✓ bwrap namespace creation works" || echo "✗ bwrap namespace creation still fails"
+
+      - name: Install system dependencies (macOS)
+        if: matrix.os == 'macos'
+        run: |
+          brew install ripgrep zsh
+
+      - name: Install Node dependencies
+        if: matrix.os != 'windows'
+        run: npm install
+
+      - name: Lint (ESLint)
+        if: matrix.os == 'linux' && matrix.arch == 'x86-64'
+        run: npx eslint .
+
+      - name: Build seccomp binaries (Linux)
+        if: matrix.os == 'linux'
+        run: npm run build:seccomp
+
+      - name: Build project
+        if: matrix.os != 'windows'
+        run: npm run build
+
+      - name: Run tests
+        if: matrix.os != 'windows'
+        run: npm test
+
+      - name: Run Node.js fallback tests
+        if: matrix.os != 'windows'
+        run: node test/utils/which-node-test.mjs
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            test-results/
+            *.log
+          if-no-files-found: ignore
+
+  docker-tests:
+    name: Tests (docker / ${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86-64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Enable unprivileged user namespaces on host
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          sudo sysctl -w kernel.unprivileged_userns_clone=1 || true
+
+      - name: Run srt end-to-end in unprivileged container
+        run: |
+          docker run --rm \
+            --security-opt seccomp=unconfined \
+            --security-opt apparmor=unconfined \
+            -v "${{ github.workspace }}:/work" \
+            -w /work \
+            -e SRT_E2E_DOCKER=1 \
+            ubuntu:24.04 \
+            bash -euo pipefail -c '
+              apt-get update -qq
+              apt-get install -y -qq bubblewrap socat ripgrep python3 curl ca-certificates unzip gcc libseccomp-dev
+              curl -fsSL https://bun.sh/install | bash
+              export PATH="$HOME/.bun/bin:$PATH"
+              curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+              apt-get install -y -qq nodejs
+              npm ci
+              npm run build:seccomp
+              npm run build
+              bun test test/docker-weak-sandbox.test.ts
+            '
