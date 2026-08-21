@@ -28,10 +28,14 @@ Those approaches can reproduce the files while losing the squash parent and
 falling back to a file-copy update.
 
 An explicit user request to add, import, pull, synchronize, or update an
-upstream subtree authorizes the local commits required by this workflow. That
-includes the `git subtree` commit and an immediately following fork or metadata
-commit when necessary. It does not authorize push, publication, unrelated
-commits, or history rewrites.
+upstream subtree authorizes the local commits required by this workflow,
+including the synchronization commit created by `git subtree`. It does not
+require an immediate follow-up commit for fork adaptations, metadata, version,
+or changelog changes. Keep those repository-owned changes uncommitted until all
+post-synchronization work and verification are complete, then commit them
+together when a follow-up commit is needed. Otherwise, leave them in the
+worktree for review. The authorization does not extend to push, publication,
+unrelated commits, or history rewrites.
 
 ## Establish the root and inspect state
 
@@ -101,17 +105,17 @@ This makes every forked package installable as `pi install npm:@xzzpig/pi-*`,
 keeps the local fork clearly distinguishable from the upstream package on npm,
 and matches the repo-wide convention in `README.md`. Upstream ships its own
 name (e.g. `@gotgenes/pi-permission-system`); the fork MUST NOT keep it.
-Rename the npm name in a separate commit immediately after the import, before
-any further local changes:
+Rename the npm name after the import, before unrelated local changes. Keep the
+rename and its required README, manifest, and code adaptations together as one
+post-import change set, and verify the complete change set before creating a
+follow-up commit:
 
 ```bash
 # name=pi-tool-display → npm name @xzzpig/pi-tool-display
 jq --arg n "@xzzpig/${name}" '.name = $n' "packages/${name}/package.json" \
   > "packages/${name}/package.json.tmp" && \
   mv "packages/${name}/package.json.tmp" "packages/${name}/package.json"
-# Fix README and code references to the upstream name, then:
-git add "packages/${name}"
-git commit -m "chore: rename ${name} npm package to @xzzpig/${name}"
+# Fix README, manifest, and code references to the upstream name.
 ```
 
 Keep the scope OUT of `subtrees/*.json` records: the schema validates `name`
@@ -162,15 +166,15 @@ cat > "subtrees/${name}.json" <<EOF
 }
 EOF
 
-# Record metadata in a follow-up local commit after the tracked subtree merge.
-git add "subtrees/${name}.json"
-git commit -m "chore: add ${name} upstream subtree"
+# Leave metadata uncommitted while completing post-import adaptations.
 ```
 
-After the import, rename the npm package to `@xzzpig/<name>` in a separate
-commit (see "Forked package npm naming" above) and adapt the Pi manifest in
-the same commit when the upstream layout is not already a valid package.
-Confirm the helper accepts the record:
+After the import, rename the npm package to `@xzzpig/<name>` (see "Forked
+package npm naming" above) and adapt the Pi manifest when the upstream layout
+is not already a valid package. Keep the metadata, naming, manifest, and other
+repository-owned changes uncommitted while running the post-import checks; do
+not create a follow-up commit immediately after the subtree merge. Confirm the
+helper accepts the record:
 
 ```bash
 direnv reload
@@ -249,7 +253,8 @@ commit=$(git rev-parse FETCH_HEAD)
 
 If `$commit` equals the current `upstreamCommit` in the record, the subtree
 is already synchronized. Otherwise, pull through `git subtree` and verify that
-its squash parent preserves tracking trailers before making later commits:
+its squash parent preserves tracking trailers while the synchronization merge
+remains `HEAD`:
 
 ```bash
 git subtree pull --prefix="packages/${name}" --squash "upstream-${name}" "$commit"
@@ -266,9 +271,12 @@ jq --arg c "$commit" --arg v "$version" --arg t "$(date -Iseconds)" \
   '.upstreamCommit = $c | .version = $v | .lastSyncedAt = $t' \
   "subtrees/${name}.json" > "subtrees/${name}.json.tmp" &&
   mv "subtrees/${name}.json.tmp" "subtrees/${name}.json"
-git add "subtrees/${name}.json"
-git commit -m "chore: update ${name} subtree"
 ```
+
+Leave the record uncommitted while applying fork adaptations, version changes,
+and changelog updates. Run the full verification workflow first. If a local
+follow-up commit is needed, create one coherent commit only after those checks
+pass; otherwise, report the expected uncommitted files for review.
 
 ### Fork package versioning
 
@@ -285,6 +293,9 @@ After every upstream sync, compare the old and new upstream release:
 - An upstream patch-only release increments the fork's patch version.
 - Update `package.json`, `versions.json`, and any package-local lockfile
   version fields together, then add a local changelog entry.
+
+Keep these version and changelog edits in the same uncommitted post-sync change
+set as the metadata and fork adaptations until verification passes.
 
 ### Ref change (explicit override)
 
@@ -303,7 +314,9 @@ git config --local "remote.upstream-${name}.pi-ref" "$new_ref"
 ```
 
 Then update the JSON record: set `ref` to the new value, `upstreamCommit` to
-the new commit, and `lastSyncedAt` to the current timestamp. Commit the result.
+the new commit, and `lastSyncedAt` to the current timestamp. Keep the result
+uncommitted with the other post-sync changes until adaptation and verification
+are complete; do not create an immediate metadata-only commit.
 
 ### Conflict resolution
 
@@ -311,8 +324,9 @@ the new commit, and `lastSyncedAt` to the current timestamp. Commit the result.
 2. Resolve conflicts under `packages/<name>` while preserving the local
    `@xzzpig/pi-*` npm name and the `pi-*` package contract (never adopt the
    upstream's own package name). Do not replace the subtree with copied files.
-3. Complete the subtree merge and verify its squash-parent trailers before
-   making later fork or metadata commits.
+3. Complete the subtree merge, including the conflict resolutions, and verify
+   its squash-parent trailers before creating any additional repository-owned
+   fork or metadata commit.
 4. Record the exact resolved upstream commit:
 
 ```bash
@@ -321,8 +335,9 @@ tip=$(git rev-parse FETCH_HEAD)
 git merge-base --is-ancestor <resolved-commit> "$tip"  # must succeed
 ```
 
-Update the JSON record with the resolved commit and optional version. Verify
-with `direnv reload` and type-check the target package.
+Update the JSON record with the resolved commit and optional version. Keep the
+record and any additional post-merge adaptations uncommitted during
+verification. Run `direnv reload` and type-check the target package.
 
 ## Split and push
 
@@ -343,7 +358,9 @@ invokes it.
 
 ## Verification
 
-For every upstream change:
+For every upstream change, run verification while repository-owned follow-up
+changes are still uncommitted. A dirty worktree containing only the expected
+metadata, fork adaptation, version, and changelog files is valid at this stage:
 
 ```bash
 git status --short --branch
@@ -354,8 +371,8 @@ pnpm exec prettier --check .
 direnv reload
 ```
 
-For a successful `git subtree pull`, verify its second parent before adding
-later commits:
+For a successful `git subtree pull`, verify its second parent before a later
+commit moves `HEAD`. Uncommitted working-tree edits do not prevent this check:
 
 ```bash
 git show -s --format='%P%n%B' HEAD
