@@ -537,6 +537,18 @@ export const CredentialsConfigSchema = z
  * Network configuration schema for validation
  */
 export const NetworkConfigSchema = z.object({
+  disabled: z
+    .boolean()
+    .optional()
+    .describe(
+      'Disable all network policy enforcement. When true, no network rules are emitted: ' +
+        'allowedDomains/deniedDomains and proxy settings are ignored, no local proxy or Linux bridge ' +
+        'is started, macOS profiles allow all network operations ((allow network*)), and Linux skips ' +
+        '--unshare-net so sandboxed processes share the host network namespace. Filesystem and ' +
+        'credential-env restrictions still apply, but credential injection needs the proxy and ' +
+        'cannot substitute sentinels while disabled (masked values would reach upstreams unchanged). ' +
+        'Use only when the sandboxed process is trusted with full host network access.',
+    ),
   allowedDomains: z
     .array(domainPatternSchema)
     .describe('List of allowed domains (e.g., ["github.com", "*.npmjs.org"])'),
@@ -673,7 +685,7 @@ export const NetworkConfigSchema = z.object({
             'log), so paths that exist on only some hosts are safe to list.',
         ),
     })
-    .refine(o => !o.caCertPath === !o.caKeyPath, {
+    .refine(o => Boolean(o.caCertPath) === Boolean(o.caKeyPath), {
       message: 'caCertPath and caKeyPath must be provided together',
     })
     .optional()

@@ -5,12 +5,15 @@ import test from "node:test";
 
 import assert from "node:assert/strict";
 
+import type { SandboxConfig } from "../src/config.ts";
+
 import {
   allowsAllDomains,
   canonicalizePath,
   decideWritePolicy,
   domainIsAllowed,
   extractDomainsFromCommand,
+  isNetworkUnrestricted,
   matchesPattern,
   resolveWritePermission,
 } from "../src/policy.ts";
@@ -116,5 +119,28 @@ test("canonicalizes symlinks and nonexistent descendants", () => {
   assert.equal(
     canonicalizePath(join(link, "new", "file")),
     join(canonicalizePath(real), "new", "file"),
+  );
+});
+
+test("isNetworkUnrestricted is true only when network.disabled is explicitly true", () => {
+  const base = { filesystem: {} } as SandboxConfig;
+  assert.equal(isNetworkUnrestricted(base), false);
+  assert.equal(
+    isNetworkUnrestricted({
+      ...base,
+      network: { allowedDomains: [], deniedDomains: [], disabled: false },
+    }),
+    false,
+  );
+  assert.equal(
+    isNetworkUnrestricted({ ...base, network: { allowedDomains: [], deniedDomains: [] } }),
+    false,
+  );
+  assert.equal(
+    isNetworkUnrestricted({
+      ...base,
+      network: { allowedDomains: [], deniedDomains: [], disabled: true },
+    }),
+    true,
   );
 });

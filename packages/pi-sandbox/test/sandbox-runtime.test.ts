@@ -5,6 +5,8 @@ import test from "node:test";
 
 import assert from "node:assert/strict";
 
+import type { SandboxConfig } from "../src/config.ts";
+
 import { DEFAULT_CONFIG, mergeConfigLayers } from "../src/config.ts";
 import { canonicalizePath } from "../src/policy.ts";
 import {
@@ -179,4 +181,24 @@ test("protectNonexistentFiles survives mergeConfigLayers and can be set to true"
     writePaths: [],
   });
   assert.equal(runtime.filesystem?.protectNonexistentFiles, true);
+});
+
+test("buildRuntimeConfig passes network.disabled through to the runtime config", () => {
+  const disabled: SandboxConfig = {
+    ...DEFAULT_CONFIG,
+    network: {
+      ...DEFAULT_CONFIG.network,
+      allowedDomains: ["example.com"],
+      deniedDomains: [],
+      disabled: true,
+    },
+  };
+
+  const runtime = buildRuntimeConfig(disabled);
+  assert.equal(runtime.network?.disabled, true);
+  assert.deepEqual(runtime.network?.allowedDomains, ["example.com"]);
+
+  // Default config leaves the flag unset, preserving today's behavior.
+  const enabled = buildRuntimeConfig(DEFAULT_CONFIG);
+  assert.equal(enabled.network?.disabled, undefined);
 });

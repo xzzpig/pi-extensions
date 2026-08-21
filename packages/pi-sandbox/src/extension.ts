@@ -18,6 +18,7 @@ import {
   canonicalizePath,
   domainIsAllowed,
   extractDomainsFromCommand,
+  isNetworkUnrestricted,
   matchesPattern,
   resolveWritePermission,
 } from "./policy.ts";
@@ -118,7 +119,11 @@ export default function (pi: ExtensionAPI) {
 
     try {
       await initializeSandbox(config, allowances);
-      if (setProxyEnvironment && supportsNodeEnvProxy(process.versions.node)) {
+      if (
+        setProxyEnvironment &&
+        !isNetworkUnrestricted(config) &&
+        supportsNodeEnvProxy(process.versions.node)
+      ) {
         process.env.NODE_USE_ENV_PROXY ??= "1";
       }
       sandboxEnabled = true;
@@ -255,25 +260,27 @@ export default function (pi: ExtensionAPI) {
     if (!sandboxEnabled || !sandboxInitialized) return;
 
     const config = loadConfig(ctx.cwd);
-    for (const domain of extractDomainsFromCommand(event.command)) {
-      if (!domainIsAllowed(domain, effectiveDomains(ctx.cwd))) {
-        const choice = await promptDomainBlock(
-          pi,
-          ctx,
-          domain,
-          config.permissionPromptTimeoutSeconds,
-        );
-        if (choice.action === "abort") {
-          return {
-            result: {
-              output: `Blocked: "${domain}" is not in allowedDomains. Use /sandbox to review your config.`,
-              exitCode: 1,
-              cancelled: false,
-              truncated: false,
-            },
-          };
+    if (!isNetworkUnrestricted(config)) {
+      for (const domain of extractDomainsFromCommand(event.command)) {
+        if (!domainIsAllowed(domain, effectiveDomains(ctx.cwd))) {
+          const choice = await promptDomainBlock(
+            pi,
+            ctx,
+            domain,
+            config.permissionPromptTimeoutSeconds,
+          );
+          if (choice.action === "abort") {
+            return {
+              result: {
+                output: `Blocked: "${domain}" is not in allowedDomains. Use /sandbox to review your config.`,
+                exitCode: 1,
+                cancelled: false,
+                truncated: false,
+              },
+            };
+          }
+          await applyChoice(choice.action, "domain", choice.value, ctx.cwd);
         }
-        await applyChoice(choice.action, "domain", choice.value, ctx.cwd);
       }
     }
     return {
@@ -290,7 +297,11 @@ export default function (pi: ExtensionAPI) {
     if (!config.enabled) return;
     const { projectPath, globalPath } = getConfigPaths(ctx.cwd);
 
-    if (sandboxInitialized && isToolCallEventType("bash", event)) {
+    if (
+      sandboxInitialized &&
+      isToolCallEventType("bash", event) &&
+      !isNetworkUnrestricted(config)
+    ) {
       for (const domain of extractDomainsFromCommand(event.input.command)) {
         if (!domainIsAllowed(domain, effectiveDomains(ctx.cwd))) {
           const choice = await promptDomainBlock(

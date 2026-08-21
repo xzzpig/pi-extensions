@@ -287,6 +287,7 @@ srt --settings /path/to/srt-settings.json <command>
 
 Uses an **allow-only pattern** - all network access is denied by default.
 
+- `network.disabled` - Set to `true` to disable all network enforcement (boolean, default: false). No network rules are emitted, no local proxy or Linux bridge is started, macOS profiles allow all network operations (`(allow network*)`), and Linux bwrap skips `--unshare-net` so sandboxed processes share the host network namespace. Filesystem and credential-env restrictions still apply, but credential injection needs the proxy and cannot substitute sentinels while disabled. Toggling network enforcement back on for a running session requires `reset()` + `initialize()`.
 - `network.allowedDomains` - Array of allowed domains (supports wildcards like `*.example.com`). Empty array = no network access.
 - `network.deniedDomains` - Array of denied domains (checked first, takes precedence over allowedDomains)
 - `network.allowLocalBinding` - Allow binding to local ports (boolean, default: false)

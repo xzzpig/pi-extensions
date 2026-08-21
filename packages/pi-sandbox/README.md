@@ -74,6 +74,7 @@ Note below that the order of precedence for filesystem read and write are opposi
   "permissionPromptTimeoutSeconds": 600, // Defaults to 10 minutes; 0 waits indefinitely
   "allowBrowserProcess": true,     // If you want to use agent-browser or similar Chrome setup
   "network": {
+    "disabled": false,             // true = no network restrictions at all (see below)
     "allowLocalBinding": true,     // ditto
     "allowAllUnixSockets": true,   // ditto
     "allowUnauthenticatedSocksProxy": true, // Enables Git-over-SSH on macOS
@@ -192,6 +193,26 @@ implies read access; paths do not need to be repeated in `allowRead`.
 works with the built-in `nc`. Domain filtering still applies, but another local process
 that discovers the temporary proxy port can use it while the sandbox is running.
 
+#### Turning network restrictions off entirely
+
+Setting `network.disabled` to `true` removes every network restriction while
+keeping filesystem sandboxing fully active:
+
+- No domain prompts for bash commands or `!cmd`; `allowedDomains`/
+  `deniedDomains` are ignored.
+- No OS-level isolation: macOS seatbelt profiles allow all network operations;
+  Linux bwrap skips `--unshare-net`, so sandboxed processes share the host
+  network namespace and can reach any host directly (raw TCP/UDP included —
+  unlike `allowedDomains: ["*"]`, which still routes everything through the
+  local filtering proxy).
+- No local proxy listeners are started, and `NODE_USE_ENV_PROXY` is not set.
+
+The footer status shows `network unrestricted` while this mode is active.
+
+> **⚠️ `network.disabled` removes exfiltration protection.** Sandboxed
+> commands can contact arbitrary hosts on any port. Only enable it for
+> projects whose commands you trust with full host network access.
+>
 > **⚠️ Read and write have different precedence rules:**
 >
 > - **Read:** Every read is prompted unless the path is in `allowRead` or `allowWrite`.

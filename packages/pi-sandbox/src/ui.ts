@@ -6,7 +6,12 @@ import {
   getConfigPaths,
   type SandboxConfig,
 } from "./config.ts";
-import { allowsAllDomains, domainIsAllowed, matchesPattern } from "./policy.ts";
+import {
+  allowsAllDomains,
+  domainIsAllowed,
+  isNetworkUnrestricted,
+  matchesPattern,
+} from "./policy.ts";
 import { type SessionAllowances } from "./sandbox-runtime.ts";
 
 export type PermissionChoice = "abort" | "session" | "project" | "global";
@@ -347,6 +352,9 @@ export function promptWriteBlock(
 }
 
 export function warnIfAllDomainsAllowed(ctx: ExtensionContext, config: SandboxConfig): void {
+  // network.disabled removes per-domain prompts entirely; the "*" warning
+  // would only confuse.
+  if (isNetworkUnrestricted(config)) return;
   if (!allowsAllDomains(config.network?.allowedDomains)) return;
   ctx.ui.notify(
     '⚠️ Network sandbox allows all domains because network.allowedDomains contains "*". ' +
@@ -356,9 +364,14 @@ export function warnIfAllDomainsAllowed(ctx: ExtensionContext, config: SandboxCo
 }
 
 export function formatSandboxStatus(config: SandboxConfig): string {
-  const networkLabel = allowsAllDomains(config.network?.allowedDomains)
-    ? "all domains"
-    : `${config.network?.allowedDomains?.length ?? 0} domains`;
+  let networkLabel: string;
+  if (isNetworkUnrestricted(config)) {
+    networkLabel = "network unrestricted";
+  } else if (allowsAllDomains(config.network?.allowedDomains)) {
+    networkLabel = "all domains";
+  } else {
+    networkLabel = `${config.network?.allowedDomains?.length ?? 0} domains`;
+  }
   return `🔒 Sandbox: ${networkLabel}, ${config.filesystem?.allowWrite?.length ?? 0} write paths`;
 }
 
@@ -373,8 +386,11 @@ export function formatSandboxConfiguration(
     `  Global config:  ${paths.globalPath}`,
     "",
     "Network (bash + !cmd):",
+    ...(isNetworkUnrestricted(config)
+      ? ["  ⚠️ network.disabled: all network restrictions are off."]
+      : []),
     `  Allowed domains: ${config.network?.allowedDomains?.join(", ") || "(none)"}`,
-    ...(allowsAllDomains(config.network?.allowedDomains)
+    ...(allowsAllDomains(config.network?.allowedDomains) && !isNetworkUnrestricted(config)
       ? ['  ⚠️ "*" allows all domains and disables per-domain prompts.']
       : []),
     `  Denied domains:  ${config.network?.deniedDomains?.join(", ") || "(none)"}`,

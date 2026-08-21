@@ -2,6 +2,17 @@ import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 
+import type { SandboxConfig } from "./config.ts";
+
+/**
+ * True when network.disabled is set: bash/!cmd domain scanning, domain
+ * prompts, and the Node proxy environment are all skipped because the
+ * sandbox imposes no network restrictions at all.
+ */
+export function isNetworkUnrestricted(config: SandboxConfig): boolean {
+  return config.network?.disabled === true;
+}
+
 export function decideWritePolicy(path: string, allowWrite: string[], denyWrite: string[]) {
   if (matchesPattern(path, denyWrite)) return "deny";
   if (allowWrite.length === 0 || !matchesPattern(path, allowWrite)) return "prompt";

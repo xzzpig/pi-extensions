@@ -5,6 +5,21 @@ This fork tracks [`carderne/pi-sandbox`](https://github.com/carderne/pi-sandbox)
 via git subtree; entries below describe only fork-specific deviations from
 upstream.
 
+## 0.4.0
+
+### Added
+
+- **`network.disabled` switch.** Setting `"network": { "disabled": true }`
+  in `sandbox.json` turns off every network restriction while keeping the
+  filesystem sandbox fully active: no domain prompts for bash or `!cmd`, no
+  OS-level network isolation (macOS seatbelt emits `(allow network*)`; Linux
+  bwrap skips `--unshare-net`), no local proxy listeners, and
+  `NODE_USE_ENV_PROXY` is no longer set. The status footer reports
+  "network unrestricted" and `/sandbox` marks the configuration accordingly;
+  the `allowedDomains: ["*"]` warning is suppressed as meaningless in this
+  mode. Defaults to absent/false, preserving upstream behavior exactly.
+  Requires `@xzzpig/sandbox-runtime` 0.0.71+ (its `network.disabled` support).
+
 ## 0.1.0
 
 ### Added

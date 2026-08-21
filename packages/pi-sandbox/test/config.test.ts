@@ -22,6 +22,25 @@ test("omitted permission prompt timeout defaults to ten minutes", () => {
   assert.equal(merged.permissionPromptTimeoutSeconds, DEFAULT_PERMISSION_PROMPT_TIMEOUT_SECONDS);
 });
 
+test("network.disabled merges as a scalar with project overriding global", () => {
+  const absent = mergeConfigLayers(DEFAULT_CONFIG, {}, {});
+  assert.equal(absent.network?.disabled, undefined);
+
+  const globalOnly = mergeConfigLayers(
+    DEFAULT_CONFIG,
+    { network: { allowedDomains: [], deniedDomains: [], disabled: true } },
+    {},
+  );
+  assert.equal(globalOnly.network?.disabled, true);
+
+  const projectWins = mergeConfigLayers(
+    DEFAULT_CONFIG,
+    { network: { allowedDomains: [], deniedDomains: [], disabled: true } },
+    { network: { disabled: false } },
+  );
+  assert.equal(projectWins.network?.disabled, false);
+});
+
 test("mergeConfigLayers combines configured arrays and deduplicates entries", () => {
   const merged = mergeConfigLayers(
     DEFAULT_CONFIG,

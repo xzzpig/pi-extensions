@@ -610,7 +610,24 @@ async function initialize(
     }
   }
 
-  // Initialize network infrastructure
+  // Initialize network infrastructure unless network.disabled skips it.
+  // With no proxy/bridge running, wrap paths must never request proxy
+  // ports — guaranteed because they compute needsNetworkProxy from the
+  // same flag, so waitForNetworkInitialization() is never reached here.
+  if (runtimeConfig.network.disabled === true) {
+    logForDebugging(
+      '[Sandbox] network.disabled is set - skipping proxy and network bridge initialization',
+    )
+    if (runtimeConfig.credentials) {
+      logForDebugging(
+        '[Sandbox] network.disabled: credential masking has no proxy to substitute ' +
+          'sentinels on egress; masked values would reach upstreams unchanged',
+        { level: 'warn' },
+      )
+    }
+    return
+  }
+
   initializationPromise = (async () => {
     try {
       // On Windows the WFP loopback permit covers a fixed port
@@ -1268,15 +1285,34 @@ async function wrapWithSandbox(
     customConfig?.network?.allowedDomains !== undefined ||
     config?.network?.allowedDomains !== undefined
 
-  // Network RESTRICTION is needed whenever network config is specified
-  // This includes empty allowedDomains which means "block all network"
-  const needsNetworkRestriction = hasNetworkConfig
+  // network.disabled bypasses ALL network enforcement, mirroring how
+  // filesystem.disabled bypasses filesystem rule generation: platform
+  // wrappers emit permissive network rules (macOS "(allow network*)") or
+  // skip netns isolation and proxy plumbing (Linux), and no local proxy
+  // is required. Note: initialize() skips proxy/bridge startup under the
+  // same flag, so a per-call override that re-enables restrictions cannot
+  // route through a proxy that was never started — hosts would be hard-
+  // blocked instead. Call reset() + initialize() to toggle globally.
+  //
+  // Precedence mirrors fsDisabled below: when a caller passes a per-call
+  // network override at all, its `disabled` (defaulting to false) wins
+  // outright; a global disabled=true must not leak through an overriding
+  // block that omits the key.
+  const networkDisabled =
+    customConfig?.network !== undefined
+      ? (customConfig.network.disabled ?? false)
+      : (config?.network.disabled ?? false)
 
-  // Network PROXY is needed whenever network config is specified
+  // Network RESTRICTION is needed whenever network config is specified
+  // and not disabled. This includes empty allowedDomains which means
+  // "block all network"
+  const needsNetworkRestriction = hasNetworkConfig && !networkDisabled
+
+  // Network PROXY is needed whenever network restriction applies.
   // Even with empty allowedDomains, we route through proxy so that:
   // 1. updateConfig() can enable network access for already-running processes
   // 2. The proxy blocks all requests when allowlist is empty
-  const needsNetworkProxy = hasNetworkConfig
+  const needsNetworkProxy = needsNetworkRestriction
 
   // Wait for network initialization only if proxy is actually needed
   if (needsNetworkProxy) {
@@ -1411,7 +1447,13 @@ async function wrapWithSandboxArgv(
     const hasNetworkConfig =
       customConfig?.network?.allowedDomains !== undefined ||
       config?.network?.allowedDomains !== undefined
-    if (hasNetworkConfig) {
+    // Same precedence as wrapWithSandbox(): a per-call network override
+    // owns its disabled key outright.
+    const networkDisabled =
+      customConfig?.network !== undefined
+        ? (customConfig.network.disabled ?? false)
+        : (config?.network.disabled ?? false)
+    if (hasNetworkConfig && !networkDisabled) {
       await waitForNetworkInitialization()
     }
     const credentialRestrictions = getCredentialRestrictions(
@@ -1478,8 +1520,10 @@ async function wrapWithSandboxArgv(
     // via `computeWindowsFsAccessSet`.
     return wrapCommandWithSandboxWindows({
       command,
-      httpProxyPort: hasNetworkConfig ? getProxyPort() : undefined,
-      socksProxyPort: hasNetworkConfig ? getSocksProxyPort() : undefined,
+      httpProxyPort:
+        hasNetworkConfig && !networkDisabled ? getProxyPort() : undefined,
+      socksProxyPort:
+        hasNetworkConfig && !networkDisabled ? getSocksProxyPort() : undefined,
       proxyAuthToken: hasNetworkConfig ? proxyAuthToken : undefined,
       // mode:'deny' env vars are structurally absent (fresh
       // srt-sandbox profile env). mode:'mask' sentinels are
