@@ -3,7 +3,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { keyText, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth, type Component, type KeyId, type TUI } from "@earendil-works/pi-tui";
-import { BUILTIN_AGENT_NAMES, discoverAgents } from "../agents/agents.ts";
+import { BUILTIN_AGENT_NAMES, discoverAgents, discoverAgentsAll, findBlockingAgentDiagnostic, resolveAgentName, type AgentConfig, type AgentDiscoveryDiagnostic, type AgentScope } from "../agents/agents.ts";
+import { listRuntimeAgentConfigs, mergeRuntimeAgents } from "../agents/runtime-agent-registry.ts";
 import { resolveExistingReadPaths } from "../shared/settings.ts";
 import {
 	DEFAULT_PROVIDER_MODELS_MAX_AGE_DAYS,
@@ -18,6 +19,7 @@ import type { SubagentParamsLike } from "../runs/foreground/subagent-executor.ts
 import { findModelInfo, toModelInfo } from "../shared/model-info.ts";
 import { formatTokens, shortenPath } from "../shared/formatters.ts";
 import { listAsyncRuns, formatAsyncRunProgressLabel, type AsyncRunSummary } from "../runs/background/async-status.ts";
+import { encodeInspectReply, handleInspectRpcArgs, INSPECT_WIDGET_KEY } from "../runs/background/inspect-rpc.ts";
 import { listScheduledRunSummaries } from "../runs/background/scheduled-runs.ts";
 import { SUBAGENT_FANOUT_CHILD_ENV } from "../runs/shared/pi-args.ts";
 import type { SlashSubagentResponse, SlashSubagentUpdate } from "./slash-bridge.ts";
@@ -106,9 +108,22 @@ const extractExecutionFlags = (rawArgs: string): { args: string; bg: boolean; fo
 	return { args, bg, fork };
 };
 
-const makeAgentCompletions = (state: SubagentState) => (prefix: string) => {
+function discoverSlashAgents(pi: ExtensionAPI, cwd: string, scope: AgentScope): { agents: AgentConfig[]; agentDiagnostics?: AgentDiscoveryDiagnostic[] } {
+	const discovered = discoverAgents(cwd, scope);
+	if (listRuntimeAgentConfigs(pi).length === 0) return discovered;
+	const all = discoverAgentsAll(cwd);
+	const configuredAgents: AgentConfig[] = [
+		...all.builtin,
+		...all.package,
+		...(scope !== "project" ? all.user : []),
+		...(scope !== "user" ? all.project : []),
+	];
+	return mergeRuntimeAgents(pi, discovered, configuredAgents);
+}
+
+const makeAgentCompletions = (pi: ExtensionAPI, state: SubagentState) => (prefix: string) => {
 	if (!state.baseCwd || prefix.includes(" ")) return null;
-	return discoverAgents(state.baseCwd, "both").agents
+	return discoverSlashAgents(pi, state.baseCwd, "both").agents
 		.filter((agent) => agent.name.startsWith(prefix))
 		.map((agent) => ({ value: agent.name, label: agent.name }));
 };
@@ -661,7 +676,7 @@ export function registerSlashCommands(
 
 	pi.registerCommand("run", {
 		description: "Run one subagent through workflowScript: /run agent[output=file] [task] [--bg] [--fork]",
-		getArgumentCompletions: makeAgentCompletions(state),
+		getArgumentCompletions: makeAgentCompletions(pi, state),
 		handler: async (args, ctx) => {
 			const { args: cleanedArgs, bg, fork } = extractExecutionFlags(args);
 			const input = cleanedArgs.trim();
@@ -671,8 +686,16 @@ export function registerSlashCommands(
 			const task = firstSpace === -1 ? "" : input.slice(firstSpace + 1).trim();
 
 			if (!state.baseCwd) { ctx.ui.notify("Subagent session cwd is not initialized yet", "error"); return; }
-			const agents = discoverAgents(state.baseCwd, "both").agents;
-			if (!agents.find((a) => a.name === agentName)) { ctx.ui.notify(`Unknown agent: ${agentName}`, "error"); return; }
+			const discovered = discoverSlashAgents(pi, state.baseCwd, "both");
+			const resolvedAgent = resolveAgentName(agentName, discovered.agents);
+			const candidates = resolvedAgent.error
+				? discovered.agents.filter((agent) => resolveAgentName(agentName, [agent]).agent)
+				: resolvedAgent.agent;
+			const diagnostic = findBlockingAgentDiagnostic(agentName, candidates, discovered.agentDiagnostics);
+			if (diagnostic || resolvedAgent.error || !resolvedAgent.agent) {
+				ctx.ui.notify(diagnostic ? `Agent '${agentName}' has invalid configuration: ${diagnostic.error}` : resolvedAgent.error ?? `Unknown agent: ${agentName}`, "error");
+				return;
+			}
 
 			let finalTask = task;
 			if (inline.reads && Array.isArray(inline.reads) && inline.reads.length > 0) {
@@ -703,6 +726,23 @@ export function registerSlashCommands(
 		},
 	});
 
+	pi.registerCommand("subagents-inspect-rpc", {
+		description: "Host integration bridge: answer an async child inspection request with a correlated widget payload (no model turn)",
+		handler: async (args, ctx) => {
+			if (ctx.mode === "tui") {
+				ctx.ui.notify("Inspection replies are emitted only on RPC surfaces. Use /subagents or subagent({ action: \"status\", view: \"transcript\" }) interactively.", "info");
+				return;
+			}
+			if (!ctx.hasUI) return;
+			const reply = handleInspectRpcArgs(args, { state });
+			// Emit-then-retract in one handler: stdio delivers the two widget
+			// updates in order, the host buffers the payload by requestId, and
+			// the dedicated key never accumulates visible state.
+			ctx.ui.setWidget(INSPECT_WIDGET_KEY, encodeInspectReply(reply));
+			ctx.ui.setWidget(INSPECT_WIDGET_KEY, undefined);
+		},
+	});
+
 	pi.registerCommand("subagents-guide", {
 		description: "Show a packaged subagents guide topic",
 		getArgumentCompletions: (prefix) => prefix.includes(" ") ? null : SUBAGENT_GUIDE_TOPICS
@@ -720,7 +760,7 @@ export function registerSlashCommands(
 
 	pi.registerCommand("subagents-refine", {
 		description: "Generate a bounded project-local refinement overlay for one subagent",
-		getArgumentCompletions: makeAgentCompletions(state),
+		getArgumentCompletions: makeAgentCompletions(pi, state),
 		handler: async (args, ctx) => {
 			const parts = args.trim().split(/\s+/).filter(Boolean);
 			if (parts.length !== 1) {

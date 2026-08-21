@@ -1,5 +1,6 @@
 import type { ModelInfo as AvailableModelInfo } from "../../shared/model-info.ts";
 import type { Usage } from "../../shared/types.ts";
+import { filterFallbackCandidates, parseModelKey, recordModelFailure } from "./model-exclusions.ts";
 import { checkModelScope, type ModelScopeConfig, type ModelScopeViolation, type ModelSource } from "./model-scope.ts";
 
 export type { AvailableModelInfo };
@@ -41,7 +42,7 @@ export function normalizeParentModel(model: unknown): ParentModel | undefined {
 /**
  * Normalize a model id or provider segment for fuzzy comparison: case-fold,
  * treat dots/underscores as dashes (so `4.5` matches `4-5`), and collapse
- * repeated separators. Pure.
+ * repeated separators.
  */
 export function normalizeModelSegment(segment: string): string {
 	return segment
@@ -58,7 +59,7 @@ function isPlausibleDateStamp(year: string, month: string, day: string): boolean
 	return yyyy >= 1900 && yyyy <= 2099 && mm >= 1 && mm <= 12 && dd >= 1 && dd <= 31;
 }
 
-/** Drop a trailing date stamp (`-20251001` or `-2025-10-01`) so dated and undated ids match. Pure. */
+/** Drop a trailing date stamp (`-20251001` or `-2025-10-01`) so dated and undated ids match. */
 function stripTrailingDateStamp(segment: string): string {
 	const dashed = /^(.*)-(\d{4})-(\d{2})-(\d{2})$/.exec(segment);
 	if (dashed && isPlausibleDateStamp(dashed[2]!, dashed[3]!, dashed[4]!)) return dashed[1]!;
@@ -67,21 +68,65 @@ function stripTrailingDateStamp(segment: string): string {
 	return segment;
 }
 
+function isRegisteredProvider(provider: string, availableModels: AvailableModelInfo[]): boolean {
+	const normalized = normalizeModelSegment(provider);
+	return availableModels.some((entry) => normalizeModelSegment(entry.provider) === normalized);
+}
+
+/**
+ * Split `provider/id` only when the first path segment is a registered provider.
+ * Hugging Face-style `owner/name` ids therefore stay intact unless `owner` is
+ * itself a provider in the active registry. `:` and `.` keep the same rule.
+ */
+function splitQualifiedModelQuery(
+	baseModel: string,
+	availableModels: AvailableModelInfo[],
+): { queryProvider?: string; queryIdRaw: string } {
+	const slashIdx = baseModel.indexOf("/");
+	if (slashIdx !== -1) {
+		const providerPart = baseModel.slice(0, slashIdx);
+		if (isRegisteredProvider(providerPart, availableModels)) {
+			return { queryProvider: normalizeModelSegment(providerPart), queryIdRaw: baseModel.slice(slashIdx + 1) };
+		}
+		return { queryIdRaw: baseModel };
+	}
+	const providerSeparators = [":", "."];
+	for (const separator of providerSeparators) {
+		const separatorIdx = baseModel.indexOf(separator);
+		if (separatorIdx <= 0) continue;
+		const providerPart = baseModel.slice(0, separatorIdx);
+		if (!isRegisteredProvider(providerPart, availableModels)) continue;
+		return { queryProvider: normalizeModelSegment(providerPart), queryIdRaw: baseModel.slice(separatorIdx + 1) };
+	}
+	return { queryIdRaw: baseModel };
+}
+
+function resolveExactIdMatches(
+	baseModel: string,
+	availableModels: AvailableModelInfo[],
+	preferredProvider?: string,
+): string | undefined {
+	const exactMatches = availableModels.filter((entry) => entry.id === baseModel);
+	if (preferredProvider) {
+		const preferredMatch = exactMatches.find((entry) => entry.provider === preferredProvider);
+		if (preferredMatch) return preferredMatch.fullId;
+	}
+	if (exactMatches.length === 1) return exactMatches[0]!.fullId;
+	return undefined;
+}
+
 function resolveBaseModelCandidate(
 	baseModel: string,
 	availableModels: AvailableModelInfo[],
 	preferredProvider?: string,
 ): string | undefined {
-	if (baseModel.includes("/")) {
-		const exact = availableModels.find((entry) => entry.fullId === baseModel);
-		if (exact) return exact.fullId;
-	} else {
-		const exactMatches = availableModels.filter((entry) => entry.id === baseModel);
-		if (preferredProvider) {
-			const preferredMatch = exactMatches.find((entry) => entry.provider === preferredProvider);
-			if (preferredMatch) return preferredMatch.fullId;
-		}
-		if (exactMatches.length === 1) return exactMatches[0]!.fullId;
+	const exact = availableModels.find((entry) => entry.fullId === baseModel);
+	if (exact) return exact.fullId;
+
+	const { queryProvider } = splitQualifiedModelQuery(baseModel, availableModels);
+	if (queryProvider === undefined) {
+		const exactId = resolveExactIdMatches(baseModel, availableModels, preferredProvider);
+		if (exactId) return exactId;
 	}
 
 	return fuzzyResolveModel(baseModel, availableModels, preferredProvider);
@@ -90,35 +135,20 @@ function resolveBaseModelCandidate(
 /**
  * Fuzzy-resolve a base model id (thinking suffix already stripped) against the
  * registry, tolerating separator, case, and optional date-stamp differences so
- * users do not have to spell provider/model exactly. A qualified `provider/id`
+ * users do not have to spell provider/model exactly. A slash is a provider
+ * prefix only when that prefix is a registered provider; otherwise the whole
+ * string is the model id (Hugging Face `owner/name`). A qualified provider
  * query only matches within the named provider — this never silently switches
  * providers for security/cost-sensitive configs. Returns the matched `fullId`,
  * or `undefined` when there is no match or the match is ambiguous across
- * providers (and no `preferredProvider` disambiguates). Pure.
+ * providers (and no `preferredProvider` disambiguates).
  */
 export function fuzzyResolveModel(
 	baseModel: string,
 	availableModels: AvailableModelInfo[],
 	preferredProvider?: string,
 ): string | undefined {
-	let queryProvider: string | undefined;
-	let queryIdRaw = baseModel;
-	const slashIdx = baseModel.indexOf("/");
-	if (slashIdx !== -1) {
-		queryProvider = normalizeModelSegment(baseModel.slice(0, slashIdx));
-		queryIdRaw = baseModel.slice(slashIdx + 1);
-	} else {
-		const providerSeparators = [":", "."];
-		for (const separator of providerSeparators) {
-			const separatorIdx = baseModel.indexOf(separator);
-			if (separatorIdx <= 0) continue;
-			const providerPart = normalizeModelSegment(baseModel.slice(0, separatorIdx));
-			if (!availableModels.some((entry) => normalizeModelSegment(entry.provider) === providerPart)) continue;
-			queryProvider = providerPart;
-			queryIdRaw = baseModel.slice(separatorIdx + 1);
-			break;
-		}
-	}
+	const { queryProvider, queryIdRaw } = splitQualifiedModelQuery(baseModel, availableModels);
 	const queryId = normalizeModelSegment(queryIdRaw);
 	const queryIdNoDate = stripTrailingDateStamp(queryId);
 
@@ -143,7 +173,7 @@ export function fuzzyResolveModel(
  * thinking suffix). Exact registry matches win; fuzzy normalization
  * (separator/case/date-stamp via {@link fuzzyResolveModel}) is a fallback so
  * spelling differences still resolve. Never switches providers for a qualified
- * query. Pure.
+ * query.
  */
 export function resolveModelCandidate(
 	model: string | undefined,
@@ -163,18 +193,45 @@ export function resolveModelCandidate(
 	return model;
 }
 
-function resolveRequiredSubagentModelCandidate(
+function resolveSubagentModelCandidate(
 	model: string,
 	availableModels: AvailableModelInfo[] | undefined,
 	preferredProvider?: string,
-): string {
+): string | undefined {
 	if (!availableModels || availableModels.length === 0) return model;
 	const resolvedWhole = resolveBaseModelCandidate(model, availableModels, preferredProvider);
 	if (resolvedWhole) return resolvedWhole;
 	const { baseModel, thinkingSuffix } = splitThinkingSuffix(model);
 	const resolvedBase = thinkingSuffix ? resolveBaseModelCandidate(baseModel, availableModels, preferredProvider) : undefined;
-	if (resolvedBase) return `${resolvedBase}${thinkingSuffix}`;
-	throw new Error(`Unknown subagent model '${model}' in the active Pi model registry.`);
+	return resolvedBase ? `${resolvedBase}${thinkingSuffix}` : undefined;
+}
+
+function suggestAlternateProviderModel(
+	model: string,
+	availableModels: AvailableModelInfo[] | undefined,
+): string | undefined {
+	if (!availableModels || availableModels.length === 0) return undefined;
+	const { baseModel, thinkingSuffix } = splitThinkingSuffix(model);
+	const { queryProvider, queryIdRaw } = splitQualifiedModelQuery(baseModel, availableModels);
+	if (queryProvider === undefined) return undefined;
+	const suggestion = resolveBaseModelCandidate(queryIdRaw, availableModels);
+	if (!suggestion) return undefined;
+	const matched = availableModels.find((entry) => entry.fullId === suggestion);
+	if (!matched || normalizeModelSegment(matched.provider) === queryProvider) return undefined;
+	return `${suggestion}${thinkingSuffix}`;
+}
+
+function resolveRequiredSubagentModelCandidate(
+	model: string,
+	availableModels: AvailableModelInfo[] | undefined,
+	preferredProvider?: string,
+): string {
+	const resolved = resolveSubagentModelCandidate(model, availableModels, preferredProvider);
+	if (resolved) return resolved;
+	const suggestion = suggestAlternateProviderModel(model, availableModels);
+	throw new Error(
+		`Unknown subagent model '${model}' in the active Pi model registry.${suggestion ? ` Did you mean '${suggestion}'?` : ""}`,
+	);
 }
 
 export interface ResolveSubagentModelOverrideOptions {
@@ -263,6 +320,18 @@ export interface BuildModelCandidatesOptions {
 	/** Fallback models warn by default and throw when strict scope enforcement is enabled. */
 	scope?: ModelScopeConfig;
 	onWarn?: (violation: ModelScopeViolation) => void;
+	/** The primary model came from the running parent session, not configuration. */
+	primaryModelFromParent?: boolean;
+}
+
+export function inheritsParentModel(
+	explicitModel: string | boolean | undefined,
+	agentModel: string | boolean | undefined,
+	parentModel: ParentModel | undefined,
+): boolean {
+	const requestedModel = explicitModel ?? agentModel;
+	const trimmed = typeof requestedModel === "string" ? requestedModel.trim() : "";
+	return Boolean(parentModel && (!trimmed || trimmed === INHERIT_MODEL));
 }
 
 export function buildModelCandidates(
@@ -278,8 +347,17 @@ export function buildModelCandidates(
 	for (let index = 0; index < rawCandidates.length; index++) {
 		const raw = rawCandidates[index];
 		if (!raw) continue;
-		const normalized = resolveRequiredSubagentModelCandidate(raw.trim(), availableModels, preferredProvider);
-		if (!normalized || seen.has(normalized)) continue;
+		const model = raw.trim();
+		const normalized = index === 0
+			? options?.primaryModelFromParent
+				? model
+				: resolveRequiredSubagentModelCandidate(model, availableModels, preferredProvider)
+			: resolveSubagentModelCandidate(model, availableModels, preferredProvider);
+		if (!normalized) {
+			console.warn(`[pi-subagents] Skipping fallback model '${model}' because it is unavailable in this environment.`);
+			continue;
+		}
+		if (seen.has(normalized)) continue;
 		if ((index > 0 || options?.scope?.strict === true) && options?.scope?.enforce) {
 			const violation = checkModelScope(normalized, options.scope, "inherited");
 			if (violation) {
@@ -290,11 +368,12 @@ export function buildModelCandidates(
 		seen.add(normalized);
 		candidates.push(normalized);
 	}
-	return candidates;
+	return filterFallbackCandidates(candidates);
 }
 
 const RETRYABLE_MODEL_FAILURE_PATTERNS = [
 	/rate\s*limit/i,
+	/usage\s*limit/i,
 	/too many requests/i,
 	/\b429\b/,
 	/quota/i,
@@ -344,6 +423,40 @@ export function isRetryableModelFailure(error: string | undefined): boolean {
 	if (!error) return false;
 	if (TOOL_FAILURE_PREFIX.test(error.trim())) return false;
 	return RETRYABLE_MODEL_FAILURE_PATTERNS.some((pattern) => pattern.test(error));
+}
+
+export function recordRetryableModelFailure(model: string | undefined, error: string | undefined): void {
+	if (!model || !isRetryableModelFailure(error)) return;
+	const { provider, modelId } = parseModelKey(model);
+	recordModelFailure({ modelId, reason: error, ...(provider ? { provider } : {}) });
+}
+
+/**
+ * Context-overflow signals. These are deliberately NOT part of
+ * {@link RETRYABLE_MODEL_FAILURE_PATTERNS}: an overflow means the input was too
+ * large for the model's context window, so retrying the same input on another
+ * model (or the same model again) cannot succeed. Callers should treat overflow
+ * as a terminal, non-retryable failure and surface a clear "input too large"
+ * error instead of burning fallback attempts on a guaranteed failure.
+ */
+const CONTEXT_OVERFLOW_PATTERNS = [
+	/context(?: length| window| limit)? (?:exceed|overflow|too long)/i,
+	/maximum context length/i,
+	/too many tokens/i,
+	/token limit/i,
+	/context_length_exceeded/i,
+	/length_required/i,
+	/maximum.*tokens/i,
+	/prompt.*too long/i,
+	/input.*too long/i,
+	/exceeded.*context/i,
+	/context.*overflow/i,
+];
+
+export function isContextOverflow(error: string | undefined): boolean {
+	if (!error) return false;
+	if (TOOL_FAILURE_PREFIX.test(error.trim())) return false;
+	return CONTEXT_OVERFLOW_PATTERNS.some((pattern) => pattern.test(error));
 }
 
 export function formatModelAttemptNote(attempt: ModelAttemptSummary, nextModel?: string): string {

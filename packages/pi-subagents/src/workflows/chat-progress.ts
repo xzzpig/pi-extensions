@@ -26,7 +26,7 @@ interface ResolveWorkflowChatProgressInput {
 }
 
 function git(cwd: string, args: string[]): string | undefined {
-	const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf-8" });
+	const result = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf-8", windowsHide: true });
 	if (result.status !== 0) return undefined;
 	const output = result.stdout.trim();
 	return output || undefined;
@@ -90,7 +90,7 @@ export function resolveWorkflowChatProgress(input: ResolveWorkflowChatProgressIn
 	else mode = requestedMode;
 
 	if (mode === "live-card" && !sameRepo) return { error: "chatProgress: 'live-card' is only available for workflowScript runs in the same Git repository." };
-	if (mode === "live-card" && input.background) return { error: "chatProgress: 'live-card' requires a watched foreground workflow; pass async:false." };
+	if (mode === "live-card" && input.background) return { error: "chatProgress: 'live-card' is unavailable for async workflowScript. Async workflows have no inline live card; omit chatProgress or use auto/off. Use async:false only when the parent must block." };
 	return { projection: { mode, repoRelation, ...(repoLabel ? { repoLabel } : {}) } };
 }
 

@@ -20,10 +20,31 @@ describe("public subagent execution normalization", () => {
 				workflowScript: `console.info("Converted structured single-child request to workflow runs.run('main', ...)."); return runs.run("main", {"agent":"worker","output":true})`,
 			},
 		});
+		assert.deepEqual(normalizePublicSubagentExecution({ agent: "worker" }, { asyncByDefault: false }), {
+			ok: true,
+			params: {
+				async: false,
+				workflowScript: `console.info("Converted structured single-child request to workflow runs.run('main', ...)."); return runs.run("main", {"agent":"worker","output":true})`,
+			},
+		});
+		assert.deepEqual(normalizePublicSubagentExecution({ agent: "worker", async: true }, { asyncByDefault: false }), {
+			ok: true,
+			params: {
+				async: true,
+				workflowScript: `console.info("Converted structured single-child request to workflow runs.run('main', ...)."); return runs.run("main", {"agent":"worker","output":true})`,
+			},
+		});
 		assert.deepEqual(normalizePublicSubagentExecution({ agent: "worker", output: false }), {
 			ok: true,
 			params: {
 				workflowScript: `console.info("Converted structured single-child request to workflow runs.run('main', ...)."); return runs.run("main", {"agent":"worker","output":false})`,
+			},
+		});
+		assert.deepEqual(normalizePublicSubagentExecution({ agent: "worker", isolation: "none" }), {
+			ok: true,
+			params: {
+				worktree: false,
+				workflowScript: `console.info("Converted structured single-child request to workflow runs.run('main', ...)."); return runs.run("main", {"agent":"worker","output":true})`,
 			},
 		});
 		assert.deepEqual(normalizePublicSubagentExecution({ action: " list " }), { ok: true, params: { action: "list" } });
@@ -50,6 +71,9 @@ describe("public subagent execution normalization", () => {
 			{ action: "single" },
 			{ action: "parallel" },
 			{ action: "chain" },
+			{ action: "append-step", id: "run", step: { agent: "worker" } },
+			{ action: "approve-checkpoint", id: "run" },
+			{ action: "reject-checkpoint", id: "run" },
 			{ agent: "" },
 			{ agent: 42 },
 			{ task: "work" },
@@ -60,12 +84,17 @@ describe("public subagent execution normalization", () => {
 			{ chain: [{ agent: "worker" }] },
 			{ parallel: [{ agent: "worker" }] },
 			{ concurrency: 2 },
+			{ action: "get", chainName: "review-pipeline" },
+			{ action: "create", config: { name: "review-pipeline", steps: [{ agent: "worker" }] } },
 			{ clarify: true, workflowScript: "return 1" },
 			{ resume: "retained-run", workflowScript: "return 1" },
 			{},
 			{ workflowScript: " " },
 			{ action: "status", workflowScript: "return 1" },
 			{ action: "schedule.create", every: "1h", agent: "worker", workflowScript: "return 1" },
+			{ workflowScript: "return 1", isolation: "invalid" },
+			{ workflowScript: "return 1", isolation: "none", worktree: true },
+			{ workflowScript: "return 1", isolation: "worktree", worktree: false },
 		] as const) {
 			assert.equal(normalizePublicSubagentExecution(params).ok, false, JSON.stringify(params));
 		}

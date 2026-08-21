@@ -41,7 +41,7 @@ export type WorkflowNodeStatus = "pending" | "running" | "completed" | "failed" 
 
 export interface WorkflowGraphNode {
 	id: string;
-	kind: "step" | "parallel-group" | "dynamic-parallel-group" | "agent" | "checkpoint";
+	kind: "step" | "parallel-group" | "dynamic-parallel-group" | "agent";
 	agent?: string;
 	phase?: string;
 	label: string;
@@ -61,16 +61,6 @@ export interface WorkflowGraphNode {
 	structured?: boolean;
 	acceptanceStatus?: AcceptanceLedgerStatus;
 	error?: string;
-	checkpoint?: ChainCheckpointState;
-}
-
-export interface ChainCheckpointState {
-	name: string;
-	message?: string;
-	status: "pending" | "approved" | "rejected";
-	stepIndex: number;
-	approvedAt?: number;
-	rejectedAt?: number;
 }
 
 export interface WorkflowGraphSnapshot {
@@ -79,6 +69,29 @@ export interface WorkflowGraphSnapshot {
 	phases: Array<{ title: string; nodeIds: string[] }>;
 	nodes: WorkflowGraphNode[];
 	currentNodeId?: string;
+}
+
+export type WorkflowReceiptState = "complete" | "failed" | "paused" | "stopped";
+
+type WorkflowReceiptEntryResumability =
+	| { latestRunId: string; resumability: { state: "resumable" } }
+	| { latestRunId?: string; resumability: { state: "not-resumable"; reason: string } };
+
+export type WorkflowReceiptEntry = WorkflowReceiptEntryResumability & {
+	key: string;
+	agent?: string;
+	requestedContext?: "fresh" | "fork";
+	resolvedContext?: "fresh" | "fork" | "mixed";
+	outputReference?: string;
+	continuation: { runIds: string[] };
+};
+
+export interface WorkflowReceipt {
+	version: 1;
+	workflowRunId: string;
+	state: WorkflowReceiptState;
+	createdAt: number;
+	entries: Record<string, WorkflowReceiptEntry>;
 }
 
 export interface SavedOutputReference {
@@ -171,6 +184,7 @@ export interface ControlConfig {
 export interface ResolvedControlConfig {
 	enabled: boolean;
 	needsAttentionAfterMs: number;
+	needsAttentionAfterMsIsExplicit?: boolean;
 	activeNoticeAfterMs: number;
 	activeNoticeAfterTurns?: number;
 	activeNoticeAfterTokens?: number;
@@ -224,6 +238,10 @@ export interface ControlEvent {
 	currentPath?: string;
 	elapsedMs?: number;
 	recentFailureSummary?: string;
+	workflowKey?: string;
+	phase?: string;
+	label?: string;
+	taskPreview?: string;
 }
 
 export type SubagentResultStatus = "completed" | "failed" | "paused" | "stopped" | "detached";
@@ -282,7 +300,7 @@ export interface ParallelHandoffGroup {
 export interface ParallelHandoffManifest {
 	version: 1;
 	runId: string;
-	mode: "parallel" | "chain";
+	mode: "single" | "parallel" | "chain";
 	source: "foreground" | "async";
 	cwd: string;
 	createdAt: number;
@@ -415,6 +433,12 @@ export type ProcessTerminalV1 =
 		diagnostic?: string;
 	});
 
+/** Identifies the durable schedule that launched a run, so its completion is attributable. */
+export interface ScheduleOrigin {
+	id: string;
+	name?: string;
+}
+
 export type SteeringActionState = "delivered" | "scheduled" | "pending" | "partial" | "recovered" | "failed";
 export type SteeringTargetState = "scheduled" | "pending" | "routed" | "queued" | "delivered" | "late" | "failed" | "recovered";
 
@@ -508,6 +532,7 @@ export interface SteeringRecoveryDescriptor {
 	sessionFile?: string;
 	cwd: string;
 	model?: string;
+	modelOverrideFromParent?: boolean;
 	fallbackModels?: string[];
 	thinking?: string;
 	tools?: string[];
@@ -528,6 +553,8 @@ export interface SteeringRecoveryDescriptor {
 	structuredOutputSchema?: JsonSchemaObject;
 	acceptance?: AcceptanceInput;
 	controlConfig?: ResolvedControlConfig;
+	/** Resolved launch context for this async child. */
+	context?: "fresh" | "fork";
 	/** Raw per-run bridge override. Omitted descriptors continue to use global config. */
 	intercomBridge?: IntercomBridgeConfig;
 	absoluteDeadlineAt?: number;
@@ -1057,7 +1084,6 @@ export interface Details {
 	totalSteps?: number;         // Total steps in chain
 	currentStepIndex?: number;   // 0-indexed current step (for running chains)
 	workflowGraph?: WorkflowGraphSnapshot;
-	checkpoint?: ChainCheckpointState;
 	outputs?: ChainOutputMap;
 	// Aggregated child usage across all agents in the run
 	totalChildUsage?: Usage;
@@ -1087,9 +1113,9 @@ export interface Details {
 	workflow?: {
 		value?: unknown;
 		trace: Array<{
-			operation: "run" | "status";
+			operation: "run" | "status" | "steer";
 			key: string;
-			state: "started" | "completed" | "failed" | "detached" | "stopped" | "reused";
+			state: "started" | "completed" | "failed" | "detached" | "stopped" | "reused" | "queued" | "delivered" | "missed";
 			agent?: string;
 			runId?: string;
 			phase?: string;
@@ -1099,6 +1125,8 @@ export interface Details {
 		}>;
 		emits: unknown[];
 		console: Array<{ level: "log" | "info" | "warn" | "error"; text: string }>;
+		/** Terminal keyed child receipt. Async workflows also persist it beside status.json. */
+		receipt?: WorkflowReceipt;
 	};
 	chatProgress?: {
 		mode: "off" | "live-card";
@@ -1266,6 +1294,7 @@ export interface AsyncStartedEvent {
 	sessionRoot?: string;
 	pid?: number;
 	sessionId?: string;
+	completionOwnerId?: string;
 	mode?: SubagentRunMode;
 	agent?: string;
 	agents?: string[];
@@ -1277,7 +1306,6 @@ export interface AsyncStartedEvent {
 	chainStepCount?: number;
 	parallelGroups?: AsyncParallelGroupStatus[];
 	workflowGraph?: WorkflowGraphSnapshot;
-	checkpoint?: ChainCheckpointState;
 	launchContractDigest?: string;
 	launchResolvedExtensions?: LaunchResolvedChildExtensionsV1;
 	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1;
@@ -1298,6 +1326,11 @@ export type AgentRunnerConfig =
 		command: string;
 		args?: string[];
 		promptDelivery?: "stdin";
+	}
+	| {
+		type: "external-job";
+		provider: string;
+		options?: Record<string, unknown>;
 	};
 
 export interface ExternalCliRunnerStatus {
@@ -1314,6 +1347,35 @@ export interface ExternalCliRunnerStatus {
 	};
 }
 
+export interface ExternalJobRunnerStatus {
+	type: "external-job";
+	provider: string;
+	options: Record<string, unknown>;
+	capabilities: {
+		stop: false;
+		steer: false;
+		resume: false;
+		structuredOutput: false;
+		toolEvents: false;
+	};
+}
+
+export interface ExternalJobStatus {
+	provider: string;
+	providerJobId?: string;
+	promptDigest: string;
+	options: Record<string, unknown>;
+	handleUrl?: string;
+	conversationUrl?: string;
+	resultArtifactPath?: string;
+	state: "queued" | "running" | "completed" | "failed" | "stopped" | "blocked";
+	failureCode?: string;
+	failureMessage?: string;
+	blockingJobId?: string;
+	startedAt?: number;
+	updatedAt?: number;
+}
+
 export interface ExternalProcessStatus {
 	pid?: number;
 	startedAt: number;
@@ -1328,6 +1390,8 @@ export interface ExternalProcessStatus {
 export interface AsyncStatus {
 	lifecycleArtifactVersion?: SubagentLifecycleArtifactVersion;
 	runId: string;
+	/** Parent Pi process/window that owns local completion delivery. */
+	completionOwnerId?: string;
 	/** Host tool-call id retained when it differs from the internal run id. */
 	toolCallId?: string;
 	sessionId?: string;
@@ -1361,12 +1425,13 @@ export interface AsyncStatus {
 	usageBudget?: UsageBudgetState;
 	pid?: number;
 	cwd?: string;
+	/** Parent-resolved child session root retained for trusted restored transcript lookup. */
+	sessionRoot?: string;
 	currentStep?: number;
 	chainStepCount?: number;
 	pendingAppends?: number;
 	parallelGroups?: AsyncParallelGroupStatus[];
 	workflowGraph?: WorkflowGraphSnapshot;
-	checkpoint?: ChainCheckpointState;
 	processTerminal?: ProcessTerminalV1;
 	runFanoutBudget?: RunFanoutBudgetSnapshot;
 	runFanoutBudgetDescriptor?: RunFanoutBudgetDescriptor;
@@ -1378,10 +1443,13 @@ export interface AsyncStatus {
 	workflow?: Details["workflow"];
 	parentWorkflowRunId?: string;
 	workflowKey?: string;
+	/** Set when a durable schedule launched this run, so completions can name their origin. */
+	scheduleOrigin?: ScheduleOrigin;
 	steps?: Array<{
 		agent: string;
-		runner?: ExternalCliRunnerStatus;
+		runner?: ExternalCliRunnerStatus | ExternalJobRunnerStatus;
 		externalProcess?: ExternalProcessStatus;
+		externalJob?: ExternalJobStatus;
 		/** Resolved launch context for this child step. */
 		context?: "fresh" | "fork";
 		/** Short caller-facing task/goal shown in fleet surfaces when available. */
@@ -1396,7 +1464,6 @@ export interface AsyncStatus {
 		parentWorkflowRunId?: string;
 		outputName?: string;
 		structured?: boolean;
-		checkpoint?: ChainCheckpointState;
 		status: "pending" | "running" | "complete" | "completed" | "failed" | "paused" | "stopped" | "rejected";
 		children?: NestedRunSummary[];
 		sessionFile?: string;
@@ -1476,6 +1543,7 @@ export interface AsyncJobState {
 	description?: string;
 	pid?: number;
 	sessionId?: string;
+	completionOwnerId?: string;
 	activityState?: ActivityState;
 	lastActivityAt?: number;
 	currentTool?: string;
@@ -1492,7 +1560,6 @@ export interface AsyncJobState {
 	chainStepCount?: number;
 	parallelGroups?: AsyncParallelGroupStatus[];
 	steps?: AsyncJobStep[];
-	checkpoint?: ChainCheckpointState;
 	stepsTotal?: number;
 	runningSteps?: number;
 	completedSteps?: number;
@@ -1570,7 +1637,6 @@ export interface ForegroundResumeRun {
 	/** Originating parent session. Detached exits can outlive the active session. */
 	sessionId?: string;
 	updatedAt: number;
-	checkpoint?: ChainCheckpointState;
 	children: ForegroundResumeChild[];
 }
 
@@ -1663,6 +1729,8 @@ export interface ActiveAsyncCapacitySnapshot {
 export interface SubagentState {
 	baseCwd: string;
 	currentSessionId: string | null;
+	/** Reload-stable identity for this parent Pi process/window. */
+	completionOwnerId?: string;
 	/** Runtime-owned artifact resolution inputs used by Fleet transcript targeting. */
 	artifactDirPreference?: ArtifactDirPreference;
 	/** Runtime authority snapshot used by optional inspector controls. */
@@ -1811,6 +1879,8 @@ export interface RunSyncOptions {
 	nestedRoute?: NestedRouteInfo;
 	/** Override the agent's default model (format: "provider/id" or just "id") */
 	modelOverride?: string;
+	/** The override came from the running parent session, not configuration. */
+	modelOverrideFromParent?: boolean;
 	/** LLM intent arbiter for the completion mutation guard (rescues read-only review runs). */
 	llmIntentArbiter?: import("../runs/shared/llm-intent-arbiter.ts").TaskMutationArbiter;
 	/** Override the agent's default thinking level for this run */
@@ -1915,6 +1985,8 @@ export interface MainWindowRendererConfig {
 
 export interface ExtensionConfig {
 	asyncByDefault?: boolean;
+	/** Set the context for launches that omit an explicit context. */
+	defaultSubagentContext?: "fresh" | "fork";
 	/** Optional shortcut that detaches the active foreground single-subagent run. */
 	foregroundDetachShortcut?: string;
 	/** Show the Claude Code-style navigable fleet. Defaults to true. */
@@ -1925,10 +1997,8 @@ export interface ExtensionConfig {
 	fleetKeybindings?: FleetKeybindingsConfig;
 	/** Show the under-editor async runs widget. Defaults to true, including when FleetView is enabled. */
 	asyncWidget?: boolean;
-	/** Tool description variant registered for the parent-facing subagent tool. Defaults to full. */
+	/** Tool description variant registered for the parent-facing subagent tool. Defaults to split metadata. */
 	toolDescriptionMode?: ToolDescriptionMode;
-	/** Include legacy append-step and checkpoint controls in the registered tool schema. Defaults to false. */
-	legacyChainControls?: boolean;
 	/** Inline chat rendering for the subagent tool. Defaults to rich. */
 	inlineToolDisplay?: InlineToolDisplay;
 	/** Density controls for the main chat subagent call/result renderer. */
@@ -1984,6 +2054,13 @@ export interface ExtensionConfig {
 	/** Artifact cleanup retention. Set cleanupDays to 0 to disable cleanup. */
 	artifactConfig?: Pick<ArtifactConfig, "cleanupDays">;
 	intercomBridge?: IntercomBridgeConfig;
+	/** Control how slow result-index scans are logged. Defaults to \"all\".
+	 *  - \"all\": log every slow scan, including scans that find nothing.
+	 *  - \"activity\": log only slow scans that found or scheduled work. Silences
+	 *    the periodic healthy rescan that inspects zero files while no async runs
+	 *    are pending, which otherwise spams the session transcript.
+	 *  - \"off\": never log slow result-index scans. */
+	resultScanLogging?: "all" | "activity" | "off";
 	proactiveSkillSubagents?: ProactiveSkillSubagentsConfig | false;
 	scheduledRuns?: ScheduledRunsConfig;
 	/** Durable mission behavior. Missions are automatic by default; set enabled:false to disable auto-create. Explicit mission actions/fields still work. */
@@ -2067,7 +2144,10 @@ export function resolveTempScopeId(options?: {
 
 const MAX_PARALLEL = 8;
 export const MAX_CONCURRENCY = 4;
-export const TEMP_ROOT_DIR = path.join(os.tmpdir(), `pi-subagents-${resolveTempScopeId()}`);
+const configuredTempRoot = process.env.PI_SUBAGENTS_TEMP_ROOT?.trim();
+export const TEMP_ROOT_DIR = configuredTempRoot
+	? path.resolve(configuredTempRoot)
+	: path.join(os.tmpdir(), `pi-subagents-${resolveTempScopeId()}`);
 export const RESULTS_DIR = path.join(TEMP_ROOT_DIR, "async-subagent-results");
 export const ASYNC_DIR = path.join(TEMP_ROOT_DIR, "async-subagent-runs");
 export const CHAIN_RUNS_DIR = path.join(TEMP_ROOT_DIR, "chain-runs");
@@ -2090,7 +2170,7 @@ export const SLASH_SUBAGENT_CANCEL_EVENT = "subagent:slash:cancel";
 export const POLL_INTERVAL_MS = 250;
 export const MAX_WIDGET_JOBS = 4;
 export const DEFAULT_SUBAGENT_MAX_DEPTH = 2;
-export const SUBAGENT_ACTIONS = ["list", "get", "models", "children.list", "guide", "create", "update", "delete", "eject", "disable", "enable", "reset", "mission.create", "mission.list", "mission.show", "mission.update", "mission.resolve-decision", "mission.attach-run", "mission.close", "worktree.discard", "refine", "refine.show", "refine.rollback", "inspector.open", "inspector.status", "inspector.close", "project.open", "project.status", "project.close", "status", "debug.run", "grant-spawn-budget", "interrupt", "resume", "steer", "stop", "dismiss", "append-step", "approve-checkpoint", "reject-checkpoint", "doctor", "watchdog.status", "watchdog.check", "watchdog.configure", "watchdog.recommend-model", "schedule.create", "schedule.list", "schedule.show", "schedule.history", "schedule.pause", "schedule.resume", "schedule.run", "schedule.run-due", "schedule.delete"] as const;
+export const SUBAGENT_ACTIONS = ["list", "get", "models", "children.list", "guide", "create", "update", "delete", "eject", "disable", "enable", "reset", "mission.create", "mission.list", "mission.show", "mission.update", "mission.resolve-decision", "mission.attach-run", "mission.close", "worktree.discard", "refine", "refine.show", "refine.rollback", "inspector.open", "inspector.status", "inspector.close", "project.open", "project.status", "project.close", "status", "debug.run", "grant-spawn-budget", "interrupt", "resume", "steer", "stop", "dismiss", "doctor", "watchdog.status", "watchdog.check", "watchdog.configure", "watchdog.recommend-model", "schedule.create", "schedule.list", "schedule.show", "schedule.history", "schedule.pause", "schedule.resume", "schedule.run", "schedule.run-due", "schedule.delete"] as const;
 
 export const DEFAULT_FORK_PREAMBLE =
 	"You are a delegated subagent running from a fork of the parent session. " +
