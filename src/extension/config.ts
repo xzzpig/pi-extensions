@@ -94,6 +94,9 @@ function validateMainWindowRendererConfig(value: unknown): void {
 }
 
 function validateConfig(config: Record<string, unknown>): void {
+	if (config.defaultSubagentContext !== undefined && config.defaultSubagentContext !== "fresh" && config.defaultSubagentContext !== "fork") {
+		throw new Error('config.defaultSubagentContext must be "fresh" or "fork"');
+	}
 	if (config.foregroundDetachShortcut !== undefined
 		&& (typeof config.foregroundDetachShortcut !== "string" || !isValidKeyId(config.foregroundDetachShortcut))) {
 		throw new Error("config.foregroundDetachShortcut must be a valid keybinding string such as \"ctrl+b\"");
@@ -101,14 +104,14 @@ function validateConfig(config: Record<string, unknown>): void {
 	if (config.artifactDir !== undefined && !ARTIFACT_DIR_PREFERENCES.has(config.artifactDir as ArtifactDirPreference)) {
 		throw new Error(`config.artifactDir must be "project", "session", or "temp"`);
 	}
-	if (config.legacyChainControls !== undefined && typeof config.legacyChainControls !== "boolean") {
-		throw new Error("config.legacyChainControls must be a boolean");
-	}
 	if (config.maxActiveAsyncRunsPerSession !== undefined
 		&& (typeof config.maxActiveAsyncRunsPerSession !== "number"
 			|| !Number.isInteger(config.maxActiveAsyncRunsPerSession)
 			|| config.maxActiveAsyncRunsPerSession < 0)) {
 		throw new Error("config.maxActiveAsyncRunsPerSession must be a non-negative integer");
+	}
+	if (config.resultScanLogging !== undefined && config.resultScanLogging !== "all" && config.resultScanLogging !== "activity" && config.resultScanLogging !== "off") {
+		throw new Error('config.resultScanLogging must be "all", "activity", or "off"');
 	}
 	validateMissionStoreConfig(config.missions);
 	validateAuthorityPolicy(config.authorityPolicy);

@@ -74,6 +74,7 @@ import {
 	buildModelCandidates,
 	formatModelAttemptNote,
 	isRetryableModelFailure,
+	recordRetryableModelFailure,
 } from "../shared/model-fallback.ts";
 import {
 	SUBAGENT_STARTUP_RETRY_DELAYS_MS,
@@ -783,6 +784,7 @@ async function runSingleAttempt(
 				currentToolDurationMs: input.currentToolDurationMs ?? currentToolDurationMs(now),
 				currentPath: input.currentPath ?? progress.currentPath,
 				recentFailureSummary: input.recentFailureSummary,
+				taskPreview: task,
 			});
 			emitControlEvent(event);
 			return previous !== "needs_attention";
@@ -809,6 +811,7 @@ async function runSingleAttempt(
 				currentToolDurationMs: currentToolDurationMs(now),
 				currentPath: progress.currentPath,
 				elapsedMs: now - startTime,
+				taskPreview: task,
 			}));
 			return true;
 		};
@@ -870,6 +873,7 @@ async function runSingleAttempt(
 				startedAt: startTime,
 				lastActivityAt: progress.lastActivityAt,
 				currentTool: progress.currentTool,
+				thinking: resolvedThinking,
 				now,
 			});
 			if (idleState === "needs_attention") {
@@ -1671,7 +1675,7 @@ async function runSyncCompletionInner(
 		agent.fallbackModels,
 		options.availableModels,
 		options.preferredModelProvider,
-		{ scope: options.modelScope },
+		{ scope: options.modelScope, primaryModelFromParent: options.modelOverrideFromParent },
 	);
 	const attemptedModels: string[] = [];
 	const modelAttempts: ModelAttempt[] = [];
@@ -1858,7 +1862,9 @@ async function runSyncCompletionInner(
 				attempt.error = startupError;
 				break modelAttemptsLoop;
 			}
-			if (!isRetryableModelFailure(result.error) || modelIndex === modelsToTry.length - 1) break modelAttemptsLoop;
+			const retryableModelFailure = isRetryableModelFailure(result.error);
+			if (retryableModelFailure) recordRetryableModelFailure(result.model ?? candidate, result.error);
+			if (!retryableModelFailure || modelIndex === modelsToTry.length - 1) break modelAttemptsLoop;
 			attemptNotes.push(formatModelAttemptNote(attempt, modelsToTry[modelIndex + 1]));
 			break;
 		}

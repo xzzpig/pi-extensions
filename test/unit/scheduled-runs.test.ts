@@ -166,6 +166,20 @@ describe("project schedule management", () => {
 		assert.match(text(listed), /other/);
 	});
 
+	it("treats a deleted project cwd as having no schedules during restore and listing", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-schedule-deleted-project-"));
+		roots.push(root);
+		const project = path.join(root, "project");
+		fs.mkdirSync(project);
+		fs.rmSync(project, { recursive: true });
+		assert.deepEqual(listScheduledRunSummaries(project), []);
+		const manager = createScheduledRunManager({
+			config: { scheduledRuns: { enabled: true } },
+			launch: async () => ({ content: [{ type: "text", text: "unused" }], details: { mode: "management", results: [] } }),
+		});
+		assert.doesNotThrow(() => manager.bindSession(context(project)));
+	});
+
 	it("rejects direct schedule targets and requires workflowScript", async () => {
 		const h = harness();
 		const result = await h.manager.handleToolCall({ action: "schedule.create", id: "direct", every: "1h", agent: "worker", task: "Review" }, h.ctx);
@@ -283,6 +297,35 @@ describe("project schedule management", () => {
 		assert.match(text(result), /Failed to read schedule record/);
 	});
 
+	it("skips orphan schedule directories during restore and listing", async () => {
+		const h = harness();
+		h.manager.stop();
+		const root = scheduledRunStorePath(h.ctx.cwd, undefined, path.join(h.root, "stores"));
+		fs.mkdirSync(path.join(root, "orphan"), { recursive: true });
+		const manager = createScheduledRunManager({
+			config: { scheduledRuns: { enabled: true } },
+			storeRoot: path.join(h.root, "stores"),
+			timers: h.timers,
+			launch: async () => ({ content: [{ type: "text", text: "unused" }], details: { mode: "management", results: [] } }),
+		});
+		assert.doesNotThrow(() => manager.bindSession(h.ctx));
+		assert.match(text(await manager.handleToolCall({ action: "schedule.list" }, h.ctx)), /No project schedules/);
+	});
+
+	it("rejects same-id create when an orphan directory contains stale state", async () => {
+		const h = harness();
+		const root = scheduledRunStorePath(h.ctx.cwd, undefined, path.join(h.root, "stores"));
+		const dir = path.join(root, "orphan");
+		fs.mkdirSync(dir, { recursive: true });
+		fs.writeFileSync(path.join(dir, "active.lock"), "stale", "utf-8");
+		fs.writeFileSync(path.join(dir, "history.json"), JSON.stringify({ schemaVersion: 1, runs: [] }), "utf-8");
+		const result = await h.manager.handleToolCall({ action: "schedule.create", id: "orphan", every: "1h", workflowScript: "return runs.run('main', { agent: 'worker' })" }, h.ctx);
+		assert.equal(result.isError, true);
+		assert.match(text(result), /already exists/);
+		assert.equal(fs.existsSync(path.join(dir, "schedule.json")), false);
+		assert.equal(fs.readFileSync(path.join(dir, "active.lock"), "utf-8"), "stale");
+	});
+
 	it("rejects schedule directories that escape through a symlink", async () => {
 		const h = harness();
 		const root = scheduledRunStorePath(h.ctx.cwd, undefined, path.join(h.root, "stores"));
@@ -326,7 +369,7 @@ describe("recurring schedule execution", () => {
 		h.clock.now += 3_600_000;
 		h.timers.fireAll();
 		assert.equal(h.launches.length, 1);
-		assert.deepEqual(h.launches[0]?.params, { workflowScript: "return runs.run('main', { agent: 'worker', task: 'Maintain backlog' })", async: true, context: "fresh", cwd: h.ctx.cwd, mission: false });
+		assert.deepEqual(h.launches[0]?.params, { workflowScript: "return runs.run('main', { agent: 'worker', task: 'Maintain backlog' })", async: true, context: "fresh", cwd: h.ctx.cwd, mission: false, scheduleOrigin: { id: "hourly", name: "workflowScript -> agent worker" } });
 		h.launches[0]!.resolve({ content: [{ type: "text", text: "Async worker" }], details: { mode: "single", results: [], asyncId: "async-1", asyncDir: "/tmp/async-1" } });
 		await flush();
 		assert.deepEqual([...h.manager.observedCompletionRunIds()], ["async-1"]);
@@ -609,6 +652,7 @@ describe("recurring schedule execution", () => {
 		assert.equal(h.launches.length, 1);
 		h.launches[0]!.resolve({ content: [{ type: "text", text: "Async" }], details: { mode: "workflow", results: [], asyncId: "workflow-1" } });
 		assert.match(text(await firstPromise), /async workflow-1/);
+		assert.deepEqual([...h.manager.referencedAsyncRunIds()], ["workflow-1"]);
 		const second = await h.manager.handleToolCall({ action: "schedule.run", id: "manual" }, h.ctx);
 		assert.match(text(second), /skipped/);
 		assert.equal(h.launches.length, 1);
@@ -627,6 +671,7 @@ describe("recurring schedule execution", () => {
 		h.launches[1]!.resolve({ content: [{ type: "text", text: "Async" }], details: { mode: "single", results: [], asyncId: "async-fail" } });
 		await second;
 		h.manager.handleAsyncCompletion({ id: "async-fail", success: false, summary: "child failed" });
+		assert.deepEqual([...h.manager.referencedAsyncRunIds()], ["async-fail"]);
 		const history = await h.manager.handleToolCall({ action: "schedule.history", id: "failures" }, h.ctx);
 		assert.match(text(history), /failed_run.*async async-fail/);
 		assert.match(text(history), /failed_launch/);

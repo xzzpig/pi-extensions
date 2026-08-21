@@ -1,14 +1,31 @@
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, resolve as resolvePath } from "node:path";
 import { Worker } from "node:worker_threads";
 
 const KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const requireFromPackage = createRequire(import.meta.url);
 
 const WORKER_SOURCE = String.raw`
-const { parentPort } = require("node:worker_threads");
-const { promiseHooks } = require("node:v8");
+const { parentPort, workerData } = require("node:worker_threads");
 const vm = require("node:vm");
 const { inspect } = require("node:util");
+const { parse } = require(workerData.acornPath);
 
-if (!promiseHooks || typeof promiseHooks.createHook !== "function") throw new Error("workflowScript requires node:v8 promiseHooks.createHook support.");
+let promiseHooks;
+try {
+  ({ promiseHooks } = require("node:v8"));
+} catch {}
+
+function createWorkflowPromiseHook(callbacks) {
+  if (!promiseHooks || typeof promiseHooks.createHook !== "function") return () => {};
+  try {
+    return promiseHooks.createHook(callbacks);
+  } catch (error) {
+    if (error?.name !== "NotImplementedError") throw error;
+    return () => {};
+  }
+}
 
 let nextCallId = 0;
 let topLevelWorkflowPromise;
@@ -20,7 +37,7 @@ const trackedPromiseTrackers = new WeakMap();
 const trackedPromiseTargets = new WeakMap();
 let nativePromiseTrackers = new WeakMap();
 let nativePromiseParents = new WeakMap();
-const observedRunCallIds = new Set();
+const observedCallIds = new Set();
 
 function stableRunJson(value) {
   if (Array.isArray(value)) return "[" + value.map(stableRunJson).join(",") + "]";
@@ -79,7 +96,7 @@ function mergeObservations(...groups) {
   const merged = [];
   for (const group of groups) {
     for (const observation of group) {
-      if (!observation || typeof observation.callId !== "number" || typeof observation.key !== "string" || seen.has(observation.callId)) continue;
+      if (!observation || typeof observation.callId !== "number" || typeof observation.key !== "string" || typeof observation.operation !== "string" || seen.has(observation.callId)) continue;
       seen.add(observation.callId);
       merged.push(observation);
     }
@@ -99,9 +116,9 @@ function addTrackedObservations(tracker, observations) {
   tracker.observations = mergeObservations(tracker.observations, observations);
   if (!tracker.consumed) return;
   for (const observation of tracker.observations) {
-    if (observedRunCallIds.has(observation.callId)) continue;
-    observedRunCallIds.add(observation.callId);
-    parentPort.postMessage({ type: "runObserved", callId: observation.callId, key: observation.key });
+    if (observedCallIds.has(observation.callId)) continue;
+    observedCallIds.add(observation.callId);
+    parentPort.postMessage({ type: "callObserved", callId: observation.callId, key: observation.key, operation: observation.operation });
   }
 }
 
@@ -211,8 +228,8 @@ function hostCall(method, args, observation) {
     pending.set(callId, { resolve, reject });
     parentPort.postMessage({ type: "call", callId, method, args });
   });
-  return observation && typeof observation.key === "string"
-    ? trackRunObservation([{ key: observation.key, callId }], promise)
+  return observation && typeof observation.key === "string" && typeof observation.operation === "string"
+    ? trackRunObservation([{ key: observation.key, operation: observation.operation, callId }], promise)
     : promise;
 }
 
@@ -232,7 +249,7 @@ function formatRef(result) {
   return "[" + parts.join("; ") + "]";
 }
 
-const runFingerprints = new Map();
+let runFingerprints = new Map();
 
 function validateRunCall(key, params, label, fingerprints) {
   if (typeof key !== "string" || !runKeyPattern.test(key)) throw new Error(label + " has an invalid key.");
@@ -241,11 +258,21 @@ function validateRunCall(key, params, label, fingerprints) {
     const hint = label === "runs.run" ? "; use runs.all(...) and JavaScript control flow for orchestration." : ".";
     throw new Error(label + " accepts one child via { agent, task } and execution controls only" + hint);
   }
+  if (Object.prototype.hasOwnProperty.call(params, "clarify")) throw new Error(label + " does not support clarify UI.");
   if (params.worktree !== undefined && typeof params.worktree !== "boolean") throw new Error(label + " worktree must be true or false.");
   if (params.gate !== undefined && (typeof params.gate !== "string" || !params.gate.trim())) throw new Error(label + " gate must be a non-empty command string.");
   if (params.gate !== undefined && params.acceptance !== undefined) throw new Error(label + " gate cannot be combined with acceptance; use one gate command or acceptance.verify.");
   if (params.gate !== undefined && params.resume !== undefined) throw new Error(label + " gate is not supported with retained resume.");
-  if (params.resume !== undefined && (typeof params.resume !== "string" || !params.resume.trim())) throw new Error(label + " resume must be a non-empty retained run id.");
+  if (params.resume !== undefined && typeof params.resume !== "string") {
+    const reference = params.resume;
+    if (!reference || typeof reference !== "object" || Array.isArray(reference)) throw new Error(label + " resume must be a retained run id or keyed workflow receipt reference.");
+    const fields = Object.keys(reference);
+    if (fields.some((field) => field !== "workflowRunId" && field !== "key" && field !== "latest")) throw new Error(label + " keyed resume contains unsupported fields.");
+    if (typeof reference.workflowRunId !== "string" || !reference.workflowRunId.trim()) throw new Error(label + " keyed resume workflowRunId must be non-empty.");
+    if (typeof reference.key !== "string" || !runKeyPattern.test(reference.key)) throw new Error(label + " keyed resume key is invalid.");
+    if (reference.latest !== true) throw new Error(label + " keyed resume requires latest: true.");
+  }
+  if (typeof params.resume === "string" && !params.resume.trim()) throw new Error(label + " resume must be a non-empty retained run id.");
   if (params.resume !== undefined && params.agent !== undefined) throw new Error(label + " resume and agent are mutually exclusive.");
   if (params.resume !== undefined && (typeof params.task !== "string" || !params.task.trim())) throw new Error(label + " resume requires a non-empty task follow-up.");
   assertJsonValue(params, label + " params");
@@ -258,7 +285,7 @@ function validateRunCall(key, params, label, fingerprints) {
 const runs = Object.freeze({
   run(key, params) {
     validateRunCall(key, params, "runs.run", runFingerprints);
-    return hostCall("run", { key, params }, { key });
+    return hostCall("run", { key, params }, { key, operation: "run" });
   },
   all(items) {
     if (!Array.isArray(items)) throw new Error("runs.all(items) requires an array.");
@@ -272,10 +299,21 @@ const runs = Object.freeze({
       validateRunCall(key, params, "runs.all item " + index, fingerprints);
       calls.push({ key, params });
     }
-    for (const { key, params } of calls) runFingerprints.set(key, stableRunJson(params));
+    runFingerprints = fingerprints;
     const batch = { id: "batch-" + (++nextCallId), calls };
     const launched = calls.map(({ key, params }) => runHostCall(key, params, true, batch));
-    return trackRunObservation(launched.map(({ key, callId }) => ({ key, callId })), Promise.all(launched.map(({ promise }) => promise)));
+    return trackRunObservation(launched.map(({ key, callId }) => ({ key, operation: "run", callId })), Promise.all(launched.map(({ promise }) => promise)));
+  },
+  steer(key, message, options = {}) {
+    if (typeof key !== "string" || !runKeyPattern.test(key)) throw new Error("runs.steer has an invalid key.");
+    if (typeof message !== "string" || !message.trim()) throw new Error("runs.steer message must be a non-empty string.");
+    if (!options || typeof options !== "object" || Array.isArray(options)) throw new Error("runs.steer options must be an object.");
+    const allowed = new Set(["mode", "index", "ackTimeoutMs"]);
+    for (const option of Object.keys(options)) if (!allowed.has(option)) throw new Error("runs.steer options contain unsupported field '" + option + "'.");
+    if (options.mode !== undefined && options.mode !== "steer" && options.mode !== "follow_up" && options.mode !== "auto") throw new Error("runs.steer mode must be 'steer', 'follow_up', or 'auto'.");
+    if (options.index !== undefined && (!Number.isInteger(options.index) || options.index < 0 || options.index > 1000000)) throw new Error("runs.steer index must be an integer between 0 and 1000000.");
+    if (options.ackTimeoutMs !== undefined && (!Number.isInteger(options.ackTimeoutMs) || options.ackTimeoutMs < 1)) throw new Error("runs.steer ackTimeoutMs must be a positive integer.");
+    return hostCall("steer", { key, message: message.trim(), options }, { key, operation: "steer" });
   },
   status(keyOrRunId) { return hostCall("status", { keyOrRunId }); },
   ref: formatRef,
@@ -299,14 +337,6 @@ const state = Object.freeze({
   },
 });
 
-const prompts = Object.freeze({
-  render(ref, vars) {
-    if (typeof ref !== "string" || !ref.trim()) throw new Error("prompts.render(ref, vars) requires a non-empty ref string.");
-    if (vars !== undefined) assertJsonValue(vars, "prompts.render vars");
-    return hostCall("prompts.render", { ref, vars });
-  },
-});
-
 let contextObjectPrototype;
 
 const capturedConsole = Object.freeze(Object.fromEntries(
@@ -316,7 +346,7 @@ const capturedConsole = Object.freeze(Object.fromEntries(
 ));
 
 function formatWorkflowScriptSyntaxError(error) {
-  const details = error && error.stack ? error.stack : String(error);
+  const details = formatWorkflowScriptError(error);
   return [
     "workflowScript must be valid JavaScript.",
     "If task text contains Markdown fences or backticks, use an array joined with \"\\n\" or escaped strings instead of a raw backtick template literal.",
@@ -324,6 +354,52 @@ function formatWorkflowScriptSyntaxError(error) {
     "Original SyntaxError:",
     details,
   ].join("\n");
+}
+
+function formatWorkflowScriptError(error) {
+  const message = error && typeof error.message === "string" ? error.message : String(error);
+  const stack = error && typeof error.stack === "string" ? error.stack : "";
+  if (!stack) return message;
+  return stack.includes(message) ? stack : message + "\n" + stack;
+}
+
+function isSyntaxError(error) {
+  return error instanceof SyntaxError || error?.name === "SyntaxError";
+}
+
+const NESTED_ASYNC_WORKFLOW_ERROR = "workflowScript does not support nested async functions. Use top-level await, plain helper functions that return runs.run(...), or explicit Promise chains so workflows stay portable across Node and Bun.";
+const AST_SCALAR_KEYS = new Set(["type", "start", "end"]);
+
+function assertPortableWorkflowScript(source) {
+  const wrapped = "(async () => {\n" + source + "\n})()";
+  const ast = parse(wrapped, { ecmaVersion: "latest", sourceType: "script" });
+  const wrapper = workflowWrapperFunction(ast);
+  walkWorkflowAst(wrapper.body, wrapper);
+}
+
+function workflowWrapperFunction(ast) {
+  const wrapper = ast.body?.[0]?.expression?.callee;
+  if (!wrapper || wrapper.type !== "ArrowFunctionExpression") throw new Error("workflowScript wrapper parse invariant failed.");
+  return wrapper;
+}
+
+function isAsyncFunctionNode(node) {
+  return node.async === true && (node.type === "FunctionDeclaration" || node.type === "FunctionExpression" || node.type === "ArrowFunctionExpression");
+}
+
+function walkWorkflowAst(node, allowedAsyncFunction) {
+  if (!node || typeof node !== "object") return;
+  if (Array.isArray(node)) {
+    for (const item of node) walkWorkflowAst(item, allowedAsyncFunction);
+    return;
+  }
+  if (node !== allowedAsyncFunction && isAsyncFunctionNode(node)) {
+    throw new Error(NESTED_ASYNC_WORKFLOW_ERROR);
+  }
+  for (const [key, child] of Object.entries(node)) {
+    if (AST_SCALAR_KEYS.has(key)) continue;
+    walkWorkflowAst(child, allowedAsyncFunction);
+  }
 }
 
 function assertJsonValue(value, path = "emit", seen = new Set()) {
@@ -383,16 +459,16 @@ parentPort.on("message", async (message) => {
   }
   if (message.type !== "start") return;
   try {
-    const sandbox = { runs, prompts, Promise: workflowPromise, emit(value) { assertJsonValue(value); parentPort.postMessage({ type: "emit", value }); }, console: capturedConsole };
+    const sandbox = { runs, Promise: workflowPromise, emit(value) { assertJsonValue(value); parentPort.postMessage({ type: "emit", value }); }, console: capturedConsole };
     if (message.stateEnabled) sandbox.state = state;
     const context = vm.createContext(sandbox, { codeGeneration: { strings: false, wasm: false } });
     contextObjectPrototype = vm.runInContext("Object.prototype", context);
     let compiled;
     try {
+      assertPortableWorkflowScript(message.script);
       compiled = new vm.Script("(async () => {\n" + message.script + "\n})()", { filename: "workflow-script.js" });
     } catch (error) {
-      if (!(error instanceof SyntaxError)) throw error;
-      parentPort.postMessage({ type: "error", error: formatWorkflowScriptSyntaxError(error) });
+      parentPort.postMessage({ type: "error", error: isSyntaxError(error) ? formatWorkflowScriptSyntaxError(error) : formatWorkflowScriptError(error) });
       return;
     }
     const nativePromisePrototype = vm.runInContext("(async () => {})().constructor.prototype", context);
@@ -411,7 +487,7 @@ parentPort.on("message", async (message) => {
           return Reflect.apply(nativeThen, this, args);
         },
       });
-      stopWorkflowPromiseHook = promiseHooks.createHook({
+      stopWorkflowPromiseHook = createWorkflowPromiseHook({
         before(promise) {
           activeNativePromises.push(promise);
         },
@@ -456,7 +532,7 @@ parentPort.on("message", async (message) => {
     assertJsonValue(persistedValue, "return");
     parentPort.postMessage({ type: "complete", value: persistedValue });
   } catch (error) {
-    parentPort.postMessage({ type: "error", error: error && error.stack ? error.stack : String(error), ...(error && error.workflowErrorKind === "detached-child" ? { errorKind: "detached-child" } : {}) });
+    parentPort.postMessage({ type: "error", error: isSyntaxError(error) ? formatWorkflowScriptSyntaxError(error) : formatWorkflowScriptError(error), ...(error && error.workflowErrorKind === "detached-child" ? { errorKind: "detached-child" } : {}) });
   }
 });
 `;
@@ -471,14 +547,19 @@ export interface WorkflowScriptChildResult {
 	error?: string;
 	detached?: boolean;
 	structuredOutput?: unknown;
+	requestedContext?: "fresh" | "fork";
+	resolvedContext?: "fresh" | "fork" | "mixed";
+	outputReference?: string;
+	resumability?: { state: "resumable" } | { state: "not-resumable"; reason: string };
+	continuation?: { runIds: string[] };
 	artifactPaths: string[];
 	results?: unknown[];
 }
 
 export interface WorkflowScriptTraceEntry {
-	operation: "run" | "status";
+	operation: "run" | "status" | "steer";
 	key: string;
-	state: "started" | "completed" | "failed" | "detached" | "stopped" | "reused";
+	state: "started" | "completed" | "failed" | "detached" | "stopped" | "reused" | "queued" | "delivered" | "missed";
 	/** Canonical child agent name when resolved launch or result data is available. */
 	agent?: string;
 	runId?: string;
@@ -486,6 +567,32 @@ export interface WorkflowScriptTraceEntry {
 	phase?: string;
 	label?: string;
 	error?: string;
+}
+
+export interface WorkflowSteerOptions {
+	mode?: "steer" | "follow_up" | "auto";
+	index?: number;
+	ackTimeoutMs?: number;
+}
+
+export interface WorkflowSteerResult {
+	key: string;
+	state: "queued" | "delivered" | "missed" | "failed";
+	requestId?: string;
+	deliveryStatus?: "queued" | "delivered";
+	targets?: Array<{ index: number; state: string; reason?: string }>;
+	error?: string;
+}
+
+export interface WorkflowReceiptResumeReference {
+	workflowRunId: string;
+	key: string;
+	latest: true;
+}
+
+export interface WorkflowResolvedResumeReference {
+	runId: string;
+	runIds?: string[];
 }
 
 export interface WorkflowScriptResult {
@@ -514,13 +621,12 @@ export interface RunWorkflowScriptOptions {
 	signal?: AbortSignal;
 	admit?: (calls: Array<{ key: string; params: Record<string, unknown> }>) => void | Promise<void>;
 	launch: (key: string, params: Record<string, unknown>, signal: AbortSignal, admission: { admitted: boolean }) => Promise<WorkflowScriptChildResult>;
+	resolveResume?: (reference: WorkflowReceiptResumeReference, signal: AbortSignal) => string | WorkflowResolvedResumeReference | Promise<string | WorkflowResolvedResumeReference>;
 	status: (keyOrRunId: string, signal: AbortSignal) => Promise<WorkflowScriptChildResult>;
+	steer?: (key: string, message: string, options: WorkflowSteerOptions, signal: AbortSignal) => Promise<WorkflowSteerResult>;
 	state?: {
 		get: (key: string) => unknown | Promise<unknown>;
 		set: (key: string, value: unknown) => void | Promise<void>;
-	};
-	prompts?: {
-		render: (ref: string, vars?: unknown) => string | Promise<string>;
 	};
 	onTrace?: (trace: WorkflowScriptTraceEntry[]) => void;
 	onEmit?: (emits: unknown[]) => void;
@@ -536,6 +642,16 @@ function isPlainJsonObject(value: unknown): value is Record<string, unknown> {
 	return prototype === null || prototype === Object.prototype;
 }
 
+function parseWorkflowResumeReference(value: unknown): WorkflowReceiptResumeReference | undefined {
+	if (!isRecord(value)) return undefined;
+	const fields = Object.keys(value);
+	if (fields.some((field) => field !== "workflowRunId" && field !== "key" && field !== "latest")) throw new Error("keyed resume contains unsupported fields.");
+	if (typeof value.workflowRunId !== "string" || !value.workflowRunId.trim()) throw new Error("keyed resume workflowRunId must be non-empty.");
+	const key = validateKey(value.key, "keyed resume");
+	if (value.latest !== true) throw new Error("keyed resume requires latest: true.");
+	return { workflowRunId: value.workflowRunId.trim(), key, latest: true };
+}
+
 function omitUndefinedWorkflowValues(value: unknown, seen = new Set<object>()): unknown {
 	if (value === null || typeof value !== "object") return value;
 	if (seen.has(value)) return value;
@@ -547,6 +663,18 @@ function omitUndefinedWorkflowValues(value: unknown, seen = new Set<object>()): 
 			: value;
 	seen.delete(value);
 	return normalized;
+}
+
+function omitNonJsonWorkflowResultMetadata(value: unknown): unknown {
+	const normalized = omitUndefinedWorkflowValues(value);
+	if (!isPlainJsonObject(normalized) || !Object.hasOwn(normalized, "results")) return normalized;
+	try {
+		assertWorkflowJsonValue(normalized.results, "runs.run result.results");
+		return normalized;
+	} catch {
+		const { results: _results, ...safeResult } = normalized;
+		return safeResult;
+	}
 }
 
 export function assertWorkflowJsonValue(value: unknown, path = "value", seen = new Set<object>()): void {
@@ -629,44 +757,92 @@ function workflowStringMetadata(params: Record<string, unknown>): Pick<WorkflowS
 	};
 }
 
+function resolveWorkflowParserEntry(): string {
+	try {
+		return requireFromPackage.resolve("acorn");
+	} catch (primaryError) {
+		// Some runtimes (e.g. Bun-compiled single-file binaries) fail bare
+		// package-specifier resolution through createRequire while subpath
+		// resolution still works. Resolve the manifest and derive the
+		// CommonJS entry from its "main" field instead.
+		try {
+			const manifestPath = requireFromPackage.resolve("acorn/package.json");
+			const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as { main?: unknown };
+			const entry = typeof manifest.main === "string" && manifest.main ? manifest.main : "./dist/acorn.js";
+			return resolvePath(dirname(manifestPath), entry);
+		} catch {
+			throw primaryError;
+		}
+	}
+}
+
 export async function runWorkflowScript(options: RunWorkflowScriptOptions): Promise<WorkflowScriptResult> {
 	if (!options.script.trim()) throw new Error("workflowScript must not be empty.");
 	if (options.timeoutMs !== undefined && (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 1)) throw new Error("workflow script timeout must be a positive integer.");
 
-	const worker = new Worker(WORKER_SOURCE, { eval: true });
+	let acornPath: string;
+	try {
+		acornPath = resolveWorkflowParserEntry();
+	} catch (error) {
+		throw new Error("Workflow parser dependency 'acorn' is unavailable from pi-subagents. Reinstall pi-subagents dependencies before launching workflowScript.", { cause: error });
+	}
+	const worker = new Worker(WORKER_SOURCE, { eval: true, workerData: { acornPath } });
 	const emits: unknown[] = [];
 	const consoleEntries: WorkflowScriptResult["console"] = [];
 	const trace: WorkflowScriptTraceEntry[] = [];
 	const children = new Map<string, WorkflowScriptChildResult>();
 	const childOrder: string[] = [];
 	const launches = new Map<string, { fingerprint: string; promise: Promise<WorkflowScriptChildResult>; observed: boolean }>();
+	const steers = new Map<number, { key: string; promise: Promise<WorkflowSteerResult>; observed: boolean }>();
 	const stoppedLaunches = new Set<string>();
 	const batchAdmissions = new Map<string, Promise<void>>();
 	const observedRunCalls = new Set<number>();
+	const observedSteerCalls = new Set<number>();
 	const childController = new AbortController();
 	let settled = false;
+	let finishing = false;
 
 	const partial = (): Omit<WorkflowScriptResult, "value"> => ({ emits, console: consoleEntries, trace, children: childOrder.flatMap((key) => {
 		const child = children.get(key);
 		return child ? [child] : [];
 	}) });
-	const traceChanged = () => options.onTrace?.([...trace]);
+	// Hosts use onTrace to persist a progress journal, and it is invoked from inside
+	// the run-promise handlers below. A throw here would reject the child promise the
+	// script is awaiting, so a single failed status write could mark a completed child
+	// failed and abort its siblings through Promise.all. Telemetry must not decide
+	// workflow outcomes, so a failing callback is reported and the run continues.
+	const traceChanged = () => {
+		try {
+			options.onTrace?.([...trace]);
+		} catch (error) {
+			console.error("Workflow onTrace callback failed:", error);
+		}
+	};
 
 	return await new Promise<WorkflowScriptResult>((resolve, reject) => {
 		const finish = (outcome: { value: unknown } | { error: Error & { workflowErrorKind?: unknown } }) => {
-			if (settled) return;
-			settled = true;
-			if (timer) clearTimeout(timer);
-			options.signal?.removeEventListener("abort", onAbort);
-			void worker.terminate();
-			const unobservedKeys = "value" in outcome ? [...launches].filter(([, launch]) => !launch.observed).map(([key]) => key) : [];
-			const completionError = unobservedKeys.length > 0
-				? new Error(`workflowScript completed with unawaited runs.run launch(es): ${unobservedKeys.map((key) => `'${key}'`).join(", ")}. Await or return each launch.`)
-				: undefined;
-			childController.abort("error" in outcome ? outcome.error : completionError ?? new Error("Workflow script completed."));
-			if ("error" in outcome) reject(new WorkflowScriptError(outcome.error.message, partial(), outcome.error.workflowErrorKind === "detached-child" ? "detached-child" : undefined));
-			else if (completionError) reject(new WorkflowScriptError(completionError.message, partial()));
-			else resolve({ value: outcome.value, ...partial() });
+			if (settled || finishing) return;
+			finishing = true;
+			childController.abort("error" in outcome ? outcome.error : new Error("Workflow script completed."));
+			void Promise.allSettled([...steers.values()].map(({ promise }) => promise)).then(() => {
+				if (settled) return;
+				settled = true;
+				if (timer) clearTimeout(timer);
+				options.signal?.removeEventListener("abort", onAbort);
+				void worker.terminate();
+				const unobservedKeys = "value" in outcome ? [...launches].filter(([, launch]) => !launch.observed).map(([key]) => key) : [];
+				const completionError = unobservedKeys.length > 0
+					? new Error(`workflowScript completed with unawaited runs.run launch(es): ${unobservedKeys.map((key) => `'${key}'`).join(", ")}. For ordinary parallel fanout use await runs.all([{key, agent, task}, ...]); do not read .output from unawaited launches.`)
+					: "value" in outcome
+						? (() => {
+							const unobservedSteers = [...steers.values()].filter((steer) => !steer.observed).map((steer) => steer.key);
+							return unobservedSteers.length > 0 ? new Error(`workflowScript completed with unawaited runs.steer call(s): ${unobservedSteers.map((key) => `'${key}'`).join(", ")}. Await or return each call.`) : undefined;
+						})()
+						: undefined;
+				if ("error" in outcome) reject(new WorkflowScriptError(outcome.error.message, partial(), outcome.error.workflowErrorKind === "detached-child" ? "detached-child" : undefined));
+				else if (completionError) reject(new WorkflowScriptError(completionError.message, partial()));
+				else resolve({ value: outcome.value, ...partial() });
+			});
 		};
 		const onAbort = () => {
 			const signalReason = options.signal?.reason;
@@ -738,37 +914,42 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 				if (message.errorKind === "detached-child") workflowError.workflowErrorKind = "detached-child";
 				return finish({ error: workflowError });
 			}
-			if (message.type === "runObserved" && typeof message.callId === "number") {
+			if (message.type === "callObserved" && typeof message.callId === "number") {
 				const key = typeof message.key === "string" ? message.key : undefined;
-				const launch = key ? launches.get(key) : undefined;
-				if (launch) launch.observed = true;
-				else observedRunCalls.add(message.callId);
+				if (message.operation === "run") {
+					const launch = key ? launches.get(key) : undefined;
+					if (launch) launch.observed = true;
+					else observedRunCalls.add(message.callId);
+				} else if (message.operation === "steer") {
+					const steer = steers.get(message.callId);
+					if (steer) steer.observed = true;
+					else observedSteerCalls.add(message.callId);
+				}
 				return;
 			}
 			if (message.type !== "call" || typeof message.callId !== "number" || typeof message.method !== "string" || !isRecord(message.args)) return;
 
-			const respond = (promise: Promise<unknown>) => {
+			const respond = (promise: Promise<unknown>, responsePath?: string) => {
 				void promise.then(
 					(value) => {
-						if (!settled) worker.postMessage({ type: "response", callId: message.callId, ok: true, value: omitUndefinedWorkflowValues(value) });
+						if (settled) return;
+						const normalized = responsePath ? omitNonJsonWorkflowResultMetadata(value) : omitUndefinedWorkflowValues(value);
+						if (!responsePath) {
+							worker.postMessage({ type: "response", callId: message.callId, ok: true, value: normalized });
+							return;
+						}
+						try {
+							assertWorkflowJsonValue(normalized, responsePath);
+							worker.postMessage({ type: "response", callId: message.callId, ok: true, value: normalized });
+						} catch (error) {
+							worker.postMessage({ type: "response", callId: message.callId, ok: false, error: `${responsePath} must contain only JSON data before it can be returned from workflowScript. Return a plain projection such as { runId, ok, output }. ${error instanceof Error ? error.message : String(error)}` });
+						}
 					},
 					(error: unknown) => {
 						if (!settled) worker.postMessage({ type: "response", callId: message.callId, ok: false, error: error instanceof Error ? error.message : String(error), ...(error instanceof Error && (error as { workflowErrorKind?: unknown }).workflowErrorKind === "detached-child" ? { errorKind: "detached-child" } : {}) });
 					},
 				);
 			};
-
-			if (message.method === "prompts.render") {
-				if (!options.prompts) return respond(Promise.reject(new Error("Workflow prompt rendering is unavailable.")));
-				const ref = message.args.ref;
-				const vars = message.args.vars;
-				if (typeof ref !== "string" || !ref.trim()) return respond(Promise.reject(new Error("prompts.render(ref, vars) requires a non-empty ref string.")));
-				return respond(Promise.resolve().then(() => options.prompts!.render(ref, vars)).then((rendered) => {
-					if (typeof rendered !== "string") throw new Error("prompts.render must return task text.");
-					return rendered;
-				}));
-			}
-
 			if (message.method === "state.get" || message.method === "state.set") {
 				if (!options.state) return respond(Promise.reject(new Error("Workflow state is unavailable without a mission.")));
 				let key: string;
@@ -794,14 +975,45 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 				const target = known?.runId ?? keyOrRunId;
 				trace.push({ operation: "status", key: keyOrRunId, state: "started", ...(known?.runId ? { runId: known.runId } : {}) });
 				traceChanged();
-				if (settled) return;
+				if (settled || finishing) return;
 				respond(options.status(target, childController.signal).then((result) => {
-					if (settled) return result;
+					if (settled || finishing) return result;
 					trace.push({ operation: "status", key: keyOrRunId, state: result.ok ? "completed" : "failed", ...(result.runId ? { runId: result.runId } : {}), ...(!result.ok ? { error: result.output } : {}) });
 					traceChanged();
 					if (!result.ok) throw new Error(`Status '${keyOrRunId}' failed: ${result.output}`);
 					return result;
 				}));
+				return;
+			}
+			if (message.method === "steer") {
+				let key: string;
+				try {
+					key = validateKey(message.args.key, "runs.steer");
+				} catch (error) {
+					return respond(Promise.reject(error));
+				}
+				const steerMessage = message.args.message;
+				if (typeof steerMessage !== "string" || !steerMessage.trim()) return respond(Promise.reject(new Error(`runs.steer('${key}') requires a non-empty message.`)));
+				const steerOptions = isRecord(message.args.options) ? message.args.options as WorkflowSteerOptions : {};
+				const startedAt = Date.now();
+				trace.push({ operation: "steer", key, state: "started" });
+				traceChanged();
+				const promise = Promise.resolve().then(() => {
+					if (!launches.has(key)) throw new Error(`runs.steer('${key}') requires a prior runs.run/runs.all launch with that key.`);
+					if (!options.steer) throw new Error("Workflow steering is unavailable in this host.");
+					return options.steer(key, steerMessage.trim(), steerOptions, childController.signal);
+				}).then((receipt) => {
+					trace.push({ operation: "steer", key, state: receipt.state, durationMs: Date.now() - startedAt, ...(receipt.error ? { error: receipt.error } : {}) });
+					traceChanged();
+					return receipt;
+				}, (error: unknown) => {
+					const text = error instanceof Error ? error.message : String(error);
+					trace.push({ operation: "steer", key, state: "failed", durationMs: Date.now() - startedAt, error: text });
+					traceChanged();
+					throw error;
+				});
+				steers.set(message.callId, { key, promise, observed: observedSteerCalls.delete(message.callId) });
+				respond(promise);
 				return;
 			}
 			if (message.method !== "run") return respond(Promise.reject(new Error(`Unknown runs API method '${message.method}'.`)));
@@ -831,9 +1043,13 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			if (params.gate !== undefined && params.resume !== undefined) {
 				return respond(Promise.reject(new Error(`runs.run('${key}') gate is not supported with retained resume.`)));
 			}
-			if (params.resume !== undefined && (typeof params.resume !== "string" || !params.resume.trim())) {
-				return respond(Promise.reject(new Error(`runs.run('${key}') resume must be a non-empty retained run id.`)));
+			let resumeReference: WorkflowReceiptResumeReference | undefined;
+			try {
+				if (params.resume !== undefined && typeof params.resume !== "string") resumeReference = parseWorkflowResumeReference(params.resume);
+			} catch (error) {
+				return respond(Promise.reject(new Error(`runs.run('${key}') ${error instanceof Error ? error.message : String(error)}`)));
 			}
+			if (typeof params.resume === "string" && !params.resume.trim()) return respond(Promise.reject(new Error(`runs.run('${key}') resume must be a non-empty retained run id.`)));
 			if (params.resume !== undefined && params.agent !== undefined) {
 				return respond(Promise.reject(new Error(`runs.run('${key}') resume and agent are mutually exclusive.`)));
 			}
@@ -859,7 +1075,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 				if (callObserved) existing.observed = true;
 				trace.push({ operation: "run", key, state: "reused", ...workflowStringMetadata(params) });
 				traceChanged();
-				return respond(deliver(existing.promise));
+				return respond(deliver(existing.promise), `runs.run('${key}') result`);
 			}
 
 			const startedAt = Date.now();
@@ -870,25 +1086,50 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			if (!admission) {
 				const seenKeys = new Set<string>();
 				const calls = (batch?.calls ?? [{ key, params }]).filter((call) => {
-					if (seenKeys.has(call.key) || launches.has(call.key) || call.params.resume !== undefined) return false;
+					if (seenKeys.has(call.key) || launches.has(call.key)) return false;
 					seenKeys.add(call.key);
 					return true;
 				});
 				admission = Promise.resolve().then(() => {
-					if (settled) return;
+					if (settled || finishing) return;
 					return options.admit?.(calls);
 				});
 				if (batch) batchAdmissions.set(batch.id, admission);
 			}
-			const promise = admission.then(() => {
-				if (settled || stoppedLaunches.has(key)) {
+			let resolvedResumeLineage: string[] | undefined;
+			const promise = admission.then(async () => {
+				if (settled || finishing || stoppedLaunches.has(key)) {
 					const reason = childController.signal.reason;
 					const text = reason instanceof Error ? reason.message : typeof reason === "string" ? reason : "Workflow script aborted.";
 					return { key, ok: false, output: text, error: text, artifactPaths: [] };
 				}
-				return options.launch(key, { ...params, async: params.async ?? false }, childController.signal, { admitted: true });
+				const resolvedResumeValue = resumeReference
+					? await Promise.resolve().then(() => {
+						if (!options.resolveResume) throw new Error("Keyed workflow receipt resume is unavailable in this host.");
+						return options.resolveResume(resumeReference, childController.signal);
+					})
+					: undefined;
+				const resolvedResume = typeof resolvedResumeValue === "string"
+					? resolvedResumeValue
+					: isRecord(resolvedResumeValue) && typeof resolvedResumeValue.runId === "string"
+						? resolvedResumeValue.runId
+						: undefined;
+				if (resumeReference && (typeof resolvedResume !== "string" || !resolvedResume.trim())) throw new Error("Keyed workflow receipt resume resolved without a retained run id.");
+				const resolvedResumeId = resolvedResume?.trim();
+				if (isRecord(resolvedResumeValue)) {
+					const lineage = Array.isArray(resolvedResumeValue.runIds)
+						? resolvedResumeValue.runIds.filter((runId): runId is string => typeof runId === "string" && Boolean(runId.trim())).map((runId) => runId.trim())
+						: [];
+					resolvedResumeLineage = [...new Set(lineage.length ? lineage : [resolvedResumeId!])];
+					if (resolvedResumeLineage.at(-1) !== resolvedResumeId) resolvedResumeLineage.push(resolvedResumeId!);
+				}
+				const launchParams = resolvedResumeId ? { ...params, resume: resolvedResumeId } : params;
+				return options.launch(key, { ...launchParams, async: launchParams.async ?? false }, childController.signal, { admitted: true });
 			}).then((result) => {
-				const normalized = !result.ok && !result.error ? { ...result, error: result.output } : result;
+				let normalized = !result.ok && !result.error ? { ...result, error: result.output } : result;
+				if (resolvedResumeLineage?.length && normalized.runId) {
+					normalized = { ...normalized, continuation: { runIds: [...new Set([...resolvedResumeLineage, normalized.runId])] } };
+				}
 				if (stoppedLaunches.has(key)) return normalized;
 				children.set(key, normalized);
 				const state = normalized.ok ? "completed" : normalized.detached ? "detached" : "failed";
@@ -908,7 +1149,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			childOrder.push(key);
 			trace.push({ operation: "run", key, state: "started", ...workflowStringMetadata(params) });
 			traceChanged();
-			respond(deliver(promise));
+			respond(deliver(promise), `runs.run('${key}') result`);
 		});
 
 		worker.postMessage({ type: "start", script: options.script, stateEnabled: options.state !== undefined });

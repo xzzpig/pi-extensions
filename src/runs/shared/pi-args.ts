@@ -433,13 +433,20 @@ export function resolvePiLaunchToolPlan(
 			...internalTools,
 		]),
 	];
+	// Supervisor-coordination names stay in the --tools allowlist but are never
+	// strict requirements: children register contact_supervisor at runtime through
+	// the native supervisor channel (or pi-intercom). The pre-0.50 bridge always
+	// appended intercom alongside contact_supervisor, so that exact pairing is
+	// legacy plumbing, not a user demand for an external intercom provider;
+	// a lone intercom entry stays strictly required (#1207).
+	const legacySupervisorPairing = declaredBuiltinTools.includes("contact_supervisor");
 	const requiredChildTools = explicitToolAllowlist
 		? [
 				...new Set([
 					...(input.tools !== undefined ? declaredBuiltinTools : []),
 					...(input.mcpDirectTools?.length ? effectiveMcpTools : []),
 					...internalTools,
-				]),
+				].filter((tool) => tool !== "contact_supervisor" && (!legacySupervisorPairing || tool !== "intercom"))),
 			]
 		: [];
 	const permSystemExt = capabilityCeiling?.denyExtensions

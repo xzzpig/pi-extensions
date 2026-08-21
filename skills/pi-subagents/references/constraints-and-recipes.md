@@ -4,10 +4,12 @@ This file is a detailed reference loaded from `skills/pi-subagents/SKILL.md`.
 
 ## Important Constraints
 
-- **Forking requires a persisted parent session.** If the current session does not
-  have a persisted session file, forked runs fail. Packaged `worker`, `oracle`,
-  and `advisor` default to forked context, so use `context: "fresh"` explicitly
-  when that is not available or not wanted.
+- **Explicit forking requires a persisted parent session.** If the current session
+  does not have a persisted session file or current leaf, explicit `context: "fork"`
+  fails. An agent-level `defaultContext: fork` is a preference: packaged `worker`,
+  `oracle`, and `advisor` fall back to `fresh` when those fork preconditions are not
+  met yet. Use `context: "fresh"` when you do not want a fork even after the parent
+  session exists.
 - **Forked runs inherit parent history.** They are branched threads, not fresh
   filtered contexts. Use fresh context for adversarial reviewers unless the user explicitly asks for forked context.
 - **Default subagent nesting depth is 2.** Deeper recursive delegation is blocked
@@ -34,6 +36,7 @@ In an interactive chat, do not call `subagent_wait()` merely to wait after launc
 - `subagent_wait()` — return when the next initially active async run or registered provider item finishes, or a subagent needs attention.
 - `subagent_wait({ all: true })` — block until every async run and provider item active at call time finishes, or a subagent needs attention.
 - `subagent_wait({ id: "..." })` — block on one async or remembered detached foreground run (id or prefix). Provider items are not selected through this parameter.
+- `subagent_wait({ stopOnAttention: false })` — for blocking waits only, keep waiting through idle or long-thinking attention; supervisor/contact requests still stop the wait.
 - `subagent_wait({ timeoutMs })` — cap the block; active work keeps running if it elapses.
 
 Providers are discovered through the `pi-subagents/background-work` registry and must return stable item IDs with exact owning session IDs. Child agents receive no provider automatically: keep `subagent_wait` in the child `tools` allowlist and load provider extensions through `extensions` or `subagentOnlyExtensions`.
@@ -63,6 +66,10 @@ Give subagents specific tasks rather than vague mandates.
 
 If a subagent encounters an unapproved product, architecture, scope, merge, release, credential, or authority choice, it should use `contact_supervisor` and wait for the reply instead of deciding alone. Generic `intercom` is external or provider-supplied only. Use it only when external bridge instructions provide an explicit safe target. External checks, receipts, and review bots provide evidence only; they do not grant authority.
 
+### Use a short oracle consultation for material advice
+
+When a user asks to ask, consult, discuss with, or come to agreement with `oracle` about a plan, design, or architecture decision, do not treat the first advisory report as final when it raises a material challenge or tradeoff. Read it, resume the same oracle session once with a targeted question, then make the parent decision. An explicit one-shot request, a trivial question, or a fully settled first answer does not need a follow-up.
+
 ### Intervene only on clear control signals
 
 Use subagent control proactively when a delegated run emits `needs_attention`, or when a human asks you to regain control. Do not interrupt just because a child has briefly produced no output. Silence can be normal during long tool calls, test runs, or model reasoning.
@@ -77,8 +84,8 @@ Use `/name` so intercom targeting stays stable.
 
 ```js
 subagent({ workflowScript: `
-  const context = await runs.run("recon", { agent: "scout", task: "Inspect the codebase and identify the implementation seam" });
-  return (await runs.run("implement", { agent: "worker", task: "Implement from: " + context.output })).output;
+  const context = await runs.run("recon", { agent: "scout", task: "Start from the named source roots, paths, and symbols. Identify the implementation seam before broad search." });
+  return (await runs.run("implement", { agent: "worker", task: "Read the scout output, plan paths, and named files/seams first. Implement from: " + context.output })).output;
 ` })
 ```
 

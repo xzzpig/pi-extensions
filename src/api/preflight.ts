@@ -2,11 +2,11 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { discoverAgents, discoverAgentsAll, resolveAgentName, type AgentConfig, type AgentScope, type AgentSource } from "../agents/agents.ts";
+import { discoverAgents, discoverAgentsAll, findBlockingAgentDiagnostic, resolveAgentName, type AgentConfig, type AgentScope, type AgentSource } from "../agents/agents.ts";
 import { resolveExecutionAgentScope } from "../agents/agent-scope.ts";
 import { buildSkillInjection, normalizeSkillInput, resolveSkillsWithFallback } from "../agents/skills.ts";
 import { buildAgentMemoryInjection } from "../agents/agent-memory.ts";
-import { buildModelCandidates, resolveEffectiveSubagentModel, type AvailableModelInfo, type ParentModel } from "../runs/shared/model-fallback.ts";
+import { buildModelCandidates, inheritsParentModel, resolveEffectiveSubagentModel, type AvailableModelInfo, type ParentModel } from "../runs/shared/model-fallback.ts";
 import { applyThinkingSuffix, resolvePiLaunchToolPlan, type PiLaunchToolPlan } from "../runs/shared/pi-args.ts";
 import { injectOutputPathSystemPrompt, normalizeSingleOutputOverride, resolveSingleOutputPath } from "../runs/shared/single-output.ts";
 import { getArtifactPaths, getArtifactsDir } from "../shared/artifacts.ts";
@@ -17,6 +17,8 @@ import { appendTurnBudgetSystemPrompt } from "../runs/shared/turn-budget.ts";
 import type { ResolvedTurnBudget } from "../shared/types.ts";
 import type { ResolvedMcpDirectToolSelection } from "../runs/shared/mcp-direct-tool-allowlist.ts";
 import { resolveStepBehavior } from "../shared/settings.ts";
+import { canPreferForkFromSnapshot, resolveSubagentLaunchContext } from "../shared/fork-context.ts";
+import { loadConfig } from "../extension/config.ts";
 import { agentDefinitionDigest, AGENT_DEFINITION_PROJECTION_VERSION, launchBindingDigest } from "../shared/launch-contract.ts";
 import { DIRS, TEMP_ROOT_DIR } from "../shared/types.ts";
 import { processTerminalCandidatePath, processTerminalPath } from "../runs/background/process-terminal.ts";
@@ -60,6 +62,8 @@ export interface SubagentLaunchContractInput {
 	artifacts?: boolean;
 	artifactDir?: ArtifactDirPreference;
 	parentSessionFile?: string | null;
+	/** Current parent leaf required before an implicit `defaultContext: fork` stays `fork`. */
+	parentLeafId?: string | null;
 	sessionRoot?: string;
 	sessionDir?: string;
 	runId?: string;
@@ -190,6 +194,18 @@ function normalizeAvailableModels(models: SubagentLaunchContractInput["available
 	return (models ?? []).map((model) => ({ ...model, fullId: model.fullId ?? `${model.provider}/${model.id}` }));
 }
 
+function resolveLaunchContractContext(input: SubagentLaunchContractInput, agent: AgentConfig): "fresh" | "fork" {
+	return resolveSubagentLaunchContext({
+		explicitContext: input.context,
+		agentDefaultContext: agent.defaultContext,
+		defaultSubagentContext: loadConfig().defaultSubagentContext,
+		canUseImplicitFork: canPreferForkFromSnapshot({
+			parentSessionFile: input.parentSessionFile,
+			leafId: input.parentLeafId,
+		}),
+	});
+}
+
 function candidateList(inputAgent: string, selected: AgentConfig | undefined, cwd: string): SubagentLaunchContractAgentCandidate[] {
 	const all = discoverAgentsAll(cwd);
 	return [...all.builtin, ...all.package, ...all.user, ...all.project]
@@ -222,12 +238,17 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 	if (input.artifactDir !== undefined && input.artifactDir !== "project" && input.artifactDir !== "session" && input.artifactDir !== "temp") {
 		return { ok: false, code: "invalid_artifact_dir", message: `Unsupported artifactDir '${String(input.artifactDir)}'; expected 'project', 'session', or 'temp'.`, diagnostics };
 	}
-	if (input.context === "fork") {
-		diagnostics.push({ code: "host_required", severity: "host-required", message: "Exact fork session branching and fork-thinking downgrade checks require Pi host session and model-registry snapshots." });
-	}
 	const scope = resolveExecutionAgentScope(input.agentScope);
 	const discovered = discoverAgents(effectiveCwd, scope);
 	const resolvedAgent = resolveAgentName(input.agent, discovered.agents);
+	const ambiguousCandidates = resolvedAgent.error
+		? discovered.agents.filter((agent) => resolveAgentName(input.agent, [agent]).agent)
+		: resolvedAgent.agent;
+	const invalidAgent = findBlockingAgentDiagnostic(input.agent, ambiguousCandidates, discovered.agentDiagnostics);
+	if (invalidAgent) {
+		const message = `Agent '${input.agent}' has invalid configuration: ${invalidAgent.error}`;
+		return { ok: false, code: "missing_agent", message, diagnostics: [{ code: "missing_agent", severity: "error", message }] };
+	}
 	if (resolvedAgent.error) {
 		return { ok: false, code: "ambiguous_agent", message: resolvedAgent.error, diagnostics };
 	}
@@ -235,6 +256,10 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 		return { ok: false, code: "missing_agent", message: `Unknown agent: ${input.agent}`, diagnostics };
 	}
 	const agent = resolvedAgent.agent;
+	const context = resolveLaunchContractContext(input, agent);
+	if (context === "fork") {
+		diagnostics.push({ code: "host_required", severity: "host-required", message: "Exact fork session branching and fork-thinking downgrade checks require Pi host session and model-registry snapshots." });
+	}
 	const effectiveCapabilityCeiling = intersectSubagentCapabilityCeilings(input.capabilityCeiling, input.inheritedCapabilityCeiling);
 	const restrictionMessage = capabilityCeilingAgentRestrictionMessage(agent.name, effectiveCapabilityCeiling);
 	if (restrictionMessage) return { ok: false, code: "restricted_agent", message: restrictionMessage, diagnostics };
@@ -260,7 +285,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 	}
 	if (resolvedSkills.missing.length > 0) diagnostics.push({ code: "missing_skill", severity: "error", message: `Missing skills: ${resolvedSkills.missing.join(", ")}` });
 
-	const externalRunner = agent.runner?.type === "external-cli";
+	const externalRunner = agent.runner?.type === "external-cli" || agent.runner?.type === "external-job";
 	const availableModels = normalizeAvailableModels(input.availableModels);
 	const preferredProvider = input.preferredProvider ?? input.parentModel?.provider;
 	const primaryModel = externalRunner
@@ -270,7 +295,10 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 	const model = externalRunner ? undefined : applyThinkingSuffix(primaryModel, effectiveThinkingConfig, input.thinking !== undefined);
 	const modelCandidates = externalRunner
 		? []
-		: buildModelCandidates(primaryModel, agent.fallbackModels, availableModels, preferredProvider, { scope: discovered.modelScope })
+		: buildModelCandidates(primaryModel, agent.fallbackModels, availableModels, preferredProvider, {
+			scope: discovered.modelScope,
+			primaryModelFromParent: inheritsParentModel(input.model, agent.model, input.parentModel),
+		})
 			.map((candidate) => applyThinkingSuffix(candidate, effectiveThinkingConfig, input.thinking !== undefined) ?? candidate);
 	let toolPlan: PiLaunchToolPlan;
 	try {
@@ -335,7 +363,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 			definitionDigest,
 			shadowedCandidates,
 		},
-		context: input.context ?? agent.defaultContext ?? "fresh",
+		context,
 		...(model ? { model } : {}),
 		modelCandidates,
 		...(resolveEffectiveThinking(model, effectiveThinkingConfig) ? { thinking: resolveEffectiveThinking(model, effectiveThinkingConfig) } : {}),
@@ -401,7 +429,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 			extensions: toolPlan.extensionArgs,
 			mcpDirectTools: toolPlan.effectiveMcpTools,
 			...(outputPath ? { outputPath } : {}),
-			outputMode: input.outputMode ?? "inline",
+			outputMode: behavior.outputMode,
 			...(input.outputSchema ? { structuredOutputSchema: input.outputSchema } : {}),
 		}),
 	};

@@ -6,7 +6,7 @@ import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Compo
 import { snapshotExternalRuns, type ExternalRun } from "../api/external-runs.ts";
 import { getArtifactPaths, getArtifactsDir } from "../shared/artifacts.ts";
 import { formatDuration, formatModelThinking, formatTokens, shortenPath } from "../shared/formatters.ts";
-import { DIRS, type AsyncJobState, type Details, type FleetKeybindingAction, type FleetKeybindingsConfig, type ForegroundChildControl, type ForegroundResumeChild, type ForegroundResumeRun, type ForegroundRunControl, type SubagentState } from "../shared/types.ts";
+import { DIRS, type AsyncJobState, type AsyncJobStep, type Details, type FleetKeybindingAction, type FleetKeybindingsConfig, type ForegroundChildControl, type ForegroundResumeChild, type ForegroundResumeRun, type ForegroundRunControl, type SubagentState } from "../shared/types.ts";
 import { decodeUtf8Tail } from "../shared/utf8.ts";
 import { readStatus } from "../shared/utils.ts";
 import { formatAsyncRunTranscript } from "../runs/background/fleet-view.ts";
@@ -14,10 +14,12 @@ import { listAsyncRuns, type AsyncRunSummary } from "../runs/background/async-st
 import { steerAsyncRun } from "../runs/foreground/async-steering-action.ts";
 import type { SteerDeliveryMode } from "../runs/background/control-channel.ts";
 import { stopAsyncRun } from "../runs/foreground/async-stop-action.ts";
+import { resolveWorkflowForegroundSteeringTarget, steerWorkflowForegroundTarget } from "../runs/foreground/workflow-foreground-steering.ts";
 import { contextModeBadge, contextModeLabel } from "../runs/shared/context-mode.ts";
 import { FLEET_STATUS_WIDGET_KEY } from "./fleet-status.ts";
 import { readFleetTranscript, renderFleetTranscript, type FleetTranscript } from "./fleet-transcript.ts";
 import { handleHerdrInspectorAction } from "../inspectors/herdr/actions.ts";
+import type { HerdrClient } from "../inspectors/herdr/client.ts";
 import { getLivePromptAudit, type LivePromptAudit, type PromptAuditView } from "../runs/foreground/prompt-audit.ts";
 
 const REFRESH_MS = 750;
@@ -108,6 +110,7 @@ export interface FleetViewOptions {
 	fleetKeybindings?: FleetKeybindingsConfig;
 	actions?: FleetActionHandlers;
 	copyText?: (text: string) => Promise<void> | void;
+	herdrClient?: HerdrClient;
 }
 
 function belongsToCurrentSession(sessionId: string | undefined, currentSessionId: string | null): boolean {
@@ -193,9 +196,22 @@ export function collectFleetSnapshot(
 	const workflowParentIds = new Set([...trackedJobs.values()]
 		.filter((job) => job.mode === "workflow" && belongsToCurrentSession(job.sessionId, state.currentSessionId))
 		.map((job) => job.asyncId));
+	const workflowForegroundChildCounts = new Map<string, number>();
+	const liveWorkflowForegroundControls = new Set<ForegroundRunControl>();
+	for (const control of state.foregroundControls.values()) {
+		const activeChildCount = control.activeChildren?.size ?? 0;
+		if (!control.parentWorkflowRunId
+			|| !workflowParentIds.has(control.parentWorkflowRunId)
+			|| !belongsToCurrentSession(control.sessionId, state.currentSessionId)
+			|| !control.workflowSteeringDir
+			|| activeChildCount === 0) continue;
+		liveWorkflowForegroundControls.add(control);
+		workflowForegroundChildCounts.set(control.parentWorkflowRunId, (workflowForegroundChildCounts.get(control.parentWorkflowRunId) ?? 0) + activeChildCount);
+	}
 	for (const control of [...state.foregroundControls.values()].sort((left, right) => right.updatedAt - left.updatedAt)) {
 		activeForegroundIds.add(control.runId);
-		if (control.parentWorkflowRunId && workflowParentIds.has(control.parentWorkflowRunId)) continue;
+		if (control.parentWorkflowRunId && workflowParentIds.has(control.parentWorkflowRunId)
+			&& ((workflowForegroundChildCounts.get(control.parentWorkflowRunId) ?? 0) <= 1 || !liveWorkflowForegroundControls.has(control))) continue;
 		if (control.activeChildren) {
 			for (const child of [...control.activeChildren.values()].sort((left, right) => left.index - right.index)) {
 				items.push({
@@ -478,10 +494,68 @@ function externalElapsedEnd(run: ExternalRun): number {
 	return terminal ? (run.endedAt ?? run.updatedAt ?? Date.now()) : Date.now();
 }
 
-function asyncDetail(item: Extract<FleetItem, { kind: "async" }>): string[] {
+function workflowStepLabel(step: AsyncJobStep, index: number): string {
+	const key = step.workflowKey ?? `step ${index + 1}`;
+	const label = step.label && step.label !== key ? ` · ${step.label}` : "";
+	const phase = step.phase ? `${step.phase}: ` : "";
+	return `${phase}${key}${label} (${step.agent})`;
+}
+
+function workflowStepActivity(step: AsyncJobStep): string | undefined {
+	if (step.currentTool) return `tool ${step.currentTool}`;
+	if (step.currentPath) return shortenPath(step.currentPath);
+	if (step.activityState === "needs_attention") return "needs attention";
+	if (step.activityState === "active_long_running") return "long-running";
+	if (step.turnCount !== undefined) return `${step.turnCount} turns`;
+	if (step.toolCount !== undefined) return `${step.toolCount} tools`;
+	return undefined;
+}
+
+function visibleWorkflowProgressSteps(steps: AsyncJobStep[], visibleLimit: number): Array<{ step: AsyncJobStep; index: number } | { hidden: number }> {
+	if (steps.length <= visibleLimit) return steps.map((step, index) => ({ step, index }));
+	const selected = new Set<number>();
+	for (const [index, step] of steps.entries()) {
+		if (step.status !== "complete" && step.status !== "completed") selected.add(index);
+		if (selected.size >= visibleLimit) break;
+	}
+	for (let index = steps.length - 1; index >= 0 && selected.size < visibleLimit; index--) selected.add(index);
+	const visible = [...selected].sort((left, right) => left - right).map((index) => ({ step: steps[index]!, index }));
+	return [{ hidden: steps.length - visible.length }, ...visible];
+}
+
+function workflowProgressLines(steps: AsyncJobStep[] | undefined): string[] {
+	if (!steps?.length) return [];
+	const lines = ["Workflow progress:"];
+	for (const row of visibleWorkflowProgressSteps(steps, 8)) {
+		if ("hidden" in row) {
+			lines.push(`  +${row.hidden} hidden workflow steps`);
+			continue;
+		}
+		const activity = workflowStepActivity(row.step);
+		const context = contextModeLabel(row.step.context);
+		const details = [row.step.status, activity, context, row.step.tokens?.total !== undefined ? formatTokens(row.step.tokens.total) : undefined].filter(Boolean).join(" · ");
+		lines.push(`  ${row.index + 1}. ${workflowStepLabel(row.step, row.index)}${details ? ` — ${details}` : ""}`);
+	}
+	return lines;
+}
+
+function asyncDetail(item: Extract<FleetItem, { kind: "async" }>, state: SubagentState): string[] {
 	const status = readStatus(item.run.asyncDir);
 	if (status) {
-		return formatAsyncRunTranscript(status, item.run.asyncDir, { index: item.index, lines: TRANSCRIPT_LINES }).split("\n");
+		const trackedJob = state.fleetJobs?.get(item.runId) ?? state.asyncJobs.get(item.runId);
+		const lines = formatAsyncRunTranscript(status, item.run.asyncDir, {
+			index: item.index,
+			lines: TRANSCRIPT_LINES,
+			sessionRoots: uniquePaths([...(state.trustedSessionRoots ?? []), trackedJob?.sessionRoot]),
+		}).split("\n");
+		if (status.mode === "workflow" && item.index === undefined) {
+			const progress = workflowProgressLines((status.steps ?? item.run.steps) as AsyncJobStep[]);
+			if (progress.length) {
+				const modeIndex = lines.findIndex((line) => line.startsWith("Mode:"));
+				lines.splice(modeIndex >= 0 ? modeIndex + 1 : 0, 0, "", ...progress);
+			}
+		}
+		return lines;
 	}
 	const outputPath = item.index !== undefined ? path.join(item.run.asyncDir, `output-${item.index}.log`) : undefined;
 	return [
@@ -527,7 +601,7 @@ function detailLines(item: FleetItem | undefined, error: string | undefined, sta
 			? foregroundRecentDetail(item, state)
 			: item.kind === "external"
 				? externalDetail(item)
-				: asyncDetail(item);
+				: asyncDetail(item, state);
 	if (error) lines.unshift(`Fleet scan warning: ${error}`, "");
 	return lines;
 }
@@ -835,6 +909,18 @@ export class SubagentFleetComponent implements Component {
 		return { item };
 	}
 
+	private selectedSteerAction(): { runId: string; asyncDir: string; index?: number } | { reason: string } {
+		const item = this.snapshot.items[this.selected];
+		if (item?.kind === "foreground-active" && item.control.parentWorkflowRunId) {
+			const parent = this.state.asyncJobs.get(item.control.parentWorkflowRunId) ?? this.state.fleetJobs?.get(item.control.parentWorkflowRunId);
+			if (!parent || !isActionableAsyncState(parent.status)) return { reason: "The parent workflow is no longer available for steering." };
+			return { runId: item.runId, asyncDir: parent.asyncDir, ...(item.index !== undefined ? { index: item.index } : {}) };
+		}
+		const target = this.selectedAsyncAction();
+		if ("reason" in target) return target;
+		return { runId: target.item.runId, asyncDir: target.item.run.asyncDir, ...(target.item.index !== undefined ? { index: target.item.index } : {}) };
+	}
+
 	private selectedHerdrInspectAction(): { runId: string; asyncDir: string; index?: number } | { reason: string } {
 		const item = this.snapshot.items[this.selected];
 		if (!item) return { reason: "No child is selected." };
@@ -992,12 +1078,12 @@ export class SubagentFleetComponent implements Component {
 					this.setActionNotice({ text: "Steer message cannot be empty.", isError: true });
 					return;
 				}
-				const target = this.selectedAsyncAction();
+				const target = this.selectedSteerAction();
 				if ("reason" in target || !this.options.actions) {
 					this.setActionNotice({ text: "reason" in target ? target.reason : "Fleet controls are unavailable in this context.", isError: true });
 					return;
 				}
-				this.runAction(() => this.options.actions!.steer({ runId: target.item.runId, asyncDir: target.item.run.asyncDir, ...(target.item.index !== undefined ? { index: target.item.index } : {}), message, mode: this.steerMode }));
+				this.runAction(() => this.options.actions!.steer({ ...target, message, mode: this.steerMode }));
 				return;
 			}
 			if (matchesKey(data, "tab") || data === "\t") {
@@ -1065,7 +1151,7 @@ export class SubagentFleetComponent implements Component {
 			return;
 		}
 		if (matchesFleetAction(data, this.keybindings, "steer")) {
-			const target = this.selectedAsyncAction();
+			const target = this.selectedSteerAction();
 			if ("reason" in target || !this.options.actions) this.setActionNotice({ text: "reason" in target ? target.reason : "Fleet controls are unavailable in this context.", isError: true });
 			else {
 				this.actionNotice = undefined;
@@ -1274,23 +1360,38 @@ export async function openSubagentFleet(ctx: ExtensionContext, state: SubagentSt
 		await copyToClipboard(text);
 	});
 	const actions = options.actions ?? {
-		steer: async (input: { runId: string; asyncDir: string; index?: number; message: string; mode: SteerDeliveryMode }) => firstToolResultText(await steerAsyncRun({
-			state,
-			runId: input.runId,
-			...(input.index !== undefined ? { index: input.index } : {}),
-			message: input.message,
-			mode: input.mode,
-			location: { asyncDir: input.asyncDir, resolvedId: input.runId } as Parameters<typeof steerAsyncRun>[0]["location"],
-		}), `Failed to steer async run ${input.runId}.`),
+		steer: async (input: { runId: string; asyncDir: string; index?: number; message: string; mode: SteerDeliveryMode }) => {
+			const status = readStatus(input.asyncDir);
+			const liveWorkflowRunId = status?.mode === "workflow" && state.workflowControllers?.has(status.runId || input.runId)
+				? status.runId || input.runId
+				: undefined;
+			if (liveWorkflowRunId) {
+				const route = state.foregroundControls.get(input.runId)?.parentWorkflowRunId === liveWorkflowRunId
+					? resolveWorkflowForegroundSteeringTarget({ state, childRunId: input.runId, asyncDirRoot: options.asyncDirRoot ?? DIRS.async })
+					: resolveWorkflowForegroundSteeringTarget({ state, workflowRunId: liveWorkflowRunId, asyncDirRoot: options.asyncDirRoot ?? DIRS.async });
+				if (!route.ok) return { text: route.message, isError: true };
+				return firstToolResultText(await steerWorkflowForegroundTarget({ target: route.target, message: input.message, mode: input.mode, ...(input.index !== undefined ? { index: input.index } : {}) }), `Failed to steer foreground run ${input.runId}.`);
+			}
+			return firstToolResultText(await steerAsyncRun({
+				state,
+				runId: input.runId,
+				...(input.index !== undefined ? { index: input.index } : {}),
+				message: input.message,
+				mode: input.mode,
+				location: { asyncDir: input.asyncDir, resolvedId: input.runId } as Parameters<typeof steerAsyncRun>[0]["location"],
+			}), `Failed to steer async run ${input.runId}.`);
+		},
 		stop: (input: { runId: string; asyncDir: string; index?: number }) => firstToolResultText(stopAsyncRun(state, input.runId, undefined, { asyncDir: input.asyncDir, resolvedId: input.runId }), `Failed to stop async run ${input.runId}.`),
 		inspect: async (input: { runId: string; asyncDir: string; index?: number }) => firstToolResultText(await handleHerdrInspectorAction("inspector.open", {
 			id: input.runId,
 			dir: input.asyncDir,
+			focus: true,
 			...(input.index !== undefined ? { index: input.index } : {}),
 		}, {
 			state,
 			sessionRoots: state.trustedSessionRoots,
 			cwd: state.baseCwd,
+			...(options.herdrClient ? { client: options.herdrClient } : {}),
 			...(state.authorityPolicy ? { authorityPolicy: state.authorityPolicy } : {}),
 			...(state.missionStoreConfig ? { missions: state.missionStoreConfig } : {}),
 		}), `Failed to open Herdr inspector for async run ${input.runId}.`),
