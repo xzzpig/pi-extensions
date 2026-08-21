@@ -1,8 +1,10 @@
 import {
   AssistantMessageComponent,
   getMarkdownTheme,
+  ToolExecutionComponent,
   UserMessageComponent,
 } from "@earendil-works/pi-coding-agent";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
   matchesKey,
   truncateToWidth,
@@ -25,6 +27,50 @@ export interface TranscriptTheme {
 export interface TranscriptTui {
   requestRender(): void;
 }
+
+/**
+ * Structured tool result payload as delivered by agent session events. It is
+ * stored verbatim so Pi's native tool renderers receive the same shape the
+ * main transcript would.
+ */
+export interface TranscriptToolResultPayload {
+  content?: Array<{
+    type?: string;
+    text?: string;
+    data?: string;
+    mimeType?: string;
+  }>;
+  details?: unknown;
+}
+
+/**
+ * Host context used to construct Pi's native `ToolExecutionComponent`
+ * instances. Every field is optional: missing values fall back to a detached
+ * stub TUI and `process.cwd()`.
+ */
+export interface NativeToolRenderOptions {
+  /** Structural TUI subset; only `requestRender` is required. */
+  tui?: TranscriptTui;
+  /** Working directory used to resolve built-in tool definitions. */
+  cwd?: string;
+  /** Resolver for extension-registered custom tool definitions. */
+  resolveToolDefinition?: (toolName: string) => ToolDefinition | undefined;
+  /** Pass-through for Pi's image rendering settings. */
+  showImages?: boolean;
+  imageWidthCells?: number;
+  /** Initial expanded state for tool output. */
+  expanded?: boolean;
+}
+
+/** Structural lookup accepted by render functions; maps satisfy this. */
+export interface ToolComponentLookup {
+  get(toolCallId: string): ToolExecutionComponent | undefined;
+}
+
+/** Full TUI type expected by Pi's component constructor. */
+type NativeToolTui = NonNullable<
+  ConstructorParameters<typeof ToolExecutionComponent>[5]
+>;
 
 type Theme = TranscriptTheme;
 type ThemeColor = string;
@@ -60,7 +106,8 @@ export type TranscriptEntry =
       type: "tool-call";
       toolCallId: string;
       toolName: string;
-      args: string;
+      /** Raw provider arguments object, preserved for native renderers. */
+      args: unknown;
     }
   | {
       id: number;
@@ -68,8 +115,8 @@ export type TranscriptEntry =
       type: "tool-result";
       toolCallId: string;
       toolName: string;
-      content: string;
-      truncated: boolean;
+      /** Raw structured result; `null` until the first result arrives. */
+      result: TranscriptToolResultPayload | null;
       isError: boolean;
       streaming: boolean;
     }
@@ -98,22 +145,169 @@ export interface TranscriptState {
     string,
     { turnId: number; callEntryId: number; resultEntryId?: number }
   >;
+  /** Persistent native tool components keyed by tool call id. */
+  toolComponents: TranscriptToolComponents;
 }
 
-export interface SessionTranscriptOptions {
+export interface SessionTranscriptOptions extends NativeToolRenderOptions {
   /** Maximum retained entries. Oldest entries are discarded first. */
   maxEntries?: number;
   /** Maximum retained text across all entries. */
   maxChars?: number;
-  /** Maximum retained text for an individual tool result. */
-  maxToolResultChars?: number;
 }
 
 const DEFAULT_MAX_ENTRIES = 500;
 const DEFAULT_MAX_CHARS = 512 * 1024;
-const DEFAULT_MAX_TOOL_RESULT_CHARS = 16 * 1024;
 
-export function createTranscriptState(): TranscriptState {
+const DETACHED_TUI: TranscriptTui = { requestRender() {} };
+
+/**
+ * Owns the persistent `ToolExecutionComponent` instance for every live tool
+ * call, mirroring how Pi's interactive mode keeps pending components keyed by
+ * `toolCallId`. Instances are updated incrementally as events arrive and are
+ * pruned by the host once their transcript entries disappear.
+ */
+export class TranscriptToolComponents implements ToolComponentLookup {
+  private readonly components = new Map<string, ToolExecutionComponent>();
+  private readonly options: NativeToolRenderOptions;
+  private attachedTui: TranscriptTui | null;
+  /**
+   * Components capture their TUI at construction. This forwarder lets a host
+   * attach (or replace) the real TUI at any time — including after tool
+   * events already created instances — without rebuilding them.
+   */
+  private readonly forwardedTui: TranscriptTui;
+
+  constructor(options: NativeToolRenderOptions = {}) {
+    this.options = options;
+    this.attachedTui = options.tui ?? null;
+    this.forwardedTui = {
+      requestRender: () => this.attachedTui?.requestRender(),
+    };
+  }
+
+  /** Wires (or replaces) the host TUI that receives repaint requests. */
+  attachTui(tui: TranscriptTui): void {
+    this.attachedTui = tui;
+  }
+
+  get size(): number {
+    return this.components.size;
+  }
+
+  has(toolCallId: string): boolean {
+    return this.components.has(toolCallId);
+  }
+
+  get(toolCallId: string): ToolExecutionComponent | undefined {
+    return this.components.get(toolCallId);
+  }
+
+  handleStart(toolCallId: string, toolName: string, args: unknown): void {
+    const component = this.ensure(toolCallId, toolName);
+    if (this.createdWithoutArgs.delete(toolCallId)) {
+      component.updateArgs(args ?? {});
+    }
+    component.setArgsComplete();
+    component.markExecutionStarted();
+    this.requestRender();
+  }
+
+  handleUpdate(
+    toolCallId: string,
+    toolName: string,
+    partialResult: unknown,
+  ): void {
+    const component = this.ensure(toolCallId, toolName);
+    component.updateResult(toComponentResult(partialResult, false), true);
+    this.requestRender();
+  }
+
+  handleEnd(
+    toolCallId: string,
+    toolName: string,
+    result: unknown,
+    isError: boolean,
+  ): void {
+    const component = this.ensure(toolCallId, toolName);
+    component.updateResult(toComponentResult(result, isError), false);
+    this.requestRender();
+  }
+
+  /** Drops instances whose transcript entries no longer exist. */
+  retainOnly(aliveToolCallIds: ReadonlySet<string>): void {
+    for (const toolCallId of this.components.keys()) {
+      if (!aliveToolCallIds.has(toolCallId)) this.components.delete(toolCallId);
+    }
+  }
+
+  clear(): void {
+    this.components.clear();
+  }
+
+  private ensure(toolCallId: string, toolName: string): ToolExecutionComponent {
+    const existing = this.components.get(toolCallId);
+    if (existing) return existing;
+    // Results may arrive before their start event; remember the placeholder so
+    // handleStart can backfill the real arguments later.
+    this.createdWithoutArgs.add(toolCallId);
+    const component = new ToolExecutionComponent(
+      toolName,
+      toolCallId,
+      {},
+      {
+        showImages: this.options.showImages,
+        imageWidthCells: this.options.imageWidthCells,
+      },
+      this.options.resolveToolDefinition?.(toolName),
+      // Forwards to the attached host TUI; only requestRender is invoked.
+      this.forwardedTui as NativeToolTui,
+      this.options.cwd ?? process.cwd(),
+    );
+    if (this.options.expanded) component.setExpanded(true);
+    this.components.set(toolCallId, component);
+    return component;
+  }
+
+  private requestRender(): void {
+    // Matches Pi's interactive mode, which repaints after every tool event.
+    this.attachedTui?.requestRender();
+  }
+
+  private readonly createdWithoutArgs = new Set<string>();
+}
+
+function toComponentResult(
+  value: unknown,
+  isError: boolean,
+): {
+  content: Array<{
+    type: string;
+    text?: string;
+    data?: string;
+    mimeType?: string;
+  }>;
+  details?: unknown;
+  isError: boolean;
+} {
+  const payload =
+    value && typeof value === "object"
+      ? (value as TranscriptToolResultPayload)
+      : {};
+  const content = Array.isArray(payload.content)
+    ? payload.content.map((part) => ({
+        type: part?.type ?? "text",
+        text: part?.text,
+        data: part?.data,
+        mimeType: part?.mimeType,
+      }))
+    : [];
+  return { content, details: payload.details, isError };
+}
+
+export function createTranscriptState(
+  nativeTools: NativeToolRenderOptions = {},
+): TranscriptState {
   return {
     entries: [],
     nextEntryId: 1,
@@ -122,6 +316,7 @@ export function createTranscriptState(): TranscriptState {
     lastTurnId: null,
     activeAssistant: null,
     toolCalls: new Map(),
+    toolComponents: new TranscriptToolComponents(nativeTools),
   };
 }
 
@@ -325,6 +520,7 @@ export function removeTranscriptTurn(
   if (state.currentTurnId === turnId) state.currentTurnId = null;
   if (state.lastTurnId === turnId) state.lastTurnId = null;
   if (state.activeAssistant?.turnId === turnId) state.activeAssistant = null;
+  state.toolComponents.retainOnly(new Set(state.toolCalls.keys()));
 }
 
 function extractMessageText(message: { content?: unknown }): string {
@@ -360,77 +556,38 @@ function extractThinking(message: { content?: unknown }): string {
   return thinkingParts.join("\n").trim();
 }
 
-function formatToolPreview(value: unknown): string {
-  if (value && typeof value === "object" && !Array.isArray(value)) {
-    const record = value as Record<string, unknown>;
-    for (const key of [
-      "path",
-      "file",
-      "filePath",
-      "command",
-      "query",
-      "pattern",
-    ]) {
-      const candidate = record[key];
-      if (typeof candidate === "string" && candidate.trim()) {
-        return safeTerminalText(candidate.trim()).slice(0, 240);
-      }
-    }
-  }
+function jsonSize(value: unknown): number {
+  if (value === undefined || value === null) return 0;
   try {
-    const serialized = JSON.stringify(value);
-    return safeTerminalText(
-      serialized && serialized !== "{}" ? serialized : "",
-    ).slice(0, 240);
+    return JSON.stringify(value)?.length ?? 0;
   } catch {
-    return safeTerminalText(String(value ?? "")).slice(0, 240);
+    return String(value).length;
   }
 }
 
-function summarizeToolResult(
-  value: unknown,
-  maxLength: number,
-): { content: string; truncated: boolean } {
-  let content = "";
-  if (value && typeof value === "object") {
-    const toolValue = value as {
-      content?: Array<{ type?: string; text?: string }>;
-      error?: unknown;
-      message?: unknown;
-    };
-    if (Array.isArray(toolValue.content)) {
-      const textParts: string[] = [];
-      for (const part of toolValue.content) {
-        if (part.type === "text" && typeof part.text === "string") {
-          textParts.push(part.text);
-        }
-      }
-      content = textParts.join("\n").trim();
-    }
-    if (!content && typeof toolValue.error === "string")
-      content = toolValue.error;
-    if (!content && typeof toolValue.message === "string")
-      content = toolValue.message;
-  }
-  if (!content) {
-    if (typeof value === "string") content = value;
-    else if (value !== undefined) {
-      try {
-        content = JSON.stringify(value, null, 2) ?? "";
-      } catch {
-        content = String(value);
-      }
+function estimateToolResultSize(
+  result: TranscriptToolResultPayload | null,
+): number {
+  if (!result) return 0;
+  let size = 0;
+  if (Array.isArray(result.content)) {
+    for (const part of result.content) {
+      if (!part || typeof part !== "object") continue;
+      if (typeof part.text === "string") size += part.text.length;
+      if (typeof part.data === "string") size += part.data.length;
     }
   }
-  if (!content) content = "(no tool output)";
-  const safe = safeTerminalText(content);
-  const truncated = safe.length > maxLength;
-  return {
-    content: truncated
-      ? `${safe.slice(0, Math.max(0, maxLength - 3))}...`
-      : safe,
-    truncated,
-  };
+  return size + jsonSize(result.details);
+}
+
+/** Deep-copies structured tool data for snapshots; falls back to the reference. */
+function cloneStructured<T>(value: T): T {
+  if (value === null || typeof value !== "object") return value;
+  try {
+    return structuredClone(value);
+  } catch {
+    return value;
+  }
 }
 
 function ensureToolCall(
@@ -438,7 +595,7 @@ function ensureToolCall(
   turnId: number,
   toolCallId: string,
   toolName: string,
-  args: string,
+  args: unknown,
 ): { turnId: number; callEntryId: number; resultEntryId?: number } {
   const existing = state.toolCalls.get(toolCallId);
   if (existing) return existing;
@@ -544,11 +701,17 @@ function upsertToolResult(
   turnId: number,
   toolCallId: string,
   toolName: string,
-  result: { content: string; truncated: boolean },
+  result: TranscriptToolResultPayload | null,
   isError: boolean,
   streaming: boolean,
 ): void {
-  const toolCall = ensureToolCall(state, turnId, toolCallId, toolName, "");
+  const toolCall = ensureToolCall(
+    state,
+    turnId,
+    toolCallId,
+    toolName,
+    undefined,
+  );
   const existing =
     toolCall.resultEntryId === undefined
       ? undefined
@@ -557,8 +720,7 @@ function upsertToolResult(
             entry.id === toolCall.resultEntryId && entry.type === "tool-result",
         );
   if (existing && existing.type === "tool-result") {
-    existing.content = result.content;
-    existing.truncated = result.truncated;
+    existing.result = result;
     existing.isError = isError;
     existing.streaming = streaming;
     return;
@@ -568,8 +730,7 @@ function upsertToolResult(
     turnId,
     toolCallId,
     toolName,
-    content: result.content,
-    truncated: result.truncated,
+    result,
     isError,
     streaming,
   });
@@ -598,9 +759,9 @@ function entryLength(entry: TranscriptEntry): number {
     case "notice":
       return entry.text.length;
     case "tool-call":
-      return entry.toolName.length + entry.args.length;
+      return entry.toolName.length + jsonSize(entry.args);
     case "tool-result":
-      return entry.toolName.length + entry.content.length;
+      return entry.toolName.length + estimateToolResultSize(entry.result);
     default:
       return 0;
   }
@@ -608,15 +769,42 @@ function entryLength(entry: TranscriptEntry): number {
 
 function pruneToolCallIndex(state: TranscriptState): void {
   const entryIds = new Set(state.entries.map((entry) => entry.id));
+  const aliveToolCallIds = new Set<string>();
   for (const [toolCallId, record] of state.toolCalls.entries()) {
-    if (!entryIds.has(record.callEntryId)) state.toolCalls.delete(toolCallId);
-    else if (
+    if (!entryIds.has(record.callEntryId)) {
+      state.toolCalls.delete(toolCallId);
+      continue;
+    }
+    aliveToolCallIds.add(toolCallId);
+    if (
       record.resultEntryId !== undefined &&
       !entryIds.has(record.resultEntryId)
     ) {
       record.resultEntryId = undefined;
     }
   }
+  // Result entries whose call entry was trimmed away have no renderable
+  // position: their visual is owned by the component attached to the call.
+  let hasOrphanResults = false;
+  for (const entry of state.entries) {
+    if (
+      entry.type === "tool-result" &&
+      !aliveToolCallIds.has(entry.toolCallId)
+    ) {
+      hasOrphanResults = true;
+      break;
+    }
+  }
+  if (hasOrphanResults) {
+    state.entries = state.entries.filter(
+      (entry) =>
+        !(
+          entry.type === "tool-result" &&
+          !aliveToolCallIds.has(entry.toolCallId)
+        ),
+    );
+  }
+  state.toolComponents.retainOnly(aliveToolCallIds);
 }
 
 export function trimTranscriptState(
@@ -714,25 +902,41 @@ function eventToolCallId(
   return eventString(event.toolCallId, `unknown-tool-${state.nextEntryId}`);
 }
 
+function normalizeToolResultPayload(
+  value: unknown,
+): TranscriptToolResultPayload | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "object") return value as TranscriptToolResultPayload;
+  if (typeof value === "string")
+    return { content: [{ type: "text", text: value }] };
+  return { content: [{ type: "text", text: String(value) }] };
+}
+
 function applyTranscriptToolResult(
   state: TranscriptState,
   event: SessionEventLike,
   value: unknown,
-  maxToolResultChars: number,
   isError: boolean,
   streaming: boolean,
 ): void {
   const toolCallId = eventToolCallId(state, event);
+  const toolName = eventString(event.toolName, "tool");
   const turnId = state.toolCalls.get(toolCallId)?.turnId ?? ensureTurn(state);
+  const payload = normalizeToolResultPayload(value);
   upsertToolResult(
     state,
     turnId,
     toolCallId,
-    eventString(event.toolName, "tool"),
-    summarizeToolResult(value, maxToolResultChars),
+    toolName,
+    payload,
     isError,
     streaming,
   );
+  if (streaming) {
+    state.toolComponents.handleUpdate(toolCallId, toolName, payload);
+  } else {
+    state.toolComponents.handleEnd(toolCallId, toolName, payload, isError);
+  }
 }
 
 function appendRetryStartNotice(
@@ -777,10 +981,6 @@ export function applyAgentSessionEvent(
   if (!input || typeof input !== "object") return;
   const event = input as SessionEventLike;
   if (typeof event.type !== "string") return;
-  const maxToolResultChars = Math.max(
-    256,
-    options.maxToolResultChars ?? DEFAULT_MAX_TOOL_RESULT_CHARS,
-  );
   switch (event.type) {
     case "turn_start":
       ensureTurn(state);
@@ -797,31 +997,19 @@ export function applyAgentSessionEvent(
     case "tool_execution_start": {
       const turnId = ensureTurn(state);
       const toolCallId = eventToolCallId(state, event);
-      ensureToolCall(
-        state,
-        turnId,
-        toolCallId,
-        eventString(event.toolName, "tool"),
-        formatToolPreview(event.args),
-      );
+      const toolName = eventString(event.toolName, "tool");
+      ensureToolCall(state, turnId, toolCallId, toolName, event.args);
+      state.toolComponents.handleStart(toolCallId, toolName, event.args);
       break;
     }
     case "tool_execution_update":
-      applyTranscriptToolResult(
-        state,
-        event,
-        event.partialResult,
-        maxToolResultChars,
-        false,
-        true,
-      );
+      applyTranscriptToolResult(state, event, event.partialResult, false, true);
       break;
     case "tool_execution_end":
       applyTranscriptToolResult(
         state,
         event,
         event.result,
-        maxToolResultChars,
         event.isError === true,
         false,
       );
@@ -842,19 +1030,32 @@ export function applyAgentSessionEvent(
 }
 
 export class SessionTranscript {
-  private readonly state = createTranscriptState();
+  private readonly state: TranscriptState;
   private readonly options: SessionTranscriptOptions;
 
   constructor(options: SessionTranscriptOptions = {}) {
     this.options = options;
+    this.state = createTranscriptState(options);
   }
 
   get entries(): readonly TranscriptEntry[] {
     return this.state.entries;
   }
 
+  /** Live native tool components keyed by tool call id. */
+  get toolComponents(): ToolComponentLookup {
+    return this.state.toolComponents;
+  }
+
   snapshot(): TranscriptEntry[] {
-    return this.state.entries.map((entry) => ({ ...entry }));
+    return this.state.entries.map((entry) => {
+      const copy = { ...entry } as TranscriptEntry;
+      if (copy.type === "tool-call") copy.args = cloneStructured(copy.args);
+      else if (copy.type === "tool-result") {
+        copy.result = cloneStructured(copy.result);
+      }
+      return copy;
+    });
   }
 
   get currentTurnId(): number | null {
@@ -929,6 +1130,7 @@ export class SessionTranscript {
     this.state.currentTurnId = null;
     this.state.lastTurnId = null;
     this.state.toolCalls.clear();
+    this.state.toolComponents.clear();
   }
 }
 
@@ -956,11 +1158,12 @@ type TranscriptRenderBlock =
   | { kind: "separator" }
   | { kind: "user"; text: string }
   | { kind: "assistant"; thinking: string; text: string }
-  | { kind: "tool-call"; toolName: string; args: string }
   | {
-      kind: "tool-result";
-      content: string;
-      truncated: boolean;
+      kind: "tool-native";
+      toolCallId: string;
+      toolName: string;
+      args: unknown;
+      result: TranscriptToolResultPayload | null;
       isError: boolean;
       streaming: boolean;
     }
@@ -973,6 +1176,18 @@ function buildRenderBlocks(
   let pendingAssistant:
     | { kind: "assistant"; thinking: string; text: string }
     | undefined;
+
+  // Tool results are upserted in place, so the last entry per call id wins.
+  // Their visual output is owned by the native component rendered at the call
+  // position, so result entries never emit blocks of their own.
+  const latestResults = new Map<
+    string,
+    Extract<TranscriptEntry, { type: "tool-result" }>
+  >();
+  for (const entry of entries) {
+    if (entry.type === "tool-result")
+      latestResults.set(entry.toolCallId, entry);
+  }
 
   const flushAssistant = (): void => {
     if (!pendingAssistant) return;
@@ -1010,23 +1225,21 @@ function buildRenderBlocks(
       case "assistant-text":
         appendAssistantText("assistant-text", entry.text);
         break;
-      case "tool-call":
+      case "tool-call": {
         flushAssistant();
+        const result = latestResults.get(entry.toolCallId);
         blocks.push({
-          kind: "tool-call",
+          kind: "tool-native",
+          toolCallId: entry.toolCallId,
           toolName: entry.toolName,
           args: entry.args,
+          result: result?.result ?? null,
+          isError: result?.isError ?? false,
+          streaming: result?.streaming ?? false,
         });
         break;
+      }
       case "tool-result":
-        flushAssistant();
-        blocks.push({
-          kind: "tool-result",
-          content: entry.content,
-          truncated: entry.truncated,
-          isError: entry.isError,
-          streaming: entry.streaming,
-        });
         break;
       case "notice":
         flushAssistant();
@@ -1093,32 +1306,23 @@ function renderNativeAssistantMessage(
   );
 }
 
-function wrapRenderedLines(lines: readonly string[], width: number): string[] {
+function wrapRenderedLines(
+  lines: readonly string[],
+  width: number,
+  verbatimLines?: ReadonlySet<number>,
+): string[] {
   const wrapped: string[] = [];
-  for (const line of lines) {
+  for (const [index, line] of lines.entries()) {
+    // Native tool components own their geometry (diffs, borders, tables);
+    // re-wrapping their output would corrupt it, same as Pi's main transcript.
+    if (verbatimLines?.has(index)) {
+      wrapped.push(line);
+      continue;
+    }
     if (!line) wrapped.push("");
     else wrapped.push(...wrapTextWithAnsi(line, Math.max(1, width)));
   }
   return wrapped;
-}
-
-function transcriptBadge(
-  theme: Theme,
-  label: string,
-  background: ThemeBackground,
-  foreground: ThemeColor,
-): string {
-  return theme.bg(background, theme.fg(foreground, theme.bold(` ${label} `)));
-}
-
-function toolResultLabel(
-  theme: Theme,
-  isError: boolean,
-  streaming: boolean,
-): string {
-  if (isError) return theme.fg("error", "↳ error");
-  if (streaming) return theme.fg("warning", "↳ streaming result");
-  return theme.fg("dim", "↳ result");
 }
 
 function noticeToneColor(tone: TranscriptNoticeTone): ThemeColor {
@@ -1137,18 +1341,52 @@ export interface TranscriptRenderOptions {
   theme: Theme;
   emptyText?: string;
   assistantLabel?: string;
-  toolLabel?: string;
   thinkingLabel?: string;
   assistantBadgeBackground?: ThemeBackground;
   assistantBadgeForeground?: ThemeColor;
-  toolBadgeBackground?: ThemeBackground;
-  toolBadgeForeground?: ThemeColor;
+  /**
+   * Live native tool components keyed by tool call id. When omitted, tool
+   * blocks are rendered through stateless ad-hoc components rebuilt from the
+   * entry data on every frame.
+   */
+  toolComponents?: ToolComponentLookup;
+}
+
+/**
+ * Builds a stateless component for tool blocks rendered without a live
+ * registry (direct API use). Rebuilt per frame; correct output, no incremental
+ * renderer state.
+ */
+function createAdHocToolComponent(
+  block: Extract<TranscriptRenderBlock, { kind: "tool-native" }>,
+): ToolExecutionComponent {
+  const component = new ToolExecutionComponent(
+    block.toolName,
+    block.toolCallId,
+    block.args ?? {},
+    {},
+    undefined,
+    // Only requestRender is ever invoked on the host TUI.
+    DETACHED_TUI as NativeToolTui,
+    process.cwd(),
+  );
+  component.setArgsComplete();
+  component.markExecutionStarted();
+  if (block.result) {
+    component.updateResult(
+      toComponentResult(block.result, block.isError),
+      block.streaming,
+    );
+  }
+  return component;
 }
 
 /**
  * Render normalized transcript entries as terminal lines. User and assistant
  * messages deliberately use Pi's native components so markdown, code,
  * thinking, and message theming stay consistent with the main transcript.
+ * Tool calls are rendered by Pi's native `ToolExecutionComponent`, giving
+ * built-in tools their familiar rich output (diffs, file previews, images).
  */
 export function renderTranscriptLines(
   entries: readonly TranscriptEntry[],
@@ -1160,23 +1398,24 @@ export function renderTranscriptLines(
     return [theme.fg("dim", options.emptyText ?? "No transcript yet.")];
 
   const lines: string[] = [];
-  const assistantBadge = transcriptBadge(
-    theme,
-    options.assistantLabel ?? "Assistant",
+  const verbatimLines = new Set<number>();
+  const pushVerbatim = (rendered: readonly string[]): void => {
+    for (const line of rendered) {
+      verbatimLines.add(lines.length);
+      lines.push(line);
+    }
+  };
+  const assistantBadge = theme.bg(
     options.assistantBadgeBackground ?? "customMessageBg",
-    options.assistantBadgeForeground ?? "success",
-  );
-  const toolBadge = transcriptBadge(
-    theme,
-    options.toolLabel ?? "Tool",
-    options.toolBadgeBackground ?? "toolPendingBg",
-    options.toolBadgeForeground ?? "warning",
+    theme.fg(
+      options.assistantBadgeForeground ?? "success",
+      theme.bold(` ${options.assistantLabel ?? "Assistant"} `),
+    ),
   );
   const separator = theme.fg(
     "borderMuted",
     "────────────────────────────────────────",
   );
-  const indent = "    ";
 
   const blankBefore = (): void => {
     if (lines.length > 0 && lines.at(-1) !== "") lines.push("");
@@ -1203,28 +1442,12 @@ export function renderTranscriptLines(
           ),
         );
         break;
-      case "tool-call": {
+      case "tool-native": {
         blankBefore();
-        const name = theme.fg(
-          "warning",
-          theme.bold(safeTerminalText(block.toolName)),
-        );
-        const args = block.args
-          ? theme.fg("dim", ` · ${safeTerminalText(block.args)}`)
-          : "";
-        lines.push(`${toolBadge} ${name}${args}`);
-        break;
-      }
-      case "tool-result": {
-        const label = toolResultLabel(theme, block.isError, block.streaming);
-        lines.push(
-          `${label}${block.truncated ? theme.fg("dim", " (truncated)") : ""}`,
-        );
-        for (const resultLine of safeTerminalText(block.content).split("\n")) {
-          lines.push(
-            `${indent}${block.isError ? theme.fg("error", resultLine) : theme.fg("dim", resultLine)}`,
-          );
-        }
+        const component =
+          options.toolComponents?.get(block.toolCallId) ??
+          createAdHocToolComponent(block);
+        pushVerbatim(component.render(width));
         break;
       }
       case "notice": {
@@ -1239,8 +1462,13 @@ export function renderTranscriptLines(
     }
   }
 
-  return wrapRenderedLines(lines, width).map((line) =>
-    visibleWidth(line) > width ? truncateToWidth(line, width, "") : line,
+  // wrapRenderedLines preserves length for verbatim lines, so indices stay
+  // aligned for the width-truncation pass below.
+  const wrapped = wrapRenderedLines(lines, width, verbatimLines);
+  return wrapped.map((line, index) =>
+    verbatimLines.has(index) || visibleWidth(line) <= width
+      ? line
+      : truncateToWidth(line, width, ""),
   );
 }
 

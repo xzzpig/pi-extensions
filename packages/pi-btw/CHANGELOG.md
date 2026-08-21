@@ -4,6 +4,30 @@ All notable changes to the `@xzzpig/pi-btw` fork are documented here. This
 fork tracks [`dbachelder/pi-btw`](https://github.com/dbachelder/pi-btw) via git
 subtree; entries below describe only fork-specific deviations from upstream.
 
+## 0.6.0
+
+### Changed
+
+- **Native tool call rendering.** BTW threads now render tool calls through
+  Pi's native `ToolExecutionComponent` (bundled
+  `@xzzpig/pi-components@0.2.0`) instead of a summarized badge/preview row.
+  Built-in tools keep their main-transcript output; output stays collapsed by
+  default, matching the main transcript.
+- Transcript entries store raw provider `args` and structured tool results;
+  component instances are pruned together with their entries when turns are
+  removed or history is trimmed.
+- The bundled `@xzzpig/pi-components` now ships its runtime as TypeScript
+  source, so the overlay shares the host's core-package module instances in
+  every load layout. Prototype patches from other plugins (pi-starline's
+  user-message rail, pi-tool-display's message box) now apply to BTW threads
+  when extensions are mixed from local paths and npm installs.
+
+### Fixed
+
+- The overlay attaches its live TUI to the tool component registry
+  (`attachTui`), so streaming tool output repaints while a command is still
+  running instead of appearing only after completion.
+
 ## 0.5.2
 
 ### Fixed

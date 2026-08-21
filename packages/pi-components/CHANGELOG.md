@@ -3,6 +3,53 @@
 All notable changes to the internal `@xzzpig/pi-components` shared library are
 documented here.
 
+## 0.2.0
+
+### Breaking
+
+- **Tool calls render through Pi's native `ToolExecutionComponent`.** The
+  hand-drawn badge/result renderer (`formatToolPreview`,
+  `summarizeToolResult`, tool badges, `↳ result` labels, and the
+  `maxToolResultChars` cap) is removed. `tool-call` entries now store raw
+  provider `args`, and `tool-result` entries store structured
+  `TranscriptToolResultPayload` data verbatim so built-in tools keep their
+  rich main-transcript output (diffs, file previews, images).
+- `SessionTranscriptOptions` extends `NativeToolRenderOptions` (`tui`, `cwd`,
+  `resolveToolDefinition`, `showImages`, `imageWidthCells`, `expanded`) and no
+  longer accepts `maxToolResultChars`.
+- `renderTranscriptLines` options replace `toolLabel` / `toolBadgeBackground`
+  / `toolBadgeForeground` with `toolComponents` (a `ToolComponentLookup`); a
+  persistent component registry is available via `TranscriptToolComponents`
+  and `SessionTranscript.toolComponents`. Tool rows bypass line wrapping and
+  width truncation because components own their geometry.
+- `snapshot()` deep-copies structured tool `args`/`result` data.
+
+### Changed
+
+- Tool result entries whose call entry was trimmed away are dropped together
+  with their component instances; `trimTranscriptState`,
+  `removeCurrentTurn()`, and `clear()` prune the registry in lockstep with the
+  entry list.
+- `TranscriptToolComponents` requests a TUI repaint after every tool event
+  (matching Pi's interactive mode) and routes component repaint signals
+  through a forwarder, so `attachTui()` can wire — or replace — the host TUI
+  at any time, even after instances exist. This keeps streaming tool output
+  (e.g. bash's per-second invalidate interval) visible while a command runs.
+- **Runtime entry ships TypeScript source again** (`exports["./transcript"]`
+  now resolves to `src/transcript.ts`; types still resolve to the compiled
+  `dist/src/transcript.d.ts`, so consumer typechecks are unchanged). Pi loads
+  extension code through jiti, whose core-package alias map only applies to
+  files jiti transforms itself; a precompiled `.js` entry was delegated to
+  native import and resolved `@earendil-works/pi-coding-agent` by physical
+  location, splitting into a second module instance in local-development
+  layouts (repo workspace + npm-installed plugins). With a `.ts` entry the
+  component library shares the host's core-package instances in every layout,
+  so prototype patches from other plugins (e.g. pi-starline's user-message
+  rail) apply to overlay transcripts again. This supersedes the 0.1.1
+  bundle-safe rationale: consumers run exclusively inside Pi's jiti loader,
+  which executes TypeScript directly. The unused legacy `"."` export
+  (`dist/index.js`) was removed and `files` now includes `src`.
+
 ## 0.1.1
 
 ### Fixed

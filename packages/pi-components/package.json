@@ -1,6 +1,6 @@
 {
   "name": "@xzzpig/pi-components",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "description": "Reusable transcript components for Pi extensions.",
   "license": "MIT",
@@ -11,22 +11,17 @@
     "transcript",
     "components"
   ],
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
   "files": [
     "dist",
+    "src",
     "README.md",
     "CHANGELOG.md",
     "LICENSE"
   ],
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    },
     "./transcript": {
       "types": "./dist/src/transcript.d.ts",
-      "default": "./dist/src/transcript.js"
+      "default": "./src/transcript.ts"
     }
   },
   "scripts": {

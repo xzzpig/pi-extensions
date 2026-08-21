@@ -1131,7 +1131,7 @@ describe("btw runtime behavior", () => {
     expect(record.getIsStreaming()).toBe(true);
     expect(findLatest(transcriptEntries(overlay), (entry: any) => entry.type === "tool-call")).toMatchObject({
       toolName: "read",
-      args: "package.json",
+      args: { path: "package.json" },
     });
 
     blocking.release();
@@ -1265,12 +1265,11 @@ describe("btw runtime behavior", () => {
     expect(entries[0]).toMatchObject({ type: "turn-boundary", phase: "start" });
     expect(entries[1]).toMatchObject({ type: "user-message", text: "read package metadata" });
     expect(entries[2]).toMatchObject({ type: "thinking", text: "Inspecting package.json", streaming: false });
-    expect(entries[3]).toMatchObject({ type: "tool-call", toolName: "read", args: "package.json" });
+    expect(entries[3]).toMatchObject({ type: "tool-call", toolName: "read", args: { path: "package.json" } });
     expect(entries[4]).toMatchObject({
       type: "tool-result",
       toolName: "read",
-      content: '{"name":"pi-btw"}',
-      truncated: false,
+      result: { content: [{ type: "text", text: '{"name":"pi-btw"}' }] },
       isError: false,
       streaming: false,
     });
@@ -1317,18 +1316,14 @@ describe("btw runtime behavior", () => {
     await flushAsyncWork();
 
     const transcript = transcriptText(overlay);
-    expect(transcript).toContain("<bg:toolPendingBg>");
     expect(transcript).toContain("Inspecting package.json");
-    expect(transcript).toContain("<bold>read</bold>");
+    // Native read renderer shows the call row (tool name + path); output stays
+    // hidden while collapsed, matching Pi's main transcript default.
     expect(transcript).toContain("package.json");
-    expect(transcript).toContain("↳ result");
-    expect(transcript).toContain("(truncated)");
-    expect(transcript).toContain("line 1");
-    expect(transcript).toContain("    <fg:dim>line 1</fg:dim>");
+    expect(transcript).not.toContain("line 1");
     expect(transcript).toContain("────────────────");
     expect(transcript).toContain("second question");
     expect(transcript).toContain("Second answer");
-    expect(transcript.indexOf("↳ result")).toBeGreaterThan(transcript.indexOf("<bold>read</bold>"));
     expect(transcript.indexOf("second question")).toBeGreaterThan(transcript.indexOf("────────────────"));
   });
 
@@ -1349,7 +1344,7 @@ describe("btw runtime behavior", () => {
     });
     expect(findLatest(entries, (entry: any) => entry.type === "tool-call")).toMatchObject({
       toolName: "read",
-      args: "package.json",
+      args: { path: "package.json" },
     });
     expect(entries.some((entry: any) => entry.type === "tool-result")).toBe(false);
 
@@ -1359,8 +1354,7 @@ describe("btw runtime behavior", () => {
     entries = transcriptEntries(overlay);
     expect(findLatest(entries, (entry: any) => entry.type === "tool-result")).toMatchObject({
       toolName: "read",
-      content: '{"name":"pi-btw"}',
-      truncated: false,
+      result: { content: [{ type: "text", text: '{"name":"pi-btw"}' }] },
       isError: false,
       streaming: false,
     });

@@ -7,6 +7,7 @@ import {
   renderTranscriptLines,
   safeTerminalText,
   SessionTranscript,
+  TranscriptToolComponents,
   TranscriptViewport,
 } from "../src/transcript.ts";
 
@@ -25,7 +26,7 @@ beforeEach(() => {
 
 describe("SessionTranscript", () => {
   it("normalizes streamed messages, tool results, and retry lifecycle events", () => {
-    const transcript = new SessionTranscript({ maxToolResultChars: 20 });
+    const transcript = new SessionTranscript();
 
     transcript.apply(event({ type: "turn_start" }));
     transcript.apply(
@@ -113,9 +114,20 @@ describe("SessionTranscript", () => {
         (entry) => entry.type === "tool-call" && entry.toolName === "read",
       ),
     ).toBe(true);
+    const call = entries.find((entry) => entry.type === "tool-call");
+    if (call?.type === "tool-call") {
+      expect(call.args).toEqual({ path: "package.json" });
+    }
     const result = entries.find((entry) => entry.type === "tool-result");
     expect(result?.type).toBe("tool-result");
-    if (result?.type === "tool-result") expect(result.truncated).toBe(true);
+    if (result?.type === "tool-result") {
+      // Raw structured payloads are preserved verbatim for native renderers.
+      expect(result.result).toEqual({
+        content: [{ type: "text", text: "x".repeat(400) }],
+      });
+      expect(result.isError).toBe(false);
+      expect(result.streaming).toBe(false);
+    }
     expect(entries.filter((entry) => entry.type === "notice")).toHaveLength(2);
     expect(entries.at(-1)).toMatchObject({
       type: "turn-boundary",
@@ -142,6 +154,196 @@ describe("SessionTranscript", () => {
           entry.type === "assistant-text" && entry.text === "answer 19",
       ),
     ).toBe(true);
+  });
+
+  it("deep-copies structured tool data in snapshots", () => {
+    const transcript = new SessionTranscript();
+    transcript.apply(
+      event({
+        type: "tool_execution_start",
+        toolCallId: "edit-1",
+        toolName: "edit",
+        args: { path: "a.ts", oldText: "a", newText: "b" },
+      }),
+    );
+    transcript.apply(
+      event({
+        type: "tool_execution_end",
+        toolCallId: "edit-1",
+        toolName: "edit",
+        result: {
+          content: [{ type: "text", text: "done" }],
+          details: { diff: ["-a", "+b"] },
+        },
+        isError: false,
+      }),
+    );
+
+    const snapshot = transcript.snapshot();
+    const snapCall = snapshot.find((entry) => entry.type === "tool-call");
+    const snapResult = snapshot.find((entry) => entry.type === "tool-result");
+    if (
+      snapCall?.type === "tool-call" &&
+      snapCall.args !== null &&
+      typeof snapCall.args === "object"
+    ) {
+      (snapCall.args as { path?: string }).path = "mutated";
+    }
+    if (snapResult?.type === "tool-result") {
+      if (snapResult.result) snapResult.result.details = "mutated";
+    }
+
+    const liveCall = transcript.entries.find(
+      (entry) => entry.type === "tool-call",
+    );
+    const liveResult = transcript.entries.find(
+      (entry) => entry.type === "tool-result",
+    );
+    expect(liveCall).toMatchObject({ args: { path: "a.ts" } });
+    expect(liveResult).toMatchObject({
+      result: { details: { diff: ["-a", "+b"] } },
+    });
+  });
+});
+
+describe("native tool components", () => {
+  it("keeps one persistent component per tool call and prunes it with entries", () => {
+    const transcript = new SessionTranscript();
+    transcript.apply(
+      event({
+        type: "tool_execution_start",
+        toolCallId: "bash-1",
+        toolName: "bash",
+        args: { command: "echo hi" },
+      }),
+    );
+    transcript.apply(
+      event({
+        type: "tool_execution_update",
+        toolCallId: "bash-1",
+        partialResult: { content: [{ type: "text", text: "partial" }] },
+      }),
+    );
+    transcript.apply(
+      event({
+        type: "tool_execution_end",
+        toolCallId: "bash-1",
+        result: { content: [{ type: "text", text: "hi" }] },
+        isError: false,
+      }),
+    );
+
+    const component = transcript.toolComponents.get("bash-1");
+    expect(component).toBeDefined();
+    // Streaming updates mutate the same instance instead of recreating it.
+    expect(transcript.toolComponents.get("bash-1")).toBe(component);
+
+    transcript.clear();
+    expect(transcript.toolComponents.get("bash-1")).toBeUndefined();
+  });
+
+  it("backfills arguments when a result arrives before its start event", () => {
+    const transcript = new SessionTranscript();
+    transcript.apply(
+      event({
+        type: "tool_execution_end",
+        // Unknown tool name exercises Pi's generic fallback renderer, which
+        // prints both the raw args JSON and the text output verbatim.
+        toolCallId: "late-1",
+        toolName: "sidecar",
+        result: { content: [{ type: "text", text: "contents" }] },
+        isError: false,
+      }),
+    );
+    expect(transcript.toolComponents.get("late-1")).toBeDefined();
+
+    transcript.apply(
+      event({
+        type: "tool_execution_start",
+        toolCallId: "late-1",
+        toolName: "read",
+        args: { path: "README.md" },
+      }),
+    );
+    const rendered = renderTranscriptLines(transcript.entries, {
+      width: 80,
+      theme: theme as never,
+      toolComponents: transcript.toolComponents,
+    }).join("\n");
+    const plain = rendered.replace(/\x1b\[[0-9;]*m/g, "");
+    expect(plain).toContain("README.md");
+    expect(plain).toContain("contents");
+  });
+
+  it("forwards repaint requests to a TUI attached after creation", () => {
+    const transcript = new SessionTranscript();
+    transcript.apply(
+      event({
+        type: "tool_execution_start",
+        toolCallId: "bash-live",
+        toolName: "bash",
+        args: { command: "sleep 5" },
+      }),
+    );
+
+    // No TUI attached yet: events apply without crashing, nothing to notify.
+    expect(transcript.toolComponents.get("bash-live")).toBeDefined();
+
+    const requestRender = vi.fn();
+    (transcript.toolComponents as TranscriptToolComponents).attachTui({
+      requestRender,
+    });
+
+    // Streaming bash output relies on these repaint signals reaching the
+    // host TUI while the tool is still running.
+    transcript.apply(
+      event({
+        type: "tool_execution_update",
+        toolCallId: "bash-live",
+        partialResult: { content: [{ type: "text", text: "partial" }] },
+      }),
+    );
+    transcript.apply(
+      event({
+        type: "tool_execution_end",
+        toolCallId: "bash-live",
+        result: { content: [{ type: "text", text: "done" }] },
+        isError: false,
+      }),
+    );
+    expect(requestRender).toHaveBeenCalledTimes(2);
+  });
+
+  it("drops components when their turn is removed or entries are trimmed", () => {
+    const transcript = new SessionTranscript({ maxEntries: 8 });
+    transcript.apply(event({ type: "turn_start" }));
+    transcript.apply(
+      event({
+        type: "tool_execution_start",
+        toolCallId: "trim-1",
+        toolName: "bash",
+        args: { command: "true" },
+      }),
+    );
+    expect(transcript.toolComponents.get("trim-1")).toBeDefined();
+
+    transcript.removeCurrentTurn();
+    expect(transcript.toolComponents.get("trim-1")).toBeUndefined();
+
+    transcript.apply(event({ type: "turn_start" }));
+    transcript.apply(
+      event({
+        type: "tool_execution_start",
+        toolCallId: "trim-2",
+        toolName: "bash",
+        args: { command: "true" },
+      }),
+    );
+    for (let index = 0; index < 12; index++) {
+      transcript.appendCompletedTurn({ assistant: `filler ${index}` });
+    }
+    expect(transcript.entries.some((e) => e.type === "tool-call")).toBe(false);
+    expect(transcript.toolComponents.get("trim-2")).toBeUndefined();
   });
 });
 
@@ -183,7 +385,8 @@ describe("transcript rendering", () => {
     expect(rendered).toContain("ready");
     expect(rendered).not.toContain("**ready**");
     expect(rendered).toContain("I am checking the file");
-    expect(rendered).toContain("bash");
+    // Native bash renderer shows the command line, not the tool name.
+    expect(rendered).toContain("printf ok");
     expect(rendered).toContain("ok");
     expect(rendered).toContain("Retry succeeded.");
     // UserMessageComponent supplies the Pi-native message background. The

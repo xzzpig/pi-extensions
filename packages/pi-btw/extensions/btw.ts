@@ -1,4 +1,9 @@
-import { renderTranscriptLines } from "@xzzpig/pi-components/transcript";
+import {
+  renderTranscriptLines,
+  TranscriptToolComponents,
+  type ToolComponentLookup,
+  type TranscriptToolResultPayload,
+} from "@xzzpig/pi-components/transcript";
 import {
   buildSessionContext,
   createAgentSession,
@@ -115,15 +120,14 @@ type BtwTranscriptEntry =
   | { id: number; turnId: number; type: "user-message"; text: string }
   | { id: number; turnId: number; type: "thinking"; text: string; streaming: boolean }
   | { id: number; turnId: number; type: "assistant-text"; text: string; streaming: boolean }
-  | { id: number; turnId: number; type: "tool-call"; toolCallId: string; toolName: string; args: string }
+  | { id: number; turnId: number; type: "tool-call"; toolCallId: string; toolName: string; args: unknown }
   | {
       id: number;
       turnId: number;
       type: "tool-result";
       toolCallId: string;
       toolName: string;
-      content: string;
-      truncated: boolean;
+      result: TranscriptToolResultPayload | null;
       isError: boolean;
       streaming: boolean;
     };
@@ -137,6 +141,7 @@ type BtwTranscriptState = {
   currentTurnId: number | null;
   lastTurnId: number | null;
   toolCalls: Map<string, { turnId: number; callEntryId: number; resultEntryId?: number }>;
+  toolComponents: TranscriptToolComponents;
 };
 
 type BtwSessionRuntime = {
@@ -285,6 +290,8 @@ function buildBtwSeedState(
             return [];
           }
 
+          // SAFETY: entry is object-checked above; fields are re-validated
+          // immediately below (role: string, content: array) before any use.
           const message = entry as unknown as Partial<Message> & { role?: string; customType?: string; content?: unknown };
           if (typeof message.role !== "string" || !Array.isArray(message.content)) {
             return [];
@@ -359,31 +366,17 @@ function buildBtwSeedState(
   };
 }
 
-function formatToolPreview(value: unknown): string {
-  if (value === undefined) {
-    return "";
+function toToolResultPayload(value: unknown): TranscriptToolResultPayload | null {
+  if (value === undefined || value === null) {
+    return null;
   }
-
+  if (typeof value === "object") {
+    return value as TranscriptToolResultPayload;
+  }
   if (typeof value === "string") {
-    return value;
+    return { content: [{ type: "text", text: value }] };
   }
-
-  if (value && typeof value === "object") {
-    const path = (value as { path?: unknown }).path;
-    if (typeof path === "string") {
-      return path;
-    }
-  }
-
-  try {
-    const preview = JSON.stringify(value);
-    if (!preview || preview === "{}") {
-      return "";
-    }
-    return preview.length > 120 ? `${preview.slice(0, 117)}...` : preview;
-  } catch {
-    return "";
-  }
+  return { content: [{ type: "text", text: String(value) }] };
 }
 
 function createEmptyTranscriptState(): BtwTranscriptState {
@@ -394,6 +387,8 @@ function createEmptyTranscriptState(): BtwTranscriptState {
     currentTurnId: null,
     lastTurnId: null,
     toolCalls: new Map(),
+    // Default-collapsed tool output, matching Pi's main transcript behavior.
+    toolComponents: new TranscriptToolComponents(),
   };
 }
 
@@ -465,6 +460,7 @@ function removeTranscriptTurn(state: BtwTranscriptState, turnId: number | null):
   if (state.lastTurnId === turnId) {
     state.lastTurnId = null;
   }
+  state.toolComponents.retainOnly(new Set(state.toolCalls.keys()));
 }
 
 function findLatestTranscriptEntry<TType extends BtwTranscriptEntry["type"]>(
@@ -542,62 +538,12 @@ function upsertTranscriptTextEntry(
   appendTranscriptEntry(state, { type, turnId, text, streaming } as Omit<Extract<BtwTranscriptEntry, { type: "thinking" | "assistant-text" }>, "id">);
 }
 
-function summarizeToolResult(value: unknown, maxLength = 400): { content: string; truncated: boolean } {
-  let content = "";
-
-  if (value && typeof value === "object") {
-    const toolValue = value as {
-      content?: Array<{ type?: string; text?: string }>;
-      error?: unknown;
-      message?: unknown;
-    };
-
-    if (Array.isArray(toolValue.content)) {
-      content = toolValue.content
-        .filter((part) => part.type === "text" && typeof part.text === "string")
-        .map((part) => part.text ?? "")
-        .join("\n")
-        .trim();
-    }
-
-    if (!content && typeof toolValue.error === "string") {
-      content = toolValue.error;
-    }
-
-    if (!content && typeof toolValue.message === "string") {
-      content = toolValue.message;
-    }
-  }
-
-  if (!content) {
-    if (typeof value === "string") {
-      content = value;
-    } else if (value !== undefined) {
-      try {
-        content = JSON.stringify(value, null, 2);
-      } catch {
-        content = String(value);
-      }
-    }
-  }
-
-  if (!content) {
-    content = "(no tool output)";
-  }
-
-  const truncated = content.length > maxLength;
-  return {
-    content: truncated ? `${content.slice(0, maxLength - 3)}...` : content,
-    truncated,
-  };
-}
-
 function ensureToolCallEntry(
   state: BtwTranscriptState,
   turnId: number,
   toolCallId: string,
   toolName: string,
-  args: string,
+  args: unknown,
 ): { turnId: number; callEntryId: number; resultEntryId?: number } {
   const existing = state.toolCalls.get(toolCallId);
   if (existing) {
@@ -621,20 +567,18 @@ function upsertToolResultEntry(
   turnId: number,
   toolCallId: string,
   toolName: string,
-  content: string,
-  truncated: boolean,
+  result: TranscriptToolResultPayload | null,
   isError: boolean,
   streaming: boolean,
 ): void {
-  const toolCall = ensureToolCallEntry(state, turnId, toolCallId, toolName, "");
+  const toolCall = ensureToolCallEntry(state, turnId, toolCallId, toolName, undefined);
   const existing =
     toolCall.resultEntryId === undefined
       ? undefined
       : state.entries.find((entry) => entry.id === toolCall.resultEntryId && entry.type === "tool-result");
 
   if (existing && existing.type === "tool-result") {
-    existing.content = content;
-    existing.truncated = truncated;
+    existing.result = result;
     existing.isError = isError;
     existing.streaming = streaming;
     return;
@@ -645,8 +589,7 @@ function upsertToolResultEntry(
     turnId,
     toolCallId,
     toolName,
-    content,
-    truncated,
+    result,
     isError,
     streaming,
   } as Omit<Extract<BtwTranscriptEntry, { type: "tool-result" }>, "id">);
@@ -715,37 +658,22 @@ function applyTranscriptEvent(state: BtwTranscriptState, event: AgentSessionEven
     }
     case "tool_execution_start": {
       const turnId = ensureTranscriptTurn(state);
-      ensureToolCallEntry(state, turnId, event.toolCallId, event.toolName, formatToolPreview(event.args));
+      ensureToolCallEntry(state, turnId, event.toolCallId, event.toolName, event.args);
+      state.toolComponents.handleStart(event.toolCallId, event.toolName, event.args);
       return;
     }
     case "tool_execution_update": {
       const turnId = state.toolCalls.get(event.toolCallId)?.turnId ?? ensureTranscriptTurn(state);
-      const result = summarizeToolResult(event.partialResult);
-      upsertToolResultEntry(
-        state,
-        turnId,
-        event.toolCallId,
-        event.toolName,
-        result.content,
-        result.truncated,
-        false,
-        true,
-      );
+      const result = toToolResultPayload(event.partialResult);
+      upsertToolResultEntry(state, turnId, event.toolCallId, event.toolName, result, false, true);
+      state.toolComponents.handleUpdate(event.toolCallId, event.toolName, result);
       return;
     }
     case "tool_execution_end": {
       const turnId = state.toolCalls.get(event.toolCallId)?.turnId ?? ensureTranscriptTurn(state);
-      const result = summarizeToolResult(event.result);
-      upsertToolResultEntry(
-        state,
-        turnId,
-        event.toolCallId,
-        event.toolName,
-        result.content,
-        result.truncated,
-        event.isError,
-        false,
-      );
+      const result = toToolResultPayload(event.result);
+      upsertToolResultEntry(state, turnId, event.toolCallId, event.toolName, result, event.isError, false);
+      state.toolComponents.handleEnd(event.toolCallId, event.toolName, result, event.isError);
       return;
     }
     case "turn_end": {
@@ -909,6 +837,7 @@ class BtwOverlayComponent extends Container implements Focusable {
   private readonly summaryText: Text;
   private readonly hintsText: Text;
   private readonly readTranscriptEntries: () => BtwTranscript;
+  private readonly readToolComponents: () => ToolComponentLookup;
   private readonly getStatus: () => string | null;
   private readonly getMode: () => BtwThreadMode;
   private readonly onSubmitCallback: (value: string) => void;
@@ -940,6 +869,7 @@ class BtwOverlayComponent extends Container implements Focusable {
     theme: ExtensionContext["ui"]["theme"],
     keybindings: KeybindingsManager,
     readTranscriptEntries: () => BtwTranscript,
+    readToolComponents: () => ToolComponentLookup,
     getStatus: () => string | null,
     getMode: () => BtwThreadMode,
     onSubmit: (value: string) => void,
@@ -950,6 +880,7 @@ class BtwOverlayComponent extends Container implements Focusable {
     this.tui = tui;
     this.theme = theme;
     this.readTranscriptEntries = readTranscriptEntries;
+    this.readToolComponents = readToolComponents;
     this.getStatus = getStatus;
     this.getMode = getMode;
     this.onSubmitCallback = onSubmit;
@@ -1138,8 +1069,8 @@ class BtwOverlayComponent extends Container implements Focusable {
         theme: this.theme,
         emptyText: "No BTW thread yet. Ask a side question to start one.",
         assistantLabel: "Assistant",
-        toolLabel: "Tool",
         thinkingLabel: "Thinking",
+        toolComponents: this.readToolComponents(),
       }),
       innerWidth,
     );
@@ -1574,6 +1505,9 @@ export default function (pi: ExtensionAPI) {
     void ctx.ui
       .custom<void>(
         async (tui, theme, keybindings, done) => {
+          // Route native tool component repaint requests (streaming bash
+          // output, elapsed-time intervals) to the live TUI.
+          transcriptState.toolComponents.attachTui(tui);
           runtime.finish = () => {
             done();
           };
@@ -1583,6 +1517,7 @@ export default function (pi: ExtensionAPI) {
             theme,
             keybindings,
             () => transcriptState.entries,
+            () => transcriptState.toolComponents,
             () => overlayStatus,
             () => pendingMode,
             (value) => {
@@ -1882,6 +1817,9 @@ export default function (pi: ExtensionAPI) {
 
     for (let i = 0; i < branch.length; i++) {
       if (isCustomEntry(branch[i], BTW_MODEL_OVERRIDE_TYPE)) {
+        // SAFETY: isCustomEntry guarantees { type: "custom", customType, data? };
+        // data's concrete shape is written only by this extension's own
+        // session-append calls and is re-validated via details?.action below.
         const details = (branch[i] as unknown as { data?: BtwModelOverrideDetails }).data;
         if (details?.action === "set") {
           const resolved = ctx.modelRegistry.find(details.provider, details.id);
@@ -1897,6 +1835,8 @@ export default function (pi: ExtensionAPI) {
       }
 
       if (isCustomEntry(branch[i], BTW_THINKING_OVERRIDE_TYPE)) {
+        // SAFETY: isCustomEntry guarantees the custom-entry envelope; data is
+        // extension-written and discriminated by details?.action below.
         const details = (branch[i] as unknown as { data?: BtwThinkingOverrideDetails }).data;
         btwThinkingOverride =
           details?.action === "set"
@@ -1908,6 +1848,8 @@ export default function (pi: ExtensionAPI) {
 
       if (isCustomEntry(branch[i], BTW_RESET_TYPE)) {
         lastResetIndex = i;
+        // SAFETY: isCustomEntry guarantees the custom-entry envelope; data is
+        // extension-written and defaults defensively via details?.mode ?? below.
         const details = (branch[i] as unknown as { data?: BtwResetDetails }).data;
         pendingMode = details?.mode ?? "contextual";
       }
@@ -1918,6 +1860,8 @@ export default function (pi: ExtensionAPI) {
         continue;
       }
 
+      // SAFETY: isCustomEntry guarantees the custom-entry envelope; data is
+      // extension-written and re-validated via details?.question/answer below.
       const details = (entry as unknown as { data?: BtwDetails }).data;
       if (!details?.question || !details.answer) {
         continue;

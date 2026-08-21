@@ -12,8 +12,11 @@ TypeScript source remains in this repository for development.
 that consumes `AgentSessionEvent` values and a keyboard- and wheel-scrollable
 `TranscriptViewport`. User messages, assistant text, thinking, markdown, and
 code fences render through Pi's native `UserMessageComponent`,
-`AssistantMessageComponent`, and `getMarkdownTheme()` so embedded transcripts
-match the main session instead of approximating its styling.
+`AssistantMessageComponent`, and `getMarkdownTheme()`; tool calls render
+through Pi's native `ToolExecutionComponent` (raw `args` and structured
+results are preserved verbatim so built-in tools keep their rich
+main-transcript output), so embedded transcripts match the main session
+instead of approximating its styling.
 
 ```ts
 import {
@@ -24,7 +27,8 @@ import {
 const transcript = new SessionTranscript({
   maxEntries: 500,
   maxChars: 512 * 1024,
-  maxToolResultChars: 16 * 1024,
+  // Optional native tool context: tui, cwd, resolveToolDefinition,
+  // showImages, imageWidthCells, expanded.
 });
 const unsubscribe = session.subscribe((event) => transcript.apply(event));
 
@@ -33,8 +37,10 @@ const viewport = new TranscriptViewport({
   theme,
   readEntries: () => transcript.entries,
   assistantLabel: "Auditor",
-  toolLabel: "Tool",
   thinkingLabel: "Thinking",
+  // Live component registry keeps incremental renderer state per tool call;
+  // omit it and tool blocks still render via stateless ad-hoc components.
+  toolComponents: transcript.toolComponents,
 });
 
 const visible = viewport.render(width, height);
@@ -47,6 +53,7 @@ policy. `Esc` handling is intentionally delegated to the host overlay.
 
 The transcript normalizes user/assistant events, streaming thinking and text,
 tool calls and results, and automatic retry notices. It bounds retained history
-and sanitizes untrusted terminal control sequences before rendering. Pi core
+(entries and total chars — raw tool data is uncapped by design) and sanitizes
+untrusted terminal control sequences in message text before rendering. Pi core
 packages are peer dependencies, so installed extensions use the same Pi runtime
 and active theme as their host.
