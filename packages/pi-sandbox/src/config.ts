@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { type SandboxRuntimeConfig } from "@carderne/sandbox-runtime";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { type SandboxRuntimeConfig } from "@xzzpig/sandbox-runtime";
 
 export type SandboxConfig = Omit<SandboxRuntimeConfig, "network"> & {
   enabled?: boolean;
@@ -49,6 +49,7 @@ export const DEFAULT_CONFIG: SandboxConfig = {
     allowRead: [".", "~/.config", "~/.local", "Library"],
     allowWrite: [".", "/tmp"],
     denyWrite: [".env", ".env.*", "*.pem", "*.key"],
+    protectNonexistentFiles: false,
   },
 };
 

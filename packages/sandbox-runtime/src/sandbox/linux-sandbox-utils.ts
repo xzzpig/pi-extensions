@@ -46,6 +46,14 @@ export interface LinuxSandboxParams {
   caCertPath?: string
   readConfig?: FsReadRestrictionConfig
   writeConfig?: FsWriteRestrictionConfig
+  /**
+   * When false, do not create read-only mount-point placeholders for
+   * auto-protected dangerous files (.bashrc, .gitconfig, .mcp.json, ...)
+   * that do not exist yet inside allowed write paths. Existing dangerous
+   * files are still protected, and user-specified denyWrite paths are
+   * unaffected. Defaults to true when omitted.
+   */
+  protectNonexistentFiles?: boolean
   /** Environment variable names to unset inside the sandbox (bwrap --unsetenv) */
   unsetEnvVars?: string[]
   /** Environment variables to set inside the sandbox (bwrap --setenv NAME VALUE) */
@@ -843,6 +851,23 @@ function pushReadDenyDirMounts(
 }
 
 /**
+ * Whether a directory entry exists at path, without following symlinks. This
+ * differs from fs.existsSync: a dangling symlink (target missing) has a real
+ * directory entry, so it counts as existing. Used by the
+ * protectNonexistentFiles=false filter to keep protecting dangerous
+ * files that already exist on the host (including symlinks) while still
+ * dropping genuinely absent paths.
+ */
+function pathEntryLstatExists(p: string): boolean {
+  try {
+    fs.lstatSync(p)
+    return true
+  } catch (error) {
+    return (error as NodeJS.ErrnoException)?.code !== 'ENOENT'
+  }
+}
+
+/**
  * Generate filesystem bind mount arguments for bwrap
  */
 async function generateFilesystemArgs(
@@ -852,6 +877,7 @@ async function generateFilesystemArgs(
   maskedFileStoreDir: string | undefined,
   ripgrepConfig: { command: string; args?: string[] } = { command: 'rg' },
   mandatoryDenySearchDepth: number = DEFAULT_MANDATORY_DENY_SEARCH_DEPTH,
+  protectNonexistentFiles = true,
   abortSignal?: AbortSignal,
 ): Promise<string[]> {
   const args: string[] = []
@@ -927,13 +953,25 @@ async function generateFilesystemArgs(
     }
 
     // Deny writes within allowed paths (user-specified + mandatory denies)
+    const mandatoryDenyPaths = await linuxGetMandatoryDenyPaths(
+      ripgrepConfig,
+      mandatoryDenySearchDepth,
+      abortSignal,
+    )
+    // When the caller opted out of protecting non-existent dangerous
+    // files, drop the entries that do not exist on the host yet. Only
+    // the auto-protected mandatory list is filtered here; user-specified
+    // denyWithinAllow paths are never dropped, so explicit denyWrite
+    // rules keep full effect even for paths that do not exist yet.
+    // Existence is judged with lstat (not existsSync): an already-present
+    // symlink — including a dangling one, whose target does not exist — is
+    // a real directory entry and must keep its protection exactly like the
+    // default mode, which resolves the deny to the link target.
     const denyPaths = [
       ...(writeConfig.denyWithinAllow || []),
-      ...(await linuxGetMandatoryDenyPaths(
-        ripgrepConfig,
-        mandatoryDenySearchDepth,
-        abortSignal,
-      )),
+      ...(protectNonexistentFiles === false
+        ? mandatoryDenyPaths.filter(p => pathEntryLstatExists(p))
+        : mandatoryDenyPaths),
     ]
 
     // Duplicate deny entries must be collapsed: a duplicate
@@ -1371,6 +1409,7 @@ export async function wrapCommandWithSandboxLinux(
     binShell,
     ripgrepConfig = { command: 'rg' },
     mandatoryDenySearchDepth = DEFAULT_MANDATORY_DENY_SEARCH_DEPTH,
+    protectNonexistentFiles = true,
     seccompConfig,
     bwrapPath,
     socatPath,
@@ -1555,6 +1594,7 @@ export async function wrapCommandWithSandboxLinux(
       maskedFileStoreDir,
       ripgrepConfig,
       mandatoryDenySearchDepth,
+      protectNonexistentFiles,
       abortSignal,
     )
     bwrapArgs.push(...fsArgs)

@@ -12,7 +12,7 @@ try {
 } catch (error) {
   throw new Error(`cannot load ${SCHEMA_PATH}: ${error.message}`);
 }
-const PLUGIN_NAME = /^pi-[a-z0-9][a-z0-9-]*$/;
+const PLUGIN_NAME = /^[a-z0-9][a-z0-9-]*$/;
 
 function typeMatches(value, type) {
   switch (type) {
@@ -117,7 +117,7 @@ export function readSubtreeMetadata(root, name) {
   const expectedRemote = `upstream-${nameFromFile}`;
   if (metadata.name !== nameFromFile || !PLUGIN_NAME.test(nameFromFile)) {
     throw new Error(
-      `${relative(root, path)} must describe a valid pi-* plugin name`,
+      `${relative(root, path)} must describe a valid unscoped package name`,
     );
   }
   if (metadata.prefix !== expectedPrefix) {

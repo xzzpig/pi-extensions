@@ -1,0 +1,13 @@
+{
+  "$schema": "../schemas/subtree-metadata.schema.json",
+  "name": "sandbox-runtime",
+  "prefix": "packages/sandbox-runtime",
+  "source": "https://github.com/carderne/sandbox-runtime.git",
+  "remote": "upstream-sandbox-runtime",
+  "ref": "v0.0.70",
+  "version": "0.0.70",
+  "upstreamCommit": "476bf986ef63410b61febf879a6f1a46b7898d5f",
+  "squash": true,
+  "lastSyncedAt": "2026-08-21T02:30:00.000Z",
+  "notes": "Forked from carderne/sandbox-runtime (itself derived from Anthropic's sandbox-runtime); local fork adds filesystem.protectNonexistentFiles so embedders can skip bwrap placeholder mounts for not-yet-existing dangerous files. Published locally as @xzzpig/sandbox-runtime; it is a support library for pi-sandbox rather than a Pi plugin, so the record keeps the plain upstream-derived name instead of the pi-* plugin convention."
+}

@@ -4,7 +4,7 @@ Sandbox for [pi](https://pi.dev/).
 
 Sandboxes pi like this:
 - read/write/edit: direct control using allow/deny lists
-- bash: uses [`@carderne/sandbox-runtime`](https://www.npmjs.com/package/@carderne/sandbox-runtime) to control network and file system access
+- bash: uses [`@xzzpig/sandbox-runtime`](https://www.npmjs.com/package/@xzzpig/sandbox-runtime) to control network and file system access
 
 When a blocked action is attempted, the user is
 prompted to allow it temporarily or permanently rather than silently failing.
@@ -23,7 +23,7 @@ You may need to trial and error to find additional things you need to allow.
 #### Prerequisites
 
 `pi-sandbox` delegates the OS-level bash sandbox to
-[`@carderne/sandbox-runtime`](https://www.npmjs.com/package/@carderne/sandbox-runtime),
+[`@xzzpig/sandbox-runtime`](https://www.npmjs.com/package/@xzzpig/sandbox-runtime),
 published from the fork at <https://github.com/carderne/sandbox-runtime>,
 which is forked from Anthropic's
 [`anthropic-experimental/sandbox-runtime`](https://github.com/anthropic-experimental/sandbox-runtime).
@@ -93,7 +93,19 @@ Note below that the order of precedence for filesystem read and write are opposi
     // - empty ALLOW means no write access at all
     // - DENY takes precedence and is never prompted
     "allowWrite": [".", "/tmp"],
-    "denyWrite": [".env", ".env.*", "*.pem", "*.key"]
+    "denyWrite": [".env", ".env.*", "*.pem", "*.key"],
+
+    // Linux/bwrap only. Defaults to false so tools like `git status` and lint
+    // glob scans see the real directory while a sandboxed command runs.
+    // The runtime default (when this option is absent) is true, which mounts
+    // read-only placeholders for not-yet-existing dangerous files (.bashrc,
+    // .mcp.json, …) and leaves temporary mount-point files on the host during
+    // the command's execution.
+    // Set to true to also prevent sandboxed commands from creating those files
+    // inside allowed write paths. With the default false, literal denyWrite
+    // paths that do not exist yet (built-in defaults or your own entries) are
+    // neither created nor protected; existing files are always protected.
+    "protectNonexistentFiles": false
   }
 }
 ```
@@ -188,6 +200,23 @@ that discovers the temporary proxy port can use it while the sandbox is running.
 > - **Write:** `denyWrite` takes precedence over `allowWrite` and is never
 >   prompted. A path in `denyWrite` is always blocked, even if it matches
 >   `allowWrite`.
+
+On Linux (bwrap), the sandbox also protects dangerous files (`.bashrc`,
+`.gitconfig`, `.mcp.json`, …) that do not exist yet inside allowed write paths.
+`filesystem.protectNonexistentFiles` defaults to `false` here so no
+placeholder files appear in the working directory while a sandboxed command runs
+(placeholder mount points would show up as empty dotfiles to `git status`, lint
+glob scans, etc.). Set it to `true` to also prevent sandboxed commands from
+creating those files inside allowed write paths.
+
+With the default `false`, any literal `denyWrite` path that does not exist yet —
+whether from the built-in defaults (`.env`, `.env.*`, `*.pem`, `*.key`) or from
+your own configuration — is neither created nor protected: sandboxed commands
+can create and write such files freely, and no placeholder appears. Paths that
+already exist on disk (including dangling symlinks) are always protected
+regardless of this setting. Glob patterns in `denyWrite` are unaffected by this
+option (they are skipped on Linux anyway), and the option has no effect on macOS
+or Windows.
 
 If neither file configures an array, its built-in defaults apply (see above for
 the defaults). Once an array is configured, only its combined global and local

@@ -718,6 +718,21 @@ export const FilesystemConfigSchema = z.object({
   denyWrite: z
     .array(filesystemPathSchema)
     .describe('Paths denied for writing (takes precedence over allowWrite)'),
+  protectNonexistentFiles: z
+    .boolean()
+    .optional()
+    .describe(
+      'On Linux: when true (the default), the sandbox also protects dangerous files ' +
+        '(.bashrc, .gitconfig, .mcp.json, etc.) that do not exist yet inside allowed write paths ' +
+        'by mounting read-only placeholders (/dev/null or an empty dir) over them, so sandboxed ' +
+        'commands cannot create them. bwrap materializes these placeholders as empty files/dirs on ' +
+        'the host during command execution (e.g. a temporary .bashrc in the working directory), ' +
+        'which can confuse tools like git status or lint/glob scans; they are removed after the ' +
+        'command finishes. Set to false to skip placeholders for non-existent dangerous files, so no ' +
+        'temporary files appear, at the cost of allowing sandboxed commands to create those files ' +
+        'inside allowed write paths. Existing dangerous files and user-configured denyWrite paths ' +
+        'remain protected regardless of this setting. macOS and Windows are unaffected.',
+    ),
 })
 
 /**

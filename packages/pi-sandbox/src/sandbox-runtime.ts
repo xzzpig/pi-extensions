@@ -1,12 +1,12 @@
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, lstatSync } from "node:fs";
 
+import { type BashOperations, getShellConfig } from "@earendil-works/pi-coding-agent";
 import {
   SandboxManager,
   type SandboxAskCallback,
   type SandboxRuntimeConfig,
-} from "@carderne/sandbox-runtime";
-import { type BashOperations, getShellConfig } from "@earendil-works/pi-coding-agent";
+} from "@xzzpig/sandbox-runtime";
 
 import { type SandboxConfig } from "./config.ts";
 import { canonicalizePath, domainIsAllowed } from "./policy.ts";
@@ -32,6 +32,19 @@ const canonicalizeFilesystemPattern = (path: string) =>
 
 const canonicalizeFilesystemPatterns = (paths: string[]) =>
   unique(paths.map(canonicalizeFilesystemPattern));
+
+/**
+ * lstat-based existence: a dangling symlink has a real directory entry and
+ * counts as existing (mirrors the runtime's pathEntryLstatExists semantics).
+ */
+function pathEntryExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException)?.code !== "ENOENT";
+  }
+}
 
 export function resolveAllowances(
   config: SandboxConfig,
@@ -63,6 +76,21 @@ export function buildRuntimeConfig(
 ): SandboxRuntimeConfig {
   const effective = resolveAllowances(config, allowances);
 
+  // With protectNonexistentFiles=false, every literal denyWrite entry that
+  // does not exist yet is dropped — whether it comes from the built-in
+  // defaults (.env, .env.*, *.pem, *.key) or from user configuration. This
+  // keeps bwrap from materializing placeholder mount points for paths that
+  // are not there (e.g. an empty .env appearing in the project during every
+  // command). Entries that exist keep full write protection, and glob
+  // patterns pass through untouched (Linux drops them anyway; macOS is
+  // unaffected by the flag).
+  const rawDenyWrite = config.filesystem?.denyWrite ?? [];
+  const canonicalDenyWrite = canonicalizeFilesystemPatterns(rawDenyWrite);
+  const denyWrite =
+    config.filesystem?.protectNonexistentFiles === false
+      ? canonicalDenyWrite.filter((path) => path.includes("*") || pathEntryExists(path))
+      : canonicalDenyWrite;
+
   return {
     network: {
       ...config.network,
@@ -74,7 +102,8 @@ export function buildRuntimeConfig(
       denyRead: canonicalizeFilesystemPatterns(config.filesystem?.denyRead ?? []),
       allowRead: canonicalizeFilesystemPatterns(effective.readPaths),
       allowWrite: canonicalizeFilesystemPatterns(effective.writePaths),
-      denyWrite: canonicalizeFilesystemPatterns(config.filesystem?.denyWrite ?? []),
+      denyWrite,
+      protectNonexistentFiles: config.filesystem?.protectNonexistentFiles,
     },
     ignoreViolations: config.ignoreViolations,
     enableWeakerNestedSandbox: config.enableWeakerNestedSandbox,

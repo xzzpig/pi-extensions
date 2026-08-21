@@ -31,8 +31,10 @@ commits, or pushes.
 
 ## Conventions you must follow
 
-- Package directories and `package.json` names must be identical and match
-  `pi-[a-z0-9][a-z0-9-]*`.
+- Package directories and `package.json` names must be identical. Pi plugin
+  packages match `pi-[a-z0-9][a-z0-9-]*` (npm name `@xzzpig/pi-*`); an
+  upstream-derived support library that is not a Pi plugin may use the plain
+  upstream name instead (e.g. `sandbox-runtime`, npm `@xzzpig/sandbox-runtime`).
 - Pi core imports belong in `peerDependencies`, runtime libraries in
   `dependencies`, development-only types in `devDependencies`.
 - One metadata record per imported subtree, validated against

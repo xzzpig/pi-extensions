@@ -368,6 +368,14 @@ Examples:
 - Paths can be absolute (e.g., `/home/user/.ssh`) or relative to the current working directory (e.g., `./src`)
 - `~` expands to the user's home directory
 
+**Linux placeholder protection for dangerous files (bwrap):**
+
+- `filesystem.protectNonexistentFiles` - boolean, default: `true` (Linux only).
+- When `true` (default), the sandbox also protects dangerous files (`.bashrc`, `.gitconfig`, `.mcp.json`, etc.) that do not exist yet inside allowed write paths, by mounting read-only placeholders (`/dev/null` or an empty dir) over them. This prevents sandboxed commands from creating these files, but bwrap materializes the placeholders as empty files/dirs on the host while the command runs (e.g., a temporary `.bashrc` in the working directory), and they are removed after the command finishes.
+- Set to `false` to skip placeholders for non-existent dangerous files, so no temporary dotfiles appear on the host during execution (useful when tools like `git status` or lint/glob scans run concurrently). **Security tradeoff:** with `false`, sandboxed commands can create these dangerous files inside allowed write paths.
+- Existing dangerous files and user-configured `denyWrite` paths remain protected regardless of this setting.
+- macOS and Windows are unaffected by this option.
+
 #### Other Configuration
 
 - `ignoreViolations` - Object mapping command patterns to arrays of paths where violations should be ignored
@@ -636,7 +644,6 @@ Filesystem restrictions are enforced at the OS level:
 **Default filesystem permissions:**
 
 - **Read** (deny-then-allow): Allowed everywhere by default. You can deny broad regions, then re-allow specific paths within them. `allowRead` takes precedence over `denyRead`.
-
   - Example: `denyRead: ["~/.ssh"]` to block access to SSH keys
   - Example: `denyRead: ["/Users"], allowRead: ["."]` to block all of `/Users` except the workspace
   - Empty `denyRead: []` = full read access (nothing denied)
@@ -773,7 +780,7 @@ Users should be aware of potential risks that come from allowing broad domains l
 
 - Privilege Escalation via Unix Sockets: The `allowUnixSockets` configuration can inadvertently grant access to powerful system services that could lead to sandbox bypasses. For example, if it is used to allow access to `/var/run/docker.sock` this would effectively grant access to the host system through exploiting the docker socket. Users are encouraged to carefully consider any unix sockets that they allow through the sandbox.
 - Filesystem Permission Escalation: Overly broad filesystem write permissions can enable privilege escalation attacks. Allowing writes to directories containing executables in `$PATH`, system configuration directories, or user shell configuration files (`.bashrc`, `.zshrc`) can lead to code execution in different security contexts when other users or system processes access these files.
-<<<<<<< HEAD
+  <<<<<<< HEAD
 - Linux Sandbox Strength: The Linux implementation provides strong filesystem and network isolation but includes an `enableWeakerNestedSandbox` mode that enables it to work inside of Docker environments without privileged namespaces. This option considerably weakens security and should only be used in cases where additional isolation is otherwise enforced.
 - Apple Events (macOS): The `allowAppleEvents` option re-enables sending Apple Events and Launch Services open requests (`(allow appleevent-send)`, `(allow lsopen)`, and mach-lookups for `com.apple.coreservices.appleevents`, `com.apple.CoreServices.coreservicesd`, and `com.apple.coreservices.quarantine-resolver`), which `open`, `osascript`, and URL-opening helpers require. With these allowed, a sandboxed command can launch arbitrary applications with no user prompt, and launched applications run outside the sandbox entirely — so this option removes code-execution isolation, not just weakens it. Scripting already-running applications via Apple Events is additionally gated by macOS TCC automation consent, but launching via `open` is not. Only enable this when commands inside the sandbox genuinely need to open URLs or applications.
 - Weaker Network Isolation (macOS): The `enableWeakerNetworkIsolation` option re-enables access to `com.apple.trustd.agent` and `com.apple.SystemConfiguration.configd`. The former is needed for Go programs to verify TLS certificates via the macOS Security framework; the latter is needed for Rust/Go programs (e.g. `uv`, `cargo`) that query system proxy/network configuration on startup. This opens a potential data exfiltration vector through the trustd service and exposes read-only host network configuration (proxy settings, DNS servers) through configd. Only enable when needed.

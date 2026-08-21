@@ -7,18 +7,18 @@ subtree prefix so upstream files do not need local-only records.
 The schema is [`schemas/subtree-metadata.schema.json`](../schemas/subtree-metadata.schema.json).
 The non-example fields are:
 
-| Field            | Meaning                                                      |
-| ---------------- | ------------------------------------------------------------ |
-| `name`           | Local record/directory name, unscoped `pi-*` (see below).    |
-| `prefix`         | Local subtree path, exactly `packages/<name>`.               |
-| `upstreamPath`   | Optional relative directory inside a monorepo source.        |
-| `source`         | Upstream Git source used by the local remote.                |
-| `remote`         | Local remote, exactly `upstream-<name>`.                     |
-| `ref`            | Branch, tag, or commit-ish used for synchronization.         |
-| `version`        | Optional human-readable release/tag label.                   |
-| `upstreamCommit` | Exact 40-character commit recorded at synchronization.       |
-| `squash`         | Whether subtree history is synchronized with squash commits. |
-| `lastSyncedAt`   | ISO timestamp for the local record.                          |
+| Field            | Meaning                                                                                                                                          |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `name`           | Local record/directory name, unscoped `^[a-z0-9][a-z0-9-]*$`; `pi-*` for plugins, plain upstream-derived name for support libraries (see below). |
+| `prefix`         | Local subtree path, exactly `packages/<name>`.                                                                                                   |
+| `upstreamPath`   | Optional relative directory inside a monorepo source.                                                                                            |
+| `source`         | Upstream Git source used by the local remote.                                                                                                    |
+| `remote`         | Local remote, exactly `upstream-<name>`.                                                                                                         |
+| `ref`            | Branch, tag, or commit-ish used for synchronization.                                                                                             |
+| `version`        | Optional human-readable release/tag label.                                                                                                       |
+| `upstreamCommit` | Exact 40-character commit recorded at synchronization.                                                                                           |
+| `squash`         | Whether subtree history is synchronized with squash commits.                                                                                     |
+| `lastSyncedAt`   | ISO timestamp for the local record.                                                                                                              |
 
 [`template.json.example`](template.json.example) shows the shape without
 pretending that an upstream repository has been imported.

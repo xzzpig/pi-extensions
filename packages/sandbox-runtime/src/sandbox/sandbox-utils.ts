@@ -685,7 +685,9 @@ export function expandGlobPattern(
     const entries = fs.readdirSync(baseDir, {
       recursive: true,
       withFileTypes: true,
-    })
+      // @types/node@18's withFileTypes overload does not expose `recursive`;
+      // the runtime option is supported since Node 20 (and by Bun).
+    } as unknown as Parameters<typeof fs.readdirSync>[1])
 
     for (const entry of entries) {
       // Build the full path for this entry

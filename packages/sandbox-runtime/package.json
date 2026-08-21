@@ -1,5 +1,5 @@
 {
-  "name": "@carderne/sandbox-runtime",
+  "name": "@xzzpig/sandbox-runtime",
   "version": "0.0.70",
   "description": "Anthropic Sandbox Runtime (ASRT) - A general-purpose tool for wrapping security boundaries around arbitrary processes",
   "type": "module",
@@ -46,7 +46,7 @@
     "husky": "^9.1.7",
     "lint-staged": "^16.2.6",
     "prettier": "3.3.3",
-    "typescript": "^5.6.3",
+    "typescript": "5.6.3",
     "typescript-eslint": "^8.13.0"
   },
   "files": [
@@ -71,12 +71,13 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/carderne/sandbox-runtime.git"
+    "url": "git+https://github.com/xzzpig/pi-extensions.git",
+    "directory": "packages/sandbox-runtime"
   },
   "bugs": {
-    "url": "https://github.com/carderne/sandbox-runtime/issues"
+    "url": "https://github.com/xzzpig/pi-extensions/issues"
   },
-  "homepage": "https://github.com/carderne/sandbox-runtime#readme",
+  "homepage": "https://github.com/xzzpig/pi-extensions/tree/main/packages/sandbox-runtime#readme",
   "lint-staged": {
     "*.ts": [
       "eslint --fix --cache --cache-location=node_modules/.cache/.eslintcache",

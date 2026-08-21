@@ -53,7 +53,11 @@ in [`schemas/subtree-metadata.schema.json`](../../../schemas/subtree-metadata.sc
 and documented in [`subtrees/AGENTS.md`](../../../subtrees/AGENTS.md). A valid
 record must contain:
 
-- `name`: local record/directory name matching `pi-[a-z0-9][a-z0-9-]*` (unscoped). This is subtree bookkeeping only — NOT the published npm name (see "Forked package npm naming").
+- `name`: local record/directory name, unscoped, matching
+  `^[a-z0-9][a-z0-9-]*$`. Pi plugin packages use the `pi-*` form; an
+  upstream-derived support library that is not a Pi plugin may keep the plain
+  upstream-derived name (e.g. `sandbox-runtime`). This is subtree bookkeeping
+  only — NOT the published npm name (see "Forked package npm naming").
 - `prefix`: exactly `packages/<name>`.
 - `upstreamPath` (optional): relative directory inside a monorepo source. Omit it when the plugin is the source repository root.
 - `source`: upstream Git source.
@@ -127,7 +131,8 @@ ref=main
 version=v1.2.3
 
 # Validate naming.
-echo "$name" | grep -qE '^pi-[a-z0-9][a-z0-9-]*$' || exit 1
+# Validate naming (pi-* for plugins; plain names allowed for support libraries).
+echo "$name" | grep -qE '^[a-z0-9][a-z0-9-]*$' || exit 1
 
 # Create remote, fetch, and import.
 git remote add "upstream-${name}" "$source"

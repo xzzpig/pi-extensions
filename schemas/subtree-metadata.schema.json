@@ -19,11 +19,11 @@
     "$schema": { "type": "string" },
     "name": {
       "type": "string",
-      "pattern": "^pi-[a-z0-9][a-z0-9-]*$"
+      "pattern": "^[a-z0-9][a-z0-9-]*$"
     },
     "prefix": {
       "type": "string",
-      "pattern": "^packages/pi-[a-z0-9][a-z0-9-]*$"
+      "pattern": "^packages/[a-z0-9][a-z0-9-]*$"
     },
     "upstreamPath": {
       "type": "string",
@@ -36,7 +36,7 @@
     },
     "remote": {
       "type": "string",
-      "pattern": "^upstream-pi-[a-z0-9][a-z0-9-]*$"
+      "pattern": "^upstream-[a-z0-9][a-z0-9-]*$"
     },
     "ref": {
       "type": "string",

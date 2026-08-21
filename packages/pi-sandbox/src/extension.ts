@@ -1,4 +1,3 @@
-import { SandboxManager } from "@carderne/sandbox-runtime";
 import { type AgentToolResult, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   createBashToolDefinition,
@@ -6,6 +5,7 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { Key } from "@earendil-works/pi-tui";
+import { SandboxManager } from "@xzzpig/sandbox-runtime";
 
 import {
   addDomainToConfig,

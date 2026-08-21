@@ -1348,6 +1348,9 @@ async function wrapWithSandbox(
         binShell,
         ripgrepConfig: getRipgrepConfig(),
         mandatoryDenySearchDepth: getMandatoryDenySearchDepth(),
+        protectNonexistentFiles:
+          customConfig?.filesystem?.protectNonexistentFiles ??
+          config?.filesystem?.protectNonexistentFiles,
         seccompConfig: getSeccompConfig(),
         bwrapPath: config?.bwrapPath,
         socatPath: config?.socatPath,
@@ -1683,8 +1686,9 @@ function forceCloseHttpServer(
     // first, the connections are gone by the time close() runs and its
     // callback fires immediately (Bun reports "Server is not running.",
     // Node reports no error). Verified against both orderings.
-    if (typeof server.closeAllConnections === 'function') {
-      server.closeAllConnections()
+    const serverWithClose = server as { closeAllConnections?: () => void }
+    if (typeof serverWithClose.closeAllConnections === 'function') {
+      serverWithClose.closeAllConnections()
     }
     server.close(error => {
       if (error && error.message !== 'Server is not running.') {
