@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+	AUDITOR_THINKING_LEVELS,
 	buildAuditorModelChoices,
 	configuredAuditorModelKey,
 	filterAuditorModelChoices,
@@ -76,5 +77,6 @@ test("thinkingLevelChoices marks the current level and offers (default)", () => 
 	assert.deepEqual(thinkingLevelChoices("high")[5], "✓ high");
 	assert.equal(thinkingLevelChoices("high")[0], "  (default)");
 	assert.equal(thinkingLevelChoices(undefined)[0], "  (default)");
-	assert.equal(thinkingLevelChoices(undefined).length, 7, "default + six levels");
+	assert.equal(thinkingLevelChoices(undefined).length, 8, "default + seven levels");
+	assert.deepEqual(AUDITOR_THINKING_LEVELS.at(-1), "max", "max is offered as the last level");
 });

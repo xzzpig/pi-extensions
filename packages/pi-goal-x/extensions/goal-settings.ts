@@ -20,7 +20,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { KeyId } from "@earendil-works/pi-tui";
 
-export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export const DEFAULT_AUDITOR_AGENT = "goal-auditor";
 export const AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE = "auditorProjectResources is deprecated and ignored. Configure the selected auditor agent's extensions, subagentOnlyExtensions, skills, and tools instead.";
@@ -116,7 +116,7 @@ export function invalidateGoalSettingsCache(): void {
 	settingsFileCache.clear();
 }
 
-const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
+const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 const ALLOWED_SETTINGS_KEYS = new Set([
 	"disableTasks",

@@ -83,7 +83,7 @@ const EXTRA_AGENT_DIRS_ENV = "PI_SUBAGENT_EXTRA_AGENT_DIRS";
 const GOAL_X_PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_AUDITOR_SOURCE_PATH = path.join(GOAL_X_PACKAGE_ROOT, "agents", "goal-auditor.md");
 const DEFAULT_AUDITOR_PROGRESS_EXTENSION_PATH = path.join(GOAL_X_PACKAGE_ROOT, "extensions", "goal-auditor-progress.ts");
-const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh"]);
+const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
 let standaloneAuditorAgentDir: string | undefined;
 

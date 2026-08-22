@@ -96,6 +96,10 @@ test("D-03/D-07/D-12: default agent and request overrides are explicit", () => {
 		model: "openai/gpt-5",
 		thinking: "high",
 	});
+	assert.deepEqual(resolveAuditorDelegationOverrides({ model: "gpt-5", thinkingLevel: "max" }), {
+		model: "gpt-5",
+		thinking: "max",
+	}, "max thinking level passes through to delegation");
 	assert.deepEqual(resolveAuditorDelegationOverrides({ model: "gpt-5" }), { model: "gpt-5" });
 	assert.match(resolveAuditorDelegationOverrides({ provider: "openai" }).error ?? "", /Provider-only/);
 	assert.deepEqual(GOAL_AUDITOR_RESULT_SCHEMA, {

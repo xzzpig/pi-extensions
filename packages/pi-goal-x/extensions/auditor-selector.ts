@@ -5,7 +5,7 @@
  * current-session/default choice (which clears the explicit provider/model),
  * authenticated models from the model registry (with a ✓ marker on the exact
  * current selection), and an advanced manual `provider/model` entry. The
- * thinking-level row offers the six levels or `(default)`.
+ * thinking-level row offers the seven levels or `(default)`.
  */
 
 export type AuditorModelSummary = { provider: string; id: string; name?: string };
@@ -15,7 +15,7 @@ export type AuditorChoice =
 	| { kind: "model"; provider: string; model: string; label: string }
 	| { kind: "manual"; label: string };
 
-export const AUDITOR_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
+export const AUDITOR_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 
 export function auditorModelLabel(model: AuditorModelSummary): string {
 	return `${model.provider}/${model.id}${model.name && model.name !== model.id ? ` — ${model.name}` : ""}`;

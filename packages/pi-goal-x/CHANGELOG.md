@@ -4,6 +4,12 @@ All notable changes to pi-goal-x are documented here.
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-08-22
+
+### Added
+
+- **`max` thinking level for the completion auditor.** `/goal-settings` `thinking_level` now offers and persists `max` alongside the other six levels, settings files accept it, and delegation passes it through to pi-subagents (which applies it as a `:max` model suffix; actual effect still depends on the auditor model's registry support).
+
 ## [0.2.0] — 2026-08-20 (fork release)
 
 ### Changed
