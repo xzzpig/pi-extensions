@@ -960,16 +960,25 @@ function isRelativeAgentResourcePath(value: string): boolean {
 	return value === "." || value === ".." || value.startsWith("./") || value.startsWith("../");
 }
 
+/**
+ * Upstream v0.53.0 resolves agent-frontmatter extension paths to absolute
+ * paths at discovery time, so a portable resource is any entry that is a
+ * path (relative or absolute) rather than a bare tool name.
+ */
+function isAgentResourcePath(value: string): boolean {
+	return isRelativeAgentResourcePath(value) || path.isAbsolute(value);
+}
+
 function resolvePortableAgentResources(
 	entries: string[] | undefined,
 	sourceFilePath: string,
 ): { entries: string[] | undefined; resourcePaths: string[] } {
 	const baseDir = path.dirname(sourceFilePath);
-	const resourcePaths = (entries ?? [])
-		.filter(isRelativeAgentResourcePath)
-		.map((entry) => path.resolve(baseDir, entry));
+	const resourcePaths = (entries ?? []).flatMap((entry) =>
+		isAgentResourcePath(entry) ? [path.resolve(baseDir, entry)] : [],
+	);
 	return {
-		entries: entries?.map((entry) => isRelativeAgentResourcePath(entry) ? path.resolve(baseDir, entry) : entry),
+		entries: entries?.map((entry) => isAgentResourcePath(entry) ? path.resolve(baseDir, entry) : entry),
 		resourcePaths,
 	};
 }

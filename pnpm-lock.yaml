@@ -79,7 +79,7 @@ importers:
   packages/pi-goal-x:
     dependencies:
       '@xzzpig/pi-subagents':
-        specifier: 0.4.2
+        specifier: 0.5.0
         version: link:../pi-subagents
     devDependencies:
       '@earendil-works/pi-ai':
@@ -223,6 +223,9 @@ importers:
 
   packages/pi-subagents:
     dependencies:
+      acorn:
+        specifier: 8.18.0
+        version: 8.18.0
       jiti:
         specifier: 2.7.0
         version: 2.7.0
@@ -2139,6 +2142,7 @@ packages:
   eslint@9.39.5:
     resolution: {integrity: sha512-DgZS62aPLXKlnxILS/AYCoRvHaZeXceIzlXPkkGGzJWSow1aEk0lbTlxUSlyjC8jcaKxAdOnTDz+o1JFSBsyjw==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    deprecated: This version is no longer supported. Please see https://eslint.org/version-support for other options.
     hasBin: true
     peerDependencies:
       jiti: '*'

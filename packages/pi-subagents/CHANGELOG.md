@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-22
+
+### Changed
+- Synced the fork with upstream pi-subagents v0.53.0 (runtime agent registration API, keyed workflow receipts, TTL-based model-fallback exclusion, RPC schedule management, council mode; legacy chain workflow internals removed upstream in #1166).
+
+### Fixed
+- Preserved local compatibility fixes across the merge: `@xzzpig/pi-permission-system` priority in `resolvePermissionSystemExtension()`, foreground tool-result normalization for mixed Pi host event shapes, and the shared `ejectAgentDefinition` helper (adapted to upstream's `availableAgentNames` rename).
+
 ## [0.4.2] - 2026-08-20
 
 ### Fixed
