@@ -23,6 +23,7 @@ export function makeTSNode(
     startIndex: 0,
     childCount: children.length,
     isNamed: true,
+    hasError: false,
     child: (i) => children[i] ?? null,
   };
 }

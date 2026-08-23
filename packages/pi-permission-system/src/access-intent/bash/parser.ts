@@ -13,6 +13,8 @@ export interface TSNode {
   readonly childCount: number;
   /** False for anonymous tokens (operators, delimiters); true for named nodes. */
   readonly isNamed: boolean;
+  /** True when this node is an ERROR or contains any error nodes within it. */
+  readonly hasError: boolean;
   child(index: number): TSNode | null;
 }
 

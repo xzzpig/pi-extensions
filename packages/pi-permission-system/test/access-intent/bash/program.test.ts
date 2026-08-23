@@ -1202,10 +1202,30 @@ describe("BashProgram", () => {
         ]);
       });
 
-      it("flags an opaque payload that cannot be located or parsed as unresolved", async () => {
+      it("treats a bare opaque wrapper as inert (no unresolved flag)", async () => {
         const program = await BashProgram.parse("eval", normalizer);
         expect(program.commands()).toEqual([
-          { text: "eval", wrapperKind: "opaque-payload", payloadUnresolved: true },
+          { text: "eval", wrapperKind: "opaque-payload" },
+        ]);
+      });
+
+      it("treats an empty or command-less opaque payload as inert", async () => {
+        for (const command of ['eval ""', "eval '# just a comment'"]) {
+          const program = await BashProgram.parse(command, normalizer);
+          expect(program.commands()).toEqual([
+            { text: command, wrapperKind: "opaque-payload" },
+          ]);
+        }
+      });
+
+      it("flags an unparseable non-empty opaque payload as unresolved", async () => {
+        const program = await BashProgram.parse("eval 'if ('", normalizer);
+        expect(program.commands()).toEqual([
+          {
+            text: "eval 'if ('",
+            wrapperKind: "opaque-payload",
+            payloadUnresolved: true,
+          },
         ]);
       });
 
@@ -1261,11 +1281,54 @@ describe("BashProgram", () => {
         ]);
       });
 
-      it("flags an indirection wrapper with no inner command as unresolved", async () => {
+      it("treats a bare indirection wrapper as inert (no unresolved flag)", async () => {
         const program = await BashProgram.parse("sudo", normalizer);
         expect(program.commands()).toEqual([
-          { text: "sudo", wrapperKind: "indirection", payloadUnresolved: true },
+          { text: "sudo", wrapperKind: "indirection" },
         ]);
+      });
+
+      it("treats an assignments-only env as inert", async () => {
+        const program = await BashProgram.parse("env FOO=bar BAZ=qux", normalizer);
+        expect(program.commands()).toEqual([
+          { text: "env FOO=bar BAZ=qux", wrapperKind: "indirection" },
+        ]);
+      });
+
+      it("treats a payload-less indirection invocation as inert", async () => {
+        // Every argument consumed by the wrapper's own syntax (duration,
+        // option values) — nothing inner executes, so the wrapper is gated
+        // as an ordinary command by its own text.
+        for (const command of ["timeout 5", "sudo -u root", "env -u HOME"]) {
+          const program = await BashProgram.parse(command, normalizer);
+          expect(program.commands()).toEqual([
+            { text: command, wrapperKind: "indirection" },
+          ]);
+        }
+      });
+
+      it("gates an env -S split-string command as an opaque payload", async () => {
+        const program = await BashProgram.parse("env -S 'rm x'", normalizer);
+        expect(program.commands()).toEqual([
+          { text: "env -S 'rm x'", wrapperKind: "opaque-payload" },
+          { text: "rm x", context: "wrapper_payload" },
+        ]);
+      });
+
+      it("keeps a stdin-command executor unresolved when no command is given", async () => {
+        // GNU parallel treats every stdin line as a shell command when no
+        // command argument is present (`echo rm x | parallel`), so a bare or
+        // flags-only call must stay fail-closed.
+        for (const command of ["parallel", "parallel -j 4"]) {
+          const program = await BashProgram.parse(command, normalizer);
+          expect(program.commands()).toEqual([
+            {
+              text: command,
+              wrapperKind: "indirection",
+              payloadUnresolved: true,
+            },
+          ]);
+        }
       });
 
       it("flags an env-prefixed indirection wrapper after stripping the prefix", async () => {
@@ -1341,7 +1404,7 @@ describe("BashProgram", () => {
       it("is absent when the wrapper names no inner command", async () => {
         const program = await BashProgram.parse("xargs", normalizer);
         expect(program.commands()).toEqual([
-          { text: "xargs", wrapperKind: "indirection", payloadUnresolved: true },
+          { text: "xargs", wrapperKind: "indirection" },
         ]);
       });
     });

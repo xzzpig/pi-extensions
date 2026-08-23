@@ -144,7 +144,12 @@ export class BashProgram {
  * re-entrant use from inside the enumeration walk is safe: the walk is
  * synchronous and the inner parse fully completes before the walk continues.
  * An unparseable payload contributes no units (the wrapper is then flagged
- * `payloadUnresolved` by the enumerator).
+ * `payloadUnresolved` by the enumerator; a payload with no commands at all is
+ * marked inert instead).
+ *
+ * Returns `null` when the source cannot be parsed — a missing tree or one
+ * containing ERROR nodes — so the caller can fail closed; a clean parse of a
+ * command-less payload returns an empty array (provably inert, not unknown).
  */
 function parseCommandUnits(
   source: string,
@@ -152,9 +157,9 @@ function parseCommandUnits(
     parse(input: string): { rootNode: TSNode; delete(): void } | null;
   },
   parseProgram: ParseProgram,
-): BashCommand[] {
+): BashCommand[] | null {
   const tree = parser.parse(source);
-  if (!tree) return [];
+  if (!tree || tree.rootNode.hasError) return null;
   try {
     return collectCommands(tree.rootNode, { parseProgram });
   } finally {

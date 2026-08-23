@@ -28,7 +28,9 @@ export function parseBashCommandsSync(command: string): BashCommand[] | null {
   try {
     const parseProgram: ParseProgram = (source) => {
       const payloadTree = parser.parse(source);
-      if (!payloadTree) return [];
+      // `null` = unparseable (fail-closed); an empty array is a clean parse of
+      // a command-less payload (provably inert).
+      if (!payloadTree || payloadTree.rootNode.hasError) return null;
       try {
         return collectCommands(payloadTree.rootNode, { parseProgram });
       } finally {

@@ -270,7 +270,7 @@ const EXEC_CONDITIONAL_WRAPPERS = new Map<string, ReadonlySet<string>>([
 const VALUE_TAKING_FLAGS = new Map<string, ReadonlySet<string>>([
   ["sudo", new Set(["-u", "-g", "-p", "-C", "-h", "-U", "-r", "-t"])],
   ["doas", new Set(["-u", "-C"])],
-  ["env", new Set(["-u", "-C", "--unset", "--chdir"])],
+  ["env", new Set(["-u", "-C", "-S", "--unset", "--chdir"])],
   [
     "xargs",
     new Set(["-n", "-P", "-I", "-i", "-d", "-E", "-L", "-l", "-s", "-a"]),

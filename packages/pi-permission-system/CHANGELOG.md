@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-08-24
+
+### Changed
+
+- Fork: provably payload-less wrapper invocations are now gated as ordinary commands by their own text instead of being floored to `ask` — a bare `eval`, a missing/blank/command-less opaque payload (`bash -c ""`, comments, pure assignments), or an indirection wrapper whose every argument is consumed by its own option/value/positional syntax (`timeout 5`, `env -u HOME`, `sudo -u root`, assignments-only `env`). A non-empty payload that fails to parse still floors to `ask` (fail-closed). Wrappers whose bare or flags-only form executes each stdin line as a shell command (`parallel`, `rust-parallel`, `rush`) stay floored when no command argument is given, and `env -S '…'` is now treated as an inline command string — re-parsed like an opaque payload so its inner commands are gated individually.
+
 ## [0.3.0] - 2026-08-16
 
 ### Changed

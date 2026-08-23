@@ -58,6 +58,18 @@ interface WrapperClassification {
 	 */
 	readonly unresolved: boolean;
 	/**
+	 * True when the wrapper invocation carries no executable inner content at
+	 * all (a bare `env`, `eval ""`, `bash -c` with no payload argument). Such a
+	 * call runs nothing beyond the wrapper binary itself, so the wrapper unit
+	 * is gated as an ordinary command by its own text — it is neither marked
+	 * unresolved nor floored. Never set alongside {@link unresolved}.
+	 *
+	 * Wrappers whose bare form executes stdin lines as commands (GNU parallel
+	 * and kin, per {@link WrapperSpec.stdinCommands}) are never empty — they
+	 * stay fail-closed when no command argument is present.
+	 */
+	readonly empty?: boolean;
+	/**
 	 * The command this wrapper actually runs, for display (#713). Absent for
 	 * an ordinary command and for a wrapper whose inner command cannot be
 	 * established.
@@ -104,10 +116,15 @@ export interface BashCommand {
  * The enumerator uses this to descend into opaque wrapper payloads
  * (`eval`/`bash -c`), recursively applying the same enumeration (chains,
  * substitutions, nested wrappers). Supply it from the call site that owns a
- * tree-sitter parser; when absent, opaque payloads cannot be resolved and the
- * affected wrapper unit is marked `payloadUnresolved` (fail-closed floor).
+ * tree-sitter parser. Returns `null` when the source cannot be parsed
+ * (including a parse tree containing ERROR nodes) so the affected wrapper
+ * unit can be marked `payloadUnresolved` (fail-closed floor); an empty array
+ * means a clean parse of a payload that contains no commands (comments,
+ * pure assignments) — provably inert. When absent, opaque payloads cannot be
+ * resolved and the affected wrapper unit is marked `payloadUnresolved`
+ * (fail-closed floor).
  */
-export type ParseProgram = (source: string) => BashCommand[];
+export type ParseProgram = (source: string) => BashCommand[] | null;
 
 // ── Command enumeration ──────────────────────────────────────────────────────
 
@@ -323,14 +340,18 @@ const EXEC_CONDITIONAL_WRAPPERS = new Map<string, ReadonlySet<string>>([
  * - `skipAssignments` — skip positional arguments shaped like environment
  *   assignments (`env X=1 cmd …`); bash's `env` consumes them before the
  *   command.
- * - `inlinePayloadFlag` — a flag whose value is an inline command string
- *   (`flock -c "cmd"`) treated as an opaque payload, like `eval`/`bash -c`.
- */
+	 * - `inlinePayloadFlag` — a flag whose value is an inline command string
+	 *   (`flock -c "cmd"`) treated as an opaque payload, like `eval`/`bash -c`.
+	 * - `stdinCommands` — a bare invocation executes each stdin line as a shell
+	 *   command when no command argument is given (GNU parallel semantics). A
+	 *   bare call is therefore NOT inert and must stay fail-closed.
+	 */
 interface WrapperSpec {
 	readonly valueOptions?: ReadonlySet<string>;
 	readonly skipPositionals?: number;
 	readonly skipAssignments?: boolean;
 	readonly inlinePayloadFlag?: string;
+	readonly stdinCommands?: boolean;
 }
 
 const INDIRECTION_WRAPPER_SPECS: Readonly<Record<string, WrapperSpec>> = {
@@ -347,7 +368,14 @@ const INDIRECTION_WRAPPER_SPECS: Readonly<Record<string, WrapperSpec>> = {
 			"-A",
 		]),
 	},
-	env: { valueOptions: new Set(["-u", "-C", "-S"]), skipAssignments: true },
+	env: {
+		valueOptions: new Set(["-u", "-C"]),
+		skipAssignments: true,
+		// `env -S` takes a split-string command as its value — an inline payload
+		// like `flock -c`, re-parsed and gated instead of consumed as a plain
+		// option value.
+		inlinePayloadFlag: "-S",
+	},
 	xargs: {
 		valueOptions: new Set(["-d", "-E", "-I", "-i", "-L", "-P", "-n", "-s"]),
 	},
@@ -368,11 +396,19 @@ const INDIRECTION_WRAPPER_SPECS: Readonly<Record<string, WrapperSpec>> = {
 			"-R",
 			"-f",
 		]),
+		// Bare GNU parallel treats every stdin line as a shell command
+		// (`echo rm x | parallel` runs it), so a bare call is not inert.
+		stdinCommands: true,
 	},
 	"rust-parallel": {
 		valueOptions: new Set(["-j", "-P", "-n", "-N", "-S", "-I", "-D"]),
+		stdinCommands: true,
 	},
-	rush: { valueOptions: new Set(["-j", "-n", "-r", "-k", "-t"]) },
+	rush: {
+		valueOptions: new Set(["-j", "-n", "-r", "-k", "-t"]),
+		// Same stdin-as-command semantics as GNU parallel.
+		stdinCommands: true,
+	},
 	doas: { valueOptions: new Set(["-C", "-u"]) },
 	setsid: { valueOptions: new Set(["-p"]) },
 	stdbuf: { valueOptions: new Set(["-i", "-o", "-e"]) },
@@ -396,8 +432,10 @@ const INDIRECTION_WRAPPER_SPECS: Readonly<Record<string, WrapperSpec>> = {
  * `-c` short-flag cluster (`-c`, `-ec`, `-xc`) — the inner program is the
  * argument string following the flag (for `eval`, all its arguments joined).
  * The payload is unquoted and re-parsed via `parseProgram`; its commands are
- * exposed as `inner` with `wrapper_payload` context. A missing payload or an
- * unparseable one marks the wrapper `unresolved` (fail-closed floor).
+ * exposed as `inner` with `wrapper_payload` context. A missing or blank
+ * payload marks the wrapper inert (`empty`) — it runs nothing beyond the
+ * shell itself and is gated as an ordinary command; an unparseable
+ * non-empty payload marks the wrapper `unresolved` (fail-closed floor).
  *
  * `"indirection"`: an always-invoking prefix/exec wrapper
  * (`INDIRECTION_WRAPPER_NAMES`), or a search tool (`EXEC_CONDITIONAL_WRAPPERS`)
@@ -405,8 +443,10 @@ const INDIRECTION_WRAPPER_SPECS: Readonly<Record<string, WrapperSpec>> = {
  * the leading option/value/positional arguments per {@link WrapperSpec} and
  * slicing the command text verbatim from the first inner-command argument
  * (with `wrapper_indirection` context). A bare `find`/`fd` search runs no
- * subcommand and is not flagged. An inner command that cannot be located marks
- * the wrapper `unresolved`.
+ * subcommand and is not flagged. An invocation whose every argument was
+ * consumed by the wrapper's own syntax (`timeout 5`, `env -u HOME`, bare
+ * `sudo`) is marked inert (`empty`). An inner command that cannot be located
+ * otherwise marks the wrapper `unresolved`.
  */
 function classifyWrapperCommand(
 	node: TSNode,
@@ -435,7 +475,7 @@ function classifyWrapperCommand(
 			if (flagIndex === -1) {
 				classification = classifyIndirection(node, args, spec);
 			} else {
-				classification = classifyOpaquePayload(args.slice(flagIndex + 1, flagIndex + 2), parseProgram);
+				classification = classifyOpaquePayload(args.slice(flagIndex + 1), parseProgram);
 			}
 		}
 	} else if (EXEC_CONDITIONAL_WRAPPERS.has(commandName)) {
@@ -450,8 +490,12 @@ function classifyWrapperCommand(
 
 	// #713: display-only field naming the command this wrapper actually runs.
 	// It is never gated on its own — the wrapper floor still applies per
-	// `payloadUnresolved` / `wrapperFloors`.
-	const executedUnit = executedUnitOf(commandUnitText(node), readCommandWords(node));
+	// `payloadUnresolved` / `wrapperFloors`. Absent when no inner command can
+	// be established (unresolved payload) or when nothing executes (inert).
+	const executedUnit =
+		classification.unresolved || classification.empty
+			? null
+			: executedUnitOf(commandUnitText(node), readCommandWords(node));
 	return executedUnit === null ? classification : { ...classification, executedUnit };
 }
 
@@ -461,28 +505,41 @@ function classifyWrapperCommand(
  * The payload is the remaining argument list (joined, mirroring bash's arg
  * concatenation), unquoted one layer, then re-parsed as a bash program. A
  * parseable non-empty program contributes its command units as `inner`
- * (recursively resolved, so a payload's own wrappers keep gating); a missing
- * or unparseable payload marks the wrapper `unresolved` (fail-closed).
+ * (recursively resolved, so a payload's own wrappers keep gating); a missing,
+ * blank, or fully command-less payload marks the wrapper inert (`empty`); a
+ * non-empty unparseable payload marks the wrapper `unresolved` (fail-closed).
  */
 function classifyOpaquePayload(
 	payloadArgs: readonly WrapperArg[],
 	parseProgram: ParseProgram | undefined,
 ): WrapperClassification {
 	if (payloadArgs.length === 0) {
-		return { kind: "opaque-payload", inner: [], unresolved: true };
+		// No payload argument at all (`eval`, `bash -c`): the shell prints a
+		// usage error and runs nothing. Inert — gate as an ordinary command.
+		return { kind: "opaque-payload", inner: [], unresolved: false, empty: true };
 	}
 	const payload = unquotePayload(payloadArgs.map((arg) => arg.text).join(" "));
-	if (payload === "" || payload === "-") {
-		return { kind: "opaque-payload", inner: [], unresolved: true };
+	if (payload.trim() === "" || payload === "-") {
+		// An empty/blank payload executes nothing; `-` names no runnable command.
+		return { kind: "opaque-payload", inner: [], unresolved: false, empty: true };
 	}
 	if (parseProgram === undefined) {
 		return { kind: "opaque-payload", inner: [], unresolved: true };
 	}
 	const inner = parseProgram(payload);
+	if (inner === null) {
+		// The payload exists but cannot be parsed — fail closed.
+		return { kind: "opaque-payload", inner: [], unresolved: true };
+	}
+	if (inner.length === 0) {
+		// A clean parse found no commands in the payload (comments, pure
+		// assignments) — nothing executes.
+		return { kind: "opaque-payload", inner: [], unresolved: false, empty: true };
+	}
 	return {
 		kind: "opaque-payload",
 		inner,
-		unresolved: inner.length === 0,
+		unresolved: false,
 	};
 }
 
@@ -490,8 +547,11 @@ function classifyOpaquePayload(
  * Classify an indirection wrapper by scanning its arguments for the inner
  * command's first token. The inner unit is the command text sliced verbatim
  * from that token (options and their values before it are consumed per the
- * wrapper's spec; `--` ends option processing). An inner command that cannot
- * be located marks the wrapper `unresolved`.
+ * wrapper's spec; `--` ends option processing). When every argument was
+ * consumed by that syntax (`timeout 5`, `env -u HOME`, bare `sudo`), the
+ * invocation is payload-less: it is marked inert (`empty`) — gated as an
+ * ordinary command — unless the wrapper executes stdin lines as commands
+ * ({@link WrapperSpec.stdinCommands}), in which case it stays fail-closed.
  */
 function classifyIndirection(
 	node: TSNode,
@@ -499,19 +559,30 @@ function classifyIndirection(
 	spec: WrapperSpec,
 ): WrapperClassification {
 	const start = findInnerCommandStart(args, spec);
-	if (start === undefined) {
+	if (start !== undefined) {
+		return {
+			kind: "indirection",
+			inner: [{ text: node.text.slice(start) }],
+			unresolved: false,
+		};
+	}
+	// Every argument was consumed by the wrapper's own option/value/positional
+	// syntax — the invocation carries no inner command at all.
+	if (spec.stdinCommands) {
+		// …but these wrappers execute each stdin line as a shell command when
+		// no command argument is given, so payload-less is not provably
+		// inert — fail closed.
 		return { kind: "indirection", inner: [], unresolved: true };
 	}
-	return {
-		kind: "indirection",
-		inner: [{ text: node.text.slice(start) }],
-		unresolved: false,
-	};
+	return { kind: "indirection", inner: [], unresolved: false, empty: true };
 }
 
 /**
  * Locate the byte offset of the inner command's first token (relative to the
- * enclosing `command` node), or `undefined` when no inner command exists.
+ * enclosing `command` node), scanning past the wrapper's own syntax. Returns
+ * `undefined` when every argument was consumed by that syntax (`timeout 5`,
+ * `env -u HOME`, bare `sudo`) — a payload-less invocation whose only possible
+ * effect is the wrapper binary's own usage error or environment output.
  */
 function findInnerCommandStart(
 	args: readonly WrapperArg[],

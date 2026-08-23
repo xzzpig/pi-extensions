@@ -98,13 +98,25 @@ describe("resolveBashAdvisoryCheck", () => {
       expect(result.state).toBe("allow");
     });
 
-    it("floors an unresolved opaque wrapper allow to ask", () => {
+    it("floors an unresolved indirection wrapper allow to ask", () => {
+      // A bare parallel executes each stdin line as a shell command, so it
+      // stays fail-closed even though no command argument is present.
+      const resolver = makeBashResolver({
+        parallel: makeCheckResult({ state: "allow", toolName: "bash" }),
+      });
+      const result = resolveBashAdvisoryCheck("parallel", undefined, resolver);
+      expect(result.state).toBe("ask");
+      expect(result.matchedPattern).toBe("<indirection-bash-wrapper>");
+    });
+
+    it("gates a bare wrapper by its own rules instead of flooring", () => {
+      // A bare `eval` executes nothing; the fork gates it like an ordinary
+      // command rather than hardcoding an ask floor.
       const resolver = makeBashResolver({
         eval: makeCheckResult({ state: "allow", toolName: "bash" }),
       });
       const result = resolveBashAdvisoryCheck("eval", undefined, resolver);
-      expect(result.state).toBe("ask");
-      expect(result.matchedPattern).toBe("<opaque-bash-wrapper>");
+      expect(result.state).toBe("allow");
     });
 
     it("floors a resolved wrapper in wrapperFloors 'always' mode", () => {

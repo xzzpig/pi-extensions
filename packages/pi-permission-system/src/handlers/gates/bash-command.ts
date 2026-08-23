@@ -87,10 +87,11 @@ export function resolveBashCommandCheck(
     });
     // Fork: wrapper flooring is configurable. In `fallback` mode (default), a
     // wrapper unit is floored only when its inner commands could not be
-    // resolved (`payloadUnresolved`); resolved inner commands are gated as
-    // their own units, so the wrapper itself does not prompt. In `always`
-    // mode, the upstream v24 behavior is preserved: every wrapper `allow` is
-    // clamped to `ask`.
+    // resolved (`payloadUnresolved`); a provably inert wrapper (bare `env`,
+    // `eval ""`) carries no flag and is gated by its own text like an ordinary
+    // command; resolved inner commands are gated as their own units, so the
+    // wrapper itself does not prompt. In `always` mode, the upstream v24
+    // behavior is preserved: every wrapper `allow` is clamped to `ask`.
     const shouldFloor =
       cmd.wrapperKind !== undefined &&
       (cmd.payloadUnresolved === true || options?.wrapperFloors === "always");
