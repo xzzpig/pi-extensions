@@ -1780,6 +1780,10 @@ export interface SubagentState {
 	waitSubscriptions?: Map<string, WaitSubscriptionRecord>;
 	/** Live in-process workflow controllers. Durable status remains on disk after settlement. */
 	workflowControllers?: Map<string, AbortController>;
+	/** Session-snapshot `<available_subagents>` block appended to the parent system prompt; empty when nothing is advertised. */
+	contextInjectionBlock?: string;
+	/** `subagents.injectAgents` entries that matched no discovered agent at snapshot time. */
+	contextInjectionUnknownNames?: string[];
 }
 
 // ============================================================================

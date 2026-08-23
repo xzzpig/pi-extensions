@@ -1528,6 +1528,111 @@ Do work
 	});
 });
 
+describe("agent frontmatter injectToContext", () => {
+	it("serializes injectToContext into agent frontmatter", () => {
+		const agent: AgentConfig = {
+			name: "scout",
+			description: "Scout",
+			systemPrompt: "Recon",
+			systemPromptMode: "replace",
+			inheritProjectContext: false,
+			inheritSkills: false,
+			source: "project",
+			filePath: "/tmp/scout.md",
+			injectToContext: true,
+		};
+
+		const serialized = serializeAgent(agent);
+		assert.match(serialized, /injectToContext: true/);
+	});
+
+	it("omits injectToContext when unset or false", () => {
+		const unset: AgentConfig = {
+			name: "scout",
+			description: "Scout",
+			systemPrompt: "Recon",
+			systemPromptMode: "replace",
+			inheritProjectContext: false,
+			inheritSkills: false,
+			source: "project",
+			filePath: "/tmp/scout.md",
+		};
+		const disabled: AgentConfig = { ...unset, injectToContext: false };
+
+		assert.doesNotMatch(serializeAgent(unset), /injectToContext/);
+		assert.doesNotMatch(serializeAgent(disabled), /injectToContext/);
+	});
+
+	it("parses injectToContext from discovered agent frontmatter and keeps it out of extraFields", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-inject-to-context-"));
+		tempDirs.push(dir);
+		const agentsDir = path.join(dir, ".pi", "agents");
+		fs.mkdirSync(agentsDir, { recursive: true });
+		fs.writeFileSync(path.join(agentsDir, "scout.md"), `---
+name: scout
+description: Scout
+injectToContext: true
+---
+
+Recon
+`, "utf-8");
+
+		const result = discoverAgents(dir, "project");
+		const scout = result.agents.find((agent) => agent.name === "scout");
+		assert.equal(scout?.injectToContext, true);
+		assert.equal(scout?.extraFields?.injectToContext, undefined);
+	});
+
+	it("defaults injectToContext to false when frontmatter omits it or uses a non-true value", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-inject-defaults-"));
+		tempDirs.push(dir);
+		const agentsDir = path.join(dir, ".pi", "agents");
+		fs.mkdirSync(agentsDir, { recursive: true });
+		fs.writeFileSync(path.join(agentsDir, "plain.md"), `---
+name: plain
+description: Plain
+---
+
+Body
+`, "utf-8");
+		fs.writeFileSync(path.join(agentsDir, "truthy.md"), `---
+name: truthy
+description: Truthy
+injectToContext: yes
+---
+
+Body
+`, "utf-8");
+
+		const result = discoverAgents(dir, "project");
+		assert.equal(result.agents.find((agent) => agent.name === "plain")?.injectToContext ?? false, false);
+		assert.equal(result.agents.find((agent) => agent.name === "truthy")?.injectToContext ?? false, false);
+	});
+
+	it("preserves injectToContext through a serialize and rediscover round trip", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-inject-roundtrip-"));
+		tempDirs.push(dir);
+		const agentsDir = path.join(dir, ".pi", "agents");
+		fs.mkdirSync(agentsDir, { recursive: true });
+		fs.writeFileSync(path.join(agentsDir, "scout.md"), `---
+name: scout
+description: Scout
+injectToContext: true
+---
+
+Recon
+`, "utf-8");
+
+		const discovered = discoverAgents(dir, "project").agents.find((agent) => agent.name === "scout");
+		assert.ok(discovered);
+		const serialized = serializeAgent({ ...discovered, source: "project", filePath: path.join(agentsDir, "scout.md") });
+		fs.writeFileSync(path.join(agentsDir, "scout.md"), serialized, "utf-8");
+
+		const rediscovered = discoverAgents(dir, "project").agents.find((agent) => agent.name === "scout");
+		assert.equal(rediscovered?.injectToContext, true);
+	});
+});
+
 describe("agent frontmatter prompt assembly defaults", () => {
 	it("defaults ordinary agents to replace mode with no inherited context or skills", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-default-prompt-settings-"));

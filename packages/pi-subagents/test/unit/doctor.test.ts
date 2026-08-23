@@ -196,4 +196,49 @@ describe("buildDoctorReport", () => {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
 	});
+
+	it("reports context injection advertisement and unknown names", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-doctor-context-injection-"));
+		try {
+			const flagged = makeAgent("flagged-a", "project");
+			flagged.injectToContext = true;
+			const state = makeState(root);
+			state.contextInjectionBlock = "<available_subagents>...</available_subagents>";
+
+			const report = buildDoctorReport({
+				cwd: root,
+				config: {},
+				state,
+				deps: {
+					isAsyncAvailable: () => true,
+					discoverAgentsAll: () => ({
+						builtin: [],
+						user: [makeAgent("listed-user", "user")],
+						project: [flagged],
+						injectAgents: ["listed-user", "ghost"],
+						chains: [],
+						userDir: path.join(root, "home", ".agents"),
+						projectDir: path.join(root, ".pi", "agents"),
+						userChainDir: path.join(root, "home", ".pi", "agent", "chains"),
+						projectChainDir: path.join(root, ".pi", "chains"),
+						userSettingsPath: path.join(root, "home", ".pi", "agent", "settings.json"),
+						projectSettingsPath: path.join(root, ".pi", "settings.json"),
+					}),
+					discoverAvailableSkills: () => [],
+					diagnoseIntercomBridge: () => ({
+						active: false,
+						mode: "always",
+						wantsIntercom: false,
+						supervisorChannelAvailable: true,
+						extensionDir: "native:pi-subagents-supervisor-channel",
+					}),
+				},
+			});
+
+			assert.match(report, /- context injection: 2 advertised \(flagged-a, listed-user\); session snapshot present/);
+			assert.match(report, /- context injection unknown names \(ignored\): ghost/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
 });

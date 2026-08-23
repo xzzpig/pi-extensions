@@ -20,6 +20,7 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { keyText, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { discoverAgents, discoverAgentsAll, type AgentConfig, type AgentScope } from "../agents/agents.ts";
+import { mergeAgentsForScope } from "../agents/agent-selection.ts";
 import { clearRuntimeAgentsForPi, listRuntimeAgentConfigs, mergeRuntimeAgents } from "../agents/runtime-agent-registry.ts";
 import { ensureAccessibleDir } from "../shared/accessible-dir.ts";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "../shared/artifacts.ts";
@@ -56,6 +57,7 @@ import { SUBAGENT_CHILD_ENV, SUBAGENT_PARENT_SESSION_ENV } from "../runs/shared/
 import { resolveCurrentSubagentCapabilityCeiling } from "../runs/shared/capability-ceiling.ts";
 import { formatDuration, shortenPath } from "../shared/formatters.ts";
 import { loadConfig, resolveAsyncByDefault, resolveScheduledStoreRoot } from "./config.ts";
+import { applyInjectionBlock, renderInjectionBlock, resolveInjectableAgents, SUBAGENT_INJECTION_MARKER } from "./context-injection.ts";
 import { buildSubagentToolDescription, buildSubagentToolPromptMetadata } from "./tool-description.ts";
 import { collectGoalContinuationNotices } from "../missions/goal-driver.ts";
 import { restoreForegroundRunHistory } from "../runs/foreground/foreground-history.ts";
@@ -887,6 +889,35 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		fleetStatus?.setContext(ctx);
 	};
 
+	// Snapshot the injectable-agent advertisement once per session so the
+	// appended `<available_subagents>` block stays byte-identical across turns
+	// and provider prompt caching is never invalidated mid-session.
+	const refreshContextInjectionSnapshot = (ctx: ExtensionContext) => {
+		if (process.env[SUBAGENT_CHILD_ENV] === "1") return;
+		try {
+			const cwd = ctx.cwd || state.baseCwd;
+			if (!cwd) {
+				state.contextInjectionBlock = "";
+				state.contextInjectionUnknownNames = [];
+				return;
+			}
+			const discovery = discoverAgentsAll(cwd);
+			const mergedAgents = mergeAgentsForScope("both", discovery.user, discovery.project, discovery.builtin, discovery.package);
+			const resolved = resolveInjectableAgents({
+				agents: mergedAgents,
+				injectAgents: discovery.injectAgents,
+				capabilityCeiling: resolveCurrentSubagentCapabilityCeiling(state.currentSessionId ?? undefined),
+			});
+			state.contextInjectionBlock = renderInjectionBlock(resolved.agents);
+			state.contextInjectionUnknownNames = resolved.unknownNames;
+		} catch (error) {
+			// Injection is a best-effort convenience; never break session startup.
+			state.contextInjectionBlock = "";
+			state.contextInjectionUnknownNames = [];
+			console.error("Failed to snapshot injectable subagents:", error);
+		}
+	};
+
 	let runtimeCleaned = false;
 	const runtimeEntry: SubagentRuntimeEntry = {
 		sessionManager: null,
@@ -1001,6 +1032,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		installRuntime(ctx);
 		const recovering = event.reason === "startup" || event.reason === "reload" || event.reason === "resume";
 		resetSessionState(ctx, recovering);
+		refreshContextInjectionSnapshot(ctx);
 		herdrStatusBridge.sessionStarted({
 			hasUI: ctx.hasUI === true,
 			runs: activeHerdrRuns(),
@@ -1008,6 +1040,15 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		rpcBridge.emitReady(ctx);
 		supervisorChannel.start();
 		supervisorChannel.activateTransport();
+	});
+
+	pi.on("before_agent_start", (event) => {
+		if (process.env[SUBAGENT_CHILD_ENV] === "1") return undefined;
+		const next = applyInjectionBlock({
+			systemPrompt: event.systemPrompt,
+			block: state.contextInjectionBlock ?? "",
+		});
+		return next ? { systemPrompt: next } : undefined;
 	});
 
 	pi.on("session_shutdown", async () => {

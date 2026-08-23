@@ -140,6 +140,7 @@ export interface AgentConfig {
 	outputMode?: OutputMode;
 	defaultReads?: string[];
 	defaultProgress?: boolean;
+	injectToContext?: boolean;
 	interactive?: boolean;
 	maxSubagentDepth?: number;
 	completionGuard?: boolean;
@@ -162,6 +163,7 @@ interface SubagentSettings {
 	disableBuiltins?: boolean;
 	disableThinking?: boolean;
 	modelScope?: ModelScopeConfig;
+	injectAgents?: string[];
 }
 
 const EMPTY_SUBAGENT_SETTINGS: SubagentSettings = { overrides: {} };
@@ -249,6 +251,7 @@ interface AgentDiscoveryResult {
 	agentDiagnostics?: AgentDiscoveryDiagnostic[];
 	projectAgentsDir: string | null;
 	modelScope?: ModelScopeConfig;
+	injectAgents?: string[];
 }
 
 function getUserChainDir(): string {
@@ -262,9 +265,19 @@ interface PackageSubagentPaths {
 
 let cachedGlobalNpmRoot: string | null = null;
 
-function readJsonFileBestEffort(filePath: string): unknown {
+/** Parsed JSON object record from a manifest/settings-style file. */
+interface JsonObjectFile {
+	[key: string]: unknown;
+}
+
+function isJsonObjectRecord(value: unknown): value is JsonObjectFile {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readJsonFileBestEffort(filePath: string): JsonObjectFile | null {
 	try {
-		return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+		const parsed: unknown = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+		return isJsonObjectRecord(parsed) ? parsed : null;
 	} catch {
 		// Installed package scans are opportunistic; bad third-party manifests
 		// should not break local agent discovery.
@@ -272,9 +285,10 @@ function readJsonFileBestEffort(filePath: string): unknown {
 	}
 }
 
-function readOptionalJsonFile(filePath: string): unknown {
+function readOptionalJsonFile(filePath: string): JsonObjectFile | null {
+	let parsed: unknown;
 	try {
-		return JSON.parse(fs.readFileSync(filePath, "utf-8"));
+		parsed = JSON.parse(fs.readFileSync(filePath, "utf-8"));
 	} catch (error) {
 		const code = typeof error === "object" && error !== null && "code" in error
 			? (error as { code?: unknown }).code
@@ -282,6 +296,7 @@ function readOptionalJsonFile(filePath: string): unknown {
 		if (code === "ENOENT") return null;
 		throw error;
 	}
+	return isJsonObjectRecord(parsed) ? parsed : null;
 }
 
 function isSafePackagePath(value: string): boolean {
@@ -394,15 +409,15 @@ function stringArray(value: unknown): string[] {
 function extractSubagentPathsFromPackageRoot(packageRoot: string): PackageSubagentPaths {
 	const packageJsonPath = path.join(packageRoot, "package.json");
 	const pkg = readJsonFileBestEffort(packageJsonPath);
-	if (!pkg || typeof pkg !== "object" || Array.isArray(pkg)) return { agents: [], chains: [] };
+	if (!pkg) return { agents: [], chains: [] };
 
 	const roots: Record<string, unknown>[] = [];
-	const piSubagents = (pkg as { "pi-subagents"?: unknown })["pi-subagents"];
+	const piSubagents = pkg["pi-subagents"];
 	if (piSubagents && typeof piSubagents === "object" && !Array.isArray(piSubagents)) {
 		roots.push(piSubagents as Record<string, unknown>);
 	}
 
-	const pi = (pkg as { pi?: unknown }).pi;
+	const pi = pkg.pi;
 	if (pi && typeof pi === "object" && !Array.isArray(pi)) {
 		const subagents = (pi as { subagents?: unknown }).subagents;
 		if (subagents && typeof subagents === "object" && !Array.isArray(subagents)) {
@@ -457,8 +472,8 @@ function collectPackageRootsFromNodeModules(nodeModulesDir: string): string[] {
 
 function collectSettingsPackageRoots(settingsFile: string, baseDir: string): string[] {
 	const settings = readOptionalJsonFile(settingsFile);
-	if (!settings || typeof settings !== "object" || Array.isArray(settings)) return [];
-	const packages = (settings as { packages?: unknown }).packages;
+	if (!settings) return [];
+	const packages = settings.packages;
 	if (!Array.isArray(packages)) return [];
 
 	const roots: string[] = [];
@@ -959,6 +974,14 @@ function readSubagentSettings(filePath: string | null): SubagentSettings {
 		}
 		defaultExtensions = subagentsObject.defaultExtensions.map((item) => item.trim());
 	}
+	let injectAgents: string[] | undefined;
+	if ("injectAgents" in subagentsObject) {
+		if (!Array.isArray(subagentsObject.injectAgents)
+			|| subagentsObject.injectAgents.some((item) => typeof item !== "string" || !item.trim())) {
+			throw new Error(`Subagent settings in '${filePath}' have invalid 'injectAgents'; expected an array of non-empty agent names.`);
+		}
+		injectAgents = subagentsObject.injectAgents.map((item) => item.trim());
+	}
 	const modelScope = parseModelScopeConfig(subagentsObject.modelScope, { filePath });
 
 	const parsed: Record<string, BuiltinAgentOverrideConfig> = {};
@@ -971,6 +994,7 @@ function readSubagentSettings(filePath: string | null): SubagentSettings {
 		...(disableBuiltins !== undefined ? { disableBuiltins } : {}),
 		...(disableThinking !== undefined ? { disableThinking } : {}),
 		...(modelScope !== undefined ? { modelScope } : {}),
+		...(injectAgents !== undefined ? { injectAgents } : {}),
 	};
 	if (!agentOverrides || typeof agentOverrides !== "object" || Array.isArray(agentOverrides)) {
 		return parsedSettings;
@@ -1779,6 +1803,7 @@ function loadAgentsFromDefinitionFiles(files: AgentDefinitionFile[], source: Age
 			...(outputMode !== undefined ? { outputMode } : {}),
 			...(defaultReads?.length ? { defaultReads } : {}),
 			defaultProgress: frontmatter.defaultProgress === "true",
+			injectToContext: frontmatter.injectToContext === "true",
 			interactive: frontmatter.interactive === "true",
 			...(maxSubagentDepth !== undefined ? { maxSubagentDepth } : {}),
 			...(completionGuard !== undefined ? { completionGuard } : {}),
@@ -1891,6 +1916,9 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 	const defaultModel = resolveSubagentDefaultModel(userSettings, projectSettings, userSettingsPath, projectSettingsPath);
 	const defaultThinking = resolveSubagentDefaultThinking(userSettings, projectSettings, projectSettingsPath);
 	const defaultExtensions = resolveSubagentDefaultExtensions(userSettings, projectSettings, projectSettingsPath);
+	const injectAgents = projectSettingsPath && projectSettings.injectAgents !== undefined
+		? projectSettings.injectAgents
+		: userSettings.injectAgents;
 	const modelScope = projectSettings.modelScope ?? userSettings.modelScope;
 	const packageSubagentPaths = collectPackageSubagentPaths(cwd, {
 		includeUser: scope !== "project",
@@ -1947,7 +1975,7 @@ export function discoverAgents(cwd: string, scope: AgentScope): AgentDiscoveryRe
 		...projectLoaded.flatMap((loaded) => loaded.diagnostics),
 		...packageLoaded.flatMap((loaded) => loaded.diagnostics),
 	];
-	return { agents, agentDiagnostics, projectAgentsDir, ...(modelScope !== undefined ? { modelScope } : {}) };
+	return { agents, agentDiagnostics, projectAgentsDir, ...(modelScope !== undefined ? { modelScope } : {}), ...(injectAgents?.length ? { injectAgents } : {}) };
 }
 
 export function discoverAgentsAll(cwd: string): {
@@ -1956,6 +1984,7 @@ export function discoverAgentsAll(cwd: string): {
 	user: AgentConfig[];
 	project: AgentConfig[];
 	agentDiagnostics?: AgentDiscoveryDiagnostic[];
+	injectAgents?: string[];
 	chains: ChainConfig[];
 	chainDiagnostics: ChainDiscoveryDiagnostic[];
 	userDir: string;
@@ -1977,6 +2006,9 @@ export function discoverAgentsAll(cwd: string): {
 	const defaultModel = resolveSubagentDefaultModel(userSettings, projectSettings, userSettingsPath, projectSettingsPath);
 	const defaultThinking = resolveSubagentDefaultThinking(userSettings, projectSettings, projectSettingsPath);
 	const defaultExtensions = resolveSubagentDefaultExtensions(userSettings, projectSettings, projectSettingsPath);
+	const injectAgents = projectSettingsPath && projectSettings.injectAgents !== undefined
+		? projectSettings.injectAgents
+		: userSettings.injectAgents;
 	const packageSubagentPaths = collectPackageSubagentPaths(cwd);
 
 	const builtinLoaded = loadAgentsFromDefinitionFiles(BUILTIN_AGENT_DEFINITION_FILES, "builtin");
@@ -2067,5 +2099,5 @@ export function discoverAgentsAll(cwd: string): {
 
 	const userDir = process.env.PI_CODING_AGENT_DIR ? userDirOld : fs.existsSync(userDirNew) ? userDirNew : userDirOld;
 
-	return { builtin, package: packageAgents, user, project, agentDiagnostics, chains, chainDiagnostics, userDir, projectDir, userChainDir, projectChainDir, userSettingsPath, projectSettingsPath };
+	return { builtin, package: packageAgents, user, project, agentDiagnostics, chains, chainDiagnostics, userDir, projectDir, userChainDir, projectChainDir, userSettingsPath, projectSettingsPath, ...(injectAgents?.length ? { injectAgents } : {}) };
 }

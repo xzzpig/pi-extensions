@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { discoverAgentsAll, type AgentSource } from "../agents/agents.ts";
+import { mergeAgentsForScope } from "../agents/agent-selection.ts";
+import { resolveInjectableAgents } from "./context-injection.ts";
 import { isAsyncAvailable } from "../runs/background/async-execution.ts";
 import { formatSpawnBudgetSummary, getSpawnBudgetSnapshot } from "../runs/shared/spawn-budget.ts";
 import { getActiveAsyncCapacitySnapshot, resolveMaxActiveAsyncRunsPerSession } from "../runs/background/active-async-capacity.ts";
@@ -144,8 +146,17 @@ function formatDiscovery(input: DoctorReportInput, deps: DoctorDeps): string[] {
 				runtime: 0,
 			};
 			const diagnostics = discovered.agentDiagnostics ?? [];
+			const injectable = resolveInjectableAgents({
+				agents: mergeAgentsForScope("both", discovered.user, discovered.project, discovered.builtin, discovered.package),
+				injectAgents: discovered.injectAgents,
+			});
+			const snapshot = input.state.contextInjectionBlock;
 			return [
 				`- agents: total ${agentCounts.builtin + agentCounts.package + agentCounts.user + agentCounts.project} (${formatSourceCounts(agentCounts)})`,
+				injectable.agents.length
+					? `- context injection: ${injectable.agents.length} advertised (${injectable.agents.map((agent) => agent.name).join(", ")}); session snapshot ${snapshot ? "present" : "absent"}`
+					: "- context injection: none",
+				...(injectable.unknownNames.length ? [`- context injection unknown names (ignored): ${injectable.unknownNames.join(", ")}`] : []),
 				...diagnostics.map((diagnostic) => `- invalid agent ${diagnostic.name ?? diagnostic.filePath} (${diagnostic.source}): ${diagnostic.error}`),
 			].join("\n");
 		}),

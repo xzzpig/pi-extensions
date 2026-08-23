@@ -178,6 +178,7 @@ acceptanceRole: read-only
 completionGuard: false
 interactive: true
 maxSubagentDepth: 1
+injectToContext: true
 ---
 
 Your system prompt goes here.
@@ -224,7 +225,45 @@ Field notes:
 | `completionGuard` | Set `false` only for non-implementation agents that may mention implementation words while using mutation-capable tools such as `bash`. |
 | `interactive` | Parsed for compatibility but not currently enforced. |
 | `maxSubagentDepth` | Tightens nested delegation for this agent's children. |
+| `injectToContext` | Advertise this agent in the parent system prompt at session start so the main agent can select it without calling `{ action: "list" }` first. See [Context injection](#context-injection). |
 | `memory` | Opt-in role-specific persistent memory. See below. |
+
+## Context injection
+
+By default the parent agent learns which agents exist only by calling `subagent({ action: "list" })`. Context injection pre-declares selected agents in the parent system prompt through a compact `<available_subagents>` block, so routing decisions can happen without a discovery round trip.
+
+Two sources contribute, and the union is advertised:
+
+1. Agent files that opt in with `injectToContext: true` in their frontmatter.
+2. The `subagents.injectAgents` setting, which lists agent names (canonical names or aliases; builtins allowed):
+
+```json
+{
+  "subagents": {
+    "injectAgents": ["worker", "reviewer", "security-reviewer"]
+  }
+}
+```
+
+Rendered block shape:
+
+```text
+<available_subagents>
+The following pre-declared subagents are available.
+Launch them with the subagent tool when a task matches their description.
+
+- security-reviewer: Security review specialist
+- worker: Implementation work, including approved oracle handoffs.
+</available_subagents>
+```
+
+Semantics and guarantees:
+
+- **Snapshot per session.** The list resolves once at session start (and on reload) and stays byte-identical for every turn, so provider prompt caching is never invalidated mid-session. Edits to agent files or settings take effect in a new session, not the current one; `{ action: "list" }` remains the runtime source of truth.
+- **Only executable agents are advertised.** Disabled agents and agents restricted by the session capability ceiling are never injected.
+- **Children never see it.** Spawned child sessions do not load the parent injection; fanout children can still call `{ action: "list" }`.
+- **Unknown setting names are ignored** and reported by `/subagents-doctor` instead of failing startup.
+- The block is appended only when it is not already present, so forked or resumed sessions never duplicate it.
 
 ## Per-agent persistent memory
 

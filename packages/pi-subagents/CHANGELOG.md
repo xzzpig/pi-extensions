@@ -1,6 +1,9 @@
 # Changelog
 
-## [Unreleased]
+## [0.6.0] - 2026-08-23
+
+### Added
+- Context injection: agents that opt in with `injectToContext: true` frontmatter, plus names listed under the new `subagents.injectAgents` setting, are pre-declared to the parent agent in a compact `<available_subagents>` system-prompt block. The union resolves once per session (canonical names or aliases; builtins allowed), stays byte-identical across turns to preserve provider prompt caching, skips disabled and capability-ceiling-restricted agents and spawned child sessions, ignores unknown setting names (reported by `/subagents-doctor`), and never duplicates itself on forked or resumed sessions.
 
 ## [0.5.0] - 2026-08-22
 

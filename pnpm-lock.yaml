@@ -79,7 +79,7 @@ importers:
   packages/pi-goal-x:
     dependencies:
       '@xzzpig/pi-subagents':
-        specifier: 0.5.0
+        specifier: 0.6.0
         version: link:../pi-subagents
     devDependencies:
       '@earendil-works/pi-ai':

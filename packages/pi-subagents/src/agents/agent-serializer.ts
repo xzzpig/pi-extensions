@@ -31,6 +31,7 @@ export const KNOWN_FIELDS = new Set([
 	"outputMode",
 	"defaultReads",
 	"defaultProgress",
+	"injectToContext",
 	"interactive",
 	"maxSubagentDepth",
 	"completionGuard",
@@ -120,6 +121,7 @@ export function serializeAgent(config: AgentConfig, options: SerializeAgentOptio
 	if (readsValue) lines.push(`defaultReads: ${readsValue}`);
 
 	if (config.defaultProgress) lines.push("defaultProgress: true");
+	if (config.injectToContext) lines.push("injectToContext: true");
 	if (config.interactive) lines.push("interactive: true");
 	const maxSubagentDepth = config.maxSubagentDepth;
 	if (typeof maxSubagentDepth === "number" && Number.isInteger(maxSubagentDepth) && maxSubagentDepth >= 0) {

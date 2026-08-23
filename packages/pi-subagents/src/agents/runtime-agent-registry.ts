@@ -43,6 +43,7 @@ export interface RuntimeAgentDefinition {
 	outputMode?: OutputMode;
 	defaultReads?: readonly string[];
 	defaultProgress?: boolean;
+	injectToContext?: boolean;
 	interactive?: boolean;
 	maxSubagentDepth?: number;
 	completionGuard?: boolean;
@@ -202,7 +203,7 @@ function validateDefinition(value: unknown): RuntimeAgentDefinition {
 		"description", "systemPrompt", "aliases", "tools", "mcpDirectTools", "model", "fallbackModels", "thinking",
 		"systemPromptMode", "inheritProjectContext", "inheritSkills", "defaultContext", "defaultAsync", "defaultTimeoutMs",
 		"defaultToolTimeoutMs", "defaultTurnBudget", "defaultAcceptance", "acceptanceRole", "runner", "skills", "skillPath",
-		"extensions", "subagentOnlyExtensions", "output", "outputMode", "defaultReads", "defaultProgress", "interactive",
+		"extensions", "subagentOnlyExtensions", "output", "outputMode", "defaultReads", "defaultProgress", "injectToContext", "interactive",
 		"maxSubagentDepth", "completionGuard", "toolBudget", "permissions",
 	]);
 	const unknown = Object.keys(definition).filter((key) => !supported.has(key));
@@ -237,6 +238,7 @@ function validateDefinition(value: unknown): RuntimeAgentDefinition {
 	const output = validateOptionalString(definition.output, "Runtime agent definition output");
 	const defaultReads = validateStringList(definition.defaultReads, "Runtime agent definition defaultReads");
 	const defaultProgress = validateBoolean(definition.defaultProgress, "Runtime agent definition defaultProgress");
+	const injectToContext = validateBoolean(definition.injectToContext, "Runtime agent definition injectToContext");
 	const interactive = validateBoolean(definition.interactive, "Runtime agent definition interactive");
 	const maxSubagentDepth = validatePositiveInteger(definition.maxSubagentDepth, "Runtime agent definition maxSubagentDepth");
 	const completionGuard = validateBoolean(definition.completionGuard, "Runtime agent definition completionGuard");
@@ -270,6 +272,7 @@ function validateDefinition(value: unknown): RuntimeAgentDefinition {
 		...(outputMode !== undefined ? { outputMode: outputMode as OutputMode } : {}),
 		...(defaultReads ? { defaultReads } : {}),
 		...(defaultProgress !== undefined ? { defaultProgress } : {}),
+		...(injectToContext !== undefined ? { injectToContext } : {}),
 		...(interactive !== undefined ? { interactive } : {}),
 		...(maxSubagentDepth !== undefined ? { maxSubagentDepth } : {}),
 		...(completionGuard !== undefined ? { completionGuard } : {}),
@@ -349,6 +352,7 @@ function toAgentConfig(name: string, definition: RuntimeAgentDefinition): AgentC
 		...(definition.outputMode !== undefined ? { outputMode: definition.outputMode } : {}),
 		...(definition.defaultReads !== undefined ? { defaultReads: [...definition.defaultReads] } : {}),
 		...(definition.defaultProgress !== undefined ? { defaultProgress: definition.defaultProgress } : {}),
+		...(definition.injectToContext !== undefined ? { injectToContext: definition.injectToContext } : {}),
 		...(definition.interactive !== undefined ? { interactive: definition.interactive } : {}),
 		...(definition.maxSubagentDepth !== undefined ? { maxSubagentDepth: definition.maxSubagentDepth } : {}),
 		...(definition.completionGuard !== undefined ? { completionGuard: definition.completionGuard } : {}),

@@ -50,6 +50,10 @@ Installing the extension does not start an automatic reviewer in the background.
 When you finish implementing, run a reviewer subagent before summarizing.
 ```
 
+### Pre-declaring agents in context (context injection)
+
+By default Pi discovers agents by calling `subagent({ action: "list" })`. You can pre-declare selected agents in the parent system prompt so routing happens without that round trip: set `injectToContext: true` in an agent's frontmatter, or list names under `subagents.injectAgents` in settings. The union is injected once per session as a compact block — byte-stable across turns, so prompt caching stays effective. Disabled and capability-restricted agents are never advertised; unknown setting names are ignored and reported by `/subagents-doctor`. See [docs/agents.md](docs/agents.md#context-injection).
+
 ## Builtin agents
 
 The extension ships with agents you can use immediately:
