@@ -789,6 +789,7 @@ describe("package-provided agents and chains", () => {
 		const chainsRoot = path.join(dir, ".pi", "npm", "node_modules", "@scope", "chain-workflow");
 		writeJson(path.join(workflowRoot, "package.json"), {
 			name: "my-pi-workflow",
+			version: "1.2.3",
 			"pi-subagents": {
 				agents: ["./agents"],
 			},
@@ -824,6 +825,10 @@ Review the task.
 		const packagedAgent = all.package.find((agent) => agent.name === "my-workflow.reviewer");
 		assert.ok(packagedAgent);
 		assert.equal(packagedAgent.source, "package");
+		assert.equal(packagedAgent.packageName, "my-workflow");
+		assert.equal(packagedAgent.packageSourceName, "my-pi-workflow");
+		assert.equal(packagedAgent.packageSourceVersion, "1.2.3");
+		assert.equal(packagedAgent.packageSourceRoot, workflowRoot);
 		assert.equal(packagedAgent.filePath, path.join(workflowRoot, "agents", "reviewer.md"));
 		assert.equal(discoverAgents(dir, "both").agents.find((agent) => agent.name === "my-workflow.reviewer")?.source, "package");
 
@@ -1630,6 +1635,67 @@ Recon
 
 		const rediscovered = discoverAgents(dir, "project").agents.find((agent) => agent.name === "scout");
 		assert.equal(rediscovered?.injectToContext, true);
+	});
+});
+
+describe("agent frontmatter fast mode", () => {
+	it("parses and serializes fast mode", () => {
+		const agent: AgentConfig = {
+			name: "worker",
+			description: "Worker",
+			systemPrompt: "Do work",
+			systemPromptMode: "replace",
+			inheritProjectContext: false,
+			inheritSkills: false,
+			source: "project",
+			filePath: "/tmp/worker.md",
+			fast: true,
+		};
+
+		const serialized = serializeAgent(agent);
+		assert.match(serialized, /fast: true/);
+
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-fast-mode-"));
+		tempDirs.push(dir);
+		const agentsDir = path.join(dir, ".pi", "agents");
+		fs.mkdirSync(agentsDir, { recursive: true });
+		fs.writeFileSync(path.join(agentsDir, "worker.md"), `---
+name: worker
+description: Worker
+model: openai-codex/gpt-5.6-luna
+fast: true
+---
+
+Do work
+`, "utf-8");
+
+		const result = discoverAgents(dir, "project");
+		const worker = result.agents.find((candidate) => candidate.name === "worker");
+		assert.equal(worker?.fast, true);
+		assert.equal(worker?.extraFields?.fast, undefined);
+	});
+
+	it("adds the fast extension only for allowlisted native models", () => {
+		const allowed = buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			model: "openai-codex/gpt-5.6-luna:low",
+			fast: true,
+			inheritProjectContext: false,
+			inheritSkills: false,
+		});
+
+		assert.ok(allowed.args.some((arg) => arg.endsWith("fast-mode-extension.ts")));
+		assert.throws(() => buildPiArgs({
+			baseArgs: ["-p"],
+			task: "hello",
+			sessionEnabled: false,
+			model: "anthropic/claude-sonnet-4",
+			fast: true,
+			inheritProjectContext: false,
+			inheritSkills: false,
+		}), /fast mode supports only/);
 	});
 });
 

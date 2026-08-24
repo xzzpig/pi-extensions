@@ -39,6 +39,7 @@ import type { AcceptanceInput, Details, ExtensionConfig, ToolBudgetConfig } from
 import { getProjectConfigDir } from "../shared/utils.ts";
 import { capabilityCeilingAgentRestrictionSources, isAgentAllowedByCapabilityCeiling, resolveCurrentSubagentCapabilityCeiling } from "../runs/shared/capability-ceiling.ts";
 import { listRuntimeAgentConfigs, mergeRuntimeAgents, type RuntimeAgentOwner } from "./runtime-agent-registry.ts";
+import { listExternalJobProviders } from "../api/external-job-provider.ts";
 
 export const AGENT_MANAGEMENT_API_VERSION = 1 as const;
 
@@ -113,18 +114,23 @@ function parseCsv(value: string): string[] {
 	return [...new Set(value.split(",").map((v) => v.trim()).filter(Boolean))];
 }
 
-function configObject(config: unknown): { value?: Record<string, unknown>; error?: string } {
+type ConfigObjectResult =
+	| { status: "ok"; value: Record<string, unknown> }
+	| { status: "missing" }
+	| { status: "error"; message: string };
+
+function configObject(config: unknown): ConfigObjectResult {
 	let val = config;
 	if (typeof val === "string") {
 		try {
 			val = JSON.parse(val);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			return { error: `config must be valid JSON: ${message}` };
+			return { status: "error", message: `config must be valid JSON: ${message}` };
 		}
 	}
-	if (!val || typeof val !== "object" || Array.isArray(val)) return {};
-	return { value: val as Record<string, unknown> };
+	if (!val || typeof val !== "object" || Array.isArray(val)) return { status: "missing" };
+	return { status: "ok", value: val as Record<string, unknown> };
 }
 
 function hasKey(obj: Record<string, unknown>, key: string): boolean {
@@ -232,7 +238,8 @@ function isMutableSource(source: AgentSource): source is ManagementScope {
 function modelWarning(ctx: ManagementContext, model: string | undefined): string | undefined {
 	if (!model) return undefined;
 	const found = ctx.modelRegistry.getAvailable().some((m) => `${m.provider}/${m.id}` === model || m.id === model);
-	return found ? undefined : `Warning: model '${model}' is not in the current model registry.`;
+	if (found) return undefined;
+	return `Warning: model '${model}' is not in the current model registry. Run subagent({ action: "models" }) to list valid provider/id selectors, then use the exact provider/id form (bare ids resolve only when unique).`;
 }
 
 function fallbackModelsWarning(ctx: ManagementContext, fallbackModels: string[] | undefined): string | undefined {
@@ -270,7 +277,9 @@ export function editableAgentConfig(agent: AgentConfig): AgentConfig {
 	const base = agent.override?.base;
 	const {
 		override: _override,
+		output: _output,
 		outputMode: _outputMode,
+		defaultReads: _defaultReads,
 		model: _model,
 		fallbackModels: _fallbackModels,
 		thinking: _thinking,
@@ -298,7 +307,9 @@ export function editableAgentConfig(agent: AgentConfig): AgentConfig {
 
 	return withDeclaredExtensionPaths({
 		...editable,
+		...(base.output !== undefined ? { output: base.output } : {}),
 		...(base.outputMode !== undefined ? { outputMode: base.outputMode } : {}),
+		...(base.defaultReads !== undefined ? { defaultReads: [...base.defaultReads] } : {}),
 		...(base.model !== undefined ? { model: base.model } : {}),
 		...(base.fallbackModels !== undefined ? { fallbackModels: [...base.fallbackModels] } : {}),
 		...(base.thinking !== undefined ? { thinking: base.thinking } : {}),
@@ -646,9 +657,83 @@ function renamePath(currentPath: string, newName: string, scope: ManagementScope
 	return { filePath };
 }
 
+function packageSourceLabel(agent: AgentConfig): string {
+	if (!agent.packageSourceName) return agent.source;
+	return agent.packageSourceVersion ? `${agent.packageSourceName}@${agent.packageSourceVersion}` : agent.packageSourceName;
+}
+
+type ExternalJobProviderStatus =
+	| { ok: true; names: Set<string> }
+	| { ok: false; error: string };
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
+function registeredExternalJobProviderStatus(): ExternalJobProviderStatus {
+	try {
+		return { ok: true, names: new Set(listExternalJobProviders().map((provider) => provider.name)) };
+	} catch (error) {
+		return { ok: false, error: errorMessage(error) };
+	}
+}
+
+function externalJobProviderSuffix(provider: string, names: Set<string> | undefined): string {
+	if (!names) return "?";
+	return names.has(provider) ? "✓" : "missing";
+}
+
+function runnerListBadge(agent: AgentConfig, providerNames: Set<string> | undefined): string | undefined {
+	if (agent.runner?.type === "external-job") return `external-job:${agent.runner.provider} ${externalJobProviderSuffix(agent.runner.provider, providerNames)}`;
+	if (agent.runner?.type === "external-cli") return "external-cli";
+	return undefined;
+}
+
+function formatAgentListLine(agent: AgentConfig, providerNames: Set<string> | undefined): string {
+	const source = agent.source === "package" ? packageSourceLabel(agent) : agent.source;
+	const parts = [
+		source,
+		runnerListBadge(agent, providerNames),
+		agent.defaultContext ? `context: ${agent.defaultContext}` : undefined,
+		agent.aliases?.length ? `aliases: ${agent.aliases.join(", ")}` : undefined,
+	].filter((part): part is string => Boolean(part));
+	return `- ${agent.name} (${parts.join(", ")}): ${agent.description}`;
+}
+
+function formatAgentListSections(agents: AgentConfig[], providerNames: Set<string> | undefined): string[] {
+	if (agents.length === 0) return ["- (none)"];
+	const sections: Array<[AgentSource, string]> = [
+		["package", "Package agents"],
+		["user", "User agents"],
+		["project", "Project agents"],
+		["runtime", "Runtime agents"],
+		["builtin", "Builtin agents"],
+	];
+	const lines: string[] = [];
+	for (const [source, label] of sections) {
+		const matches = agents.filter((agent) => agent.source === source);
+		if (matches.length === 0) continue;
+		if (lines.length > 0) lines.push("");
+		lines.push(label, ...matches.map((agent) => formatAgentListLine(agent, providerNames)));
+	}
+	return lines;
+}
+
+function formatRunnerDetail(agent: AgentConfig, providerNames: Set<string> | undefined): string | undefined {
+	if (!agent.runner) return undefined;
+	if (agent.runner.type === "external-job") return `Runner: external-job via ${agent.runner.provider} ${externalJobProviderSuffix(agent.runner.provider, providerNames)}`;
+	if (agent.runner.type === "external-cli") return `Runner: external-cli ${agent.runner.command}`;
+	return `Runner: ${JSON.stringify(agent.runner)}`;
+}
+
 function formatAgentDetail(agent: AgentConfig): string {
 	const tools = [...(agent.tools ?? []), ...(agent.mcpDirectTools ?? []).map((t) => `mcp:${t}`)];
+	const providerStatus = registeredExternalJobProviderStatus();
 	const lines: string[] = [`Agent: ${agent.name} (${agent.source})`, `Path: ${agent.filePath}`, `Description: ${agent.description}`];
+	if (agent.source === "package" && agent.packageSourceName) {
+		lines.push(`Source package: ${packageSourceLabel(agent)}`);
+		if (agent.packageSourceRoot) lines.push(`Package root: ${agent.packageSourceRoot}`);
+	}
 	if (agent.packageName) {
 		lines.push(`Local name: ${frontmatterNameForConfig(agent)}`);
 		lines.push(`Package: ${agent.packageName}`);
@@ -660,7 +745,12 @@ function formatAgentDetail(agent: AgentConfig): string {
 	if (agent.skills?.length) lines.push(`Skills: ${agent.skills.join(", ")}`);
 	if (agent.skillPath?.length) lines.push(`Skill paths: ${agent.skillPath.join(", ")}`);
 	lines.push(`System prompt mode: ${agent.systemPromptMode}`);
-	if (agent.runner) lines.push(`Runner: ${JSON.stringify(agent.runner)}`);
+	const runnerDetail = formatRunnerDetail(agent, providerStatus.ok ? providerStatus.names : undefined);
+	if (runnerDetail) {
+		lines.push(runnerDetail);
+		if (agent.runner?.type === "external-job" && !providerStatus.ok) lines.push(`External-job provider registry unavailable: ${providerStatus.error}`);
+		if (agent.runner?.type === "external-job" && agent.runner.options) lines.push(`Runner options: ${JSON.stringify(agent.runner.options)}`);
+	}
 	lines.push(`Inherit project context: ${agent.inheritProjectContext ? "true" : "false"}`);
 	lines.push(`Inherit skills: ${agent.inheritSkills ? "true" : "false"}`);
 	if (agent.defaultContext) lines.push(`Default context: ${agent.defaultContext}`);
@@ -710,16 +800,16 @@ export function handleList(params: ManagementParams, ctx: ManagementContext): Ag
 		...(ctx.config?.proactiveSkillSubagents !== undefined ? { config: ctx.config.proactiveSkillSubagents } : {}),
 		discoverAvailableSkills: () => discoverAvailableSkills(ctx.cwd),
 	});
+	const providerStatus = registeredExternalJobProviderStatus();
 	const lines = [
 		"Executable agents:",
-		...(agents.length
-			? agents.map((a) => `- ${a.name} (${a.source}${a.defaultContext ? `, context: ${a.defaultContext}` : ""}${a.aliases?.length ? `, aliases: ${a.aliases.join(", ")}` : ""}): ${a.description}`)
-			: ["- (none)"]),
+		...formatAgentListSections(agents, providerStatus.ok ? providerStatus.names : undefined),
 		...(restrictedAgents.length ? [
 			"",
 			`Restricted agents (not executable in this session${restrictedSources?.length ? `; capability ceiling: ${restrictedSources.join(", ")}` : ""}):`,
-			...restrictedAgents.map((a) => `- ${a.name} (${a.source}${a.aliases?.length ? `, aliases: ${a.aliases.join(", ")}` : ""}): ${a.description}`),
+			...restrictedAgents.map((a) => formatAgentListLine(a, providerStatus.ok ? providerStatus.names : undefined)),
 		] : []),
+		...(!providerStatus.ok && [...agents, ...restrictedAgents].some((agent) => agent.runner?.type === "external-job") ? ["", `External-job provider registry unavailable: ${providerStatus.error}`] : []),
 		...(d.agentDiagnostics?.length ? [
 			"",
 			"Invalid agent definitions:",
@@ -808,6 +898,17 @@ function handleModels(params: ManagementParams, ctx: ManagementContext): AgentTo
 		lines.push("");
 	}
 
+	const availableFullIds = availableModels.map((m) => m.fullId).sort();
+	if (availableFullIds.length > 0) {
+		lines.push("Available models in this session's registry (copy an exact provider/id when passing model):");
+		lines.push("");
+		const shown = availableFullIds.slice(0, 80);
+		for (const fullId of shown) lines.push(`  ${fullId}`);
+		if (availableFullIds.length > shown.length) lines.push(`  ... and ${availableFullIds.length - shown.length} more`);
+		lines.push("");
+		lines.push("Use an exact provider/id from this list when you pass model; bare ids resolve only when unique in the registry.");
+	}
+
 	return result(lines.join("\n"));
 }
 
@@ -833,9 +934,9 @@ function handleGet(params: ManagementParams, ctx: ManagementContext): AgentToolR
 
 export function handleCreate(params: ManagementParams, ctx: ManagementContext): AgentToolResult<Details> {
 	const parsedConfig = configObject(params.config);
-	if (parsedConfig.error) return result(parsedConfig.error, true);
+	if (parsedConfig.status === "error") return result(parsedConfig.message, true);
+	if (parsedConfig.status === "missing") return result("config required for create.", true);
 	const cfg = parsedConfig.value;
-	if (!cfg) return result("config required for create.", true);
 	if (typeof cfg.name !== "string" || !cfg.name.trim()) return result("config.name is required and must be a non-empty string.", true);
 	if (typeof cfg.description !== "string" || !cfg.description.trim()) return result("config.description is required and must be a non-empty string.", true);
 	const name = sanitizeName(cfg.name);
@@ -883,9 +984,9 @@ export function handleCreate(params: ManagementParams, ctx: ManagementContext): 
 export function handleUpdate(params: ManagementParams, ctx: ManagementContext): AgentToolResult<Details> {
 	if (!params.agent) return result("Specify 'agent' for update.", true);
 	const parsedConfig = configObject(params.config);
-	if (parsedConfig.error) return result(parsedConfig.error, true);
+	if (parsedConfig.status === "error") return result(parsedConfig.message, true);
+	if (parsedConfig.status === "missing") return result("config required for update.", true);
 	const cfg = parsedConfig.value;
-	if (!cfg) return result("config required for update.", true);
 	if (hasKey(cfg, "steps")) return result("Durable chain definitions were removed; use workflowScript or /prompt-workflow for repeatable workflows.", true);
 	const warnings: string[] = [];
 	const scopeHint = asDisambiguationScope(params.agentScope);

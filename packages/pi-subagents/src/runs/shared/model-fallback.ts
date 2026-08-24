@@ -1,7 +1,7 @@
-import type { ModelInfo as AvailableModelInfo } from "../../shared/model-info.ts";
+import { splitKnownThinkingSuffix, type ModelInfo as AvailableModelInfo } from "../../shared/model-info.ts";
 import type { Usage } from "../../shared/types.ts";
 import { filterFallbackCandidates, parseModelKey, recordModelFailure } from "./model-exclusions.ts";
-import { checkModelScope, type ModelScopeConfig, type ModelScopeViolation, type ModelSource } from "./model-scope.ts";
+import { checkModelScope, type ModelScopeCheckRule, type ModelScopeViolation, type ModelSource } from "./model-scope.ts";
 
 export type { AvailableModelInfo };
 
@@ -14,12 +14,17 @@ interface ModelAttemptSummary {
 }
 
 export function splitThinkingSuffix(model: string): { baseModel: string; thinkingSuffix: string } {
-	const colonIdx = model.lastIndexOf(":");
-	if (colonIdx === -1) return { baseModel: model, thinkingSuffix: "" };
-	return {
-		baseModel: model.substring(0, colonIdx),
-		thinkingSuffix: model.substring(colonIdx),
-	};
+	return splitKnownThinkingSuffix(model);
+}
+
+export function formatSubagentModelVerificationError(expectedModel: string, observedModel: string, availableModels: AvailableModelInfo[] | undefined): string | undefined {
+	if (!availableModels || availableModels.length === 0) return undefined;
+	const expectedBase = splitThinkingSuffix(expectedModel).baseModel;
+	const observedBase = splitThinkingSuffix(observedModel).baseModel;
+	if (expectedBase === observedBase) return undefined;
+	const expectedEntry = availableModels.find((entry) => entry.fullId === expectedBase);
+	if (expectedEntry && expectedEntry.id === observedBase) return undefined;
+	return `model_verification_failed: child reported a different model than the launch candidate. Expected '${expectedModel}' but observed '${observedModel}'.`;
 }
 
 /** Sentinel model value requesting that a subagent inherit the parent session's model. */
@@ -236,7 +241,7 @@ function resolveRequiredSubagentModelCandidate(
 
 export interface ResolveSubagentModelOverrideOptions {
 	/** When set with `enforce: true`, out-of-scope models are rejected. */
-	scope?: ModelScopeConfig;
+	scope?: ModelScopeCheckRule | ModelScopeCheckRule[];
 	/** Origin of the requested model: explicit caller-supplied (hard error) vs inherited (warn). Defaults to `"inherited"`. */
 	source?: ModelSource;
 	/** Called for warn-severity violations instead of `console.warn`. */
@@ -245,6 +250,32 @@ export interface ResolveSubagentModelOverrideOptions {
 
 function defaultScopeWarn(violation: ModelScopeViolation): void {
 	console.warn(`[pi-subagents] ${violation.message}`);
+}
+
+function configuredScopes(scope: ModelScopeCheckRule | ModelScopeCheckRule[] | undefined): ModelScopeCheckRule[] {
+	return scope ? (Array.isArray(scope) ? scope : [scope]) : [];
+}
+
+function throwForUnresolvedEnforcedInheritScope(scope: ModelScopeCheckRule | ModelScopeCheckRule[] | undefined, includeMixed = false): void {
+	const unresolvedInheritScope = configuredScopes(scope)
+		.find((entry) => entry.enforce === true && (includeMixed ? entry.allow?.includes(INHERIT_MODEL) : entry.allow?.length === 1 && entry.allow[0] === INHERIT_MODEL));
+	if (!unresolvedInheritScope) return;
+	const origin = unresolvedInheritScope.origin ?? "modelScope";
+	throw new Error(`Cannot enforce subagent model scope (${origin}): 'inherit' requires a current parent session model.`);
+}
+
+function enforceModelScopes(
+	model: string,
+	scope: ModelScopeCheckRule | ModelScopeCheckRule[] | undefined,
+	source: ModelSource,
+	onWarn: ((violation: ModelScopeViolation) => void) | undefined,
+): void {
+	const violations = configuredScopes(scope)
+		.map((entry) => checkModelScope(model, entry, source))
+		.filter((violation): violation is ModelScopeViolation => violation !== undefined);
+	const error = violations.find((violation) => violation.severity === "error");
+	if (error) throw new Error(error.message);
+	for (const violation of violations) (onWarn ?? defaultScopeWarn)(violation);
 }
 
 /**
@@ -274,19 +305,16 @@ export function resolveSubagentModelOverride(
 ): string | undefined {
 	const trimmed = typeof requestedModel === "string" ? requestedModel.trim() : "";
 	const explicit = trimmed && trimmed !== INHERIT_MODEL ? trimmed : undefined;
+	if (!parentModel) throwForUnresolvedEnforcedInheritScope(options?.scope, explicit === undefined || options?.source === "inherited");
 	let resolved: string | undefined;
 	if (explicit === undefined) {
 		resolved = parentModel ? `${parentModel.provider}/${parentModel.id}` : undefined;
 	} else {
 		resolved = resolveRequiredSubagentModelCandidate(explicit, availableModels, preferredProvider);
 	}
-	if (resolved && options?.scope?.enforce) {
+	if (resolved && options?.scope) {
 		const source: ModelSource = explicit === undefined ? "inherited" : (options.source ?? "inherited");
-		const violation = checkModelScope(resolved, options.scope, source);
-		if (violation) {
-			if (violation.severity === "error") throw new Error(violation.message);
-			(options.onWarn ?? defaultScopeWarn)(violation);
-		}
+		enforceModelScopes(resolved, options.scope, source, options.onWarn);
 	}
 	return resolved;
 }
@@ -318,7 +346,7 @@ export function resolveEffectiveSubagentModel(
 
 export interface BuildModelCandidatesOptions {
 	/** Fallback models warn by default and throw when strict scope enforcement is enabled. */
-	scope?: ModelScopeConfig;
+	scope?: ModelScopeCheckRule | ModelScopeCheckRule[];
 	onWarn?: (violation: ModelScopeViolation) => void;
 	/** The primary model came from the running parent session, not configuration. */
 	primaryModelFromParent?: boolean;
@@ -341,6 +369,7 @@ export function buildModelCandidates(
 	preferredProvider?: string,
 	options?: BuildModelCandidatesOptions,
 ): string[] {
+	if (!primaryModel) throwForUnresolvedEnforcedInheritScope(options?.scope, true);
 	const seen = new Set<string>();
 	const candidates: string[] = [];
 	const rawCandidates = [primaryModel, ...(fallbackModels ?? [])];
@@ -358,12 +387,9 @@ export function buildModelCandidates(
 			continue;
 		}
 		if (seen.has(normalized)) continue;
-		if ((index > 0 || options?.scope?.strict === true) && options?.scope?.enforce) {
-			const violation = checkModelScope(normalized, options.scope, "inherited");
-			if (violation) {
-				if (violation.severity === "error") throw new Error(violation.message);
-				(options.onWarn ?? defaultScopeWarn)(violation);
-			}
+		const scopes = configuredScopes(options?.scope);
+		if (index > 0 || scopes.some((scope) => scope.enforce === true && scope.strict === true)) {
+			enforceModelScopes(normalized, scopes, "inherited", options?.onWarn);
 		}
 		seen.add(normalized);
 		candidates.push(normalized);

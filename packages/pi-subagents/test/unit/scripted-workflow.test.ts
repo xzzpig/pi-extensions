@@ -145,7 +145,7 @@ describe("scripted workflow runtime", () => {
 		});
 
 		assert.deepEqual(launches.map(({ key }) => key), ["scan", "review-a", "review-b"]);
-		assert.equal(launches.every(({ params }) => params.async === false), true);
+		assert.equal(launches.every(({ params }) => !Object.prototype.hasOwnProperty.call(params, "async")), true);
 		assert.deepEqual(result.emits, [{ count: 2 }]);
 		assert.deepEqual(result.console, [{ level: "log", text: "reviewed 2" }]);
 		assert.match(JSON.stringify(result.value), /\[run review-a; id=run-revi\]/);
@@ -186,7 +186,7 @@ describe("scripted workflow runtime", () => {
 		});
 
 		assert.deepEqual(resolvedReference, { workflowRunId: "workflow-1", key: "advisor", latest: true });
-		assert.deepEqual(launchParams, { resume: "retained-run", task: "Continue", async: false });
+		assert.deepEqual(launchParams, { resume: "retained-run", task: "Continue" });
 		assert.equal((result.value as { runId?: string }).runId, "continued-run");
 		assert.deepEqual((result.value as { continuation?: { runIds?: string[] } }).continuation?.runIds, ["ancestor-run", "retained-run", "continued-run"]);
 	});
@@ -370,6 +370,7 @@ describe("scripted workflow runtime", () => {
 			`return await runs.all([{ key: "valid", agent: "worker", task: "run" }, { key: "legacy", agent: "worker", task: "run", parallel: [{ task: "nested" }] }]);`,
 			`return await runs.all([{ key: "valid", agent: "worker", task: "run" }, { key: "undefined-action", agent: "worker", task: "run", action: undefined }]);`,
 			`return await runs.all([{ key: "valid", agent: "worker", task: "run" }, { key: "uncloneable", agent: "worker", task: () => "run" }]);`,
+			`return await runs.all([{ key: "valid", agent: "worker", task: "run" }, { key: "bad-binding", agent: "worker", task: "run", extensionBindings: { invalid: true } }]);`,
 			`const items = []; items[1] = { key: "valid", agent: "worker", task: "run" }; return await runs.all(items);`,
 		];
 		for (const script of malformedScripts) {
@@ -505,7 +506,7 @@ describe("scripted workflow runtime", () => {
 			},
 			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
 		});
-		assert.deepEqual(launchParams, { resume: "retained-run", task: "Apply the follow-up", async: false });
+		assert.deepEqual(launchParams, { resume: "retained-run", task: "Apply the follow-up" });
 		assert.equal((resumed.value as { runId?: string }).runId, "revived-run");
 
 		await assert.rejects(
@@ -541,6 +542,26 @@ describe("scripted workflow runtime", () => {
 			{ key: "one", worktree: true },
 			{ key: "two", worktree: true },
 			{ key: "three", worktree: false },
+		]);
+	});
+
+	it("passes distinct namespaced bindings to parallel children", async () => {
+		const launches: Array<{ key: string; bindings: unknown }> = [];
+		await runWorkflowScript({
+			script: `return runs.all([
+				{ key: "coder", agent: "worker", task: "code", extensionBindings: { "shepherd.dispatch/1": { role: "coder" } } },
+				{ key: "reviewer", agent: "reviewer", task: "review", extensionBindings: { "shepherd.dispatch/1": { role: "reviewer" } } }
+			]);`,
+			timeoutMs: 2_000,
+			async launch(key, params) {
+				launches.push({ key, bindings: params.extensionBindings });
+				return { key, ok: true, output: key, artifactPaths: [], results: [] };
+			},
+			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+		});
+		assert.deepEqual(launches, [
+			{ key: "coder", bindings: { "shepherd.dispatch/1": { role: "coder" } } },
+			{ key: "reviewer", bindings: { "shepherd.dispatch/1": { role: "reviewer" } } },
 		]);
 	});
 
@@ -931,6 +952,27 @@ describe("scripted workflow runtime", () => {
 			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
 		});
 		assert.equal(result.value, "helper all output");
+	});
+
+	it("accepts awaited Promise.all over then chains that return child launches", async () => {
+		const result = await runWorkflowScript({
+			script: `
+				function patchLane(key) {
+					return runs.run(key + "-writer", { agent: "worker", task: "write " + key })
+						.then((writer) => runs.run(key + "-review", { agent: "reviewer", task: "review " + writer.output }));
+				}
+				const reviews = await Promise.all([patchLane("alpha"), patchLane("beta")]);
+				return reviews.map((review) => review.key);
+			`,
+			timeoutMs: 2_000,
+			async launch(key, params) {
+				if (key.endsWith("-review")) assert.match(String(params.task), /review .* writer output/);
+				return { key, ok: true, output: key + " writer output", artifactPaths: [] };
+			},
+			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+		});
+		assert.deepEqual(result.value, ["alpha-review", "beta-review"]);
+		assert.deepEqual(result.children.map((child) => child.key), ["alpha-writer", "beta-writer", "alpha-review", "beta-review"]);
 	});
 
 	it("accepts awaited and returned handlers on portable plain helper wrappers", async () => {

@@ -8,6 +8,13 @@ export interface RunnerSubagentStep {
 	agent: string;
 	task: string;
 	runner?: ResolvedRunnerConfig;
+	externalJobFollowUp?: {
+		sourceRunId: string;
+		sourceStepIndex: number;
+		parentProviderJobId: string;
+		requestId: string;
+		requestDigest: string;
+	};
 	/** Resolved launch context for this child. */
 	context?: "fresh" | "fork";
 	importAsyncRoot?: {
@@ -22,8 +29,13 @@ export interface RunnerSubagentStep {
 	structured?: boolean;
 	cwd?: string;
 	model?: string;
+	fast?: boolean;
 	thinking?: string;
+	thinkingCeiling?: import("../../shared/model-info.ts").ThinkingLevel;
 	modelCandidates?: string[];
+	/** The primary model is inherited from the parent session and should not be verified against the child-reported active registry model. */
+	skipPrimaryModelVerification?: boolean;
+	modelVerificationRegistry?: Array<{ provider: string; id: string; fullId: string }>;
 	tools?: string[];
 	extensions?: string[];
 	subagentOnlyExtensions?: string[];
@@ -48,12 +60,14 @@ export interface RunnerSubagentStep {
 		schema: import("../../shared/types.ts").JsonSchemaObject;
 		schemaPath: string;
 		outputPath: string;
+		acceptanceReportPath?: string;
 	};
 	structuredOutputSchema?: import("../../shared/types.ts").JsonSchemaObject;
 	agentContract?: import("../../shared/types.ts").AgentContract;
 	definitionDigest?: string;
 	launchBindingTask?: string;
 	launchContractDigest?: string;
+	extensionBindings?: import("./extension-bindings.ts").ExtensionBindings;
 	launchResolvedExtensions?: import("../../shared/types.ts").LaunchResolvedChildExtensionsV1;
 	runtimeAcknowledgedExtensions?: import("../../shared/types.ts").RuntimeAcknowledgedChildExtensionsV1;
 	effectiveAcceptance?: import("../../shared/types.ts").ResolvedAcceptanceConfig;
@@ -93,6 +107,7 @@ export interface DynamicRunnerGroup {
 	gateOn?: import("../../shared/types.ts").ChainGateLayer;
 	capabilityCeiling?: import("./capability-ceiling.ts").ResolvedSubagentCapabilityCeiling;
 	capabilityAudit?: import("./capability-ceiling.ts").SubagentCapabilityAudit;
+	thinkingCeiling?: import("../../shared/model-info.ts").ThinkingLevel;
 }
 
 export type RunnerStep = RunnerSubagentStep | ParallelStepGroup | DynamicRunnerGroup;

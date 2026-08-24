@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { editableAgentConfig, handleCreate, handleList, handleManagementAction, handleUpdate } from "../../src/agents/agent-management.ts";
 import { EXTRA_AGENT_DIRS_ENV } from "../../src/agents/agents.ts";
+import { EXTERNAL_JOB_PROVIDER_REGISTRY_KEY, registerExternalJobProvider } from "../../src/api/external-job-provider.ts";
 import { clearSkillCache } from "../../src/agents/skills.ts";
 import { PI_CODING_AGENT_PACKAGE_ROOT_ENV } from "../../src/shared/utils.ts";
 
@@ -113,6 +114,85 @@ describe("agent management config parsing", () => {
 		assert.match(userScoped, /Description: User worker override/);
 		assert.doesNotMatch(userScoped, /Project worker override|Implementation agent for normal tasks/);
 
+	});
+
+	it("surfaces package source and external-job provider status in list and get", () => {
+		const packageDir = path.join(tempDir, ".pi", "npm", "node_modules", "test-surf");
+		fs.mkdirSync(path.join(packageDir, "agents"), { recursive: true });
+		fs.writeFileSync(path.join(packageDir, "package.json"), JSON.stringify({
+			name: "test-surf",
+			version: "9.8.7",
+			pi: { subagents: { agents: ["agents"] } },
+		}));
+		fs.writeFileSync(path.join(packageDir, "agents", "gpt-pro.md"), `---
+name: gpt-pro
+description: ChatGPT Pro advisor via Surf
+runner:
+  type: external-job
+  provider: test-surf-oracle
+  options:
+    model: pro
+async: true
+---
+Advise only.
+`);
+		const dispose = registerExternalJobProvider({
+			name: "test-surf-oracle",
+			start: () => ({ providerJobId: "job", state: "completed" }),
+			status: () => ({ providerJobId: "job", state: "completed" }),
+			result: () => ({ providerJobId: "job", state: "completed", output: "ok" }),
+			reattach: () => ({ providerJobId: "job", state: "completed" }),
+		});
+		try {
+			const ctx = { cwd: tempDir, modelRegistry: { getAvailable: () => [] } };
+			const listed = readText(handleList({}, ctx));
+			assert.match(listed, /Package agents/);
+			assert.match(listed, /- gpt-pro \(test-surf@9\.8\.7, external-job:test-surf-oracle ✓\): ChatGPT Pro advisor via Surf/);
+
+			const detail = readText(handleManagementAction("get", { agent: "gpt-pro" }, ctx));
+			assert.match(detail, /Source package: test-surf@9\.8\.7/);
+			assert.match(detail, new RegExp(`Package root: ${packageDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+			assert.match(detail, /Runner: external-job via test-surf-oracle ✓/);
+			assert.match(detail, /Runner options: {"model":"pro"}/);
+		} finally {
+			dispose();
+		}
+	});
+
+	it("keeps external-job provider registry errors visible", () => {
+		const packageDir = path.join(tempDir, ".pi", "npm", "node_modules", "test-surf");
+		fs.mkdirSync(path.join(packageDir, "agents"), { recursive: true });
+		fs.writeFileSync(path.join(packageDir, "package.json"), JSON.stringify({
+			name: "test-surf",
+			version: "9.8.7",
+			pi: { subagents: { agents: ["agents"] } },
+		}));
+		fs.writeFileSync(path.join(packageDir, "agents", "gpt-pro.md"), `---
+name: gpt-pro
+description: ChatGPT Pro advisor via Surf
+runner:
+  type: external-job
+  provider: test-surf-oracle
+---
+Advise only.
+`);
+		const key = Symbol.for(EXTERNAL_JOB_PROVIDER_REGISTRY_KEY);
+		const globals = globalThis as Record<PropertyKey, unknown>;
+		const previous = globals[key];
+		globals[key] = { version: 0, providers: new Map() };
+		try {
+			const ctx = { cwd: tempDir, modelRegistry: { getAvailable: () => [] } };
+			const listed = readText(handleList({}, ctx));
+			assert.match(listed, /- gpt-pro \(test-surf@9\.8\.7, external-job:test-surf-oracle \?\): ChatGPT Pro advisor via Surf/);
+			assert.match(listed, /External-job provider registry unavailable: Unsupported external-job provider registry/);
+
+			const detail = readText(handleManagementAction("get", { agent: "gpt-pro" }, ctx));
+			assert.match(detail, /Runner: external-job via test-surf-oracle \?/);
+			assert.match(detail, /External-job provider registry unavailable: Unsupported external-job provider registry/);
+		} finally {
+			if (previous === undefined) delete globals[key];
+			else globals[key] = previous;
+		}
 	});
 
 	it("does not apply a malformed project diagnostic to an explicit user get", () => {
@@ -689,14 +769,29 @@ describe("agent management config parsing", () => {
 
 	it("does not serialize settings overrides into custom agent frontmatter during updates", () => {
 		const ctx = { cwd: tempDir, modelRegistry: { getAvailable: () => [{ provider: "anthropic", id: "claude-sonnet-4-6" }] } };
+		const userSettingsPath = path.join(process.env.PI_CODING_AGENT_DIR!, "settings.json");
 		const settingsPath = path.join(tempDir, ".pi", "settings.json");
 		const agentPath = path.join(tempDir, ".pi", "agents", "implementer.md");
 		fs.mkdirSync(path.dirname(agentPath), { recursive: true });
+		fs.mkdirSync(path.dirname(userSettingsPath), { recursive: true });
+		fs.writeFileSync(userSettingsPath, JSON.stringify({
+			subagents: {
+				agentOverrides: {
+					implementer: {
+						output: "user.md",
+						defaultReads: ["user.md"],
+						model: "anthropic/claude-sonnet-4-6",
+					},
+				},
+			},
+		}, null, 2), "utf-8");
 		fs.writeFileSync(settingsPath, JSON.stringify({
 			subagents: {
 				agentOverrides: {
 					implementer: {
+						output: "artifacts/implementer.md",
 						outputMode: "file-only",
+						defaultReads: ["CONTEXT.md"],
 						model: "anthropic/claude-sonnet-4-6",
 						systemPromptMode: "append",
 						inheritProjectContext: true,
@@ -716,7 +811,9 @@ Drive the failing test first.
 		const got = handleManagementAction("get", { agent: "implementer" }, ctx);
 		assert.equal(got.isError, false);
 		const beforeText = readText(got);
+		assert.match(beforeText, /Output: artifacts\/implementer\.md/);
 		assert.match(beforeText, /Output mode: file-only/);
+		assert.match(beforeText, /Reads: CONTEXT\.md/);
 		assert.match(beforeText, /Model: anthropic\/claude-sonnet-4-6/);
 		assert.match(beforeText, /System prompt mode: append/);
 		assert.match(beforeText, /Inherit project context: true/);
@@ -730,7 +827,9 @@ Drive the failing test first.
 
 		const content = fs.readFileSync(agentPath, "utf-8");
 		assert.match(content, /^description: Updated implementer$/m);
+		assert.doesNotMatch(content, /^output:/m);
 		assert.doesNotMatch(content, /^outputMode:/m);
+		assert.doesNotMatch(content, /^defaultReads:/m);
 		assert.doesNotMatch(content, /^model:/m);
 		assert.doesNotMatch(content, /^systemPromptMode:/m);
 		assert.doesNotMatch(content, /^inheritProjectContext:/m);
@@ -739,11 +838,42 @@ Drive the failing test first.
 		const gotAfter = handleManagementAction("get", { agent: "implementer" }, ctx);
 		assert.equal(gotAfter.isError, false);
 		const afterText = readText(gotAfter);
+		assert.match(afterText, /Output: artifacts\/implementer\.md/);
 		assert.match(afterText, /Output mode: file-only/);
+		assert.match(afterText, /Reads: CONTEXT\.md/);
 		assert.match(afterText, /Model: anthropic\/claude-sonnet-4-6/);
 		assert.match(afterText, /System prompt mode: append/);
 		assert.match(afterText, /Inherit project context: true/);
 		assert.match(afterText, /Inherit skills: true/);
+	});
+
+	it("preserves blank output and defaultReads frontmatter that blocks settings overrides during updates", () => {
+		const ctx = { cwd: tempDir, modelRegistry: { getAvailable: () => [] } };
+		const settingsPath = path.join(tempDir, ".pi", "settings.json");
+		const agentPath = path.join(tempDir, ".pi", "agents", "implementer.md");
+		fs.mkdirSync(path.dirname(agentPath), { recursive: true });
+		fs.writeFileSync(settingsPath, JSON.stringify({
+			subagents: { agentOverrides: { implementer: { output: "settings.md", defaultReads: ["settings.md"] } } },
+		}, null, 2), "utf-8");
+		fs.writeFileSync(agentPath, `---
+name: implementer
+description: TDD implementer
+output:
+defaultReads:
+---
+
+Drive the failing test first.
+`, "utf-8");
+
+		const updated = handleUpdate({ agent: "implementer", config: { description: "Updated implementer" } }, ctx);
+		assert.equal(updated.isError, false);
+
+		const content = fs.readFileSync(agentPath, "utf-8");
+		assert.match(content, /^output: ?$/m);
+		assert.match(content, /^defaultReads: ?$/m);
+		const after = readText(handleManagementAction("get", { agent: "implementer" }, ctx));
+		assert.doesNotMatch(after, /Output: settings\.md/);
+		assert.doesNotMatch(after, /Reads: settings\.md/);
 	});
 
 	it("preserves explicit default-like frontmatter that blocks settings overrides during updates", () => {
@@ -828,6 +958,9 @@ Drive the failing test first.
 		assert.match(text, /^Builtin subagent models/m);
 		assert.match(text, /Current session model:\n  openai\/gpt-5-mini/);
 		assert.match(text, /(?:^|\n)scout\n  model:\n    openai\/gpt-5-mini\n  source: inherits current session model(?:\n|$)/);
+		assert.match(text, /Available models in this session's registry/);
+		assert.match(text, /  anthropic\/claude-sonnet-4\n  openai\/gpt-5-mini/);
+		assert.match(text, /Use an exact provider\/id from this list when you pass model/);
 	});
 
 	it("reports override source and disabled builtin state in runtime model mappings", () => {

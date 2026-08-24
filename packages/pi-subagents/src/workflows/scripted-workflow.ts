@@ -150,7 +150,15 @@ function trackObservationTracker(tracker, promise, allowFutureObservations = fal
     get(promiseTarget, prop) {
       if (prop === "then") return function promiseThen(onFulfilled, onRejected) {
         consumeTrackedObservations(tracker);
-        return trackObservationTracker({ observations: tracker.observations, consumed: false, dependencies: [tracker] }, promiseTarget.then(onFulfilled, onRejected), true);
+        const chainTracker = { observations: tracker.observations, consumed: false, dependencies: [tracker] };
+        const wrapHandler = (handler) => typeof handler === "function"
+          ? function trackedThenHandler(...args) {
+            const value = handler.apply(this, args);
+            addTrackerDependency(chainTracker, promiseObservationTracker(value));
+            return trackedPromiseTarget(value);
+          }
+          : handler;
+        return trackObservationTracker(chainTracker, promiseTarget.then(wrapHandler(onFulfilled), wrapHandler(onRejected)), true);
       };
       if (prop === "catch") return function promiseCatch(onRejected) {
         consumeTrackedObservations(tracker);
@@ -242,6 +250,33 @@ function runHostCall(key, params, collectFailure, batch) {
   return { key, callId, promise };
 }
 
+function isArrayIndexProperty(prop) {
+  if (!/^(0|[1-9]\d*)$/.test(prop)) return false;
+  const index = Number(prop);
+  return Number.isSafeInteger(index) && index >= 0 && index < 4294967295;
+}
+
+const runsAllResultTargets = new WeakMap();
+
+function runsAllKeyAccessError(prop) {
+  return new Error("Cannot read runs.all result property '" + prop + "'. runs.all resolves to an ordered array, not a key map. Use results[0], array destructuring, or results.map((result) => result.output), not results." + prop + ".");
+}
+
+function wrapRunsAllResults(results, keys) {
+  const keySet = new Set(keys);
+  const proxy = new Proxy(results, {
+    get(target, prop, receiver) {
+      if (typeof prop !== "string") return Reflect.get(target, prop, receiver);
+      if (prop === "then" || prop === "toJSON") return undefined;
+      if (prop in target || isArrayIndexProperty(prop)) return Reflect.get(target, prop, receiver);
+      if (keySet.has(prop)) throw runsAllKeyAccessError(prop);
+      throw runsAllKeyAccessError(prop);
+    },
+  });
+  runsAllResultTargets.set(proxy, results);
+  return proxy;
+}
+
 function formatRef(result) {
   if (!result || typeof result !== "object") throw new Error("runs.ref(result) requires a run result object.");
   const parts = ["run " + (result.key || "unknown")];
@@ -249,7 +284,42 @@ function formatRef(result) {
   return "[" + parts.join("; ") + "]";
 }
 
+function formatChildResultString(result) {
+  const output = typeof result?.output === "string" ? result.output.trim() : "";
+  return output || formatRef(result);
+}
+
+function decorateWorkflowChildResult(result) {
+  if (!result || typeof result !== "object" || Array.isArray(result)) return result;
+  Object.defineProperties(result, {
+    toString: { value() { return formatChildResultString(this); }, enumerable: false, configurable: true },
+  });
+  return result;
+}
+
 let runFingerprints = new Map();
+
+function validateExtensionBindings(value, label) {
+  if (value === undefined) return;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(label + " extensionBindings must be a plain JSON object.");
+  const keys = Object.keys(value);
+  if (keys.length > 16) throw new Error(label + " extensionBindings supports at most 16 namespaces.");
+  for (const key of keys) if (!/^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,62})\/[1-9][0-9]{0,8}$/.test(key)) throw new Error(label + " extensionBindings namespace '" + key + "' must use a package-like name followed by '/<positive-version>'.");
+  assertJsonValue(value, label + " extensionBindings");
+  let propertyCount = 0;
+  function visit(entry, depth) {
+    if (!entry || typeof entry !== "object") return;
+    if (depth > 16) throw new Error(label + " extensionBindings exceeds the maximum nesting depth of 16.");
+    if (Array.isArray(entry)) { for (const item of entry) visit(item, depth + 1); return; }
+    for (const child of Object.values(entry)) {
+      propertyCount++;
+      if (propertyCount > 256) throw new Error(label + " extensionBindings exceeds 256 total properties.");
+      visit(child, depth + 1);
+    }
+  }
+  visit(value, 0);
+  if (new TextEncoder().encode(stableRunJson(value)).byteLength > 16384) throw new Error(label + " extensionBindings canonical JSON exceeds 16384 bytes.");
+}
 
 function validateRunCall(key, params, label, fingerprints) {
   if (typeof key !== "string" || !runKeyPattern.test(key)) throw new Error(label + " has an invalid key.");
@@ -263,6 +333,7 @@ function validateRunCall(key, params, label, fingerprints) {
   if (params.gate !== undefined && (typeof params.gate !== "string" || !params.gate.trim())) throw new Error(label + " gate must be a non-empty command string.");
   if (params.gate !== undefined && params.acceptance !== undefined) throw new Error(label + " gate cannot be combined with acceptance; use one gate command or acceptance.verify.");
   if (params.gate !== undefined && params.resume !== undefined) throw new Error(label + " gate is not supported with retained resume.");
+  if (params.extensionBindings !== undefined && params.resume !== undefined) throw new Error(label + " extensionBindings is not supported with retained resume; resume uses the original retained child binding.");
   if (params.resume !== undefined && typeof params.resume !== "string") {
     const reference = params.resume;
     if (!reference || typeof reference !== "object" || Array.isArray(reference)) throw new Error(label + " resume must be a retained run id or keyed workflow receipt reference.");
@@ -275,6 +346,7 @@ function validateRunCall(key, params, label, fingerprints) {
   if (typeof params.resume === "string" && !params.resume.trim()) throw new Error(label + " resume must be a non-empty retained run id.");
   if (params.resume !== undefined && params.agent !== undefined) throw new Error(label + " resume and agent are mutually exclusive.");
   if (params.resume !== undefined && (typeof params.task !== "string" || !params.task.trim())) throw new Error(label + " resume requires a non-empty task follow-up.");
+  validateExtensionBindings(params.extensionBindings, label);
   assertJsonValue(params, label + " params");
   const fingerprint = stableRunJson(params);
   const existing = fingerprints.get(key);
@@ -285,7 +357,8 @@ function validateRunCall(key, params, label, fingerprints) {
 const runs = Object.freeze({
   run(key, params) {
     validateRunCall(key, params, "runs.run", runFingerprints);
-    return hostCall("run", { key, params }, { key, operation: "run" });
+    const launched = runHostCall(key, params, false);
+    return trackRunObservation([{ key, operation: "run", callId: launched.callId }], launched.promise.then(decorateWorkflowChildResult));
   },
   all(items) {
     if (!Array.isArray(items)) throw new Error("runs.all(items) requires an array.");
@@ -302,7 +375,7 @@ const runs = Object.freeze({
     runFingerprints = fingerprints;
     const batch = { id: "batch-" + (++nextCallId), calls };
     const launched = calls.map(({ key, params }) => runHostCall(key, params, true, batch));
-    return trackRunObservation(launched.map(({ key, callId }) => ({ key, operation: "run", callId })), Promise.all(launched.map(({ promise }) => promise)));
+    return trackRunObservation(launched.map(({ key, callId }) => ({ key, operation: "run", callId })), Promise.all(launched.map(({ promise }) => promise)).then((results) => wrapRunsAllResults(results.map(decorateWorkflowChildResult), calls.map(({ key }) => key))));
   },
   steer(key, message, options = {}) {
     if (typeof key !== "string" || !runKeyPattern.test(key)) throw new Error("runs.steer has an invalid key.");
@@ -431,6 +504,31 @@ function isPlainWorkflowObject(value) {
   return prototype === null || prototype === Object.prototype || prototype === contextObjectPrototype;
 }
 
+function unwrapRunsAllResults(value, seen = new Map()) {
+  if (value === null || typeof value !== "object") return value;
+  const runsAllTarget = runsAllResultTargets.get(value);
+  const target = runsAllTarget || value;
+  if (seen.has(target)) return seen.get(target);
+  if (Array.isArray(target)) {
+    const copy = [];
+    seen.set(target, copy);
+    let changed = !!runsAllTarget;
+    for (let index = 0; index < target.length; index++) {
+      copy[index] = unwrapRunsAllResults(target[index], seen);
+      changed ||= copy[index] !== target[index];
+    }
+    return changed ? copy : target;
+  }
+  if (!isPlainWorkflowObject(target) || Object.getOwnPropertySymbols(target).length > 0) return target;
+  let changed = false;
+  const entries = Object.entries(target).map(([key, entry]) => {
+    const unwrapped = unwrapRunsAllResults(entry, seen);
+    changed ||= unwrapped !== entry;
+    return [key, unwrapped];
+  });
+  return changed ? Object.fromEntries(entries) : target;
+}
+
 function omitUndefinedWorkflowValues(value, seen = new Set()) {
   if (value === null || typeof value !== "object") return value;
   if (seen.has(value)) return value;
@@ -459,7 +557,7 @@ parentPort.on("message", async (message) => {
   }
   if (message.type !== "start") return;
   try {
-    const sandbox = { runs, Promise: workflowPromise, emit(value) { assertJsonValue(value); parentPort.postMessage({ type: "emit", value }); }, console: capturedConsole };
+    const sandbox = { runs, Promise: workflowPromise, emit(value) { const emittedValue = unwrapRunsAllResults(value); assertJsonValue(emittedValue); parentPort.postMessage({ type: "emit", value: emittedValue }); }, console: capturedConsole };
     if (message.stateEnabled) sandbox.state = state;
     const context = vm.createContext(sandbox, { codeGeneration: { strings: false, wasm: false } });
     contextObjectPrototype = vm.runInContext("Object.prototype", context);
@@ -540,12 +638,14 @@ parentPort.on("message", async (message) => {
 export interface WorkflowScriptChildResult {
 	key: string;
 	ok: boolean;
+	stopped?: boolean;
 	/** Canonical child agent name when launch resolution produced one. */
 	agent?: string;
 	runId?: string;
 	output: string;
 	error?: string;
 	detached?: boolean;
+	interrupted?: boolean;
 	structuredOutput?: unknown;
 	requestedContext?: "fresh" | "fork";
 	resolvedContext?: "fresh" | "fork" | "mixed";
@@ -628,8 +728,25 @@ export interface RunWorkflowScriptOptions {
 		get: (key: string) => unknown | Promise<unknown>;
 		set: (key: string, value: unknown) => void | Promise<void>;
 	};
+	registerStopChild?: (stop: ((key: string, message?: string) => boolean) | undefined) => void;
 	onTrace?: (trace: WorkflowScriptTraceEntry[]) => void;
 	onEmit?: (emits: unknown[]) => void;
+}
+
+function combinedAbortSignal(signals: AbortSignal[]): AbortSignal {
+	const controller = new AbortController();
+	const abort = (signal: AbortSignal): void => {
+		if (controller.signal.aborted) return;
+		controller.abort(signal.reason);
+	};
+	for (const signal of signals) {
+		if (signal.aborted) {
+			abort(signal);
+			break;
+		}
+		signal.addEventListener("abort", () => abort(signal), { once: true });
+	}
+	return controller.signal;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -795,6 +912,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 	const launches = new Map<string, { fingerprint: string; promise: Promise<WorkflowScriptChildResult>; observed: boolean }>();
 	const steers = new Map<number, { key: string; promise: Promise<WorkflowSteerResult>; observed: boolean }>();
 	const stoppedLaunches = new Set<string>();
+	const childStopControllers = new Map<string, AbortController>();
 	const batchAdmissions = new Map<string, Promise<void>>();
 	const observedRunCalls = new Set<number>();
 	const observedSteerCalls = new Set<number>();
@@ -818,6 +936,26 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			console.error("Workflow onTrace callback failed:", error);
 		}
 	};
+	const stoppedChildResult = (key: string, message: string): WorkflowScriptChildResult => ({ key, ok: false, stopped: true, output: message, error: message, artifactPaths: [] });
+	const stopChild = (key: string, message = `Workflow child '${key}' stopped by user.`): boolean => {
+		if (!launches.has(key) || children.has(key)) return false;
+		stoppedLaunches.add(key);
+		children.set(key, stoppedChildResult(key, message));
+		childStopControllers.get(key)?.abort(new Error(message));
+		const started = trace.findLast((entry) => entry.operation === "run" && entry.key === key && entry.state === "started");
+		trace.push({
+			operation: "run",
+			key,
+			state: "stopped",
+			...(started?.agent ? { agent: started.agent } : {}),
+			...(started?.phase ? { phase: started.phase } : {}),
+			...(started?.label ? { label: started.label } : {}),
+			error: message,
+		});
+		traceChanged();
+		return true;
+	};
+	options.registerStopChild?.(stopChild);
 
 	return await new Promise<WorkflowScriptResult>((resolve, reject) => {
 		const finish = (outcome: { value: unknown } | { error: Error & { workflowErrorKind?: unknown } }) => {
@@ -827,6 +965,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			void Promise.allSettled([...steers.values()].map(({ promise }) => promise)).then(() => {
 				if (settled) return;
 				settled = true;
+				options.registerStopChild?.(undefined);
 				if (timer) clearTimeout(timer);
 				options.signal?.removeEventListener("abort", onAbort);
 				void worker.terminate();
@@ -1061,7 +1200,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			const deliver = (promise: Promise<WorkflowScriptChildResult>) => collectFailure
 				? promise
 				: promise.then((result) => {
-					if (!result.ok) {
+					if (!result.ok && !result.stopped) {
 						const childError = new Error(result.detached ? `Run '${key}' detached: ${result.error ?? result.output}` : `Run '${key}' failed: ${result.error ?? result.output}`) as Error & { workflowErrorKind?: "detached-child" };
 						if (result.detached) childError.workflowErrorKind = "detached-child";
 						throw childError;
@@ -1100,13 +1239,16 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			const promise = admission.then(async () => {
 				if (settled || finishing || stoppedLaunches.has(key)) {
 					const reason = childController.signal.reason;
-					const text = reason instanceof Error ? reason.message : typeof reason === "string" ? reason : "Workflow script aborted.";
-					return { key, ok: false, output: text, error: text, artifactPaths: [] };
+					const text = children.get(key)?.error ?? (reason instanceof Error ? reason.message : typeof reason === "string" ? reason : "Workflow script aborted.");
+					return stoppedChildResult(key, text);
 				}
+				const childStopController = new AbortController();
+				childStopControllers.set(key, childStopController);
+				const childSignal = combinedAbortSignal([childController.signal, childStopController.signal]);
 				const resolvedResumeValue = resumeReference
 					? await Promise.resolve().then(() => {
 						if (!options.resolveResume) throw new Error("Keyed workflow receipt resume is unavailable in this host.");
-						return options.resolveResume(resumeReference, childController.signal);
+						return options.resolveResume(resumeReference, childSignal);
 					})
 					: undefined;
 				const resolvedResume = typeof resolvedResumeValue === "string"
@@ -1124,22 +1266,24 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 					if (resolvedResumeLineage.at(-1) !== resolvedResumeId) resolvedResumeLineage.push(resolvedResumeId!);
 				}
 				const launchParams = resolvedResumeId ? { ...params, resume: resolvedResumeId } : params;
-				return options.launch(key, { ...launchParams, async: launchParams.async ?? false }, childController.signal, { admitted: true });
+				return options.launch(key, launchParams, childSignal, { admitted: true });
 			}).then((result) => {
 				let normalized = !result.ok && !result.error ? { ...result, error: result.output } : result;
 				if (resolvedResumeLineage?.length && normalized.runId) {
 					normalized = { ...normalized, continuation: { runIds: [...new Set([...resolvedResumeLineage, normalized.runId])] } };
 				}
-				if (stoppedLaunches.has(key)) return normalized;
+				childStopControllers.delete(key);
+				if (stoppedLaunches.has(key)) return children.get(key) ?? normalized;
 				children.set(key, normalized);
-				const state = normalized.ok ? "completed" : normalized.detached ? "detached" : "failed";
+				const state = normalized.ok ? "completed" : normalized.stopped ? "stopped" : normalized.detached ? "detached" : "failed";
 				trace.push({ operation: "run", key, state, durationMs: Date.now() - startedAt, ...workflowStringMetadata(params), ...(normalized.agent ? { agent: normalized.agent } : {}), ...(normalized.runId ? { runId: normalized.runId } : {}), ...(!normalized.ok ? { error: normalized.error ?? normalized.output } : {}) });
 				traceChanged();
 				return normalized;
 			}, (error: unknown) => {
 				const text = error instanceof Error ? error.message : String(error);
 				const failure: WorkflowScriptChildResult = { key, ok: false, output: text, error: text, artifactPaths: [] };
-				if (stoppedLaunches.has(key)) return failure;
+				childStopControllers.delete(key);
+				if (stoppedLaunches.has(key)) return children.get(key) ?? { ...failure, stopped: true };
 				children.set(key, failure);
 				trace.push({ operation: "run", key, state: "failed", durationMs: Date.now() - startedAt, ...workflowStringMetadata(params), error: text });
 				traceChanged();
