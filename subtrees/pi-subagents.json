@@ -4,10 +4,10 @@
   "prefix": "packages/pi-subagents",
   "source": "https://github.com/nicobailon/pi-subagents.git",
   "remote": "upstream-pi-subagents",
-  "ref": "v0.53.0",
-  "version": "0.53.0",
-  "upstreamCommit": "c91f4de5ea956f0d1fcab9e44eba079fa2f917dd",
+  "ref": "v0.56.0",
+  "version": "v0.56.0",
+  "upstreamCommit": "a0e2b9e31de5970215a567e20e2d781bbbddf235",
   "squash": true,
-  "lastSyncedAt": "2026-08-22T02:17:33+08:00",
+  "lastSyncedAt": "2026-08-24T20:21:46+08:00",
   "notes": "Forked from nicobailon/pi-subagents; local compatibility fixes preserve @xzzpig/pi-permission-system priority in resolvePermissionSystemExtension() and Pi SDK 0.83 streamFn option naming (intentionally diverges from upstream). Fleet native transcript (openspec fleet-native-transcript): adds src/tui/fleet-native-transcript.ts (JSONL→shared-library entries adapter + Pi-native renderer via guarded dynamic import of @xzzpig/pi-components/transcript), minimal wiring in src/tui/fleet.ts (renderer mode cache branch, v/V toggleRenderer keybinding, legacy fallback), new dependency @xzzpig/pi-components@0.3.0 bundled via bundledDependencies (private, never published to npm), and shared readTranscriptRecords export in src/tui/fleet-transcript.ts."
 }
