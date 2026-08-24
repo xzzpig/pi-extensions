@@ -482,6 +482,45 @@ describe("renderPromptDialog", () => {
       expect(view.lines[2]).toBe("command   : @'");
       expect(view.elided).toBe(true);
     });
+
+    it("bounds the same forwarded here-string ask carrying the child's own payload (#745)", () => {
+      // The same ask, arriving as the child built it rather than as a relayed
+      // sentence: `kind: "bash"` with the child's real evidence entries. A
+      // different input to the same budget, so the row bound is measured here
+      // rather than inferred from the `kind: "forwarded"` pin above.
+      const body = Array.from(
+        { length: 200 },
+        () => "- a finding line about some module in the codebase",
+      ).join("\n");
+      const command = `@'\n${body}\n'@ | Out-File -FilePath report.md`;
+      const budget = { maxRows: 24, fieldMaxWidth: 400, width: 120 };
+
+      const view = renderPromptDialog(
+        makePromptPayload({
+          kind: "bash",
+          request: {
+            ...makePromptPayload().request,
+            requester: {
+              agentName: "scout",
+              forwarded: true,
+              sessionId: "abc123",
+            },
+            surface: "bash",
+            toolName: "bash",
+            value: command,
+            matchedPattern: "*",
+          },
+          evidence: [
+            { label: "full command", text: command, detail: null },
+            { label: "working directory", text: "/repo", detail: null },
+          ],
+        }),
+        budget,
+      );
+
+      expect(view.lines.length).toBeLessThanOrEqual(budget.maxRows);
+      expect(view.elided).toBe(true);
+    });
   });
 
   describe("highlighting the flagged element", () => {

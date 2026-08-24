@@ -15,6 +15,10 @@ describe("DenyingAuthorizer", () => {
       approved: false,
       state: "denied",
       confirmationUnavailable: true,
+      decidedBy: {
+        kind: "unavailable",
+        reason: "No live authority was reachable for this session",
+      },
     });
   });
 
@@ -25,7 +29,6 @@ describe("DenyingAuthorizer", () => {
       makePromptDetails({
         requestId: "req-2",
         source: "skill_input",
-        message: "Allow skill input?",
         skillName: "deploy-helper",
       }),
     );
@@ -34,6 +37,10 @@ describe("DenyingAuthorizer", () => {
       approved: false,
       state: "denied",
       confirmationUnavailable: true,
+      decidedBy: {
+        kind: "unavailable",
+        reason: "No live authority was reachable for this session",
+      },
     });
   });
 });

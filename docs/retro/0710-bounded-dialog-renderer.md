@@ -80,3 +80,94 @@ Test count 2944 → 2978 (+34); `check`, root `lint` (0 findings), `fallow dead-
 - **Pre-completion reviewer: WARN** (no FAILs).
   Both findings were addressed rather than deferred: the documentation-precision nit on the redundancy rule, and a local variable in `coreFacts` named `value` while holding a label.
   Its third note (the narrower `Paint` type, the unlisted test file) is recorded above as a deviation.
+
+## Stage: Final Retrospective (2026-08-15T16:19:51Z)
+
+### Session summary
+
+One session carried planning, TDD implementation, ship, and this retrospective for Phase 13 Step 2: the bounded permission-dialog renderer.
+Seventeen commits landed `pi-permission-system@25.3.0`, closing [#710] and [#713] and superseding PRs [#716] and [#738] with authorship credited.
+The single user intervention of the session — a question about commit typing — exposed a changelog-honesty problem that cost a six-commit history rewrite and uncovered a silent co-authorship defect.
+
+### Observations
+
+#### What went well
+
+- **A planning-time measurement drove a design decision, not just a plan sentence.**
+  A disposable vitest spike over the real `wrapTextWithAnsi` put the reported ask at 202 rows locally / 205 forwarded.
+  That number then did five jobs: it proved [ADR 0011] §3 and §5 only cohere under one reading (the field cap must apply to the core, or the reported ask stays at 86–202 rows), it grounded the `ask_user` option set, it became the plan's predicted-effect table, it became a regression assertion in `test/presentation/dialog-renderer.test.ts`, and it became the evidence in the issue close comment.
+  The `/plan-issue` measurement rule exists to avoid false precision; here the measurement changed the design rather than decorating it.
+- **The tidy-first assessor caught the residue of a rule added one session earlier.**
+  [#744]'s retro added a `/plan-issue` grep obligation for a **newly required** interface field (grep constructors, not use sites).
+  This plan followed it and still missed two inline `PromptPreferences` constructions in `local-user-authorizer.test.ts`.
+  The assessor found both, plus the `as unknown as PermissionPromptView` casts that would have let a missing `budget` field compile clean.
+  A rule plus a fresh-context backstop caught what the rule alone did not.
+- **TDD ordering produced a diagnostic the plan could not.**
+  The [#710] repro assertion went green at cycle 3, before the row bound existed — proving the *field cap* is what fixes the reported case and the row budget only bounds evidence.
+  The plan predicted that division of labour; the cycle order demonstrated it.
+- **Tree-identity verification made a six-commit history rewrite safe.**
+  Every rebase pass was checked with `git diff --stat pre-retype-710 HEAD` against a backup tag, not by reading the rebase's own output — which is exactly what caught the silent no-op below.
+
+#### What caused friction (agent side)
+
+1. `missing-context` (user-caught) — five cycles that built a module nothing imported yet were typed `feat:`, and the wiring commit that changed every user's prompt appearance was typed `fix:`.
+   The precedent was already in a document read during planning: [#744]'s retro records Step 1 as an "all-hidden commit range" for exactly this situation.
+   The plan then propagated the wrong types into its TDD Order, and implementation followed the plan faithfully.
+   Impact: a user correction, a six-commit `GIT_SEQUENCE_EDITOR` rewrite, and roughly 15 tool calls.
+   The published changelog would otherwise have read as a construction diary — seven feature lines including two near-identical "bound the …" entries describing an internal seam — with the appearance change filed under Bug Fixes.
+2. `other` (self-identified) — the first scripted rebase reported `Successfully rebased and updated refs/heads/main` while changing not one subject.
+   This git writes its todo as `pick <sha> # <subject>`; the sequence-editor pattern expected no `#`, so every line stayed `pick` and the rebase replayed as a no-op.
+   Impact: three diagnostic tool calls (dry run on a fake todo, `git config` check, dumping the real todo) plus a re-run.
+   Caught by diffing the subjects afterwards, not by the rebase's exit message — the same class as `AGENTS.md`'s `tail`-masking trap, where the status comes from the wrong thing.
+3. `other` (self-identified) — `Co-authored-by:` was written *above* the `Refs #710, #716` paragraph, so git's trailer parser saw no trailer block at all and GitHub would not have attributed either contributor.
+   `Refs #710, #716` has no colon, so it is not trailer-shaped, and it was the final paragraph.
+   Verified both ways with `git interpret-trailers --parse`: empty for the shipped ordering, correct for `Refs` first.
+   Impact: one more rebase pass (three tool calls) — but the real cost was a false claim, since the turn-200 summary had already told the operator credit was given.
+   This is a direct collision with `AGENTS.md`'s own house style, which puts `Refs #N` last.
+4. `instruction-violation` (self-identified) — an `eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing` was added preemptively in `permission-prompt-component.ts`; the rule never fired, so lint rejected the unused directive.
+   The `code-design` skill states the rule plainly: add a disable only after the linter reports it.
+   Impact: one lint failure, one removal edit, one re-run.
+   No new rule warranted — the existing one is correct and the root-level lint caught it inside the same cycle.
+5. `instruction-violation` (self-identified) — one `Edit` used a fabricated absolute path with a doubled package segment (`…/pi/pi-permission-system/test/…` instead of `…/pi/pi-packages/packages/pi-permission-system/test/…`).
+   Impact: one denied call, corrected immediately.
+   Second consecutive session with this exact error ([#744]'s retro records the first).
+   No rule proposed: this package's own `external_directory` gate blocked it and named the correct path, which is the backstop working as designed.
+6. `instruction-violation` (self-identified) — this retro entry re-added `[#710]:` and `[ADR 0011]:` link definitions that the planning stage had already defined, tripping `MD053`.
+   The `markdown-conventions` skill names this exact case: link reference definitions are file-scoped, so an appended stage references them without redefining.
+   Impact: one `rumdl` failure and one removal edit, caught before the commit.
+
+[#713]: https://github.com/gotgenes/pi-packages/issues/713
+
+#### What caused friction (user side)
+
+- None.
+  The session's one intervention was a redirecting **question** ("Shouldn't a fresh presentation to the user at least warrant a feat?") rather than a correction, and it was strictly better than a correction would have been: it surfaced the literal mis-typing *and*, on investigation, the larger diary-changelog problem the question did not name.
+- One structural opportunity, not a user failure: the commit types were visible in the plan's TDD Order at plan-review time, but a list of nine `feat:`/`fix:` subjects is not legible as "what the changelog will say".
+  Nothing in the workflow renders that view, so there was nothing cheap for the operator to react to until the commits existed.
+
+### Diagnostic details
+
+- **Model-performance correlation** — planning, TDD, the commit-retype, and this retrospective ran on `anthropic/claude-opus-5`; the ship stage ran on `anthropic/claude-sonnet-5`.
+  Both subagents (`tidy-first-assessor`, `pre-completion-reviewer`) ran `anthropic/claude-sonnet-5` per their frontmatter.
+  The split is appropriate and matches [#744]: shipping is a deterministic checklist, while planning and TDD carried the design judgment.
+  No mismatch in either direction — both subagents did judgment-heavy work well, the assessor finding fixture sites the plan's grep missed and the reviewer catching a documentation-precision gap about a second omission mechanism.
+- **Escalation-delay tracking** — no `rabbit-hole` friction points.
+  The longest single-error sequence was three tool calls (diagnosing the rebase no-op), well under the five-call threshold.
+- **Unused-tool detection** — nothing missed.
+  `colgrep` went unused, correctly: every search was exact-symbol (`formatAskPrompt`, `doublePressToConfirm`, `requestPermissionDecision`), which the `colgrep` skill's decision table assigns to `grep`.
+- **Feedback-loop gap analysis** — no gap.
+  `pnpm run check` plus the cycle-scoped `vitest run <file>` ran after every red and green; root `pnpm run lint` ran before every commit, which is what caught the speculative `eslint-disable` inside its own cycle; `pnpm run test`, `pnpm fallow dead-code`, and `verify:public-types` ran at the end and again after the retype.
+
+### Changes made
+
+1. `AGENTS.md` § Commits — type a commit by what a user can observe once it lands, not by what it adds to the tree; a module nothing imports yet is `refactor:` and the wiring commit carries the `feat:`/`fix:`.
+2. `AGENTS.md` § Commits — `Co-authored-by:` belongs in the final paragraph, below `Refs #N`, because git reads only the last paragraph as trailers and `Refs #N` is not trailer-shaped; verify with `git interpret-trailers --parse`.
+3. `AGENTS.md` § Commits — a scripted rebase reports `Successfully rebased` even when its sequence editor matched nothing, since this git writes its todo as `pick <sha> # <subject>`; verify by diffing subjects and confirm content with `git diff <backup-tag> HEAD`.
+4. `.pi/prompts/tdd-plan.md` — added a changelog-preview check to "After the last TDD step" (new item 9), so a commit describing an internal seam is retyped before anything is pushed.
+
+Four candidates were considered and declined, recorded so a later session does not re-derive them:
+
+1. A rule for the doubled-package-segment `Edit` path (second consecutive session) — the `external_directory` gate blocks it and names the correct path, so the backstop already works.
+2. Added emphasis on `code-design`'s speculative-`eslint-disable` rule — the rule is adequate and root lint caught the violation inside its own cycle.
+3. A `markdown-conventions` change for duplicate link-reference definitions — the skill already names this exact case and `rumdl` caught it pre-commit.
+4. Putting the changelog preview in `/plan-issue` instead of `/tdd-plan` — cheaper to act on, but the plan is a prediction, and this session's prediction was the thing that was wrong.

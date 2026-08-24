@@ -42,5 +42,5 @@ describe("formatUnknownToolReason", () => {
   });
 });
 
-// formatSkillPathDenyReason has moved to denial-messages.ts.
-// Its behavior is tested in denial-messages.test.ts.
+// Skill denial text is now a render over the prompt payload.
+// Its behavior is tested in presentation/agent-renderer.test.ts.

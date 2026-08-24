@@ -9,7 +9,6 @@
  */
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { vi } from "vitest";
-
 import type { ResolvedAccessIntent } from "#src/access-intent/access-intent";
 import type { AskEscalator } from "#src/authority/authorizer-selection";
 import type { ShellToolsConfig } from "#src/config-schema";
@@ -31,6 +30,7 @@ import type { Rule } from "#src/rule";
 import { SessionRules } from "#src/session-rules";
 import type { ToolRegistry } from "#src/tool-registry";
 import type { PermissionCheckResult, PermissionState } from "#src/types";
+import { DECIDED_BY_HUMAN } from "#test/helpers/decision-fixtures";
 import {
   makeConfigStore,
   makeRealResolver,
@@ -86,6 +86,7 @@ export function makeCtx(
     sessionManager: {
       getEntries: vi.fn().mockReturnValue([]),
       getSessionDir: vi.fn().mockReturnValue("/sessions/test"),
+      getSessionId: vi.fn().mockReturnValue("test-session"),
       addEntry: vi.fn(),
     },
     ...overrides,
@@ -314,9 +315,11 @@ export function makeHandler(overrides?: {
   const skillInputPipeline = new SkillInputGatePipeline(resolver);
   const reporter = new GateDecisionReporter(logger, events);
   const prompter: AskEscalator = overrides?.prompter ?? {
-    escalate: vi
-      .fn<AskEscalator["escalate"]>()
-      .mockResolvedValue({ approved: true, state: "approved" }),
+    escalate: vi.fn<AskEscalator["escalate"]>().mockResolvedValue({
+      approved: true,
+      state: "approved",
+      decidedBy: DECIDED_BY_HUMAN,
+    }),
   };
   const runner = new GateRunner(
     resolver,

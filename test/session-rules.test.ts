@@ -3,7 +3,7 @@ import { posixPathFlavor } from "#src/path/path-flavor";
 import { evaluate } from "#src/rule";
 import { SessionApproval } from "#src/session-approval";
 import type { SessionApprovalRecorder } from "#src/session-approval-recorder";
-import { deriveApprovalPattern, SessionRules } from "#src/session-rules";
+import { SessionRules } from "#src/session-rules";
 
 // ── SessionRules ───────────────────────────────────────────────────────────
 
@@ -238,85 +238,5 @@ describe("SessionRules", () => {
         ).action,
       ).toBe("allow");
     });
-  });
-});
-
-// ── deriveApprovalPattern ──────────────────────────────────────────────────
-
-describe("deriveApprovalPattern", () => {
-  it("returns parent directory glob for a file path", () => {
-    expect(deriveApprovalPattern("/other/project/src/foo.ts")).toBe(
-      "/other/project/src/*",
-    );
-  });
-
-  it("returns directory glob when path already ends with separator", () => {
-    expect(deriveApprovalPattern("/other/project/src/")).toBe(
-      "/other/project/src/*",
-    );
-  });
-
-  it("returns parent directory glob for a directory-like path without trailing separator", () => {
-    // Cannot distinguish dir from file — dirname is the safe choice
-    expect(deriveApprovalPattern("/other/project/src")).toBe(
-      "/other/project/*",
-    );
-  });
-
-  it("handles root path", () => {
-    expect(deriveApprovalPattern("/")).toBe("/*");
-  });
-
-  it("handles single-level path", () => {
-    expect(deriveApprovalPattern("/foo")).toBe("/*");
-  });
-
-  it("produces a pattern that matches paths under the approved directory", () => {
-    const pattern = deriveApprovalPattern("/other/project/src/foo.ts");
-    const session = new SessionRules();
-    session.approve("external_directory", pattern);
-    expect(
-      evaluate(
-        "external_directory",
-        "/other/project/src/bar.ts",
-        session.getRuleset(),
-        posixPathFlavor,
-      ).action,
-    ).toBe("allow");
-  });
-
-  it("produces a pattern that does not match sibling directories", () => {
-    const pattern = deriveApprovalPattern("/other/project/src/foo.ts");
-    const session = new SessionRules();
-    session.approve("external_directory", pattern);
-    expect(
-      evaluate(
-        "external_directory",
-        "/other/project/lib/bar.ts",
-        session.getRuleset(),
-        posixPathFlavor,
-      ).action,
-    ).toBe("ask");
-  });
-
-  it("binds a current-directory file to the cwd subtree once resolved", () => {
-    // Callers resolve the path to its canonical absolute form before deriving;
-    // a current-directory file then yields the cwd glob and excludes siblings.
-    const pattern = deriveApprovalPattern("/test/project/index.html");
-    expect(pattern).toBe("/test/project/*");
-    const session = new SessionRules();
-    session.approve("edit", pattern);
-    expect(
-      evaluate(
-        "edit",
-        "/test/project/index.html",
-        session.getRuleset(),
-        posixPathFlavor,
-      ).action,
-    ).toBe("allow");
-    expect(
-      evaluate("edit", "/etc/passwd", session.getRuleset(), posixPathFlavor)
-        .action,
-    ).toBe("ask");
   });
 });

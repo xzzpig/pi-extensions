@@ -12,11 +12,23 @@ import type { PromptPayload } from "#src/presentation/prompt-payload";
 export function makePromptDetails(
   overrides?: Partial<PromptPermissionDetails>,
 ): PromptPermissionDetails {
+  return { requestId: "req-1", ...makeGatePromptDetails(), ...overrides };
+}
+
+/**
+ * The gate-descriptor projection of {@link makePromptDetails}.
+ *
+ * A gate supplies every prompt detail except the request id, which the runner
+ * mints. Declared beside the full factory so a new required field is defaulted
+ * once for both, rather than diverging between the prompter tests and the gate
+ * tests.
+ */
+export function makeGatePromptDetails(
+  overrides?: Partial<Omit<PromptPermissionDetails, "requestId">>,
+): Omit<PromptPermissionDetails, "requestId"> {
   return {
-    requestId: "req-1",
     source: "tool_call",
     agentName: null,
-    message: "Allow this?",
     payload: makePromptPayload(),
     ...overrides,
   };

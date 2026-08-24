@@ -3,7 +3,11 @@ import { LocalUserAuthorizer } from "#src/authority/local-user-authorizer";
 import type { PermissionPromptDecision } from "#src/authority/permission-dialog";
 import type { requestPermissionDecision } from "#src/authority/permission-prompt-component";
 import type { PromptPermissionDetails } from "#src/authority/permission-prompter";
-import { makePromptDetails } from "#test/helpers/prompt-details-fixtures";
+import { DECIDED_BY_HUMAN } from "#test/helpers/decision-fixtures";
+import {
+  makePromptDetails,
+  makePromptPayload,
+} from "#test/helpers/prompt-details-fixtures";
 import { makePromptPreferences } from "#test/helpers/prompt-view-fixtures";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -18,7 +22,6 @@ function makeDetails(
   return makePromptDetails({
     requestId: "req-123",
     agentName: "test-agent",
-    message: "Allow read?",
     toolName: "read",
     ...overrides,
   });
@@ -47,9 +50,11 @@ function makeDeps(
   const ui = makePromptUi();
   const decisionFn =
     overrides.requestPermissionDecision ??
-    vi
-      .fn<typeof requestPermissionDecision>()
-      .mockResolvedValue({ approved: true, state: "approved" });
+    vi.fn<typeof requestPermissionDecision>().mockResolvedValue({
+      approved: true,
+      state: "approved",
+      decidedBy: DECIDED_BY_HUMAN,
+    });
   return {
     deps: {
       ui,
@@ -85,7 +90,7 @@ describe("LocalUserAuthorizer", () => {
       surface: "bash",
       value: "git push",
       agentName: "test-agent",
-      message: "Allow read?",
+      request: makePromptPayload().request,
       forwarding: null,
     });
   });
@@ -108,7 +113,7 @@ describe("LocalUserAuthorizer", () => {
       surface: "skill",
       value: "deploy-helper",
       agentName: "test-agent",
-      message: "Allow read?",
+      request: makePromptPayload().request,
       forwarding: null,
     });
   });
@@ -155,7 +160,11 @@ describe("LocalUserAuthorizer", () => {
     const ui = makePromptUi();
     const decisionFn = vi.fn<typeof requestPermissionDecision>(() => {
       calls.push("dialog");
-      return Promise.resolve({ approved: true, state: "approved" });
+      return Promise.resolve({
+        approved: true,
+        state: "approved",
+        decidedBy: DECIDED_BY_HUMAN,
+      });
     });
     const authorizer = new LocalUserAuthorizer({
       ui,
@@ -179,8 +188,6 @@ describe("LocalUserAuthorizer", () => {
         makeDetails({
           source: "tool_call",
           agentName: "Explore",
-          message:
-            "Subagent 'Explore' requested permission.\n\nAllow git push?",
           surface: "bash",
           value: "git push",
           forwarding: {
@@ -196,7 +203,7 @@ describe("LocalUserAuthorizer", () => {
         surface: "bash",
         value: "git push",
         agentName: "Explore",
-        message: "Subagent 'Explore' requested permission.\n\nAllow git push?",
+        request: makePromptPayload().request,
         forwarding: {
           requesterAgentName: "Explore",
           requesterSessionId: "child-session",
@@ -280,6 +287,7 @@ describe("LocalUserAuthorizer", () => {
     const decision: PermissionPromptDecision = {
       approved: false,
       state: "denied",
+      decidedBy: DECIDED_BY_HUMAN,
     };
     const { deps } = makeDeps({
       requestPermissionDecision: vi
