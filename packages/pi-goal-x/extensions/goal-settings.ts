@@ -593,8 +593,8 @@ export interface SettingsSnapshot {
 /**
  * Resolve one settings leaf across layers (environment > project > global > default).
  *
- * SAFETY: callers that pass `undefined as unknown as T` for defaultValue rely
- * on the runtime contract that only `=== undefined` is checked — no T-typed
+ * SAFETY: callers passing `undefined as unknown as T` for defaultValue rely on
+ * the runtime contract that only `=== undefined` is checked — no T-typed
  * operation is ever performed on the default, so the cast cannot misbehave.
  */
 function resolveLeaf<T>(args: {
