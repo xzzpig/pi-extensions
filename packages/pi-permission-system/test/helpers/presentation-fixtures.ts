@@ -1,6 +1,5 @@
 import type { ToolInputFormatterLookup } from "#src/tool-input-formatter-registry";
 import {
-  TOOL_INPUT_LOG_PREVIEW_MAX_LENGTH,
   TOOL_INPUT_PREVIEW_MAX_LENGTH,
   TOOL_TEXT_SUMMARY_MAX_LENGTH,
 } from "#src/tool-input-preview";
@@ -14,7 +13,7 @@ import type { PermissionCheckResult } from "#src/types";
  * Build a `PermissionCheckResult` for a presentation unit test.
  *
  * Defaults to the package's least-privilege `ask`. The presentation modules
- * (`denial-messages`, `permission-prompts`, `tool-preview-formatter`) never
+ * (the payload builders, `permission-prompts`, `tool-preview-formatter`) never
  * read `state`, so a file whose subject is denials or allows wraps this with
  * its own default rather than the caller repeating the whole literal.
  */
@@ -45,7 +44,6 @@ export function makeToolPreviewFormatter(
     {
       toolInputPreviewMaxLength: TOOL_INPUT_PREVIEW_MAX_LENGTH,
       toolTextSummaryMaxLength: TOOL_TEXT_SUMMARY_MAX_LENGTH,
-      toolInputLogPreviewMaxLength: TOOL_INPUT_LOG_PREVIEW_MAX_LENGTH,
       ...options,
     },
     customFormatters,

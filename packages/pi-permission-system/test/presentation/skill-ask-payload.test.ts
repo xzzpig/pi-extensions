@@ -1,5 +1,4 @@
 import { describe, expect, test } from "vitest";
-import { renderLegacyMessage } from "#src/presentation/legacy-message";
 import {
   buildSkillAskPayload,
   buildSkillPathAskPayload,
@@ -35,18 +34,12 @@ describe("buildSkillAskPayload", () => {
     expect(payload.evidence).toEqual([]);
   });
 
-  test("includes skill name and agent name", () => {
-    const result = renderLegacyMessage(
-      buildSkillAskPayload("librarian", "my-agent"),
-    );
-    expect(result).toContain("librarian");
-    expect(result).toContain("Agent 'my-agent'");
-  });
-
-  test("uses 'Current agent' without agent name", () => {
-    const result = renderLegacyMessage(buildSkillAskPayload("librarian", null));
-    expect(result).toContain("Current agent");
-    expect(result).toContain("librarian");
+  test("leaves the requester unnamed when no agent is active", () => {
+    expect(buildSkillAskPayload("librarian", null).request.requester).toEqual({
+      agentName: null,
+      forwarded: false,
+      sessionId: null,
+    });
   });
 });
 
@@ -69,28 +62,13 @@ describe("buildSkillPathAskPayload", () => {
     ]);
   });
 
-  test("includes skill name, read path, and agent name", () => {
-    const result = renderLegacyMessage(
+  test("names the requesting agent on the payload", () => {
+    expect(
       buildSkillPathAskPayload(
         skillEntry("librarian"),
         "/skills/librarian/SKILL.md",
         "my-agent",
-      ),
-    );
-    expect(result).toContain("librarian");
-    expect(result).toContain("/skills/librarian/SKILL.md");
-    expect(result).toContain("Agent 'my-agent'");
-  });
-
-  test("uses 'Current agent' without agent name", () => {
-    expect(
-      renderLegacyMessage(
-        buildSkillPathAskPayload(
-          skillEntry("librarian"),
-          "/skills/librarian/SKILL.md",
-          null,
-        ),
-      ),
-    ).toContain("Current agent");
+      ).request.requester.agentName,
+    ).toBe("my-agent");
   });
 });

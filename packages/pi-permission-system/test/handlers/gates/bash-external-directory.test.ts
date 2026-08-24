@@ -11,15 +11,25 @@ import type {
 } from "#src/handlers/gates/descriptor";
 import { isGateBypass, isGateDescriptor } from "#src/handlers/gates/descriptor";
 import type { ToolCallContext } from "#src/handlers/gates/types";
-import { pathFlavorForPlatform, win32PathFlavor } from "#src/path/path-flavor";
+import { pathFlavorForPlatform } from "#src/path/path-flavor";
 import { PathNormalizer } from "#src/path-normalizer";
 import type { ScopedPermissionResolver } from "#src/permission-resolver";
+import {
+  allEvidence,
+  findEvidence,
+  type PromptPayload,
+} from "#src/presentation/prompt-payload";
 import type { PermissionCheckResult } from "#src/types";
 import { getNonEmptyString, toRecord } from "#src/value-guards";
 
 import { makeResolver } from "#test/helpers/gate-fixtures";
 
 // ── helpers ────────────────────────────────────────────────────────────────
+
+/** Every escaping path the payload lists, in payload order. */
+function externalPaths(payload: PromptPayload): string[] {
+  return allEvidence(payload, "external path").map((entry) => entry.text);
+}
 
 function makeTcc(overrides: Partial<ToolCallContext> = {}): ToolCallContext {
   return {
@@ -60,15 +70,34 @@ async function describeGate(
   tcc: ToolCallContext,
   resolver: ScopedPermissionResolver,
 ): Promise<GateResult> {
+  return describeGateOnPlatform(process.platform, tcc, resolver);
+}
+
+/**
+ * Variant of {@link describeGate} that injects an explicit host platform, so a
+ * win32-specific decision can be exercised on a POSIX CI host (and vice versa)
+ * without mocking `node:path` (#533).
+ */
+async function describeGateOnPlatform(
+  platform: NodeJS.Platform,
+  tcc: ToolCallContext,
+  resolver: ScopedPermissionResolver,
+): Promise<GateResult> {
+  const normalizer = new PathNormalizer(
+    pathFlavorForPlatform(platform),
+    tcc.cwd,
+  );
   const command = getNonEmptyString(toRecord(tcc.input).command);
   const bashProgram =
     tcc.toolName === "bash" && command
-      ? await BashProgram.parse(
-          command,
-          new PathNormalizer(pathFlavorForPlatform(process.platform), tcc.cwd),
-        )
+      ? await BashProgram.parse(command, normalizer)
       : null;
-  return describeBashExternalDirectoryGate(tcc, bashProgram, resolver);
+  return describeBashExternalDirectoryGate(
+    tcc,
+    bashProgram,
+    resolver,
+    normalizer,
+  );
 }
 
 // ── tests ──────────────────────────────────────────────────────────────────
@@ -102,12 +131,9 @@ describe("describeBashExternalDirectoryGate", () => {
         resolver,
       );
       expect(isGateDescriptor(result)).toBe(true);
-      expect((result as GateDescriptor).denialContext).toMatchObject({
-        kind: "bash_external_directory",
-        externalPaths: [
-          { path: join(homedir(), "pi-permission-system-repro-new") },
-        ],
-      });
+      expect(externalPaths((result as GateDescriptor).payload)).toEqual([
+        join(homedir(), "pi-permission-system-repro-new"),
+      ]);
     });
 
     // biome-ignore lint/suspicious/noTemplateCurlyInString: intentional literal — a braced shell expansion, not a template string
@@ -118,10 +144,9 @@ describe("describeBashExternalDirectoryGate", () => {
         makeResolver(makeCheckResult("ask")),
       );
       expect(isGateDescriptor(result)).toBe(true);
-      expect((result as GateDescriptor).denialContext).toMatchObject({
-        kind: "bash_external_directory",
-        externalPaths: [{ path: join(homedir(), "somewhere") }],
-      });
+      expect(externalPaths((result as GateDescriptor).payload)).toEqual([
+        join(homedir(), "somewhere"),
+      ]);
     });
 
     it("does not prompt for a variable it cannot resolve", async () => {
@@ -171,12 +196,10 @@ describe("describeBashExternalDirectoryGate", () => {
       resolver,
     )) as GateDescriptor;
 
-    expect(result.promptDetails.payload.kind).toBe("bash_external_directory");
+    expect(result.payload.kind).toBe("bash_external_directory");
     // The command is the decision value; the paths it reaches are evidence.
-    expect(result.promptDetails.payload.request.value).toBe(
-      "cat /outside/a.ts",
-    );
-    expect(result.promptDetails.payload.evidence).toContainEqual({
+    expect(result.payload.request.value).toBe("cat /outside/a.ts");
+    expect(result.payload.evidence).toContainEqual({
       label: "external path",
       text: "/outside/a.ts",
       detail: null,
@@ -195,6 +218,11 @@ describe("describeBashExternalDirectoryGate", () => {
     expect(bypass.log).toMatchObject({
       event: "permission_request.session_approved",
       details: expect.objectContaining({ resolution: "session_approved" }),
+    });
+    expect(bypass.decidedBy).toEqual({
+      kind: "session_approval",
+      surface: "external_directory",
+      pattern: null,
     });
   });
 
@@ -259,17 +287,17 @@ describe("describeBashExternalDirectoryGate", () => {
     expect(desc.decision.surface).toBe("external_directory");
   });
 
-  it("denialContext contains the command and external paths", async () => {
+  it("payload carries the command and the boundary it escaped", async () => {
     const result = await describeGate(
       makeTcc({ input: { command: "cat /outside/file.ts" } }),
       makeResolver(makeCheckResult("ask")),
     );
-    const desc = result as GateDescriptor;
-    expect(desc.denialContext).toMatchObject({
-      kind: "bash_external_directory",
-      command: "cat /outside/file.ts",
-      cwd: "/test/project",
-    });
+    const { payload } = result as GateDescriptor;
+    expect(payload.kind).toBe("bash_external_directory");
+    expect(payload.request.value).toBe("cat /outside/file.ts");
+    expect(findEvidence(payload, "working directory")?.text).toBe(
+      "/test/project",
+    );
   });
 
   it("promptDetails includes command and tool_call source", async () => {
@@ -349,26 +377,12 @@ describe("describeBashExternalDirectoryGate", () => {
 });
 
 describe("describeBashExternalDirectoryGate — Git Bash semantics (win32)", () => {
-  async function describeGateWin32(
-    tcc: ToolCallContext,
-    resolver: ScopedPermissionResolver,
-  ): Promise<GateResult> {
-    const command = getNonEmptyString(toRecord(tcc.input).command);
-    const bashProgram =
-      tcc.toolName === "bash" && command
-        ? await BashProgram.parse(
-            command,
-            new PathNormalizer(win32PathFlavor, tcc.cwd),
-          )
-        : null;
-    return describeBashExternalDirectoryGate(tcc, bashProgram, resolver);
-  }
-
   const winTcc = (command: string): ToolCallContext =>
     makeTcc({ cwd: "C:/projects/app", input: { command } });
 
   it("does not prompt for a /dev/null redirect target", async () => {
-    const result = await describeGateWin32(
+    const result = await describeGateOnPlatform(
+      "win32",
       winTcc("echo hi > /dev/null"),
       makeResolver(makeCheckResult("ask")),
     );
@@ -376,15 +390,46 @@ describe("describeBashExternalDirectoryGate — Git Bash semantics (win32)", () 
   });
 
   it("prompts for a /tmp path displayed as typed, not as C:\\tmp", async () => {
-    const result = await describeGateWin32(
+    const result = await describeGateOnPlatform(
+      "win32",
       winTcc("ls /tmp"),
       makeResolver(makeCheckResult("ask")),
     );
     expect(isGateDescriptor(result)).toBe(true);
-    const desc = result as GateDescriptor;
-    expect(desc.denialContext).toMatchObject({
-      kind: "bash_external_directory",
-      externalPaths: [{ path: "/tmp" }],
-    });
+    expect(externalPaths((result as GateDescriptor).payload)).toEqual(["/tmp"]);
+  });
+
+  it("derives the session approval through the injected flavor, not the host", async () => {
+    // A native Windows path carries backslash separators the *host* POSIX
+    // `node:path` cannot see, so an ambient derivation collapses it to `./*`
+    // and the recorded grant matches nothing (#655).
+    const result = await describeGateOnPlatform(
+      "win32",
+      makeTcc({
+        cwd: "C:\\Projects\\App",
+        input: { command: "cat C:\\Other\\data\\x.txt" },
+      }),
+      makeResolver(makeCheckResult("ask")),
+    );
+    expect(isGateDescriptor(result)).toBe(true);
+    expect((result as GateDescriptor).sessionApproval?.patterns).toEqual([
+      "c:\\other\\data\\*",
+    ]);
+  });
+
+  // Invariant pin, not a probe: the pre-#655 ambient derivation also produced
+  // `/tmp/logs/*` on a POSIX CI host, since it read the *host* separator. It
+  // goes red only against a flavor-aware derivation that scopes on
+  // `flavor.impl.sep` — the tempting rewrite that reintroduces the widening.
+  it("keeps a POSIX-shaped Git Bash directory token scoped to itself", async () => {
+    const result = await describeGateOnPlatform(
+      "win32",
+      winTcc("ls /tmp/logs/"),
+      makeResolver(makeCheckResult("ask")),
+    );
+    expect(isGateDescriptor(result)).toBe(true);
+    expect((result as GateDescriptor).sessionApproval?.patterns).toEqual([
+      "/tmp/logs/*",
+    ]);
   });
 });

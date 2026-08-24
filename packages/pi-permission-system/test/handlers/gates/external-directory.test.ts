@@ -7,7 +7,7 @@ import type {
 import { isGateBypass, isGateDescriptor } from "#src/handlers/gates/descriptor";
 import { describeExternalDirectoryGate } from "#src/handlers/gates/external-directory";
 import type { ToolCallContext } from "#src/handlers/gates/types";
-import { pathFlavorForPlatform } from "#src/path/path-flavor";
+import { pathFlavorForPlatform, win32PathFlavor } from "#src/path/path-flavor";
 import { PathNormalizer } from "#src/path-normalizer";
 import type { ScopedPermissionResolver } from "#src/permission-resolver";
 import type { ToolAccessExtractorLookup } from "#src/tool-access-extractor-registry";
@@ -88,6 +88,8 @@ describe("describeExternalDirectoryGate", () => {
     expect(bypass.log).toMatchObject({
       event: "permission_request.infrastructure_auto_allowed",
     });
+    // Containment allowed this, not a rule the operator wrote.
+    expect(bypass.decidedBy).toEqual({ kind: "infrastructure_read" });
   });
 
   it("returns GateBypass respecting custom infraDirs", () => {
@@ -154,11 +156,9 @@ describe("describeExternalDirectoryGate", () => {
       ["/test/agent"],
     ) as GateDescriptor;
 
-    expect(result.promptDetails.payload.kind).toBe("external_directory");
-    expect(result.promptDetails.payload.request.value).toBe(
-      "/outside/project/file.ts",
-    );
-    expect(result.promptDetails.payload.evidence).toContainEqual({
+    expect(result.payload.kind).toBe("external_directory");
+    expect(result.payload.request.value).toBe("/outside/project/file.ts");
+    expect(result.payload.evidence).toContainEqual({
       label: "working directory",
       text: "/test/project",
       detail: null,
@@ -199,26 +199,27 @@ describe("describeExternalDirectoryGate", () => {
     }
   });
 
-  it("sessionApproval uses deriveApprovalPattern", () => {
+  it("records a directory-scoped session approval on the external_directory surface", () => {
     const result = gateUnderTest(
       makeTcc({ input: { path: "/outside/project/file.ts" } }),
       ["/test/agent"],
     ) as GateDescriptor;
-    expect(result.sessionApproval).toBeDefined();
     expect(result.sessionApproval?.surface).toBe("external_directory");
-    expect(result.sessionApproval?.representativePattern).toBeDefined();
+    expect(result.sessionApproval?.patterns).toEqual(["/outside/project/*"]);
   });
 
-  it("denialContext contains the external path and cwd", () => {
+  it("payload contains the external path and the boundary it escaped", () => {
     const result = gateUnderTest(
       makeTcc({ input: { path: "/outside/project/file.ts" } }),
       ["/test/agent"],
     ) as GateDescriptor;
-    expect(result.denialContext).toMatchObject({
-      kind: "external_directory",
-      toolName: "read",
-      pathValue: "/outside/project/file.ts",
-      cwd: "/test/project",
+    expect(result.payload.kind).toBe("external_directory");
+    expect(result.payload.request.toolName).toBe("read");
+    expect(result.payload.request.value).toBe("/outside/project/file.ts");
+    expect(result.payload.evidence).toContainEqual({
+      label: "working directory",
+      text: "/test/project",
+      detail: null,
     });
   });
 
@@ -236,13 +237,14 @@ describe("describeExternalDirectoryGate", () => {
     });
   });
 
-  it("logContext includes path and message", () => {
+  it("logContext includes the path, and no prompt wording", () => {
     const result = gateUnderTest(makeTcc(), ["/test/agent"]) as GateDescriptor;
     expect(result.logContext).toMatchObject({
       source: "tool_call",
       path: "/outside/project/file.ts",
     });
-    expect(result.logContext.message).toBeDefined();
+    // The payload's request facts are stamped by the runner, not the gate.
+    expect(result.logContext).not.toHaveProperty("message");
   });
 });
 
@@ -297,5 +299,26 @@ describe("describeExternalDirectoryGate — extension and MCP tools (#352)", () 
       ["/test/agent"],
     );
     expect(result).toBeNull();
+  });
+
+  it("derives the session approval through the injected flavor, not the host", () => {
+    // A native Windows path carries backslash separators the *host* POSIX
+    // `node:path` cannot see, so an ambient derivation collapses it to `./*`
+    // and the recorded grant matches nothing (#655).
+    const result = describeExternalDirectoryGate(
+      makeTcc({
+        input: { path: "C:\\Other\\data\\x.txt" },
+        cwd: "C:\\Projects\\App",
+      }),
+      [],
+      makeResolver(
+        makeCheckResult({ state: "ask", toolName: "external_directory" }),
+      ),
+      new PathNormalizer(win32PathFlavor, "C:\\Projects\\App"),
+    );
+    expect(isGateDescriptor(result)).toBe(true);
+    expect((result as GateDescriptor).sessionApproval?.patterns).toEqual([
+      "c:\\other\\data\\*",
+    ]);
   });
 });

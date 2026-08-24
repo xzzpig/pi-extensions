@@ -1,5 +1,4 @@
 import { describe, expect, test } from "vitest";
-import { renderLegacyMessage } from "#src/presentation/legacy-message";
 import {
   buildBashExternalDirectoryAskPayload,
   buildExternalDirectoryAskPayload,
@@ -29,64 +28,48 @@ describe("buildPathAskPayload", () => {
     expect(payload.evidence).toEqual([]);
   });
 
-  test("renders the path ask", () => {
+  test("leaves the requester unnamed when no agent is active", () => {
     expect(
-      renderLegacyMessage(
-        buildPathAskPayload({
-          toolName: "read",
-          pathValue: "/etc/passwd",
-          agentName: null,
-        }),
-      ),
-    ).toBe(
-      "Current agent requested tool 'read' for path '/etc/passwd'. Allow this path access?",
-    );
+      buildPathAskPayload({
+        toolName: "read",
+        pathValue: "/etc/passwd",
+        agentName: null,
+      }).request.requester,
+    ).toEqual({ agentName: null, forwarded: false, sessionId: null });
   });
 });
 
 describe("buildExternalDirectoryAskPayload", () => {
-  test("uses 'Current agent' when no agent name provided", () => {
-    const result = renderLegacyMessage(
-      buildExternalDirectoryAskPayload({
-        toolName: "read",
-        pathValue: "/etc/passwd",
-        cwd: "/projects/my-app",
-        agentName: null,
-      }),
-    );
-    expect(result).toContain("Current agent");
-    expect(result).toContain("read");
-    expect(result).toContain("/etc/passwd");
-    expect(result).toContain("/projects/my-app");
+  test("carries the typed path, the boundary, and the requester", () => {
+    const payload = buildExternalDirectoryAskPayload({
+      toolName: "write",
+      pathValue: "/tmp/out.txt",
+      cwd: "/projects/my-app",
+      agentName: "my-agent",
+    });
+
+    expect(payload.kind).toBe("external_directory");
+    expect(payload.request.toolName).toBe("write");
+    expect(payload.request.value).toBe("/tmp/out.txt");
+    expect(payload.request.requester.agentName).toBe("my-agent");
+    expect(payload.evidence).toEqual([
+      { label: "working directory", text: "/projects/my-app", detail: null },
+    ]);
   });
 
-  test("uses agent name when provided", () => {
-    const result = renderLegacyMessage(
-      buildExternalDirectoryAskPayload({
-        toolName: "write",
-        pathValue: "/tmp/out.txt",
-        cwd: "/projects/my-app",
-        agentName: "my-agent",
-      }),
-    );
-    expect(result).toContain("Agent 'my-agent'");
-    expect(result).toContain("write");
-    expect(result).toContain("/tmp/out.txt");
-  });
-
-  test("discloses the resolved path when it differs from the typed path", () => {
-    const result = renderLegacyMessage(
+  test("discloses the resolved path as its own entry when it differs", () => {
+    expect(
       buildExternalDirectoryAskPayload({
         toolName: "read",
         pathValue: "demo-symlink-passwd",
         resolvedPath: "/etc/passwd",
         cwd: "/projects/my-app",
         agentName: null,
-      }),
-    );
-    expect(result).toBe(
-      "Current agent requested tool 'read' for path 'demo-symlink-passwd' (resolves to '/etc/passwd') outside working directory '/projects/my-app'. Allow this external directory access?",
-    );
+      }).evidence,
+    ).toEqual([
+      { label: "resolves to", text: "/etc/passwd", detail: null },
+      { label: "working directory", text: "/projects/my-app", detail: null },
+    ]);
   });
 
   test("omits the disclosure when resolvedPath is undefined", () => {
@@ -100,39 +83,26 @@ describe("buildExternalDirectoryAskPayload", () => {
     expect(payload.evidence).toEqual([
       { label: "working directory", text: "/projects/my-app", detail: null },
     ]);
-    expect(renderLegacyMessage(payload)).not.toContain("resolves to");
   });
 });
 
 describe("buildBashExternalDirectoryAskPayload", () => {
-  test("includes command, paths, cwd, and agent name", () => {
-    const result = renderLegacyMessage(
-      buildBashExternalDirectoryAskPayload({
-        command: "cat /etc/passwd",
-        externalPaths: [{ path: "/etc/passwd" }],
-        cwd: "/projects/my-app",
-        agentName: "my-agent",
-        toolName: "bash",
-      }),
-    );
-    expect(result).toContain("Agent 'my-agent'");
-    expect(result).toContain("cat /etc/passwd");
-    expect(result).toContain("/etc/passwd");
-    expect(result).toContain("/projects/my-app");
-  });
+  test("makes the command the value and the paths it reached evidence", () => {
+    const payload = buildBashExternalDirectoryAskPayload({
+      command: "cat /etc/passwd",
+      externalPaths: [{ path: "/etc/passwd" }],
+      cwd: "/projects/my-app",
+      agentName: "my-agent",
+      toolName: "bash",
+    });
 
-  test("uses 'Current agent' when no agent name provided", () => {
-    expect(
-      renderLegacyMessage(
-        buildBashExternalDirectoryAskPayload({
-          command: "ls /tmp",
-          externalPaths: [{ path: "/tmp" }],
-          cwd: "/projects/my-app",
-          agentName: null,
-          toolName: "bash",
-        }),
-      ),
-    ).toContain("Current agent");
+    expect(payload.kind).toBe("bash_external_directory");
+    expect(payload.request.value).toBe("cat /etc/passwd");
+    expect(payload.request.requester.agentName).toBe("my-agent");
+    expect(payload.evidence).toEqual([
+      { label: "working directory", text: "/projects/my-app", detail: null },
+      { label: "external path", text: "/etc/passwd", detail: null },
+    ]);
   });
 
   test("binds each path's canonical alias to its own entry", () => {
@@ -152,8 +122,5 @@ describe("buildBashExternalDirectoryAskPayload", () => {
       { label: "external path", text: "/a", detail: "/private/a" },
       { label: "external path", text: "/b", detail: null },
     ]);
-    expect(renderLegacyMessage(payload)).toBe(
-      "Current agent requested bash command 'cat a b' which references path(s) outside working directory '/repo': /a (resolves to '/private/a'), /b. Allow this external directory access?",
-    );
   });
 });

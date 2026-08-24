@@ -6,7 +6,6 @@ import type { AskEscalator } from "#src/authority/authorizer-selection";
 import type { ShellToolsConfig } from "#src/config-schema";
 import type { WrapperFloors } from "#src/types";
 import type { DecisionReporter } from "#src/decision-reporter";
-import type { DenialContext } from "#src/denial-messages";
 import type { GateDescriptor } from "#src/handlers/gates/descriptor";
 import { GateRunner } from "#src/handlers/gates/runner";
 import type { SkillInputGateInputs } from "#src/handlers/gates/skill-input-gate-pipeline";
@@ -19,8 +18,12 @@ import type { SessionApprovalRecorder } from "#src/session-approval-recorder";
 import type { SkillPromptEntry } from "#src/skill-prompt-sanitizer";
 import type { ToolPreviewFormatterOptions } from "#src/tool-preview-formatter";
 import type { PermissionCheckResult } from "#src/types";
+import { DECIDED_BY_HUMAN } from "#test/helpers/decision-fixtures";
 import { makeCheckResult } from "#test/helpers/handler-fixtures";
-import { makePromptPayload } from "#test/helpers/prompt-details-fixtures";
+import {
+  makeGatePromptDetails,
+  makePromptPayload,
+} from "#test/helpers/prompt-details-fixtures";
 
 /**
  * Permission resolver mock with an optional default check result.
@@ -39,8 +42,8 @@ export function makeResolver(defaultCheck?: PermissionCheckResult) {
 /**
  * Gate descriptor factory with runner-test defaults.
  *
- * Uses deny as the default `denialContext` check result so tests that
- * verify block paths don't need to override the surface check.
+ * Carries the payload every render over this descriptor reads, so a test that
+ * verifies a block path gets rendered denial text without overriding it.
  */
 export function makeDescriptor(
   overrides: Partial<GateDescriptor> = {},
@@ -48,18 +51,16 @@ export function makeDescriptor(
   return {
     surface: "read",
     input: {},
-    denialContext: {
-      kind: "tool",
-      check: makeCheckResult({ state: "deny", matchedPattern: "*" }),
-    },
-    promptDetails: {
-      source: "tool_call",
-      agentName: null,
-      message: "Allow tool 'read'?",
-      payload: makePromptPayload(),
+    payload: makePromptPayload({
+      request: {
+        ...makePromptPayload().request,
+        matchedPattern: "*",
+      },
+    }),
+    promptDetails: makeGatePromptDetails({
       toolCallId: "tc-1",
       toolName: "read",
-    },
+    }),
     logContext: {
       source: "tool_call",
       toolCallId: "tc-1",
@@ -119,9 +120,11 @@ export function makeGateRunner(
     (vi.fn() as SessionApprovalRecorder["recordSessionApproval"]);
   const escalate =
     overrides.escalate ??
-    vi
-      .fn<AskEscalator["escalate"]>()
-      .mockResolvedValue({ approved: true, state: "approved" });
+    vi.fn<AskEscalator["escalate"]>().mockResolvedValue({
+      approved: true,
+      state: "approved",
+      decidedBy: DECIDED_BY_HUMAN,
+    });
   const isYoloEnabled =
     overrides.isYoloEnabled ?? ((): boolean => overrides.yolo ?? false);
   const runner = new GateRunner(
@@ -139,54 +142,6 @@ export function makeGateRunner(
       escalate,
       reporter,
     },
-  };
-}
-
-/**
- * Gate descriptor variant with write-surface defaults and a caller-supplied
- * denialContext.
- *
- * Use instead of `makeDescriptor` when the test exercises denial-message
- * formatting — the write surface and its matching promptDetails/logContext
- * keep the message helpers' field access consistent.
- */
-export function makeDenialDescriptor(
-  denialContext: DenialContext,
-  overrides: Partial<GateDescriptor> = {},
-): GateDescriptor {
-  return {
-    surface: "write",
-    input: {},
-    denialContext,
-    promptDetails: {
-      source: "tool_call",
-      agentName: null,
-      message: "Allow tool 'write'?",
-      payload: makePromptPayload({
-        request: {
-          requester: { agentName: null, forwarded: false, sessionId: null },
-          surface: "write",
-          toolName: "write",
-          invokedToolName: null,
-          value: "write",
-          matchedPattern: null,
-          commandContext: null,
-          executedUnit: null,
-        },
-      }),
-      toolCallId: "tc-1",
-      toolName: "write",
-    },
-    logContext: {
-      source: "tool_call",
-      toolCallId: "tc-1",
-      toolName: "write",
-    },
-    decision: {
-      surface: "write",
-      value: "write",
-    },
-    ...overrides,
   };
 }
 
@@ -288,7 +243,6 @@ export function makeGateInputs(
       vi.fn<() => ToolPreviewFormatterOptions>(() => ({
         toolInputPreviewMaxLength: 500,
         toolTextSummaryMaxLength: 100,
-        toolInputLogPreviewMaxLength: 200,
       })),
     getPathNormalizer:
       overrides.getPathNormalizer ??

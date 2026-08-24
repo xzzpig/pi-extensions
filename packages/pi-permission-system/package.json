@@ -1,7 +1,7 @@
 {
   "name": "@xzzpig/pi-permission-system",
-  "version": "0.4.0",
-  "description": "Permission enforcement extension for the Pi coding agent. Fork of @gotgenes/pi-permission-system with configurable wrapper-floor behavior.",
+  "version": "0.5.0",
+  "description": "Permission enforcement extension for the Pi coding agent. Fork of @gotgenes/pi-permission-system (v27.0.1) with configurable wrapper-floor behavior.",
   "type": "module",
   "exports": {
     ".": {
@@ -31,6 +31,8 @@
     "typecheck": "tsc --noEmit",
     "build:types": "rollup -c rollup.dts.config.mjs",
     "prepack": "pnpm run build:types",
+    "gen:schema": "node --experimental-strip-types scripts/generate-permissions-schema.ts && biome format --write schemas/permissions.schema.json",
+    "verify:public-types": "bash scripts/verify-public-types.sh",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -72,6 +74,7 @@
     "@earendil-works/pi-tui": ">=0.79.0"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.0",
     "@earendil-works/pi-coding-agent": "catalog:",
     "@earendil-works/pi-tui": "catalog:",
     "@types/node": "catalog:",
