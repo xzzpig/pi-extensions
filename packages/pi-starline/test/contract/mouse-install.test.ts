@@ -47,6 +47,7 @@ type RealReceiver = {
 	overlayStack: unknown[];
 	terminal: { write: (data: string) => void };
 	flashes: { flash: (message: string) => void };
+	overlayStack: unknown[];
 	copySelectionToClipboard: () => void;
 	handleViewportInput: (data: string) => { consume: boolean } | undefined;
 	// `TuiBase.requestRender` is inherited, not stubbed: the patches call it on
@@ -68,6 +69,10 @@ function makeReceiver(previousScreen: string[]): { instance: RealReceiver; writt
 	instance.overlayStack = [];
 	instance.terminal = { write: (data: string) => written.push(data) };
 	instance.flashes = { flash: () => {} };
+	// 0.84.2: `handleViewportInput` runs `isOverlayFocused()` on the way to
+	// every non-wheel key, which reads `overlayStack`. The real instance gets
+	// it from the constructor; this fake never ran one, so set it explicitly.
+	instance.overlayStack = [];
 	instance.renderRequested = false;
 	// `requestRender` defers the actual frame to `scheduleRender` on the next
 	// tick, which returns immediately when the TUI is stopped. This keeps the

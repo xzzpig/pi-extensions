@@ -7,7 +7,14 @@ upstream.
 
 ## 0.1.0
 
-### Fixed
+## [0.1.1] — 2026-08-24 (fork release)
+
+### Changed
+
+- **Synced upstream v0.3.1 → v0.3.2.** Upstream raised peer ranges for
+  `@earendil-works/pi-ai`, `pi-coding-agent`, and `pi-tui` to `>= 0.84.0`
+  and added a `TuiAltScreen` missing-guard (readable warning instead of a
+  startup crash on older Pi bundles). Adopted as-is on top of the fork.
 
 - **Git status no longer churns `.git/index.lock`.** Every git probe in the
   statusline refresh (`git status --porcelain=2`, `git diff --numstat`, and the

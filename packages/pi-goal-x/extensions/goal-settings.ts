@@ -416,6 +416,8 @@ export function parseSettingsLayer(
 					}
 					sparse.dashboard = dash;
 				}
+				// SAFETY: `sparse` is built key-by-key above through the validated
+				// parse/normalize path, so its runtime shape is a GoalKeybindings.
 				layer.keybindings = sparse as unknown as GoalKeybindings;
 				break;
 			}
@@ -588,6 +590,13 @@ export interface SettingsSnapshot {
 	diagnostics: SettingsDiagnostic[];
 }
 
+/**
+ * Resolve one settings leaf across layers (environment > project > global > default).
+ *
+ * SAFETY: callers that pass `undefined as unknown as T` for defaultValue rely
+ * on the runtime contract that only `=== undefined` is checked — no T-typed
+ * operation is ever performed on the default, so the cast cannot misbehave.
+ */
 function resolveLeaf<T>(args: {
 	envValue?: T;
 	projectValue?: T;
@@ -647,16 +656,20 @@ export function loadSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv = proce
 		globalValue: global.layer.subtaskDepth,
 		defaultValue: 1,
 	}));
+	// SAFETY: an `undefined` defaultValue only feeds resolveLeaf's "no default"
+	// branch; the type parameter stays phantom, so no value of T is ever read.
 	const provider = track("provider", resolveLeaf<string>({
 		projectValue: project.layer.provider,
 		globalValue: global.layer.provider,
 		defaultValue: undefined as unknown as string,
 	}));
+	// SAFETY: phantom default — resolveLeaf only checks === undefined (see its doc).
 	const model = track("model", resolveLeaf<string>({
 		projectValue: project.layer.model,
 		globalValue: global.layer.model,
 		defaultValue: undefined as unknown as string,
 	}));
+	// SAFETY: phantom default — resolveLeaf only checks === undefined (see its doc).
 	const thinkingLevel = track("thinkingLevel", resolveLeaf<ThinkingLevel>({
 		projectValue: project.layer.thinkingLevel,
 		globalValue: global.layer.thinkingLevel,
@@ -693,16 +706,19 @@ export function loadSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv = proce
 		globalValue: global.layer.oracle?.enabled,
 		defaultValue: false,
 	}));
+	// SAFETY: phantom default — resolveLeaf only checks === undefined (see its doc).
 	const oracleProvider = track("oracle.provider", resolveLeaf<string>({
 		projectValue: project.layer.oracle?.provider,
 		globalValue: global.layer.oracle?.provider,
 		defaultValue: undefined as unknown as string,
 	}));
+	// SAFETY: phantom default — resolveLeaf only checks === undefined (see its doc).
 	const oracleModel = track("oracle.model", resolveLeaf<string>({
 		projectValue: project.layer.oracle?.model,
 		globalValue: global.layer.oracle?.model,
 		defaultValue: undefined as unknown as string,
 	}));
+	// SAFETY: phantom default — resolveLeaf only checks === undefined (see its doc).
 	const oracleThinkingLevel = track("oracle.thinkingLevel", resolveLeaf<ThinkingLevel>({
 		projectValue: project.layer.oracle?.thinkingLevel,
 		globalValue: global.layer.oracle?.thinkingLevel,
@@ -946,6 +962,8 @@ function atomicWriteJson(target: string, value: unknown, options: { defaultMode:
 
 function applyPathMutation(layer: GoalSettingsLayer, mutation: SettingsMutation): void {
 	if (mutation.path.length === 0) throw new SettingsMutationError("empty settings path");
+	// SAFETY: `layer` comes from parseSettingsLayer (JSON-object input), so its
+	// runtime shape is a plain record keyed by settings names.
 	let container: Record<string, unknown> = layer as unknown as Record<string, unknown>;
 	for (let i = 0; i < mutation.path.length - 1; i += 1) {
 		const key = mutation.path[i]!;
@@ -1011,6 +1029,9 @@ export function mutateSettingsLayer(input: MutateSettingsInput): SettingsSnapsho
 		}
 
 		const next = structuredClone(current.layer) as Record<string, unknown>;
+		// SAFETY: `next` is a clone of a parseSettingsLayer-produced layer, so it
+		// satisfies the GoalSettingsLayer structural contract applyPathMutation
+		// mutates against.
 		applyPathMutation(next as unknown as GoalSettingsLayer, input.mutation);
 		pruneEmptyObjects(next);
 		canonicalizeAliases(next);
@@ -1055,6 +1076,8 @@ export function saveGoalSettingsFileConfig(cwd: string, settings: GoalSettings):
 			returned.thinkingLevel = returned.thinking_level as ThinkingLevel;
 			delete returned.thinking_level;
 		}
+		// SAFETY: the persisted layer carries the canonical thinking_level alias;
+		// re-expose it as the runtime `thinkingLevel` key for legacy callers.
 		return returned as unknown as GoalSettings;
 	} finally {
 		lock.release();
@@ -1150,5 +1173,6 @@ export function effectiveSettingsReport(cwd: string, env: NodeJS.ProcessEnv = pr
 }
 
 export function isAuditorEnabledByDefault(settings: GoalSettings): boolean {
+	// Auditor participates unless explicitly disabled at any layer.
 	return settings.disabled !== true;
 }
