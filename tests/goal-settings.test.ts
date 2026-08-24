@@ -15,6 +15,7 @@ import {
 import {
 	goalSettingsPath,
 	parseGoalSettings,
+	parseSettingsLayer,
 	loadGoalSettingsFileConfig,
 	loadGoalSettings,
 	saveGoalSettingsFileConfig,
@@ -62,11 +63,13 @@ test("parseGoalSettings: string true/false values accepted", () => {
 	});
 });
 
-test("parseGoalSettings: autoSelectSingleGoal accepted as bool or string", () => {
+test("parseGoalSettings: autoSelectSingleGoal accepted as bool or string; explicit false preserved (layering)", () => {
 	assert.deepEqual(parseGoalSettings({ autoSelectSingleGoal: true }), { autoSelectSingleGoal: true });
 	assert.deepEqual(parseGoalSettings({ autoSelectSingleGoal: "true" }), { autoSelectSingleGoal: true });
-	assert.deepEqual(parseGoalSettings({ autoSelectSingleGoal: false }), {});
-	assert.deepEqual(parseGoalSettings({ autoSelectSingleGoal: "false" }), {});
+	// Issue #27 layering requirement: explicit false must survive parsing so a
+	// project can override a global true.
+	assert.deepEqual(parseGoalSettings({ autoSelectSingleGoal: false }), { autoSelectSingleGoal: false });
+	assert.deepEqual(parseGoalSettings({ autoSelectSingleGoal: "false" }), { autoSelectSingleGoal: false });
 });
 
 test("parseGoalSettings: unknown keys rejected", () => {
@@ -98,11 +101,13 @@ test("parseGoalSettings: task keybindings use pi-tui key names", () => {
 	assert.equal(loadGoalSettings("/tmp/does-not-exist", {}).keybindings?.dashboard.toggleExpand, "ctrl+shift+t");
 });
 
-test("parseGoalSettings: unknown task keybindings are rejected", () => {
-	assert.throws(() => parseGoalSettings({ keybindings: { dashboard: { expand: "ctrl+t" } } }), /Unknown dashboard keybinding/);
+test("parseGoalSettings: unknown nested task keybindings become diagnostics, valid siblings still apply", () => {
+	const result = parseSettingsLayer({ keybindings: { dashboard: { expand: "ctrl+t", scrollUp: "ctrl+u" } } }, "project", "t.json");
+	assert.equal(result.layer.keybindings?.dashboard?.scrollUp, "ctrl+u", "valid sibling key still applies");
+	assert.ok(result.diagnostics.some((d) => d.code === "unknown_key" && d.settingPath === "keybindings.dashboard.expand"));
 });
 
-test("parseGoalSettings: multiple unknown keys rejected", () => {
+test("parseGoalSettings: multiple unknown keys rejected with the full list", () => {
 	assert.throws(
 		() => parseGoalSettings({ disableTasks: true, foo: "bar", baz: 42 }),
 		/foo, baz/,
@@ -170,14 +175,15 @@ test("loadGoalSettingsFileConfig: malformed JSON returns empty defaults", () => 
 	});
 });
 
-test("loadGoalSettingsFileConfig: unknown keys cause fallback to empty defaults", () => {
+test("loadGoalSettingsFileConfig: unknown keys diagnosed while known values still load (layered rewrite)", () => {
 	withTempDir((dir) => {
 		const configPath = goalSettingsPath(dir);
 		fs.mkdirSync(path.dirname(configPath), { recursive: true });
 		fs.writeFileSync(configPath, JSON.stringify({ disableTasks: true, extra: "bad" }), "utf8");
-		// parseGoalSettings throws on unknown keys, so loadGoalSettingsFileConfig catches -> returns empty {}
+		// Layered behavior: the valid known key still applies; the unknown key
+		// is a visible diagnostic instead of silently erasing the whole file.
 		const result = loadGoalSettingsFileConfig(dir);
-		assert.deepEqual(result, {});
+		assert.equal(result.disableTasks, true);
 	});
 });
 
@@ -275,7 +281,7 @@ test("loadGoalSettings: objectiveMaxChars defaults to no limit and honors the en
 		assert.equal(loadGoalSettings(dir, {}).objectiveMaxChars, 2000, "file config read");
 		assert.equal(loadGoalSettings(dir, { PI_GOAL_OBJECTIVE_MAX_CHARS: "8000" }).objectiveMaxChars, 8000, "env var overrides file");
 	});
-	assert.equal(loadGoalSettings("/tmp/does-not-exist", {}).objectiveMaxChars, undefined, "unset = no limit");
+	assert.equal(loadGoalSettings("/tmp/does-not-exist", {}).objectiveMaxChars, 0, "unset resolves to the default 0 (no limit)");
 });
 
 test("saveGoalSettingsFileConfig: task keybindings round-trip", () => {
@@ -313,7 +319,7 @@ test("effectiveSettingsReport: objectiveMaxChars row shows the effective value a
 		const lines = effectiveSettingsReport(dir, {});
 		const row = lines.find((l) => l.startsWith("  max objective length"));
 		assert.ok(row, "report includes the max objective length row");
-		assert.match(row!, /3000 \(file\)/);
+		assert.match(row!, /3000 \(project\)/);
 	});
 });
 

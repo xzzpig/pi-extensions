@@ -150,7 +150,7 @@ export function goalDraftingPrompt(topic: string, focus: GoalDraftingFocus): str
 		"- For simple single-step goals, no task list is required. The `tasks` parameter can be omitted.",
 		"- After goal creation, `propose_task_list` is still available for user-requested task additions or structural changes.",
 		"- propose_goal_draft opens the user's Confirm / Continue Chatting dialog. Confirm creates and focuses the goal; Continue Chatting means keep refining through normal proposal cycles.",
-		"- Before proposing, write the COMPLETE goal into your own message — every section (objective, success criteria, boundaries, constraints, verification contract) and the full task list — so the user can scroll up and re-read the whole goal while the confirmation dialog is open. Nothing may be omitted from the presented goal.",
+		"- Call propose_goal_draft with the complete structured proposal. The tool call renderer is the scrollable, complete human presentation of the objective and task tree — do NOT duplicate the full proposal in a preceding prose message. A brief orientation sentence is fine.",
 		"- create_goal is not a shortcut. Direct create_goal calls are rejected so the user keeps explicit say in goal creation.",
 	];
 

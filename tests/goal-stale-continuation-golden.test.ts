@@ -40,6 +40,7 @@ interface HandlerMap {
 function createHarness(cwd: string) {
 	const handlers: HandlerMap = {};
 	const sentMessages: Array<{ customType?: string; details?: unknown }> = [];
+	const notifications: Array<{ message: string; level?: string }> = [];
 	let aborts = 0;
 	let toolCalls = 0;
 
@@ -78,7 +79,7 @@ function createHarness(cwd: string) {
 		isIdle: () => false,
 		hasPendingMessages: () => true,
 		abort: () => { aborts++; },
-		ui: { notify: () => {} },
+		ui: { notify: (message: string, level?: string) => { notifications.push({ message, level }); } },
 	} as unknown as ExtensionContext & { abort: () => void };
 
 	piGoalExtension(mockPi as never);
@@ -86,6 +87,7 @@ function createHarness(cwd: string) {
 	return {
 		handlers,
 		sentMessages,
+		notifications,
 		get aborts() { return aborts; },
 		get toolCalls() { return toolCalls; },
 		ctx,
@@ -298,6 +300,56 @@ test("provider-error guard: agent_end with an error message never queues a conti
 		assert.equal(await countCheckpoints(h), 0, "agent_end with an error message must not queue a continuation");
 	} finally {
 		// temp dir cleanup is best-effort.
+	}
+});
+
+test("network-error recovery waits for agent_settled before scheduling its backoff", async () => {
+	const { cwd, goal } = fixtureCwd();
+	const h = createHarness(cwd);
+	try {
+		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
+		await h.handlers["before_agent_start"]!({
+			systemPrompt: "base",
+			prompt: "user typed: continue",
+			systemPromptOptions: {},
+		}, h.ctx);
+
+		await h.handlers["agent_end"]!({
+			messages: [{ role: "assistant", stopReason: "error", errorMessage: "Provider finish_reason: network_error" }],
+		}, idleCtx(h.ctx));
+		assert.equal(await countCheckpoints(h), 0, "agent_end must not race Pi's built-in retries");
+
+		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+		assert.equal(await countCheckpoints(h), 0, "the first recovery is delayed by the backoff policy");
+		assert.match(h.notifications.at(-1)?.message ?? "", /Retrying the goal in 5s \(recovery 1\/5\)/);
+	} finally {
+		// The delayed timer is unref'd and needs no test teardown.
+	}
+});
+
+test("a successful Pi retry clears the pending network-error recovery", async () => {
+	const { cwd, goal } = fixtureCwd();
+	const h = createHarness(cwd);
+	try {
+		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
+		await h.handlers["before_agent_start"]!({
+			systemPrompt: "base",
+			prompt: "user typed: continue",
+			systemPromptOptions: {},
+		}, h.ctx);
+
+		await h.handlers["agent_end"]!({
+			messages: [{ role: "assistant", stopReason: "error", errorMessage: "Provider finish_reason: network_error" }],
+		}, idleCtx(h.ctx));
+		await h.handlers["agent_end"]!({
+			messages: [{ role: "assistant", stopReason: "end_turn" }],
+		}, idleCtx(h.ctx));
+		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+
+		assert.equal(await countCheckpoints(h), 1, "the successful Pi retry uses the normal continuation path");
+		assert.equal(h.notifications.length, 0, "no goal-level recovery is announced after Pi retries successfully");
+	} finally {
+		// No delayed timer should exist after the successful retry.
 	}
 });
 

@@ -2,6 +2,93 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.29.0] — 2026-08-23
+
+### Added
+
+- **Complete model-context accounting (PR D)** — `npm run context:measure` /
+  `context:gate`: composed-request measurement over 22 deterministic fixtures
+  including active tool schemas; committed deterministic baseline.
+- **Single-source active-goal prompt (PR E)** — current task rendered once,
+  lifecycle rules stated once, concise `get_goal` default with optional
+  verbose mode, `PI_GOAL_PROMPT_PROFILE=legacy-v1` emergency fallback.
+  Composed requests reduced on every task fixture.
+- **UI/model payload separation (PR F)** — audit events display-only;
+  auditor progress derived from session events (progress tool removed);
+  auditor prompt single-source; post-compaction delta.
+- **Opt-in read-only blocker Oracle (PR G, #26)** — one stronger-model
+  consultation per distinct blocker before blocking. Default off; explicit
+  provider/model required; read-only session; follow-up gating; durable
+  ledger events.
+
+### Changed
+
+- `update_goal({status:"blocked"})` now requires a `reason` describing the
+  concrete blocker (feeds the blocker fingerprint and ledger record).
+- Tool schemas grew by +136 bytes/request (`attempted_actions` parameter).
+
+## [0.30.0] — 2026-08-23
+
+### Fixed
+
+- **Network-error recovery for active goals (#36)** — after Pi exhausts its own
+  provider retries with `network_error`, an active auto-continue goal now
+  retries through a bounded 5/10/20/40/80-second backoff ladder. The fallback
+  begins only after Pi settles, cancels cleanly on user interaction or goal
+  lifecycle changes, and leaves the goal active with a clear warning after the
+  capped recovery budget is exhausted.
+
+## [0.29.0] — 2026-08-23
+
+## [0.28.0] — 2026-08-23
+
+### Added
+
+- **Layered global settings (clean rewrite of #27)** — settings now resolve per
+  leaf as `environment > project > global > defaults`. Global file:
+  `~/.pi/agent/pi-goal-x-settings.json` (honors `PI_CODING_AGENT_DIR` and
+  `PI_GOAL_GLOBAL_SETTINGS_FILE`); project file unchanged. Explicit `false`/`0`
+  in a lower layer override inherited values; nested keybindings inherit per
+  key; unknown keys are reported as diagnostics without erasing valid keys;
+  writes are atomic and lock-protected against concurrent processes.
+- **Scope-aware settings UI** — `/goal-settings` shows each row's effective
+  value and source, can edit the project or global layer, and can remove an
+  override to return to inheritance. Headless mode reports both paths.
+- **`hideUnfocusedBanner` setting (clean rewrite of #29)** — optionally
+  suppress the unfocused above-editor widget and status hint. Layered, with
+  live hide/restore on toggle. Focused dashboards, audit UI, and the
+  model-facing `[PI GOAL UNFOCUSED]` safety guidance are unchanged.
+- **`npm run test:settings-race`** — two-writer concurrency coverage for the
+  locked settings mutation path.
+
+## [0.27.5] — 2026-08-23
+
+### Fixed
+
+- **Issue #30 — continuation checkpoints no longer persist the full goal prompt**
+  Every auto-continue turn persisted a full continuation prompt (~6.4K chars:
+  objective, task list, verification contract, lifecycle policy) as a custom
+  session message; one reported session accumulated 851 byte-identical copies
+  (~5.4 MB). Checkpoints are now bounded v2 trigger markers (≤160 chars) with
+  structured metadata; the complete goal state is injected exactly once per
+  turn via the system prompt, so nothing about model-facing behavior changes.
+  Provider context retains at most one historical checkpoint marker; older
+  markers are filtered out and legacy full checkpoints remain parseable.
+
+### Added
+
+- **Checkpoint health report** — `/goal-recovery` and `/goal-status health`
+  now report persisted checkpoint counts, legacy/v2 classification, bytes
+  spent on checkpoint content, and projected post-recovery size (read-only).
+- **Offline session recovery CLI** — `pi-goal-x-recover` repairs existing
+  oversized session files: dry-run default, `--apply` gated behind
+  `--confirm-pi-closed`, timestamped backup, atomic rename, unchanged entry
+  ids/parent links/line count/header, non-goal and malformed lines preserved
+  byte-identically, idempotent. See README "Session checkpoint recovery".
+- **B10 checkpoint-growth benchmark** gating persisted growth, provider-visible
+  checkpoint count, recovery reduction, and composed-request duplication in
+  `bench:gate:naf`.
+
 ## [0.27.4] — 2026-08-11
 
 ### Fixed

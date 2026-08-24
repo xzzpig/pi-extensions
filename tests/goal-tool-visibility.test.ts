@@ -272,7 +272,7 @@ describe("Tool profile invariance", () => {
 			// update_goal(blocked) transitions active -> blocked; profile stays five.
 			const update = registeredTools.find((t) => t.name === "update_goal");
 			assert.ok(update);
-			const result = await (update.execute as Function)("update-b", { status: "blocked" }, new AbortController().signal, undefined, f.mockCtx);
+			const result = await (update.execute as Function)("update-b", { status: "blocked", reason: "test blocker" }, new AbortController().signal, undefined, f.mockCtx);
 			assert.ok(result.terminate === true, "blocked terminates the turn");
 			expectGoalProfile(FIVE_GOAL_TOOLS);
 			expectHostUntouched(HOST_SEED_A);
@@ -305,7 +305,7 @@ describe("Tool profile invariance", () => {
 
 			const update = registeredTools.find((t) => t.name === "update_goal");
 			assert.ok(update);
-			const result = await (update.execute as Function)("update-p", { status: "blocked" }, new AbortController().signal, undefined, f.mockCtx);
+			const result = await (update.execute as Function)("update-p", { status: "blocked", reason: "test blocker" }, new AbortController().signal, undefined, f.mockCtx);
 			const text = result.content?.[0]?.text ?? "";
 			assert.ok(text.includes("applies only to an active goal"),
 				`blocked from paused must be a state-aware failure, got: ${text.slice(0, 100)}`);

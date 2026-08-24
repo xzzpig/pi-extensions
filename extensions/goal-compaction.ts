@@ -11,7 +11,7 @@ import {
   type GoalLedgerEvent,
   type LedgerStateReadResult,
 } from "./goal-ledger.ts";
-import { type GoalRecord } from "./goal-record.ts";
+import { type GoalRecord, type GoalTask } from "./goal-record.ts";
 
 export function buildGoalCompactSummary(
   goal: GoalRecord,
@@ -149,5 +149,53 @@ export function buildCompactionSummary(args: {
   lines.push("Continue from the focused goal above, or ask the user to run /goal-focus.");
   lines.push("Do not rely on chat memory for goal state; use the facts above.");
 
+  return lines.join("\n");
+}
+
+/**
+ * PR E §62: post-compaction DELTA for the focused goal. The active system
+ * goal block already contains the objective, full policy, task gate, and
+ * verification contract — this delta adds only what compaction may have
+ * lost: the execution focus, a bounded recent-events tail, the latest
+ * unresolved auditor finding, and the other-open-goals count.
+ */
+export function buildPostCompactionGoalDelta(args: {
+  goal: GoalRecord;
+  ledgerEvents: GoalLedgerEvent[];
+  otherOpenCount: number;
+}): string {
+  const { goal, ledgerEvents, otherOpenCount } = args;
+  const lines: string[] = [];
+  lines.push(`[POST-COMPACTION RESYNC goalId=${goal.id}]`);
+  // Execution focus (with contract) — the one thing memory must not lose.
+  if (goal.currentTaskId && goal.taskList) {
+    const find = (tasks: GoalTask[]): GoalTask | undefined => {
+      for (const t of tasks) {
+        if (t.id === goal.currentTaskId) return t;
+        const nested = t.subtasks ? find(t.subtasks) : undefined;
+        if (nested) return nested;
+      }
+      return undefined;
+    };
+    const current = find(goal.taskList.tasks);
+    if (current) {
+      lines.push(`Current task: ${current.id} — ${current.title}${current.verificationContract ? ` (contract: ${current.verificationContract})` : ""}`);
+    }
+  }
+  // Bounded recent-event tail.
+  const recent = latestEventsForGoal(ledgerEvents, goal.id, 5);
+  if (recent.length > 0) {
+    lines.push("Recent events:");
+    for (const event of recent) {
+      lines.push(`  ${event.at.slice(11, 19)} ${event.type}`);
+    }
+  }
+  // Latest unresolved auditor finding.
+  const audit = latestAuditorResultForGoal(ledgerEvents, goal.id);
+  if (audit && audit.verdict === "disapproved") {
+    lines.push(`Latest unresolved auditor finding: ${audit.report.slice(0, 300)}`);
+  }
+  lines.push(`Other open goals: ${otherOpenCount}`);
+  lines.push("Continue from authoritative files and goal storage.");
   return lines.join("\n");
 }

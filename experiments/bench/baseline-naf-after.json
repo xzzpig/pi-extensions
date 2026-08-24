@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-09T11:28:12.108Z",
+  "generatedAt": "2026-08-23T12:26:56.596Z",
   "bench": "pi-goal-x extension",
   "agentFree": true,
   "rows": [
@@ -36,7 +36,7 @@
       "n": 200,
       "p50": 0,
       "p95": 0,
-      "max": 0,
+      "max": 0.3,
       "ops": 0,
       "notes": "mean 0ms"
     },
@@ -148,7 +148,7 @@
       "n": 50,
       "p50": 0.1,
       "p95": 0.1,
-      "max": 0.2,
+      "max": 0.1,
       "ops": 3,
       "notes": "mean 0.1ms"
     },
@@ -159,10 +159,10 @@
       "fixture": "1k-event ledger file",
       "n": 50,
       "p50": 0.1,
-      "p95": 1,
-      "max": 1.7,
+      "p95": 0.1,
+      "max": 0.4,
       "ops": 1,
-      "notes": "mean 0.2ms"
+      "notes": "mean 0.1ms"
     },
     {
       "id": "B1.append.x4",
@@ -172,7 +172,7 @@
       "n": 20,
       "p50": 0.1,
       "p95": 0.4,
-      "max": 0.7,
+      "max": 0.5,
       "ops": 1,
       "notes": "mean 0.1ms; one appendFileSync for 4 events (was 4×5 ops)"
     },
@@ -195,7 +195,7 @@
       "n": 30,
       "p50": 0.1,
       "p95": 0.1,
-      "max": 0.2,
+      "max": 0.1,
       "notes": "mean 0.1ms"
     },
     {
@@ -216,9 +216,9 @@
       "fixture": "5000 in-memory events",
       "n": 30,
       "p50": 0.3,
-      "p95": 1.2,
-      "max": 1.4,
-      "notes": "mean 0.5ms"
+      "p95": 0.4,
+      "max": 0.8,
+      "notes": "mean 0.3ms"
     },
     {
       "id": "B3.parse.10000",
@@ -238,9 +238,9 @@
       "fixture": "10000 in-memory events",
       "n": 30,
       "p50": 0.6,
-      "p95": 0.8,
-      "max": 2.3,
-      "notes": "mean 0.7ms"
+      "p95": 0.6,
+      "max": 1.6,
+      "notes": "mean 0.6ms"
     },
     {
       "id": "B2.readturn.1g",
@@ -249,8 +249,8 @@
       "fixture": "1 goals, 1000 events",
       "n": 20,
       "p50": 0,
-      "p95": 1.3,
-      "max": 1.3,
+      "p95": 1.1,
+      "max": 1.1,
       "ops": 0,
       "notes": "fs ops/turn 0 (p50), mean 0.1ms"
     },
@@ -261,8 +261,8 @@
       "fixture": "10 goals, 1000 events",
       "n": 20,
       "p50": 0,
-      "p95": 1.5,
-      "max": 1.5,
+      "p95": 1.4,
+      "max": 1.4,
       "ops": 0,
       "notes": "fs ops/turn 0 (p50), mean 0.1ms"
     },
@@ -298,9 +298,9 @@
       "p50": "-",
       "p95": "-",
       "max": "-",
-      "ops": 972,
+      "ops": 19,
       "n": 1,
-      "notes": "3887 chars, ~972 tokens; est prefill ~0.97s @ 1000t/s (estimate, not live)"
+      "notes": "73 chars, ~19 tokens; est prefill ~0.02s @ 1000t/s (estimate, not live)"
     },
     {
       "id": "B4.goalPrompt.10t",
@@ -334,9 +334,9 @@
       "p50": "-",
       "p95": "-",
       "max": "-",
-      "ops": 1083,
+      "ops": 19,
       "n": 1,
-      "notes": "4332 chars, ~1083 tokens; est prefill ~1.08s @ 1000t/s (estimate, not live)"
+      "notes": "73 chars, ~19 tokens; est prefill ~0.02s @ 1000t/s (estimate, not live)"
     },
     {
       "id": "B4.goalPrompt.50t",
@@ -431,10 +431,10 @@
       "modules": "storage/goal-lock",
       "fixture": "2 processes, 1 goal lock",
       "n": 1,
-      "p50": 13.2,
-      "p95": 13.2,
-      "max": 13.2,
-      "notes": "fail-fast in 13.2ms; P1-5 bounded window ≈200ms (was ~2.8s frozen)"
+      "p50": 12.4,
+      "p95": 12.4,
+      "max": 12.4,
+      "notes": "fail-fast in 12.4ms; P1-5 bounded window ≈200ms (was ~2.8s frozen)"
     },
     {
       "id": "B5.auditor.dispatch",
@@ -442,10 +442,10 @@
       "modules": "goal-core-tools + goal-completion + goal-state + goal-service + goal-ledger",
       "fixture": "1 active goal each, 5 fixtures",
       "n": 5,
-      "p50": 1.1,
-      "p95": 2.1,
-      "max": 2.1,
-      "notes": "cold=1ms warm=2.1ms; P1-6 seeds the auditor session warm"
+      "p50": 1.2,
+      "p95": 2,
+      "max": 2,
+      "notes": "cold=1ms warm=2ms; P1-6 seeds the auditor session warm"
     },
     {
       "id": "B1.pool.cold",
@@ -453,11 +453,11 @@
       "modules": "storage/goal-files",
       "fixture": "50 goals + settings + 1k-event ledger",
       "n": 5,
-      "p50": 0.5,
-      "p95": 5.7,
-      "max": 5.7,
+      "p50": 0.3,
+      "p95": 5.4,
+      "max": 5.4,
       "ops": 2,
-      "notes": "fresh-process cold read; wall samples 0.4/0.5/0.5/0.5/5.7ms; ops = min over samples (deterministic per code state)"
+      "notes": "fresh-process cold read; wall samples 0.3/0.3/0.3/0.4/5.4ms; ops = min over samples (deterministic per code state)"
     },
     {
       "id": "B1.pool.cold.lat25",
@@ -465,12 +465,12 @@
       "modules": "storage/goal-files",
       "fixture": "50 goals + settings + 1k-event ledger",
       "n": 5,
-      "p50": 61.9,
-      "p95": 70.7,
-      "max": 70.7,
+      "p50": 66.1,
+      "p95": 70.5,
+      "max": 70.5,
       "ops": 2,
       "latency": "25ms/op",
-      "notes": "fresh-process cold read; wall samples 51.8/61.7/61.9/68.4/70.7ms; ops = min over samples (deterministic per code state)"
+      "notes": "fresh-process cold read; wall samples 53.4/56.8/66.1/70.5/70.5ms; ops = min over samples (deterministic per code state)"
     },
     {
       "id": "B1.settings.cold",
@@ -490,12 +490,12 @@
       "modules": "goal-settings",
       "fixture": "50 goals + settings + 1k-event ledger",
       "n": 5,
-      "p50": 35.4,
-      "p95": 35.5,
-      "max": 35.5,
+      "p50": 29,
+      "p95": 35.4,
+      "max": 35.4,
       "ops": 1,
       "latency": "25ms/op",
-      "notes": "fresh-process cold read; wall samples 32.6/35.4/35.4/35.4/35.5ms; ops = min over samples (deterministic per code state)"
+      "notes": "fresh-process cold read; wall samples 25.7/28.8/29/35.4/35.4ms; ops = min over samples (deterministic per code state)"
     },
     {
       "id": "B1.ledger.cold",
@@ -503,11 +503,11 @@
       "modules": "goal-ledger",
       "fixture": "50 goals + settings + 1k-event ledger",
       "n": 5,
-      "p50": 1.3,
-      "p95": 1.5,
-      "max": 1.5,
+      "p50": 1.4,
+      "p95": 1.7,
+      "max": 1.7,
       "ops": 1,
-      "notes": "fresh-process cold read; wall samples 1.2/1.2/1.3/1.3/1.5ms; ops = min over samples (deterministic per code state)"
+      "notes": "fresh-process cold read; wall samples 1.2/1.3/1.4/1.4/1.7ms; ops = min over samples (deterministic per code state)"
     },
     {
       "id": "B1.ledger.cold.lat25",
@@ -515,12 +515,12 @@
       "modules": "goal-ledger",
       "fixture": "50 goals + settings + 1k-event ledger",
       "n": 5,
-      "p50": 36.4,
-      "p95": 36.5,
-      "max": 36.5,
+      "p50": 30.4,
+      "p95": 36,
+      "max": 36,
       "ops": 1,
       "latency": "25ms/op",
-      "notes": "fresh-process cold read; wall samples 28.6/33.2/36.4/36.5/36.5ms; ops = min over samples (deterministic per code state)"
+      "notes": "fresh-process cold read; wall samples 26.8/30.1/30.4/34.5/36ms; ops = min over samples (deterministic per code state)"
     },
     {
       "id": "B5.startup.cold",
@@ -529,10 +529,10 @@
       "fixture": "50 goals + settings + 1k-event ledger",
       "n": 5,
       "p50": 1.5,
-      "p95": 1.9,
-      "max": 1.9,
+      "p95": 2.6,
+      "max": 2.6,
       "ops": 3,
-      "notes": "fresh-process cold read; wall samples 1.4/1.4/1.5/1.7/1.9ms; ops = min over samples (deterministic per code state)"
+      "notes": "fresh-process cold read; wall samples 1.4/1.4/1.5/2.6/2.6ms; ops = min over samples (deterministic per code state)"
     },
     {
       "id": "B5.startup.cold.lat25",
@@ -540,12 +540,12 @@
       "modules": "goal-state + storage/goal-files + goal-settings",
       "fixture": "50 goals + settings + 1k-event ledger",
       "n": 5,
-      "p50": 91.1,
-      "p95": 91.4,
-      "max": 91.4,
+      "p50": 84.5,
+      "p95": 91.1,
+      "max": 91.1,
       "ops": 3,
       "latency": "25ms/op",
-      "notes": "fresh-process cold read; wall samples 80.6/90/91.1/91.3/91.4ms; ops = min over samples (deterministic per code state)"
+      "notes": "fresh-process cold read; wall samples 83.3/84.4/84.5/91.1/91.1ms; ops = min over samples (deterministic per code state)"
     },
     {
       "id": "B1.ledgerstate.cold",
@@ -553,11 +553,11 @@
       "modules": "goal-ledger",
       "fixture": "50 goals + settings + 1k-event ledger",
       "n": 5,
-      "p50": 1.5,
-      "p95": 4.3,
-      "max": 4.3,
+      "p50": 1.4,
+      "p95": 3.4,
+      "max": 3.4,
       "ops": 2,
-      "notes": "fresh-process cold read; wall samples 1.5/1.5/1.5/1.5/4.3ms; ops = min over samples (deterministic per code state)"
+      "notes": "fresh-process cold read; wall samples 1.4/1.4/1.4/1.4/3.4ms; ops = min over samples (deterministic per code state)"
     },
     {
       "id": "B1.ledgerstate.cp.hit",
@@ -565,11 +565,11 @@
       "modules": "goal-ledger",
       "fixture": "50 goals + settings + 1k-event ledger + checkpoint",
       "n": 5,
-      "p50": 1.7,
-      "p95": 4,
-      "max": 4,
+      "p50": 1.4,
+      "p95": 2.7,
+      "max": 2.7,
       "ops": 2,
-      "notes": "fresh-process cold read; wall samples 1.5/1.6/1.7/1.8/4ms; ops = min over samples (deterministic per code state)"
+      "notes": "fresh-process cold read; wall samples 1.3/1.4/1.4/1.4/2.7ms; ops = min over samples (deterministic per code state)"
     },
     {
       "id": "B1.ledgerstate.cp.tail",
@@ -577,11 +577,11 @@
       "modules": "goal-ledger",
       "fixture": "50 goals + settings + 1k-event ledger + checkpoint",
       "n": 5,
-      "p50": 1.7,
-      "p95": 1.7,
-      "max": 1.7,
+      "p50": 1.4,
+      "p95": 1.5,
+      "max": 1.5,
       "ops": 2,
-      "notes": "fresh-process cold read; wall samples 1.5/1.6/1.7/1.7/1.7ms; ops = min over samples (deterministic per code state)"
+      "notes": "fresh-process cold read; wall samples 1.4/1.4/1.4/1.4/1.5ms; ops = min over samples (deterministic per code state)"
     },
     {
       "id": "B7.tool.create_goal",
@@ -589,11 +589,11 @@
       "modules": "goal-core-tools + goal-state + goal-service + goal-notifications",
       "fixture": "1 focused fixture",
       "n": 5,
-      "p50": 0.8,
-      "p95": 1.7,
-      "max": 1.7,
+      "p50": 0.7,
+      "p95": 1.5,
+      "max": 1.5,
       "ops": 15,
-      "notes": "fs ops/case ~15; mean 1ms"
+      "notes": "fs ops/case ~15; mean 0.9ms"
     },
     {
       "id": "B7.tool.get_goal",
@@ -613,7 +613,7 @@
       "modules": "goal-core-tools + goal-state + goal-service",
       "fixture": "1 focused fixture",
       "n": 5,
-      "p50": 0.9,
+      "p50": 1,
       "p95": 1.1,
       "max": 1.1,
       "ops": 20,
@@ -625,9 +625,9 @@
       "modules": "goal-core-tools + goal-service + goal-ledger",
       "fixture": "1 focused fixture",
       "n": 5,
-      "p50": 0.9,
-      "p95": 1.1,
-      "max": 1.1,
+      "p50": 1,
+      "p95": 1,
+      "max": 1,
       "ops": 20,
       "notes": "fs ops/case ~20; mean 0.9ms"
     },
@@ -638,10 +638,10 @@
       "fixture": "1 focused fixture",
       "n": 5,
       "p50": 1,
-      "p95": 1.5,
-      "max": 1.5,
+      "p95": 1.2,
+      "max": 1.2,
       "ops": 20,
-      "notes": "fs ops/case ~20; mean 1.1ms"
+      "notes": "fs ops/case ~20; mean 1ms"
     },
     {
       "id": "B7.tool.update_goal_task",
@@ -649,7 +649,7 @@
       "modules": "goal-task-tools + goal-service + storage/goal-lock + goal-ledger",
       "fixture": "1 goal, 20 tasks",
       "n": 5,
-      "p50": 0.8,
+      "p50": 0.9,
       "p95": 0.9,
       "max": 0.9,
       "ops": 20,
@@ -718,7 +718,7 @@
       "n": 100,
       "p50": 0,
       "p95": 0,
-      "max": 0,
+      "max": 0.1,
       "notes": "mean 0ms"
     },
     {
@@ -839,7 +839,7 @@
       "n": 50,
       "p50": 0,
       "p95": 0.1,
-      "max": 0.4,
+      "max": 0.1,
       "notes": "mean 0ms"
     },
     {
@@ -1015,7 +1015,7 @@
       "n": 100,
       "p50": 0,
       "p95": 0.1,
-      "max": 0.2,
+      "max": 0.1,
       "notes": "mean 0ms"
     },
     {
@@ -1025,7 +1025,7 @@
       "fixture": "1 goal, 50 tasks",
       "n": 100,
       "p50": 0,
-      "p95": 0,
+      "p95": 0.1,
       "max": 0.1,
       "notes": "mean 0ms"
     },
@@ -1138,6 +1138,90 @@
       "p95": 0,
       "max": 0,
       "notes": "mean 0ms"
+    },
+    {
+      "id": "B10.checkpoint.persisted.1",
+      "label": "persisted checkpoint chars (1 turns)",
+      "modules": "prompts/goal-prompts",
+      "fixture": "1 unchanged continuation turns",
+      "p50": "-",
+      "p95": "-",
+      "max": "-",
+      "ops": 68,
+      "n": 1,
+      "notes": "v2 marker is 68 chars; objective occurrences in persisted checkpoints must be 0"
+    },
+    {
+      "id": "B10.checkpoint.persisted.10",
+      "label": "persisted checkpoint chars (10 turns)",
+      "modules": "prompts/goal-prompts",
+      "fixture": "10 unchanged continuation turns",
+      "p50": "-",
+      "p95": "-",
+      "max": "-",
+      "ops": 680,
+      "n": 1,
+      "notes": "v2 marker is 68 chars; objective occurrences in persisted checkpoints must be 0"
+    },
+    {
+      "id": "B10.checkpoint.persisted.100",
+      "label": "persisted checkpoint chars (100 turns)",
+      "modules": "prompts/goal-prompts",
+      "fixture": "100 unchanged continuation turns",
+      "p50": "-",
+      "p95": "-",
+      "max": "-",
+      "ops": 6800,
+      "n": 1,
+      "notes": "v2 marker is 68 chars; objective occurrences in persisted checkpoints must be 0"
+    },
+    {
+      "id": "B10.checkpoint.persisted.1000",
+      "label": "persisted checkpoint chars (1000 turns)",
+      "modules": "prompts/goal-prompts",
+      "fixture": "1000 unchanged continuation turns",
+      "p50": "-",
+      "p95": "-",
+      "max": "-",
+      "ops": 68000,
+      "n": 1,
+      "notes": "v2 marker is 68 chars; objective occurrences in persisted checkpoints must be 0"
+    },
+    {
+      "id": "B10.checkpoint.provider-context.1000",
+      "label": "provider-visible checkpoints after compaction (1000-turn fixture)",
+      "modules": "extensions/goal-events",
+      "fixture": "1001 checkpoints (1000 legacy + 1 v2), 50-task tree",
+      "p50": "-",
+      "p95": "-",
+      "max": "-",
+      "ops": 1,
+      "n": 1,
+      "notes": "must be <= 1; latest marker rewritten to bounded v2 content"
+    },
+    {
+      "id": "B10.checkpoint.recovery.850",
+      "label": "checkpoint chars after offline recovery (850-entry legacy fixture)",
+      "modules": "scripts/recover-session-checkpoints.mjs",
+      "fixture": "850 legacy checkpoints (~6400 chars each)",
+      "p50": "-",
+      "p95": "-",
+      "max": "-",
+      "ops": 51850,
+      "n": 1,
+      "notes": "was ~5440000 chars; saved 7140000; must be <= 5% of legacy"
+    },
+    {
+      "id": "B10.checkpoint.composed-request.50t",
+      "label": "full goal blocks in composed request (50-task tree)",
+      "modules": "prompts/goal-prompts + extensions/goal-events",
+      "fixture": "system prompt with injected goal block + latest checkpoint marker",
+      "p50": "-",
+      "p95": "-",
+      "max": "-",
+      "ops": 1,
+      "n": 1,
+      "notes": "objective occurs 1x; both counts must be exactly 1"
     }
   ]
 }

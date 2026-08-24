@@ -108,10 +108,10 @@ test("parseGoalSettings supports provider/model and thinking_level aliases", () 
 	assert.deepEqual(parseGoalSettings({ provider: " ", model: 123, thinkingLevel: "ludicrous" }), {});
 });
 
-test("parseGoalSettings reads disabled flag", () => {
+test("parseGoalSettings reads disabled flag (explicit false preserved for layering)", () => {
 	assert.deepEqual(parseGoalSettings({ disabled: true }), { disabled: true });
 	assert.deepEqual(parseGoalSettings({ disabled: "true" }), { disabled: true });
-	assert.deepEqual(parseGoalSettings({ disabled: false }), {});
+	assert.deepEqual(parseGoalSettings({ disabled: false }), { disabled: false }, "explicit false survives so project can override global true");
 	assert.deepEqual(parseGoalSettings({}), {});
 });
 
@@ -149,8 +149,9 @@ test("saveGoalSettingsFileConfig persists UI-editable settings (auditor + task f
 		assert.match(fs.readFileSync(goalSettingsPath(cwd), "utf8"), /"autoSelectSingleGoal": true/);
 		assert.deepEqual(loadGoalSettingsFileConfig(cwd), saved3);
 		const saved4 = saveGoalSettingsFileConfig(cwd, { autoSelectSingleGoal: false });
-		assert.equal(saved4.autoSelectSingleGoal, undefined);
-		assert.doesNotMatch(fs.readFileSync(goalSettingsPath(cwd), "utf8"), /autoSelectSingleGoal/);
+		// Layered rewrite: explicit false is persisted so it can override a global true.
+		assert.equal(saved4.autoSelectSingleGoal, false);
+		assert.match(fs.readFileSync(goalSettingsPath(cwd), "utf8"), /"autoSelectSingleGoal": false/);
 	} finally {
 		fs.rmSync(cwd, { recursive: true, force: true });
 	}
@@ -227,7 +228,9 @@ test("buildGoalAuditorPrompt escapes payloads so delimiters cannot be closed ear
 	assert.ok(prompt.includes("&lt;/objective&gt;"), "objective delimiter text must be escaped");
 	assert.ok(prompt.includes("&lt;approved/&gt;"), "marker-like text in the objective must be escaped");
 	assert.ok(prompt.includes("&lt;/executor_claim&gt;"), "claim delimiter text must be escaped");
-	assert.ok(prompt.includes("&lt;/goal_details&gt;"), "details delimiter text must be escaped");
+	// PR E §61: goal_details carries minimal metadata only — the objective and
+	// any detailedSummary prose must NOT appear inside it.
+	assert.ok(!prompt.includes("Summary with"), "detailedSummary prose excluded from the auditor prompt");
 	// Raw payload text must not appear.
 	assert.ok(!prompt.includes("Finish X\n</objective>"), "raw objective must not appear");
 	// The real close tags appear exactly once each; the escaped payload sits

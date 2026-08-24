@@ -343,6 +343,38 @@ Completed and cleared goals are stored in:
 
 Each session can focus on one goal while the project keeps other goals open.
 
+## Session checkpoint recovery
+
+Auto-continue checkpoints are tiny structured markers (≤160 chars) that
+trigger the next turn; the full goal state is injected once per turn by the
+extension and is never persisted into checkpoints. Sessions created by older
+versions may still contain large "legacy" full-prompt checkpoints.
+
+Check `/goal-recovery` or `/goal-status health` for a read-only report:
+
+```text
+Session checkpoints:
+  total: 851
+  legacy full checkpoints: 851
+  checkpoint content: 5.4 MB
+  projected content after recovery: 92 KB
+```
+
+To repair an affected session file, close Pi first (the tool refuses to run
+while a live session could be open), then:
+
+```bash
+# Report only — writes nothing:
+pi-goal-x-recover --session <session.jsonl>
+
+# Repair (creates a timestamped backup, rewrites only checkpoint entries):
+pi-goal-x-recover --session <session.jsonl> --apply --confirm-pi-closed
+```
+
+Recovery preserves every entry id and parent link, keeps all non-goal lines
+byte-identical (including malformed lines), and is idempotent. Rollback is
+the timestamped `.backup-*` file created next to the session.
+
 ## Commands
 
 ```text
@@ -368,11 +400,20 @@ Each session can focus on one goal while the project keeps other goals open.
 
 ## Configuration
 
-Settings are stored in:
+Settings resolve per setting in this order (highest wins):
 
 ```text
-.pi/pi-goal-x-settings.json
+environment > project layer > global layer > defaults
 ```
+
+Files:
+
+```text
+global:  ~/.pi/pi-goal-x-settings.json   (or $PI_CODING_AGENT_DIR, or $PI_GOAL_GLOBAL_SETTINGS_FILE)
+project: <cwd>/.pi/pi-goal-x-settings.json   (or $PI_GOAL_SETTINGS_FILE)
+```
+
+Define shared configuration once in the global file and override per project. Explicit `false`/`0` values in a lower layer override inherited values; nested `keybindings` inherit per key. `/goal-settings` shows each row's effective value and source, can switch the edited scope, and can remove a local override to return to inheritance.
 
 Use `/goal-settings` to configure task lists, verification contracts, subtask depth, automatic goal selection, and completion auditing. Goal objectives have no hard length limit by default; set `objectiveMaxChars` (or `PI_GOAL_OBJECTIVE_MAX_CHARS`, `0` = no limit) to cap objective length across `create_goal`, `propose_goal_draft`, and `/goal-tweak`.
 
@@ -391,6 +432,23 @@ Configure the task shortcuts in the same file when the terminal captures the def
 ```
 
 The default task bindings are `ctrl+shift+t`, `ctrl+shift+up`, and `ctrl+shift+down`. Use pi key names such as `ctrl+shift+up`.
+
+### Blocker Oracle (opt-in)
+
+When an active goal reports blocked, a stronger read-only model can be consulted once per distinct blocker before the goal is allowed to stop. Off by default; configure under `/goal-settings → Blocker Oracle`:
+
+```json
+{
+  "oracle": {
+    "enabled": true,
+    "provider": "anthropic",
+    "model": "<a stronger model>",
+    "maxFailedAttemptsPerBlocker": 2
+  }
+}
+```
+
+Both `provider` and `model` must be set explicitly — the executor model is never used as a silent fallback. The Oracle session can only read files (`read`, `grep`, `find`, `ls`) and returns structured advice. Actionable advice keeps the goal running until you attempt it; advice that needs human input lets the goal block immediately.
 
 ## License
 

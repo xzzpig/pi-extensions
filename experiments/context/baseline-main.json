@@ -1,0 +1,692 @@
+{
+  "generatedAtCommit": "main",
+  "measuredAt": "2026-08-23",
+  "fixtures": [
+    {
+      "fixture": "active-regular-10-tasks",
+      "breakdown": {
+        "baseSystemChars": 49,
+        "extensionSystemChars": 2061,
+        "goalStateChars": 2061,
+        "checkpointChars": 70,
+        "historicalCheckpointChars": 0,
+        "toolSchemaChars": 7398,
+        "messageChars": 202,
+        "totalSerializedChars": 9676,
+        "estimatedTokens": 2419
+      },
+      "semantic": {
+        "objective": 1,
+        "verificationContract": 0,
+        "currentTask": 0,
+        "lifecyclePolicyThirdBlocker": 1,
+        "independentAuditor": 3,
+        "neverEditObjective": 2,
+        "blockerPolicyUpdateGoal": 1,
+        "completionPolicyUpdateGoal": 1,
+        "goalActiveMarker": 1,
+        "checkpointMarker": 1,
+        "unfocusedSafety": 0,
+        "pausedMarker": 0,
+        "budgetLimitedMarker": 0,
+        "staleMarker": 0,
+        "postCompactionMarker": 0
+      }
+    },
+    {
+      "fixture": "active-regular-50-tasks",
+      "breakdown": {
+        "baseSystemChars": 49,
+        "extensionSystemChars": 2433,
+        "goalStateChars": 2433,
+        "checkpointChars": 70,
+        "historicalCheckpointChars": 0,
+        "toolSchemaChars": 7398,
+        "messageChars": 202,
+        "totalSerializedChars": 10048,
+        "estimatedTokens": 2512
+      },
+      "semantic": {
+        "objective": 1,
+        "verificationContract": 0,
+        "currentTask": 0,
+        "lifecyclePolicyThirdBlocker": 1,
+        "independentAuditor": 3,
+        "neverEditObjective": 2,
+        "blockerPolicyUpdateGoal": 1,
+        "completionPolicyUpdateGoal": 1,
+        "goalActiveMarker": 1,
+        "checkpointMarker": 1,
+        "unfocusedSafety": 0,
+        "pausedMarker": 0,
+        "budgetLimitedMarker": 0,
+        "staleMarker": 0,
+        "postCompactionMarker": 0
+      }
+    },
+    {
+      "fixture": "active-regular-no-tasks",
+      "breakdown": {
+        "baseSystemChars": 49,
+        "extensionSystemChars": 1441,
+        "goalStateChars": 1441,
+        "checkpointChars": 70,
+        "historicalCheckpointChars": 0,
+        "toolSchemaChars": 7398,
+        "messageChars": 202,
+        "totalSerializedChars": 9056,
+        "estimatedTokens": 2264
+      },
+      "semantic": {
+        "objective": 1,
+        "verificationContract": 0,
+        "currentTask": 0,
+        "lifecyclePolicyThirdBlocker": 1,
+        "independentAuditor": 3,
+        "neverEditObjective": 2,
+        "blockerPolicyUpdateGoal": 1,
+        "completionPolicyUpdateGoal": 1,
+        "goalActiveMarker": 1,
+        "checkpointMarker": 1,
+        "unfocusedSafety": 0,
+        "pausedMarker": 0,
+        "budgetLimitedMarker": 0,
+        "staleMarker": 0,
+        "postCompactionMarker": 0
+      }
+    },
+    {
+      "fixture": "audit-rejection-and-rework",
+      "breakdown": {
+        "baseSystemChars": 49,
+        "extensionSystemChars": 0,
+        "goalStateChars": 0,
+        "checkpointChars": 74,
+        "historicalCheckpointChars": 0,
+        "toolSchemaChars": 7398,
+        "messageChars": 206,
+        "totalSerializedChars": 7619,
+        "estimatedTokens": 1905
+      },
+      "semantic": {
+        "objective": 0,
+        "verificationContract": 0,
+        "currentTask": 0,
+        "lifecyclePolicyThirdBlocker": 0,
+        "independentAuditor": 2,
+        "neverEditObjective": 0,
+        "blockerPolicyUpdateGoal": 0,
+        "completionPolicyUpdateGoal": 0,
+        "goalActiveMarker": 0,
+        "checkpointMarker": 1,
+        "unfocusedSafety": 0,
+        "pausedMarker": 0,
+        "budgetLimitedMarker": 0,
+        "staleMarker": 0,
+        "postCompactionMarker": 0
+      }
+    },
+    {
+      "fixture": "blocked-goal",
+      "breakdown": {
+        "baseSystemChars": 49,
+        "extensionSystemChars": 1449,
+        "goalStateChars": 1449,
+        "checkpointChars": 69,
+        "historicalCheckpointChars": 0,
+        "toolSchemaChars": 7398,
+        "messageChars": 201,
+        "totalSerializedChars": 9063,
+        "estimatedTokens": 2266
+      },
+      "semantic": {
+        "objective": 1,
+        "verificationContract": 0,
+        "currentTask": 0,
+        "lifecyclePolicyThirdBlocker": 1,
+        "independentAuditor": 3,
+        "neverEditObjective": 2,
+        "blockerPolicyUpdateGoal": 1,
+        "completionPolicyUpdateGoal": 1,
+        "goalActiveMarker": 1,
+        "checkpointMarker": 1,
+        "unfocusedSafety": 0,
+        "pausedMarker": 0,
+        "budgetLimitedMarker": 0,
+        "staleMarker": 0,
+        "postCompactionMarker": 0
+      }
+    },
+    {
+      "fixture": "completion-audit",
+      "breakdown": {
+        "baseSystemChars": 49,
+        "extensionSystemChars": 0,
+        "goalStateChars": 0,
+        "checkpointChars": 78,
+        "historicalCheckpointChars": 0,
+        "toolSchemaChars": 7398,
+        "messageChars": 210,
+        "totalSerializedChars": 7623,
+        "estimatedTokens": 1906
+      },
+      "semantic": {
+        "objective": 0,
+        "verificationContract": 0,
+        "currentTask": 0,
+        "lifecyclePolicyThirdBlocker": 0,
+        "independentAuditor": 2,
+        "neverEditObjective": 0,
+        "blockerPolicyUpdateGoal": 0,
+        "completionPolicyUpdateGoal": 0,
+        "goalActiveMarker": 0,
+        "checkpointMarker": 1,
+        "unfocusedSafety": 0,
+        "pausedMarker": 0,
+        "budgetLimitedMarker": 0,
+        "staleMarker": 0,
+        "postCompactionMarker": 0
+      }
+    },
+    {
+      "fixture": "current-contracted-task",
+      "breakdown": {
+        "baseSystemChars": 49,
+        "extensionSystemChars": 2382,
+        "goalStateChars": 2382,
+        "checkpointChars": 77,
+        "historicalCheckpointChars": 0,
+        "toolSchemaChars": 7398,
+        "messageChars": 209,
+        "totalSerializedChars": 10004,
+        "estimatedTokens": 2501
+      },
+      "semantic": {
+        "objective": 1,
+        "verificationContract": 1,
+        "currentTask": 1,
+        "lifecyclePolicyThirdBlocker": 1,
+        "independentAuditor": 4,
+        "neverEditObjective": 2,
+        "blockerPolicyUpdateGoal": 1,
+        "completionPolicyUpdateGoal": 1,
+        "goalActiveMarker": 1,
+        "checkpointMarker": 1,
+        "unfocusedSafety": 0,
+        "pausedMarker": 0,
+        "budgetLimitedMarker": 0,
+        "staleMarker": 0,
+        "postCompactionMarker": 0
+      }
+    },
+    {
+      "fixture": "get-goal-default-and-verbose",
+      "breakdown": {
+        "baseSystemChars": 49,
+        "extensionSystemChars": 2098,
+        "goalStateChars": 2098,
+        "checkpointChars": 70,
+        "historicalCheckpointChars": 0,
+        "toolSchemaChars": 7398,
+        "messageChars": 202,
+        "totalSerializedChars": 9713,
+        "estimatedTokens": 2429
+      },
+      "semantic": {
+        "objective": 1,
+        "verificationContract": 1,
+        "currentTask": 0,
+        "lifecyclePolicyThirdBlocker": 1,
+        "independentAuditor": 4,
+        "neverEditObjective": 2,
+        "blockerPolicyUpdateGoal": 1,
+        "completionPolicyUpdateGoal": 1,
+        "goalActiveMarker": 1,
+        "checkpointMarker": 1,
+        "unfocusedSafety": 0,
+        "pausedMarker": 0,
+        "budgetLimitedMarker": 0,
+        "staleMarker": 0,
+        "postCompactionMarker": 0
+      }
+    },
+    {
+      "fixture": "guided-drafting-question",
+      "breakdown": {
+        "baseSystemChars": 49,
+        "extensionSystemChars": 0,
+        "goalStateChars": 0,
+        "checkpointChars": 0,
+        "historicalCheckpointChars": 0,
+        "toolSchemaChars": 7398,
+        "messageChars": 111,
+        "totalSerializedChars": 7545,
+        "estimatedTokens": 1887
+      },
+      "semantic": {
+        "objective": 0,
+        "verificationContract": 0,
+        "currentTask": 0,
+        "lifecyclePolicyThirdBlocker": 0,
+        "independentAuditor": 2,
+        "neverEditObjective": 0,
+        "blockerPolicyUpdateGoal": 0,
+        "completionPolicyUpdateGoal": 0,
+        "goalActiveMarker": 0,
+        "checkpointMarker": 0,
+        "unfocusedSafety": 0,
+        "pausedMarker": 0,
+        "budgetLimitedMarker": 0,
+        "staleMarker": 0,
+        "postCompactionMarker": 0
+      }
+    },
+    {
+      "fixture": "guided-proposal",
+      "breakdown": {
+        "baseSystemChars": 49,
+        "extensionSystemChars": 0,
+        "goalStateChars": 0,
+        "checkpointChars": 0,
+        "historicalCheckpointChars": 0,
+        "toolSchemaChars": 7398,
+        "messageChars": 113,
+        "totalSerializedChars": 7547,
+        "estimatedTokens": 1887
+      },
+      "semantic": {
+        "objective": 0,
+        "verificationContract": 0,
+        "currentTask": 0,
+        "lifecyclePolicyThirdBlocker": 0,
+        "independentAuditor": 2,
+        "neverEditObjective": 0,
+        "blockerPolicyUpdateGoal": 0,
+        "completionPolicyUpdateGoal": 0,
+        "goalActiveMarker": 0,
+        "checkpointMarker": 0,
+        "unfocusedSafety": 0,
+        "pausedMarker": 0,
+        "budgetLimitedMarker": 0,
+        "staleMarker": 0,
+        "postCompactionMarker": 0
+      }
+    },
+    {
+      "fixture": "half-complete-tree",
+      "breakdown": {
+        "baseSystemChars": 49,
+        "extensionSystemChars": 1966,
+        "goalStateChars": 1966,
+        "checkpointChars": 75,
+        "historicalCheckpointChars": 0,
+        "toolSchemaChars": 7398,
+        "messageChars": 207,
+        "totalSerializedChars": 9586,
+        "estimatedTokens": 2397
+      },
+      "semantic": {
+        "objective": 1,
+        "verificationContract": 0,
+        "currentTask": 0,
+        "lifecyclePolicyThirdBlocker": 1,
+        "independentAuditor": 3,
+        "neverEditObjective": 2,
+        "blockerPolicyUpdateGoal": 1,
+        "completionPolicyUpdateGoal": 1,
+        "goalActiveMarker": 1,
+        "checkpointMarker": 1,
+        "unfocusedSafety": 0,
+        "pausedMarker": 0,
+        "budgetLimitedMarker": 0,
+        "staleMarker": 0,
+        "postCompactionMarker": 0
+      }
+    },
+    {
+      "fixture": "latest-auditor-rejection",
+      "breakdown": {
+        "baseSystemChars": 49,
+        "extensionSystemChars": 877,
+        "goalStateChars": 877,
+        "checkpointChars": 79,
+        "historicalCheckpointChars": 0,
+        "toolSchemaChars": 7398,
+        "messageChars": 211,
+        "totalSerializedChars": 8501,
+        "estimatedTokens": 2126
+      },
+      "semantic": {
+        "objective": 1,
+        "verificationContract": 0,
+        "currentTask": 0,
+        "lifecyclePolicyThirdBlocker": 0,
+        "independentAuditor": 3,
+        "neverEditObjective": 0,
+        "blockerPolicyUpdateGoal": 0,
+        "completionPolicyUpdateGoal": 1,
+        "goalActiveMarker": 0,
+        "checkpointMarker": 1,
+        "unfocusedSafety": 0,
+        "pausedMarker": 1,
+        "budgetLimitedMarker": 0,
+        "staleMarker": 0,
+        "postCompactionMarker": 0
+      }
+    },
+    {
+      "fixture": "long-objective",
+      "breakdown": {
+        "baseSystemChars": 49,
+        "extensionSystemChars": 4439,
+        "goalStateChars": 4439,
+        "checkpointChars": 76,
+        "historicalCheckpointChars": 0,
+        "toolSchemaChars": 7398,
+        "messageChars": 208,
+        "totalSerializedChars": 12060,
+        "estimatedTokens": 3015
+      },
+      "semantic": {
+        "objective": 0,
+        "verificationContract": 0,
+        "currentTask": 0,
+        "lifecyclePolicyThirdBlocker": 1,
+        "independentAuditor": 3,
+        "neverEditObjective": 2,
+        "blockerPolicyUpdateGoal": 1,
+        "completionPolicyUpdateGoal": 1,
+        "goalActiveMarker": 1,
+        "checkpointMarker": 1,
+        "unfocusedSafety": 0,
+        "pausedMarker": 0,
+        "budgetLimitedMarker": 0,
+        "staleMarker": 0,
+        "postCompactionMarker": 0
+      }
+    },
+    {
+      "fixture": "nested-tasks",
+      "breakdown": {
+        "baseSystemChars": 49,
+        "extensionSystemChars": 2582,
+        "goalStateChars": 2582,
+        "checkpointChars": 74,
+        "historicalCheckpointChars": 0,
+        "toolSchemaChars": 7398,
+        "messageChars": 206,
+        "totalSerializedChars": 10201,
+        "estimatedTokens": 2551
+      },
+      "semantic": {
+        "objective": 1,
+        "verificationContract": 0,
+        "currentTask": 0,
+        "lifecyclePolicyThirdBlocker": 1,
+        "independentAuditor": 3,
+        "neverEditObjective": 2,
+        "blockerPolicyUpdateGoal": 1,
+        "completionPolicyUpdateGoal": 1,
+        "goalActiveMarker": 1,
+        "checkpointMarker": 1,
+        "unfocusedSafety": 0,
+        "pausedMarker": 0,
+        "budgetLimitedMarker": 0,
+        "staleMarker": 0,
+        "postCompactionMarker": 0
+      }
+    },
+    {
+      "fixture": "paused-goal",
+      "breakdown": {
+        "baseSystemChars": 49,
+        "extensionSystemChars": 570,
+        "goalStateChars": 570,
+        "checkpointChars": 68,
+        "historicalCheckpointChars": 0,
+        "toolSchemaChars": 7398,
+        "messageChars": 200,
+        "totalSerializedChars": 8183,
+        "estimatedTokens": 2046
+      },
+      "semantic": {
+        "objective": 1,
+        "verificationContract": 0,
+        "currentTask": 0,
+        "lifecyclePolicyThirdBlocker": 0,
+        "independentAuditor": 2,
+        "neverEditObjective": 0,
+        "blockerPolicyUpdateGoal": 0,
+        "completionPolicyUpdateGoal": 1,
+        "goalActiveMarker": 0,
+        "checkpointMarker": 1,
+        "unfocusedSafety": 0,
+        "pausedMarker": 1,
+        "budgetLimitedMarker": 0,
+        "staleMarker": 0,
+        "postCompactionMarker": 0
+      }
+    },
+    {
+      "fixture": "post-compaction-turn",
+      "breakdown": {
+        "baseSystemChars": 49,
+        "extensionSystemChars": 1779,
+        "goalStateChars": 1779,
+        "checkpointChars": 0,
+        "historicalCheckpointChars": 0,
+        "toolSchemaChars": 7398,
+        "messageChars": 41,
+        "totalSerializedChars": 9249,
+        "estimatedTokens": 2313
+      },
+      "semantic": {
+        "objective": 1,
+        "verificationContract": 0,
+        "currentTask": 0,
+        "lifecyclePolicyThirdBlocker": 1,
+        "independentAuditor": 3,
+        "neverEditObjective": 2,
+        "blockerPolicyUpdateGoal": 1,
+        "completionPolicyUpdateGoal": 1,
+        "goalActiveMarker": 1,
+        "checkpointMarker": 0,
+        "unfocusedSafety": 0,
+        "pausedMarker": 0,
+        "budgetLimitedMarker": 0,
+        "staleMarker": 0,
+        "postCompactionMarker": 0
+      }
+    },
+    {
+      "fixture": "sisyphus-ordered-objective",
+      "breakdown": {
+        "baseSystemChars": 49,
+        "extensionSystemChars": 2053,
+        "goalStateChars": 2053,
+        "checkpointChars": 70,
+        "historicalCheckpointChars": 0,
+        "toolSchemaChars": 7398,
+        "messageChars": 202,
+        "totalSerializedChars": 9668,
+        "estimatedTokens": 2417
+      },
+      "semantic": {
+        "objective": 1,
+        "verificationContract": 0,
+        "currentTask": 0,
+        "lifecyclePolicyThirdBlocker": 1,
+        "independentAuditor": 3,
+        "neverEditObjective": 2,
+        "blockerPolicyUpdateGoal": 1,
+        "completionPolicyUpdateGoal": 1,
+        "goalActiveMarker": 1,
+        "checkpointMarker": 1,
+        "unfocusedSafety": 0,
+        "pausedMarker": 0,
+        "budgetLimitedMarker": 0,
+        "staleMarker": 0,
+        "postCompactionMarker": 0
+      }
+    },
+    {
+      "fixture": "stale-checkpoint",
+      "breakdown": {
+        "baseSystemChars": 49,
+        "extensionSystemChars": 386,
+        "goalStateChars": 386,
+        "checkpointChars": 68,
+        "historicalCheckpointChars": 0,
+        "toolSchemaChars": 7398,
+        "messageChars": 76,
+        "totalSerializedChars": 7903,
+        "estimatedTokens": 1976
+      },
+      "semantic": {
+        "objective": 1,
+        "verificationContract": 0,
+        "currentTask": 0,
+        "lifecyclePolicyThirdBlocker": 0,
+        "independentAuditor": 2,
+        "neverEditObjective": 0,
+        "blockerPolicyUpdateGoal": 0,
+        "completionPolicyUpdateGoal": 0,
+        "goalActiveMarker": 0,
+        "checkpointMarker": 1,
+        "unfocusedSafety": 0,
+        "pausedMarker": 0,
+        "budgetLimitedMarker": 0,
+        "staleMarker": 1,
+        "postCompactionMarker": 0
+      }
+    },
+    {
+      "fixture": "token-budget-at-limit",
+      "breakdown": {
+        "baseSystemChars": 49,
+        "extensionSystemChars": 239,
+        "goalStateChars": 239,
+        "checkpointChars": 74,
+        "historicalCheckpointChars": 0,
+        "toolSchemaChars": 7398,
+        "messageChars": 206,
+        "totalSerializedChars": 7858,
+        "estimatedTokens": 1965
+      },
+      "semantic": {
+        "objective": 1,
+        "verificationContract": 0,
+        "currentTask": 0,
+        "lifecyclePolicyThirdBlocker": 0,
+        "independentAuditor": 2,
+        "neverEditObjective": 0,
+        "blockerPolicyUpdateGoal": 0,
+        "completionPolicyUpdateGoal": 0,
+        "goalActiveMarker": 0,
+        "checkpointMarker": 1,
+        "unfocusedSafety": 0,
+        "pausedMarker": 0,
+        "budgetLimitedMarker": 1,
+        "staleMarker": 0,
+        "postCompactionMarker": 0
+      }
+    },
+    {
+      "fixture": "token-budget-seventy-five-percent",
+      "breakdown": {
+        "baseSystemChars": 49,
+        "extensionSystemChars": 1505,
+        "goalStateChars": 1505,
+        "checkpointChars": 74,
+        "historicalCheckpointChars": 0,
+        "toolSchemaChars": 7398,
+        "messageChars": 206,
+        "totalSerializedChars": 9124,
+        "estimatedTokens": 2281
+      },
+      "semantic": {
+        "objective": 1,
+        "verificationContract": 0,
+        "currentTask": 0,
+        "lifecyclePolicyThirdBlocker": 1,
+        "independentAuditor": 3,
+        "neverEditObjective": 2,
+        "blockerPolicyUpdateGoal": 1,
+        "completionPolicyUpdateGoal": 1,
+        "goalActiveMarker": 1,
+        "checkpointMarker": 1,
+        "unfocusedSafety": 0,
+        "pausedMarker": 0,
+        "budgetLimitedMarker": 0,
+        "staleMarker": 0,
+        "postCompactionMarker": 0
+      }
+    },
+    {
+      "fixture": "token-budget-zero-percent",
+      "breakdown": {
+        "baseSystemChars": 49,
+        "extensionSystemChars": 1493,
+        "goalStateChars": 1493,
+        "checkpointChars": 73,
+        "historicalCheckpointChars": 0,
+        "toolSchemaChars": 7398,
+        "messageChars": 205,
+        "totalSerializedChars": 9111,
+        "estimatedTokens": 2278
+      },
+      "semantic": {
+        "objective": 1,
+        "verificationContract": 0,
+        "currentTask": 0,
+        "lifecyclePolicyThirdBlocker": 1,
+        "independentAuditor": 3,
+        "neverEditObjective": 2,
+        "blockerPolicyUpdateGoal": 1,
+        "completionPolicyUpdateGoal": 1,
+        "goalActiveMarker": 1,
+        "checkpointMarker": 1,
+        "unfocusedSafety": 0,
+        "pausedMarker": 0,
+        "budgetLimitedMarker": 0,
+        "staleMarker": 0,
+        "postCompactionMarker": 0
+      }
+    },
+    {
+      "fixture": "unfocused-multiple-goals",
+      "breakdown": {
+        "baseSystemChars": 49,
+        "extensionSystemChars": 240,
+        "goalStateChars": 240,
+        "checkpointChars": 0,
+        "historicalCheckpointChars": 0,
+        "toolSchemaChars": 7398,
+        "messageChars": 13,
+        "totalSerializedChars": 7694,
+        "estimatedTokens": 1924
+      },
+      "semantic": {
+        "objective": 0,
+        "verificationContract": 0,
+        "currentTask": 0,
+        "lifecyclePolicyThirdBlocker": 0,
+        "independentAuditor": 2,
+        "neverEditObjective": 0,
+        "blockerPolicyUpdateGoal": 0,
+        "completionPolicyUpdateGoal": 0,
+        "goalActiveMarker": 0,
+        "checkpointMarker": 0,
+        "unfocusedSafety": 1,
+        "pausedMarker": 0,
+        "budgetLimitedMarker": 0,
+        "staleMarker": 0,
+        "postCompactionMarker": 0
+      }
+    }
+  ],
+  "totals": {
+    "totalSerializedChars": 197032,
+    "estimatedTokens": 49265
+  }
+}

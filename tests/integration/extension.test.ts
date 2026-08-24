@@ -28,6 +28,8 @@ interface Harness {
 	notifies: Array<{ msg: string; level: string }>;
 	activeToolsHistory: string[][];
 	terminalInputHandler: ((data: string) => unknown) | null;
+	statusCalls: Array<{ key: string; value?: string }>;
+	widgetCalls: Array<{ key: string; factory: unknown }>;
 }
 
 interface HarnessOptions {
@@ -47,6 +49,8 @@ function createHarness(options: HarnessOptions): Harness {
 	const commands = new Map<string, any>();
 	const notifies: Array<{ msg: string; level: string }> = [];
 	const activeToolsHistory: string[][] = [];
+	const statusCalls: Array<{ key: string; value?: string }> = [];
+	const widgetCalls: Array<{ key: string; factory: unknown }> = [];
 	let activeTools = ["read", "bash", "edit", "write"];
 	let terminalInputHandler: ((data: string) => unknown) | null = null;
 	const pi = {
@@ -72,7 +76,7 @@ function createHarness(options: HarnessOptions): Harness {
 			getRoot: () => options.cwd,
 		},
 		ui: {
-			notify: (msg: string, level: string) => { notifies.push({ msg, level }); }, setStatus: () => {}, setWidget: () => {},
+			notify: (msg: string, level: string) => { notifies.push({ msg, level }); }, setStatus: (key: string, value?: string) => { statusCalls.push({ key, value }); }, setWidget: (key: string, factory: unknown) => { widgetCalls.push({ key, factory }); },
 			onTerminalInput: (cb: (data: string) => unknown) => { terminalInputHandler = cb; return () => {}; },
 			select: options.select ?? (async () => undefined),
 			input: options.input ?? (async () => undefined),
@@ -87,6 +91,7 @@ function createHarness(options: HarnessOptions): Harness {
 	goalExtension(pi as any, options.runCompletionAuditor ? { runCompletionAuditor: options.runCompletionAuditor } : {});
 	return {
 		handlers, tools, commands, ctx, notifies, activeToolsHistory,
+		statusCalls, widgetCalls,
 		get terminalInputHandler() { return terminalInputHandler; },
 	};
 }
@@ -376,7 +381,7 @@ describe("five-tool handler integration", () => {
 	it("goal-settings menu toggles the disabled switch through the registered handler", async () => {
 		const f = fixture();
 		try {
-			const selects: string[] = ["  auditor disabled: false", "Done"];
+			const selects: string[] = ["  auditor disabled: false (default)", "Set project override to true", "Done"];
 			const h = createHarness({
 				cwd: f.cwd,
 				sessionEntries: f.sessionEntries,
@@ -399,7 +404,7 @@ describe("five-tool handler integration", () => {
 		const f = fixture();
 		try {
 			writeFileSync(path.join(f.cwd, ".pi", "pi-goal-x-settings.json"), JSON.stringify({ disabled: true }));
-			const selects: string[] = ["  thinking_level: off", "off", "Done"];
+			const selects: string[] = ["  thinking_level: (default) (default)", "off", "Done"];
 			const inputs: string[] = ["off"];
 			const h = createHarness({
 				cwd: f.cwd,
@@ -443,17 +448,18 @@ describe("five-tool handler integration", () => {
 				await start(h);
 				await h.commands.get("goal-settings").handler("", h.ctx);
 				const lines = firstOptions.filter((o) => o.startsWith("  ") && !o.startsWith("  ───"));
-				assert.equal(lines.length, 10, `all ten rows rendered, got: ${lines.join(" | ")}`);
-				assert.ok(lines.some((l) => l === "  auditor disabled: true"));
-				assert.ok(lines.some((l) => l === "  provider: anthropic"));
-				assert.ok(lines.some((l) => l === "  model: (default)"));
-				assert.ok(lines.some((l) => l === "  thinking_level: high"));
-				assert.ok(lines.some((l) => l === "  disableTasks: true"));
-				assert.ok(lines.some((l) => l === "  disableContracts: false"));
-				assert.ok(lines.some((l) => l === "  subtaskDepth: 3"));
-				assert.ok(lines.some((l) => l === "  autoSelectSingleGoal: false"));
-				assert.ok(lines.some((l) => l === "  stall timeout (minutes): 0"));
-				assert.ok(lines.some((l) => l === "  max objective length (0 = none): 0"), "objective length row defaults to 0");
+				assert.equal(lines.length, 16, `all sixteen rows rendered, got: ${lines.join(" | ")}`);
+				assert.ok(lines.some((l) => l === "  auditor disabled: true (project override)"));
+				assert.ok(lines.some((l) => l === "  provider: anthropic (project override)"));
+				assert.ok(lines.some((l) => l === "  model: (default) (default)"));
+				assert.ok(lines.some((l) => l === "  thinking_level: high (project override)"));
+				assert.ok(lines.some((l) => l === "  disableTasks: true (project override)"));
+				assert.ok(lines.some((l) => l === "  disableContracts: false (default)"));
+				assert.ok(lines.some((l) => l === "  subtaskDepth: 3 (project override)"));
+				assert.ok(lines.some((l) => l === "  autoSelectSingleGoal: false (default)"));
+				assert.ok(lines.some((l) => l === "  hideUnfocusedBanner: false (default)"));
+				assert.ok(lines.some((l) => l === "  stall timeout (minutes): 0 (default)"));
+				assert.ok(lines.some((l) => l === "  max objective length (0 = none): 0 (default)"), "objective length row defaults to 0");
 			} finally {
 				f.cleanup();
 			}
@@ -463,10 +469,10 @@ describe("five-tool handler integration", () => {
 			const f = fixture();
 			try {
 				const selects = [
-					"  disableTasks: false",
-					"  disableContracts: false",
-					"  auditor disabled: false",
-					"  autoSelectSingleGoal: false",
+					"  disableTasks: false (default)", "Set project override to true",
+					"  disableContracts: false (default)", "Set project override to true",
+					"  auditor disabled: false (default)", "Set project override to true",
+					"  autoSelectSingleGoal: false (default)", "Set project override to true",
 					"Done",
 				];
 				const h = createHarness({
@@ -480,9 +486,9 @@ describe("five-tool handler integration", () => {
 				assert.equal(saved.disableContracts, true);
 				assert.equal(saved.disabled, true);
 				assert.equal(saved.autoSelectSingleGoal, true);
-				// Second pass toggles disableTasks off and autoSelectSingleGoal off; the
-				// file must then omit both keys (false is the default and not persisted).
-				const selects2 = ["  disableTasks: true", "  autoSelectSingleGoal: true", "Done"];
+				// Second pass removes the local overrides via the action menu's
+				// inherit choice; the file then omits both keys.
+				const selects2 = ["  disableTasks: true (project override)", "Use inherited value", "  autoSelectSingleGoal: true (project override)", "Use inherited value", "Done"];
 				const h2 = createHarness({
 					cwd: f.cwd, sessionEntries: f.sessionEntries, hasUI: true,
 					select: async () => selects2.shift(),
@@ -505,8 +511,8 @@ describe("five-tool handler integration", () => {
 				// Set both via the manual provider/model entry: filter first, then
 				// pick "✎ Enter provider/model manually (advanced)", then type the pair.
 				const selects = [
-					"  provider: (default)", "✎ Enter provider/model manually (advanced)",
-					"  model: (default)", "✎ Enter provider/model manually (advanced)",
+					"  provider: (default) (default)", "✎ Enter provider/model manually (advanced)",
+					"  model: claude-sonnet-4 (project override)", "✎ Enter provider/model manually (advanced)",
 					"Done",
 				];
 				const inputs = ["", "anthropic/claude-sonnet-4", "", "anthropic/claude-sonnet-4"];
@@ -522,7 +528,7 @@ describe("five-tool handler integration", () => {
 				assert.equal(saved.model, "claude-sonnet-4");
 				// Clear both by returning to the current-session/default choice from
 				// either row: the default choice deletes provider and model together.
-				const selects2 = ["  provider: anthropic", "  Current session / default (system default)", "Done"];
+				const selects2 = ["  provider: anthropic (project override)", "  Current session / default (system default)", "Done"];
 				const inputs2 = [""];
 				const h2 = createHarness({
 					cwd: f.cwd, sessionEntries: f.sessionEntries, hasUI: true,
@@ -543,12 +549,12 @@ describe("five-tool handler integration", () => {
 			const f = fixture();
 			try {
 				const selects = [
-					"  thinking_level: (default)", "off",
-					"  thinking_level: off", "minimal",
-					"  thinking_level: minimal", "low",
-					"  thinking_level: low", "medium",
-					"  thinking_level: medium", "high",
-					"  thinking_level: high", "xhigh",
+					"  thinking_level: (default) (default)", "off",
+					"  thinking_level: off (project override)", "minimal",
+					"  thinking_level: minimal (project override)", "low",
+					"  thinking_level: low (project override)", "medium",
+					"  thinking_level: medium (project override)", "high",
+					"  thinking_level: high (project override)", "xhigh",
 					"Done",
 				];
 				const inputs = ["off", "minimal", "low", "medium", "high", "xhigh"];
@@ -563,7 +569,7 @@ describe("five-tool handler integration", () => {
 				assert.equal(saved.thinking_level, "xhigh", "all six levels accepted in sequence");
 				// Unknown value is rejected with a warning and nothing is persisted.
 				const notifiesBefore = h.notifies.length;
-				const selects2 = ["  thinking_level: xhigh", "bogus", "Done"];
+				const selects2 = ["  thinking_level: xhigh (project override)", "bogus", "Done"];
 				const inputs2 = ["bogus"];
 				const h2 = createHarness({
 					cwd: f.cwd, sessionEntries: f.sessionEntries, hasUI: true,
@@ -586,7 +592,9 @@ describe("five-tool handler integration", () => {
 				const rejects = ["1.5", "1x", "0", "-3", "Infinity", "9007199254740992", "", "1"];
 				const inputs = [...rejects];
 				const selects: string[] = [];
-				for (let i = 0; i < rejects.length; i++) selects.push("  subtaskDepth: (default)");
+				for (let i = 0; i < rejects.length; i++) {
+					selects.push("  subtaskDepth: 1 (default)", "Set project override...");
+				}
 				selects.push("Done");
 				const h = createHarness({
 					cwd: f.cwd, sessionEntries: f.sessionEntries, hasUI: true,
@@ -606,7 +614,12 @@ describe("five-tool handler integration", () => {
 		it("toggling tasks off, on, and off in one menu session reinstalls the correct fixed profile each time", async () => {
 			const f = fixture();
 			try {
-				const selects = ["  disableTasks: (default)", "  disableTasks: true", "  disableTasks: (default)", "Done"];
+				const selects = [
+					"  disableTasks: false (default)", "Set project override to true",
+					"  disableTasks: true (project override)", "Use inherited value",
+					"  disableTasks: false (default)", "Set project override to true",
+					"Done",
+				];
 				const h = createHarness({
 					cwd: f.cwd, sessionEntries: f.sessionEntries, hasUI: true,
 					select: async () => selects.shift(),
@@ -626,14 +639,77 @@ describe("five-tool handler integration", () => {
 			}
 		});
 
+		it("hideUnfocusedBanner hides and restores the unfocused chrome live (PR #29)", async () => {
+			const f = fixture();
+			try {
+				// Two open goals, nothing focused: the unfocused banner renders.
+				writeActiveGoalFile({ cwd: f.cwd }, { ...f.goal, id: "second-open-goal", objective: "Second open goal for the banner test" } as never);
+				const entries = [{ type: "custom", customType: "pi-goal-focus", data: goalFocusDetails(null, "unfocused") }];
+				const h = createHarness({
+					cwd: f.cwd, sessionEntries: entries, hasUI: true,
+					select: async () => {
+						return "Done";
+					},
+				});
+				await start(h);
+				await Promise.resolve(); // flush the coalesced UI microtask
+				assert.ok(
+					h.statusCalls.some((c) => c.key === "goal" && typeof c.value === "string" && c.value.includes("goal: unfocused")),
+					`unfocused hint visible before the setting: ${JSON.stringify(h.statusCalls)}`,
+				);
+
+				// Turn the setting on through the menu; the hide must be visible in
+				// captured UI state before the handler resolves.
+				let queue = ["  hideUnfocusedBanner: false (default)", "Set project override to true", "Done"];
+				const h2 = createHarness({
+					cwd: f.cwd, sessionEntries: entries, hasUI: true,
+					select: async (_prompt: string, options: string[]) => {
+						const hit = queue.find((q) => options.includes(q));
+						if (hit === undefined) return "Done";
+						queue = queue.filter((q) => q !== hit);
+						return hit;
+					},
+				});
+				await start(h2);
+				await h2.commands.get("goal-settings").handler("", h2.ctx);
+				await Promise.resolve(); // coalesced flush is a single microtask
+				const cleared = h2.statusCalls.some((c) => c.key === "goal" && c.value === undefined)
+					&& h2.widgetCalls.some((w) => w.factory === undefined || w.factory === null);
+				assert.ok(cleared, `live hide clears status + widget: ${JSON.stringify(h2.statusCalls)} / ${h2.widgetCalls.length} widget calls`);
+				const saved = readSettings(f.cwd);
+				assert.equal(saved.hideUnfocusedBanner, true);
+
+				// Restore via the action menu's inherit choice.
+				queue = ["  hideUnfocusedBanner: true (project override)", "Use inherited value", "Done"];
+				const h3 = createHarness({
+					cwd: f.cwd, sessionEntries: entries, hasUI: true,
+					select: async (_prompt: string, options: string[]) => {
+						const hit = queue.find((q) => options.includes(q));
+						if (hit === undefined) return "Done";
+						queue = queue.filter((q) => q !== hit);
+						return hit;
+					},
+				});
+				await start(h3);
+				await h3.commands.get("goal-settings").handler("", h3.ctx);
+				await Promise.resolve();
+				assert.ok(
+					h3.statusCalls.some((c) => c.key === "goal" && typeof c.value === "string" && c.value.includes("goal: unfocused")),
+					"live restore re-renders the unfocused hint",
+					);
+			} finally {
+				f.cleanup();
+			}
+		});
+
 		it("headless /goal-settings reports the settings file path without editing", async () => {
 			const f = fixture();
 			try {
 				const h = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries, hasUI: false });
 				await start(h);
 				await h.commands.get("goal-settings").handler("", h.ctx);
-				assert.ok(h.notifies.some((n) => n.msg.includes("Settings file: ") && n.msg.includes("pi-goal-x-settings.json")),
-					`headless notification: ${h.notifies.map((n) => n.msg).join(" | ")}`);
+				assert.ok(h.notifies.some((n) => n.msg.includes("project file: ") && n.msg.includes("pi-goal-x-settings.json") && n.msg.includes("Global file: ")),
+					`headless notification reports both layer paths: ${h.notifies.map((n) => n.msg).join(" | ")}`);
 				const p = settingsPath(f.cwd);
 				assert.ok(!existsSync(p), "headless invocation must not create the settings file");
 			} finally {
@@ -652,9 +728,9 @@ describe("five-tool handler integration", () => {
 				await start(h);
 				assert.equal(h.activeToolsHistory.length, 1, "three-tool install at session_start");
 				assert.ok(!h.activeToolsHistory[0]!.includes("set_goal_tasks"), "env override installs the core profile");
-				// Toggling the file value cannot change the effective setting, so no
-				// reinstall may happen even though the menu session edits twice.
-				const selects = ["  disableTasks: (default)", "  disableTasks: true", "Done"];
+				// The env override makes the disableTasks row read-only: selecting it
+				// warns and never mutates, so no reinstall may happen.
+				const selects = ["  disableTasks: false (environment; read-only)", "Done"];
 				const h2 = createHarness({
 					cwd: f.cwd, sessionEntries: f.sessionEntries, hasUI: true,
 					select: async () => selects.shift(),
@@ -835,7 +911,7 @@ describe("completion transaction hardening (follow-up Stage 3)", () => {
 			const get = h.tools.get("get_goal")!;
 			const snapshot = await (get.execute as any)("g-1", {}, new AbortController().signal, undefined, h.ctx);
 			const snapText = snapshot.content?.[0]?.text ?? "";
-			assert.ok(snapText.includes("Status: running"), `goal still open and active: ${snapText.slice(0, 100)}`);
+			assert.match(snapText, /Goal \S+: running/, `goal still open and active: ${snapText.slice(0, 100)}`);
 		} finally {
 			try { chmodSync(goalsDir, 0o755); } catch {}
 			f.cleanup();

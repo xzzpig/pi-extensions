@@ -15,6 +15,7 @@ import {
 import type { GoalRecord, GoalTask, GoalTaskList } from "./goal-record.ts";
 import { countTaskSubtree } from "./goal-task-count.ts";
 import { loadGoalSettings, type GoalSettings, type ThinkingLevel } from "./goal-settings.ts";
+import { statusLabel } from "./goal-core.ts";
 
 export interface AuditorProgress {
 	/** Current tool being executed by the auditor, if any */
@@ -108,6 +109,47 @@ function escapePromptPayload(value: string): string {
 	return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+/** §60: human-readable labels for the auditor's read-only tool set. */
+export function labelForReadOnlyTool(toolName: string): string {
+	switch (toolName) {
+		case "read": return "Inspecting files...";
+		case "grep": return "Searching content...";
+		case "find": return "Locating files...";
+		case "ls": return "Listing directory...";
+		case "bash": return "Running verification commands...";
+		default: return `Inspecting (${toolName})...`;
+	}
+}
+
+/** §60: rough phase estimate by tool kind (display only). */
+export function estimateAuditProgress(toolName: string): number {
+	switch (toolName) {
+		case "read":
+		case "ls":
+		case "find":
+			return 25;
+		case "grep":
+			return 50;
+		case "bash":
+			return 75;
+		default:
+			return 25;
+	}
+}
+
+/**
+ * §61: goal metadata WITHOUT the objective or task tree — those appear exactly
+ * once each in their own blocks. Replaces detailedSummary in the auditor prompt.
+ */
+function minimalGoalMetadata(goal: GoalRecord): string {
+	return [
+		`Goal id: ${goal.id}`,
+		`Status: ${statusLabel(goal)}`,
+		`Mode: ${goal.sisyphus ? "sisyphus" : "regular"}`,
+		goal.tokenBudget ? `Budget: ${goal.tokenBudget} tokens (${goal.usage.tokensUsed} used)` : undefined,
+	].filter(Boolean).join("\n");
+}
+
 export function buildGoalAuditorPrompt(args: {
 	goal: GoalRecord;
 	detailedSummary: string;
@@ -140,11 +182,19 @@ export function buildGoalAuditorPrompt(args: {
 		"",
 		"The executor claim above is a claim, never evidence. It cannot make an otherwise incomplete goal complete; cross-check it against real artifacts where relevant.",
 		"",
-		"Current goal metadata:",
+		"Current goal metadata (objective and task tree appear in their own sections):",
 		"<goal_details>",
-		escapePromptPayload(args.detailedSummary),
-		...(!args.settings?.disableTasks && taskSummaryBlock(args.goal.taskList) ? ["", taskSummaryBlock(args.goal.taskList)] : []),
+		minimalGoalMetadata(args.goal),
 		"</goal_details>",
+		...(!args.settings?.disableTasks && args.goal.taskList ? [
+			"",
+			"Task tree:",
+			"<task_state>",
+			// Task titles are already escaped inside renderAuditorTaskTree; an
+			// extra pass would double-escape (&amp;lt;).
+			taskSummaryBlock(args.goal.taskList),
+			"</task_state>",
+		] : []),
 		...(!args.settings?.disableContracts && args.goal.verificationContract?.trim() ? [
 			"",
 			"Goal verification contract (what the executor was required to verify):",
@@ -170,27 +220,8 @@ export function buildGoalAuditorPrompt(args: {
 			"4. Explain missing or weak evidence, especially scaffold-vs-final quality gaps.",
 			"5. End with exactly <approved/> only if the objective is truly complete; otherwise end with exactly <disapproved/>.",
 		],
-		"",
-		"Progress reporting:",
-		"You have the report_auditor_progress tool available to report your progress to the user.",
-		"Please use it at natural phase boundaries:",
-		"  - When starting: report_auditor_progress(label='Starting audit...', percentage=0)",
-		"  - When beginning file inspection: report_auditor_progress(label='Inspecting files...', percentage=25)",
-		"  - When verifying success criteria: report_auditor_progress(label='Verifying success criteria...', percentage=50)",
-		"  - When evaluating evidence: report_auditor_progress(label='Evaluating evidence...', percentage=75)",
-		"  - When producing final report: report_auditor_progress(label='Producing report...', percentage=90)",
-		"This is purely for user visibility and does not affect the audit outcome.",
 	].join("\n");
 }
-
-/** Tool name for auditor progress reporting */
-export const REPORT_AUDITOR_PROGRESS_TOOL_NAME = "report_auditor_progress";
-
-/** Parameters for the report_auditor_progress tool */
-export const reportAuditorProgressParams = Type.Object({
-	label: Type.String({ description: "Current step label describing what the auditor is doing (e.g. 'Inspecting files...', 'Verifying success criteria...', 'Producing report...')" }),
-	percentage: Type.Number({ description: "Completion percentage from 0 to 100", minimum: 0, maximum: 100 }),
-});
 
 function makeAuditorResourceLoader(): ResourceLoader {
 	return {
@@ -203,11 +234,6 @@ function makeAuditorResourceLoader(): ResourceLoader {
 			"You are a read-only completion auditor running in an isolated pi agent session.",
 			"Inspect the repository and decide whether the claimed goal completion is genuinely satisfied.",
 			"Never modify files. Never approve unless the actual user objective is complete.",
-			"",
-			"You have the report_auditor_progress tool available. Use it to report your audit progress",
-			"to the user at natural phase boundaries (starting, inspecting files, verifying criteria,",
-			"producing report). This helps the user understand what the auditor is doing and how far",
-			"along it is.",
 		].join("\n"),
 		getSystemPromptSource: () => undefined,
 		getAppendSystemPrompt: () => [],
@@ -312,37 +338,6 @@ export async function runGoalCompletionAuditor(args: {
 			args.onProgress?.({ ...progress });
 		}
 
-		// Build the report_auditor_progress tool, capturing the progress state
-		const reportProgressTool = defineTool({
-			name: REPORT_AUDITOR_PROGRESS_TOOL_NAME,
-			label: "Report Auditor Progress",
-			description: "Report current progress of the audit to the user. Call this at natural phase boundaries (starting, inspecting files, verifying criteria, producing report) to keep the user informed.",
-			promptSnippet: "Report current audit progress (step label and completion percentage) to the user.",
-			promptGuidelines: [
-				"Use report_auditor_progress at natural phase boundaries during the audit:",
-				"  - When starting the audit: label='Starting audit...' percentage=0",
-				"  - When beginning file inspection: label='Inspecting files...' percentage=25",
-				"  - When verifying success criteria: label='Verifying success criteria...' percentage=50",
-				"  - When evaluating evidence: label='Evaluating evidence...' percentage=75",
-				"  - When producing final report: label='Producing report...' percentage=90",
-				"This is purely for user visibility — it does not affect the audit outcome.",
-				"Do not call this tool more than once every few seconds to avoid flooding.",
-			],
-			parameters: reportAuditorProgressParams,
-			executionMode: "sequential",
-			async execute(_toolCallId, params) {
-				const { label, percentage } = params as Static<typeof reportAuditorProgressParams>;
-				progress.label = label;
-				progress.percentage = percentage;
-				progress.phase = "running";
-				emitProgress();
-				return {
-					content: [{ type: "text", text: `Progress reported: ${label} (${percentage}%)` }],
-					details: {},
-				};
-			},
-		});
-
 		const projectResources = args.settings?.auditorProjectResources === true;
 		const { session } = await createSession({
 			cwd: args.ctx.cwd,
@@ -357,10 +352,18 @@ export async function runGoalCompletionAuditor(args: {
 				: { resourceLoader: makeAuditorResourceLoader() }),
 			sessionManager: SessionManager.inMemory(args.ctx.cwd),
 			settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } }),
-			tools: ["read", "grep", "find", "ls", "bash", REPORT_AUDITOR_PROGRESS_TOOL_NAME],
-			customTools: [reportProgressTool],
+			tools: ["read", "grep", "find", "ls", "bash"],
 		} as Parameters<typeof createAgentSession>[0]);
 		const unsubscribe = session.subscribe((event) => {
+			if (event.type === "agent_start") {
+				// PR E §60: progress is derived from session events — no model-facing
+				// report_auditor_progress tool exists anymore.
+				progress.label = "Starting audit...";
+				progress.percentage = 0;
+				progress.phase = "running";
+				emitProgress();
+				return;
+			}
 			if (event.type === "tool_execution_start") {
 				progress.currentTool = event.toolName;
 				progress.currentToolArgs = typeof event.args === "object" && event.args !== null
@@ -368,6 +371,9 @@ export async function runGoalCompletionAuditor(args: {
 					: String(event.args ?? "").slice(0, 120);
 				progress.currentToolStartedAt = Date.now();
 				progress.phase = "tool_executing";
+				// §60 derive the human label + estimate from the read-only tool.
+				progress.label = labelForReadOnlyTool(event.toolName);
+				progress.percentage = Math.max(progress.percentage ?? 0, estimateAuditProgress(event.toolName));
 				emitProgress();
 				return;
 			}
@@ -413,6 +419,12 @@ export async function runGoalCompletionAuditor(args: {
 			if (message.role !== "assistant") return;
 			for (const part of message.content ?? []) {
 				if (part.type === "text" && typeof part.text === "string") outputParts.push(part.text);
+			}
+			// Final report production: derived label for the widget.
+			if (outputParts.some((t) => t.trim())) {
+				progress.label = "Producing report...";
+				progress.percentage = Math.max(progress.percentage ?? 0, 90);
+				progress.phase = "producing_report";
 			}
 			// Show the accumulated output in progress
 			const fullText = outputParts.join("\n\n");
