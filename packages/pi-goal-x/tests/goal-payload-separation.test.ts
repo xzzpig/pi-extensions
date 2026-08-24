@@ -59,7 +59,9 @@ describe("PR F §61: single-source auditor prompt", () => {
 		});
 		assert.equal(prompt.split("Deliver the audited thing.").length - 1, 1, "objective occurs once");
 		assert.equal(prompt.split("[ ] t2").length - 1, 1, "task tree rendered once");
-		assert.ok(!prompt.includes("report_auditor_progress"), "no progress protocol in the prompt");
+		// Fork divergence: the delegation-based auditor keeps the child-only
+		// report_auditor_progress protocol in its prompt (progress flows through
+		// pi-subagents display events, not a parent-session tool).
 	});
 });
 

@@ -342,7 +342,7 @@ test("saveGoalSettingsFileConfig: auditor agent round-trips and deprecated resou
 		assert.equal(loaded.auditorProjectResources, true);
 		assert.equal(loadGoalSettings(dir, {}).auditorAgent, "project-auditor");
 		const report = effectiveSettingsReport(dir, {});
-		assert.ok(report.some((line) => line.includes("auditor agent: project-auditor (file)")));
+		assert.ok(report.some((line) => line.includes("auditor agent: project-auditor (project)")));
 		assert.ok(report.some((line) => line.includes(AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE)));
 	});
 });

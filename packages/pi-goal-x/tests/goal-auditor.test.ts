@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import test from "node:test";
 
 import {
@@ -10,6 +13,13 @@ import {
 	runGoalCompletionAuditor,
 	type GoalAuditorEvents,
 } from "../extensions/goal-auditor.ts";
+import {
+	goalSettingsPath,
+	loadGoalSettings,
+	loadGoalSettingsFileConfig,
+	parseGoalSettings,
+	saveGoalSettingsFileConfig,
+} from "../extensions/goal-settings.ts";
 import { REPORT_AUDITOR_PROGRESS_PROTOCOL_PREFIX } from "../extensions/goal-auditor-progress.ts";
 import type { GoalRecord } from "../extensions/goal-record.ts";
 import {
@@ -167,9 +177,6 @@ test("loadGoalSettings does not read old env vars", () => {
 	// Old env vars are ignored; only PI_GOAL_DISABLE_TASKS/CONTRACTS work
 	assert.deepEqual(loadGoalSettings("/tmp", { PI_GOAL_AUDITOR_PROVIDER: "fireworks" as string }).provider, undefined);
 	// PI_GOAL_SETTINGS_FILE env var can point to an alternative path
-});
-
-	});
 });
 
 test("I-03/I-04/D-07: explicit task keeps the claim untrusted and requires structured output", () => {

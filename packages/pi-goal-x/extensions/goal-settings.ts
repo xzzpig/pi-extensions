@@ -299,25 +299,6 @@ function asThinkingLevel(value: unknown): ThinkingLevel | undefined {
 	return text && THINKING_LEVELS.has(text) ? text as ThinkingLevel : undefined;
 }
 
-const ALLOWED_SETTINGS_KEYS = new Set([
-	"disableTasks",
-	"disableContracts",
-	"subtaskDepth",
-	"provider",
-	"model",
-	"thinkingLevel",
-	"thinking_level",
-	"auditorAgent",
-	"disabled",
-	"autoSelectSingleGoal",
-	"auditorProjectResources",
-	"stallTimeoutMinutes",
-	"objectiveMaxChars",
-	"keybindings",
-	"hideUnfocusedBanner",
-	"oracle",
-]);
-
 const ALLOWED_ORACLE_KEYS = new Set([
 	"enabled",
 	"provider",
@@ -1086,6 +1067,9 @@ function buildPersistedLayer(settings: GoalSettings): Record<string, unknown> {
 	if (settings.provider) persisted.provider = settings.provider;
 	if (settings.model) persisted.model = settings.model;
 	if (settings.thinkingLevel) persisted.thinking_level = settings.thinkingLevel;
+	if (settings.auditorAgent && settings.auditorAgent !== DEFAULT_AUDITOR_AGENT) {
+		persisted.auditorAgent = settings.auditorAgent;
+	}
 	if (settings.disabled !== undefined) persisted.disabled = settings.disabled;
 	if (settings.disableTasks !== undefined) persisted.disableTasks = settings.disableTasks;
 	if (settings.disableContracts !== undefined) persisted.disableContracts = settings.disableContracts;

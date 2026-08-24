@@ -4,9 +4,9 @@
   "prefix": "packages/pi-goal-x",
   "source": "https://github.com/tmonk/pi-goal-x.git",
   "remote": "upstream-pi-goal-x",
-  "ref": "v0.27.4",
-  "version": "0.27.4",
-  "upstreamCommit": "a2b6568b615c639c76a1924ec2731e9a933876ce",
+  "ref": "v0.30.0",
+  "version": "v0.30.0",
+  "upstreamCommit": "9644b09ac99526b9b9e9c6e0ba195a5b2b756f34",
   "squash": true,
-  "lastSyncedAt": "2026-08-15T22:44:44+08:00"
+  "lastSyncedAt": "2026-08-24T18:30:36+08:00"
 }

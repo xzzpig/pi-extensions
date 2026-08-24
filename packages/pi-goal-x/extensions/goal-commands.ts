@@ -9,7 +9,6 @@ import {
 	loadGoalSettings,
 	loadSettingsSnapshot,
 	mutateSettingsLayer,
-	readSettingsLayer,
 	envOverrideFor,
 	type GoalSettings,
 	type SettingsMutation,
@@ -24,12 +23,18 @@ import {
 import { clearGoalCommandMessage, validateResumeGoal } from "./goal-policy.ts";
 import { invalidateGoalLedgerCache, readGoalLedger } from "./goal-ledger.ts";
 import { buildGoalStatusText } from "./goal-status.ts";
-import { AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE, DEFAULT_AUDITOR_AGENT, effectiveSettingsReport, envOverrideFor, invalidateGoalSettingsCache, loadGoalSettingsFileConfig } from "./goal-settings.ts";
+import { AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE, DEFAULT_AUDITOR_AGENT, effectiveSettingsReport, invalidateGoalSettingsCache, loadGoalSettingsFileConfig } from "./goal-settings.ts";
 import { invalidateGoalPoolCache, mergeGoalPromptFromDisk, readActiveGoalPool } from "./storage/goal-files.ts";
 import { nowIso, type GoalMode, type GoalRecord } from "./goal-record.ts";
 import { clearGoalDrafting, hasActiveDraft, startGoalDrafting } from "./goal-drafting.ts";
 import { formatRecoveryReport, runRecoveryReport, runRecoveryRepair } from "./goal-recovery.ts";
 import { formatCheckpointHealthReport, readSessionCheckpointHealth } from "./goal-session-health.ts";
+
+/**
+ * JSON-ish shape reachable along a canonical settings path: a leaf value, an
+ * intermediate layer object, or undefined when a segment is missing.
+ */
+type SettingsPathValue = string | number | boolean | null | SettingsPathValue[] | { [key: string]: SettingsPathValue };
 
 export interface GoalRefreshState {
 	poolIds: Iterable<string>;
@@ -480,12 +485,6 @@ export function registerGoalCommands(core: GoalCore): void {
 		return typeof value === "string" ? value : "(default)";
 	}
 
-	function settingsLines(config: GoalSettings): string[] {
-		const lines = SETTING_ROWS.map((row) => `${row.label}: ${settingsValue(config, row.key)}`);
-		if (config.auditorProjectResources === true) lines.push(`NOTE: ${AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE}`);
-		return lines;
-	}
-
 	async function handleSettingsMenu(ctx: ExtensionContext): Promise<void> {
 		if (!ctx.hasUI) {
 			// Headless: read-only report of both layer paths.
@@ -536,13 +535,14 @@ export function registerGoalCommands(core: GoalCore): void {
 				options.push(`─── Editing: ${scope} (${scopePath(scope)}) ───`);
 				let lastSection: string | null = null;
 				const pathOf = (row: SettingRow): string[] => row.path ?? [String(row.key)];
-				const valueAtPath = (obj: unknown, path: string[]): unknown => {
+				/** Traverse a settings layer/snapshot; returns the raw node or leaf at `path`. */
+				const valueAtPath = (obj: unknown, path: readonly string[]): SettingsPathValue | undefined => {
 					let cursor: unknown = obj;
 					for (const segment of path) {
 						if (!cursor || typeof cursor !== "object") return undefined;
 						cursor = (cursor as Record<string, unknown>)[segment];
 					}
-					return cursor;
+					return cursor === undefined ? undefined : (cursor as SettingsPathValue);
 				};
 				for (const row of SETTING_ROWS) {
 					if (row.section !== lastSection) {
@@ -568,7 +568,7 @@ export function registerGoalCommands(core: GoalCore): void {
 						: settingsValue(snapshot.value, row.key);
 					options.push(`  ${row.label}: ${displayValue} ${source}`);
 				}
-				if (config.auditorProjectResources === true) {
+				if (snapshot.value.auditorProjectResources === true) {
 					options.push(`  Note: ${AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE}`);
 				}
 				options.push("Done");
