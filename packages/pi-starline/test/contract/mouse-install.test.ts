@@ -47,7 +47,6 @@ type RealReceiver = {
 	overlayStack: unknown[];
 	terminal: { write: (data: string) => void };
 	flashes: { flash: (message: string) => void };
-	overlayStack: unknown[];
 	copySelectionToClipboard: () => void;
 	handleViewportInput: (data: string) => { consume: boolean } | undefined;
 	// `TuiBase.requestRender` is inherited, not stubbed: the patches call it on
