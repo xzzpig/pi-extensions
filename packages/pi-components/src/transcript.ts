@@ -1,6 +1,7 @@
 import {
   AssistantMessageComponent,
   getMarkdownTheme,
+  initTheme,
   ToolExecutionComponent,
   UserMessageComponent,
 } from "@earendil-works/pi-coding-agent";
@@ -147,6 +148,8 @@ export interface TranscriptState {
   >;
   /** Persistent native tool components keyed by tool call id. */
   toolComponents: TranscriptToolComponents;
+  /** Argument char cap applied to every recorded tool call. */
+  toolArgsCharLimit: number;
 }
 
 export interface SessionTranscriptOptions extends NativeToolRenderOptions {
@@ -154,10 +157,56 @@ export interface SessionTranscriptOptions extends NativeToolRenderOptions {
   maxEntries?: number;
   /** Maximum retained text across all entries. */
   maxChars?: number;
+  /**
+   * Per-tool-call argument size cap in JSON characters. Oversized arguments
+   * are replaced by a truncated marker object so pathological payloads cannot
+   * break rendering or memory bounds. Defaults to 64 KiB.
+   */
+  maxToolArgsChars?: number;
 }
 
 const DEFAULT_MAX_ENTRIES = 500;
 const DEFAULT_MAX_CHARS = 512 * 1024;
+const DEFAULT_MAX_TOOL_ARGS_CHARS = 64 * 1024;
+
+let themeEnsured = false;
+
+/**
+ * The SDK shares its global theme across module instances (tsx/jiti/host) via
+ * these globalThis symbols — the same keys its exported `theme` proxy checks
+ * before throwing "Theme not initialized" (see theme.js in pi-coding-agent).
+ * Both historical and current spellings are probed for older host support.
+ */
+const THEME_GLOBAL_KEY = Symbol.for("@earendil-works/pi-coding-agent:theme");
+const THEME_GLOBAL_KEY_OLD = Symbol.for("@mariozechner/pi-coding-agent:theme");
+
+function isTranscriptThemeInitialized(): boolean {
+  // SAFETY: the SDK stores its theme on globalThis under a symbol key; the
+  // proxy does `if (!t) throw` on the same lookup, so a defined value means
+  // a fully constructed Theme instance the proxy will hand back directly.
+  const globals = globalThis as unknown as Record<PropertyKey, unknown>;
+  return (
+    globals[THEME_GLOBAL_KEY] !== undefined ||
+    globals[THEME_GLOBAL_KEY_OLD] !== undefined
+  );
+}
+
+/**
+ * Ensures Pi's global theme is initialized so native message/tool components
+ * can render outside a live interactive session (headless embeds, unit tests).
+ *
+ * IMPORTANT: when the host has already initialized the theme (interactive Pi
+ * installs the user's chosen theme before any transcript renders), this is a
+ * strict no-op. Re-calling `initTheme()` would re-resolve the default theme
+ * from environment detection and can silently replace the user's selection
+ * with the dark fallback — changing tool-call colors in the main session too.
+ */
+export function ensureTranscriptTheme(): void {
+  if (themeEnsured) return;
+  themeEnsured = true;
+  if (isTranscriptThemeInitialized()) return;
+  initTheme();
+}
 
 const DETACHED_TUI: TranscriptTui = { requestRender() {} };
 
@@ -306,7 +355,7 @@ function toComponentResult(
 }
 
 export function createTranscriptState(
-  nativeTools: NativeToolRenderOptions = {},
+  nativeTools: NativeToolRenderOptions & SessionTranscriptOptions = {},
 ): TranscriptState {
   return {
     entries: [],
@@ -317,6 +366,10 @@ export function createTranscriptState(
     activeAssistant: null,
     toolCalls: new Map(),
     toolComponents: new TranscriptToolComponents(nativeTools),
+    toolArgsCharLimit: Math.max(
+      16,
+      nativeTools.maxToolArgsChars ?? DEFAULT_MAX_TOOL_ARGS_CHARS,
+    ),
   };
 }
 
@@ -447,7 +500,14 @@ export function safeTerminalText(value: string): string {
   return safe;
 }
 
-function appendEntry(
+/**
+ * Appends a fully-formed entry, assigning the next sequential id.
+ *
+ * Public building block for hosts that construct transcripts from historical
+ * records instead of live agent events. The entry must be structurally valid
+ * for its `type`; ids and array placement are owned by this function.
+ */
+export function appendEntry(
   state: TranscriptState,
   entry: Omit<TranscriptEntry, "id"> & Record<string, unknown>,
 ): TranscriptEntry {
@@ -456,7 +516,11 @@ function appendEntry(
   return nextEntry;
 }
 
-function ensureTurn(state: TranscriptState): number {
+/**
+ * Returns the active turn id, opening a new turn (with a start boundary)
+ * when none is open. Public building block for historical-record ingestion.
+ */
+export function ensureTurn(state: TranscriptState): number {
   if (state.currentTurnId !== null) return state.currentTurnId;
   const turnId = state.nextTurnId++;
   state.currentTurnId = turnId;
@@ -465,7 +529,12 @@ function ensureTurn(state: TranscriptState): number {
   return turnId;
 }
 
-function findLatestEntry<TType extends TranscriptEntry["type"]>(
+/**
+ * Finds the most recent entry of `type` inside `turnId`, scanning backwards.
+ * Public building block used by upsert-style helpers and hosts that merge
+ * repeated records (e.g. streamed message updates persisted as several lines).
+ */
+export function findLatestEntry<TType extends TranscriptEntry["type"]>(
   state: TranscriptState,
   turnId: number,
   type: TType,
@@ -480,7 +549,14 @@ function findLatestEntry<TType extends TranscriptEntry["type"]>(
   return undefined;
 }
 
-function finishTurn(
+/**
+ * Closes `turnId` (defaulting to the current turn): appends the end boundary
+ * unless one already exists, clears streaming flags on the turn's entries,
+ * and updates bookkeeping. Idempotent — finishing an already-finished turn is
+ * a no-op for boundary creation. Public building block for hosts that know
+ * when a replayed exchange is complete.
+ */
+export function finishTurn(
   state: TranscriptState,
   turnId: number | null = state.currentTurnId,
 ): void {
@@ -590,7 +666,75 @@ function cloneStructured<T>(value: T): T {
   }
 }
 
-function ensureToolCall(
+/**
+ * Degraded stand-in stored on a tool-call entry when the original arguments
+ * exceed the state's char limit or cannot be serialized. Consumers can narrow
+ * with the `truncated` flag; rendering falls back to the preview text.
+ */
+export interface TruncatedToolArgs {
+  truncated: true;
+  /** Present only when JSON serialization of the original payload failed. */
+  reason?: "unserializable";
+  /** Serialized length of the original payload, when it was serializable. */
+  originalChars?: number;
+  preview: string;
+}
+
+function buildTruncatedToolArgs(
+  serialized: string | undefined,
+  raw: unknown,
+  limit: number,
+): TruncatedToolArgs {
+  if (serialized === undefined) {
+    return {
+      truncated: true,
+      reason: "unserializable",
+      preview: String(raw).slice(0, limit),
+    };
+  }
+  return {
+    truncated: true,
+    originalChars: serialized.length,
+    preview: serialized.slice(0, limit),
+  };
+}
+
+/**
+ * Returns a truncation marker when pathological tool arguments exceed
+ * `limit` (or cannot be serialized), and `null` when the payload may be
+ * stored verbatim. Ingestion therefore never throws and rendering stays
+ * bounded regardless of provider payload size.
+ */
+function oversizedToolArgs(
+  args: unknown,
+  limit: number,
+): TruncatedToolArgs | null {
+  if (args === undefined || args === null) return null;
+  let serialized: string | undefined;
+  try {
+    serialized = JSON.stringify(args);
+  } catch {
+    serialized = undefined;
+  }
+  if (serialized === undefined) {
+    return buildTruncatedToolArgs(undefined, args, limit);
+  }
+  return serialized.length <= limit
+    ? null
+    : buildTruncatedToolArgs(serialized, args, limit);
+}
+
+/**
+ * Finds or creates the tool-call record for `toolCallId`, appending a
+ * tool-call entry when none exists yet.
+ *
+ * Public building block for hosts that ingest historical records where calls
+ * and results may arrive in either order: when the result was recorded first,
+ * the placeholder entry's arguments are backfilled here from the later call
+ * record. Arguments exceeding the state's char limit are stored as a
+ * truncated marker object instead of failing.
+ */
+export function ensureToolCall(
   state: TranscriptState,
   turnId: number,
   toolCallId: string,
@@ -598,13 +742,30 @@ function ensureToolCall(
   args: unknown,
 ): { turnId: number; callEntryId: number; resultEntryId?: number } {
   const existing = state.toolCalls.get(toolCallId);
-  if (existing) return existing;
+  if (existing) {
+    // Result-before-call replay: backfill arguments onto the placeholder.
+    if (args !== undefined && args !== null) {
+      const callEntry = state.entries.find(
+        (entry) =>
+          entry.id === existing.callEntryId && entry.type === "tool-call",
+      );
+      if (
+        callEntry &&
+        callEntry.type === "tool-call" &&
+        (callEntry.args === undefined || callEntry.args === null)
+      ) {
+        callEntry.args =
+          oversizedToolArgs(args, state.toolArgsCharLimit) ?? args;
+      }
+    }
+    return existing;
+  }
   const callEntry = appendEntry(state, {
     type: "tool-call",
     turnId,
     toolCallId,
     toolName,
-    args,
+    args: oversizedToolArgs(args, state.toolArgsCharLimit) ?? args,
   });
   const record = { turnId, callEntryId: callEntry.id };
   state.toolCalls.set(toolCallId, record);
@@ -679,7 +840,12 @@ function finishActiveAssistantSegment(state: TranscriptState): void {
   state.activeAssistant = null;
 }
 
-function upsertText(
+/**
+ * Inserts or updates the thinking/assistant-text entry for `turnId`.
+ * Repeated records for the same turn merge into one entry (latest text wins).
+ * Public building block for hosts that replay completed message records.
+ */
+export function upsertText(
   state: TranscriptState,
   turnId: number,
   type: "thinking" | "assistant-text",
@@ -696,7 +862,13 @@ function upsertText(
   appendEntry(state, { type, turnId, text, streaming });
 }
 
-function upsertToolResult(
+/**
+ * Inserts or updates the structured result of a tool call, creating the call
+ * placeholder first when the result arrives before its start event. Safe to
+ * call repeatedly — the latest result wins and streaming flags update in place.
+ * Public building block for hosts that ingest persisted tool results.
+ */
+export function upsertToolResult(
   state: TranscriptState,
   turnId: number,
   toolCallId: string,
@@ -737,7 +909,12 @@ function upsertToolResult(
   toolCall.resultEntryId = resultEntry.id;
 }
 
-function appendNotice(
+/**
+ * Appends a notice attached to the current turn (or the most recent one).
+ * Text is sanitized before storage. Public building block for hosts that
+ * surface stderr output, retry banners, or other non-conversation events.
+ */
+export function appendNotice(
   state: TranscriptState,
   text: string,
   tone: TranscriptNoticeTone,

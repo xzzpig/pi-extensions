@@ -59,7 +59,7 @@ export interface FleetTranscript {
 	warning?: string;
 }
 
-interface FleetTranscriptReadOptions {
+export interface FleetTranscriptReadOptions {
 	trustedRoots: string[];
 	maxRecords?: number;
 	maxBytes?: number;
@@ -352,6 +352,52 @@ export function readFleetTranscript(filePath: string, options: FleetTranscriptRe
 		path: filePath,
 		events: parsed.events,
 		truncated: tail.truncated || tail.lines.length > maxRecords || parsed.explicitTruncation,
+		...(warnings.length ? { warning: safeDisplayText(warnings.join(" ")) } : {}),
+	};
+}
+
+export interface TranscriptRecordRead {
+	records: Array<Record<string, unknown>>;
+	truncated: boolean;
+	warning?: string;
+}
+
+/**
+ * Shared trusted-root-guarded tail reader that returns raw parsed JSONL
+ * records instead of fleet events. Both the legacy rail renderer and the
+ * native-component renderer ingest through this single validation path, so
+ * symlink refusal and path-escape rejection cannot diverge between them.
+ */
+export function readTranscriptRecords(filePath: string, options: FleetTranscriptReadOptions): TranscriptRecordRead {
+	const validated = validateTranscriptPath(filePath, options.trustedRoots);
+	if (!validated.resolvedPath) {
+		return { records: [], truncated: false, ...(validated.warning ? { warning: safeDisplayText(validated.warning) } : {}) };
+	}
+	const maxRecords = Math.max(1, options.maxRecords ?? DEFAULT_MAX_RECORDS);
+	const tail = readTailLines(validated.resolvedPath, Math.max(1024, options.maxBytes ?? DEFAULT_MAX_BYTES));
+	const selected = tail.lines.slice(-maxRecords);
+	const records: Array<Record<string, unknown>> = [];
+	let malformed = 0;
+	for (const line of selected) {
+		if (!line.trim()) continue;
+		try {
+			const parsed: unknown = JSON.parse(line);
+			if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+				records.push(parsed as Record<string, unknown>);
+			} else {
+				malformed++;
+			}
+		} catch {
+			malformed++;
+		}
+	}
+	const warnings = [
+		tail.warning,
+		malformed > 0 ? `Skipped ${malformed} malformed transcript record${malformed === 1 ? "" : "s"}.` : undefined,
+	].filter((value): value is string => Boolean(value));
+	return {
+		records,
+		truncated: tail.truncated || tail.lines.length > maxRecords,
 		...(warnings.length ? { warning: safeDisplayText(warnings.join(" ")) } : {}),
 	};
 }

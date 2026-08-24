@@ -18,7 +18,8 @@ import { stopAsyncRun } from "../runs/foreground/async-stop-action.ts";
 import { resolveWorkflowForegroundSteeringTarget, steerWorkflowForegroundTarget } from "../runs/foreground/workflow-foreground-steering.ts";
 import { contextModeBadge, contextModeLabel } from "../runs/shared/context-mode.ts";
 import { FLEET_STATUS_WIDGET_KEY } from "./fleet-status.ts";
-import { readFleetTranscript, renderFleetTranscript, type FleetTranscript } from "./fleet-transcript.ts";
+import { readFleetTranscript, renderFleetTranscript } from "./fleet-transcript.ts";
+import { buildNativeFleetTranscript, loadNativeTranscriptSupport, type NativeTranscriptModule } from "./fleet-native-transcript.ts";
 import { handleHerdrInspectorAction } from "../inspectors/herdr/actions.ts";
 import type { HerdrClient } from "../inspectors/herdr/client.ts";
 import { getLivePromptAudit, type LivePromptAudit, type PromptAuditView } from "../runs/foreground/prompt-audit.ts";
@@ -47,6 +48,7 @@ export const DEFAULT_FLEET_KEYBINDINGS: Record<FleetKeybindingAction, string[]> 
 	inspect: ["H"],
 	stop: ["D"],
 	toggleTools: ["x", "X", "ctrl+o"],
+	toggleRenderer: ["v", "V"],
 };
 
 type ResolvedFleetKeybindings = Record<FleetKeybindingAction, string[]>;
@@ -750,11 +752,14 @@ interface FleetDetailSections {
 }
 
 interface FleetTranscriptCache {
+	mode: "native" | "legacy";
 	path: string;
 	fingerprint: string;
 	width: number;
 	expandedTools: boolean;
-	transcript: FleetTranscript;
+	conversationState: string;
+	hasContent: boolean;
+	warning?: string;
 	body: string[];
 }
 
@@ -778,6 +783,10 @@ export class SubagentFleetComponent implements Component {
 	private bodyHeight = 8;
 	private lastRosterWidth: number | undefined;
 	private expandedTools = false;
+	/** Structured-view renderer selection; legacy is the always-available fallback. */
+	private rendererMode: "native" | "legacy" = "native";
+	/** undefined = still loading, null = unavailable (permanent for this inspector session). */
+	private nativeModule: NativeTranscriptModule | null | undefined;
 	private promptAuditOpen = false;
 	private promptAuditView: PromptAuditView = "authored";
 	private actionNotice: FleetActionResult | undefined;
@@ -816,6 +825,52 @@ export class SubagentFleetComponent implements Component {
 		this.selectedKey = options.initialKey;
 		this.refresh();
 		this.scheduleRefresh();
+		// Resolve native-renderer availability once; until it settles the
+		// inspector renders through the legacy path (see renderedTranscript).
+		void loadNativeTranscriptSupport().then((mod) => {
+			this.nativeModule = mod;
+			if (!this.disposed && this.rendererMode === "native") this.tui.requestRender();
+		});
+	}
+
+	private nativeRenderedOutcome(mod: NativeTranscriptModule, target: { path: string; trustedRoots: string[] }, width: number): { body: string[]; conversationState: string; hasContent: boolean; warning?: string } {
+		try {
+			const built = buildNativeFleetTranscript(mod, {
+				filePath: target.path,
+				trustedRoots: target.trustedRoots,
+				width,
+				expandedTools: this.expandedTools,
+				cwd: this.state.baseCwd,
+				theme: this.theme,
+			});
+			return { body: built.lines, conversationState: built.conversationState, hasContent: built.entryCount > 0, ...(built.warning ? { warning: built.warning } : {}) };
+		} catch {
+			// A native-render failure must never blank the inspector: degrade to
+			// the legacy renderer for the rest of this inspector session.
+			this.nativeModule = null;
+			return this.legacyRenderedOutcome(target, width);
+		}
+	}
+
+	private legacyRenderedOutcome(target: { path: string; trustedRoots: string[] }, width: number): { body: string[]; conversationState: string; hasContent: boolean; warning?: string } {
+		const transcript = readFleetTranscript(target.path, { trustedRoots: target.trustedRoots });
+		const body = transcript.events.length > 0
+			? renderFleetTranscript(transcript, width, this.theme, this.markdownTheme, { expandedTools: this.expandedTools })
+			: [];
+		const latest = transcript.events.at(-1);
+		const conversationState = latest?.kind === "assistant"
+			? "assistant response"
+			: latest?.kind === "user"
+				? "supervisor message"
+				: latest?.kind === "tool"
+					? `${latest.name} · ${latest.status}`
+					: "activity";
+		return {
+			body,
+			conversationState,
+			hasContent: transcript.events.length > 0,
+			...(transcript.warning ? { warning: transcript.warning } : {}),
+		};
 	}
 
 	private scheduleRefresh(): void {
@@ -1202,6 +1257,22 @@ export class SubagentFleetComponent implements Component {
 			this.expandedTools = !this.expandedTools;
 			this.transcriptCache = undefined;
 			this.tui.requestRender();
+			return;
+		}
+		if (matchesFleetAction(data, this.keybindings, "toggleRenderer")) {
+			if (this.rendererMode === "native" && this.nativeModule === null) {
+				this.setActionNotice({ text: "Native transcript renderer unavailable in this host; staying on the text view.", isError: true });
+				return;
+			}
+			if (this.rendererMode === "legacy" && this.nativeModule === undefined) {
+				this.setActionNotice({ text: "Native transcript renderer is still loading." });
+				return;
+			}
+			this.rendererMode = this.rendererMode === "native" ? "legacy" : "native";
+			this.detailAutoFollow = true;
+			this.transcriptCache = undefined;
+			this.tui.requestRender();
+			return;
 		}
 	}
 
@@ -1219,21 +1290,29 @@ export class SubagentFleetComponent implements Component {
 		});
 	}
 
-	private renderedTranscript(target: { path: string; trustedRoots: string[] }, width: number): { transcript: FleetTranscript; body: string[] } {
-		const fingerprint = `${target.trustedRoots.join("\0")}|${transcriptFingerprint(target.path)}`;
+	private renderedTranscript(target: { path: string; trustedRoots: string[] }, width: number): { body: string[]; conversationState: string; hasContent: boolean; warning?: string } {
+		const fingerprint = `${this.rendererMode}|${target.trustedRoots.join("\0")}|${transcriptFingerprint(target.path)}`;
 		if (this.transcriptCache
+			&& this.transcriptCache.mode === this.rendererMode
 			&& this.transcriptCache.path === target.path
 			&& this.transcriptCache.fingerprint === fingerprint
 			&& this.transcriptCache.width === width
 			&& this.transcriptCache.expandedTools === this.expandedTools) {
-			return { transcript: this.transcriptCache.transcript, body: [...this.transcriptCache.body] };
+			return {
+				body: [...this.transcriptCache.body],
+				conversationState: this.transcriptCache.conversationState,
+				hasContent: this.transcriptCache.hasContent,
+				...(this.transcriptCache.warning ? { warning: this.transcriptCache.warning } : {}),
+			};
 		}
-		const transcript = readFleetTranscript(target.path, { trustedRoots: target.trustedRoots });
-		const body = transcript.events.length > 0
-			? renderFleetTranscript(transcript, width, this.theme, this.markdownTheme, { expandedTools: this.expandedTools })
-			: [];
-		this.transcriptCache = { path: target.path, fingerprint, width, expandedTools: this.expandedTools, transcript, body };
-		return { transcript, body: [...body] };
+		// While the native module is still resolving (undefined) or unavailable
+		// (null) the legacy rail renderer serves the view; both paths share the
+		// same trusted-root read and cache entry.
+		const outcome = this.rendererMode === "native" && this.nativeModule
+			? this.nativeRenderedOutcome(this.nativeModule, target, width)
+			: this.legacyRenderedOutcome(target, width);
+		this.transcriptCache = { mode: this.rendererMode, path: target.path, fingerprint, width, expandedTools: this.expandedTools, ...outcome, body: [...outcome.body] };
+		return outcome;
 	}
 
 	private promptAuditDetail(width: number): FleetDetailSections {
@@ -1270,20 +1349,13 @@ export class SubagentFleetComponent implements Component {
 		if (selected) {
 			const target = transcriptTarget(selected, this.state);
 			if (target) {
-				const { transcript, body } = this.renderedTranscript(target, width);
-				transcriptWarning = transcript.warning;
-				if (transcript.events.length > 0) {
+				const rendered = this.renderedTranscript(target, width);
+				transcriptWarning = rendered.warning;
+				if (rendered.hasContent) {
+					const body = rendered.body;
 					if (this.snapshot.error) body.unshift(this.theme.fg("warning", `Fleet scan warning: ${this.snapshot.error}`), "");
-					const latest = transcript.events.at(-1);
-					const conversationState = latest?.kind === "assistant"
-						? "assistant response"
-						: latest?.kind === "user"
-							? "supervisor message"
-							: latest?.kind === "tool"
-								? `${latest.name} · ${latest.status}`
-								: "activity";
 					const promptSummary = selected.kind === "foreground-active" ? foregroundAuthoredPromptSummary(selected, this.state) : undefined;
-					return { header: structuredHeader(selected, width, this.theme, conversationState, promptSummary), body: this.withActionLines(body) };
+					return { header: structuredHeader(selected, width, this.theme, rendered.conversationState, promptSummary), body: this.withActionLines(body) };
 				}
 			}
 		}
@@ -1352,7 +1424,7 @@ export class SubagentFleetComponent implements Component {
 			? ` j/k child · 1/2/3 view · g redo with guidance · c copy · wheel ↑↓ · Esc close Prompt Audit · ${position}`
 			: selected?.kind === "external"
 				? ` ${bindingLabel(this.keybindings, "selectUp")}/${bindingLabel(this.keybindings, "selectDown")} job · display-only · ${bindingLabel(this.keybindings, "refresh")} refresh · wheel ↑↓ · ${bindingLabel(this.keybindings, "close")} close · ${position}`
-				: ` ${bindingLabel(this.keybindings, "selectUp")}/${bindingLabel(this.keybindings, "selectDown")} agent · p Prompt Audit · ${bindingLabel(this.keybindings, "inspect")} Herdr · ${bindingLabel(this.keybindings, "steer")} steer · ${bindingLabel(this.keybindings, "stop")} stop · ${bindingLabel(this.keybindings, "toggleTools")} tools · ${bindingLabel(this.keybindings, "refresh")} refresh · wheel ↑↓ · ${bindingLabel(this.keybindings, "close")} close · ${position}`;
+				: ` ${bindingLabel(this.keybindings, "selectUp")}/${bindingLabel(this.keybindings, "selectDown")} agent · p Prompt Audit · ${bindingLabel(this.keybindings, "inspect")} Herdr · ${bindingLabel(this.keybindings, "steer")} steer · ${bindingLabel(this.keybindings, "stop")} stop · ${bindingLabel(this.keybindings, "toggleTools")} tools · ${bindingLabel(this.keybindings, "toggleRenderer")} view · ${bindingLabel(this.keybindings, "refresh")} refresh · wheel ↑↓ · ${bindingLabel(this.keybindings, "close")} close · ${position}`;
 		lines.push(this.theme.fg("border", "│") + fit(this.theme.fg("dim", footer), innerWidth) + this.theme.fg("border", "│"));
 		lines.push(this.theme.fg("border", `╰${"─".repeat(innerWidth)}╯`));
 		return lines.map((line) => truncateToWidth(line, width));

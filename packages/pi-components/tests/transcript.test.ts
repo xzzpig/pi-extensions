@@ -4,11 +4,21 @@ import {
   type AgentSessionEvent,
 } from "@earendil-works/pi-coding-agent";
 import {
+  appendEntry,
+  createTranscriptState,
+  ensureToolCall,
+  ensureTranscriptTheme,
+  ensureTurn,
+  finishTurn,
+  removeTranscriptTurn,
   renderTranscriptLines,
   safeTerminalText,
   SessionTranscript,
   TranscriptToolComponents,
   TranscriptViewport,
+  TruncatedToolArgs,
+  upsertText,
+  upsertToolResult,
 } from "../src/transcript.ts";
 
 const theme = {
@@ -22,6 +32,23 @@ const event = (value: unknown): AgentSessionEvent => value as AgentSessionEvent;
 
 beforeEach(() => {
   initTheme();
+});
+
+describe("ensureTranscriptTheme", () => {
+  it("never clobbers an already-initialized host theme", () => {
+    const key = Symbol.for("@earendil-works/pi-coding-agent:theme");
+    const globals = globalThis as unknown as Record<PropertyKey, unknown>;
+    const sentinel = { name: "host-light-theme" };
+    const original = globals[key];
+    try {
+      globals[key] = sentinel;
+      ensureTranscriptTheme();
+      ensureTranscriptTheme(); // idempotent
+      expect(globals[key]).toBe(sentinel);
+    } finally {
+      globals[key] = original;
+    }
+  });
 });
 
 describe("SessionTranscript", () => {
@@ -591,5 +618,137 @@ describe("TranscriptViewport", () => {
     expect(scrolled.following).toBe(false);
     expect(scrolled.hiddenBelow).toBeGreaterThan(0);
     expect(requestRender).toHaveBeenCalled();
+  });
+});
+
+describe("historical record ingestion (builder API)", () => {
+  it("replays a completed exchange with turn boundaries and cleared streaming flags", () => {
+    const state = createTranscriptState();
+    const turnId = ensureTurn(state);
+    appendEntry(state, { type: "user-message", turnId, text: "please fix" });
+    upsertText(state, turnId, "assistant-text", "done", true);
+    finishTurn(state, turnId);
+
+    const kinds = state.entries.map((entry) => entry.type);
+    expect(kinds).toContain("user-message");
+    expect(
+      state.entries.filter((entry) => entry.type === "turn-boundary"),
+    ).toHaveLength(2);
+    const assistant = state.entries.find(
+      (entry) => entry.type === "assistant-text",
+    );
+    expect(assistant?.streaming).toBe(false);
+    expect(state.currentTurnId).toBeNull();
+
+    // Idempotent finish: no duplicate end boundary, ids stay unique.
+    finishTurn(state, turnId);
+    expect(
+      state.entries.filter((entry) => entry.type === "turn-boundary"),
+    ).toHaveLength(2);
+    expect(new Set(state.entries.map((entry) => entry.id)).size).toBe(
+      state.entries.length,
+    );
+  });
+
+  it("pairs tool results with calls in either arrival order and backfills arguments", () => {
+    // Result after call.
+    const replay = createTranscriptState();
+    const turnId = ensureTurn(replay);
+    const record = ensureToolCall(replay, turnId, "call-1", "bash", {
+      command: "ls",
+    });
+    upsertToolResult(
+      replay,
+      turnId,
+      "call-1",
+      "bash",
+      { content: [{ type: "text", text: "out" }] },
+      false,
+      false,
+    );
+    expect(record.resultEntryId).toBeDefined();
+    const result = replay.entries.find(
+      (entry) => entry.id === record.resultEntryId,
+    );
+    expect(result?.type).toBe("tool-result");
+
+    // Result before call: placeholder gets arguments backfilled later.
+    const reversed = createTranscriptState();
+    const lateTurn = ensureTurn(reversed);
+    upsertToolResult(
+      reversed,
+      lateTurn,
+      "call-2",
+      "read",
+      { content: [{ type: "text", text: "body" }] },
+      false,
+      false,
+    );
+    ensureToolCall(reversed, lateTurn, "call-2", "read", { path: "a.ts" });
+    const paired = reversed.toolCalls.get("call-2");
+    expect(paired?.resultEntryId).toBeDefined();
+    const callEntry = reversed.entries.find(
+      (entry) => entry.id === paired?.callEntryId,
+    );
+    expect(
+      callEntry?.type === "tool-call" &&
+        (callEntry.args as { path?: string })?.path,
+    ).toBe("a.ts");
+    expect(
+      reversed.entries.filter((entry) => entry.type === "tool-call"),
+    ).toHaveLength(1);
+  });
+
+  it("degrades oversized and unserializable arguments instead of throwing", () => {
+    const state = createTranscriptState({ maxToolArgsChars: 64 });
+    const turnId = ensureTurn(state);
+
+    ensureToolCall(state, turnId, "big-1", "write", {
+      content: "x".repeat(5000),
+    });
+    const bigCall = state.entries.find((entry) => entry.type === "tool-call");
+    const stored =
+      bigCall?.type === "tool-call"
+        ? (bigCall.args as TruncatedToolArgs)
+        : undefined;
+    expect(stored?.truncated).toBe(true);
+    expect(stored?.originalChars).toBeGreaterThan(64);
+    expect(stored?.preview.length).toBeLessThanOrEqual(64);
+
+    // Rendering still succeeds with the degraded marker stored.
+    const lines = renderTranscriptLines(state.entries, {
+      width: 80,
+      theme: theme as never,
+    });
+    expect(lines.join("\n")).toContain("write");
+
+    // Circular (unserializable) arguments must not throw either.
+    const hostile: Record<string, unknown> = {};
+    hostile.self = hostile;
+    expect(() =>
+      ensureToolCall(state, turnId, "loop-1", "bash", hostile),
+    ).not.toThrow();
+    const loopCall = state.entries.find(
+      (entry) => entry.type === "tool-call" && entry.toolCallId === "loop-1",
+    );
+    expect(
+      loopCall?.type === "tool-call" &&
+        (loopCall.args as TruncatedToolArgs)?.truncated,
+    ).toBe(true);
+  });
+
+  it("prunes tool components when their turn is removed from replayed records", () => {
+    const state = createTranscriptState();
+    const turnId = ensureTurn(state);
+    ensureToolCall(state, turnId, "gone-1", "bash", { command: "echo" });
+    state.toolComponents.handleStart("gone-1", "bash", { command: "echo" });
+    expect(state.toolComponents.has("gone-1")).toBe(true);
+
+    removeTranscriptTurn(state, turnId);
+    expect(state.toolComponents.has("gone-1")).toBe(false);
+    expect(state.toolCalls.has("gone-1")).toBe(false);
+    expect(
+      state.entries.filter((entry) => entry.turnId === turnId),
+    ).toHaveLength(0);
   });
 });

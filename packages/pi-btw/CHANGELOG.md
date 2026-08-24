@@ -4,6 +4,24 @@ All notable changes to the `@xzzpig/pi-btw` fork are documented here. This
 fork tracks [`dbachelder/pi-btw`](https://github.com/dbachelder/pi-btw) via git
 subtree; entries below describe only fork-specific deviations from upstream.
 
+## 0.7.0
+
+### Changed
+
+- **Migrated to the shared builder API.** The hand-written transcript state
+  machine (~200 lines: `appendTranscriptEntry`, `ensureTranscriptTurn`,
+  `finishTranscriptTurn`, `removeTranscriptTurn`, `findLatestTranscriptEntry`
+  and the upsert helpers) was removed in favor of `@xzzpig/pi-components`'s
+  public builder exports (`appendEntry`, `ensureTurn`, `finishTurn`,
+  `findLatestEntry`, `ensureToolCall`, `upsertText`, `upsertToolResult`,
+  `removeTranscriptTurn`, `hasStreamingTranscriptEntry`); entry/state types
+  now alias the library's `TranscriptEntry`/`TranscriptState`. Behavior is
+  equivalent (58/58 tests match the pre-migration baseline).
+- `@xzzpig/pi-components` is declared via `bundledDependencies` (stays
+  private, never published to npm) and bumped to 0.3.0, which also stops
+  tool-call backgrounds being reset to the dark theme in the main session
+  after opening a thread (the shared theme is probed, never re-initialized).
+
 ## 0.6.0
 
 ### Changed

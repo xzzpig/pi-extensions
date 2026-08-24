@@ -1,11 +1,11 @@
 {
   "pi-notify": "0.1.0",
   "pi-permission-system": "0.4.0",
-  "pi-components": "0.2.0",
-  "pi-subagents": "0.6.0",
+  "pi-components": "0.3.0",
+  "pi-subagents": "0.7.0",
   "pi-tool-display": "0.1.1",
   "pi-goal-x": "0.2.1",
-  "pi-btw": "0.6.0",
+  "pi-btw": "0.7.0",
   "pi-starline": "0.1.0",
   "pi-sandbox": "0.4.0"
 }

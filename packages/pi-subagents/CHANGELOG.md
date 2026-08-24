@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.7.0] - 2026-08-24
+
+### Added
+
+- **Fleet inspector native transcript rendering.** `/subagents-fleet` now
+  renders structured session transcripts through `@xzzpig/pi-components`
+  native components (tool calls via `ToolExecutionComponent`, messages via the
+  native message components). A new adapter (`src/tui/fleet-native-transcript.ts`)
+  converts persisted child-transcript JSONL records into library entries,
+  fills the tool-component registry per cache generation, synthesizes results
+  for calls without a result record, and degrades truncated (>32KB) argument
+  payloads to renderable entries with a truncation preview + result notice.
+- **`v` key toggles the renderer.** Switches the inspector between the native
+  transcript and the legacy rail renderer (rebindable via
+  `FLEET_KEYBINDING_ACTIONS`; session-scoped state; inactive in Prompt Audit
+  mode). When the native module is missing or fails to load, the legacy
+  renderer is used automatically.
+
+### Changed
+
+- `@xzzpig/pi-components@0.3.0` is bundled via `bundledDependencies` (private,
+  never published to npm); `prepack` rebuilds it so the bundle always carries
+  fresh `dist`.
+- Tool-call theming follows the host's global theme: the shared library never
+  re-initializes an already-active theme (fixes dark-theme tool backgrounds in
+  the main session after opening the inspector).
+
+### Fixed
+
+- Truncated or corrupt `argsPayload` records no longer produce empty tool
+  entries; they degrade with the recorded preview and outcome visible.
+
 ## [0.6.0] - 2026-08-23
 
 ### Added

@@ -1970,6 +1970,7 @@ export const FLEET_KEYBINDING_ACTIONS = [
 	"inspect",
 	"stop",
 	"toggleTools",
+	"toggleRenderer",
 ] as const;
 
 export type FleetKeybindingAction = typeof FLEET_KEYBINDING_ACTIONS[number];

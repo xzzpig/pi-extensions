@@ -1,8 +1,19 @@
 import {
+  appendEntry,
+  createTranscriptState,
+  ensureToolCall,
+  ensureTurn,
+  findLatestEntry,
+  finishTurn,
+  hasStreamingTranscriptEntry,
+  removeTranscriptTurn,
   renderTranscriptLines,
-  TranscriptToolComponents,
   type ToolComponentLookup,
+  type TranscriptEntry,
+  type TranscriptState,
   type TranscriptToolResultPayload,
+  upsertText,
+  upsertToolResult,
 } from "@xzzpig/pi-components/transcript";
 import {
   buildSessionContext,
@@ -115,34 +126,13 @@ type ResolvedBtwSettings = {
   fallbackReason?: string;
 };
 
-type BtwTranscriptEntry =
-  | { id: number; turnId: number; type: "turn-boundary"; phase: "start" | "end" }
-  | { id: number; turnId: number; type: "user-message"; text: string }
-  | { id: number; turnId: number; type: "thinking"; text: string; streaming: boolean }
-  | { id: number; turnId: number; type: "assistant-text"; text: string; streaming: boolean }
-  | { id: number; turnId: number; type: "tool-call"; toolCallId: string; toolName: string; args: unknown }
-  | {
-      id: number;
-      turnId: number;
-      type: "tool-result";
-      toolCallId: string;
-      toolName: string;
-      result: TranscriptToolResultPayload | null;
-      isError: boolean;
-      streaming: boolean;
-    };
+// Entry and state shapes are owned by @xzzpig/pi-components; these aliases
+// keep the historical local names readable without duplicating the structure.
+type BtwTranscriptEntry = TranscriptEntry;
 
 type BtwTranscript = BtwTranscriptEntry[];
 
-type BtwTranscriptState = {
-  entries: BtwTranscript;
-  nextEntryId: number;
-  nextTurnId: number;
-  currentTurnId: number | null;
-  lastTurnId: number | null;
-  toolCalls: Map<string, { turnId: number; callEntryId: number; resultEntryId?: number }>;
-  toolComponents: TranscriptToolComponents;
-};
+type BtwTranscriptState = TranscriptState;
 
 type BtwSessionRuntime = {
   session: AgentSession;
@@ -379,114 +369,22 @@ function toToolResultPayload(value: unknown): TranscriptToolResultPayload | null
   return { content: [{ type: "text", text: String(value) }] };
 }
 
+// Entry/state construction is delegated to the shared library so replayed
+// records and live events share one ingestion path and component registry.
 function createEmptyTranscriptState(): BtwTranscriptState {
-  return {
-    entries: [],
-    nextEntryId: 1,
-    nextTurnId: 1,
-    currentTurnId: null,
-    lastTurnId: null,
-    toolCalls: new Map(),
-    // Default-collapsed tool output, matching Pi's main transcript behavior.
-    toolComponents: new TranscriptToolComponents(),
-  };
-}
-
-function appendTranscriptEntry<T extends BtwTranscriptEntry>(
-  state: BtwTranscriptState,
-  entry: Omit<T, "id">,
-): T {
-  const nextEntry = { ...entry, id: state.nextEntryId++ } as T;
-  state.entries.push(nextEntry);
-  return nextEntry;
-}
-
-function ensureTranscriptTurn(state: BtwTranscriptState): number {
-  if (state.currentTurnId !== null) {
-    return state.currentTurnId;
-  }
-
-  const turnId = state.nextTurnId++;
-  state.currentTurnId = turnId;
-  state.lastTurnId = turnId;
-  appendTranscriptEntry(state, { type: "turn-boundary", turnId, phase: "start" } as Omit<Extract<BtwTranscriptEntry, { type: "turn-boundary" }>, "id">);
-  return turnId;
-}
-
-function finishTranscriptTurn(state: BtwTranscriptState, turnId?: number | null): void {
-  const resolvedTurnId = turnId ?? state.currentTurnId;
-  if (resolvedTurnId === null || resolvedTurnId === undefined) {
-    return;
-  }
-
-  const hasEndBoundary = state.entries.some(
-    (entry) => entry.turnId === resolvedTurnId && entry.type === "turn-boundary" && entry.phase === "end",
-  );
-  if (!hasEndBoundary) {
-    appendTranscriptEntry(state, { type: "turn-boundary", turnId: resolvedTurnId, phase: "end" } as Omit<Extract<BtwTranscriptEntry, { type: "turn-boundary" }>, "id">);
-  }
-
-  for (const entry of state.entries) {
-    if (entry.turnId !== resolvedTurnId) {
-      continue;
-    }
-
-    if (entry.type === "thinking" || entry.type === "assistant-text" || entry.type === "tool-result") {
-      entry.streaming = false;
-    }
-  }
-
-  state.lastTurnId = resolvedTurnId;
-  if (state.currentTurnId === resolvedTurnId) {
-    state.currentTurnId = null;
-  }
-}
-
-function removeTranscriptTurn(state: BtwTranscriptState, turnId: number | null): void {
-  if (turnId === null) {
-    return;
-  }
-
-  state.entries = state.entries.filter((entry) => entry.turnId !== turnId);
-  for (const [toolCallId, toolCall] of state.toolCalls.entries()) {
-    if (toolCall.turnId === turnId) {
-      state.toolCalls.delete(toolCallId);
-    }
-  }
-
-  if (state.currentTurnId === turnId) {
-    state.currentTurnId = null;
-  }
-  if (state.lastTurnId === turnId) {
-    state.lastTurnId = null;
-  }
-  state.toolComponents.retainOnly(new Set(state.toolCalls.keys()));
-}
-
-function findLatestTranscriptEntry<TType extends BtwTranscriptEntry["type"]>(
-  state: BtwTranscriptState,
-  turnId: number,
-  type: TType,
-): Extract<BtwTranscriptEntry, { type: TType }> | undefined {
-  for (let i = state.entries.length - 1; i >= 0; i--) {
-    const entry = state.entries[i];
-    if (entry.turnId === turnId && entry.type === type) {
-      return entry as Extract<BtwTranscriptEntry, { type: TType }>;
-    }
-  }
-
-  return undefined;
+  // Default-collapsed tool output, matching Pi's main transcript behavior.
+  return createTranscriptState();
 }
 
 function ensureTranscriptTurnForUserMessage(state: BtwTranscriptState): number {
   if (state.currentTurnId !== null) {
-    const currentAssistant = findLatestTranscriptEntry(state, state.currentTurnId, "assistant-text");
+    const currentAssistant = findLatestEntry(state, state.currentTurnId, "assistant-text");
     if (currentAssistant && !currentAssistant.streaming) {
-      finishTranscriptTurn(state, state.currentTurnId);
+      finishTurn(state, state.currentTurnId);
     }
   }
 
-  return ensureTranscriptTurn(state);
+  return ensureTurn(state);
 }
 
 function extractMessageText(message: { content?: string | AssistantMessage["content"] | UserMessage["content"] }): string {
@@ -508,92 +406,13 @@ function upsertUserMessageEntry(state: BtwTranscriptState, turnId: number, text:
     return;
   }
 
-  const existing = findLatestTranscriptEntry(state, turnId, "user-message");
+  const existing = findLatestEntry(state, turnId, "user-message");
   if (existing) {
     existing.text = text;
     return;
   }
 
-  appendTranscriptEntry(state, { type: "user-message", turnId, text } as Omit<Extract<BtwTranscriptEntry, { type: "user-message" }>, "id">);
-}
-
-function upsertTranscriptTextEntry(
-  state: BtwTranscriptState,
-  turnId: number,
-  type: "thinking" | "assistant-text",
-  text: string,
-  streaming: boolean,
-): void {
-  if (!text) {
-    return;
-  }
-
-  const existing = findLatestTranscriptEntry(state, turnId, type);
-  if (existing) {
-    existing.text = text;
-    existing.streaming = streaming;
-    return;
-  }
-
-  appendTranscriptEntry(state, { type, turnId, text, streaming } as Omit<Extract<BtwTranscriptEntry, { type: "thinking" | "assistant-text" }>, "id">);
-}
-
-function ensureToolCallEntry(
-  state: BtwTranscriptState,
-  turnId: number,
-  toolCallId: string,
-  toolName: string,
-  args: unknown,
-): { turnId: number; callEntryId: number; resultEntryId?: number } {
-  const existing = state.toolCalls.get(toolCallId);
-  if (existing) {
-    return existing;
-  }
-
-  const callEntry = appendTranscriptEntry(state, {
-    type: "tool-call",
-    turnId,
-    toolCallId,
-    toolName,
-    args,
-  } as Omit<Extract<BtwTranscriptEntry, { type: "tool-call" }>, "id">);
-  const record = { turnId, callEntryId: callEntry.id };
-  state.toolCalls.set(toolCallId, record);
-  return record;
-}
-
-function upsertToolResultEntry(
-  state: BtwTranscriptState,
-  turnId: number,
-  toolCallId: string,
-  toolName: string,
-  result: TranscriptToolResultPayload | null,
-  isError: boolean,
-  streaming: boolean,
-): void {
-  const toolCall = ensureToolCallEntry(state, turnId, toolCallId, toolName, undefined);
-  const existing =
-    toolCall.resultEntryId === undefined
-      ? undefined
-      : state.entries.find((entry) => entry.id === toolCall.resultEntryId && entry.type === "tool-result");
-
-  if (existing && existing.type === "tool-result") {
-    existing.result = result;
-    existing.isError = isError;
-    existing.streaming = streaming;
-    return;
-  }
-
-  const resultEntry = appendTranscriptEntry(state, {
-    type: "tool-result",
-    turnId,
-    toolCallId,
-    toolName,
-    result,
-    isError,
-    streaming,
-  } as Omit<Extract<BtwTranscriptEntry, { type: "tool-result" }>, "id">);
-  toolCall.resultEntryId = resultEntry.id;
+  appendEntry(state, { type: "user-message", turnId, text });
 }
 
 function applyAssistantMessageToTranscript(
@@ -607,18 +426,18 @@ function applyAssistantMessageToTranscript(
   const answer = extractMessageText(assistantMessage);
 
   if (thinking) {
-    upsertTranscriptTextEntry(state, turnId, "thinking", thinking, streaming);
+    upsertText(state, turnId, "thinking", thinking, streaming);
   }
 
   if (answer) {
-    upsertTranscriptTextEntry(state, turnId, "assistant-text", answer, streaming);
+    upsertText(state, turnId, "assistant-text", answer, streaming);
   }
 }
 
 function applyTranscriptEvent(state: BtwTranscriptState, event: AgentSessionEvent): void {
   switch (event.type) {
     case "turn_start": {
-      ensureTranscriptTurn(state);
+      ensureTurn(state);
       return;
     }
     case "message_start": {
@@ -629,7 +448,7 @@ function applyTranscriptEvent(state: BtwTranscriptState, event: AgentSessionEven
       }
 
       if (event.message.role === "assistant") {
-        const turnId = ensureTranscriptTurn(state);
+        const turnId = ensureTurn(state);
         applyAssistantMessageToTranscript(state, turnId, event.message, true);
       }
       return;
@@ -639,7 +458,7 @@ function applyTranscriptEvent(state: BtwTranscriptState, event: AgentSessionEven
         return;
       }
 
-      const turnId = ensureTranscriptTurn(state);
+      const turnId = ensureTurn(state);
       applyAssistantMessageToTranscript(state, turnId, event.message, true);
       return;
     }
@@ -651,33 +470,33 @@ function applyTranscriptEvent(state: BtwTranscriptState, event: AgentSessionEven
       }
 
       if (event.message.role === "assistant") {
-        const turnId = ensureTranscriptTurn(state);
+        const turnId = ensureTurn(state);
         applyAssistantMessageToTranscript(state, turnId, event.message, false);
       }
       return;
     }
     case "tool_execution_start": {
-      const turnId = ensureTranscriptTurn(state);
-      ensureToolCallEntry(state, turnId, event.toolCallId, event.toolName, event.args);
+      const turnId = ensureTurn(state);
+      ensureToolCall(state, turnId, event.toolCallId, event.toolName, event.args);
       state.toolComponents.handleStart(event.toolCallId, event.toolName, event.args);
       return;
     }
     case "tool_execution_update": {
-      const turnId = state.toolCalls.get(event.toolCallId)?.turnId ?? ensureTranscriptTurn(state);
+      const turnId = state.toolCalls.get(event.toolCallId)?.turnId ?? ensureTurn(state);
       const result = toToolResultPayload(event.partialResult);
-      upsertToolResultEntry(state, turnId, event.toolCallId, event.toolName, result, false, true);
+      upsertToolResult(state, turnId, event.toolCallId, event.toolName, result, false, true);
       state.toolComponents.handleUpdate(event.toolCallId, event.toolName, result);
       return;
     }
     case "tool_execution_end": {
-      const turnId = state.toolCalls.get(event.toolCallId)?.turnId ?? ensureTranscriptTurn(state);
+      const turnId = state.toolCalls.get(event.toolCallId)?.turnId ?? ensureTurn(state);
       const result = toToolResultPayload(event.result);
-      upsertToolResultEntry(state, turnId, event.toolCallId, event.toolName, result, event.isError, false);
+      upsertToolResult(state, turnId, event.toolCallId, event.toolName, result, event.isError, false);
       state.toolComponents.handleEnd(event.toolCallId, event.toolName, result, event.isError);
       return;
     }
     case "turn_end": {
-      finishTranscriptTurn(state);
+      finishTurn(state);
       return;
     }
     default:
@@ -686,27 +505,19 @@ function applyTranscriptEvent(state: BtwTranscriptState, event: AgentSessionEven
 }
 
 function appendPersistedTranscriptTurn(state: BtwTranscriptState, details: BtwDetails): void {
-  const turnId = ensureTranscriptTurn(state);
+  const turnId = ensureTurn(state);
   upsertUserMessageEntry(state, turnId, details.question);
   if (details.thinking) {
-    upsertTranscriptTextEntry(state, turnId, "thinking", details.thinking, false);
+    upsertText(state, turnId, "thinking", details.thinking, false);
   }
-  upsertTranscriptTextEntry(state, turnId, "assistant-text", details.answer, false);
-  finishTranscriptTurn(state, turnId);
+  upsertText(state, turnId, "assistant-text", details.answer, false);
+  finishTurn(state, turnId);
 }
 
 function setTranscriptFailure(state: BtwTranscriptState, message: string): void {
-  const turnId = state.currentTurnId ?? state.lastTurnId ?? ensureTranscriptTurn(state);
-  upsertTranscriptTextEntry(state, turnId, "assistant-text", `❌ ${message}`, false);
-  finishTranscriptTurn(state, turnId);
-}
-
-function hasStreamingTranscriptEntry(entries: BtwTranscript): boolean {
-  return entries.some(
-    (entry) =>
-      (entry.type === "thinking" || entry.type === "assistant-text" || entry.type === "tool-result") &&
-      entry.streaming,
-  );
+  const turnId = state.currentTurnId ?? state.lastTurnId ?? ensureTurn(state);
+  upsertText(state, turnId, "assistant-text", `❌ ${message}`, false);
+  finishTurn(state, turnId);
 }
 
 function getCompletedExchangeCount(entries: BtwTranscript): number {
@@ -1937,7 +1748,7 @@ export default function (pi: ExtensionAPI) {
 
       const completedTurnId = transcriptState.lastTurnId ?? transcriptState.currentTurnId;
       const streamedThinking =
-        completedTurnId === null ? "" : findLatestTranscriptEntry(transcriptState, completedTurnId, "thinking")?.text;
+        completedTurnId === null ? "" : findLatestEntry(transcriptState, completedTurnId, "thinking")?.text;
       const answer = extractAnswer(response);
       const thinking = extractThinking(response) || streamedThinking || "";
 
