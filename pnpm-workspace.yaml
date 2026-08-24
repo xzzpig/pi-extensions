@@ -19,4 +19,4 @@ catalog:
   "vitest": "4.1.8"
 
 minimumReleaseAgeExclude:
-  - '@xzzpig/pi-subagents'
+  - "@xzzpig/pi-subagents"

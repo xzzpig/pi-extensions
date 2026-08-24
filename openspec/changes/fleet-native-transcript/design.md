@@ -36,27 +36,27 @@
 
 JSONL→entries 的解析器是 pi-subagents 私有文件格式的知识，放 `src/tui/fleet-native-transcript.ts`（新文件）；pi-components 仅将已有的私有状态操作提升为公开 API。
 
-- *备选*：把 JSONL 解析也做进 pi-components → 否决：文件格式属于 pi-subagents 领域，进公共库会形成反向耦合。
+- _备选_：把 JSONL 解析也做进 pi-components → 否决：文件格式属于 pi-subagents 领域，进公共库会形成反向耦合。
 
 ### D2: 公开 API 形态——导出模块级函数而非新建 Builder 类
 
 将 pi-components 现有私有函数（ensureTurn / finishTurn / removeTurn / findLatestEntry / upsertText / upsertToolResult / appendNotice 及条目追加）以模块级函数形式导出，签名与现内部实现保持一致。pi-btw 的同名手写函数直接删除并改为调用这些导出。
 
-- *备选*：包装成 `TranscriptBuilder` 门面类 → 否决：多一层抽象，pi-btw 迁移面更大；模块级函数与 `SessionTranscript` 类并存即可覆盖两类场景。
-- *兼容性*：纯新增导出，既有导出不动；pi-components 语义化版本 minor 升级（0.2.x → 0.3.0）。
+- _备选_：包装成 `TranscriptBuilder` 门面类 → 否决：多一层抽象，pi-btw 迁移面更大；模块级函数与 `SessionTranscript` 类并存即可覆盖两类场景。
+- _兼容性_：纯新增导出，既有导出不动；pi-components 语义化版本 minor 升级（0.2.x → 0.3.0）。
 
 ### D3: 工具组件注册表按缓存世代重建，全局展开切换走重建
 
 fleet 的 `transcriptCache` 键扩展为包含 expandedTools（现已如此）；缓存未命中时重新构造 entries + `TranscriptToolComponents`（构造参数携带 `expanded`、`cwd`）。`x` 切换 = 使缓存失效 → 下帧重建。不做 per-component 增量 setExpanded。
 
-- *备选*：持有注册表并对全体组件调 setExpanded → 否决：需要额外的注册表生命周期管理，收益仅是省一次重解析，而解析本身已被 fingerprint 缓存挡住。
-- *备选*：不传 toolComponents 让每帧 ad-hoc 重建 → 否决：750ms 刷新周期下浪费且丢失组件内部折叠状态一致性。
+- _备选_：持有注册表并对全体组件调 setExpanded → 否决：需要额外的注册表生命周期管理，收益仅是省一次重解析，而解析本身已被 fingerprint 缓存挡住。
+- _备选_：不传 toolComponents 让每帧 ad-hoc 重建 → 否决：750ms 刷新周期下浪费且丢失组件内部折叠状态一致性。
 
 ### D4: 截断 argsPayload 的降级策略——空参数 + 完整结果
 
 `JSON.parse(argsPayload)` 失败（32KB 截断）时，tool-call 条目以 `{}` 参数写入，结果照常写入。原生组件对未知工具/空参数有 generic fallback 渲染，保证条目可见。
 
-- *备选*：截断时退回 rail 线渲染该单条 → 否决：同一屏混两种渲染范式反而更乱。
+- _备选_：截断时退回 rail 线渲染该单条 → 否决：同一屏混两种渲染范式反而更乱。
 
 ### D5: 宿主能力探测与降级
 
@@ -82,8 +82,8 @@ pi-subagents `package.json` 增加 `"dependencies": { "@xzzpig/pi-components": "
 
 新增键位动作 `toggleRenderer`（纳入 `FleetKeybindingAction` 重映射体系），默认 `v`（空闲且语义贴切；已核对不与 q/j/k/r/s/x/c/p/g/H/D/K/J 等现有键冲突）。组件实例持有会话级布尔状态，默认原生渲染；与 D5 的职责边界：**D5 探测决定"能否用"，本键决定"要不要用"**——探测失败时按键给出提示并保持文本渲染，不静默失败。实现与 `x` 键完全同构：状态翻转 → transcript 缓存失效（渲染模式纳入缓存指纹）→ 下帧走对应链路重渲。
 
-- *备选*：持久化到配置文件 → 否决：需求为运行时可逆切换，会话级即可；配置级强制旧渲染已由 D5 的显式覆盖入口覆盖，两者互补而非重复。
-- *备选*：per-item 切换 → 否决：渲染范式是全局观感选择，逐条目切换认知成本高且缓存管理复杂化。
+- _备选_：持久化到配置文件 → 否决：需求为运行时可逆切换，会话级即可；配置级强制旧渲染已由 D5 的显式覆盖入口覆盖，两者互补而非重复。
+- _备选_：per-item 切换 → 否决：渲染范式是全局观感选择，逐条目切换认知成本高且缓存管理复杂化。
 
 ## Risks / Trade-offs
 
