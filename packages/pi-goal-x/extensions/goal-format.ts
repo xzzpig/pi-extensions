@@ -176,15 +176,36 @@ export function renderGoalAuditEvent(message: { content?: unknown; details?: Goa
 	);
 }
 
-export function extractGoalIdFromInjectedMessage(text: string): string | null {
+/**
+ * Issue #30 v2 markers are self-closing and carry an explicit version:
+ * `<pi_goal_continuation goal_id="..." kind="checkpoint" v="2"/>`.
+ */
+function matchV2SelfClosingContinuation(text: string): string | null {
+	const match = text.match(/^<pi_goal_continuation\s+goal_id="([^"]+)"[^>]*v="2"\s*\/?>/);
+	return match?.[1] ?? null;
+}
+
+function matchLegacyContinuation(text: string): string | null {
 	// Phase 5 C1: structured outer marker `<pi_goal_continuation goal_id="..." kind="...">`.
 	// Borrowed from pi-codex-goal. More robust than bare bracket text because
 	// the angle brackets + attributes are nearly impossible for users to type
 	// by accident, and the structure is grep-able / parse-able by external tooling.
 	const xmlMatch = text.match(/^<pi_goal_continuation\s+goal_id="([^"]+)"/);
 	if (xmlMatch) return xmlMatch[1] ?? null;
+	return null;
+}
+
+function matchLegacyBracketCheckpoint(text: string): string | null {
 	const match = text.match(/^\[(?:GOAL CHECKPOINT|GOAL CONTINUATION|GOAL STALE) goalId=([^\]\s]+)\]/);
 	return match?.[1] ?? null;
+}
+
+export function extractGoalIdFromInjectedMessage(text: string): string | null {
+	return (
+		matchV2SelfClosingContinuation(text)
+		?? matchLegacyContinuation(text)
+		?? matchLegacyBracketCheckpoint(text)
+	);
 }
 
 export function goalEventMessageId(message: { customType?: string; details?: unknown; content?: unknown }): string | null {
@@ -205,6 +226,16 @@ export function isErrorAssistantMessage(message: unknown): boolean {
 	return raw?.role === "assistant" && raw.stopReason === "error";
 }
 
+/** A provider-declared network failure is safe for the bounded goal backoff. */
+export function isNetworkErrorAssistantMessage(message: unknown): boolean {
+	if (!isErrorAssistantMessage(message)) return false;
+	const raw = asRecord(message);
+	const details = [raw?.rawStopReason, raw?.errorMessage]
+		.filter((value): value is string => typeof value === "string")
+		.join(" ");
+	return /\bnetwork[_\s-]?error\b/i.test(details);
+}
+
 export function isToolUseAssistantMessage(message: unknown): boolean {
 	const raw = asRecord(message);
 	return raw?.role === "assistant" && raw.stopReason === "toolUse";
@@ -216,6 +247,10 @@ export function hasAbortedAssistantMessage(messages: unknown[]): boolean {
 
 export function hasErrorAssistantMessage(messages: unknown[]): boolean {
 	return messages.some(isErrorAssistantMessage);
+}
+
+export function hasNetworkErrorAssistantMessage(messages: unknown[]): boolean {
+	return messages.some(isNetworkErrorAssistantMessage);
 }
 
 export function usageChannelTokens(value: unknown): number {

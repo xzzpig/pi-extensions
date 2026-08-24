@@ -1,10 +1,13 @@
 {
   "name": "@xzzpig/pi-goal-x",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Goal mode extension for pi: durable long-running objectives, five model tools, structured tasks, independent completion audit, Sisyphus mode, auto-continue, and a status overlay.",
   "license": "MIT",
   "author": "pi-goal-x contributors",
   "type": "module",
+  "bin": {
+    "pi-goal-x-recover": "scripts/recover-session-checkpoints.mjs"
+  },
   "dependencies": {
     "@xzzpig/pi-subagents": "0.6.0"
   },
@@ -29,6 +32,7 @@
   "files": [
     "agents",
     "extensions",
+    "scripts/recover-session-checkpoints.mjs",
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
@@ -63,8 +67,13 @@
     "bench:naf": "node --import ./experiments/bench/bench-adapter-hooks.mjs --experimental-strip-types ./experiments/bench/run-bench.mjs",
     "bench:gate:naf": "node --experimental-strip-types ./experiments/bench/b6-gate.mjs naf",
     "test:e2e": "node scripts/run-unit-tests.mjs e2e",
+    "test:checkpoint-recovery": "node --experimental-strip-types --test tests/session-checkpoint-growth.test.ts tests/session-checkpoint-recovery.test.ts tests/goal-session-health.test.ts",
+    "test:settings-race": "node --experimental-strip-types --test tests/goal-settings-race.test.ts",
     "lint": "eslint .",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "context:measure": "node experiments/context/run-measure.mjs",
+    "context:gate": "node experiments/context/run-gate.mjs",
+    "test:oracle": "node --experimental-strip-types --test tests/goal-oracle.test.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=0.83.0 <0.85.0",

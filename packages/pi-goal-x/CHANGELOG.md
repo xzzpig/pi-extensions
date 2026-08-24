@@ -3,60 +3,20 @@
 All notable changes to pi-goal-x are documented here.
 
 ## [Unreleased]
-
-## [0.2.1] — 2026-08-22
-
-### Added
-
-- **`max` thinking level for the completion auditor.** `/goal-settings` `thinking_level` now offers and persists `max` alongside the other six levels, settings files accept it, and delegation passes it through to pi-subagents (which applies it as a `:max` model suffix; actual effect still depends on the auditor model's registry support).
-
-## [0.2.0] — 2026-08-20 (fork release)
+## [0.3.0] — 2026-08-24 (fork release)
 
 ### Changed
 
-- **Structured completion delegation.** Goal completion reviews now run through the public `@xzzpig/pi-subagents/delegation` foreground protocol with a fresh `goal-auditor` child, schema-validated `{ verdict, report, findings }` output, precise cancellation, and normal Pi settings/retry behavior. There is no embedded `AgentSession` fallback.
-- **Configurable package auditor.** Goal-X ships `goal-auditor` as a package agent with strict default tools, a child-only progress provider, normal `subagents.agentOverrides`, explicit MCP direct-tool selection, and the `auditorAgent` setting. `auditorProjectResources` remains readable but is deprecated and ignored.
-
-### Fixed
-
-- **Cancellation closure.** Escape or unfocus cancellation now has a bounded fail-closed settlement path, and a structured approval received after cancellation can never complete the goal.
-- **Bare extension loading.** Direct `pi -e .../goal.ts -e .../pi-subagents/index.ts` launches materialize a process-private default `goal-auditor` with an absolute progress-provider path when package discovery cannot supply one, preventing `Unknown agent: goal-auditor` during completion audit.
-- **Auditor progress projection.** The child-only progress provider sends a versioned record in its tool-result text. The foreground `pi-subagents` executor normalizes native `message_end` tool-result events into bounded progress output, so Goal-X restores phase and percentage from `recentOutputLines` rather than display-only tool arguments.
-
-### Removed
-
-- **Goal-owned audit transcripts.** Removed the live transcript overlay, `/goal-audit`, in-memory transcript state, and the `@xzzpig/pi-components` runtime/bundle dependency. Detailed review activity is available from pi-subagents Fleet/transcript; the five-stage dashboard and result cards remain.
-
-### Added
-
-- **`/goal-subagent-eject global|project`.** Ejects the default auditor to user or trusted-project scope without overwriting a definition, chain, or file. The generated definition preserves required package-relative resources and passes discovery/preflight.
-
-
-
-## [0.1.2] — 2026-08-18
-
-### Added
-
-- **Live completion-auditor transcript.** Interactive audits now expose the
-  independent auditor's native messages, thinking, tool activity, results, and
-  retries in a read-only overlay. `/goal-audit` reopens the most recent audit
-  transcript during the current Pi session without changing audit or completion
-  semantics.
-
-### Fixed
-
-- **Audit transcript scrolling.** The overlay now handles mouse-wheel and
-  touchpad scrolling alongside `Up`/`Down`, `PgUp`/`PgDn`, `Home`, and `End`.
-  In fullscreen mode it reuses Pi's mouse handling; in regular mode it enables
-  and releases only the terminal mouse reporting it owns.
-
-## [0.1.0] — 2026-08-15
-
-Local `@xzzpig/pi-goal-x` fork of upstream pi-goal-x 0.27.4 (imported as a tracked subtree).
-
-### Fixed
-
-- Esc pressed while any TUI overlay is visible (e.g. the pi-subagents fleet inspector, pi's own selectors) no longer pauses the active goal. The terminal-input handler now yields to the focused overlay via `TUI.hasOverlay()` before the Escape-to-pause branch, matching the existing `goalModalDepth` guard semantics; the key still passes through to the overlay so closing it behaves normally.
+- **Synced upstream v0.27.4 → v0.30.0.** Adopted the layered global/project
+  settings rewrite (per-leaf provenance, scope-aware `/goal-settings` editing,
+  Blocker Oracle settings), the §61 minimal auditor prompt metadata, and
+  upstream's checkpoint-recovery/context-measurement tooling — with the
+  delegation-based completion auditor, `auditorAgent` setting, `max` thinking
+  level, and `@xzzpig/pi-subagents` integration preserved as fork features.
+  Upstream 0.28–0.30 highlights: opt-in read-only blocker Oracle (#26),
+  single-source active-goal prompt, UI/model payload separation, layered
+  settings (#27), hideUnfocusedBanner (#29), bounded network-error recovery
+  (#36), model-context measurement harness (#34).
 
 ## [0.27.4] — 2026-08-11
 

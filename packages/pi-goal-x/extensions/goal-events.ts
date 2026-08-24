@@ -6,20 +6,23 @@ import {
 	goalEventMessageId,
 	hasAbortedAssistantMessage,
 	hasErrorAssistantMessage,
+	hasNetworkErrorAssistantMessage,
 	isAbortedAssistantMessage,
 	isErrorAssistantMessage,
 	isMeaningfulProgressToolCall,
 	isToolUseAssistantMessage,
 } from "./goal-format.ts";
-import { buildCompactionSummary } from "./goal-compaction.ts";
+import { buildCompactionSummary, buildPostCompactionGoalDelta } from "./goal-compaction.ts";
 import { latestAuditorResultForGoal, loadLedgerState, readGoalLedger, invalidateGoalLedgerCache } from "./goal-ledger.ts";
 import { shouldArmPostCompactReminder, shouldInjectPostCompactReminder } from "./goal-policy.ts";
 import { formatTokenValue } from "./goal-core.ts";
 import { loadGoalSettings, invalidateGoalSettingsCache } from "./goal-settings.ts";
 import { budgetLine, budgetRemaining } from "./goal-accounting.ts";
-import { asRecord, nowIso, type AssistantMessageLike } from "./goal-record.ts";
+import { asRecord, nowIso, type AssistantMessageLike, type GoalRecord } from "./goal-record.ts";
 import { goalSelectorLabel } from "./goal-pool.ts";
-import { invalidateGoalPoolCache } from "./storage/goal-files.ts";import {
+import { invalidateGoalPoolCache } from "./storage/goal-files.ts";
+import { checkpointTriggerPrompt } from "./prompts/goal-prompts.ts";
+import { consumeOracleFollowupMarker, hasPendingOracleAdviceForFocusedGoal } from "./goal-oracle.ts";import {
 	goalPrompt,
 	staleContinuationPrompt,
 	unfocusedOpenGoalsPrompt,
@@ -31,6 +34,56 @@ import type { GoalCore } from "./goal-state.ts";
 import type { GoalMutationOutcome } from "./goal-service.ts";
 
 /**
+ * Issue #30: provider-context checkpoint compaction (pure helper).
+ *
+ * Every historical checkpoint message is redundant: its authoritative state is
+ * reconstructed from goal storage and injected once per turn by
+ * before_agent_start. Normal provider requests therefore retain at most ONE
+ * checkpoint marker — the latest — rewritten to the tiny bounded v2 trigger
+ * content. Keeping one user-role turn-start marker avoids provider edge cases
+ * where removing it would leave the request ending on an assistant or tool
+ * result. Audit events, user messages, assistant messages, and tool results
+ * pass through untouched.
+ */
+export function compactGoalCheckpointContext(
+	messages: readonly unknown[],
+	currentGoal: GoalRecord | null,
+): unknown[] | null {
+	let lastCheckpointIndex = -1;
+	for (let i = 0; i < messages.length; i += 1) {
+		if (goalEventMessageId(messages[i] as { customType?: string; details?: unknown; content?: unknown }) !== null) {
+			lastCheckpointIndex = i;
+		}
+	}
+	if (lastCheckpointIndex < 0) return null;
+
+	const output: unknown[] = [];
+	for (let i = 0; i < messages.length; i += 1) {
+		const message = messages[i] as { customType?: string; details?: unknown; content?: unknown };
+		const checkpointGoalId = goalEventMessageId(message);
+		if (checkpointGoalId === null) {
+			output.push(messages[i]);
+			continue;
+		}
+		// Every historical checkpoint is dropped entirely.
+		if (i !== lastCheckpointIndex) continue;
+		output.push({
+			...(message as Record<string, unknown>),
+			content: checkpointTriggerPrompt(checkpointGoalId),
+			display: false,
+			details: {
+				version: 2,
+				kind: currentGoal?.id === checkpointGoalId && currentGoal?.status === "active" ? "checkpoint" : "stale",
+				goalId: checkpointGoalId,
+				currentGoalId: currentGoal?.id ?? null,
+				currentStatus: currentGoal?.status ?? null,
+			},
+		});
+	}
+	return output;
+}
+
+/**
  * The goal extension's lifecycle event handlers (context, turn_start,
  * tool_call, tool_execution_end, turn_end, message_end, session_start,
  * session_before_compact, session_compact, session_tree, before_agent_start,
@@ -40,41 +93,12 @@ import type { GoalMutationOutcome } from "./goal-service.ts";
 export function registerGoalEvents(core: GoalCore): void {
 	const { pi } = core;
 	let continuationAfterSettleFor: string | null = null;
+	let networkErrorRecoveryAfterSettleFor: string | null = null;
 
-	pi.on("context", async (event): Promise<{ messages: typeof event.messages } | undefined> => {
-		let changed = false;
-		const latestGoalEventIndex = new Map<string, number>();
-		event.messages.forEach((message, index) => {
-			const queuedGoalId = goalEventMessageId(message as { customType?: string; details?: unknown; content?: unknown });
-			if (queuedGoalId) latestGoalEventIndex.set(queuedGoalId, index);
-		});
-
-		const messages = event.messages.map((message, index) => {
-			const candidate = message as { customType?: string; details?: unknown; content?: unknown };
-			const queuedGoalId = goalEventMessageId(candidate);
-			if (!queuedGoalId) return message;
-			if (
-				core.state.goal?.id === queuedGoalId
-				&& (core.state.goal.status === "active")
-				&& core.state.goal.autoContinue
-				&& latestGoalEventIndex.get(queuedGoalId) === index
-			) return message;
-			changed = true;
-			const details = asRecord(candidate.details) ?? {};
-			return {
-				...message,
-				content: staleContinuationPrompt(queuedGoalId, core.state.goal),
-				display: false,
-				details: {
-					...details,
-					kind: "stale",
-					goalId: queuedGoalId,
-					currentGoalId: core.state.goal?.id ?? null,
-					currentStatus: core.state.goal?.status ?? null,
-				},
-			} as typeof message;
-		});
-		return changed ? { messages } : undefined;
+	pi.on("context", async (event) => {
+		const messages = compactGoalCheckpointContext(event.messages, core.state.goal);
+		// Reference equality means no goal-event messages existed at all.
+		return messages === null ? undefined : { messages: messages as typeof event.messages };
 	});
 
 	pi.on("turn_start", async (_event, ctx) => {
@@ -115,6 +139,25 @@ export function registerGoalEvents(core: GoalCore): void {
 		// Track for #4 empty-turn gate.
 		if (isMeaningfulProgressToolCall(event.toolName, asRecord(event)?.args)) {
 			core.goalWorkToolCalledThisTurn = true;
+			// Issue #26: record a meaningful work attempt against armed Oracle
+			// advice. get_goal / echo-only reads are excluded upstream by
+			// isMeaningfulProgressToolCall.
+			const focusedId = core.focusedGoalId;
+			if (focusedId && hasPendingOracleAdviceForFocusedGoal(focusedId)) {
+				const armed = consumeOracleFollowupMarker(focusedId);
+				if (armed) {
+					try {
+						core.goalService.appendEvents(ctx, [{
+							type: "oracle_followup_attempted",
+							goalId: armed.goalId,
+							fingerprint: armed.fingerprint,
+							adviceId: armed.adviceId,
+							firstToolName: event.toolName,
+							at: nowIso(),
+						}]);
+					} catch { /* best-effort ledger append */ }
+				}
+			}
 		}
 		return;
 	});
@@ -314,7 +357,10 @@ export function registerGoalEvents(core: GoalCore): void {
 			// evaluating whether the checkpoint is actionable.
 			core.reconcileFocusedGoalFromDisk(ctx);
 			core.runtime.setCheckpoint(incomingGoalId);
-			core.clearContinuationState();
+			// This can be the hidden checkpoint dispatched by the network-error
+			// timer. Clear ordinary continuation bookkeeping but retain the
+			// consecutive recovery count for a later failed retry.
+			core.clearContinuationState(false);
 			if (!core.isActionableContinuationGoal(incomingGoalId)) {
 				try {
 					ctx.abort?.();
@@ -331,6 +377,7 @@ export function registerGoalEvents(core: GoalCore): void {
 			// autoContinue nudge state so the user always gets a fresh chain.
 			core.runtime.setCheckpoint(null);
 			core.clearContinuationState();
+			networkErrorRecoveryAfterSettleFor = null;
 		}
 
 		if (!core.state.goal) {
@@ -410,11 +457,15 @@ export function registerGoalEvents(core: GoalCore): void {
 		}
 		if (core.runtime.isPostCompactReminderPending() && shouldInjectPostCompactReminder({ pending: true, goal: activeGoal })) {
 			core.runtime.clearPostCompactReminder();
-				// Use deterministic compaction summary instead of generic reminder
-				try {
-					const ledger = getPromptLedger();
-				const compaction = buildCompactionSummary({ goalsById: core.goalsById, focusedGoalId: core.focusedGoalId, ledgerState: loadLedgerState(ctx) });
-				prompt = `${prompt}\n\n[POST-COMPACTION RESYNC goalId=${activeGoal.id}]\n${compaction}`;
+			// PR E §62: post-compaction DELTA — the active system goal block already
+			// carries objective/policy/task gate/contract; inject only what
+			// compaction may have lost. Falls back to a generic note on ledger
+			// read failure.
+			try {
+				const ledger = getPromptLedger();
+				const otherOpenCount = core.openGoals().filter((g) => g.id !== activeGoal.id).length;
+				const delta = buildPostCompactionGoalDelta({ goal: activeGoal, ledgerEvents: ledger.events, otherOpenCount });
+				prompt = `${prompt}\n\n${delta}`;
 			} catch {
 				prompt = `${prompt}\n\n[POST-COMPACTION RESYNC goalId=${core.state.goal.id}]\nThe conversation was just compacted. Re-read the objective and continue from the actual artifacts/state; do not rely on memory of the prior chat.`;
 			}
@@ -426,6 +477,7 @@ export function registerGoalEvents(core: GoalCore): void {
 		const endedGoalId = core.runningGoalId;
 		core.runningGoalId = null;
 		continuationAfterSettleFor = null;
+		networkErrorRecoveryAfterSettleFor = null;
 
 		// Account for any tokens from aborted in-flight assistant messages so
 		// they are not silently lost (but charge them to the original goal).
@@ -436,7 +488,9 @@ export function registerGoalEvents(core: GoalCore): void {
 			core.accountProgress(ctx, { completedTurnTokens: abortedTokens });
 		}
 
-		core.runtime.clearContinuationState();
+		// Keep any prior recovery attempt while Pi finishes its own automatic
+		// retries. A user-driven path resets it through the default argument.
+		core.runtime.clearContinuationState(false);
 		if (!core.state.goal || core.state.goal.status !== "active" || !core.state.goal.autoContinue) return;
 		if (endedGoalId && core.state.goal.id !== endedGoalId) return;
 		if (!core.reconcileFocusedGoalFromDisk(ctx)) return;
@@ -447,11 +501,18 @@ export function registerGoalEvents(core: GoalCore): void {
 		// Provider failures are not completed work: persist and refresh the
 		// display, but never queue a continuation for a run whose messages
 		// include an assistant error (danim47c pattern).
+		if (hasNetworkErrorAssistantMessage(event.messages)) {
+			core.persist(ctx);
+			core.updateUI(ctx);
+			networkErrorRecoveryAfterSettleFor = core.state.goal.id;
+			return;
+		}
 		if (hasErrorAssistantMessage(event.messages)) {
 			core.persist(ctx);
 			core.updateUI(ctx);
 			return;
 		}
+		core.runtime.clearNetworkErrorBackoff();
 		core.persist(ctx);
 		core.updateUI(ctx);
 		// agent_end runs before pi finishes retries, compaction, terminating-tool
@@ -465,14 +526,32 @@ export function registerGoalEvents(core: GoalCore): void {
 	pi.on("agent_settled", async (_event, ctx) => {
 		const goalId = continuationAfterSettleFor;
 		continuationAfterSettleFor = null;
-		if (!goalId || !core.isActionableContinuationGoal(goalId)) return;
-		core.queueContinuation(ctx, true);
+		const networkErrorGoalId = networkErrorRecoveryAfterSettleFor;
+		networkErrorRecoveryAfterSettleFor = null;
+		if (goalId && core.isActionableContinuationGoal(goalId)) {
+			core.queueContinuation(ctx, true);
+			return;
+		}
+		if (!networkErrorGoalId || !core.isActionableContinuationGoal(networkErrorGoalId)) return;
+		const plan = core.runtime.scheduleNetworkErrorRetry(ctx, core.state.goal!);
+		if (plan) {
+			ctx.ui.notify(
+				`Provider network error. Retrying the goal in ${Math.round(plan.delayMs / 1000)}s (recovery ${plan.attempt}/${plan.maxAttempts}).`,
+				"warning",
+			);
+			return;
+		}
+		ctx.ui.notify(
+			"Provider network errors persisted after all recovery attempts. The goal remains active; resume it when the provider is healthy.",
+			"warning",
+		);
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		continuationAfterSettleFor = null;
+		networkErrorRecoveryAfterSettleFor = null;
 		core.accountProgress(ctx);
-		core.clearContinuationTimer();
+		core.clearContinuationState();
 		core.terminalInputUnsubscribe?.();
 		core.terminalInputUnsubscribe = null;
 		if (core.state.goal) core.persist(ctx);

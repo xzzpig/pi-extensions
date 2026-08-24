@@ -1,22 +1,35 @@
 /**
- * Unified global goal settings.
+ * Layered global goal settings (clean rewrite of PR #27).
  *
- * Reads `.pi/pi-goal-x-settings.json` with env var overrides:
- *   PI_GOAL_DISABLE_TASKS     — "true" to disable, any other value = use file config
- *   PI_GOAL_DISABLE_CONTRACTS — "true" to disable, any other value = use file config
- *   PI_GOAL_OBJECTIVE_MAX_CHARS — objective length cap (0 = no limit), overrides file
- *   PI_GOAL_SETTINGS_FILE     — alternative settings file path (relative to cwd or absolute)
+ * Resolution order (per leaf):
  *
- * The file may contain:
- *   disableTasks, disableContracts, subtaskDepth,
- *   provider, model, thinkingLevel, auditorAgent, disabled, objectiveMaxChars, keybindings
+ *     environment > project layer > global layer > defaults
  *
- * `keybindings.dashboard` accepts `toggleExpand`, `scrollUp`, and `scrollDown`.
+ * Fork note: auditor delegation settings (auditorAgent, provider/model/
+ * thinkingLevel for the @xzzpig/pi-subagents-based auditor) ride the same
+ * layered keys as every other setting.
  *
- * additionalProperties: false — unknown keys are rejected.
+ * Files:
+ *
+ *     global:  ${PI_CODING_AGENT_DIR:-~/.pi/agent}/pi-goal-x-settings.json
+ *     project: <cwd>/.pi/pi-goal-x-settings.json
+ *
+ * Overrides: PI_GOAL_GLOBAL_SETTINGS_FILE, PI_GOAL_SETTINGS_FILE, and the
+ * per-setting PI_GOAL_* variables.
+ *
+ * Two distinct types (never one interface for both): GoalSettingsLayer is the
+ * SPARSE file content (booleans tri-state, 0 meaningful); GoalSettings is the
+ * RESOLVED runtime value with concrete defaults. Layer files are parsed into
+ * diagnostics rather than rejected wholesale — unknown keys are reported, and
+ * every valid known key still applies.
+ *
+ * Mutations go through mutateSettingsLayer(): fresh re-read under a filesystem
+ * path lock, structured-clone apply, atomic same-dir temp+rename write with
+ * mode preservation — concurrent processes never lose each other's keys.
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import type { KeyId } from "@earendil-works/pi-tui";
 
@@ -25,14 +38,27 @@ export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhi
 export const DEFAULT_AUDITOR_AGENT = "goal-auditor";
 export const AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE = "auditorProjectResources is deprecated and ignored. Configure the selected auditor agent's extensions, subagentOnlyExtensions, skills, and tools instead.";
 
+// ── sparse keybinding layers ────────────────────────────────────────────────
+
 export interface GoalDashboardKeybindings {
 	toggleExpand: KeyId;
 	scrollUp: KeyId;
 	scrollDown: KeyId;
 }
 
+/** Sparse dashboard keybindings: only overridden leaves are present. */
+export interface GoalDashboardKeybindingsLayer {
+	toggleExpand?: KeyId;
+	scrollUp?: KeyId;
+	scrollDown?: KeyId;
+}
+
 export interface GoalKeybindings {
 	dashboard: GoalDashboardKeybindings;
+}
+
+export interface GoalKeybindingsLayer {
+	dashboard?: GoalDashboardKeybindingsLayer;
 }
 
 export const DEFAULT_GOAL_KEYBINDINGS: GoalKeybindings = {
@@ -62,7 +88,9 @@ export function formatGoalKeybinding(key: string): string {
 	}[part.toLowerCase()] ?? part.toUpperCase())).join("+");
 }
 
-export interface GoalSettings {
+// ── resolved settings (runtime shape) ───────────────────────────────────────
+
+export interface GoalSettingsResolvedShape {
 	disableTasks?: boolean;
 	disableContracts?: boolean;
 	subtaskDepth?: number;
@@ -85,63 +113,95 @@ export interface GoalSettings {
 	objectiveMaxChars?: number;
 	/** Keyboard shortcuts for the compact task list and dashboard expansion. */
 	keybindings?: GoalKeybindings;
+	/** PR #29: suppress the unfocused goal widget + status hint (default false). */
+	hideUnfocusedBanner?: boolean;
+	/** Issue #26: opt-in read-only blocker Oracle configuration (sparse). */
+	oracle?: GoalOracleSettingsLayer;
 }
+
+// Resolved Oracle settings are attached to the resolved runtime shape below
+// (see ResolvedGoalOracleSettings).
+
+/**
+ * Issue #26: sparse per-leaf Oracle settings. Every leaf inherits
+ * independently (project > global > default); enabled defaults false.
+ */
+export interface GoalOracleSettingsLayer {
+	enabled?: boolean;
+	provider?: string;
+	model?: string;
+	thinkingLevel?: ThinkingLevel;
+	projectResources?: boolean;
+	maxFailedAttemptsPerBlocker?: number;
+}
+
+/** Resolved Oracle settings (concrete defaults). */
+export interface ResolvedGoalOracleSettings {
+	enabled: boolean;
+	provider?: string;
+	model?: string;
+	thinkingLevel?: ThinkingLevel;
+	projectResources: boolean;
+	maxFailedAttemptsPerBlocker: number;
+}
+
+/**
+ * Sparse settings layer: exactly what a settings FILE may contain. Every
+ * field optional; explicit false/0 preserved so lower layers can override
+ * higher ones. Never passed to prompt/runtime code — that consumes the
+ * resolved GoalSettings below.
+ */
+export interface GoalSettingsLayer extends GoalSettingsResolvedShape {}
+
+/**
+ * Fully resolved runtime settings (defaults filled). Exported as an alias for
+ * compatibility: all existing consumers keep importing GoalSettings.
+ */
+export interface ResolvedGoalSettingsShape extends GoalSettingsResolvedShape {
+	/** Issue #26: resolved opt-in blocker Oracle configuration. */
+	oracle?: ResolvedGoalOracleSettings;
+}
+
+export type ResolvedGoalSettings = ResolvedGoalSettingsShape;
+
+/** Compatibility alias: runtime code keeps importing GoalSettings. */
+export type GoalSettings = ResolvedGoalSettings;
 
 export const PI_GOAL_SETTINGS_FILE_ENV = "PI_GOAL_SETTINGS_FILE";
-
-/**
- * mtime+size-keyed cache for the settings file (P1-1): loadGoalSettings is on
- * the per-turn hot path (before_agent_start, queueContinuation, tool gates,
- * widget render) and previously sync-read the file every call.
- *
- * NAF (2026-08-06): steady-state loads are now ZERO-op — the cache is served
- * without any stat. External (non-extension) edits to the settings file go
- * stale mid-session; every extension write (saveGoalSettingsFileConfig)
- * invalidates the entry it wrote, so extension-mediated changes are always
- * observed. Documented nuance in the naf spec PRODUCT.md.
- */
-interface SettingsFileCacheEntry {
-	/** Missing/malformed file: cached so repeated loads are zero-op too. */
-	missing?: boolean;
-	config?: GoalSettings;
-}
-
-const settingsFileCache = new Map<string, SettingsFileCacheEntry>();
-
-/**
- * Session boundary (session_start / resume): drop the zero-op settings cache
- * so a new session always reads the settings file fresh from disk.
- */
-export function invalidateGoalSettingsCache(): void {
-	settingsFileCache.clear();
-}
+export const PI_GOAL_GLOBAL_SETTINGS_FILE_ENV = "PI_GOAL_GLOBAL_SETTINGS_FILE";
 
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
-const ALLOWED_SETTINGS_KEYS = new Set([
-	"disableTasks",
-	"disableContracts",
-	"subtaskDepth",
-	"provider",
-	"model",
-	"thinkingLevel",
-	"thinking_level",
-	"auditorAgent",
-	"disabled",
-	"autoSelectSingleGoal",
-	"auditorProjectResources",
-	"stallTimeoutMinutes",
-	"objectiveMaxChars",
-	"keybindings",
-]);
+// ── pure path resolution ────────────────────────────────────────────────────
 
-const ALLOWED_KEYBINDING_KEYS = new Set(["dashboard"]);
-const ALLOWED_DASHBOARD_KEYBINDING_KEYS = new Set(["toggleExpand", "scrollUp", "scrollDown"]);
+function asNonEmptyString(value: unknown): string | undefined {
+	return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/** Resolve the pi agent dir honoring PI_CODING_AGENT_DIR (absolute or ~-relative to homeDir). */
+export function resolveAgentDir(env: NodeJS.ProcessEnv = process.env, homeDir: string = os.homedir()): string {
+	const override = asNonEmptyString(env.PI_CODING_AGENT_DIR);
+	if (override) {
+		return path.isAbsolute(override) ? path.normalize(override) : path.resolve(homeDir, override);
+	}
+	return path.join(homeDir, ".pi", "agent");
+}
 
 /**
- * Resolve the path to the unified settings file.
- * Uses `PI_GOAL_SETTINGS_FILE` env var if set (relative to cwd or absolute).
- * Otherwise defaults to `.pi/pi-goal-x-settings.json`.
+ * Global settings path: PI_GOAL_GLOBAL_SETTINGS_FILE if set (absolute or
+ * relative to homeDir), else <agentDir>/pi-goal-x-settings.json.
+ */
+export function goalGlobalSettingsPath(env: NodeJS.ProcessEnv = process.env, homeDir: string = os.homedir()): string {
+	const override = asNonEmptyString(env[PI_GOAL_GLOBAL_SETTINGS_FILE_ENV]);
+	if (override) {
+		return path.isAbsolute(override) ? path.normalize(override) : path.resolve(homeDir, override);
+	}
+	return path.join(resolveAgentDir(env, homeDir), "pi-goal-x-settings.json");
+}
+
+/**
+ * Project settings path: PI_GOAL_SETTINGS_FILE if set (absolute or relative
+ * to cwd), else <cwd>/.pi/pi-goal-x-settings.json.
  */
 export function goalSettingsPath(cwd: string, env: NodeJS.ProcessEnv = process.env): string {
 	const override = asNonEmptyString(env[PI_GOAL_SETTINGS_FILE_ENV]);
@@ -151,9 +211,57 @@ export function goalSettingsPath(cwd: string, env: NodeJS.ProcessEnv = process.e
 	return path.join(cwd, ".pi", "pi-goal-x-settings.json");
 }
 
-function asNonEmptyString(value: unknown): string | undefined {
-	return typeof value === "string" && value.trim() ? value.trim() : undefined;
+// ── diagnostics ─────────────────────────────────────────────────────────────
+
+export type SettingsScope = "global" | "project";
+
+export type SettingsDiagnosticCode =
+	| "invalid_json"
+	| "not_object"
+	| "unknown_key"
+	| "invalid_value"
+	| "invalid_nested_key";
+
+export interface SettingsDiagnostic {
+	scope: SettingsScope;
+	path: string;
+	settingPath?: string;
+	code: SettingsDiagnosticCode;
+	message: string;
 }
+
+export interface SettingsLayerRead {
+	scope: SettingsScope;
+	path: string;
+	status: "ok" | "missing" | "invalid";
+	layer: GoalSettingsLayer;
+	diagnostics: SettingsDiagnostic[];
+	fingerprint: string;
+}
+
+// ── zero-op cache ───────────────────────────────────────────────────────────
+
+interface SettingsFileCacheEntry {
+	/** Missing/malformed file: cached so repeated loads are zero-op too. */
+	missing?: boolean;
+	read?: SettingsLayerRead;
+}
+
+const settingsFileCache = new Map<string, SettingsFileCacheEntry>();
+
+/**
+ * Session boundary (session_start / resume): drop the zero-op settings cache
+ * so a new session always reads both layers fresh from disk.
+ */
+export function invalidateGoalSettingsCache(): void {
+	settingsFileCache.clear();
+}
+
+function invalidateSettingsCachePath(target: string): void {
+	settingsFileCache.delete(target);
+}
+
+// ── leaf parsers (diagnostic-producing, never throwing) ─────────────────────
 
 function asBool(value: unknown): boolean | undefined {
 	if (value === true || value === "true") return true;
@@ -186,124 +294,828 @@ function asKeybinding(value: unknown): KeyId | undefined {
 	return key as KeyId;
 }
 
-function parseKeybindings(value: unknown): GoalKeybindings | undefined {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-	const record = value as Record<string, unknown>;
-	const unknownKeys = Object.keys(record).filter((key) => !ALLOWED_KEYBINDING_KEYS.has(key));
-	if (unknownKeys.length > 0) throw new Error(`Unknown keybindings key(s): ${unknownKeys.join(", ")}`);
-	const dashboard = record.dashboard;
-	if (!dashboard || typeof dashboard !== "object" || Array.isArray(dashboard)) return undefined;
-	const dashboardRecord = dashboard as Record<string, unknown>;
-	const unknownDashboardKeys = Object.keys(dashboardRecord).filter((key) => !ALLOWED_DASHBOARD_KEYBINDING_KEYS.has(key));
-	if (unknownDashboardKeys.length > 0) throw new Error(`Unknown dashboard keybinding(s): ${unknownDashboardKeys.join(", ")}`);
-	return {
-		dashboard: {
-			toggleExpand: asKeybinding(dashboardRecord.toggleExpand) ?? DEFAULT_GOAL_KEYBINDINGS.dashboard.toggleExpand,
-			scrollUp: asKeybinding(dashboardRecord.scrollUp) ?? DEFAULT_GOAL_KEYBINDINGS.dashboard.scrollUp,
-			scrollDown: asKeybinding(dashboardRecord.scrollDown) ?? DEFAULT_GOAL_KEYBINDINGS.dashboard.scrollDown,
-		},
-	};
-}
-
 function asThinkingLevel(value: unknown): ThinkingLevel | undefined {
 	const text = asNonEmptyString(value);
 	return text && THINKING_LEVELS.has(text) ? text as ThinkingLevel : undefined;
 }
 
+const ALLOWED_SETTINGS_KEYS = new Set([
+	"disableTasks",
+	"disableContracts",
+	"subtaskDepth",
+	"provider",
+	"model",
+	"thinkingLevel",
+	"thinking_level",
+	"auditorAgent",
+	"disabled",
+	"autoSelectSingleGoal",
+	"auditorProjectResources",
+	"stallTimeoutMinutes",
+	"objectiveMaxChars",
+	"keybindings",
+	"hideUnfocusedBanner",
+	"oracle",
+]);
+
+const ALLOWED_ORACLE_KEYS = new Set([
+	"enabled",
+	"provider",
+	"model",
+	"thinkingLevel",
+	"thinking_level",
+	"projectResources",
+	"maxFailedAttemptsPerBlocker",
+]);
+
+const ALLOWED_KEYBINDING_KEYS = new Set(["dashboard"]);
+const ALLOWED_DASHBOARD_KEYBINDING_KEYS = new Set(["toggleExpand", "scrollUp", "scrollDown"]);
+
 /**
- * Parse raw (deserialized JSON) into a GoalSettings object.
- * Rejects unknown keys (additionalProperties: false semantics).
+ * Parse raw JSON content into a sparse layer plus diagnostics. Unknown keys
+ * and invalid values produce diagnostics; they never erase valid known keys
+ * in the same file, and this never throws for content problems.
+ */
+export function parseSettingsLayer(
+	raw: unknown,
+	scope: SettingsScope,
+	filePath: string,
+): { layer: GoalSettingsLayer; diagnostics: SettingsDiagnostic[] } {
+	const diagnostics: SettingsDiagnostic[] = [];
+	const diagnostic = (
+		code: SettingsDiagnosticCode,
+		message: string,
+		settingPath?: string,
+	): SettingsDiagnostic => ({ scope, path: filePath, settingPath, code, message });
+
+	if (raw === null || raw === undefined) return { layer: {}, diagnostics };
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+		diagnostics.push(diagnostic("not_object", "settings file must contain a JSON object"));
+		return { layer: {}, diagnostics };
+	}
+	const record = raw as Record<string, unknown>;
+	const layer: GoalSettingsLayer = {};
+
+	for (const [key, value] of Object.entries(record)) {
+		switch (key) {
+			case "disableTasks":
+			case "disableContracts":
+			case "disabled":
+			case "autoSelectSingleGoal":
+			case "auditorProjectResources":
+			case "hideUnfocusedBanner": {
+				const parsed = asBool(value);
+				if (parsed === undefined) {
+					if (value !== undefined) diagnostics.push(diagnostic("invalid_value", `${key} must be true or false`, key));
+				} else {
+					layer[key] = parsed;
+				}
+				break;
+			}
+			case "subtaskDepth": {
+				const parsed = asPositiveInt(value);
+				if (parsed === undefined) diagnostics.push(diagnostic("invalid_value", `${key} must be an integer >= 1`, key));
+				else layer.subtaskDepth = parsed;
+				break;
+			}
+			case "stallTimeoutMinutes":
+			case "objectiveMaxChars": {
+				const parsed = asNonNegativeInt(value);
+				if (parsed === undefined) diagnostics.push(diagnostic("invalid_value", `${key} must be an integer >= 0`, key));
+				else layer[key] = parsed;
+				break;
+			}
+			case "provider":
+			case "model":
+			case "auditorAgent": {
+				const parsed = asNonEmptyString(value);
+				if (parsed === undefined) diagnostics.push(diagnostic("invalid_value", `${key} must be a non-empty string`, key));
+				else layer[key] = parsed;
+				break;
+			}
+			case "thinkingLevel":
+			case "thinking_level": {
+				const parsed = asThinkingLevel(value);
+				if (parsed === undefined) {
+					diagnostics.push(diagnostic("invalid_value", `${key} must be one of: ${[...THINKING_LEVELS].join(", ")}`, key));
+				} else {
+					layer.thinkingLevel = parsed;
+				}
+				break;
+			}
+			case "keybindings": {
+				if (!value || typeof value !== "object" || Array.isArray(value)) {
+					diagnostics.push(diagnostic("invalid_nested_key", "keybindings must be an object", key));
+					break;
+				}
+				const kbRecord = value as Record<string, unknown>;
+				const sparse: GoalKeybindingsLayer = {};
+				for (const [kbKey, kbValue] of Object.entries(kbRecord)) {
+					if (!ALLOWED_KEYBINDING_KEYS.has(kbKey)) {
+						diagnostics.push(diagnostic("unknown_key", `unknown keybindings key: ${kbKey}`, `keybindings.${kbKey}`));
+						continue;
+					}
+					if (kbKey !== "dashboard") continue;
+					if (!kbValue || typeof kbValue !== "object" || Array.isArray(kbValue)) {
+						diagnostics.push(diagnostic("invalid_nested_key", "keybindings.dashboard must be an object", "keybindings.dashboard"));
+						continue;
+					}
+					const dash: GoalDashboardKeybindingsLayer = {};
+					for (const [dashKey, dashValue] of Object.entries(kbValue as Record<string, unknown>)) {
+						if (!ALLOWED_DASHBOARD_KEYBINDING_KEYS.has(dashKey)) {
+							diagnostics.push(diagnostic("unknown_key", `unknown dashboard keybinding: ${dashKey}`, `keybindings.dashboard.${dashKey}`));
+							continue;
+						}
+						const bound = asKeybinding(dashValue);
+						if (bound === undefined) {
+							diagnostics.push(diagnostic("invalid_value", `${dashKey} must be a non-empty key id`, `keybindings.dashboard.${dashKey}`));
+							continue;
+						}
+						dash[dashKey as keyof GoalDashboardKeybindingsLayer] = bound;
+					}
+					sparse.dashboard = dash;
+				}
+				layer.keybindings = sparse as unknown as GoalKeybindings;
+				break;
+			}
+			case "oracle": {
+				if (!value || typeof value !== "object" || Array.isArray(value)) {
+					diagnostics.push(diagnostic("invalid_nested_key", "oracle must be an object", key));
+					break;
+				}
+				const oracleRecord = value as Record<string, unknown>;
+				const oracle: GoalOracleSettingsLayer = {};
+				for (const [oKey, oValue] of Object.entries(oracleRecord)) {
+					if (!ALLOWED_ORACLE_KEYS.has(oKey)) {
+						diagnostics.push(diagnostic("unknown_key", `unknown oracle key: ${oKey}`, `oracle.${oKey}`));
+						continue;
+					}
+					switch (oKey) {
+						case "enabled":
+						case "projectResources": {
+							const parsed = asBool(oValue);
+							if (parsed === undefined) diagnostics.push(diagnostic("invalid_value", `oracle.${oKey} must be true or false`, `oracle.${oKey}`));
+							else oracle[oKey] = parsed;
+							break;
+						}
+						case "provider":
+						case "model": {
+							const parsed = asNonEmptyString(oValue);
+							if (parsed === undefined) diagnostics.push(diagnostic("invalid_value", `oracle.${oKey} must be a non-empty string`, `oracle.${oKey}`));
+							else oracle[oKey] = parsed;
+							break;
+						}
+						case "thinkingLevel":
+						case "thinking_level": {
+							const parsed = asThinkingLevel(oValue);
+							if (parsed === undefined) diagnostics.push(diagnostic("invalid_value", `oracle.${oKey} must be one of: ${[...THINKING_LEVELS].join(", ")}`, `oracle.${oKey}`));
+							else oracle.thinkingLevel = parsed;
+							break;
+						}
+						case "maxFailedAttemptsPerBlocker": {
+							const parsed = asPositiveInt(oValue);
+							if (parsed === undefined || parsed > 3) {
+								diagnostics.push(diagnostic("invalid_value", "oracle.maxFailedAttemptsPerBlocker must be an integer between 1 and 3", `oracle.${oKey}`));
+							} else {
+								oracle.maxFailedAttemptsPerBlocker = parsed;
+							}
+							break;
+						}
+					}
+				}
+				layer.oracle = oracle;
+				break;
+			}
+			default:
+				diagnostics.push(diagnostic("unknown_key", `unknown settings key: ${key}`, key));
+				break;
+		}
+	}
+	return { layer, diagnostics };
+}
+
+/**
+ * Legacy strict parse: throws on unknown keys. Kept for callers that want
+ * fail-closed parsing of a whole known-shape object (e.g. tests); layered
+ * loading uses parseSettingsLayer instead.
  */
 export function parseGoalSettings(raw: unknown): GoalSettings {
-	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
-	const record = raw as Record<string, unknown>;
-	const unknownKeys = Object.keys(record).filter((k) => !ALLOWED_SETTINGS_KEYS.has(k));
-	if (unknownKeys.length > 0) {
-		throw new Error(`Unknown pi-goal-x-settings.json key(s): ${unknownKeys.join(", ")}`);
-	}
-	const settings: GoalSettings = {};
-	const disableTasks = asBool(record.disableTasks);
-	const disableContracts = asBool(record.disableContracts);
-	const subtaskDepth = asPositiveInt(record.subtaskDepth);
-	const provider = asNonEmptyString(record.provider);
-	const model = asNonEmptyString(record.model);
-	const thinkingLevel = asThinkingLevel(record.thinkingLevel ?? record.thinking_level);
-	const auditorAgent = asNonEmptyString(record.auditorAgent);
-	if (disableTasks !== undefined) settings.disableTasks = disableTasks;
-	if (disableContracts !== undefined) settings.disableContracts = disableContracts;
-	if (subtaskDepth !== undefined) settings.subtaskDepth = subtaskDepth;
-	if (provider !== undefined) settings.provider = provider;
-	if (model !== undefined) settings.model = model;
-	if (thinkingLevel !== undefined) settings.thinkingLevel = thinkingLevel;
-	if (auditorAgent !== undefined) settings.auditorAgent = auditorAgent;
-	if (record.disabled === true || record.disabled === "true") settings.disabled = true;
-	if (record.autoSelectSingleGoal === true || record.autoSelectSingleGoal === "true") settings.autoSelectSingleGoal = true;
-	if (record.auditorProjectResources === true || record.auditorProjectResources === "true") settings.auditorProjectResources = true;
-	const stallTimeoutMinutes = asPositiveInt(record.stallTimeoutMinutes);
-	if (stallTimeoutMinutes !== undefined) settings.stallTimeoutMinutes = stallTimeoutMinutes;
-	const objectiveMaxChars = asNonNegativeInt(record.objectiveMaxChars);
-	if (objectiveMaxChars !== undefined) settings.objectiveMaxChars = objectiveMaxChars;
-	const keybindings = parseKeybindings(record.keybindings);
-	if (keybindings) settings.keybindings = keybindings;
-	return settings;
+	const { layer, diagnostics } = parseSettingsLayer(raw, "project", "(inline)");
+	const unknown = diagnostics
+		.filter((d) => d.code === "unknown_key" && d.settingPath && !d.settingPath.includes("."))
+		.map((d) => d.settingPath!);
+	if (unknown.length > 0) throw new Error(`Unknown pi-goal-x-settings.json key(s): ${unknown.join(", ")}`);
+	return layer as GoalSettings;
 }
 
-/**
- * Load settings from the file on disk. Returns {} if file missing or invalid.
- * Zero-op session cache: the resolved path is read once per process/session
- * (and after every extension save); steady-state loads do no fs ops.
- */
-export function loadGoalSettingsFileConfig(cwd: string, env?: NodeJS.ProcessEnv): GoalSettings {
-	const configPath = goalSettingsPath(cwd, env);
-	const cached = settingsFileCache.get(configPath);
-	if (cached) return cached.missing ? {} : (cached.config ?? {});
-	let config: GoalSettings;
+// ── layer reads (cache-served, zero-op steady state) ───────────────────────
+
+function fingerprintOf(text: string): string {
+	// Cheap stable fingerprint: length + simple rolling sum (not security).
+	let hash = 2166136261;
+	for (let i = 0; i < text.length; i += 1) {
+		hash ^= text.charCodeAt(i);
+		hash = Math.imul(hash, 16777619);
+	}
+	return `${text.length}:${(hash >>> 0).toString(16)}`;
+}
+
+function statusFor(diagnostics: SettingsDiagnostic[], hadContent: boolean): "ok" | "missing" | "invalid" {
+	if (diagnostics.some((d) => d.code === "invalid_json" || d.code === "not_object")) return "invalid";
+	if (!hadContent) return "missing";
+	return diagnostics.length > 0 ? "invalid" : "ok";
+}
+
+function readSettingsLayerFresh(target: string, scope: SettingsScope): SettingsLayerRead {
+	let rawText: string | undefined;
 	try {
-		config = parseGoalSettings(JSON.parse(fs.readFileSync(configPath, "utf8")));
+		rawText = fs.readFileSync(target, "utf8");
 	} catch {
-		// missing or malformed — cache the empty result so repeated loads are zero-op
-		settingsFileCache.set(configPath, { missing: true });
-		return {};
+		const read: SettingsLayerRead = {
+			scope,
+			path: target,
+			status: "missing",
+			layer: {},
+			diagnostics: [],
+			fingerprint: "missing",
+		};
+		settingsFileCache.set(target, { read });
+		return read;
 	}
-	settingsFileCache.set(configPath, { config });
-	return config;
+	let parsed: unknown;
+	let diagnostics: SettingsDiagnostic[] = [];
+	let layer: GoalSettingsLayer = {};
+	try {
+		parsed = JSON.parse(rawText);
+	} catch {
+		const read: SettingsLayerRead = {
+			scope,
+			path: target,
+			status: "invalid",
+			layer: {},
+			diagnostics: [{ scope, path: target, code: "invalid_json", message: "settings file is not valid JSON" }],
+			fingerprint: fingerprintOf(rawText),
+		};
+		settingsFileCache.set(target, { read });
+		return read;
+	}
+	const result = parseSettingsLayer(parsed, scope, target);
+	layer = result.layer;
+	diagnostics = result.diagnostics;
+	const read: SettingsLayerRead = {
+		scope,
+		path: target,
+		status: statusFor(diagnostics, rawText.trim().length > 0),
+		layer,
+		diagnostics,
+		fingerprint: fingerprintOf(rawText),
+	};
+	settingsFileCache.set(target, { read });
+	return read;
+}
+
+/** Cache-served layer read (zero-op in steady state). */
+export function readSettingsLayer(target: string, scope: SettingsScope): SettingsLayerRead {
+	const cached = settingsFileCache.get(target);
+	if (cached?.read) return cached.read;
+	if (cached?.missing) {
+		return { scope, path: target, status: "missing", layer: {}, diagnostics: [], fingerprint: "missing" };
+	}
+	return readSettingsLayerFresh(target, scope);
+}
+
+/** Load just one layer's sparse config (compat helper over readSettingsLayer). */
+export function loadGoalSettingsFileConfig(cwd: string, env: NodeJS.ProcessEnv = process.env): GoalSettings {
+	return readSettingsLayer(goalSettingsPath(cwd, env), "project").layer as GoalSettings;
+}
+
+// ── resolution with provenance ──────────────────────────────────────────────
+
+export type SettingsSource = "environment" | "project" | "global" | "default";
+
+export interface ResolvedSetting<T> {
+	value: T;
+	source: SettingsSource;
+	envVar?: string;
+}
+
+export interface SettingsSnapshot {
+	global: SettingsLayerRead;
+	project: SettingsLayerRead;
+	value: ResolvedGoalSettings;
+	provenance: Map<string, ResolvedSetting<unknown>>;
+	diagnostics: SettingsDiagnostic[];
+}
+
+function resolveLeaf<T>(args: {
+	envValue?: T;
+	projectValue?: T;
+	globalValue?: T;
+	defaultValue: T;
+	envVar?: string;
+}): ResolvedSetting<T> {
+	if (args.envValue !== undefined) {
+		return { value: args.envValue, source: "environment", envVar: args.envVar };
+	}
+	if (args.projectValue !== undefined) return { value: args.projectValue, source: "project" };
+	if (args.globalValue !== undefined) return { value: args.globalValue, source: "global" };
+	return { value: args.defaultValue, source: "default" };
+}
+
+function pathKey(...parts: Array<string | undefined>): string {
+	return parts.filter((p) => p !== undefined).join(".");
 }
 
 /**
- * Load settings with env var overrides.
- * Env vars take precedence over file config.
- * Default: all flags false/undefined (features enabled, default model).
+ * Resolve both layers + env into one snapshot with per-leaf provenance.
+ * Nested keybindings resolve leaf-by-leaf from the SPARSE layers.
  */
-export function loadGoalSettings(cwd: string, env: NodeJS.ProcessEnv = process.env): GoalSettings {
-	const fileConfig = loadGoalSettingsFileConfig(cwd, env);
+export function loadSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv = process.env): SettingsSnapshot {
+	const globalPath = goalGlobalSettingsPath(env);
+	const projectPath = goalSettingsPath(cwd, env);
+	const global = readSettingsLayer(globalPath, "global");
+	const project = readSettingsLayer(projectPath, "project");
+
+	const provenance = new Map<string, ResolvedSetting<unknown>>();
+	const track = <T>(key: string, resolved: ResolvedSetting<T>): T => {
+		provenance.set(key, resolved as ResolvedSetting<unknown>);
+		return resolved.value;
+	};
+
+	const envBool = (name: string): boolean | undefined =>
+		asBool(env[name]);
+	const envInt = (name: string): number | undefined =>
+		asNonNegativeInt(env[name]);
+
+	const disableTasks = track("disableTasks", resolveLeaf<boolean>({
+		envValue: envBool("PI_GOAL_DISABLE_TASKS"),
+		projectValue: project.layer.disableTasks,
+		globalValue: global.layer.disableTasks,
+		defaultValue: false,
+		envVar: "PI_GOAL_DISABLE_TASKS",
+	}));
+	const disableContracts = track("disableContracts", resolveLeaf<boolean>({
+		envValue: envBool("PI_GOAL_DISABLE_CONTRACTS"),
+		projectValue: project.layer.disableContracts,
+		globalValue: global.layer.disableContracts,
+		defaultValue: false,
+		envVar: "PI_GOAL_DISABLE_CONTRACTS",
+	}));
+	const subtaskDepth = track("subtaskDepth", resolveLeaf<number>({
+		projectValue: project.layer.subtaskDepth,
+		globalValue: global.layer.subtaskDepth,
+		defaultValue: 1,
+	}));
+	const provider = track("provider", resolveLeaf<string>({
+		projectValue: project.layer.provider,
+		globalValue: global.layer.provider,
+		defaultValue: undefined as unknown as string,
+	}));
+	const model = track("model", resolveLeaf<string>({
+		projectValue: project.layer.model,
+		globalValue: global.layer.model,
+		defaultValue: undefined as unknown as string,
+	}));
+	const thinkingLevel = track("thinkingLevel", resolveLeaf<ThinkingLevel>({
+		projectValue: project.layer.thinkingLevel,
+		globalValue: global.layer.thinkingLevel,
+		defaultValue: undefined as unknown as ThinkingLevel,
+	}));
+	const auditorAgent = track("auditorAgent", resolveLeaf<string>({
+		projectValue: project.layer.auditorAgent,
+		globalValue: global.layer.auditorAgent,
+		defaultValue: DEFAULT_AUDITOR_AGENT,
+	}));
+	const disabled = track("disabled", resolveLeaf<boolean>({
+		projectValue: project.layer.disabled,
+		globalValue: global.layer.disabled,
+		defaultValue: false,
+	}));
+	const autoSelectSingleGoal = track("autoSelectSingleGoal", resolveLeaf<boolean>({
+		projectValue: project.layer.autoSelectSingleGoal,
+		globalValue: global.layer.autoSelectSingleGoal,
+		defaultValue: false,
+	}));
+	const auditorProjectResources = track("auditorProjectResources", resolveLeaf<boolean>({
+		projectValue: project.layer.auditorProjectResources,
+		globalValue: global.layer.auditorProjectResources,
+		defaultValue: false,
+	}));
+	const hideUnfocusedBanner = track("hideUnfocusedBanner", resolveLeaf<boolean>({
+		projectValue: project.layer.hideUnfocusedBanner,
+		globalValue: global.layer.hideUnfocusedBanner,
+		defaultValue: false,
+	}));
+	// Issue #26: Oracle leaves resolve per leaf like every other setting.
+	const oracleEnabled = track("oracle.enabled", resolveLeaf<boolean>({
+		projectValue: project.layer.oracle?.enabled,
+		globalValue: global.layer.oracle?.enabled,
+		defaultValue: false,
+	}));
+	const oracleProvider = track("oracle.provider", resolveLeaf<string>({
+		projectValue: project.layer.oracle?.provider,
+		globalValue: global.layer.oracle?.provider,
+		defaultValue: undefined as unknown as string,
+	}));
+	const oracleModel = track("oracle.model", resolveLeaf<string>({
+		projectValue: project.layer.oracle?.model,
+		globalValue: global.layer.oracle?.model,
+		defaultValue: undefined as unknown as string,
+	}));
+	const oracleThinkingLevel = track("oracle.thinkingLevel", resolveLeaf<ThinkingLevel>({
+		projectValue: project.layer.oracle?.thinkingLevel,
+		globalValue: global.layer.oracle?.thinkingLevel,
+		defaultValue: undefined as unknown as ThinkingLevel,
+	}));
+	const oracleProjectResources = track("oracle.projectResources", resolveLeaf<boolean>({
+		projectValue: project.layer.oracle?.projectResources,
+		globalValue: global.layer.oracle?.projectResources,
+		defaultValue: false,
+	}));
+	const oracleMaxFailedAttemptsPerBlocker = track("oracle.maxFailedAttemptsPerBlocker", resolveLeaf<number>({
+		projectValue: project.layer.oracle?.maxFailedAttemptsPerBlocker,
+		globalValue: global.layer.oracle?.maxFailedAttemptsPerBlocker,
+		defaultValue: 2,
+	}));
+	const stallTimeoutMinutes = track("stallTimeoutMinutes", resolveLeaf<number>({
+		projectValue: project.layer.stallTimeoutMinutes,
+		globalValue: global.layer.stallTimeoutMinutes,
+		defaultValue: 0,
+	}));
+	const objectiveMaxChars = track("objectiveMaxChars", resolveLeaf<number>({
+		envValue: envInt("PI_GOAL_OBJECTIVE_MAX_CHARS"),
+		projectValue: project.layer.objectiveMaxChars,
+		globalValue: global.layer.objectiveMaxChars,
+		defaultValue: 0,
+		envVar: "PI_GOAL_OBJECTIVE_MAX_CHARS",
+	}));
+
+	const keybindings: GoalKeybindings = {
+		dashboard: {
+			toggleExpand: track(pathKey("keybindings", "dashboard", "toggleExpand"), resolveLeaf<KeyId>({
+				projectValue: project.layer.keybindings?.dashboard?.toggleExpand,
+				globalValue: global.layer.keybindings?.dashboard?.toggleExpand,
+				defaultValue: DEFAULT_GOAL_KEYBINDINGS.dashboard.toggleExpand,
+			})),
+			scrollUp: track(pathKey("keybindings", "dashboard", "scrollUp"), resolveLeaf<KeyId>({
+				projectValue: project.layer.keybindings?.dashboard?.scrollUp,
+				globalValue: global.layer.keybindings?.dashboard?.scrollUp,
+				defaultValue: DEFAULT_GOAL_KEYBINDINGS.dashboard.scrollUp,
+			})),
+			scrollDown: track(pathKey("keybindings", "dashboard", "scrollDown"), resolveLeaf<KeyId>({
+				projectValue: project.layer.keybindings?.dashboard?.scrollDown,
+				globalValue: global.layer.keybindings?.dashboard?.scrollDown,
+				defaultValue: DEFAULT_GOAL_KEYBINDINGS.dashboard.scrollDown,
+			})),
+		},
+	};
+
+	const value: ResolvedGoalSettings = {
+		disableTasks,
+		disableContracts,
+		subtaskDepth,
+		...(provider ? { provider } : {}),
+		...(model ? { model } : {}),
+		...(thinkingLevel ? { thinkingLevel } : {}),
+		auditorAgent,
+		disabled,
+		autoSelectSingleGoal,
+		auditorProjectResources,
+		hideUnfocusedBanner,
+		stallTimeoutMinutes,
+		objectiveMaxChars,
+		keybindings,
+		oracle: {
+			enabled: oracleEnabled,
+			...(oracleProvider ? { provider: oracleProvider } : {}),
+			...(oracleModel ? { model: oracleModel } : {}),
+			...(oracleThinkingLevel ? { thinkingLevel: oracleThinkingLevel } : {}),
+			projectResources: oracleProjectResources,
+			maxFailedAttemptsPerBlocker: oracleMaxFailedAttemptsPerBlocker,
+		},
+	};
+
 	return {
-		disableTasks: asBool(env.PI_GOAL_DISABLE_TASKS) ?? fileConfig.disableTasks ?? false,
-		disableContracts: asBool(env.PI_GOAL_DISABLE_CONTRACTS) ?? fileConfig.disableContracts ?? false,
-		subtaskDepth: fileConfig.subtaskDepth ?? 1,
-		provider: fileConfig.provider,
-		model: fileConfig.model,
-		thinkingLevel: fileConfig.thinkingLevel,
-		auditorAgent: fileConfig.auditorAgent ?? DEFAULT_AUDITOR_AGENT,
-		disabled: fileConfig.disabled,
-		autoSelectSingleGoal: fileConfig.autoSelectSingleGoal ?? false,
-		auditorProjectResources: fileConfig.auditorProjectResources ?? false,
-		stallTimeoutMinutes: fileConfig.stallTimeoutMinutes,
-		objectiveMaxChars: asNonNegativeInt(env.PI_GOAL_OBJECTIVE_MAX_CHARS) ?? fileConfig.objectiveMaxChars,
-		keybindings: fileConfig.keybindings ?? DEFAULT_GOAL_KEYBINDINGS,
+		global,
+		project,
+		value,
+		provenance,
+		diagnostics: [...global.diagnostics, ...project.diagnostics],
 	};
 }
 
 /**
- * Save settings to the unified settings file on disk.
- * Persists only non-default values using the canonical key names.
+ * Load settings with layered resolution:
+ * environment > project > global > defaults.
  */
+export function loadGoalSettings(cwd: string, env: NodeJS.ProcessEnv = process.env): GoalSettings {
+	return loadSettingsSnapshot(cwd, env).value as GoalSettings;
+}
+
+// ── conflict-safe scoped mutation ───────────────────────────────────────────
+
+export type SettingsMutation =
+	| { op: "set"; path: readonly string[]; value: unknown }
+	| { op: "unset"; path: readonly string[] };
+
+export interface MutateSettingsInput {
+	scope: SettingsScope;
+	cwd: string;
+	env?: NodeJS.ProcessEnv;
+	mutation: SettingsMutation;
+}
+
+export class SettingsMutationError extends Error {
+	readonly diagnostics?: SettingsDiagnostic[];
+
+	constructor(message: string, diagnostics?: SettingsDiagnostic[]) {
+		super(message);
+		this.name = "SettingsMutationError";
+		this.diagnostics = diagnostics;
+	}
+}
+
+function sleepMs(ms: number): void {
+	const buffer = new Int32Array(new SharedArrayBuffer(4));
+	Atomics.wait(buffer, 0, 0, ms);
+}
+
+function pidAlive(pid: number): boolean {
+	if (!Number.isInteger(pid) || pid <= 0) return false;
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (err) {
+		return (err as NodeJS.ErrnoException).code === "EPERM";
+	}
+}
+
+interface PathLock {
+	release(): void;
+}
+
 /**
- * Determine whether the auditor should be enabled by default based on settings.
- * The auditor is enabled by default unless settings.disabled === true.
+ * Generic filesystem path lock (same discipline as the goal lock): atomic
+ * create, bounded retries, stale-TTL/dead-pid recovery. Multiple Pi processes
+ * may edit the same global file concurrently.
  */
+export function acquirePathLock(
+	lockPath: string,
+	opts: { attempts?: number; retryMs?: number; staleTtlMs?: number } = {},
+): PathLock {
+	const attempts = opts.attempts ?? 200;
+	const retryMs = opts.retryMs ?? 5;
+	const ttlMs = opts.staleTtlMs ?? 30_000;
+	fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+	const payload = JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() });
+
+	for (let attempt = 0; attempt < attempts; attempt += 1) {
+		try {
+			fs.writeFileSync(lockPath, payload, { flag: "wx" });
+			let released = false;
+			return {
+				release(): void {
+					if (released) return;
+					released = true;
+					try {
+						fs.unlinkSync(lockPath);
+					} catch {
+						// Already removed by stale recovery elsewhere.
+					}
+				},
+			};
+		} catch (err) {
+			if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+			try {
+				const stat = fs.statSync(lockPath);
+				let pid: number | undefined;
+				try {
+					pid = (JSON.parse(fs.readFileSync(lockPath, "utf8")) as Record<string, unknown>).pid as number | undefined;
+				} catch {
+					pid = undefined;
+				}
+				const stale = Date.now() - stat.mtimeMs > ttlMs || (typeof pid === "number" && !pidAlive(pid));
+				if (stale) {
+					try {
+						fs.unlinkSync(lockPath);
+					} catch {
+						// Someone else recovered it first; retry.
+					}
+					continue;
+				}
+			} catch {
+				// Lock vanished between EEXIST and stat (holder released): brief
+				// backoff so we never busy-spin against the next holder.
+				sleepMs(retryMs);
+				continue;
+			}
+			sleepMs(retryMs);
+		}
+	}
+	throw new SettingsMutationError(`Timed out acquiring the settings lock at ${lockPath}. Another writer may hold it.`);
+}
+
+function refuseSymlinkTarget(target: string): void {
+	try {
+		if (fs.lstatSync(target).isSymbolicLink()) {
+			throw new SettingsMutationError(`refusing symlink settings target: ${target}`);
+		}
+	} catch (err) {
+		if (err instanceof SettingsMutationError) throw err;
+		// Target does not exist yet — fine.
+	}
+}
+
+function atomicWriteJson(target: string, value: unknown, options: { defaultMode: number }): void {
+	const parent = path.dirname(target);
+	fs.mkdirSync(parent, { recursive: true });
+	refuseSymlinkTarget(target);
+
+	let mode = options.defaultMode;
+	try {
+		mode = fs.statSync(target).mode & 0o777;
+	} catch {
+		// New file: keep default mode.
+	}
+
+	const temp = path.join(parent, `.${path.basename(target)}.${process.pid}.${Date.now()}.tmp`);
+	let fd: number | undefined;
+	try {
+		fd = fs.openSync(temp, "wx", mode);
+		fs.writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+		fs.fsyncSync(fd);
+		fs.closeSync(fd);
+		fd = undefined;
+		fs.renameSync(temp, target);
+	} catch (error) {
+		if (fd !== undefined) {
+			try {
+				fs.closeSync(fd);
+			} catch { /* best effort */ }
+		}
+		try {
+			fs.unlinkSync(temp);
+		} catch { /* best effort */ }
+		throw error;
+	}
+	try {
+		fs.fsyncSync(fs.openSync(parent, "r"));
+	} catch { /* directory fsync is platform-dependent; best effort */ }
+}
+
+function applyPathMutation(layer: GoalSettingsLayer, mutation: SettingsMutation): void {
+	if (mutation.path.length === 0) throw new SettingsMutationError("empty settings path");
+	let container: Record<string, unknown> = layer as unknown as Record<string, unknown>;
+	for (let i = 0; i < mutation.path.length - 1; i += 1) {
+		const key = mutation.path[i]!;
+		const next = container[key];
+		if (!next || typeof next !== "object") {
+			if (mutation.op === "unset") return; // nothing to unset
+			container[key] = {};
+		}
+		container = container[key] as Record<string, unknown>;
+	}
+	const last = mutation.path[mutation.path.length - 1]!;
+	// thinkingLevel/thinking_level are accepted aliases on read; writes operate
+	// on BOTH spellings so unset clears hand-edited variants too.
+	if (last === "thinkingLevel" || last === "thinking_level") {
+		if (mutation.op === "set") container.thinkingLevel = mutation.value;
+		else {
+			delete container.thinkingLevel;
+			delete container.thinking_level;
+		}
+		return;
+	}
+	if (mutation.op === "set") container[last] = mutation.value;
+	else delete container[last];
+}
+
+/** Canonicalize the persisted spelling of aliased keys before writing. */
+function canonicalizeAliases(layer: Record<string, unknown>): void {
+	if (layer.thinkingLevel !== undefined) {
+		layer.thinking_level = layer.thinkingLevel;
+		delete layer.thinkingLevel;
+	}
+}
+
+function pruneEmptyObjects(value: unknown): void {
+	for (const key of Object.keys(value as Record<string, unknown>)) {
+		const child = (value as Record<string, unknown>)[key];
+		if (child && typeof child === "object" && !Array.isArray(child)) {
+			pruneEmptyObjects(child);
+			if (Object.keys(child as Record<string, unknown>).length === 0) delete (value as Record<string, unknown>)[key];
+		}
+	}
+}
+
+/**
+ * Apply a scoped mutation under the target's path lock and return a fresh
+ * snapshot. Refuses to overwrite an invalid layer; writes atomically;
+ * invalidates only the affected cache entry.
+ */
+export function mutateSettingsLayer(input: MutateSettingsInput): SettingsSnapshot {
+	const env = input.env ?? process.env;
+	const target = input.scope === "global"
+		? goalGlobalSettingsPath(env)
+		: goalSettingsPath(input.cwd, env);
+	const lock = acquirePathLock(`${target}.lock`);
+
+	try {
+		const current = readSettingsLayerFresh(target, input.scope);
+		if (current.status === "invalid") {
+			throw new SettingsMutationError(
+				`Refusing to overwrite invalid ${input.scope} settings at ${target}`,
+				current.diagnostics,
+			);
+		}
+
+		const next = structuredClone(current.layer) as Record<string, unknown>;
+		applyPathMutation(next as unknown as GoalSettingsLayer, input.mutation);
+		pruneEmptyObjects(next);
+		canonicalizeAliases(next);
+
+		const reparsed = parseSettingsLayer(JSON.parse(JSON.stringify(next)), input.scope, target);
+		if (reparsed.diagnostics.some((d) => d.code === "invalid_value" || d.code === "invalid_nested_key")) {
+			throw new SettingsMutationError(`Mutation produced invalid ${input.scope} settings`, reparsed.diagnostics);
+		}
+
+		atomicWriteJson(target, next, { defaultMode: 0o600 });
+		invalidateSettingsCachePath(target);
+		return loadSettingsSnapshot(input.cwd, env);
+	} finally {
+		lock.release();
+	}
+}
+
+// ── legacy whole-file save (routed through the locked mutation path) ────────
+
+/**
+ * Save settings to the PROJECT file. Kept for compatibility; internally uses
+ * the conflict-safe locked mutation path (replace semantics via unset+set is
+ * not needed here: the whole-object replace happens under the same lock with
+ * a fresh re-read, so no cached stale object is ever written).
+ */
+export function saveGoalSettingsFileConfig(cwd: string, settings: GoalSettings): GoalSettings {
+	const target = goalSettingsPath(cwd);
+	const lock = acquirePathLock(`${target}.lock`);
+	try {
+		// Fresh re-read under the lock: never persist a cached whole object.
+		const current = readSettingsLayerFresh(target, "project");
+		if (current.status === "invalid") {
+			throw new SettingsMutationError(`Refusing to overwrite invalid project settings at ${target}`, current.diagnostics);
+		}
+		const clean = buildPersistedLayer(settings);
+		atomicWriteJson(target, clean, { defaultMode: 0o600 });
+		invalidateSettingsCachePath(target);
+		// Return the normalized runtime shape (thinkingLevel), not the
+		// canonical persisted key (thinking_level).
+		const returned = { ...clean };
+		if (typeof returned.thinking_level === "string") {
+			returned.thinkingLevel = returned.thinking_level as ThinkingLevel;
+			delete returned.thinking_level;
+		}
+		return returned as unknown as GoalSettings;
+	} finally {
+		lock.release();
+	}
+}
+
+/** Canonical persisted form of a resolved/sparse settings object. */
+function buildPersistedLayer(settings: GoalSettings): Record<string, unknown> {
+	const persisted: Record<string, unknown> = {};
+	if (settings.provider) persisted.provider = settings.provider;
+	if (settings.model) persisted.model = settings.model;
+	if (settings.thinkingLevel) persisted.thinking_level = settings.thinkingLevel;
+	if (settings.disabled !== undefined) persisted.disabled = settings.disabled;
+	if (settings.disableTasks !== undefined) persisted.disableTasks = settings.disableTasks;
+	if (settings.disableContracts !== undefined) persisted.disableContracts = settings.disableContracts;
+	if (settings.subtaskDepth !== undefined) persisted.subtaskDepth = settings.subtaskDepth;
+	if (settings.autoSelectSingleGoal !== undefined) persisted.autoSelectSingleGoal = settings.autoSelectSingleGoal;
+	if (settings.auditorProjectResources !== undefined) persisted.auditorProjectResources = settings.auditorProjectResources;
+	if (settings.hideUnfocusedBanner !== undefined) persisted.hideUnfocusedBanner = settings.hideUnfocusedBanner;
+	if ((settings as { oracle?: ResolvedGoalOracleSettings }).oracle) {
+		const o: Record<string, unknown> = {};
+		const so = (settings as { oracle?: ResolvedGoalOracleSettings }).oracle!;
+		if (so.enabled !== undefined) o.enabled = so.enabled;
+		if (so.provider !== undefined) o.provider = so.provider;
+		if (so.model !== undefined) o.model = so.model;
+		if (so.thinkingLevel !== undefined) o.thinking_level = so.thinkingLevel;
+		if (so.projectResources !== undefined) o.projectResources = so.projectResources;
+		if (so.maxFailedAttemptsPerBlocker !== undefined) o.maxFailedAttemptsPerBlocker = so.maxFailedAttemptsPerBlocker;
+		if (Object.keys(o).length > 0) persisted.oracle = o;
+	}
+	if (settings.stallTimeoutMinutes !== undefined) persisted.stallTimeoutMinutes = settings.stallTimeoutMinutes;
+	if (settings.objectiveMaxChars !== undefined) persisted.objectiveMaxChars = settings.objectiveMaxChars;
+	if (settings.keybindings?.dashboard) {
+		persisted.keybindings = { dashboard: { ...settings.keybindings.dashboard } };
+	}
+	return persisted;
+}
+
+// ── reporting ───────────────────────────────────────────────────────────────
+
 /**
  * E2: which env var (if any) overrides a settings key's effective value.
- * Returns the env var name when it is set and affects the key, else null.
  */
 export function envOverrideFor(key: keyof GoalSettings | "settingsFile", env: NodeJS.ProcessEnv = process.env): string | null {
 	if (key === "disableTasks" && env.PI_GOAL_DISABLE_TASKS !== undefined) return "PI_GOAL_DISABLE_TASKS";
@@ -314,38 +1126,40 @@ export function envOverrideFor(key: keyof GoalSettings | "settingsFile", env: No
 }
 
 /**
- * E2: effective-settings report with provenance (env vs file vs default),
- * surfaced by /goal-status.
+ * E2: effective-settings report with per-leaf provenance
+ * (environment > project > global > default), surfaced by /goal-status.
  */
 export function effectiveSettingsReport(cwd: string, env: NodeJS.ProcessEnv = process.env): string[] {
-	const fileConfig = loadGoalSettingsFileConfig(cwd, env);
-	const effective = loadGoalSettings(cwd, env);
+	const snapshot = loadSettingsSnapshot(cwd, env);
 	const lines = ["Settings (provenance):"];
-	const rows: Array<{ key: keyof GoalSettings; label: string; format: (v: GoalSettings) => string }> = [
-		{ key: "autoSelectSingleGoal", label: "autoSelectSingleGoal", format: (v) => (v.autoSelectSingleGoal === true ? "true" : "false") },
-		{ key: "disableContracts", label: "disableContracts", format: (v) => (v.disableContracts === true ? "true" : "false") },
-		{ key: "disableTasks", label: "disableTasks", format: (v) => (v.disableTasks === true ? "true" : "false") },
-		{ key: "subtaskDepth", label: "subtaskDepth", format: (v) => String(v.subtaskDepth ?? 1) },
-		{ key: "disabled", label: "auditor disabled", format: (v) => (v.disabled === true ? "true" : "false") },
-		{ key: "provider", label: "provider", format: (v) => v.provider ?? "(default)" },
-		{ key: "model", label: "model", format: (v) => v.model ?? "(default)" },
-		{ key: "thinkingLevel", label: "thinking_level", format: (v) => v.thinkingLevel ?? "(default)" },
-		{ key: "auditorAgent", label: "auditor agent", format: (v) => v.auditorAgent ?? DEFAULT_AUDITOR_AGENT },
-		{ key: "auditorProjectResources", label: "auditor project resources (deprecated; ignored)", format: (v) => (v.auditorProjectResources === true ? "true" : "false") },
-		{ key: "stallTimeoutMinutes", label: "stall timeout (minutes)", format: (v) => String(v.stallTimeoutMinutes ?? 0) },
-		{ key: "objectiveMaxChars", label: "max objective length (0 = none)", format: (v) => String(v.objectiveMaxChars ?? 0) },
-		{ key: "keybindings", label: "dashboard keybindings", format: (v) => `${v.keybindings?.dashboard.toggleExpand ?? DEFAULT_GOAL_KEYBINDINGS.dashboard.toggleExpand}, ${v.keybindings?.dashboard.scrollUp ?? DEFAULT_GOAL_KEYBINDINGS.dashboard.scrollUp}, ${v.keybindings?.dashboard.scrollDown ?? DEFAULT_GOAL_KEYBINDINGS.dashboard.scrollDown}` },
+	const rows: Array<{ key: string; label: string; format: () => string }> = [
+		{ key: "autoSelectSingleGoal", label: "autoSelectSingleGoal", format: () => String(snapshot.value.autoSelectSingleGoal) },
+		{ key: "disableContracts", label: "disableContracts", format: () => String(snapshot.value.disableContracts) },
+		{ key: "disableTasks", label: "disableTasks", format: () => String(snapshot.value.disableTasks) },
+		{ key: "subtaskDepth", label: "subtaskDepth", format: () => String(snapshot.value.subtaskDepth) },
+		{ key: "disabled", label: "auditor disabled", format: () => String(snapshot.value.disabled) },
+		{ key: "provider", label: "provider", format: () => snapshot.value.provider ?? "(default)" },
+		{ key: "model", label: "model", format: () => snapshot.value.model ?? "(default)" },
+		{ key: "auditorAgent", label: "auditor agent", format: () => snapshot.value.auditorAgent ?? DEFAULT_AUDITOR_AGENT },
+		{ key: "thinkingLevel", label: "thinking_level", format: () => snapshot.value.thinkingLevel ?? "(default)" },
+		{ key: "auditorProjectResources", label: "auditor project resources", format: () => String(snapshot.value.auditorProjectResources) },
+		{ key: "hideUnfocusedBanner", label: "hide unfocused banner", format: () => String(snapshot.value.hideUnfocusedBanner) },
+		{ key: "stallTimeoutMinutes", label: "stall timeout (minutes)", format: () => String(snapshot.value.stallTimeoutMinutes) },
+		{ key: "objectiveMaxChars", label: "max objective length (0 = none)", format: () => String(snapshot.value.objectiveMaxChars) },
+		{ key: "keybindings", label: "dashboard keybindings", format: () => `${snapshot.value.keybindings!.dashboard.toggleExpand}, ${snapshot.value.keybindings!.dashboard.scrollUp}, ${snapshot.value.keybindings!.dashboard.scrollDown}` },
 	];
 	for (const row of rows) {
-		const envVar = envOverrideFor(row.key, env);
-		const value = row.format(effective);
-		const source = envVar ? `env (${envVar})` : row.key in fileConfig ? "file" : "default";
-		lines.push(`  ${row.label}: ${value} (${source})`);
+		const resolved = snapshot.provenance.get(row.key);
+		let source: string;
+		if (resolved?.source === "environment") source = `env (${resolved.envVar})`;
+		else source = resolved?.source ?? "default";
+		lines.push(`  ${row.label}: ${row.format()} (${source})`);
 	}
-	if (Object.prototype.hasOwnProperty.call(fileConfig, "auditorProjectResources")) {
+	if (snapshot.value.auditorProjectResources === true) {
 		lines.push(`  NOTE: ${AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE}`);
 	}
-	lines.push(`  settings file: ${goalSettingsPath(cwd, env)}`);
+	lines.push(`  project settings file: ${snapshot.project.path}`);
+	lines.push(`  global settings file: ${snapshot.global.path}`);
 	const fileOverride = envOverrideFor("settingsFile", env);
 	if (fileOverride) lines.push(`  (settings file overridden by ${fileOverride})`);
 	return lines;
@@ -353,47 +1167,4 @@ export function effectiveSettingsReport(cwd: string, env: NodeJS.ProcessEnv = pr
 
 export function isAuditorEnabledByDefault(settings: GoalSettings): boolean {
 	return settings.disabled !== true;
-}
-
-export function saveGoalSettingsFileConfig(cwd: string, settings: GoalSettings): GoalSettings {
-	const clean: GoalSettings = {};
-	const provider = asNonEmptyString(settings.provider);
-	const model = asNonEmptyString(settings.model);
-	const thinkingLevel = asThinkingLevel(settings.thinkingLevel);
-	const auditorAgent = asNonEmptyString(settings.auditorAgent);
-	const disableTasks = asBool(settings.disableTasks);
-	const disableContracts = asBool(settings.disableContracts);
-	const subtaskDepth = asPositiveInt(settings.subtaskDepth);
-	if (provider) clean.provider = provider;
-	if (model) clean.model = model;
-	if (thinkingLevel) clean.thinkingLevel = thinkingLevel;
-	if (auditorAgent && auditorAgent !== DEFAULT_AUDITOR_AGENT) clean.auditorAgent = auditorAgent;
-	if (settings.disabled === true) clean.disabled = true;
-	if (disableTasks === true) clean.disableTasks = true;
-	if (disableContracts === true) clean.disableContracts = true;
-	if (subtaskDepth !== undefined) clean.subtaskDepth = subtaskDepth;
-	if (settings.autoSelectSingleGoal === true) clean.autoSelectSingleGoal = true;
-	if (settings.auditorProjectResources === true) clean.auditorProjectResources = true;
-	if (settings.stallTimeoutMinutes !== undefined) clean.stallTimeoutMinutes = settings.stallTimeoutMinutes;
-	if (settings.objectiveMaxChars !== undefined) clean.objectiveMaxChars = settings.objectiveMaxChars;
-	if (settings.keybindings) clean.keybindings = parseKeybindings(settings.keybindings);
-	const configPath = goalSettingsPath(cwd);
-	fs.mkdirSync(path.dirname(configPath), { recursive: true });
-	settingsFileCache.delete(configPath);
-	const persisted: Record<string, unknown> = {};
-	if (clean.provider) persisted.provider = clean.provider;
-	if (clean.model) persisted.model = clean.model;
-	if (clean.thinkingLevel) persisted.thinking_level = clean.thinkingLevel;
-	if (clean.auditorAgent) persisted.auditorAgent = clean.auditorAgent;
-	if (clean.disabled) persisted.disabled = true;
-	if (clean.disableTasks) persisted.disableTasks = true;
-	if (clean.disableContracts) persisted.disableContracts = true;
-	if (clean.subtaskDepth !== undefined) persisted.subtaskDepth = clean.subtaskDepth;
-	if (settings.autoSelectSingleGoal === true) persisted.autoSelectSingleGoal = true;
-	if (settings.auditorProjectResources === true) persisted.auditorProjectResources = true;
-	if (clean.stallTimeoutMinutes !== undefined) persisted.stallTimeoutMinutes = clean.stallTimeoutMinutes;
-	if (clean.objectiveMaxChars !== undefined) persisted.objectiveMaxChars = clean.objectiveMaxChars;
-	if (clean.keybindings) persisted.keybindings = clean.keybindings;
-	fs.writeFileSync(configPath, `${JSON.stringify(persisted, null, 2)}\n`, "utf8");
-	return clean;
 }

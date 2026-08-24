@@ -93,7 +93,7 @@ export interface GoalCore {
 	stopAuditAnimation(): void;
 	abortAudit(ctx: ExtensionContext): void;
 	clearContinuationTimer(): void;
-	clearContinuationState(): void;
+	clearContinuationState(resetNetworkErrorBackoff?: boolean): void;
 	clearActiveAccounting(): void;
 	advanceTurnSeq(): void;
 	currentTurnStoppedGoalId(): string | null;
@@ -360,8 +360,8 @@ export function createGoalCore(
 		runtime.clearContinuationTimer();
 	}
 
-	function clearContinuationState(): void {
-		runtime.clearContinuationState();
+	function clearContinuationState(resetNetworkErrorBackoff = true): void {
+		runtime.clearContinuationState(resetNetworkErrorBackoff);
 	}
 
 	function clearActiveAccounting(): void {
@@ -650,6 +650,13 @@ export function createGoalCore(
 			return;
 		}
 		if (!state.goal) {
+			// PR #29: layered hideUnfocusedBanner suppresses BOTH the unfocused
+			// widget and the status hint. Focused dashboards and audit UI are
+			// unaffected; the model-facing [PI GOAL UNFOCUSED] prompt is unchanged.
+			if (loadGoalSettings(ctx.cwd).hideUnfocusedBanner === true) {
+				clearGoalWidget(ctx);
+				return;
+			}
 			ctx.ui.setStatus("goal", `goal: unfocused [${totalOpen} open] - /goal-focus`);
 			if (!widgetRegistered) {
 				ctx.ui.setWidget(

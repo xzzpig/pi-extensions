@@ -902,7 +902,7 @@ test("a tweak confirmation resumes a blocked goal", async () => {
 		await h.sessionStart();
 		await h.commands.get("goal-direct")!.handler("Initial objective", h.ctx);
 		const update = h.tools.get("update_goal")!;
-		const blockedResult = await (update.execute as any)("update-b", { status: "blocked" }, undefined, undefined, h.ctx);
+		const blockedResult = await (update.execute as any)("update-b", { status: "blocked", reason: "test blocker" }, undefined, undefined, h.ctx);
 		assert.ok(blockedResult?.terminate === true, "blocked terminates the turn");
 		assert.equal(firstGoal(cwd).status, "blocked", "goal blocked before the tweak");
 		await h.commands.get("goal-tweak")!.handler("Revise scope", h.ctx);

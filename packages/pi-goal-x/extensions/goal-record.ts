@@ -81,7 +81,24 @@ export interface GoalFocusEntry {
 	reason: GoalFocusReason;
 }
 
-export interface GoalEventDetails {
+/**
+ * Issue #30 v2 checkpoint details: a tiny structured trigger record. Never
+ * contains objective text, task text, verification contracts, budget strings,
+ * or policy text — the authoritative state is injected once per turn by
+ * before_agent_start from goal storage.
+ */
+export interface GoalCheckpointDetailsV2 {
+	version: 2;
+	kind: "checkpoint";
+	goalId: string;
+	status: "active";
+	revision: number;
+	checkpointSeq: number;
+	timestamp: number;
+}
+
+/** Pre-v2 event details (full objective persisted). Read-only legacy shape. */
+export interface LegacyGoalEventDetails {
 	kind: GoalEventKind;
 	goalId: string;
 	status?: GoalStatus;
@@ -92,6 +109,23 @@ export interface GoalEventDetails {
 	/** Legacy-read-only creation mode on historical event entries; no writer emits it today. */
 	focus?: GoalMode;
 }
+
+/** Historical "stale" rewrite of a checkpoint that no longer matches the goal. */
+export interface GoalStaleDetails {
+	kind: "stale";
+	goalId: string;
+	currentGoalId?: string | null;
+	currentStatus?: GoalStatus | null;
+}
+
+/** Everything that can appear in a persisted pi-goal-event entry's details. */
+export type GoalEventEntryDetails = GoalCheckpointDetailsV2 | LegacyGoalEventDetails | GoalStaleDetails;
+
+/**
+ * Legacy normalized renderer shape. Kept as the stable contract for
+ * renderGoalEvent / registerMessageRenderer; v2 entries normalize into it.
+ */
+export type GoalEventDetails = LegacyGoalEventDetails;
 
 export interface GoalCreationConfig {
 	objective: string;

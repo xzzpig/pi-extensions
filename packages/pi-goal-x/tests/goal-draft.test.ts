@@ -39,14 +39,14 @@ test("sisyphusObjectiveSufficient accepts inline and block ordered steps", () =>
 	assert.equal(sisyphusObjectiveSufficient(""), false, "empty objective");
 });
 
-test("goalDraftingPrompt requires the complete goal presentation before proposing", () => {
-	// The agent's pre-proposal message must render the COMPLETE goal — every
-	// section and the full task list — so the user can scroll up and re-read it
-	// while the confirmation dialog is open; omission is forbidden.
+test("goalDraftingPrompt routes the complete presentation through the tool renderer (PR E §57)", () => {
+	// PR F: the structured propose_goal_draft arguments are supplied ONCE and
+	// the tool call renderer is the scrollable complete human presentation.
+	// Duplicating the full proposal in prose is explicitly forbidden.
 	for (const focus of ["goal" as const, "sisyphus" as const]) {
 		const prompt = goalDraftingPrompt("some topic", focus);
-		assert.ok(prompt.includes("write the COMPLETE goal"), `${focus} prompt must require the complete goal in the agent's message`);
-		assert.ok(prompt.includes("Nothing may be omitted from the presented goal"), `${focus} prompt must forbid omission from the presented goal`);
-		assert.ok(prompt.includes("full task list"), `${focus} prompt must require the full task list`);
+		assert.ok(prompt.includes("do NOT duplicate the full proposal in a preceding prose message"), `${focus} prompt must forbid the prose duplication`);
+		assert.ok(prompt.includes("The tool call renderer is the scrollable, complete human presentation"), `${focus} prompt must name the renderer as the complete presentation`);
+		assert.ok(prompt.includes("tasks` parameter of `propose_goal_draft"), `${focus} prompt must still require the full task list via the tool`);
 	}
 });

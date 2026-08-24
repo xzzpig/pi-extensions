@@ -261,7 +261,9 @@ test("get_goal returns the complete stable snapshot", async () => {
 		});
 		await start(h);
 		const get = h.tools.get("get_goal")!;
-		const result = await (get.execute as any)("get-1", {}, undefined, undefined, h.ctx);
+		// PR E: the concise default omits verbose-only sections; pass verbose to
+		// pin the complete stable snapshot.
+		const result = await (get.execute as any)("get-1", { verbose: true }, undefined, undefined, h.ctx);
 		const text = result.content?.[0]?.text ?? "";
 		assert.ok(text.includes("Snapshot goal"), "objective present");
 		assert.ok(text.includes("Status:") && text.includes("running"), "status present");
@@ -271,6 +273,49 @@ test("get_goal returns the complete stable snapshot", async () => {
 		assert.ok(text.includes("Tasks:"), "task summary present");
 		assert.ok(text.includes("Verification contract:"), "contract present");
 		assert.ok(text.includes(`Path: ${written.activePath}`), "path present");
+	} finally {
+		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+	}
+});
+
+// ── PR E §53: concise get_goal default ───────────────────────────────
+
+test("get_goal default is concise; verbose retains full diagnostics", async () => {
+	const now = new Date().toISOString();
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-core-concise-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	const goal = createGoal({ objective: "Concise snapshot goal", autoContinue: true, sisyphus: false }, Date.UTC(2026, 7, 4, 11, 0, 0));
+	goal.verificationContract = "Run npm test (0 failures).";
+	goal.taskList = {
+		tasks: [
+			{ id: "t1", title: "Done task", status: "complete" as const },
+			{ id: "t2", title: "Current task", status: "pending" as const, verificationContract: "prove it" },
+			{ id: "t3", title: "Next up", status: "pending" as const },
+		],
+		blockCompletion: false,
+		proposedAt: now,
+	};
+	goal.currentTaskId = "t2";
+	writeActiveGoalFile({ cwd }, goal);
+	try {
+		const h = createHarness({
+			cwd,
+			sessionEntries: [{ type: "custom", customType: "pi-goal-focus", data: goalFocusDetails(goal.id, "created") }],
+		});
+		await start(h);
+		const get = h.tools.get("get_goal")!;
+		const result = await (get.execute as any)("g-1", {}, undefined, undefined, h.ctx);
+		const text = result.content?.[0]?.text ?? "";
+		assert.ok(text.includes(`Objective: ${goal.objective}`), "full objective kept (explicit state-read tool)");
+		assert.ok(text.includes("Current task: t2 — Current task — contract: prove it"), "current task with contract");
+		assert.ok(text.includes("Next pending: t3 — Next up"), "next pending (distinct from current)");
+		assert.ok(!text.includes("Lifecycle:"), "lifecycle prose omitted from the concise default");
+		assert.ok(!text.includes("Path:"), "paths are verbose-only");
+
+		const verboseResult = await (get.execute as any)("g-2", { verbose: true }, undefined, undefined, h.ctx);
+		const vtext = verboseResult.content?.[0]?.text ?? "";
+		assert.ok(vtext.includes("Lifecycle:"), "verbose keeps lifecycle guidance");
+		assert.ok(vtext.includes("Path:"), "verbose keeps paths");
 	} finally {
 		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
 	}
@@ -341,7 +386,7 @@ test("update_goal(blocked) records a distinct agent-blocked state from active", 
 		const h = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries });
 		await start(h);
 		const update = h.tools.get("update_goal")!;
-		const result = await (update.execute as any)("update-3", { status: "blocked" }, undefined, undefined, h.ctx);
+		const result = await (update.execute as any)("update-3", { status: "blocked", reason: "test blocker" }, undefined, undefined, h.ctx);
 		assert.ok(result.terminate === true, "blocked terminates the turn");
 		const active = activeGoalFiles(f.cwd);
 		assert.equal(active.length, 1, "goal remains in the active dir");
@@ -365,7 +410,7 @@ test("update_goal(blocked) is rejected from a non-active goal", async () => {
 		const h = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries });
 		await start(h);
 		const update = h.tools.get("update_goal")!;
-		const result = await (update.execute as any)("update-4", { status: "blocked" }, undefined, undefined, h.ctx);
+		const result = await (update.execute as any)("update-4", { status: "blocked", reason: "test blocker" }, undefined, undefined, h.ctx);
 		const text = result.content?.[0]?.text ?? "";
 		assert.ok(text.includes("applies only to an active goal"), `blocked must be rejected from paused, got: ${text}`);
 		const active = activeGoalFiles(f.cwd);
@@ -388,7 +433,7 @@ test("update_goal(blocked) surfaces an apply failure instead of claiming success
 		service.apply = () => ({ ok: false, message: "simulated conflict: goal modified by another process" });
 		try {
 			const update = h.tools.get("update_goal")!;
-			const result = await (update.execute as any)("update-3", { status: "blocked" }, undefined, undefined, h.ctx);
+			const result = await (update.execute as any)("update-3", { status: "blocked", reason: "test blocker" }, undefined, undefined, h.ctx);
 			const text = result.content?.[0]?.text ?? "";
 			assert.ok(text.includes("simulated conflict"), `must surface the mutation message, got: ${text}`);
 			assert.ok(text.includes("NOT marked blocked"), `must not claim the goal is blocked, got: ${text}`);

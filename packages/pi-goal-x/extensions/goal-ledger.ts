@@ -28,7 +28,11 @@ export type GoalLedgerEvent =
   | { type: "goal_budget_limited"; goalId: string; budget: number; tokensUsed: number; at: string }
   | { type: "goal_budget_warning"; goalId: string; budget: number; tokensUsed: number; pct: number; at: string }
   | { type: "goal_stalled"; goalId: string; reason: string; at: string }
-  | { type: "goal_blocked"; goalId: string; reason: string; source: "agent" | "system"; at: string };
+  | { type: "goal_blocked"; goalId: string; reason: string; source: "agent" | "system"; at: string }
+  | { type: "oracle_started"; goalId: string; fingerprint: string; provider: string; model: string; thinkingLevel?: string; reason: string; at: string }
+  | { type: "oracle_result"; goalId: string; fingerprint: string; adviceId: string; disposition: "actionable" | "needs_human" | "insufficient_context"; summary: string; recommendedTitle?: string; at: string }
+  | { type: "oracle_failed"; goalId: string; fingerprint: string; attempt: number; errorCode: "config" | "provider" | "aborted" | "invalid_output"; message: string; at: string }
+  | { type: "oracle_followup_attempted"; goalId: string; fingerprint: string; adviceId: string; firstToolName: string; at: string };
 
 export interface GoalLedgerContext {
   cwd: string;
@@ -46,6 +50,8 @@ export interface ReconstructedGoalState {
   latestPauseReason?: string;
   latestPauseSuggestedAction?: string;
   latestAuditorResult?: { verdict: "approved" | "disapproved" | "error"; report: string; at: string };
+  /** Issue #26: bounded latest Oracle disposition for this goal. */
+  latestOracleResult?: { fingerprint: string; adviceId: string; disposition: "actionable" | "needs_human" | "insufficient_context"; summary: string; at: string };
   createdAt?: string;
   completedAt?: string;
   abortedAt?: string;
@@ -647,6 +653,14 @@ function isValidLedgerEvent(value: unknown): value is GoalLedgerEvent {
       return typeof obj.goalId === "string" && typeof obj.reason === "string";
     case "goal_blocked":
       return typeof obj.goalId === "string" && typeof obj.reason === "string" && (obj.source === "agent" || obj.source === "system");
+    case "oracle_started":
+      return typeof obj.goalId === "string" && typeof obj.fingerprint === "string" && typeof obj.provider === "string" && typeof obj.model === "string" && typeof obj.reason === "string" && (obj.thinkingLevel === undefined || typeof obj.thinkingLevel === "string");
+    case "oracle_result":
+      return typeof obj.goalId === "string" && typeof obj.fingerprint === "string" && typeof obj.adviceId === "string" && (obj.disposition === "actionable" || obj.disposition === "needs_human" || obj.disposition === "insufficient_context") && typeof obj.summary === "string";
+    case "oracle_failed":
+      return typeof obj.goalId === "string" && typeof obj.fingerprint === "string" && typeof obj.attempt === "number" && (obj.errorCode === "config" || obj.errorCode === "provider" || obj.errorCode === "aborted" || obj.errorCode === "invalid_output") && typeof obj.message === "string";
+    case "oracle_followup_attempted":
+      return typeof obj.goalId === "string" && typeof obj.fingerprint === "string" && typeof obj.adviceId === "string" && typeof obj.firstToolName === "string";
     default:
       return false;
   }
@@ -699,6 +713,11 @@ function sanitizeEvent(event: GoalLedgerEvent): GoalLedgerEvent {
     case "goal_stalled":
       return { ...event, goalId: safeGoalId(event.goalId) };
     case "goal_blocked":
+      return { ...event, goalId: safeGoalId(event.goalId) };
+    case "oracle_started":
+    case "oracle_result":
+    case "oracle_failed":
+    case "oracle_followup_attempted":
       return { ...event, goalId: safeGoalId(event.goalId) };
     case "goal_unfocused":
       return event;
@@ -836,6 +855,25 @@ function applyLedgerEvents(acc: ReconstructAccumulator, events: GoalLedgerEvent[
         state.abortedAt = event.at;
         terminalGoals.set(event.goalId, state);
         goals.delete(event.goalId);
+        break;
+      }
+      case "oracle_started":
+      case "oracle_failed":
+      case "oracle_followup_attempted": {
+        // Bounded metadata only; no reconstructed state change.
+        break;
+      }
+      case "oracle_result": {
+        const oracleState = goals.get(event.goalId) ?? terminalGoals.get(event.goalId);
+        if (oracleState) {
+          oracleState.latestOracleResult = {
+            fingerprint: event.fingerprint,
+            adviceId: event.adviceId,
+            disposition: event.disposition,
+            summary: event.summary,
+            at: event.at,
+          };
+        }
         break;
       }
     }

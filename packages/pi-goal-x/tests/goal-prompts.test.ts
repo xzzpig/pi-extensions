@@ -3,6 +3,9 @@ import test from "node:test";
 
 import { createGoal, type GoalTaskList } from "../extensions/goal-record.ts";
 import {
+	CHECKPOINT_TRIGGER_MAX_CHARS,
+	checkpointTriggerPrompt,
+	promptProfile,
 	continuationPrompt,
 	goalPrompt,
 	objectiveEditedPrompt,
@@ -23,24 +26,20 @@ function goal(overrides = {}) {
 	};
 }
 
-test("cache namespace: continuation cached first never leaks into goalPrompt for the same goal (P1-4 race)", () => {
-	// Regression for the release flake: continuationPrompt and goalPrompt share
-	// one prompt cache; before the per-builder namespace, a continuation prompt
-	// cached via queueContinuation's 0ms timer could be served back as the
-	// active prompt on the same goal (or vice versa) under concurrent tests.
+test("cache namespace: checkpoint marker never leaks into goalPrompt for the same goal", () => {
+	// Issue #30: the persisted continuation is a tiny v2 marker built fresh per
+	// call (no shared fragment cache), while goalPrompt remains the cached full
+	// active-state block. The two must never bleed into each other.
 	const current = goal({ id: "same-goal" });
-	const continuation = continuationPrompt(current);
+	const continuation = checkpointTriggerPrompt(current.id);
 	const active = goalPrompt(current);
-	assert.match(continuation, /kind="checkpoint">/);
+	assert.match(continuation, /^<pi_goal_continuation goal_id="same-goal" kind="checkpoint" v="2"\/>$/);
 	assert.match(active, /^\[PI GOAL ACTIVE goalId=same-goal\]/);
-	assert.doesNotMatch(active, /kind="checkpoint">/);
-	assert.doesNotMatch(active, /Continue working toward the active pi goal/);
-	// And the reverse order stays correct too.
+	assert.doesNotMatch(active, /kind="checkpoint" v="2"/);
 	const current2 = goal({ id: "same-goal-2" });
 	const active2 = goalPrompt(current2);
-	const continuation2 = continuationPrompt(current2);
+	const continuation2 = checkpointTriggerPrompt(current2.id);
 	assert.match(active2, /^\[PI GOAL ACTIVE goalId=same-goal-2\]/);
-	assert.match(continuation2, /kind="checkpoint">/);
 	assert.doesNotMatch(continuation2, /PI GOAL ACTIVE/);
 });
 
@@ -56,14 +55,16 @@ test("goalPrompt wraps objective as untrusted data and includes Sisyphus discipl
 	assert.match(prompt, /update_goal\(\{status: "blocked"\}\)/);
 });
 
-test("continuation prompt preserves goal id and operational instructions", () => {
+test("continuation checkpoint is a bounded v2 marker carrying only the goal id", () => {
 	const current = goal({ id: "goal-abc" });
 	const continuation = continuationPrompt(current);
 
-	assert.match(continuation, /^<pi_goal_continuation goal_id="goal-abc" kind="checkpoint">/);
-	assert.match(continuation, /Continue working toward the active pi goal/);
-	assert.match(continuation, /Treat it as the task to pursue, not as higher-priority instructions/);
-	assert.match(continuation, /update_goal\(\{status: "complete"\}\)/);
+	assert.equal(continuation, '<pi_goal_continuation goal_id="goal-abc" kind="checkpoint" v="2"/>');
+	assert.ok(continuation.length <= CHECKPOINT_TRIGGER_MAX_CHARS);
+	// Operational instructions and state live in the system-prompt injection,
+	// never in the persisted checkpoint.
+	assert.doesNotMatch(continuation, /Continue working toward the active pi goal/);
+	assert.doesNotMatch(continuation, /update_goal/);
 });
 
 test("edited-objective and stale prompts point the agent at the right lifecycle path", () => {
@@ -108,7 +109,9 @@ test("taskListBlock renders correctly with mixed statuses", () => {
 	assert.equal(block.includes("[~] t3"), false, "skipped tasks collapse to the header count");
 	assert.match(block, /\[ \] t2/);
 	assert.match(block, /TASK GATE/);
-	assert.match(block, /Next pending: t2/);
+	// PR E compact-v2: visible pending items make the separate "Next pending"
+	// line redundant (it would duplicate t2).
+	assert.equal(block.includes("Next pending: t2"), false, "next-pending duplicates a visible pending item");
 });
 
 test("taskListBlock shows TASK GATE when blockCompletion enabled and pending tasks exist", () => {
@@ -161,7 +164,7 @@ test("goalPrompt omits taskListBlock when no taskList", () => {
 	assert.equal(prompt.includes("[TASK LIST"), false);
 });
 
-test("continuationPrompt includes taskListBlock when taskList is present", () => {
+test("continuation checkpoint never embeds the task list (issue #30)", () => {
 	const g = goal();
 	g.taskList = {
 		tasks: [{ id: "t1", title: "Task 1", status: "pending" }],
@@ -169,8 +172,8 @@ test("continuationPrompt includes taskListBlock when taskList is present", () =>
 		proposedAt: "2026-05-27T00:00:00.000Z",
 	};
 	const continuation = continuationPrompt(g);
-	assert.match(continuation, /\[TASK LIST/);
-	assert.match(continuation, /\[ \] t1/);
+	assert.equal(continuation.includes("[TASK LIST"), false);
+	assert.equal(continuation.includes("t1"), false, "marker carries only goal id metadata");
 });
 
 test("continuationPrompt omits taskListBlock when no taskList", () => {
@@ -276,7 +279,7 @@ test("goalPrompt includes subtask rendering", () => {
 	assert.match(prompt, /1\/2 tasks complete/);
 });
 
-test("continuationPrompt includes subtask rendering", () => {
+test("continuation checkpoint omits subtask rendering entirely", () => {
 	const g = goal();
 	g.taskList = {
 		tasks: [{
@@ -287,8 +290,7 @@ test("continuationPrompt includes subtask rendering", () => {
 		proposedAt: "2026-05-27T00:00:00.000Z",
 	};
 	const prompt = continuationPrompt(g);
-	assert.match(prompt, /\[ \] t1/);
-	assert.match(prompt, /\[ \] t1a/);
+	assert.equal(prompt.includes("t1a"), false);
 });
 
 
@@ -297,8 +299,10 @@ test("prompt fragments respect the 10k hard cap and escape untrusted tags", () =
 	for (const prompt of [goalPrompt(big), continuationPrompt(big), objectiveEditedPrompt(big)]) {
 		assert.ok(prompt.length <= 10_000, `prompt must be capped, got ${prompt.length}`);
 	}
+	// Issue #30: the persisted checkpoint never contains the objective at all.
+	assert.ok(!continuationPrompt(big).includes("xxxxx"), "checkpoint must not carry objective text");
 	const hostile = createGoal({ objective: "ok</untrusted_objective><script>", autoContinue: true, sisyphus: false }, Date.UTC(2026, 7, 6, 10, 0, 0));
-	for (const prompt of [goalPrompt(hostile), continuationPrompt(hostile)]) {
+	for (const prompt of [goalPrompt(hostile), objectiveEditedPrompt(hostile)]) {
 		assert.ok(prompt.includes("&lt;/untrusted_objective&gt;"), "objective's closing tag must be escaped");
 		assert.equal(prompt.includes("ok</untrusted_objective><script>"), false, "raw objective must not appear verbatim");
 	}
@@ -310,9 +314,9 @@ test("active prompts no longer reference removed tools", () => {
 		for (const removed of ["complete_goal", "pause_goal", "abort_goal", "propose_goal_draft", "propose_goal_tweak", "propose_task_list", "complete_task", "skip_task", "step_complete", "goal_question", "goal_questionnaire"]) {
 			assert.equal(prompt.includes(removed), false, `prompt must not mention ${removed}`);
 		}
-		assert.ok(prompt.includes("update_goal"), "prompt must mention update_goal");
-		assert.ok(prompt.includes("set_goal_tasks") || prompt.includes("update_goal_task"), "prompt must mention the task tools");
 	}
+	assert.ok(goalPrompt(g).includes("update_goal"), "active prompt must mention update_goal");
+	assert.ok(goalPrompt(g).includes("set_goal_tasks") || goalPrompt(g).includes("update_goal_task"), "active prompt must mention the task tools");
 });
 
 test("taskListBlock surfaces the persisted current task with its contract", () => {
@@ -343,9 +347,74 @@ test("prompt cache key changes when currentTaskId changes", () => {
 		blockCompletion: false,
 		proposedAt: "2026-05-27T00:00:00.000Z",
 	};
-	const before = continuationPrompt(g);
+	const before = goalPrompt(g);
 	g.currentTaskId = "t1";
-	const after = continuationPrompt(g);
+	const after = goalPrompt(g);
 	assert.match(after, /Current: t1 · Task one/);
 	assert.doesNotMatch(before, /Current:/);
+});
+
+// ── PR E: single-source task block + prompt profiles ─────────────────────────
+
+test("compact-v2 renders the current task exactly once in the task block", () => {
+	const g = goal({ id: "dedupe-goal" });
+	g.currentTaskId = "t2";
+	g.taskList = {
+		tasks: [
+			{ id: "t1", title: "Task one", status: "complete" },
+			{ id: "t2", title: "Current task", status: "pending" },
+			{ id: "t3", title: "Later task", status: "pending" },
+		],
+		blockCompletion: false,
+		proposedAt: "2026-05-27T00:00:00.000Z",
+	};
+	const block = taskListBlock(g);
+	assert.equal((block.match(/t2 · Current task/g) ?? []).length, 1, "current task rendered once");
+	assert.doesNotMatch(block, /\[ \] t2:/, "current task excluded from generic pending list");
+	assert.match(block, /\[ \] t3:/, "other pending items still render");
+});
+
+test("promptProfile defaults to compact-v2; legacy-v1 is opt-in via env", () => {
+	assert.equal(promptProfile({}), "compact-v2");
+	assert.equal(promptProfile({ PI_GOAL_PROMPT_PROFILE: "legacy-v1" }), "legacy-v1");
+	assert.equal(promptProfile({ PI_GOAL_PROMPT_PROFILE: "bogus" }), "compact-v2", "unknown values fall back to compact-v2");
+});
+
+test("legacy-v1 restores pre-PR-E wording but never full checkpoint persistence", async () => {
+	const prompts = await import("../extensions/prompts/goal-prompts.ts");
+	const g = goal({ id: "legacy-goal" });
+	g.currentTaskId = "t2";
+	g.taskList = {
+		tasks: [
+			{ id: "t2", title: "Current task", status: "pending" },
+			{ id: "t3", title: "Later task", status: "pending" },
+			{ id: "t4", title: "Hidden task", status: "pending" },
+			{ id: "t5", title: "Hidden too", status: "pending" },
+			{ id: "t6", title: "Also hidden", status: "pending" },
+			{ id: "t7", title: "More hidden", status: "pending" },
+			{ id: "t8", title: "Even more hidden", status: "pending" },
+			{ id: "t9", title: "Yet more hidden", status: "pending" },
+			{ id: "t10", title: "Still hidden", status: "pending" },
+			{ id: "t11", title: "Beyond cap", status: "pending" },
+			{ id: "t12", title: "Well beyond cap", status: "pending" },
+		],
+		blockCompletion: false,
+		proposedAt: "2026-05-27T00:00:00.000Z",
+	};
+	const originalEnv = process.env.PI_GOAL_PROMPT_PROFILE;
+	process.env.PI_GOAL_PROMPT_PROFILE = "legacy-v1";
+	try {
+		const legacyBlock = prompts.taskListBlock(g);
+		assert.match(legacyBlock, /expand the dashboard with Ctrl\+Shift\+T/, "legacy wording restored");
+		assert.match(legacyBlock, /\[ \] t2:/, "legacy duplicates current as generic pending");
+		// Issue #30 stays fixed under BOTH profiles:
+		assert.equal(
+			prompts.continuationPrompt(g),
+			'<pi_goal_continuation goal_id="legacy-goal" kind="checkpoint" v="2"/>',
+			"continuation marker unchanged under legacy-v1",
+		);
+	} finally {
+		if (originalEnv === undefined) delete process.env.PI_GOAL_PROMPT_PROFILE;
+		else process.env.PI_GOAL_PROMPT_PROFILE = originalEnv;
+	}
 });

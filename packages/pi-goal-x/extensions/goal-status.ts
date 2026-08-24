@@ -19,6 +19,7 @@ import {
 	renderCurrentTaskBlock,
 	renderUnfocusedDashboard,
 } from "./widgets/goal-dashboard-renderer.ts";
+import { formatCheckpointHealthReport, type CheckpointHealth } from "./goal-session-health.ts";
 
 /** Fixed rendering width for the notify text (medium layout mode). */
 export const GOAL_STATUS_WIDTH = 78;
@@ -39,6 +40,9 @@ export interface GoalStatusTextOptions {
 	health?: boolean;
 	/** Supplied by the command layer only for the explicit health check. */
 	activeFilePresent?: boolean;
+	/** Issue #30: persisted-checkpoint report for this session (health view only). */
+	checkpointHealth?: CheckpointHealth | null;
+	checkpointSessionFile?: string;
 	/** Effective settings lines with provenance (verbose only). */
 	settingsReport?: string[];
 	width?: number;
@@ -164,6 +168,10 @@ function buildHealthStatus(options: GoalStatusTextOptions, width: number): strin
 	const overall = checks.some((check) => check.severity === "error") ? "ERROR" : checks.some((check) => check.severity === "warn") ? "WARN" : "OK";
 	const lines = [`Goal health: ${overall}`, `Goal: ${truncateText(goal.objective, Math.max(20, width - 12))}`];
 	for (const check of checks) lines.push(`${check.severity === "error" ? "ERROR" : check.severity === "warn" ? "WARN" : "OK"} ${check.label}: ${check.value}`);
+	if (options.checkpointHealth && options.checkpointHealth.total > 0) {
+		lines.push("");
+		lines.push(formatCheckpointHealthReport(options.checkpointHealth, options.checkpointSessionFile));
+	}
 	lines.push("", "This is a storage/runtime health check, not a completion verdict.");
 	return lines.join("\n");
 }

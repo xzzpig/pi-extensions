@@ -195,7 +195,7 @@ if (settings.disabled === true) {
 		].filter((line): line is string => line !== undefined).join("\n"),
 		display: true,
 		details: { phase: "started", goalId: auditTarget.id, auditor: auditorLabel },
-	}, { triggerTurn: true });
+	}, { triggerTurn: false });
 	if (!core.isFocusedOperationCurrent(completionFocus)) {
 		return core.focusedOperationCancelledResult("Goal completion", completionFocus);
 	}

@@ -270,6 +270,7 @@ test("goal-settings renders sectioned rows with clearer auditor wording", async 
 
 		assert.ok(captured, "settings menu must call ui.select");
 		const opts: string[] = captured ?? [];
+		assert.ok(opts.some((l) => l.startsWith("─── Editing: project (")), "scope header names the edited layer");
 		assert.ok(opts.includes("─── Goal behavior ───"), "Goal behavior section header");
 		assert.ok(opts.includes("─── Task tracking ───"), "Task tracking section header");
 		assert.ok(opts.includes("─── Completion auditor ───"), "Completion auditor section header");
@@ -277,7 +278,8 @@ test("goal-settings renders sectioned rows with clearer auditor wording", async 
 		assert.ok(opts.some((l) => l.includes("auditor agent: project-auditor")), "configured auditor agent row");
 		assert.ok(opts.some((l) => l.includes("auditorProjectResources is deprecated and ignored")), "deprecated resources migration note");
 		assert.ok(opts.some((l) => l.includes("provider:")) && opts.some((l) => l.includes("model:")), "provider/model rows");
-		assert.equal(opts.filter((l) => l.startsWith("───")).length, 3, "exactly three sections");
+		assert.equal(opts.filter((l) => l.startsWith("───")).length, 5, "editing header + exactly four sections (incl. Blocker Oracle)");
+		assert.ok(opts.includes("─── Blocker Oracle ───"), "Blocker Oracle section header");
 		assert.ok(opts.includes("Done"));
 	} finally {
 		rmSync(cwd, { recursive: true, force: true });

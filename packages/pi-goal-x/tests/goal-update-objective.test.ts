@@ -308,15 +308,13 @@ function tweakedRecord(g: GoalRecord): GoalRecord {
 // ─── prompt evolution instruction ────────────────────────────────────────────
 
 test("goal evolution instruction mentions /goal-tweak instead of updatedObjective", async () => {
-	const { goalPrompt, continuationPrompt } = await import("../extensions/prompts/goal-prompts.ts");
+	const { goalPrompt } = await import("../extensions/prompts/goal-prompts.ts");
 	const goal = makeGoal();
 
-	const contText = continuationPrompt(goal);
-	assert.ok(!contText.includes("updatedObjective"), "continuationPrompt must NOT reference updatedObjective");
-	assert.ok(contText.includes("immutable"), "continuationPrompt must mention the goal is immutable");
-	assert.ok(contText.includes("/goal-tweak"), "continuationPrompt must instruct user to run /goal-tweak");
-
+	// Issue #30: the persisted continuation is a bounded marker; the immutable-
+	// objective policy lives only in the system-prompt injection (goalPrompt).
 	const goalText = goalPrompt(goal);
 	assert.ok(!goalText.includes("updatedObjective"), "goalPrompt must NOT reference updatedObjective");
+	assert.ok(goalText.includes("immutable"), "goalPrompt must mention the goal is immutable");
 	assert.ok(goalText.includes("/goal-tweak"), "goalPrompt must instruct user to run /goal-tweak");
 });

@@ -27,6 +27,7 @@ import {
 	REPORT_AUDITOR_PROGRESS_PROTOCOL_PREFIX,
 	REPORT_AUDITOR_PROGRESS_TOOL_NAME,
 } from "./goal-auditor-progress.ts";
+import { statusLabel } from "./goal-core.ts";
 
 export interface AuditorProgress {
 	currentTool?: string;
@@ -191,7 +192,18 @@ function escapePromptPayload(value: string): string {
 	return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-/** Build the explicit fresh-context task passed to the delegated auditor. */
+/**
+ * §61: goal metadata WITHOUT the objective or task tree — those appear exactly
+ * once each in their own blocks. Replaces detailedSummary in the auditor prompt.
+ */
+function minimalGoalMetadata(goal: GoalRecord): string {
+	return [
+		`Goal id: ${goal.id}`,
+		`Status: ${statusLabel(goal)}`,
+		`Mode: ${goal.sisyphus ? "sisyphus" : "regular"}`,
+		goal.tokenBudget ? `Budget: ${goal.tokenBudget} tokens (${goal.usage.tokensUsed} used)` : undefined,
+	].filter(Boolean).join("\n");
+}
 export function buildGoalAuditorPrompt(args: {
 	goal: GoalRecord;
 	detailedSummary: string;
@@ -220,11 +232,19 @@ export function buildGoalAuditorPrompt(args: {
 		"",
 		"The executor claim above is a claim, never evidence. It cannot make an otherwise incomplete goal complete; cross-check it against real artifacts where relevant.",
 		"",
-		"Current goal metadata:",
+		"Current goal metadata (objective and task tree appear in their own sections):",
 		"<goal_details>",
-		escapePromptPayload(args.detailedSummary),
-		...(!args.settings?.disableTasks && taskSummaryBlock(args.goal.taskList) ? ["", taskSummaryBlock(args.goal.taskList)] : []),
+		minimalGoalMetadata(args.goal),
 		"</goal_details>",
+		...(!args.settings?.disableTasks && args.goal.taskList ? [
+			"",
+			"Task tree:",
+			"<task_state>",
+			// Task titles are already escaped inside renderAuditorTaskTree; an
+			// extra pass would double-escape (&amp;lt;).
+			taskSummaryBlock(args.goal.taskList),
+			"</task_state>",
+		] : []),
 		...(!args.settings?.disableContracts && args.goal.verificationContract?.trim() ? [
 			"",
 			"Goal verification contract (what the executor was required to verify):",
@@ -242,12 +262,11 @@ export function buildGoalAuditorPrompt(args: {
 		"",
 		"Audit checklist:",
 		"1. Extract the real success criteria from the objective, including quality and reader outcomes.",
-		"2. Inspect artifacts or command output that can prove or disprove those criteria.",
-		"3. Treat the executor claim as untrusted and cross-check it with actual evidence.",
+		"2. Inspect artifacts or command output that can prove or disprove those criteria. Treat the executor claim as an untrusted assertion and cross-check it with actual file/shell evidence — a claim alone is never proof.",
 		...(!args.settings?.disableContracts && args.goal.verificationContract?.trim()
-			? ["4. Verify every item in the verification contract. If any item is missing or weakly addressed, disapprove."]
+			? ["3. Verify every item in the verification contract. If any item is missing or weakly addressed, disapprove."]
 			: []),
-		"5. Explain missing or weak evidence, especially scaffold-versus-final quality gaps.",
+		"4. Explain missing or weak evidence, especially scaffold-versus-final quality gaps.",
 		"",
 		"Progress reporting:",
 		"Use report_auditor_progress at natural phase boundaries so the parent dashboard can show progress.",

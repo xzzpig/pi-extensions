@@ -85,7 +85,24 @@ if (campaign === "extension-review-plan") {
 	}
 }
 
-// 3. naf campaign: the ≥10x headroom invariant (per classify.mjs) and an
+// 3.5 B10 checkpoint-growth invariants (issue #30, enforced whenever the
+// after run contains B10 rows — i.e. once PR A's benchmark is in place).
+if (afterMap.has("B10.checkpoint.persisted.1000")) {
+	const b10 = (id) => afterMap.get(id)?.ops;
+	if (typeof b10("B10.checkpoint.persisted.1000") === "number" && b10("B10.checkpoint.persisted.1000") > 160_000) {
+		failures.push(`B10 persisted checkpoint chars at 1000 turns ${b10("B10.checkpoint.persisted.1000")} > 160000`);
+	}
+	const providerVisible = b10("B10.checkpoint.provider-context.1000");
+	if (typeof providerVisible === "number" && providerVisible > 1) {
+		failures.push(`B10 provider-visible checkpoints ${providerVisible} > 1`);
+	}
+	const composed = b10("B10.checkpoint.composed-request.50t");
+	if (typeof composed === "number" && composed !== 1) {
+		failures.push(`B10 composed full goal blocks ${composed} != 1`);
+	}
+}
+
+// 4. naf campaign: the ≥10x headroom invariant (per classify.mjs) and an
 // ops/token no-regression watch for exempt rows (their metric is still
 // monitored even though they carry no 10x target).
 const headroomMisses = [];

@@ -5,10 +5,15 @@ import { extractVerificationContract, sisyphusObjectiveSufficient } from "./goal
 import { detailedSummary, oneLineSummary } from "./goal-format.ts";
 import {
 	goalSettingsPath,
+	goalGlobalSettingsPath,
 	loadGoalSettings,
-	loadGoalSettingsFileConfig,
-	saveGoalSettingsFileConfig,
+	loadSettingsSnapshot,
+	mutateSettingsLayer,
+	readSettingsLayer,
+	envOverrideFor,
 	type GoalSettings,
+	type SettingsMutation,
+	type SettingsScope,
 } from "./goal-settings.ts";
 import {
 	buildGoalListText,
@@ -19,11 +24,12 @@ import {
 import { clearGoalCommandMessage, validateResumeGoal } from "./goal-policy.ts";
 import { invalidateGoalLedgerCache, readGoalLedger } from "./goal-ledger.ts";
 import { buildGoalStatusText } from "./goal-status.ts";
-import { AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE, DEFAULT_AUDITOR_AGENT, effectiveSettingsReport, envOverrideFor, invalidateGoalSettingsCache } from "./goal-settings.ts";
+import { AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE, DEFAULT_AUDITOR_AGENT, effectiveSettingsReport, envOverrideFor, invalidateGoalSettingsCache, loadGoalSettingsFileConfig } from "./goal-settings.ts";
 import { invalidateGoalPoolCache, mergeGoalPromptFromDisk, readActiveGoalPool } from "./storage/goal-files.ts";
 import { nowIso, type GoalMode, type GoalRecord } from "./goal-record.ts";
 import { clearGoalDrafting, hasActiveDraft, startGoalDrafting } from "./goal-drafting.ts";
 import { formatRecoveryReport, runRecoveryReport, runRecoveryRepair } from "./goal-recovery.ts";
+import { formatCheckpointHealthReport, readSessionCheckpointHealth } from "./goal-session-health.ts";
 
 export interface GoalRefreshState {
 	poolIds: Iterable<string>;
@@ -265,7 +271,18 @@ export function registerGoalCommands(core: GoalCore): void {
 			}
 			return;
 		}
-		ctx.ui.notify(formatRecoveryReport(report), report.healthy ? "info" : "warning");
+		// Issue #30: surface persisted-checkpoint health for this session file
+		// (read-only). Legacy full checkpoints are repairable offline with the
+		// shipped pi-goal-x-recover CLI; this command never writes.
+		const sessionFile = (ctx.sessionManager as { getSessionFile?: () => string | undefined } | undefined)?.getSessionFile?.();
+		const checkpointHealth = sessionFile ? readSessionCheckpointHealth(sessionFile) : null;
+		const checkpointSection = checkpointHealth && checkpointHealth.total > 0
+			? `\n\n${formatCheckpointHealthReport(checkpointHealth, sessionFile)}`
+			: "";
+		ctx.ui.notify(
+			formatRecoveryReport(report) + checkpointSection,
+			report.healthy && (checkpointHealth?.legacyFull ?? 0) === 0 ? "info" : "warning",
+		);
 	}
 
 	async function runGoalRefresh(ctx: ExtensionContext): Promise<void> {
@@ -330,6 +347,13 @@ export function registerGoalCommands(core: GoalCore): void {
 			activeFilePresent: health && view?.activePath
 				? existsSync(path.resolve(ctx.cwd, view.activePath))
 				: undefined,
+			// Issue #30: checkpoint growth report (health view only, read-only).
+			checkpointHealth: health
+				? readSessionCheckpointHealth(
+					(ctx.sessionManager as { getSessionFile?: () => string | undefined } | undefined)?.getSessionFile?.() ?? "",
+				)
+				: null,
+			checkpointSessionFile: (ctx.sessionManager as { getSessionFile?: () => string | undefined } | undefined)?.getSessionFile?.(),
 			// §13.2: effective settings with provenance appear only in verbose mode;
 			// the standard mode stays free of settings noise (§13.1).
 			settingsReport: verbose ? effectiveSettingsReport(ctx.cwd) : [],
@@ -413,14 +437,17 @@ export function registerGoalCommands(core: GoalCore): void {
 	 * fields are present and operable.
 	 */
 	type SettingRow = {
-		key: keyof GoalSettings;
+		key: keyof GoalSettings | string;
 		label: string;
-		section: "Goal behavior" | "Task tracking" | "Completion auditor";
+		section: "Goal behavior" | "Task tracking" | "Completion auditor" | "Blocker Oracle";
 		kind: "boolean" | "modelSelector" | "thinking" | "positiveInteger" | "agentName";
+		/** Settings path for the mutation (defaults to [key]). */
+		path?: string[];
 	};
 
 	const SETTING_ROWS: readonly SettingRow[] = [
 		{ key: "autoSelectSingleGoal", label: "autoSelectSingleGoal", section: "Goal behavior", kind: "boolean" },
+		{ key: "hideUnfocusedBanner", label: "hideUnfocusedBanner", section: "Goal behavior", kind: "boolean" },
 		{ key: "disableContracts", label: "disableContracts", section: "Goal behavior", kind: "boolean" },
 		{ key: "stallTimeoutMinutes", label: "stall timeout (minutes)", section: "Goal behavior", kind: "positiveInteger" },
 		{ key: "objectiveMaxChars", label: "max objective length (0 = none)", section: "Goal behavior", kind: "positiveInteger" },
@@ -431,10 +458,17 @@ export function registerGoalCommands(core: GoalCore): void {
 		{ key: "provider", label: "provider", section: "Completion auditor", kind: "modelSelector" },
 		{ key: "model", label: "model", section: "Completion auditor", kind: "modelSelector" },
 		{ key: "thinkingLevel", label: "thinking_level", section: "Completion auditor", kind: "thinking" },
+		// Issue #26: opt-in blocker Oracle. Disabled by default; provider/model
+		// must BOTH be set explicitly — the executor model is never used silently.
+		{ key: "oracleEnabled", label: "oracle enabled", section: "Blocker Oracle", kind: "boolean", path: ["oracle", "enabled"] },
+		{ key: "oracleProviderModel", label: "oracle provider/model", section: "Blocker Oracle", kind: "modelSelector", path: ["oracle"] },
+		{ key: "oracleThinkingLevel", label: "oracle thinking_level", section: "Blocker Oracle", kind: "thinking", path: ["oracle", "thinkingLevel"] },
+		{ key: "oracleProjectResources", label: "oracle project resources", section: "Blocker Oracle", kind: "boolean", path: ["oracle", "projectResources"] },
+		{ key: "oracleMaxFailedAttemptsPerBlocker", label: "max failed attempts per blocker", section: "Blocker Oracle", kind: "positiveInteger", path: ["oracle", "maxFailedAttemptsPerBlocker"] },
 	];
 
-	function settingsValue(config: GoalSettings, key: keyof GoalSettings): string {
-		if (key === "disabled" || key === "disableTasks" || key === "disableContracts" || key === "autoSelectSingleGoal" || key === "auditorProjectResources") {
+	function settingsValue(config: GoalSettings, key: keyof GoalSettings | string): string {
+		if (key === "disabled" || key === "disableTasks" || key === "disableContracts" || key === "autoSelectSingleGoal" || key === "auditorProjectResources" || key === "hideUnfocusedBanner") {
 			return config[key] === true ? "true" : "false";
 		}
 		if (key === "auditorAgent") return config.auditorAgent ?? DEFAULT_AUDITOR_AGENT;
@@ -442,7 +476,7 @@ export function registerGoalCommands(core: GoalCore): void {
 		if (key === "stallTimeoutMinutes") return config.stallTimeoutMinutes !== undefined ? String(config.stallTimeoutMinutes) : "0";
 		if (key === "objectiveMaxChars") return config.objectiveMaxChars !== undefined ? String(config.objectiveMaxChars) : "0";
 		if (key === "keybindings") return config.keybindings ? `${config.keybindings.dashboard.toggleExpand}, ${config.keybindings.dashboard.scrollUp}, ${config.keybindings.dashboard.scrollDown}` : "(default)";
-		const value = config[key];
+		const value = (config as Record<string, unknown>)[key];
 		return typeof value === "string" ? value : "(default)";
 	}
 
@@ -454,37 +488,85 @@ export function registerGoalCommands(core: GoalCore): void {
 
 	async function handleSettingsMenu(ctx: ExtensionContext): Promise<void> {
 		if (!ctx.hasUI) {
-			ctx.ui.notify(`Settings file: ${goalSettingsPath(ctx.cwd)}`, "info");
+			// Headless: read-only report of both layer paths.
+			ctx.ui.notify(
+				`Settings — project file: ${goalSettingsPath(ctx.cwd)}\nGlobal file: ${goalGlobalSettingsPath()}`,
+				"info",
+			);
 			return;
 		}
+
 		/**
-		 * Persist a settings edit, then reinstall the fixed three/five profile
-		 * when the effective disableTasks value changed since the last install.
-		 * core.tasksEnabled tracks the last profile actually installed (updated
-		 * by installGoalToolProfile), so toggling task availability off, on, and
-		 * off within one menu session reinstalls on every real change instead of
-		 * comparing against the value captured when the menu opened.
+		 * After any mutation: reinstall the fixed three/five tool profile when
+		 * the effective disableTasks value changed since the last install, and
+		 * refresh the UI. This is the central settings side-effect hook — no
+		 * ad hoc per-row refresh code.
 		 */
-		const saveSettings = (next: GoalSettings): void => {
-			saveGoalSettingsFileConfig(ctx.cwd, next);
+		const applyEffectiveSettings = (): void => {
 			const tasksEnabledNow = !loadGoalSettings(ctx.cwd).disableTasks;
 			if (tasksEnabledNow !== core.tasksEnabled) {
 				core.installGoalToolProfile(tasksEnabledNow);
 			}
+			// PR #29: settings changes must be visible immediately — the banner
+			// hide/restore happens through this coalesced UI refresh.
+			core.updateUI(ctx);
 		};
+
+		const applyMutation = (scope: SettingsScope, mutation: SettingsMutation): boolean => {
+			try {
+				mutateSettingsLayer({ scope, cwd: ctx.cwd, mutation });
+				applyEffectiveSettings();
+				return true;
+			} catch (err) {
+				ctx.ui.notify(`Settings change failed: ${err instanceof Error ? err.message : String(err)}`, "warning");
+				return false;
+			}
+		};
+
+		const scopePath = (scope: SettingsScope): string =>
+			scope === "global" ? goalGlobalSettingsPath() : goalSettingsPath(ctx.cwd);
+
 		core.enterGoalModal();
 		try {
+			let scope: SettingsScope = "project";
 			while (true) {
-				const config = loadGoalSettingsFileConfig(ctx.cwd);
+				const snapshot = loadSettingsSnapshot(ctx.cwd);
+				const localLayer = snapshot[scope].layer as Record<string, unknown>;
 				const options: string[] = [];
+				options.push(`─── Editing: ${scope} (${scopePath(scope)}) ───`);
 				let lastSection: string | null = null;
+				const pathOf = (row: SettingRow): string[] => row.path ?? [String(row.key)];
+				const valueAtPath = (obj: unknown, path: string[]): unknown => {
+					let cursor: unknown = obj;
+					for (const segment of path) {
+						if (!cursor || typeof cursor !== "object") return undefined;
+						cursor = (cursor as Record<string, unknown>)[segment];
+					}
+					return cursor;
+				};
 				for (const row of SETTING_ROWS) {
 					if (row.section !== lastSection) {
 						options.push(`─── ${row.section} ───`);
 						lastSection = row.section;
 					}
-					const envVar = envOverrideFor(row.key);
-					options.push(envVar ? `  ${row.label}: ${settingsValue(config, row.key)} (env: ${envVar} — read-only)` : `  ${row.label}: ${settingsValue(config, row.key)}`);
+					const envVar = typeof row.key === "string" ? envOverrideFor(row.key as keyof GoalSettings) : null;
+					if (envVar) {
+						options.push(`  ${row.label}: ${settingsValue(snapshot.value, row.key)} (environment; read-only)`);
+						continue;
+					}
+					const rowPath = pathOf(row);
+					const provenance = snapshot.provenance.get(rowPath.join("."));
+					let source: string;
+					if (provenance?.source === "global") source = scope === "project" ? "(inherited from global)" : "(global override)";
+					else if (provenance?.source === "project") source = scope === "project" ? "(project override)" : "(project; edit via project scope)";
+					else source = "(default)";
+					const hasLocalOverride = valueAtPath(localLayer, rowPath) !== undefined;
+					if (hasLocalOverride && provenance?.source === scope) source = `(${scope} override)`;
+					// Nested rows render their leaf value directly.
+					const displayValue = row.path
+						? String(valueAtPath(snapshot.value, rowPath) ?? "(default)")
+						: settingsValue(snapshot.value, row.key);
+					options.push(`  ${row.label}: ${displayValue} ${source}`);
 				}
 				if (config.auditorProjectResources === true) {
 					options.push(`  Note: ${AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE}`);
@@ -492,115 +574,166 @@ export function registerGoalCommands(core: GoalCore): void {
 				options.push("Done");
 				const selected = await ctx.ui.select("Goal settings", options);
 				if (!selected || selected === "Done") break;
-				if (selected.startsWith("───")) continue; // section headers are not rows
-				// Strip leading spaces and resolve the row from the display label.
-				const selectedTrimmed = selected.trim();
-				const colon = selectedTrimmed.indexOf(":");
+				if (selected.startsWith("───")) continue; // headers are not rows
+				const trimmed = selected.trim();
+				if (trimmed.startsWith("Scope:")) {
+					scope = scope === "project" ? "global" : "project";
+					continue;
+				}
+				const colon = trimmed.indexOf(":");
 				if (colon === -1) continue;
-			const label = selectedTrimmed.slice(0, colon).trim();
-			const row = SETTING_ROWS.find((r) => r.label === label);
-			if (!row) continue;
-			const key = row.key;
-			if (envOverrideFor(key)) {
-				ctx.ui.notify(`${row.label} is read-only: overridden by the ${envOverrideFor(key)} env var.`, "warning");
-				continue;
-			}
-			if (row.kind === "boolean") {
-				const next = { ...config, [key]: config[key] !== true };
-				saveSettings(next);
-				ctx.ui.notify(`Settings saved:\n${settingsLines(loadGoalSettingsFileConfig(ctx.cwd)).join("\n")}`, "info");
-				continue;
-			}
-			if (row.kind === "positiveInteger") {
-				const input = await ctx.ui.input(`Set ${row.label}`, settingsValue(config, key));
-				if (input === undefined) continue;
-				// Row-driven lower bound: subtaskDepth is a nesting depth (min 1);
-				// stallTimeoutMinutes and objectiveMaxChars default to 0 meaning
-				// "off / no limit".
-				const min = (row.key === "stallTimeoutMinutes" || row.key === "objectiveMaxChars") ? 0 : 1;
-				// Full-string decimal validation: no partial parseInt. Rejects
-				// 1.5, 1x, negatives, infinity, and unsafe integers alike.
-				const trimmed = input.trim();
-				if (!/^[0-9]+$/.test(trimmed) || !Number.isSafeInteger(Number(trimmed)) || Number(trimmed) < min) {
-					ctx.ui.notify(`${row.label} must be an integer >= ${min} (e.g. ${min}, ${min + 1}, ${min + 2})`, "warning");
+				const label = trimmed.slice(0, colon).trim();
+				const row = SETTING_ROWS.find((r) => r.label === label);
+				if (!row) continue;
+				const envVarForRow2 = envOverrideFor(row.key as keyof GoalSettings);
+				if (envVarForRow2) {
+					ctx.ui.notify(`${row.label} is read-only: overridden by the ${envVarForRow2} env var.`, "warning");
 					continue;
 				}
-				const next = { ...config, [key]: Number(trimmed) };
-				saveSettings(next);
-				ctx.ui.notify(`Settings saved:\n${settingsLines(loadGoalSettingsFileConfig(ctx.cwd)).join("\n")}`, "info");
-				continue;
-			}
-				if (row.kind === "agentName") {
-					const input = await ctx.ui.input(`Set ${row.label}`, settingsValue(config, key));
+				// Per-row settings path (flat keys default to [key]; nested Blocker
+				// Oracle rows carry explicit paths).
+				const rowPath = row.path ?? [String(row.key)];
+				const pathKeyStr = rowPath.join(".");
+				const localValueAtPath = (() => {
+					let cursor: unknown = localLayer;
+					for (const segment of rowPath) {
+						if (!cursor || typeof cursor !== "object") return undefined;
+						cursor = (cursor as Record<string, unknown>)[segment];
+					}
+					return cursor;
+				})();
+
+				const inheritLabel = scope === "project" ? "Use inherited value" : "Use default (delete global override)";
+				const hasLocalOverride = localValueAtPath !== undefined;
+
+				if (row.kind === "boolean") {
+					const effective = snapshot.provenance.get(pathKeyStr)?.value === true;
+					const actions = [
+						`Set ${scope} override to true`,
+						`Set ${scope} override to false`,
+					];
+					if (hasLocalOverride) actions.push(inheritLabel);
+					actions.push("Cancel");
+					const action = await ctx.ui.select(`${row.label} (${scope})`, actions);
+					if (!action || action === "Cancel") continue;
+					if (action === inheritLabel) {
+						applyMutation(scope, { op: "unset", path: rowPath });
+						continue;
+					}
+					const value = action.endsWith("true");
+					if (value !== effective || !hasLocalOverride) {
+						applyMutation(scope, { op: "set", path: rowPath, value });
+					}
+					continue;
+				}
+
+				if (row.kind === "positiveInteger") {
+					const min = row.path ? 1 : ((row.key === "stallTimeoutMinutes" || row.key === "objectiveMaxChars") ? 0 : 1);
+					const actions = [`Set ${scope} override...`];
+					if (hasLocalOverride) actions.push(inheritLabel);
+					actions.push("Cancel");
+					const action = await ctx.ui.select(`${row.label} (${scope})`, actions);
+					if (!action || action === "Cancel") continue;
+					if (action === inheritLabel) {
+						applyMutation(scope, { op: "unset", path: rowPath });
+						continue;
+					}
+					const input = await ctx.ui.input(`Set ${row.label}`, String(snapshot.provenance.get(pathKeyStr)?.value ?? min));
 					if (input === undefined) continue;
-					const next: GoalSettings = { ...config };
-					const agentName = input.trim();
-					if (!agentName || agentName === DEFAULT_AUDITOR_AGENT) delete next.auditorAgent;
-					else next.auditorAgent = agentName;
-					saveSettings(next);
-					ctx.ui.notify(`Settings saved:\n${settingsLines(loadGoalSettingsFileConfig(ctx.cwd)).join("\n")}`, "info");
+					// Full-string decimal validation: rejects 1.5, 1x, negatives,
+					// infinity, and unsafe integers alike.
+					const value = input.trim();
+					if (!/^[0-9]+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < min) {
+						ctx.ui.notify(`${row.label} must be an integer >= ${min} (e.g. ${min}, ${min + 1}, ${min + 2})`, "warning");
+						continue;
+					}
+					// Oracle attempt cap is bounded at 3 by the settings parser.
+					if (row.path?.[0] === "oracle" && Number(value) > 3) {
+						ctx.ui.notify(`${row.label} must be an integer between 1 and 3`, "warning");
+						continue;
+					}
+					applyMutation(scope, { op: "set", path: rowPath, value: Number(value) });
 					continue;
 				}
+
 				if (row.kind === "thinking") {
-				const currentValue = settingsValue(config, key);
-				const levels = thinkingLevelChoices(currentValue === "(default)" ? undefined : currentValue);
-				const picked = await ctx.ui.select(`Set ${row.label}`, levels);
+					const currentValue = settingsValue(snapshot.value, row.key);
+					const levels = thinkingLevelChoices(currentValue === "(default)" ? undefined : currentValue);
+					const picked = await ctx.ui.select(`Set ${row.label} (${scope})`, levels);
+					if (!picked) continue;
+					const choice = picked.trim().replace(/^\u2713\s+/, "");
+					if (choice === "(default)") {
+						if (hasLocalOverride) applyMutation(scope, { op: "unset", path: rowPath });
+						continue;
+					}
+					if (!(AUDITOR_THINKING_LEVELS as readonly string[]).includes(choice)) {
+						ctx.ui.notify(`thinking_level must be one of: ${AUDITOR_THINKING_LEVELS.join(", ")} (or "(default)")`, "warning");
+						continue;
+					}
+					applyMutation(scope, { op: "set", path: rowPath, value: choice });
+					continue;
+				}
+
+				if (row.kind === "agentName") {
+					const input = await ctx.ui.input(`Set ${row.label} (${scope})`, String(valueAtPath(snapshot.value, rowPath) ?? DEFAULT_AUDITOR_AGENT));
+					if (input === undefined) continue;
+					const agentName = input.trim();
+					if (!agentName || agentName === DEFAULT_AUDITOR_AGENT) {
+						if (hasLocalOverride) applyMutation(scope, { op: "unset", path: rowPath });
+						continue;
+					}
+					applyMutation(scope, { op: "set", path: rowPath, value: agentName });
+					continue;
+				}
+
+				// modelSelector rows (provider, model): searchable model picker with
+				// explicit inherit/default handling. Auditor rows apply provider+model
+				// at the flat paths; the Oracle row writes oracle.provider/oracle.model.
+				const oraclePair = row.path?.[0] === "oracle";
+				const pairPrefix = oraclePair ? ["oracle"] : [];
+				const configuredBase = oraclePair
+					? [snapshot.value.oracle?.provider, snapshot.value.oracle?.model].filter(Boolean).join("/")
+					: configuredAuditorModelKey(snapshot.value as GoalSettings);
+				const configured = configuredBase || undefined;
+				const session = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
+				const choices = buildAuditorModelChoices(ctx.modelRegistry.getAvailable(), configured, session);
+				const filter = await ctx.ui.input("Filter auditor models (provider/id/name; blank = all)", "");
+				if (filter === undefined) continue;
+				const filtered = filterAuditorModelChoices(choices, filter);
+				const picked = await ctx.ui.select("Select auditor model", filtered.map((choice: AuditorChoice) => choice.label));
 				if (!picked) continue;
-				const trimmed = picked.trim().replace(/^\u2713\s+/, "");
-				const next: GoalSettings = { ...config };
-				if (trimmed === "(default)") {
-					delete next.thinkingLevel;
-				} else if ((AUDITOR_THINKING_LEVELS as readonly string[]).includes(trimmed)) {
-					next.thinkingLevel = trimmed as GoalSettings["thinkingLevel"];
+				const choice = filtered.find((candidate: AuditorChoice) => candidate.label === picked);
+				if (!choice) continue;
+				if (choice.kind === "default") {
+					for (const key of ["provider", "model"] as const) {
+						if (localLayer[key] !== undefined) applyMutation(scope, { op: "unset", path: [...pairPrefix, key] });
+					}
+					continue;
+				}
+				let providerValue: string;
+				let modelValue: string;
+				if (choice.kind === "manual") {
+					const input = await ctx.ui.input("Set auditor provider/model", configured ?? "provider/model");
+					if (input === undefined) continue;
+					const parsed = parseManualAuditorModel(input);
+					if ("error" in parsed) {
+						ctx.ui.notify(parsed.error, "warning");
+						continue;
+					}
+					providerValue = parsed.provider;
+					modelValue = parsed.model;
 				} else {
-					ctx.ui.notify(`thinking_level must be one of: ${AUDITOR_THINKING_LEVELS.join(", ")} (or "(default)")`, "warning");
-					continue;
+					providerValue = choice.provider;
+					modelValue = choice.model;
 				}
-				saveSettings(next);
-				ctx.ui.notify(`Settings saved:\n${settingsLines(loadGoalSettingsFileConfig(ctx.cwd)).join("\n")}`, "info");
-				continue;
-			}
-			// modelSelector rows (provider, model): searchable auditor model
-			// picker with current-session/default, authenticated models (\u2713
-			// marker on the exact current selection), and a manual
-			// provider/model entry (ll01 pattern). Either row applies the same
-			// provider+model pair.
-			const configured = configuredAuditorModelKey(config);
-			const session = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
-			const choices = buildAuditorModelChoices(ctx.modelRegistry.getAvailable(), configured, session);
-			const filter = await ctx.ui.input("Filter auditor models (provider/id/name; blank = all)", "");
-			if (filter === undefined) continue;
-			const filtered = filterAuditorModelChoices(choices, filter);
-			const picked = await ctx.ui.select("Select auditor model", filtered.map((choice) => choice.label));
-			if (!picked) continue;
-			const choice = filtered.find((candidate: AuditorChoice) => candidate.label === picked);
-			if (!choice) continue;
-			const next: GoalSettings = { ...config };
-			if (choice.kind === "default") {
-				delete next.provider;
-				delete next.model;
-			} else if (choice.kind === "manual") {
-				const input = await ctx.ui.input("Set auditor provider/model", configured ?? "provider/model");
-				if (input === undefined) continue;
-				const parsed = parseManualAuditorModel(input);
-				if ("error" in parsed) {
-					ctx.ui.notify(parsed.error, "warning");
-					continue;
+				if (applyMutation(scope, { op: "set", path: [...pairPrefix, "provider"], value: providerValue })) {
+					applyMutation(scope, { op: "set", path: [...pairPrefix, "model"], value: modelValue });
 				}
-				next.provider = parsed.provider;
-				next.model = parsed.model;
-			} else {
-				next.provider = choice.provider;
-				next.model = choice.model;
-			}
-			saveSettings(next);
-			ctx.ui.notify(`Settings saved:\n${settingsLines(loadGoalSettingsFileConfig(ctx.cwd)).join("\n")}`, "info");
 			}
 		} finally {
 			core.exitGoalModal();
 		}
 	}
-
 	async function handleGoalClear(ctx: ExtensionContext): Promise<void> {
 		core.reconcileFocusedGoalFromDisk(ctx);
 		if (!core.state.goal && core.openGoals().length > 0) {

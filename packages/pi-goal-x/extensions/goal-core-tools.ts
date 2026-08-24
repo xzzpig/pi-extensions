@@ -5,15 +5,42 @@ import { formatDuration, formatTokenValue, statusLabel, truncateText } from "./g
 import { extractVerificationContract } from "./goal-contract.ts";
 import { detailedSummary, goalDetails, renderGoalResult } from "./goal-format.ts";
 import { budgetLine } from "./goal-accounting.ts";
-import { buildGoalCreatedReport, buildTaskSummary, validateGoalAgentPause, validateGoalBlock } from "./goal-policy.ts";
+import { buildGoalCreatedReport, buildTaskSummary, findTaskInTree, validateGoalAgentPause, validateGoalBlock } from "./goal-policy.ts";
 import { buildUnfocusedOpenGoalsSummary, otherOpenGoalCount } from "./goal-pool.ts";
 import { readGoalLedger } from "./goal-ledger.ts";
 import { loadGoalSettings } from "./goal-settings.ts";
 import { buildGoalHistoryBlock, buildGoalTaskDetailBlock } from "./goal-format.ts";
 import { sisyphusStepProgress } from "./goal-policy.ts";
 import { deriveTasksFromObjective } from "./goal-task-derive.ts";
-import { nowIso, validateTokenBudgetInput } from "./goal-record.ts";
+import { nowIso, type GoalRecord, type GoalTask, validateTokenBudgetInput } from "./goal-record.ts";
 import type { GoalCore } from "./goal-state.ts";
+import { promptProfile } from "./prompts/goal-prompts.ts";
+import {
+	armOracleAdvice,
+	buildBlockerFingerprint,
+	consumeOracleFollowupMarker,
+	hasPendingOracleAdviceForFocusedGoal,
+	oracleStateForFingerprint,
+	renderActionableOracleAdvice,
+	renderOracleAdviceReminder,
+	runBlockerOracle,
+} from "./goal-oracle.ts";
+import { loadSettingsSnapshot, type ResolvedGoalOracleSettings } from "./goal-settings.ts";
+
+/** Current + first-pending (excluding current) task pointers for concise get_goal. */
+function conciseTaskPointers(goal: GoalRecord): { findCurrentTask?: GoalTask; firstPendingTask?: GoalTask } {
+	if (!goal.taskList) return {};
+	let firstPendingTask: GoalTask | undefined;
+	const walk = (tasks: GoalTask[]): void => {
+		for (const t of tasks) {
+			if (!firstPendingTask && t.status === "pending" && t.id !== goal.currentTaskId) firstPendingTask = t;
+			if (t.subtasks) walk(t.subtasks);
+		}
+	};
+	walk(goal.taskList.tasks);
+	const findCurrentTask = goal.currentTaskId ? findTaskInTree(goal.taskList.tasks, goal.currentTaskId) : undefined;
+	return { findCurrentTask, firstPendingTask };
+}
 
 export function registerCoreTools(
 	core: GoalCore,
@@ -30,15 +57,21 @@ pi.registerTool(defineTool({
 	promptSnippet: "Read the active pi goal state for the current session.",
 	promptGuidelines: [
 		"Use get_goal when you need the current goal before deciding whether to continue or mark it complete.",
-		"Before marking a goal complete, compare every explicit requirement with concrete evidence from the workspace/session.",
-		"If the returned goal has sisyphus mode on, you must execute strictly step-by-step in the order written in the objective; do not skip, combine, or rush steps, and stop to ask the user when blocked or unclear.",
-		"If requirements change, ask the user to run /goal-tweak; never edit the objective yourself. Never archive or abandon a goal on your own — ask the user to run /goal-clear instead.",
 	],
-	parameters: Type.Object({}, { additionalProperties: false }),
+	parameters: Type.Object({
+		verbose: Type.Optional(Type.Boolean({ description: "Full detail mode." })),
+		include_history: Type.Optional(Type.Boolean()),
+	}, { additionalProperties: false }),
 	async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
 		core.reconcileFocusedGoalFromDisk(ctx);
 		if (core.state.goal) core.syncGoalPromptFromDisk(ctx);
 		const view = core.goalForDisplay() ?? core.state.goal;
+		const params = (_params ?? {}) as { verbose?: boolean; include_history?: boolean };
+		// PR E profile: legacy-v1 keeps pre-optimization verbose-by-default output;
+		// compact-v2 (default) returns a concise state line set because the full
+		// policy already lives in the injected active-goal system block.
+		const verbose = promptProfile() === "legacy-v1" || params.verbose === true;
+		const includeHistory = params.include_history === true || verbose;
 		const otherCount = otherOpenGoalCount(core.goalsById, core.focusedGoalId);
 		if (!view) {
 			const text = core.openGoals().length > 0
@@ -49,39 +82,73 @@ pi.registerTool(defineTool({
 				details: goalDetails(view),
 			};
 		}
-		const lines: string[] = [view.objective, ""];
-		lines.push(`Status: ${statusLabel(view)}`);
-		lines.push(`Mode: ${view.sisyphus ? "sisyphus" : "regular"}`);
-		if (view.sisyphus) {
-			// E6: sisyphus ordered-step progress.
-			const steps = sisyphusStepProgress(view);
-			if (steps) lines.push(`At step: ${steps.current} of ${steps.total}`);
+		if (verbose) {
+			const lines: string[] = [`Goal ${view.id}: ${statusLabel(view)}, ${view.sisyphus ? "sisyphus" : "regular"}`];
+			lines.push(`Objective: ${view.objective}`, "");
+			lines.push(`Status: ${statusLabel(view)}`);
+			lines.push(`Mode: ${view.sisyphus ? "sisyphus" : "regular"}`);
+			if (view.sisyphus) {
+				// E6: sisyphus ordered-step progress.
+				const steps = sisyphusStepProgress(view);
+				if (steps) lines.push(`At step: ${steps.current} of ${steps.total}`);
+			}
+			const usageBits: string[] = [];
+			if (view.usage.activeSeconds > 0) usageBits.push(formatDuration(view.usage.activeSeconds));
+			if (view.usage.tokensUsed > 0) usageBits.push(formatTokenValue(view.usage.tokensUsed));
+			lines.push(`Usage: ${usageBits.length > 0 ? usageBits.join(" · ") : "none"}`);
+			const budget = budgetLine(view);
+			if (budget) lines.push(`Budget: ${budget}`);
+			if (view.taskList) {
+				lines.push(`Tasks: ${buildTaskSummary(view.taskList)}`);
+				// F1: task-detail block mirroring the widget.
+				const detail = buildGoalTaskDetailBlock(view);
+				if (detail) lines.push("", detail);
+			}
+			if (view.verificationContract?.trim()) lines.push(`Verification contract: ${view.verificationContract.trim()}`);
+			if (view.status === "paused" || view.status === "blocked") {
+				if (view.pauseReason) lines.push(`Blocker: ${view.pauseReason}`);
+				if (view.pauseSuggestedAction) lines.push(`Suggested action: ${view.pauseSuggestedAction}`);
+			}
+			if (view.activePath) lines.push(`Path: ${view.activePath}`);
+			if (view.archivedPath) lines.push(`Archive: ${view.archivedPath}`);
+			if (otherCount > 0) lines.push(`Other open goals: ${otherCount} (user can run /goal-list or /goal-focus)`);
+			lines.push("");
+			lines.push("Lifecycle: call update_goal({status: \"complete\"}) only when every requirement is satisfied — the independent auditor verifies from actual evidence. Call update_goal({status: \"blocked\"}) only after the same blocker recurs on three consecutive goal turns. User commands handle pause/resume/clear/focus.");
+			// E1: goal history (last audit verdict + recent lifecycle events).
+			if (includeHistory) {
+				const history = buildGoalHistoryBlock(view, readGoalLedger(ctx).events);
+				if (history) lines.push("", history);
+			}
+			return {
+				content: [{ type: "text", text: lines.join("\n") }],
+				details: goalDetails(view),
+			};
 		}
-		const usageBits: string[] = [];
-		if (view.usage.activeSeconds > 0) usageBits.push(formatDuration(view.usage.activeSeconds));
-		if (view.usage.tokensUsed > 0) usageBits.push(formatTokenValue(view.usage.tokensUsed));
-		lines.push(`Usage: ${usageBits.length > 0 ? usageBits.join(" · ") : "none"}`);
+
+		// compact-v2 default (PR E §53): concise state read. The full objective
+		// is kept — get_goal is an explicit state-read tool — but duplicated task
+		// headings and the lifecycle prose (already in the injected policy) are
+		// omitted.
+		const lines: string[] = [`Goal ${view.id}: ${statusLabel(view)}, ${view.sisyphus ? "sisyphus" : "regular"}`];
+		lines.push(`Objective: ${view.objective}`);
+		if (view.taskList) {
+			const { findCurrentTask, firstPendingTask } = conciseTaskPointers(view);
+			if (findCurrentTask) {
+				const contract = findCurrentTask.verificationContract ? ` — contract: ${findCurrentTask.verificationContract}` : "";
+				lines.push(`Current task: ${findCurrentTask.id} — ${findCurrentTask.title}${contract}`);
+			}
+			if (firstPendingTask) {
+				lines.push(`Next pending: ${firstPendingTask.id} — ${firstPendingTask.title}`);
+			}
+			lines.push(`Tasks: ${buildTaskSummary(view.taskList)}`);
+		} else if (view.currentTaskId) {
+			lines.push(`Current task: ${view.currentTaskId}`);
+		}
 		const budget = budgetLine(view);
 		if (budget) lines.push(`Budget: ${budget}`);
-		if (view.taskList) {
-			lines.push(`Tasks: ${buildTaskSummary(view.taskList)}`);
-			// F1: task-detail block mirroring the widget.
-			const detail = buildGoalTaskDetailBlock(view);
-			if (detail) lines.push("", detail);
+		if ((view.status === "paused" || view.status === "blocked") && view.pauseReason) {
+			lines.push(`Blocker: ${view.pauseReason}`);
 		}
-		if (view.verificationContract?.trim()) lines.push(`Verification contract: ${view.verificationContract.trim()}`);
-		if (view.status === "paused" || view.status === "blocked") {
-			if (view.pauseReason) lines.push(`Blocker: ${view.pauseReason}`);
-			if (view.pauseSuggestedAction) lines.push(`Suggested action: ${view.pauseSuggestedAction}`);
-		}
-		if (view.activePath) lines.push(`Path: ${view.activePath}`);
-		if (view.archivedPath) lines.push(`Archive: ${view.archivedPath}`);
-		if (otherCount > 0) lines.push(`Other open goals: ${otherCount} (user can run /goal-list or /goal-focus)`);
-		lines.push("");
-		lines.push("Lifecycle: call update_goal({status: \"complete\"}) only when every requirement is satisfied — the independent auditor verifies from actual evidence. Call update_goal({status: \"blocked\"}) only after the same blocker recurs on three consecutive goal turns. User commands handle pause/resume/clear/focus.");
-		// E1: goal history (last audit verdict + recent lifecycle events).
-		const history = buildGoalHistoryBlock(view, readGoalLedger(ctx).events);
-		if (history) lines.push("", history);
 		return {
 			content: [{ type: "text", text: lines.join("\n") }],
 			details: goalDetails(view),
@@ -173,7 +240,7 @@ pi.registerTool(defineTool({
 // complete → the independent auditor verifies from actual evidence (no
 // paperwork field); blocked → a distinct agent-blocked state that stops
 // continuation. The three-consecutive-turn blocker rule is prompt policy.
-async function runGoalBlockedFlow(ctx: ExtensionContext): Promise<AgentToolResult<unknown>> {
+	async function runGoalBlockedFlow(ctx: ExtensionContext, reasonInput?: string, attemptedActions: string[] = []): Promise<AgentToolResult<unknown>> {
 	core.reconcileFocusedGoalFromDisk(ctx);
 	const gate = validateGoalBlock({ goal: core.state.goal, runningGoalId: core.runningGoalId });
 	if (!gate.ok) {
@@ -183,26 +250,44 @@ async function runGoalBlockedFlow(ctx: ExtensionContext): Promise<AgentToolResul
 		};
 	}
 	if (!core.state.goal) throw new Error("Goal disappeared during blocked validation.");
-	core.accountProgress(ctx);
-	const result = core.goalService.apply(ctx, {
-		reconcile: false,
-		refreshFromDisk: true,
-		mutate: (g) => ({
-			...g,
-			status: "blocked" as const,
-			stopReason: "agent" as const,
-			pauseReason: g.pauseReason ?? "The model reported this goal as blocked after the same blocker recurred on consecutive turns.",
-			updatedAt: nowIso(),
-		}),
-		ledger: (written) => [{
-			type: "goal_blocked",
-			goalId: written.id,
-			reason: written.pauseReason ?? "blocked",
-			source: "agent",
-			at: written.updatedAt,
-		}],
-	});
-	if (result.ok) {
+
+	// Issue #26: the blocker reason is now required for update_goal(blocked) —
+	// it feeds the fingerprint, the ledger event, and the user-facing report.
+	const reason = reasonInput?.trim() ?? "";
+	if (!reason) {
+		return {
+			content: [{ type: "text", text: 'update_goal({ status: "blocked" }) requires a "reason" describing the concrete blocker. The goal remains active.' }],
+			details: goalDetails(core.state.goal),
+			terminate: false,
+		};
+	}
+
+	const commitBlocked = (): AgentToolResult<unknown> => {
+		const result = core.goalService.apply(ctx, {
+			reconcile: false,
+			refreshFromDisk: true,
+			mutate: (g) => ({
+				...g,
+				status: "blocked" as const,
+				stopReason: "agent" as const,
+				pauseReason: reason,
+				updatedAt: nowIso(),
+			}),
+			ledger: (written) => [{
+				type: "goal_blocked",
+				goalId: written.id,
+				reason: written.pauseReason ?? "blocked",
+				source: "agent",
+				at: written.updatedAt,
+			}],
+		});
+		if (!result.ok) {
+			return {
+				content: [{ type: "text", text: `Goal blocked state update failed: ${result.message ?? "the state mutation was rejected"}. The goal was NOT marked blocked. Retry after resolving the conflict.` }],
+				details: goalDetails(core.state.goal),
+				terminate: false,
+			};
+		}
 		core.clearContinuationState();
 		core.clearActiveAccounting();
 		if (result.goal) core.runtime.markTurnStopped(result.goal.id);
@@ -215,13 +300,145 @@ async function runGoalBlockedFlow(ctx: ExtensionContext): Promise<AgentToolResul
 			details: goalDetails(core.state.goal),
 			terminate: true,
 		};
+	};
+
+	// Oracle disabled: existing block transition, unchanged behavior.
+	const settingsSnapshot = loadSettingsSnapshot(ctx.cwd);
+	const oracleSettings = settingsSnapshot.value.oracle;
+	if (!oracleSettings?.enabled) return commitBlocked();
+
+	// ── opt-in Oracle flow (issue #26) ───────────────────────────────────
+	const goalAtBlock = core.state.goal;
+	const focusToken = core.focusedOperationToken(goalAtBlock.id);
+	const fingerprint = buildBlockerFingerprint(goalAtBlock, reason);
+	const consult = oracleStateForFingerprint(readGoalLedger(ctx).events, goalAtBlock.id, fingerprint);
+
+	// One actionable result already exists.
+	if (consult.result?.disposition === "actionable") {
+		if (!consult.followupAttempted && !hasPendingOracleAdviceForFocusedGoal(goalAtBlock.id)) {
+			// Re-arm without consulting again and refuse the block.
+			const adviceText = renderOracleAdviceReminder({
+				goalId: goalAtBlock.id,
+				fingerprint,
+				adviceId: consult.result.adviceId,
+				text: consult.result.summary,
+			});
+			return {
+				content: [{ type: "text", text: `${adviceText}\n\nThe goal was NOT marked blocked.` }],
+				details: goalDetails(goalAtBlock),
+				terminate: false,
+			};
+		}
+		return commitBlocked();
 	}
-	// The mutation failed (lock contention, revision conflict, goal archived by
-	// another process): surface the conflict instead of claiming the goal is
-	// blocked, and keep the turn alive so the agent can retry.
+	if (consult.result?.disposition === "needs_human" || consult.result?.disposition === "insufficient_context") {
+		return commitBlocked();
+	}
+	if (consult.failedAttempts >= oracleSettings.maxFailedAttemptsPerBlocker) {
+		try {
+			core.goalService.appendEvents(ctx, [{
+				type: "oracle_failed",
+				goalId: goalAtBlock.id,
+				fingerprint,
+				attempt: consult.failedAttempts,
+				errorCode: consult.lastFailure?.errorCode ?? "provider",
+				message: "failure limit reached; blocking with durable Oracle failure annotation",
+				at: nowIso(),
+			}]);
+		} catch { /* best-effort annotation */ }
+		return commitBlocked();
+	}
+
+	// Consult once.
+	try {
+		core.goalService.appendEvents(ctx, [{
+			type: "oracle_started",
+			goalId: goalAtBlock.id,
+			fingerprint,
+			provider: oracleSettings.provider ?? "(unresolved)",
+			model: oracleSettings.model ?? "(unresolved)",
+			thinkingLevel: oracleSettings.thinkingLevel,
+			reason: reason.slice(0, 1000),
+			at: nowIso(),
+		}]);
+	} catch { /* ledger append is best-effort for the started marker */ }
+
+	const run = await runBlockerOracle({
+		ctx,
+		goal: goalAtBlock,
+		reason,
+		attemptedActions: attemptedActions.slice(0, 8),
+		settings: oracleSettings as ResolvedGoalOracleSettings,
+		recentEvidence: "",
+	});
+
+	if (!core.isFocusedOperationCurrent(focusToken)) {
+		return core.focusedOperationCancelledResult("Blocker Oracle", focusToken);
+	}
+
+	if (!run.ok) {
+		if (run.errorCode === "aborted") {
+			try {
+				core.goalService.appendEvents(ctx, [{
+					type: "oracle_failed",
+					goalId: goalAtBlock.id,
+					fingerprint,
+					attempt: consult.failedAttempts + 1,
+					errorCode: "aborted",
+					message: run.message.slice(0, 300),
+					at: nowIso(),
+				}]);
+			} catch { /* best effort */ }
+			return {
+				content: [{ type: "text", text: "Oracle consultation was aborted; the goal remains active." }],
+				details: goalDetails(goalAtBlock),
+				terminate: false,
+			};
+		}
+		try {
+			core.goalService.appendEvents(ctx, [{
+				type: "oracle_failed",
+				goalId: goalAtBlock.id,
+				fingerprint,
+				attempt: consult.failedAttempts + 1,
+				errorCode: run.errorCode,
+				message: run.message.slice(0, 300),
+				at: nowIso(),
+			}]);
+		} catch { /* best effort */ }
+		const retryable = consult.failedAttempts + 1 < oracleSettings.maxFailedAttemptsPerBlocker;
+		return {
+			content: [{ type: "text", text: `Oracle consultation failed (${run.errorCode}): ${run.message.slice(0, 200)}${retryable ? " The goal remains active; try again or continue working." : ""}` }],
+			details: goalDetails(goalAtBlock),
+			terminate: false,
+		};
+	}
+
+	// Persist bounded result + arm/remind per disposition.
+	const advice = run.advice;
+	const adviceId = armOracleAdvice(goalAtBlock.id, fingerprint, advice);
+	const recommendedTitle = advice.alternatives[advice.recommendedIndex]?.title;
+	try {
+		core.goalService.appendEvents(ctx, [{
+			type: "oracle_result",
+			goalId: goalAtBlock.id,
+			fingerprint,
+			adviceId,
+			disposition: advice.disposition,
+			summary: advice.diagnosis.slice(0, 500),
+			recommendedTitle: recommendedTitle?.slice(0, 200),
+			at: nowIso(),
+		}]);
+	} catch { /* best effort */ }
+
+	if (advice.disposition === "needs_human" || advice.disposition === "insufficient_context") {
+		consumeOracleFollowupMarker(goalAtBlock.id);
+		return commitBlocked();
+	}
+
 	return {
-		content: [{ type: "text", text: `Goal blocked state update failed: ${result.message ?? "the state mutation was rejected"}. The goal was NOT marked blocked. Retry after resolving the conflict.` }],
-		details: goalDetails(core.state.goal),
+		content: [{ type: "text", text: renderActionableOracleAdvice(advice) }],
+		details: goalDetails(goalAtBlock),
 		terminate: false,
 	};
 }
@@ -291,19 +508,19 @@ async function runGoalAgentPauseFlow(ctx: ExtensionContext, reason: string | und
 pi.registerTool(defineTool({
 	name: "update_goal",
 	label: "Update Goal",
-	description: "Report a terminal or pausing outcome for the current run: status \"complete\" (runs the independent completion auditor, which verifies from actual evidence — an optional completion_summary is an untrusted claim only), status \"blocked\" (records a distinct agent-blocked state and stops continuation; use only after the same blocker recurs on three consecutive goal turns), or status \"paused\" (immediate agent-initiated pause with a required reason). Never archive or abandon a goal yourself: if it should be discarded, ask the user to run /goal-clear.",
-	promptSnippet: "Report the current run as complete (audited), blocked (after three consecutive identical blockers), or paused (immediate, with a reason).",
+	description: "Report a terminal or pausing outcome for the current run: \"complete\" runs the independent completion auditor (completion_summary is an untrusted claim only); \"blocked\" records a distinct agent-blocked state and stops continuation per the active-goal policy; \"paused\" pauses immediately with a required reason. Never archive or abandon a goal yourself — ask the user to run /goal-clear.",
+	promptSnippet: "Report the current run as complete (audited) or blocked per the active-goal lifecycle policy; paused is immediate with a required reason.",
 	promptGuidelines: [
-		"Call update_goal({status: \"complete\"}) only when every requirement is satisfied. The independent auditor derives the requirements from the objective and any verification contract and inspects the actual workspace evidence. An optional completion_summary is passed to the auditor as an UNTRUSTED claim — it is never evidence and can never substitute for real artifacts or make a disapproved goal complete.",
-		"Call update_goal({status: \"blocked\"}) only after the SAME blocker has recurred on three consecutive goal turns. Do not block on the first or second occurrence — keep trying concrete next steps and ask for help when genuinely stuck.",
-		"Call update_goal({status: \"paused\"}) for an immediate pause with a required reason and optional suggested action. It records goal_paused with source agent and stops continuation.",
-		"Do not use update_goal as an escape hatch: if the objective is achieved, complete it; if it is not, do not complete it. The goal objective is immutable — if requirements change, ask the user to run /goal-tweak instead of editing the objective yourself.",
-		"Never archive or abandon a goal on your own. When a goal should be discarded, stop and ask the user to run /goal-clear (user-owned abandonment).",
-		"For sisyphus goals, do not mark complete until every numbered step has been executed and individually verified against its done criterion.",
+		// PR E §54: capability + hard boundary here; the WHEN rules (evidence,
+		// third-identical-blocker, objective immutability) live once in the
+		// canonical active-goal policy block — do not restate them in all four
+		// schema surfaces.
+		"An optional completion_summary is passed to the auditor as an UNTRUSTED claim — it is never evidence and can never substitute for real artifacts.",
 	],
 	parameters: Type.Object({
 		status: StringEnum(["complete", "blocked", "paused"] as const, { description: "complete runs the independent auditor; blocked records a distinct agent-blocked state; paused is an immediate agent pause with a required reason." }),
-		reason: Type.Optional(Type.String({ description: "Required when status is paused: why the work is pausing." })),
+		reason: Type.Optional(Type.String({ description: "Required when status is paused or blocked: describe the concrete blocker." })),
+		attempted_actions: Type.Optional(Type.Array(Type.String({ maxLength: 240 }), { maxItems: 8, description: "Optional: up to 8 concrete actions already attempted against this blocker." })),
 		suggested_action: Type.Optional(Type.String({ description: "Optional suggested next step when status is paused." })),
 		completion_summary: Type.Optional(Type.String({ description: "Optional untrusted executor claim shown to the auditor; never evidence." })),
 	}, { additionalProperties: false }),
@@ -313,7 +530,10 @@ pi.registerTool(defineTool({
 		// status transitions observe the current task/state, not the stale disk.
 		core.flushGoalTransaction(ctx);
 		if (params.status === "blocked") {
-			return runGoalBlockedFlow(ctx);
+			const attempted = Array.isArray((params as { attempted_actions?: unknown }).attempted_actions)
+				? ((params as { attempted_actions: unknown[] }).attempted_actions.filter((a): a is string => typeof a === "string"))
+				: [];
+			return runGoalBlockedFlow(ctx, params.reason, attempted);
 		}
 		if (params.status === "paused") {
 			return runGoalAgentPauseFlow(ctx, params.reason, params.suggested_action);
