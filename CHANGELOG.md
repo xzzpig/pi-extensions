@@ -2,13 +2,101 @@
 
 ## [Unreleased]
 
+## [0.56.0] - 2026-08-23
+
+### Highlights
+- Run allowlisted OpenAI-Codex subagents with opt-in `fast` mode when you want priority service tier.
+- Pass bounded extension metadata into native child launches without leaking that authority to external runners.
+- Workflow scripts are easier to read when child results are stringified or returned.
+- Completion guards now use safer tracked-file evidence, including large dirty files and interrupted runs.
+- Model verification is less fragile for provider-qualified and variant-tagged model ids.
+
+### Added
+- Add opt-in `fast: true` launches for allowlisted native OpenAI-Codex subagents, using OpenAI's priority service tier.
+- Add bounded namespaced extension bindings to child launch contracts. Thanks to [@FL03](https://github.com/FL03) for #1410.
+
+### Fixed
+- Render workflow child results as useful text when scripts stringify `runs.all` or awaited `runs.run` result objects.
+- Keep checked acceptance compatible with strict workflow child `outputSchema` results. Thanks to [@rtbe](https://github.com/rtbe) for #1406.
+- Use bounded tracked-file mutation evidence for implementation completion guards, including files that were already dirty when the child started. Thanks to [@rtbe](https://github.com/rtbe) for #1407.
+- Bind fast mode into launch contract provenance and keep large tracked-file mutation evidence precise.
+- Add timeout recovery summaries with changed tracked files, active child state, and session/artifact paths. Thanks to [@rtbe](https://github.com/rtbe) for #1409.
+- Fail closed when reviewer runs are interrupted or detached workflow children settle without persisted top-level continuation proof. Thanks to [@rtbe](https://github.com/rtbe) for #1408.
+- Stop flagging awaited `.then()` workflow chains as unawaited when a handler returns another child launch.
+- Preserve variant-tagged model ids during verification and fallback exclusion parsing. Thanks to [@rafafortes](https://github.com/rafafortes) for #1420.
+
+## [0.55.0] - 2026-08-23
+
+### Highlights
+- Stop a single stuck child in an async workflow without stopping the whole run.
+- Continue finished external jobs, like `gpt-pro` from [Surf](https://github.com/nicobailon/surf-cli/), with follow-up requests through `resume`.
+- Cap child thinking with `subagents.maxThinking` and set a preferred default provider for bare model ids.
+- Scripted workflow outputs now land in the run's managed artifact directory instead of the repository root.
+- Child launches fail fast with clear reasons when requested models or write tools are unavailable.
+
+### Added
+- Add `subagents.maxThinking` to enforce a thinking ceiling across native subagent launches. Thanks to [@alex-real14](https://github.com/alex-real14) for #1397.
+- Add `subagents.defaultProvider` and per-agent `defaultProvider` overrides so bare subagent model ids can prefer a configured provider. Thanks to [@swingtempo](https://github.com/swingtempo) for #1393.
+- Add external-job follow-ups through `subagent({ action: "resume" })` for completed provider jobs that expose `followUp(input)`, with duplicate request dedupe, durable parent-job lineage (#1381), and clearer errors when a follow-up cannot start.
+- Add child-scoped stop support and child stop observer events for async/workflow runs. Malformed child stop requests are rejected instead of widening to a run-level stop. Thanks to [@yanqianglu](https://github.com/yanqianglu) for #1367.
+- Create one passive Orca observer tab per top-level subagent call, with shared chain/parallel progress and project-local observer manifests. Thanks to [@hyein-cbio](https://github.com/hyein-cbio) for #1360.
+- Count Herdr project panes in inline status and report compact Herdr pane title suffixes for active subagent work.
+- Let `agentOverrides` set or clear default `output` paths and `defaultReads`, while preserving explicit custom-agent frontmatter and preventing settings-derived values from being serialized into custom definitions. Thanks to [@mevatron](https://github.com/mevatron) for #1349.
+- Surface copyable `provider/id` model selectors from `{ action: "models" }` and point invalid model warnings at that discovery path. Thanks to [@lixinglong27](https://github.com/lixinglong27) for #1365.
+- Add bundled skill guidance for lightweight task profiles before subagent fanout. Thanks to [@srcKod](https://github.com/srcKod) for #1395.
+- Add delegated review guidance that separates evidence requirements from severity labels so first-pass reviews do not default to `blockers only`.
+
+### Fixed
+- Route relative `workflowScript` output paths through managed artifacts instead of creating report files in the repository root.
+- Keep the async widget spinner and elapsed timer moving while the parent is idle by routing animation ticks through the live widget rebuild path. Thanks to [@0xFlo](https://github.com/0xFlo) for #1390.
+- Slow async widget animation rerenders to 1 Hz so quiet running jobs do not repaint the full TUI at the liveness tick rate. Thanks to [@0xFlo](https://github.com/0xFlo) for #1376.
+- Fail a Pi child launch when the child reports a different provider/model than the resolved requested model. Thanks to [@zzzubair](https://github.com/zzzubair) for #1377.
+- Render detached workflow supervisor handoffs as paused/waiting and include workflow and child run ids in completion notifications.
+- Report implementation runs blocked by missing child tools as blocked mutation effects instead of no-edit completion guard failures.
+- Fail child launch attempts when the runtime lacks requested core write tools or an implementation worker has only read-only launch tools, including workflow children that inherit a read-only capability ceiling.
+- Let read-only reviewer acceptance rely on the parent-side staged-file check instead of requiring child-reported `noStagedFiles` evidence.
+- Run public single-child launches directly instead of wrapping them in a workflow, so async external-job agents do not show a completed workflow before the real provider job finishes.
+- Start omitted-`async` public external-runner single-child launches in the supported background mode, so package agents such as `gpt-pro` from [Surf](https://github.com/nicobailon/surf-cli/) do not fail as foreground requests.
+- Let workflow scripts await omitted-`async` external-runner children by launching them in the background internally and returning their terminal result.
+- Report helpful workflow errors when `runs.all(...)` results are read as keyed objects instead of ordered arrays. Thanks to [@ravshansbox](https://github.com/ravshansbox) for #1351.
+- Clarify that Council Mode can include installed external-runner advisors such as `gpt-pro` from [Surf](https://github.com/nicobailon/surf-cli/) when the `surf-cli` Pi extension has registered `surf-oracle`, with text JSON reports instead of `outputSchema`.
+
+## [0.54.0] - 2026-08-21
+
+### Highlights
+- Subagent model selection is more precise with per-agent restrictions and an `inherit` shortcut for the current parent model.
+- Package agents are easier to discover because list and detail output now shows where they come from and whether their external provider is ready.
+- Workflow runs are less fragile: tool-result backfill, context-overflow handling, resumed children, and permission asks now behave more predictably.
+- Child launches are lighter and safer because subagent processes avoid loading the parent extension graph and avoid unnecessary permission bridge setup.
+- Council Mode is easier to use from natural language and no longer requires invented advisor role labels.
+
+### Added
+- Add per-agent model restrictions and a current-parent `inherit` allow-list alias. Thanks to [@hieudmg](https://github.com/hieudmg) for #1328.
+
+### Changed
+- Show package names, versions, and external-job provider status in subagent list and detail output so package agents such as Surf's `gpt-pro` are easier to find and use.
+- Make scripted workflow helper support and stale-session recovery easier to see in `doctor` and the workflow guide (#1344).
+- Keep structured single-child execution receipts quieter by removing an internal conversion log from public workflow output.
+- Route natural-language requests for advisor councils, plan critique, cross-exam, or multiple model perspectives to the Council Mode protocol.
+- Simplify Council Mode advisor selection so model-based profiles provide the perspective and the question supplies the decision frame.
+
+### Fixed
+- Layer custom-agent user and project overrides without dropping user-only fields, while preserving project precedence. Thanks to [@jagaliano](https://github.com/jagaliano) for #1348.
+- Avoid child tool-call hangs by loading the external permission-system bridge only for explicit native permission rules and by failing stalled ask decisions closed. Thanks to [@moekyo](https://github.com/moekyo) for #1339.
+- Keep foreground workflow children from timing out after a tool result is backfilled without a separate execution-end event. Thanks to [@moekyo](https://github.com/moekyo) for #1339.
+- Mark completed foreground workflow children as resumable in keyed receipts when their persisted session file is available (#1335).
+- Avoid loading the parent extension graph in subagent child processes. Thanks to [@ccharname](https://github.com/ccharname) for #1330.
+- Stop model fallback on context-overflow failures and surface `contextOverflow`. Thanks to [@srcKod](https://github.com/srcKod) for #1323.
+- Stop empty slow result scans from spamming the session transcript. Thanks to [@afrodao2394](https://github.com/afrodao2394) for #1329.
+- Surface logical tool failures so subagent tool results backfill correctly. Thanks to [@abdwhb-png](https://github.com/abdwhb-png) for #1332 and [@moekyo](https://github.com/moekyo) for #1331.
+
 ## [0.53.0] - 2026-08-20
 
 ### Highlights
+- New `/council` mode helps with material decisions by running a small, bounded group of advisors and ending with a parent-written decision memo.
 - Pi extensions can now register runtime agents without writing user or project config.
 - Async workflows are easier to resume because completed children now have durable keyed receipts.
 - Model fallback is less noisy and less wasteful when a model fails or the prompt is too large.
-- Fleet and `/council` now give clearer supervision cues while keeping control in the parent session.
 - Extension RPC hosts can safely inspect status, launch async work, steer children, and manage schedules.
 
 ### Added
@@ -23,9 +111,7 @@
 - Add durable keyed async workflow receipts and resume-by-key selectors for
   retained workflow children (#1302).
 - Add the `resultScanLogging` config to control result scan logging. Thanks to [@apoapostolov](https://github.com/apoapostolov) for #1293.
-- Add packaged `/council` and `council-mode` resources for a bounded,
-  supervisor-mediated advisor loop, plus documented model-based `council-*`
-  profile examples (#1295).
+- Add `/council` and `council-mode` for bounded advisor councils. Use it for material decisions that need multiple perspectives: the parent picks 2–3 advisors, collects independent reports, optionally runs one cross-exam pass, and writes the final decision memo. The package also documents model-based `council-*` profile examples (#1295).
 
 ### Changed
 - Show bounded workflow progress in Fleet detail views while keeping workflow

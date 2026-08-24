@@ -8,9 +8,10 @@ import { decodePermissionRules, permissionDecision, PERMISSION_AUDIT_PATH_ENV, P
 import { consumeSteerRequestsFromDir, MAX_STEER_QUEUE_SIZE, steerAckPathFromDir, writeSteerAckAt, writeSteerCapabilityAt, writeSteerRequestToDir, type SteerDeliveryStatus, type SteerRequest } from "../background/control-channel.ts";
 import { SUBAGENT_CHILD_AGENT_ENV, SUBAGENT_CHILD_INDEX_ENV, SUBAGENT_FANOUT_CHILD_ENV, SUBAGENT_STEER_ACK_DIR_ENV, SUBAGENT_STEER_CAPABILITY_ENV, SUBAGENT_STEER_INBOX_ENV } from "./pi-args.ts";
 import { RUNTIME_EXTENSION_ACK_EVENT, RUNTIME_EXTENSION_ACK_PATH_ENV, isRuntimeAcknowledgedExtensionId, writeRuntimeAcknowledgedExtensions } from "./runtime-acknowledged-extensions.ts";
-import { createStructuredOutputToolParameters, STRUCTURED_OUTPUT_CAPTURE_ENV, STRUCTURED_OUTPUT_SCHEMA_ENV, validateStructuredOutputValue } from "./structured-output.ts";
+import { createStructuredOutputToolParameters, STRUCTURED_OUTPUT_ACCEPTANCE_CAPTURE_ENV, STRUCTURED_OUTPUT_CAPTURE_ENV, STRUCTURED_OUTPUT_SCHEMA_ENV, validateStructuredOutputValue } from "./structured-output.ts";
 import {
 	CHILD_TOOL_DIAGNOSTIC_PATH_ENV,
+	formatChildToolDiagnostic,
 	MCP_DIRECT_CHILD_TOOLS_ENV,
 	REQUIRED_CHILD_TOOLS_ENV,
 	writeChildToolDiagnostic,
@@ -21,7 +22,7 @@ import type { JsonSchemaObject, ResolvedToolBudget, SubagentState } from "../../
 import { resolveCurrentSessionId } from "../../shared/session-identity.ts";
 import { resolveWatchPath } from "../../shared/utils.ts";
 import { registerChildWatchdog } from "../../watchdog/register-child.ts";
-import { CHILD_WATCHDOG_CONFIG_ENV } from "../../watchdog/child-status.ts";
+import { CHILD_WATCHDOG_CONFIG_ENV, decodeChildWatchdogConfig } from "../../watchdog/child-status.ts";
 import { requestWatchdogPermission, type WatchdogPermissionRequest, type WatchdogPermissionResult } from "../../watchdog/permission-arbiter.ts";
 import { SUBAGENT_WATCHDOG_WARNING_TYPE } from "../../watchdog/types.ts";
 import { resolveWaitToolConfig } from "../background/wait-config.ts";
@@ -296,14 +297,41 @@ export function registerPermissionGate(
 		const decision = permissionDecision(rules, toolName);
 		if (decision === "allow") return undefined;
 		if (decision === "deny") return { block: true, reason: `Blocked by pi-subagents permission rule: '${toolName}' is denied.` };
-		const result = await requestPermission({
-			ctx,
-			toolName,
-			args: event.input ?? {},
-			rawWatchdogConfig: process.env[CHILD_WATCHDOG_CONFIG_ENV],
-			auditPath: process.env[PERMISSION_AUDIT_PATH_ENV],
-			...(ctx.signal ? { signal: ctx.signal } : {}),
-		});
+		const rawWatchdogConfig = process.env[CHILD_WATCHDOG_CONFIG_ENV];
+		let timeoutMs = 30_000;
+		try {
+			timeoutMs = decodeChildWatchdogConfig(rawWatchdogConfig)?.agentEndTimeoutMs ?? timeoutMs;
+		} catch {
+			// The arbiter reports invalid configuration with the concrete decode error.
+		}
+		if (ctx.signal?.aborted) return { block: true, reason: "Blocked by pi-subagents permission rule: Watchdog permission decision was cancelled." };
+		let timeout: ReturnType<typeof setTimeout> | undefined;
+		let abort: (() => void) | undefined;
+		let result: WatchdogPermissionResult;
+		try {
+			result = await Promise.race([
+				requestPermission({
+					ctx,
+					toolName,
+					args: event.input ?? {},
+					rawWatchdogConfig,
+					auditPath: process.env[PERMISSION_AUDIT_PATH_ENV],
+					...(ctx.signal ? { signal: ctx.signal } : {}),
+				}),
+				new Promise<WatchdogPermissionResult>((resolve) => {
+					if (!ctx.signal) return;
+					abort = () => resolve({ approved: false, reason: "Watchdog permission decision was cancelled.", source: "watchdog" });
+					ctx.signal.addEventListener("abort", abort, { once: true });
+				}),
+				new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error(`Watchdog permission decision timed out after ${timeoutMs}ms.`)), timeoutMs); }),
+			]);
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error);
+			return { block: true, reason: `Blocked by pi-subagents permission rule: Watchdog permission arbiter failed closed: ${reason}` };
+		} finally {
+			if (timeout) clearTimeout(timeout);
+			if (abort) ctx.signal?.removeEventListener("abort", abort);
+		}
 		if (result.approved) return undefined;
 		return { block: true, reason: `Blocked by pi-subagents permission rule: ${result.reason}` };
 	});
@@ -598,36 +626,41 @@ export default function registerSubagentPromptRuntime(pi: ExtensionAPI): void {
 		registerNativeSupervisorClientOnce();
 	});
 	onRuntimeEvent("agent_start", () => {
-		refreshChildToolDiagnostic(pi);
+		const diagnostic = refreshChildToolDiagnostic(pi);
+		if (diagnostic) throw new Error(formatChildToolDiagnostic(diagnostic));
 	});
 	onRuntimeEvent("agent_end", async (_event: unknown, ctx: unknown) => {
 		if ((ctx as { hasUI?: boolean } | undefined)?.hasUI === true) return;
 		await drainOutstandingWork({ state: waitState, events: pi.events });
 	});
 	const structuredOutputPath = process.env[STRUCTURED_OUTPUT_CAPTURE_ENV];
+	const structuredAcceptanceReportPath = process.env[STRUCTURED_OUTPUT_ACCEPTANCE_CAPTURE_ENV];
 	const structuredSchemaPath = process.env[STRUCTURED_OUTPUT_SCHEMA_ENV];
 	if (structuredOutputPath && structuredSchemaPath) {
 		const schema = JSON.parse(fs.readFileSync(structuredSchemaPath, "utf-8")) as JsonSchemaObject;
-		const parameters = createStructuredOutputToolParameters(schema);
+		const parameters = createStructuredOutputToolParameters(schema, { acceptanceReport: Boolean(structuredAcceptanceReportPath) });
 		const registerTool = pi.registerTool as unknown as (tool: {
 			name: string;
 			label: string;
 			description: string;
 			parameters: unknown;
-			execute: (_id: string, params: { value: unknown }) => Promise<unknown>;
+			execute: (_id: string, params: { value: unknown; acceptanceReport?: unknown }) => Promise<unknown>;
 		}) => void;
 		registerTool({
 			name: "structured_output",
 			label: "Structured Output",
 			description: "Submit the required final structured output for this subagent step. This terminates the step.",
-			parameters: parameters as never,
-			async execute(_id: string, params: { value: unknown }) {
+			parameters,
+			async execute(_id: string, params: { value: unknown; acceptanceReport?: unknown }) {
 				const validation = await validateStructuredOutputValue(schema, params.value);
 				if (validation.status === "invalid") {
 					throw new Error(`Structured output validation failed: ${validation.message}`);
 				}
 				fs.mkdirSync(path.dirname(structuredOutputPath), { recursive: true });
 				fs.writeFileSync(structuredOutputPath, JSON.stringify(params.value), { mode: 0o600 });
+				if (structuredAcceptanceReportPath && params.acceptanceReport !== undefined) {
+					fs.writeFileSync(structuredAcceptanceReportPath, JSON.stringify(params.acceptanceReport), { mode: 0o600 });
+				}
 				return {
 					content: [{ type: "text", text: "Structured output captured." }],
 					details: { path: structuredOutputPath },

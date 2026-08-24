@@ -55,7 +55,7 @@ import {
 import { buildSkillInjection, resolveSkillsWithFallback } from "../../agents/skills.ts";
 import { buildAgentMemoryInjection } from "../../agents/agent-memory.ts";
 import { effectiveToolTimeoutMs, formatToolTimeoutMessage, resolveToolTimeoutMs, toolTimeoutCallKey, toolTimeoutFromEnv } from "../shared/tool-timeout.ts";
-import { evaluateCompletionMutationGuard } from "../shared/completion-guard.ts";
+import { evaluateCompletionMutationGuard, validateImplementationToolContract } from "../shared/completion-guard.ts";
 import { arbitrateCompletionGuardRescue } from "../shared/llm-intent-arbiter.ts";
 import { getPiSpawnCommand } from "../shared/pi-spawn.ts";
 import { createJsonlWriter } from "../../shared/jsonl-writer.ts";
@@ -66,13 +66,17 @@ import { applyThinkingSuffix, buildPiArgs, cleanupTempDir, projectLaunchResolved
 import { readRuntimeAcknowledgedExtensions } from "../shared/runtime-acknowledged-extensions.ts";
 import { assertAgentAllowedByCapabilityCeiling, decodeSubagentCapabilityCeiling, intersectSubagentCapabilityCeilings, resolveCurrentSubagentCapabilityCeiling, SUBAGENT_CAPABILITY_CEILING_ENV } from "../shared/capability-ceiling.ts";
 import { resolveEffectiveThinking } from "../../shared/model-info.ts";
-import { MISSING_STRUCTURED_OUTPUT_CALL_ERROR, readStructuredOutput } from "../shared/structured-output.ts";
+import { assertThinkingWithinCeiling, decodeThinkingCeiling, intersectThinkingCeilings, SUBAGENT_THINKING_CEILING_ENV } from "../../shared/thinking-ceiling.ts";
+import { MISSING_STRUCTURED_OUTPUT_CALL_ERROR, readStructuredOutput, readStructuredOutputAcceptanceReport } from "../shared/structured-output.ts";
 import { formatProcessSignalError, isUnexplainedProcessSignal } from "../shared/process-signal.ts";
 import { readChildToolDiagnosticError } from "../shared/tool-availability.ts";
+import { buildTimeoutRecoverySummary, collectTrackedMutationEvidence, snapshotTrackedMutations } from "../shared/mutation-evidence.ts";
 import { captureSingleOutputSnapshot, extractChildWrittenOutput, finalizeSingleOutput, formatSavedOutputReference, injectOutputPathSystemPrompt, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
 import {
 	buildModelCandidates,
+	formatSubagentModelVerificationError,
 	formatModelAttemptNote,
+	isContextOverflow,
 	isRetryableModelFailure,
 	recordRetryableModelFailure,
 } from "../shared/model-fallback.ts";
@@ -308,10 +312,14 @@ async function runSingleAttempt(
 		originalTask?: string;
 		taskDelivery?: SubagentTaskDelivery;
 		orcaProgressTab?: OrcaProgressTab;
+		launchWarnings: { emitted: boolean };
+		verifyModel: boolean;
 	},
 ): Promise<SingleResult> {
 	const effectiveThinking = options.thinkingOverride ?? agent.thinking;
 	const modelArg = applyThinkingSuffix(model, effectiveThinking, options.thinkingOverride !== undefined);
+	assertThinkingWithinCeiling({ model: modelArg, configThinking: effectiveThinking, ceiling: options.thinkingCeiling, agent: agent.name, runId: options.runId });
+	const expectedModelForVerification = shared.verifyModel ? modelArg : undefined;
 	const resolvedThinking = resolveEffectiveThinking(modelArg, effectiveThinking);
 	const watchdogConfig = resolveWatchdogConfig(options.cwd ?? runtimeCwd);
 	const childWatchdog = watchdogConfig.ok
@@ -326,7 +334,7 @@ async function runSingleAttempt(
 	const permissionAuditPath = permissionRules && options.artifactsDir
 		? path.join(options.artifactsDir, "permission-audit", `${options.runId}-${options.index ?? 0}.jsonl`)
 		: undefined;
-	const { args, env: sharedEnv, tempDir, toolDiagnosticPath, runtimeAcknowledgedExtensionsPath, capabilityAudit } = buildPiArgs({
+	const { args, env: sharedEnv, tempDir, toolDiagnosticPath, runtimeAcknowledgedExtensionsPath, capabilityAudit, warnings } = buildPiArgs({
 		baseArgs: ["--mode", "json", "-p"],
 		task,
 		taskDelivery: shared.taskDelivery,
@@ -361,6 +369,8 @@ async function runSingleAttempt(
 		steerCapabilityPath: options.steerCapabilityPath,
 		steerAckDir: options.steerAckDir,
 		structuredOutput: options.structuredOutput,
+		fast: options.fast ?? agent.fast,
+		modelCandidates: shared.modelCandidates,
 		toolBudget: options.toolBudget,
 		allowZeroToolBudget: options.allowZeroToolBudget,
 		permissionRules,
@@ -368,7 +378,13 @@ async function runSingleAttempt(
 		childWatchdog,
 		waitToolEnabled: options.waitToolEnabled,
 		capabilityCeiling: options.capabilityCeiling,
+		thinkingCeiling: options.thinkingCeiling,
+		extensionBindings: options.extensionBindings,
 	});
+	if (!shared.launchWarnings.emitted && warnings.length > 0) {
+		for (const warning of warnings) console.warn(`[pi-subagents] ${warning}`);
+		shared.launchWarnings.emitted = true;
+	}
 
 	const effectiveSystemPrompt = appendTurnBudgetSystemPrompt(shared.systemPrompt, options.turnBudget);
 	const toolPlan = resolvePiLaunchToolPlan({
@@ -379,17 +395,53 @@ async function runSingleAttempt(
 		cwd: options.cwd ?? runtimeCwd,
 		requireReadTool: Boolean(shared.resolvedSkillNames?.length),
 		structuredOutput: Boolean(options.structuredOutput),
+		fast: options.fast ?? agent.fast,
+		model: modelArg,
+		modelCandidates: shared.modelCandidates,
 		capabilityCeiling: options.capabilityCeiling,
 		inheritedCapabilityCeiling: decodeSubagentCapabilityCeiling(process.env[SUBAGENT_CAPABILITY_CEILING_ENV]),
 		agentName: agent.name,
+		permissionRules,
 	});
+	const contractTools = toolPlan.explicitToolAllowlist ? toolPlan.effectiveToolAllowlist : undefined;
+	const contractError = validateImplementationToolContract({
+		agent: agent.name,
+		task: shared.originalTask ?? task,
+		tools: contractTools,
+		mcpDirectTools: toolPlan.effectiveMcpTools,
+		configuredExtensions: toolPlan.configuredExtensions,
+		requestedTools: toolPlan.requestedBuiltinTools,
+		acceptanceRole: agent.acceptanceRole,
+		completionGuard: agent.completionGuard,
+	});
+	if (contractError) {
+		cleanupTempDir(tempDir);
+		return {
+			index: options.index ?? 0,
+			agent: agent.name,
+			task,
+			messages: [],
+			finalOutput: "",
+			exitCode: 1,
+			error: contractError,
+			usage: emptyUsage(),
+			model: modelArg,
+			modelAttempts: [],
+			attemptedModels: [],
+			progressSummary: { status: "failed", toolCount: 0, tokens: 0, durationMs: 0 },
+			...(toolPlan.capabilityCeiling ? { capabilityCeiling: toolPlan.capabilityCeiling } : {}),
+			...(toolPlan.capabilityAudit ? { capabilityAudit: toolPlan.capabilityAudit } : {}),
+		};
+	}
 	const launchResolvedExtensions = projectLaunchResolvedChildExtensions(toolPlan);
 	const launchContractDigest = launchBindingDigest({
 		definitionDigest: agentDefinitionDigest(agent),
 		task: shared.originalTask ?? task,
 		...(modelArg ? { model: modelArg } : {}),
 		modelCandidates: shared.modelCandidates,
+		...((options.fast ?? agent.fast) !== undefined ? { fast: options.fast ?? agent.fast } : {}),
 		...(resolvedThinking ? { thinking: resolvedThinking } : {}),
+		...(options.thinkingCeiling ? { thinkingCeiling: options.thinkingCeiling } : {}),
 		systemPrompt: effectiveSystemPrompt,
 		systemPromptMode: agent.systemPromptMode,
 		inheritProjectContext: agent.inheritProjectContext,
@@ -401,6 +453,7 @@ async function runSingleAttempt(
 		...(options.outputPath ? { outputPath: options.outputPath } : {}),
 		outputMode: options.outputMode ?? "inline",
 		...(options.structuredOutput ? { structuredOutputSchema: options.structuredOutput.schema } : {}),
+		...(options.extensionBindings ? { extensionBindings: options.extensionBindings } : {}),
 	});
 	const result: SingleResult = withRunContext({
 		index: options.index ?? 0,
@@ -480,9 +533,11 @@ async function runSingleAttempt(
 		return result;
 	}
 	const spawnEnv = { ...process.env, ...sharedEnv, ...getSubagentDepthEnv(options.maxSubagentDepth) };
+	const mutationSnapshot = snapshotTrackedMutations(options.cwd ?? runtimeCwd);
 	let observedMutationAttempt = false;
 	let structuredOutputToolInvoked = false;
 	let structuredOutputMessageStartIndex: number | undefined;
+	let toolAvailabilityError: string | undefined;
 
 	const exitCode = await new Promise<number>((resolve) => {
 		const spawnSpec = getPiSpawnCommand(args);
@@ -1035,6 +1090,10 @@ async function runSingleAttempt(
 					if (evt.message.model) {
 						progress.model = evt.message.model;
 						if (!result.model) result.model = evt.message.model;
+						if (expectedModelForVerification && !hasToolCall) {
+							const modelVerificationError = formatSubagentModelVerificationError(expectedModelForVerification, evt.message.model, options.availableModels);
+							if (modelVerificationError && !result.error) result.error = modelVerificationError;
+						}
 					}
 					if (evt.message.errorMessage) assistantError = evt.message.errorMessage;
 					const assistantText = extractTextFromContent(evt.message.content);
@@ -1051,6 +1110,20 @@ async function runSingleAttempt(
 			}
 
 			if (evt.type === "tool_result_end" && evt.message) {
+				const toolResultCompletion = {
+					toolCallId: (evt.message as { toolCallId?: unknown }).toolCallId ?? (evt as { toolCallId?: unknown }).toolCallId,
+					toolName: (evt.message as { toolName?: unknown }).toolName ?? (evt as { toolName?: unknown }).toolName,
+				};
+				clearActiveToolTimeout(toolResultCompletion);
+				const endedTool = removeActiveToolCall(toolResultCompletion);
+				if (endedTool) {
+					progress.recentTools.push({
+						tool: endedTool.tool,
+						args: endedTool.args,
+						endMs: now,
+					});
+					refreshCurrentTool();
+				}
 				result.messages!.push(evt.message);
 				const resultText = extractTextFromContent(evt.message.content);
 				if (options.toolBudget && pendingToolResult && resultText.includes("Tool budget hard limit reached")) {
@@ -1246,6 +1319,7 @@ async function runSingleAttempt(
 				// JSONL artifact flush is best effort.
 			});
 			const toolDiagnosticError = readChildToolDiagnosticError(toolDiagnosticPath);
+			toolAvailabilityError = toolDiagnosticError;
 			result.runtimeAcknowledgedExtensions = readRuntimeAcknowledgedExtensions(runtimeAcknowledgedExtensionsPath);
 			cleanupTempDir(tempDir);
 			stdoutReader.end();
@@ -1384,6 +1458,9 @@ async function runSingleAttempt(
 				result.structuredOutputFailed = true;
 			} else {
 				result.structuredOutput = structured.value;
+				const acceptanceReport = readStructuredOutputAcceptanceReport(options.structuredOutput);
+				(result as SingleResult & { structuredAcceptanceReport?: unknown; structuredAcceptanceReportError?: string }).structuredAcceptanceReport = acceptanceReport.value;
+				(result as SingleResult & { structuredAcceptanceReport?: unknown; structuredAcceptanceReportError?: string }).structuredAcceptanceReportError = acceptanceReport.error;
 				validatedStructuredOutput = true;
 			}
 		}
@@ -1421,6 +1498,7 @@ async function runSingleAttempt(
 		tokens: progress.tokens,
 		durationMs: progress.durationMs,
 	};
+	const mutationEvidence = collectTrackedMutationEvidence(mutationSnapshot, options.cwd ?? runtimeCwd);
 
 	const acceptanceOutput = getFinalOutput(result.messages ?? []);
 	let fullOutput = stripAcceptanceReport(acceptanceOutput);
@@ -1428,9 +1506,19 @@ async function runSingleAttempt(
 	result.outputState = fullOutput.trim() || result.structuredOutput !== undefined ? "present" : "absent";
 	if (result.timedOut) {
 		const timeoutMessage = formatTimeoutMessage(options.timeoutMs ?? 0);
+		result.timeoutRecovery = buildTimeoutRecoverySummary({
+			termination: "timed-out",
+			evidence: mutationEvidence,
+			currentTool: progress.currentTool,
+			currentToolArgs: progress.currentToolArgs,
+			currentPath: progress.currentPath,
+			sessionFile: options.sessionFile,
+			transcriptPath: shared.transcriptWriter ? shared.artifactPaths?.transcriptPath : undefined,
+			artifactPaths: shared.artifactPaths,
+		});
 		fullOutput = fullOutput.trim()
-			? `${timeoutMessage}\n\nPartial output before timeout:\n${fullOutput}`
-			: timeoutMessage;
+			? `${timeoutMessage}\n\n${result.timeoutRecovery.message}\n\nPartial output before timeout:\n${fullOutput}`
+			: `${timeoutMessage}\n\n${result.timeoutRecovery.message}`;
 	} else if (result.turnBudgetExceeded && result.turnBudget) {
 		fullOutput = formatTurnBudgetOutput(turnBudgetExceededMessage(result.turnBudget, result.turnBudget.turnCount), fullOutput);
 	} else if (result.turnBudget?.outcome === "termination-deferred") {
@@ -1441,16 +1529,20 @@ async function runSingleAttempt(
 		fullOutput = fullOutput.trim() ? `${note}\n\n${fullOutput}` : note;
 	}
 	const completionGuardEnabled = isAgentContractV1(options.agentContract) ? agent.completionGuard === true : agent.completionGuard !== false;
-	const completionGuard = result.exitCode === 0 && !result.error && completionGuardEnabled
+	const completionGuard = ((result.exitCode === 0 && !result.error) || toolAvailabilityError) && completionGuardEnabled
 		? evaluateCompletionMutationGuard({
 			agent: agent.name,
 			task: shared.originalTask ?? task,
 			messages: result.messages ?? [],
-			tools: agent.tools,
-			mcpDirectTools: agent.mcpDirectTools,
+			tools: contractTools,
+			mcpDirectTools: toolPlan.effectiveMcpTools,
+			toolAvailabilityError,
+			mutationEvidence,
 		})
 		: undefined;
-	let completionGuardTriggered = completionGuard?.triggered === true && !observedMutationAttempt;
+	const mutationAttemptObserved = observedMutationAttempt || mutationEvidence.attemptedMutation;
+	let completionGuardTriggered = completionGuard?.triggered === true && !mutationAttemptObserved;
+	const completionGuardBlocked = completionGuard?.blocked === true;
 	// The classifier is deliberately narrow, so a read-only review task can
 	// still be misread as implementation. Arbitrate BEFORE any failure side
 	// effect is published (effects, exit code, progress, notifications,
@@ -1471,7 +1563,9 @@ async function runSingleAttempt(
 		result.effects = {
 			...(result.effects ?? {}),
 			fileMutation: {
-				status: completionGuard.expectedMutation
+				status: completionGuardBlocked
+					? "blocked"
+					: completionGuard.expectedMutation
 					? completionGuardTriggered
 						? "missing"
 						: arbiterRescued
@@ -1479,7 +1573,9 @@ async function runSingleAttempt(
 							: "observed"
 					: "not-applicable",
 				expected: completionGuard.expectedMutation,
-				attempted: completionGuard.attemptedMutation || observedMutationAttempt,
+				attempted: completionGuardBlocked ? false : completionGuard.attemptedMutation || mutationAttemptObserved,
+				evidence: mutationEvidence,
+				...(completionGuardBlocked && completionGuard.message ? { message: completionGuard.message } : {}),
 				...(completionGuardTriggered ? { message: "Subagent completed without making edits for an implementation task." } : {}),
 				...(arbiterRescued ? { resolvedBy: "llm-intent-arbiter" } : {}),
 			},
@@ -1561,6 +1657,14 @@ async function runSyncCompletionInner(
 			error: `Unknown agent: ${agentName}`,
 		}, options.context));
 	}
+	options = {
+		...options,
+		thinkingCeiling: intersectThinkingCeilings(
+			options.thinkingCeiling,
+			agent.maxThinking,
+			decodeThinkingCeiling(process.env[SUBAGENT_THINKING_CEILING_ENV]),
+		),
+	};
 	try {
 		assertAgentAllowedByCapabilityCeiling(agent.name, options.capabilityCeiling);
 	} catch (error) {
@@ -1631,7 +1735,7 @@ async function runSyncCompletionInner(
 		dynamicGroup: options.acceptanceContext?.dynamicGroup,
 		agentContract: options.agentContract,
 	});
-	const acceptancePrompt = formatAcceptancePrompt(effectiveAcceptance, { reportOptional: isAgentContractV1(options.agentContract) });
+	const acceptancePrompt = formatAcceptancePrompt(effectiveAcceptance, { reportOptional: isAgentContractV1(options.agentContract), structuredOutput: Boolean(options.structuredOutput?.acceptanceReportPath) });
 	const taskWithAcceptance = acceptancePrompt ? `${task}\n${acceptancePrompt}` : task;
 	options.onEffectivePrompt?.(taskWithAcceptance);
 	const sessionEnabled = Boolean(options.sessionFile || options.sessionDir) || shareEnabled;
@@ -1674,13 +1778,30 @@ async function runSyncCompletionInner(
 		options.modelOverride ?? agent.model,
 		agent.fallbackModels,
 		options.availableModels,
-		options.preferredModelProvider,
+		agent.modelProvider ?? options.preferredModelProvider,
 		{ scope: options.modelScope, primaryModelFromParent: options.modelOverrideFromParent },
 	);
+	try {
+		for (const candidate of candidates) {
+			const model = applyThinkingSuffix(candidate, options.thinkingOverride ?? agent.thinking, options.thinkingOverride !== undefined);
+			assertThinkingWithinCeiling({ model, configThinking: options.thinkingOverride ?? agent.thinking, ceiling: options.thinkingCeiling, agent: agent.name, runId: options.runId });
+		}
+	} catch (error) {
+		return redactResultPrompt(withRunContext({
+			index: options.index ?? 0,
+			agent: agent.name,
+			task,
+			exitCode: 1,
+			messages: [],
+			usage: emptyUsage(),
+			error: error instanceof Error ? error.message : String(error),
+		}, options.context));
+	}
 	const attemptedModels: string[] = [];
 	const modelAttempts: ModelAttempt[] = [];
 	const aggregateUsage = emptyUsage();
 	const attemptNotes: string[] = [];
+	const launchWarnings = { emitted: false };
 	let totalToolCount = 0;
 	let totalDurationMs = 0;
 
@@ -1755,6 +1876,7 @@ async function runSyncCompletionInner(
 	modelAttemptsLoop: for (let modelIndex = 0; modelIndex < modelsToTry.length; modelIndex++) {
 		const candidate = modelsToTry[modelIndex];
 		for (let startupAttemptIndex = 0; ; startupAttemptIndex++) {
+			const verifyModel = Boolean(candidate) && !(options.modelOverrideFromParent && modelIndex === 0);
 			const outputSnapshot = captureSingleOutputSnapshot(options.outputPath);
 			const result = await runSingleAttempt(runtimeCwd, agent, taskWithAcceptance, candidate, attemptOptions, {
 				sessionEnabled,
@@ -1772,6 +1894,8 @@ async function runSyncCompletionInner(
 				originalTask: task,
 				taskDelivery: taskDeliveryOverride,
 				orcaProgressTab,
+				launchWarnings,
+				verifyModel,
 			});
 			lastResult = result;
 			if (startupAttemptIndex === 0) {
@@ -1864,6 +1988,11 @@ async function runSyncCompletionInner(
 			}
 			const retryableModelFailure = isRetryableModelFailure(result.error);
 			if (retryableModelFailure) recordRetryableModelFailure(result.model ?? candidate, result.error);
+			if (isContextOverflow(result.error)) {
+				result.contextOverflow = true;
+				attemptNotes.push(`[fallback] ${attempt.model} failed: context overflow — the input exceeds this model's context window. Reduce the task input or use a model with a larger context window.`);
+				break modelAttemptsLoop;
+			}
 			if (!retryableModelFailure || modelIndex === modelsToTry.length - 1) break modelAttemptsLoop;
 			attemptNotes.push(formatModelAttemptNote(attempt, modelsToTry[modelIndex + 1]));
 			break;
@@ -1943,6 +2072,8 @@ async function runSyncCompletionInner(
 			result.acceptance = await evaluateAcceptance({
 				acceptance: effectiveAcceptance,
 				output: acceptanceOutputByResult.get(result) ?? result.finalOutput ?? "",
+				report: (result as SingleResult & { structuredAcceptanceReport?: import("../../shared/types.ts").AcceptanceReport; structuredAcceptanceReportError?: string }).structuredAcceptanceReport,
+				reportError: (result as SingleResult & { structuredAcceptanceReport?: import("../../shared/types.ts").AcceptanceReport; structuredAcceptanceReportError?: string }).structuredAcceptanceReportError,
 				fileOutput: childWrittenOutput !== undefined && options.outputPath
 					? { content: childWrittenOutput, path: options.outputPath, authoritative: options.outputMode === "file-only" }
 					: undefined,
