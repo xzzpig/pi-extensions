@@ -151,9 +151,11 @@ describe("forwarded decision broadcasts", () => {
         events,
         policy: { resolve: vi.fn(() => makeCheckResult({ state: "ask" })) },
         escalator: {
-          escalate: vi
-            .fn()
-            .mockResolvedValue({ approved: true, state: "approved" }),
+          escalate: vi.fn().mockResolvedValue({
+            approved: true,
+            state: "approved",
+            decidedBy: DECIDED_BY_HUMAN,
+          }),
         },
       }),
     );
