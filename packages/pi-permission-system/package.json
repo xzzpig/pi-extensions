@@ -33,8 +33,8 @@
     "prepack": "pnpm run build:types",
     "gen:schema": "node --experimental-strip-types scripts/generate-permissions-schema.ts && biome format --write schemas/permissions.schema.json",
     "verify:public-types": "bash scripts/verify-public-types.sh",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "env -u PI_SUBAGENT_PARENT_SESSION vitest run",
+    "test:watch": "env -u PI_SUBAGENT_PARENT_SESSION vitest"
   },
   "keywords": [
     "pi-package",

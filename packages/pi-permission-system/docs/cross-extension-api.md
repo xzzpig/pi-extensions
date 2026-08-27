@@ -21,7 +21,7 @@ pi.events.on("permissions:ready", (data) => {
   void (async () => {
     try {
       const { getPermissionsService } =
-        await import("@gotgenes/pi-permission-system");
+        await import("@xzzpig/pi-permission-system");
       const permissions = getPermissionsService(sessionId);
       if (permissions) {
         const result = permissions.checkPermission("bash", "git push");
@@ -56,7 +56,7 @@ Removal is deferred to a future major release.
 Both accessors were renamed in the major that reclaimed `getPermissionsService` for the keyed locator; if you are upgrading from a release whose `getPermissionsService()` took no argument, see [migration/0794-keyed-service-locator.md](migration/0794-keyed-service-locator.md).
 
 All types below are directly importable and type-check with `tsc` out of the box.
-`@gotgenes/pi-permission-system`'s published `exports` resolve `import type { … }` to a self-contained, bundled declaration file with no internal module references, so a downstream `tsconfig.json` needs no special path configuration.
+`@xzzpig/pi-permission-system`'s published `exports` resolve `import type { … }` to a self-contained, bundled declaration file with no internal module references, so a downstream `tsconfig.json` needs no special path configuration.
 
 ### API
 
@@ -206,7 +206,7 @@ export default function myExtension(pi: ExtensionAPI): void {
     void (async () => {
       try {
         const { getPermissionsService } =
-          await import("@gotgenes/pi-permission-system");
+          await import("@xzzpig/pi-permission-system");
         const permissions = getPermissionsService(sessionId);
         disposeFormatter = permissions?.registerToolInputFormatter(
           "deploy", // a tool THIS extension registers with Pi
@@ -349,7 +349,7 @@ It carries `request`, the permission ask's invariant core, verbatim from the pro
 The bus is the narrowest renderer: any loaded extension can observe it without the operator having named that extension, whereas every other route to an ask's evidence requires that consent (a registered tool-input formatter, or an `Authorizer` link the operator lists in `authorizerChain`).
 
 ```typescript
-import type { PermissionUiPromptEvent } from "@gotgenes/pi-permission-system";
+import type { PermissionUiPromptEvent } from "@xzzpig/pi-permission-system";
 
 pi.events.on("permissions:ui_prompt", (raw) => {
   const event = raw as PermissionUiPromptEvent;
@@ -432,7 +432,7 @@ Use the review log's `toolCallId` to join back to the Pi transcript.
 ```typescript
 pi.events.on("permissions:decision", (raw) => {
   const event =
-    raw as import("@gotgenes/pi-permission-system").PermissionDecisionEvent;
+    raw as import("@xzzpig/pi-permission-system").PermissionDecisionEvent;
   console.log(event.surface, event.result, event.resolution);
   // e.g. "bash" "allow" "user_approved_for_session"
 });
@@ -563,7 +563,7 @@ pi.events.on("permissions:ready", (data) => {
   if (dispose || !sessionId) return;
   void (async () => {
     const { getPermissionsService } =
-      await import("@gotgenes/pi-permission-system");
+      await import("@xzzpig/pi-permission-system");
     const permissions = getPermissionsService(sessionId);
     // This node published before the event fired — resolve and register now.
     dispose = permissions?.registerAuthorizer("my-link", authorize);

@@ -55,8 +55,8 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "npm run test:unit",
-    "test:unit": "node --experimental-strip-types --import ./test/support/isolated-temp-root.mjs --test test/unit/*.test.ts",
-    "test:integration": "node --experimental-strip-types --import ./test/support/register-loader.mjs --test test/integration/*.test.ts",
+    "test:unit": "env -u PI_SUBAGENT_PARENT_SESSION -u PI_SESSION_ID -u PI_SESSION_FILE -u PI_CODING_AGENT -u PI_PROVIDER -u PI_MODEL -u PI_REASONING_LEVEL node --experimental-strip-types --import ./test/support/isolated-temp-root.mjs --test test/unit/*.test.ts",
+    "test:integration": "env -u PI_SUBAGENT_PARENT_SESSION -u PI_SESSION_ID -u PI_SESSION_FILE -u PI_CODING_AGENT -u PI_PROVIDER -u PI_MODEL -u PI_REASONING_LEVEL node --experimental-strip-types --import ./test/support/register-loader.mjs --test test/integration/*.test.ts",
     "test:e2e": "node --experimental-strip-types --import ./test/support/register-loader.mjs --test test/e2e/*.test.ts",
     "test:all": "npm run test:unit && npm run test:integration && npm run test:e2e",
     "prepack": "npm --prefix ../pi-components run build"

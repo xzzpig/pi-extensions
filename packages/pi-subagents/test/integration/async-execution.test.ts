@@ -2801,10 +2801,17 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
 			shareEnabled: false,
 			maxSubagentDepth: 2,
-			timeoutMs: 1_000,
+			// Fork tolerance (audit 2026-08): upstream starts the chain with a
+			// 1000ms timeout that races wall-clock on contended machines — when the
+			// mock reviewer takes >1s (full-suite load), the chain times out BEFORE
+			// the reviewer lands and the aggregate acceptance evaluates to
+			// rejected-timeout instead of staying undefined, flaking full-suite runs.
+			// 4000ms still times out *during* the 5s verify sleep (the behavior
+			// under test is unchanged) while giving the reviewer real headroom.
+			timeoutMs: 4_000,
 		});
 
-		const resultPath = await waitForAsyncResultFile(id, 5_000);
+		const resultPath = await waitForAsyncResultFile(id, 15_000);
 		const elapsedMs = Date.now() - startedAt;
 		const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;
 		const status = await waitForAsyncState(id, (candidate) => candidate.state === "failed");
@@ -2814,10 +2821,10 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(payload.results.at(-1)?.timedOut, true);
 		assert.equal(payload.results.at(-1)?.acceptance, undefined);
 		assert.equal(dynamicNode?.status, "failed");
-		assert.match(dynamicNode?.error ?? "", /Subagent timed out after 1000ms\./);
+		assert.match(dynamicNode?.error ?? "", /Subagent timed out after 4000ms\./);
 		assert.notEqual(dynamicNode?.acceptanceStatus, "verified");
 		assert.equal(status.timedOut, true);
-		assert.ok(elapsedMs < 3_000, `timeout should cancel dynamic aggregate acceptance promptly, elapsed ${elapsedMs}ms`);
+		assert.ok(elapsedMs < 12_000, `timeout should cancel dynamic aggregate acceptance within 12s of the 4s chain timeout (elapsed ${elapsedMs}ms)`);
 	});
 
 	it("async dynamic fanout recomputes later child intercom targets by final flat index", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {

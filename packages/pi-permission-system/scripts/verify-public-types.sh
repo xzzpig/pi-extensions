@@ -70,7 +70,7 @@ import {
   type PermissionCheckResult,
   type PermissionsService,
   type PermissionUiPromptEvent,
-} from "@gotgenes/pi-permission-system";
+} from "@xzzpig/pi-permission-system";
 
 const _s: PermissionsService | undefined = getPermissionsService("session-id");
 void _s;
@@ -96,4 +96,4 @@ pnpm --dir "$CONSUMER" --ignore-workspace --ignore-scripts add \
 # starts from the probe file, so the tarball and peers resolve from the consumer's
 # own node_modules via the package's exports "types" condition.
 pnpm --dir "$PKG_DIR" exec tsc -p "$CONSUMER/tsconfig.json"
-echo "OK: external consumer type-checks against the packaged @gotgenes/pi-permission-system"
+echo "OK: external consumer type-checks against the packaged @xzzpig/pi-permission-system"

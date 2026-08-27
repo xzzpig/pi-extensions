@@ -6,7 +6,7 @@ Starting with the release that closes #794, two things change for an extension t
 2. `permissions:ready` fires at least once per session and may repeat, so a registration handler must be idempotent.
 
 Both are **breaking changes**.
-If your extension neither imports `@gotgenes/pi-permission-system` nor listens on `permissions:ready`, nothing here affects you.
+If your extension neither imports `@xzzpig/pi-permission-system` nor listens on `permissions:ready`, nothing here affects you.
 
 ## Why the accessor changed
 
@@ -38,7 +38,7 @@ pi.events.on(PERMISSIONS_READY_CHANNEL, (event) => {
   if (dispose || !sessionId) return;
   void (async () => {
     const { getPermissionsService } = await import(
-      "@gotgenes/pi-permission-system"
+      "@xzzpig/pi-permission-system"
     );
     dispose = getPermissionsService(sessionId)?.registerAuthorizer(
       "my-link",
