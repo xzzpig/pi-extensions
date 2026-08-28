@@ -3,7 +3,7 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["node_modules/**"],
+    ignores: ["node_modules/**", "test-engine.ts"],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

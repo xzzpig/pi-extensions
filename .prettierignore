@@ -42,6 +42,9 @@ packages/pi-sandbox
 # Upstream-derived subtree formatted with biome, not prettier.
 packages/pi-starline
 
+# Upstream-derived subtree with upstream's own formatting; check the package via its own toolchain.
+packages/pi-vibeguard
+
 # /dev/null device files bind-mounted into the repo root by the host
 # environment; unreadable and not part of the repository.
 .bash_profile

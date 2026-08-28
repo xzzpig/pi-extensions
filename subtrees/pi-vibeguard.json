@@ -1,0 +1,13 @@
+{
+  "$schema": "../schemas/subtree-metadata.schema.json",
+  "name": "pi-vibeguard",
+  "prefix": "packages/pi-vibeguard",
+  "source": "https://github.com/aizigao/pi-vibeguard.git",
+  "remote": "upstream-pi-vibeguard",
+  "ref": "master",
+  "version": "v0.1.2",
+  "upstreamCommit": "672121246907a60e646bb3d2e8a1940371f4c904",
+  "squash": true,
+  "lastSyncedAt": "2026-08-28T14:58:42+08:00",
+  "notes": "Forked from aizigao/pi-vibeguard (npm @aizigao/pi-vibeguard v0.1.2). Local divergence per openspec change add-vibeguard-mapping-command: (1) npm renamed to @xzzpig/pi-vibeguard, fork version 0.1.0, repository field repointed to xzzpig/pi-extensions; (2) added peerDependency @earendil-works/pi-tui (range aligned with pi-tool-display) plus vitest devDep for the new tests; (3) index.ts: appended inline Mapping View section (parseCategoryFromPlaceholder/maskOriginal/buildMappingSnapshot/buildCategoryStats/formatTtlRemaining + MappingViewModal TUI overlay) and registered /vibeguard:list and /vibeguard:stats (ctx.ui.custom only, zero session writes; command layer reuses the engine's own cleanup before snapshotting); (4) tests/ added (vitest unit + extension-level integration); tsconfig include widened (tests, test-engine, allowImportingTsExtensions) and eslint ignores test-engine.ts (upstream standalone script); (5) README fork notice + CHANGELOG 0.1.0 fork entry."
+}

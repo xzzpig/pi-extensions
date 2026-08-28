@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.0 (fork @xzzpig/pi-vibeguard)
+
+- Renamed npm package to `@xzzpig/pi-vibeguard` (local fork of aizigao/pi-vibeguard v0.1.2, imported as a git subtree).
+- Added `/vibeguard:list` and `/vibeguard:stats` mapping-viewer commands (custom TUI overlay; masked originals with `r` to reveal; TTL remaining; stats by category).
+- Added `@earendil-works/pi-tui` as a peer dependency for the viewer UI; added vitest unit + extension-level tests under `tests/`.
+
 ## 0.1.1
 - Config lookup (first match wins):
   1. `PI_VIBEGUARD_CONFIG` env var

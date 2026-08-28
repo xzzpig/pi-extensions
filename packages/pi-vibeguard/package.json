@@ -1,13 +1,14 @@
 {
-  "name": "@aizigao/pi-vibeguard",
-  "version": "0.1.2",
-  "description": "Pi extension that replaces sensitive strings with placeholders before LLM requests (inspired by VibeGuard).",
+  "name": "@xzzpig/pi-vibeguard",
+  "version": "0.1.0",
+  "description": "Pi extension that replaces sensitive strings with placeholders before LLM requests (inspired by VibeGuard), with local /vibeguard:list and /vibeguard:stats mapping viewers.",
   "type": "module",
   "license": "MIT",
   "homepage": "https://github.com/aizigao/pi-vibeguard#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/aizigao/pi-vibeguard.git"
+    "url": "git+https://github.com/xzzpig/pi-extensions.git",
+    "directory": "packages/pi-vibeguard"
   },
   "bugs": {
     "url": "https://github.com/aizigao/pi-vibeguard/issues"
@@ -20,6 +21,8 @@
   "files": [
     "index.ts",
     "README.md",
+    "CHANGELOG.md",
+    "vibeguard.config.json.example",
     "LICENSE"
   ],
   "engines": {
@@ -30,8 +33,10 @@
   },
   "scripts": {
     "check": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "lint:fix": "eslint . --fix"
+    "lint:fix": "eslint . --fix",
+    "test": "vitest run"
   },
   "pi": {
     "extensions": [
@@ -39,14 +44,17 @@
     ]
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "^0.74.0 || ^0.75.0 || ^0.77.0 || ^0.78.0 || ^0.79.0 || ^0.80.0 || ^0.83.0",
+    "@earendil-works/pi-tui": "^0.74.0 || ^0.75.0 || ^0.77.0 || ^0.78.0 || ^0.79.0 || ^0.80.0 || ^0.83.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
-    "@types/node": "^24.10.1",
+    "@earendil-works/pi-coding-agent": "catalog:",
+    "@earendil-works/pi-tui": "catalog:",
+    "@types/node": "catalog:",
     "@eslint/js": "^9.39.1",
     "eslint": "^9.39.1",
-    "typescript": "^5.9.3",
-    "typescript-eslint": "^8.46.4"
+    "typescript": "catalog:",
+    "typescript-eslint": "^8.46.4",
+    "vitest": "catalog:"
   }
 }

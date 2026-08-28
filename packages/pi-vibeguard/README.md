@@ -2,6 +2,14 @@
 
 [English](README.md) | [中文](README-CN.md)
 
+> **Local fork (`@xzzpig/pi-vibeguard`)** of [`@aizigao/pi-vibeguard`](https://github.com/aizigao/pi-vibeguard) (imported via git subtree, upstream v0.1.2).
+> On top of upstream it adds two mapping-viewer commands:
+>
+> - `/vibeguard:list` — table of the current session's live placeholder mappings: CATEGORY | PLACEHOLDER | ORIGINAL (masked by default, press `r` to reveal) | TTL remaining; scroll with arrows / j/k / PgUp / PgDn, close with `q` or Esc.
+> - `/vibeguard:stats` — per-category summary of live mappings, sorted by count.
+>
+> Command output renders to the local TUI only and never enters the LLM context.
+
 Inspired by [VibeGuard](https://github.com/inkdust2021/VibeGuard) and [opencode-vibeguard](https://github.com/inkdust2021/opencode-vibeguard).
 
 A pi extension that:
