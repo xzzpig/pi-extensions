@@ -1,6 +1,6 @@
 {
   "name": "@xzzpig/pi-btw",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "A pi extension for parallel side conversations with /btw",
   "type": "module",
   "dependencies": {
@@ -43,9 +43,6 @@
   "pi": {
     "extensions": [
       "./extensions/btw.ts"
-    ],
-    "skills": [
-      "./skills"
     ],
     "image": "https://raw.githubusercontent.com/dbachelder/pi-btw/main/docs/btw-overlay.png"
   },

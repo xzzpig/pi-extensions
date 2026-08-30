@@ -4,6 +4,22 @@ All notable changes to the `@xzzpig/pi-btw` fork are documented here. This
 fork tracks [`dbachelder/pi-btw`](https://github.com/dbachelder/pi-btw) via git
 subtree; entries below describe only fork-specific deviations from upstream.
 
+## 0.7.1
+
+### Changed
+
+- Removed the unused BTW skill registration from the published package.
+- Corrected npm installation instructions to use `npm:@xzzpig/pi-btw`.
+
+### Fixed
+
+- **Prevented contextual BTW sessions from resuming main-session work.** Each
+  new contextual BTW child session now inserts one internal
+  `[BTW SESSION BOUNDARY]` instruction after inherited main-session context and
+  before the BTW conversation. The marker is not rendered in the overlay or
+  included in inject/summarize handoffs; tangent sessions do not receive it and
+  follow-up turns do not duplicate it.
+
 ## 0.7.0
 
 ### Changed

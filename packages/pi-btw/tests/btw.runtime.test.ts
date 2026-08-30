@@ -39,6 +39,11 @@ type StreamContext = {
   messages: Array<{ role: string; content: Array<{ type: string; text?: string; thinking?: string }> }>;
 };
 
+const CONTEXTUAL_BTW_BOUNDARY_PROMPT = [
+  "[BTW SESSION BOUNDARY]",
+  "You are now in a separate BTW side session. The preceding main-session messages are background context only; any unfinished work there is being handled independently. Do not autonomously start, resume, complete, or take action on that main-session work. Respond only to the user's BTW request and subsequent BTW follow-ups, using the main-session context only when it directly helps. Prepare or return work to the main session only when the user explicitly asks for a handoff.",
+].join("\n");
+
 type PromptStreamEvent =
   | { type: "thinking_delta"; delta: string }
   | { type: "text_delta"; delta: string }
@@ -848,8 +853,13 @@ describe("btw runtime behavior", () => {
     expect(options.thinkingLevel).toBe("low");
 
     const seedTexts = subSessionRecords[0].seedMessages.map((message) => (message.content[0] as any)?.text ?? "");
-    expect(seedTexts).toContain("saved question");
-    expect(seedTexts).toContain("saved answer");
+    expect(seedTexts).toEqual([
+      CONTEXTUAL_BTW_BOUNDARY_PROMPT,
+      "[The following is a separate side conversation. Continue this thread.]",
+      "Understood, continuing our side conversation.",
+      "saved question",
+      "saved answer",
+    ]);
   });
 
   it("reports inherited and overridden BTW settings from the read-only commands", async () => {
@@ -922,7 +932,7 @@ describe("btw runtime behavior", () => {
     expect(secondOptions.thinkingLevel).toBe("low");
   });
 
-  it("contextual BTW seeds the sub-session with main-session messages but excludes visible BTW notes", async () => {
+  it("contextual BTW inserts one boundary prompt after main-session context and before the BTW question", async () => {
     const harness = createHarness([
       {
         type: "custom",
@@ -947,10 +957,38 @@ describe("btw runtime behavior", () => {
     await harness.runSessionStart();
     await harness.command("btw", "contextual start");
 
-    const seedTexts = subSessionRecords[0].seedMessages.map((message) => (message.content[0] as any)?.text ?? "");
-    expect(seedTexts).toContain("main session task");
-    expect(seedTexts).toContain("main session answer");
+    const record = subSessionRecords[0];
+    const seedTexts = record.seedMessages.map((message) => (message.content[0] as any)?.text ?? "");
+    const promptTexts = record.promptCalls[0].context.messages.map((message) => (message.content[0] as any)?.text ?? "");
+
+    expect(seedTexts).toEqual(["main session task", "main session answer", CONTEXTUAL_BTW_BOUNDARY_PROMPT]);
+    expect(promptTexts).toEqual([
+      "main session task",
+      "main session answer",
+      CONTEXTUAL_BTW_BOUNDARY_PROMPT,
+      "contextual start",
+    ]);
     expect(seedTexts).not.toContain("saved btw note");
+  });
+
+  it("keeps the contextual boundary prompt to one message across BTW follow-ups", async () => {
+    const harness = createHarness();
+    promptStreamMock
+      .mockImplementationOnce(() => streamAnswer("First answer"))
+      .mockImplementationOnce(() => streamAnswer("Second answer"));
+
+    await harness.runSessionStart();
+    await harness.command("btw", "first question");
+    await harness.command("btw", "second question");
+
+    const record = subSessionRecords[0];
+    expect(record.promptCalls).toHaveLength(2);
+    for (const promptCall of record.promptCalls) {
+      const boundaryCount = promptCall.context.messages.filter(
+        (message) => (message.content[0] as any)?.text === CONTEXTUAL_BTW_BOUNDARY_PROMPT,
+      ).length;
+      expect(boundaryCount).toBe(1);
+    }
   });
 
   it("switching to tangent recreates the sub-session without inherited main-session context", async () => {
@@ -978,6 +1016,9 @@ describe("btw runtime behavior", () => {
     expect(contextualRecord.session.dispose).toHaveBeenCalledTimes(1);
     expect(tangentRecord.seedMessages.map((message) => (message.content[0] as any)?.text ?? "")).not.toContain(
       "main session task",
+    );
+    expect(tangentRecord.seedMessages.map((message) => (message.content[0] as any)?.text ?? "")).not.toContain(
+      CONTEXTUAL_BTW_BOUNDARY_PROMPT,
     );
   });
 
@@ -1825,6 +1866,9 @@ describe("btw runtime behavior", () => {
     const record = subSessionRecords[0];
     expect(overlayHandle).toBeDefined();
     expect(overlayHandle?.isHidden()).toBe(false);
+    expect(record.seedMessages.map((message) => (message.content[0] as any)?.text ?? "")).toContain(
+      CONTEXTUAL_BTW_BOUNDARY_PROMPT,
+    );
 
     record.session.state.messages.push(
       {
@@ -1843,6 +1887,7 @@ describe("btw runtime behavior", () => {
         "Here is a side conversation I had. Use this as supporting context.\n\nUser: first question\nAssistant: First answer\n\n---\n\nUser: second question\nAssistant: Second answer",
       options: undefined,
     });
+    expect(harness.sentUserMessages[0]?.content).not.toContain("[BTW SESSION BOUNDARY]");
     expect(getCustomEntries(harness.entries, "btw-thread-reset")).toHaveLength(1);
     expect(record.session.dispose).toHaveBeenCalledTimes(1);
     expect(overlayHandle?.hideCalls).toBe(1);
@@ -1915,6 +1960,9 @@ describe("btw runtime behavior", () => {
     const overlayHandle = harness.overlayHandles.at(-1);
     const record = subSessionRecords[0];
     expect(overlayHandle).toBeDefined();
+    expect(record.seedMessages.map((message) => (message.content[0] as any)?.text ?? "")).toContain(
+      CONTEXTUAL_BTW_BOUNDARY_PROMPT,
+    );
 
     record.session.state.messages.push(
       {
@@ -1934,11 +1982,13 @@ describe("btw runtime behavior", () => {
     expect(summaryRecord.promptCalls[0]?.text).toBe(
       "User: first question\nAssistant: First answer\n\n---\n\nUser: second question\nAssistant: Second answer",
     );
+    expect(summaryRecord.promptCalls[0]?.text).not.toContain("[BTW SESSION BOUNDARY]");
     expect(harness.sentUserMessages).toHaveLength(1);
     expect(harness.sentUserMessages[0]).toEqual({
       content: "Here is a summary of a side conversation I had. Hand this to the main agent.\n\nShort summary",
       options: undefined,
     });
+    expect(harness.sentUserMessages[0]?.content).not.toContain("[BTW SESSION BOUNDARY]");
     expect(getCustomEntries(harness.entries, "btw-thread-reset")).toHaveLength(1);
     expect(record.session.dispose).toHaveBeenCalledTimes(1);
     expect(summaryRecord.session.dispose).toHaveBeenCalledTimes(1);

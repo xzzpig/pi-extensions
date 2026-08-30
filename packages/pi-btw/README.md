@@ -24,13 +24,7 @@ A small [pi](https://github.com/earendil-works/pi-mono) extension that adds a `/
 ### From npm (after publish)
 
 ```bash
-pi install npm:pi-btw
-```
-
-### From git
-
-```bash
-pi install git:github.com/dbachelder/pi-btw
+pi install npm:@xzzpig/pi-btw
 ```
 
 Then reload pi:
@@ -134,7 +128,10 @@ pi install /absolute/path/to/pi-btw
 
 BTW is implemented as an actual pi sub-session with its own in-memory session state, transcript events, and tool surface.
 
-- contextual `/btw` threads seed that sub-session from the current main-session branch while filtering out BTW-visible notes from the parent context
+- contextual `/btw` threads seed that sub-session from the current main-session
+  branch while filtering out BTW-visible notes from the parent context; one
+  internal boundary instruction then marks that inherited work as context only,
+  so the BTW agent does not autonomously resume it
 - `/btw:tangent` starts the same BTW UI in a contextless mode with no inherited main-session conversation
 - BTW can inherit the main thread model/thinking settings or use BTW-only overrides via `/btw:model` and `/btw:thinking`
 - `/btw:summarize` uses the current effective BTW model but keeps thinking off
@@ -152,7 +149,7 @@ Inside the BTW modal composer, slash handling is split at the BTW/session bounda
 
 This keeps BTW-owned lifecycle commands explicit while giving the side conversation the same slash-command surface as the underlying sub-session.
 
-## Behavior
+## Thread state
 
 ### Hidden BTW thread state
 
@@ -176,21 +173,11 @@ Sometimes you want to:
 - think through next steps without derailing the current turn
 - explore an idea, then inject it back once it's ready
 
-## Included skill
-
-This package also ships a small `btw` skill so pi can better recognize when a side-conversation workflow is appropriate.
-
-It helps with discoverability and guidance, but it is not required for the extension itself to work.
-
 ## Development
 
 The extension entrypoint is:
 
 - `extensions/btw.ts`
-
-The included skill is:
-
-- `skills/btw/SKILL.md`
 
 To use it without installing:
 

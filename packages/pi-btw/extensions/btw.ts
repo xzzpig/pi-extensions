@@ -63,6 +63,11 @@ const BTW_SYSTEM_PROMPT = [
   "Do not act as if you need to continue unfinished work from the main session unless the user explicitly asks you to prepare something for injection back to it.",
 ].join(" ");
 
+const BTW_CONTEXT_BOUNDARY_USER_TEXT = [
+  "[BTW SESSION BOUNDARY]",
+  "You are now in a separate BTW side session. The preceding main-session messages are background context only; any unfinished work there is being handled independently. Do not autonomously start, resume, complete, or take action on that main-session work. Respond only to the user's BTW request and subsequent BTW follow-ups, using the main-session context only when it directly helps. Prepare or return work to the main session only when the user explicitly asks for a handoff.",
+].join("\n");
+
 const BTW_SUMMARIZE_SYSTEM_PROMPT =
   "Summarize the side conversation concisely. Preserve key decisions, plans, insights, risks, and action items. Output only the summary.";
 
@@ -291,8 +296,15 @@ function buildBtwSeedState(
         }),
       );
     }
+
+    messages.push({
+      role: "user",
+      content: [{ type: "text", text: BTW_CONTEXT_BOUNDARY_USER_TEXT }],
+      timestamp: Date.now(),
+    });
   }
 
+  // Keep inherited main context and the internal boundary out of BTW handoffs.
   const sideThreadStartIndex = messages.length;
 
   if (thread.length > 0) {
