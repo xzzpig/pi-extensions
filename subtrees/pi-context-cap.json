@@ -1,0 +1,13 @@
+{
+  "$schema": "../schemas/subtree-metadata.schema.json",
+  "name": "pi-context-cap",
+  "prefix": "packages/pi-context-cap",
+  "source": "https://github.com/lukeramsden/pi-context-cap.git",
+  "remote": "upstream-pi-context-cap",
+  "ref": "main",
+  "version": "v1.0.1",
+  "upstreamCommit": "6771c67040874b6708f0139c735b654675c011c3",
+  "squash": true,
+  "lastSyncedAt": "2026-09-01T00:00:00+08:00",
+  "notes": "Forked from lukeramsden/pi-context-cap (npm @lukeramsden/pi-context-cap v1.0.1). Local divergence per openspec change fork-pi-context-cap: (1) npm renamed to @xzzpig/pi-context-cap, fork version 0.1.0; (2) added config file support (global context-cap.json + project .pi/context-cap.json, key-level merge, project trusted guard) with models whitelist (minimatch provider/modelId or bare modelId), budget/reserve from config; (3) session tri-state override /context-cap on|off (default follows whitelist); (4) refactored core into config.ts/whitelist.ts modules; README fork notice + CHANGELOG 0.1.0 fork entry."
+}

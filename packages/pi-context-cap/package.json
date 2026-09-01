@@ -1,15 +1,15 @@
 {
-  "name": "@lukeramsden/pi-context-cap",
-  "version": "1.0.1",
-  "description": "Extension for the pi coding agent: enforce a context token budget (default 200k) by forcing compaction, including mid-turn during long tool loops, instead of riding long-context models up to 1M.",
+  "name": "@xzzpig/pi-context-cap",
+  "version": "0.1.1",
+  "description": "Extension for the pi coding agent: enforce a context token budget (defaulting to the model's configured context window; 200k when unknown) by forcing compaction, including mid-turn during long tool loops, instead of riding long-context models up to their full window.",
   "license": "MIT",
-  "author": "lukeramsden",
+  "author": "xzzpig (fork of lukeramsden/pi-context-cap)",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/lukeramsden/pi-context-cap.git"
+    "url": "git+https://github.com/xzzpig/pi-extensions.git"
   },
   "homepage": "https://github.com/lukeramsden/pi-context-cap#readme",
-  "bugs": "https://github.com/lukeramsden/pi-context-cap/issues",
+  "bugs": "https://github.com/xzzpig/pi-extensions/issues",
   "keywords": [
     "pi-package",
     "pi-extension",
@@ -29,6 +29,7 @@
   "files": [
     "extensions",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
@@ -36,13 +37,15 @@
     "verify": "npm run typecheck && node scripts/verify.mjs"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": ">=0.83.0 <1"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "^0.83.0",
-    "@earendil-works/pi-coding-agent": "^0.83.0",
+    "@earendil-works/pi-coding-agent": "catalog:",
+    "@types/node": "catalog:",
     "jiti": "2.7.0",
-    "typescript": "^5.9.0"
+    "typescript": "catalog:"
+  },
+  "dependencies": {
+    "minimatch": "10.2.5"
   }
 }
