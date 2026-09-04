@@ -7,6 +7,23 @@ upstream.
 
 ## 0.1.0
 
+## [0.2.0] — 2026-09-05 (fork release)
+
+### Changed
+
+- **Synced upstream v0.3.2 → v0.3.4** (breaking upstream changes → fork minor
+  bump per the 0.x fork convention). Upstream v0.3.3 adopts Pi 0.84.4's
+  native select-without-copy: the selection stays highlighted and the copy
+  key is now `app.message.copy` (default `ctrl+x`) instead of `ctrl+c`,
+  which always interrupts again; peer ranges for `@earendil-works/pi-ai`,
+  `pi-coding-agent`, and `pi-tui` rise to `>= 0.84.4`. Upstream v0.3.4
+  drops Starline's own path-aware word selection (`mouse.pathAwareWords`
+  removed and ignored in old configs) because Pi 0.84.4 natively keeps `/`
+  and `-` inside double-clicked words. The mouse-install contract fake now
+  implements `copyActiveSelectionToClipboard` per the new TUI interface.
+  Fork divergence preserved: git probes in the statusline refresh still
+  pass `--no-optional-locks` to avoid `.git/index.lock` churn.
+
 ## [0.1.1] — 2026-08-24 (fork release)
 
 ### Changed

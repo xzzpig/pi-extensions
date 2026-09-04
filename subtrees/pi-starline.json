@@ -4,9 +4,9 @@
   "prefix": "packages/pi-starline",
   "source": "https://github.com/Andy8647/pi-starline.git",
   "remote": "upstream-pi-starline",
-  "ref": "v0.3.2",
-  "version": "v0.3.2",
-  "upstreamCommit": "7d30ec6062c351868e280f3707b88b9d269f6c68",
+  "ref": "v0.3.4",
+  "version": "v0.3.4",
+  "upstreamCommit": "30074113c55b06bb80ba4fa48a72b2881ef36ba4",
   "squash": true,
-  "lastSyncedAt": "2026-08-24T19:30:03+08:00"
+  "lastSyncedAt": "2026-09-05T00:38:31+08:00"
 }
