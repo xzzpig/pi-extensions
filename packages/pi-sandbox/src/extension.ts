@@ -260,6 +260,7 @@ export default function (pi: ExtensionAPI) {
     if (!sandboxEnabled || !sandboxInitialized) return;
 
     const config = loadConfig(ctx.cwd);
+    if (config.sandboxUserShell === false) return;
     if (!isNetworkUnrestricted(config)) {
       for (const domain of extractDomainsFromCommand(event.command)) {
         if (!domainIsAllowed(domain, effectiveDomains(ctx.cwd))) {
