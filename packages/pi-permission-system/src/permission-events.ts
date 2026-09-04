@@ -146,6 +146,10 @@ export type PermissionDecisionResolution =
   | "user_denied"
   | "auto_approved"
   | "confirmation_unavailable"
+  /** A registered `authorizerChain` link granted the ask; no human was asked. */
+  | "authorizer_allowed"
+  /** A registered `authorizerChain` link refused the ask; no human was asked. */
+  | "authorizer_denied"
   /** The gate threw, or an escalation failed, and the request was blocked. */
   | "gate_error";
 
@@ -195,12 +199,17 @@ export interface PermissionDecisionEvent {
 export type PermissionForwardedDecisionResolution =
   | "policy_allow"
   | "policy_deny"
+  | "session_approved"
+  | "infrastructure_auto_allowed"
   | "user_approved"
   | "user_approved_for_session"
   | "user_approved_for_serving_session"
   | "user_denied"
   | "auto_approved"
-  | "confirmation_unavailable";
+  | "confirmation_unavailable"
+  | "authorizer_allowed"
+  | "authorizer_denied"
+  | "gate_error";
 
 /**
  * Payload emitted on `permissions:forwarded_decision` after a serving session

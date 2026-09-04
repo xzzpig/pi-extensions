@@ -2,10 +2,29 @@ import { describe, expect, it } from "vitest";
 import {
   initialPromptState,
   type PromptModelConfig,
+  type PromptOutcome,
   reducePrompt,
+  visibleOptionKeys,
 } from "#src/authority/permission-prompt-decision";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Narrow a reducer outcome to its render arm, failing the test if it decided.
+ *
+ * An assertion signature rather than a bare `throw`: reading `.state` off the
+ * union needs narrowing, but a `throw` reports outside the assertion library,
+ * so a wrong arm arrives as a stack trace naming neither what was expected nor
+ * what came back. `expect.unreachable` returns `never`, so it narrows and
+ * reports.
+ */
+function assertRender(
+  outcome: PromptOutcome,
+): asserts outcome is Extract<PromptOutcome, { kind: "render" }> {
+  if (outcome.kind !== "render") {
+    expect.unreachable(`expected a render, got ${JSON.stringify(outcome)}`);
+  }
+}
 
 function makeConfig(
   overrides: Partial<PromptModelConfig> = {},
@@ -30,6 +49,7 @@ describe("reducePrompt", () => {
         hint: "",
         reasonError: undefined,
         scopeServing: false,
+        grantWidth: "proven",
       });
     });
   });
@@ -50,6 +70,7 @@ describe("reducePrompt", () => {
           hint: "Press y again to approve.",
           reasonError: undefined,
           scopeServing: false,
+          grantWidth: "proven",
         },
       });
     });
@@ -60,7 +81,7 @@ describe("reducePrompt", () => {
         type: "hotkey",
         key: "y",
       });
-      if (armed.kind !== "render") throw new Error("expected render");
+      assertRender(armed);
       const outcome = reducePrompt(config, armed.state, {
         type: "hotkey",
         key: "y",
@@ -77,7 +98,7 @@ describe("reducePrompt", () => {
         type: "hotkey",
         key: "y",
       });
-      if (armedY.kind !== "render") throw new Error("expected render");
+      assertRender(armedY);
       const armedN = reducePrompt(config, armedY.state, {
         type: "hotkey",
         key: "n",
@@ -91,6 +112,7 @@ describe("reducePrompt", () => {
           hint: "Press n again to deny.",
           reasonError: undefined,
           scopeServing: false,
+          grantWidth: "proven",
         },
       });
     });
@@ -101,7 +123,7 @@ describe("reducePrompt", () => {
         type: "hotkey",
         key: "n",
       });
-      if (armed.kind !== "render") throw new Error("expected render");
+      assertRender(armed);
       const outcome = reducePrompt(config, armed.state, {
         type: "hotkey",
         key: "n",
@@ -134,7 +156,7 @@ describe("reducePrompt", () => {
         type: "hotkey",
         key: "y",
       });
-      if (armed.kind !== "render") throw new Error("expected render");
+      assertRender(armed);
       const outcome = reducePrompt(config, armed.state, {
         type: "nav",
         direction: "down",
@@ -148,6 +170,7 @@ describe("reducePrompt", () => {
           hint: "",
           reasonError: undefined,
           scopeServing: false,
+          grantWidth: "proven",
         },
       });
     });
@@ -160,7 +183,7 @@ describe("reducePrompt", () => {
           type: "nav",
           direction: "up",
         });
-        if (outcome.kind !== "render") throw new Error("expected render");
+        assertRender(outcome);
         state = outcome.state;
       }
       // up from y wraps to r, then walks r→n→s→y over four presses
@@ -173,13 +196,13 @@ describe("reducePrompt", () => {
         type: "nav",
         direction: "down",
       });
-      if (down.kind !== "render") throw new Error("expected render");
+      assertRender(down);
       // highlight is now s; move once more to n
       const down2 = reducePrompt(config, down.state, {
         type: "nav",
         direction: "down",
       });
-      if (down2.kind !== "render") throw new Error("expected render");
+      assertRender(down2);
       const outcome = reducePrompt(config, down2.state, { type: "confirm" });
       expect(outcome).toEqual({
         kind: "decision",
@@ -208,7 +231,7 @@ describe("reducePrompt", () => {
         type: "hotkey",
         key: "r",
       });
-      if (armed.kind !== "render") throw new Error("expected render");
+      assertRender(armed);
       const outcome = reducePrompt(config, armed.state, {
         type: "hotkey",
         key: "r",
@@ -222,6 +245,7 @@ describe("reducePrompt", () => {
           hint: "",
           reasonError: undefined,
           scopeServing: false,
+          grantWidth: "proven",
         },
       });
     });
@@ -233,7 +257,7 @@ describe("reducePrompt", () => {
         key: "r",
       });
       expect(outcome.kind).toBe("render");
-      if (outcome.kind !== "render") throw new Error("expected render");
+      assertRender(outcome);
       expect(outcome.state.step).toBe("reason");
     });
 
@@ -243,7 +267,7 @@ describe("reducePrompt", () => {
         type: "hotkey",
         key: "r",
       });
-      if (opened.kind !== "render") throw new Error("expected render");
+      assertRender(opened);
       const outcome = reducePrompt(config, opened.state, {
         type: "submitReason",
         draft: "   ",
@@ -257,6 +281,7 @@ describe("reducePrompt", () => {
           hint: "",
           reasonError: "A reason is required.",
           scopeServing: false,
+          grantWidth: "proven",
         },
       });
     });
@@ -267,7 +292,7 @@ describe("reducePrompt", () => {
         type: "hotkey",
         key: "r",
       });
-      if (opened.kind !== "render") throw new Error("expected render");
+      assertRender(opened);
       const outcome = reducePrompt(config, opened.state, {
         type: "submitReason",
         draft: "  not now  ",
@@ -288,7 +313,7 @@ describe("reducePrompt", () => {
         type: "hotkey",
         key: "r",
       });
-      if (opened.kind !== "render") throw new Error("expected render");
+      assertRender(opened);
       const outcome = reducePrompt(config, opened.state, { type: "cancel" });
       expect(outcome).toEqual({
         kind: "render",
@@ -299,6 +324,7 @@ describe("reducePrompt", () => {
           hint: "",
           reasonError: undefined,
           scopeServing: false,
+          grantWidth: "proven",
         },
       });
     });
@@ -317,7 +343,7 @@ describe("reducePrompt", () => {
         key: "s",
       });
       expect(outcome.kind).toBe("render");
-      if (outcome.kind !== "render") throw new Error("expected render");
+      assertRender(outcome);
       expect(outcome.state.step).toBe("scope");
       expect(outcome.state.scopeServing).toBe(false);
     });
@@ -328,7 +354,7 @@ describe("reducePrompt", () => {
         type: "hotkey",
         key: "s",
       });
-      if (opened.kind !== "render") throw new Error("expected render");
+      assertRender(opened);
       const outcome = reducePrompt(config, opened.state, { type: "confirm" });
       expect(outcome).toEqual({
         kind: "decision",
@@ -342,12 +368,12 @@ describe("reducePrompt", () => {
         type: "hotkey",
         key: "s",
       });
-      if (opened.kind !== "render") throw new Error("expected render");
+      assertRender(opened);
       const moved = reducePrompt(config, opened.state, {
         type: "nav",
         direction: "down",
       });
-      if (moved.kind !== "render") throw new Error("expected render");
+      assertRender(moved);
       expect(moved.state.scopeServing).toBe(true);
       const outcome = reducePrompt(config, moved.state, { type: "confirm" });
       expect(outcome).toEqual({
@@ -362,10 +388,10 @@ describe("reducePrompt", () => {
         type: "hotkey",
         key: "s",
       });
-      if (opened.kind !== "render") throw new Error("expected render");
+      assertRender(opened);
       const outcome = reducePrompt(config, opened.state, { type: "cancel" });
       expect(outcome.kind).toBe("render");
-      if (outcome.kind !== "render") throw new Error("expected render");
+      assertRender(outcome);
       expect(outcome.state.step).toBe("decision");
     });
 
@@ -378,6 +404,202 @@ describe("reducePrompt", () => {
       expect(outcome).toEqual({
         kind: "decision",
         decision: { approved: true, state: "approved_for_session" },
+      });
+    });
+  });
+
+  describe("both-directions session grant (#813)", () => {
+    const widthLabel =
+      'Yes, allow reads and writes to "/tmp/*" for this session';
+
+    it("offers the width option only when the ask is widenable", () => {
+      expect(visibleOptionKeys(makeConfig({ widthLabel }))).toEqual([
+        "y",
+        "s",
+        "b",
+        "n",
+        "r",
+      ]);
+      expect(visibleOptionKeys(makeConfig())).toEqual(["y", "s", "n", "r"]);
+    });
+
+    it("commits the family width on b", () => {
+      const config = makeConfig({ doublePressToConfirm: false, widthLabel });
+      const outcome = reducePrompt(config, initialPromptState(config), {
+        type: "hotkey",
+        key: "b",
+      });
+      expect(outcome).toEqual({
+        kind: "decision",
+        decision: {
+          approved: true,
+          state: "approved_for_session",
+          sessionGrantWidth: "family",
+        },
+      });
+    });
+
+    it("leaves s at the proven width, naming no width at all", () => {
+      const config = makeConfig({ doublePressToConfirm: false, widthLabel });
+      const outcome = reducePrompt(config, initialPromptState(config), {
+        type: "hotkey",
+        key: "s",
+      });
+      expect(outcome).toEqual({
+        kind: "decision",
+        decision: { approved: true, state: "approved_for_session" },
+      });
+    });
+
+    it("arms b like any other hotkey under double-press", () => {
+      const config = makeConfig({ widthLabel });
+      const outcome = reducePrompt(config, initialPromptState(config), {
+        type: "hotkey",
+        key: "b",
+      });
+      expect(outcome).toEqual({
+        kind: "render",
+        state: {
+          step: "decision",
+          highlightedKey: "b",
+          armedKey: "b",
+          hint: "Press b again to approve both directions for this session.",
+          reasonError: undefined,
+          scopeServing: false,
+          grantWidth: "proven",
+        },
+      });
+    });
+
+    it("ignores b when the ask is not widenable", () => {
+      const config = makeConfig({ doublePressToConfirm: false });
+      const outcome = reducePrompt(config, initialPromptState(config), {
+        type: "hotkey",
+        key: "b",
+      });
+      expect(outcome).toEqual({
+        kind: "render",
+        state: initialPromptState(config),
+      });
+    });
+
+    it("walks five options when the width option is offered", () => {
+      const config = makeConfig({ widthLabel });
+      let state = initialPromptState(config);
+      const seen: string[] = [];
+      for (const _ of [0, 1, 2, 3, 4]) {
+        const outcome = reducePrompt(config, state, {
+          type: "nav",
+          direction: "down",
+        });
+        assertRender(outcome);
+        state = outcome.state;
+        seen.push(state.highlightedKey);
+      }
+      expect(seen).toEqual(["s", "b", "n", "r", "y"]);
+    });
+
+    it("skips b when navigating an ask that is not widenable", () => {
+      const config = makeConfig();
+      let state = initialPromptState(config);
+      const seen: string[] = [];
+      for (const _ of [0, 1, 2, 3]) {
+        const outcome = reducePrompt(config, state, {
+          type: "nav",
+          direction: "down",
+        });
+        assertRender(outcome);
+        state = outcome.state;
+        seen.push(state.highlightedKey);
+      }
+      expect(seen).toEqual(["s", "n", "r", "y"]);
+    });
+
+    describe("with a forwarded ask's scope step", () => {
+      const sessionScope = {
+        subagentLabel: "This subagent only",
+        servingSessionLabel: "The whole session",
+      };
+
+      it("carries the width chosen on b through the scope step", () => {
+        const config = makeConfig({
+          doublePressToConfirm: false,
+          widthLabel,
+          sessionScope,
+        });
+        const opened = reducePrompt(config, initialPromptState(config), {
+          type: "hotkey",
+          key: "b",
+        });
+        assertRender(opened);
+        expect(opened.state.step).toBe("scope");
+        expect(reducePrompt(config, opened.state, { type: "confirm" })).toEqual(
+          {
+            kind: "decision",
+            decision: {
+              approved: true,
+              state: "approved_for_session",
+              sessionGrantWidth: "family",
+            },
+          },
+        );
+      });
+
+      it("carries the width onto a whole-serving-session grant too", () => {
+        const config = makeConfig({
+          doublePressToConfirm: false,
+          widthLabel,
+          sessionScope,
+        });
+        const opened = reducePrompt(config, initialPromptState(config), {
+          type: "hotkey",
+          key: "b",
+        });
+        assertRender(opened);
+        const moved = reducePrompt(config, opened.state, {
+          type: "nav",
+          direction: "down",
+        });
+        assertRender(moved);
+        expect(reducePrompt(config, moved.state, { type: "confirm" })).toEqual({
+          kind: "decision",
+          decision: {
+            approved: true,
+            state: "approved_for_serving_session",
+            sessionGrantWidth: "family",
+          },
+        });
+      });
+
+      it("forgets a backed-out width when the scope step cancels", () => {
+        const config = makeConfig({
+          doublePressToConfirm: false,
+          widthLabel,
+          sessionScope,
+        });
+        const opened = reducePrompt(config, initialPromptState(config), {
+          type: "hotkey",
+          key: "b",
+        });
+        assertRender(opened);
+        const cancelled = reducePrompt(config, opened.state, {
+          type: "cancel",
+        });
+        assertRender(cancelled);
+        expect(cancelled.state.grantWidth).toBe("proven");
+
+        // The narrow option must not inherit the width the user backed out of.
+        const reopened = reducePrompt(config, cancelled.state, {
+          type: "hotkey",
+          key: "s",
+        });
+        assertRender(reopened);
+        expect(
+          reducePrompt(config, reopened.state, { type: "confirm" }),
+        ).toEqual({
+          kind: "decision",
+          decision: { approved: true, state: "approved_for_session" },
+        });
       });
     });
   });

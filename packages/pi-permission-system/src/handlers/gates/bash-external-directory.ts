@@ -17,6 +17,13 @@ import type { ToolCallContext } from "./types";
  * Returns a `GateBypass` when all paths are allowed (by config or session rule).
  * Returns a `GateDescriptor` with multi-pattern sessionApproval for uncovered paths.
  *
+ * Each path is resolved on the narrowest `external_directory`-family surface
+ * its own attributed effect names, and the session approval records one grant
+ * per uncovered path at that same surface (#810) — so an ask mixing a proven
+ * read with a proven write grants each path only its own direction, never both
+ * on both. Two paths sharing a directory derive the same glob and so grant
+ * both directions there, which is what the prompt showed.
+ *
  * The shell command (native `bash` or an aliased shell tool) is read from the
  * injected `BashProgram`, which owns the source text it was parsed from, so
  * this gate does not re-derive the input field name (#574).
@@ -30,8 +37,8 @@ export function describeBashExternalDirectoryGate(
   if (!bashProgram) return null;
   const command = bashProgram.commandText();
 
-  const externalPaths = bashProgram.externalPaths();
-  if (externalPaths.length === 0) return null;
+  const externalAccesses = bashProgram.externalAccesses();
+  if (externalAccesses.length === 0) return null;
 
   // Resolve every external path on the external_directory surface and keep the
   // ones not already allowed (config-level allows suppress the prompt just as
@@ -39,7 +46,7 @@ export function describeBashExternalDirectoryGate(
   // matching and the worst-uncovered selection.
   const { uncovered: uncoveredEntries, worstCheck } =
     selectUncoveredExternalPaths(
-      externalPaths,
+      externalAccesses,
       resolver,
       tcc.agentName ?? undefined,
     );
@@ -65,7 +72,7 @@ export function describeBashExternalDirectoryGate(
           toolName: tcc.toolName,
           agentName: tcc.agentName,
           command,
-          externalPaths: externalPaths.map((p) => p.value()),
+          externalPaths: externalAccesses.map(({ path }) => path.value()),
           resolution: "session_approved",
         },
       },
@@ -86,6 +93,7 @@ export function describeBashExternalDirectoryGate(
     resolvedPath: path.resolvedAlias(),
   }));
 
+  const surface = worstEntry.surface;
   const payload = buildBashExternalDirectoryAskPayload({
     command,
     externalPaths: disclosures,
@@ -93,24 +101,26 @@ export function describeBashExternalDirectoryGate(
     agentName: tcc.agentName,
     toolName: tcc.toolName,
     matchedPattern: preCheck.matchedPattern,
+    surface,
   });
 
-  const patterns = uncoveredEntries.map(({ path }) =>
-    normalizer.approvalPatternFor(path),
-  );
-
   return {
-    surface: "external_directory",
+    surface,
     input: {},
     payload,
-    sessionApproval: SessionApproval.multiple("external_directory", patterns),
+    sessionApproval: SessionApproval.forGrants(
+      uncoveredEntries.map((entry) => ({
+        surface: entry.surface,
+        pattern: normalizer.approvalPatternFor(entry.path),
+      })),
+    ),
     promptDetails: {
       source: "tool_call",
       agentName: tcc.agentName,
       toolCallId: tcc.toolCallId,
       toolName: tcc.toolName,
       command,
-      accessIntent: accessFactsFromPath("external_directory", worstEntry.path),
+      accessIntent: accessFactsFromPath(surface, worstEntry.path),
     },
     logContext: {
       source: "tool_call",
@@ -119,9 +129,13 @@ export function describeBashExternalDirectoryGate(
       agentName: tcc.agentName,
       command,
       externalPaths: uncoveredPaths,
+      // The blame line ADR 0013 §7 asks for: `request.surface` already records
+      // the direction, and these two record what established it.
+      effect: worstEntry.effect.effect,
+      effectSource: worstEntry.effect.source,
     },
     decision: {
-      surface: "external_directory",
+      surface,
       value: command,
     },
     preCheck,

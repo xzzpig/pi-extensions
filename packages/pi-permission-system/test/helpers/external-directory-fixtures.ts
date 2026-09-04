@@ -6,6 +6,7 @@
  * external-directory-session-dedup.test.ts.
  */
 import { vi } from "vitest";
+import { surfaceFamilyOf } from "#src/access-intent/path-surfaces";
 import type { AskEscalator } from "#src/authority/authorizer-selection";
 import { GateDecisionReporter } from "#src/decision-reporter";
 import { GateRunner } from "#src/handlers/gates/runner";
@@ -16,7 +17,10 @@ import type { ScopedPermissionManager } from "#src/permission-manager";
 import type { SessionLogger } from "#src/session-logger";
 import type { PermissionCheckResult, PermissionState } from "#src/types";
 import { wildcardMatch } from "#src/wildcard-matcher";
-import { DECIDED_BY_HUMAN } from "#test/helpers/decision-fixtures";
+import {
+  DECIDED_BY_ABSENT_AUTHORITY,
+  DECIDED_BY_HUMAN,
+} from "#test/helpers/decision-fixtures";
 
 import {
   getDecisionEvents,
@@ -87,6 +91,21 @@ export function makeApprovingPrompter(): AskEscalator {
 }
 
 /**
+ * AskEscalator stub that approves for the session at the both-directions
+ * width, as a human choosing the widened session option does (#813).
+ */
+export function makeWideSessionApprovingPrompter(): AskEscalator {
+  return {
+    escalate: vi.fn<AskEscalator["escalate"]>().mockResolvedValue({
+      approved: true,
+      state: "approved_for_session",
+      sessionGrantWidth: "family",
+      decidedBy: DECIDED_BY_HUMAN,
+    }),
+  };
+}
+
+/**
  * AskEscalator stub that denies.
  *
  * Pass `denialReason` to simulate a user who explains the refusal.
@@ -116,17 +135,22 @@ export function makeUnavailablePrompter(): AskEscalator {
       approved: false,
       state: "denied",
       confirmationUnavailable: true,
-      decidedBy: DECIDED_BY_HUMAN,
+      decidedBy: DECIDED_BY_ABSENT_AUTHORITY,
     }),
   };
 }
 
 // ── Query helpers ──────────────────────────────────────────────────────────
 
-/** Find the `external_directory` decision event from the events mock. */
+/**
+ * Find the `external_directory`-family decision event from the events mock.
+ *
+ * A direction-proven tool decides on a directional member, so the lookup is by
+ * family rather than by the literal name (#806).
+ */
 export function findExtDirDecision(events: ReturnType<typeof makeEvents>) {
   return getDecisionEvents(events).find(
-    (d) => d.surface === "external_directory",
+    (d) => surfaceFamilyOf(d.surface) === "external_directory",
   );
 }
 
@@ -155,12 +179,10 @@ export function makeExtDirDedupCheck(
       const pathValue =
         intent.kind === "path-values" ? (intent.values[0] ?? null) : null;
 
-      if (surface === "external_directory") {
+      if (surfaceFamilyOf(surface) === "external_directory") {
         if (pathValue && rules && rules.length > 0) {
           const match = rules.findLast(
-            (r) =>
-              r.surface === "external_directory" &&
-              wildcardMatch(r.pattern, pathValue),
+            (r) => r.surface === surface && wildcardMatch(r.pattern, pathValue),
           );
           if (match) {
             return {

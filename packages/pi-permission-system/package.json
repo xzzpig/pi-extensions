@@ -1,7 +1,7 @@
 {
   "name": "@xzzpig/pi-permission-system",
-  "version": "0.5.0",
-  "description": "Permission enforcement extension for the Pi coding agent. Fork of @gotgenes/pi-permission-system (v27.0.1) with configurable wrapper-floor behavior.",
+  "version": "0.6.0",
+  "description": "Permission enforcement extension for the Pi coding agent. Fork of @gotgenes/pi-permission-system (v31.0.2) with configurable wrapper-floor behavior.",
   "type": "module",
   "exports": {
     ".": {
@@ -34,7 +34,12 @@
     "gen:schema": "node --experimental-strip-types scripts/generate-permissions-schema.ts && biome format --write schemas/permissions.schema.json",
     "verify:public-types": "bash scripts/verify-public-types.sh",
     "test": "env -u PI_SUBAGENT_PARENT_SESSION vitest run",
-    "test:watch": "env -u PI_SUBAGENT_PARENT_SESSION vitest"
+    "test:watch": "env -u PI_SUBAGENT_PARENT_SESSION vitest",
+    "measure:core-coverage": "node scripts/measure-core-coverage.mjs",
+    "measure:statement-descent": "node scripts/measure-statement-descent.mjs",
+    "measure:statement-operands": "node scripts/measure-statement-operands.mjs",
+    "measure:unresolved-redirects": "node scripts/measure-unresolved-redirects.mjs",
+    "measure:wrapper-transparency": "node scripts/measure-wrapper-transparency.mjs"
   },
   "keywords": [
     "pi-package",

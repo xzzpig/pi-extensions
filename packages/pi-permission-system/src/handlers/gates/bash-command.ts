@@ -3,8 +3,8 @@ import type {
   WrapperKind,
 } from "#src/access-intent/bash/command-enumeration";
 import type { WrapperFloors } from "#src/types";
-import { pickMostRestrictive } from "#src/handlers/gates/candidate-check";
 import type { ScopedPermissionResolver } from "#src/permission-resolver";
+import { pickMostRestrictive } from "#src/restrictiveness";
 import type { PermissionCheckResult } from "#src/types";
 
 /**
@@ -41,6 +41,12 @@ import type { PermissionCheckResult } from "#src/types";
  * explicit `deny` covering it denies outright rather than being masked into an
  * approvable prompt (#712).
  *
+ * A *partial* parse failure is the other half of that clause: the units the
+ * recovery produced are enumerated normally, and any one the enumerator marked
+ * {@link BashCommand.parseUnresolved} has its `allow` floored to a synthetic
+ * `ask` naming the whole command (`<unparsed-bash-subtree>`, #840), because
+ * recovered structure is not evidence of what runs.
+ *
  * Pure and synchronous: the (async, tree-sitter) parse happens once in the
  * handler, which passes the decomposed `commands` here.
  */
@@ -53,6 +59,12 @@ const WRAPPER_SENTINEL: Record<WrapperKind, string> = {
   indirection: "<indirection-bash-wrapper>",
 };
 
+/**
+ * The synthetic `matchedPattern` recorded when a unit the parse could not
+ * resolve has its `allow` floored to `ask` (ADR 0013 §10, #840).
+ */
+const UNPARSED_SUBTREE_SENTINEL = "<unparsed-bash-subtree>";
+
 export function resolveBashCommandCheck(
   command: string,
   commands: BashCommand[],
@@ -62,9 +74,9 @@ export function resolveBashCommandCheck(
 ): PermissionCheckResult {
   if (commands.length === 0) {
     if (isTriviallyEmptyCommand(command)) {
-      return resolveWholeCommand(command, agentName, resolver);
+      return resolveOnBashSurface(command, agentName, resolver);
     }
-    const whole = resolveWholeCommand(command, agentName, resolver);
+    const whole = resolveOnBashSurface(command, agentName, resolver);
     if (whole.state === "deny") {
       return whole;
     }
@@ -78,42 +90,144 @@ export function resolveBashCommandCheck(
     };
   }
 
-  const results = commands.map((cmd) => {
-    const base = resolver.resolve({
-      kind: "tool",
-      surface: "bash",
-      input: { command: cmd.text },
-      agentName,
-    });
-    // Fork: wrapper flooring is configurable. In `fallback` mode (default), a
-    // wrapper unit is floored only when its inner commands could not be
-    // resolved (`payloadUnresolved`); a provably inert wrapper (bare `env`,
-    // `eval ""`) carries no flag and is gated by its own text like an ordinary
-    // command; resolved inner commands are gated as their own units, so the
-    // wrapper itself does not prompt. In `always` mode, the upstream v24
-    // behavior is preserved: every wrapper `allow` is clamped to `ask`.
-    const shouldFloor =
-      cmd.wrapperKind !== undefined &&
-      (cmd.payloadUnresolved === true || options?.wrapperFloors === "always");
-    const floored =
-      shouldFloor && base.state === "allow"
-        ? {
-            ...base,
-            state: "ask" as const,
-            matchedPattern: WRAPPER_SENTINEL[cmd.wrapperKind],
-          }
-        : base;
-    const result = cmd.context
-      ? { ...floored, commandContext: cmd.context }
-      : floored;
-    return cmd.executedUnit === undefined
-      ? result
-      : { ...result, executedUnit: cmd.executedUnit };
-  });
+  const results = commands.map((cmd) =>
+    resolveCommandUnit(cmd, command, agentName, resolver, options?.wrapperFloors),
+  );
   return (
     pickMostRestrictive(results) ??
-    resolveWholeCommand(command, agentName, resolver)
+    resolveOnBashSurface(command, agentName, resolver)
   );
+}
+
+/**
+ * Resolve one command unit of the chain: its own `bash`-surface rule, floored
+ * where the enumerator established a reason to floor it, then tagged with the
+ * facts the prompt and the session-approval suggestion read off the winner.
+ */
+function resolveCommandUnit(
+  cmd: BashCommand,
+  command: string,
+  agentName: string | undefined,
+  resolver: ScopedPermissionResolver,
+  wrapperFloors?: WrapperFloors,
+): PermissionCheckResult {
+  const base = resolveOnBashSurface(cmd.text, agentName, resolver);
+  const floored =
+    cmd.wrapperKind && base.state === "allow"
+      ? resolveWrapperUnit(
+          cmd,
+          cmd.wrapperKind,
+          base,
+          agentName,
+          resolver,
+          wrapperFloors,
+        )
+      : base;
+  const unparsed = floorUnparsedUnit(cmd, command, floored);
+  const contextual = cmd.context
+    ? { ...unparsed, commandContext: cmd.context }
+    : unparsed;
+  return cmd.executedUnit === undefined
+    ? contextual
+    : { ...contextual, executedUnit: cmd.executedUnit };
+}
+
+/**
+ * Floor a unit the parse could not resolve, so a subtree the fold did not
+ * understand cannot ride a permissive rule (ADR 0013 §10, #840).
+ *
+ * Three properties carry the safety argument.
+ *
+ * The result names the **whole** command, not the unit: the reason for the ask
+ * is that part of the command was not understood, and a partial parse can drop
+ * a command from enumeration entirely, so naming the fragment that did parse
+ * withholds exactly what the user needs to judge it. `command` is also the
+ * session-approval pattern, and a fragment there would grant more than the
+ * prompt showed.
+ *
+ * Only an `allow` is floored, so an explicit `deny` or `ask` on the unit
+ * decides instead — and a wrapper unit already floored to `ask` keeps its own,
+ * more specific sentinel.
+ *
+ * The result is built by spreading `resolved`, so a `source: "session"` grant
+ * survives to `GateRunner`'s session fast path, which tests the source before
+ * the state. A grant the user gave for this exact command still holds.
+ */
+function floorUnparsedUnit(
+  cmd: BashCommand,
+  command: string,
+  resolved: PermissionCheckResult,
+): PermissionCheckResult {
+  if (!cmd.parseUnresolved || resolved.state !== "allow") return resolved;
+  return {
+    ...resolved,
+    state: "ask",
+    command,
+    matchedPattern: UNPARSED_SUBTREE_SENTINEL,
+  };
+}
+
+/**
+ * Resolve a wrapper unit whose own text resolved to `allow`.
+ *
+ * A wrapper hides or indirects the command that should be gated, so its `allow`
+ * is clamped up to a synthetic `ask` naming the kind that caused it — unless
+ * the enumerator established that the floor has no reason left to hold, in
+ * which case the unit is resolved by the rules of the command it runs (ADR 0013
+ * §11, #803).
+ *
+ * Fork: wrapper flooring is configurable (`wrapperFloors`). In `fallback` mode
+ * (the fork's default) a wrapper whose inner commands were resolved is gated by
+ * its own text — the inner commands are emitted as their own units and gated
+ * there — so only unresolvable content (`payloadUnresolved`, fail-closed) and
+ * the `"always"` mode floor a wrapper `allow`. `"always"` mode, and every
+ * caller that does not configure the option, preserves the upstream behavior.
+ *
+ * Only an `allow` reaches here, which is what makes the exemption unable to
+ * weaken anything: an explicit `deny` or `ask` on the wrapper is decided before
+ * this function is consulted, and no inner rule is read at all.
+ */
+function resolveWrapperUnit(
+  cmd: BashCommand,
+  wrapperKind: WrapperKind,
+  base: PermissionCheckResult,
+  agentName: string | undefined,
+  resolver: ScopedPermissionResolver,
+  wrapperFloors?: WrapperFloors,
+): PermissionCheckResult {
+  const inner = cmd.floorExemption && cmd.executedUnit;
+  const innerDecides = () =>
+    resolveOnBashSurface(inner!, agentName, resolver);
+  if (wrapperFloors === "fallback") {
+    // Fork fallback: the inner commands are gated as their own units; a
+    // provably inert wrapper (bare `env`, `eval ""`) and a resolved wrapper
+    // are gated by their own text like an ordinary command. Only
+    // unresolvable content (`payloadUnresolved`, fail-closed) floors —
+    // unless the wrapper is a proven pure reader, whose inner rules decide
+    // in either mode (#803).
+    if (cmd.payloadUnresolved === true) {
+      return { ...base, state: "ask", matchedPattern: WRAPPER_SENTINEL[wrapperKind] };
+    }
+    return inner
+      ? { ...innerDecides(), command: base.command, floorExemption: cmd.floorExemption }
+      : base;
+  }
+  if (inner) {
+    // The inner command's rule decides, but the unit is still what runs: the
+    // prompt, the decision value, and the session-approval suggestion all read
+    // `command`, and naming a fragment of the command line there would offer a
+    // grant that does not cover what the user is looking at.
+    return {
+      ...innerDecides(),
+      command: base.command,
+      floorExemption: cmd.floorExemption,
+    };
+  }
+  return {
+    ...base,
+    state: "ask",
+    matchedPattern: WRAPPER_SENTINEL[wrapperKind],
+  };
 }
 
 /**
@@ -130,8 +244,14 @@ function isTriviallyEmptyCommand(command: string): boolean {
   return lines.every((line) => line.startsWith("#"));
 }
 
-/** Resolve the whole command string as a single unit on the `bash` surface. */
-function resolveWholeCommand(
+/**
+ * Resolve one command string against the `bash` surface's rules.
+ *
+ * Three callers share it: each command unit of the chain, the whole command
+ * when the chain yields no units, and the inner command of a wrapper the floor
+ * no longer covers.
+ */
+function resolveOnBashSurface(
   command: string,
   agentName: string | undefined,
   resolver: ScopedPermissionResolver,

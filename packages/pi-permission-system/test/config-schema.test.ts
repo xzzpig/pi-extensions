@@ -108,6 +108,137 @@ describe("unifiedConfigSchema", () => {
       });
       expect(result.success).toBe(false);
     });
+
+    it("rejects an empty surface key", () => {
+      expect(
+        unifiedConfigSchema.safeParse({ permission: { "": "allow" } }).success,
+      ).toBe(false);
+    });
+  });
+
+  describe("directional surface keys", () => {
+    it.each([
+      "path_read",
+      "path_write",
+      "external_directory_read",
+      "external_directory_write",
+    ])("accepts %s", (surface) => {
+      expect(
+        unifiedConfigSchema.safeParse({
+          permission: { [surface]: { "~/dev/*": "allow" } },
+        }).success,
+      ).toBe(true);
+    });
+
+    it.each([
+      "path_wrote",
+      "path_reed",
+      "path_delete",
+      "external_directory_reed",
+      "external_directory_",
+    ])(
+      "rejects the misspelled directional key %s, which would sit inert",
+      (surface) => {
+        const result = unifiedConfigSchema.safeParse({
+          permission: { [surface]: { "*": "deny" } },
+        });
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.error.issues[0]?.message).toContain(surface);
+        }
+      },
+    );
+
+    it("accepts exactly the directional surfaces the schema documents", () => {
+      const permission = (
+        buildPermissionsJsonSchema().properties as Record<
+          string,
+          Record<string, unknown>
+        >
+      ).permission;
+      const documented = Object.keys(
+        permission.properties as Record<string, unknown>,
+      ).filter((key) => /^(path|external_directory)_/.test(key));
+
+      expect(documented.toSorted()).toEqual([
+        "external_directory_read",
+        "external_directory_write",
+        "path_read",
+        "path_write",
+      ]);
+      for (const key of documented) {
+        expect(
+          unifiedConfigSchema.safeParse({ permission: { [key]: "allow" } })
+            .success,
+        ).toBe(true);
+      }
+    });
+
+    it("enumerates exactly those spellings when rejecting a misspelling", () => {
+      const result = unifiedConfigSchema.safeParse({
+        permission: { path_wrote: { "*": "deny" } },
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues[0]?.message).toBe(
+          'Unknown directional surface key "path_wrote". The legal spellings are path_read, path_write, external_directory_read, external_directory_write.',
+        );
+      }
+    });
+
+    it("still accepts an arbitrary tool-name surface, and keeps its rules", () => {
+      const permission = { my_extension_tool: { "*": "ask" }, ffgrep: "allow" };
+      const result = unifiedConfigSchema.safeParse({ permission });
+
+      expect(result.success).toBe(true);
+      // Asserting the parsed data, not just `success`: without the catchall
+      // zod silently *strips* an unmatched key rather than rejecting it, so a
+      // success-only assertion passes while every tool-name rule is dropped.
+      expect(result.data?.permission).toEqual(permission);
+    });
+
+    it("leaves a tool named like a family member of another family alone", () => {
+      expect(
+        unifiedConfigSchema.safeParse({
+          permission: { my_tool_read: "allow" },
+        }).success,
+      ).toBe(true);
+    });
+  });
+
+  describe("the fallback and bare-family surface keys", () => {
+    it.each(["*", "path", "external_directory", "bash", "mcp", "skill"])(
+      "accepts %s as a string shorthand",
+      (surface) => {
+        expect(
+          unifiedConfigSchema.safeParse({ permission: { [surface]: "allow" } })
+            .success,
+        ).toBe(true);
+      },
+    );
+
+    it.each(["*", "path", "external_directory", "bash", "mcp", "skill"])(
+      "accepts %s as a pattern map",
+      (surface) => {
+        expect(
+          unifiedConfigSchema.safeParse({
+            permission: { [surface]: { "*": "ask", "~/dev/*": "allow" } },
+          }).success,
+        ).toBe(true);
+      },
+    );
+
+    it.each(["*", "path", "external_directory", "bash", "mcp", "skill"])(
+      "rejects an invalid action on %s",
+      (surface) => {
+        expect(
+          unifiedConfigSchema.safeParse({
+            permission: { [surface]: "maybe" },
+          }).success,
+        ).toBe(false);
+      },
+    );
   });
 
   describe("shellTools field", () => {
@@ -215,6 +346,85 @@ describe("buildPermissionsJsonSchema", () => {
       Record<string, unknown>
     >;
     expect(Array.isArray(properties.permission.examples)).toBe(true);
+  });
+
+  it("names every well-known surface as a documented property", () => {
+    const permission = (
+      schema.properties as Record<string, Record<string, unknown>>
+    ).permission;
+    const properties = permission.properties as Record<
+      string,
+      Record<string, unknown>
+    >;
+    expect(Object.keys(properties).sort()).toEqual([
+      "*",
+      "bash",
+      "external_directory",
+      "external_directory_read",
+      "external_directory_write",
+      "mcp",
+      "path",
+      "path_read",
+      "path_write",
+      "skill",
+    ]);
+    for (const key of Object.keys(properties)) {
+      expect(properties[key].description).toEqual(expect.any(String));
+      expect(properties[key].markdownDescription).toEqual(expect.any(String));
+    }
+  });
+
+  it("keeps each surface's documentation inside the per-property budget", () => {
+    const permission = (
+      schema.properties as Record<string, Record<string, unknown>>
+    ).permission;
+    const properties = permission.properties as Record<
+      string,
+      Record<string, unknown>
+    >;
+    const oversized = Object.entries(properties)
+      .map(([key, value]) => [
+        key,
+        (value.markdownDescription as string).length,
+      ])
+      .filter(([, length]) => (length as number) > 800);
+
+    expect(oversized).toEqual([]);
+  });
+
+  it("keeps the permission object's own description a summary", () => {
+    const permission = (
+      schema.properties as Record<string, Record<string, unknown>>
+    ).permission;
+
+    expect((permission.markdownDescription as string).length).toBeLessThan(
+      1200,
+    );
+  });
+
+  it("keeps arbitrary tool-name surfaces validating alongside them", () => {
+    const permission = (
+      schema.properties as Record<string, Record<string, unknown>>
+    ).permission;
+    expect(permission.additionalProperties).toEqual({
+      anyOf: [
+        { $ref: "#/$defs/permissionState" },
+        { $ref: "#/$defs/permissionMap" },
+      ],
+    });
+  });
+});
+
+describe("config/config.example.json", () => {
+  it("validates against unifiedConfigSchema", () => {
+    const example = JSON.parse(
+      readFileSync(
+        join(import.meta.dirname, "..", "config", "config.example.json"),
+        "utf-8",
+      ),
+    ) as unknown;
+    const result = unifiedConfigSchema.safeParse(example);
+    expect(result.success ? [] : result.error.issues).toEqual([]);
   });
 });
 

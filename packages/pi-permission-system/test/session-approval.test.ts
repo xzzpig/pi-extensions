@@ -4,100 +4,141 @@ import { SessionApproval } from "#src/session-approval";
 
 describe("SessionApproval", () => {
   describe("single", () => {
-    it("stores surface and one pattern", () => {
+    it("stores one grant pairing the surface with the pattern", () => {
       const approval = SessionApproval.single("bash", "git *");
-      expect(approval.surface).toBe("bash");
-      expect(approval.patterns).toEqual(["git *"]);
+      expect(approval.grants).toEqual([{ surface: "bash", pattern: "git *" }]);
     });
 
-    it("representativePattern returns the pattern", () => {
+    it("is recordable", () => {
       const approval = SessionApproval.single("bash", "git *");
-      expect(approval.representativePattern).toBe("git *");
-    });
-
-    it("toGateApproval returns { surface, pattern }", () => {
-      const approval = SessionApproval.single("bash", "git *");
-      expect(approval.toGateApproval()).toEqual({
-        surface: "bash",
-        pattern: "git *",
-      });
+      expect(approval.isRecordable).toBe(true);
     });
   });
 
-  describe("multiple", () => {
-    it("stores surface and all patterns", () => {
-      const approval = SessionApproval.multiple("external_directory", [
-        "/outside/a/*",
-        "/outside/b/*",
+  describe("forGrants", () => {
+    it("stores every grant in order", () => {
+      const approval = SessionApproval.forGrants([
+        { surface: "external_directory_read", pattern: "/outside/a/*" },
+        { surface: "external_directory_write", pattern: "/outside/b/*" },
       ]);
-      expect(approval.surface).toBe("external_directory");
-      expect(approval.patterns).toEqual(["/outside/a/*", "/outside/b/*"]);
+      expect(approval.grants).toEqual([
+        { surface: "external_directory_read", pattern: "/outside/a/*" },
+        { surface: "external_directory_write", pattern: "/outside/b/*" },
+      ]);
     });
 
-    it("representativePattern returns the first pattern", () => {
-      const approval = SessionApproval.multiple("external_directory", [
-        "/outside/a/*",
-        "/outside/b/*",
+    it("keeps a surface per pattern rather than one for all", () => {
+      const approval = SessionApproval.forGrants([
+        { surface: "external_directory_read", pattern: "/outside/a/*" },
+        { surface: "external_directory_write", pattern: "/outside/b/*" },
       ]);
-      expect(approval.representativePattern).toBe("/outside/a/*");
+      expect(new Set(approval.grants.map((grant) => grant.surface))).toEqual(
+        new Set(["external_directory_read", "external_directory_write"]),
+      );
     });
 
-    it("toGateApproval returns { surface, pattern } using the first pattern", () => {
-      const approval = SessionApproval.multiple("external_directory", [
-        "/outside/a/*",
-        "/outside/b/*",
+    it("is recordable", () => {
+      const approval = SessionApproval.forGrants([
+        { surface: "external_directory", pattern: "/outside/a/*" },
       ]);
-      expect(approval.toGateApproval()).toEqual({
-        surface: "external_directory",
-        pattern: "/outside/a/*",
-      });
+      expect(approval.isRecordable).toBe(true);
     });
 
-    it("defensive copy — mutating the source array does not affect patterns", () => {
-      const source = ["/outside/a/*", "/outside/b/*"];
-      const approval = SessionApproval.multiple("external_directory", source);
-      source.push("/outside/c/*");
-      expect(approval.patterns).toEqual(["/outside/a/*", "/outside/b/*"]);
+    it("defensive copy — mutating the source array does not affect grants", () => {
+      const source = [{ surface: "external_directory", pattern: "/a/*" }];
+      const approval = SessionApproval.forGrants(source);
+      source.push({ surface: "external_directory", pattern: "/b/*" });
+      expect(approval.grants).toEqual([
+        { surface: "external_directory", pattern: "/a/*" },
+      ]);
     });
   });
 
-  describe("empty patterns (degenerate case)", () => {
-    it("representativePattern returns undefined", () => {
-      const approval = SessionApproval.multiple("external_directory", []);
-      expect(approval.representativePattern).toBeUndefined();
-    });
-
-    it("toGateApproval returns undefined", () => {
-      const approval = SessionApproval.multiple("external_directory", []);
-      expect(approval.toGateApproval()).toBeUndefined();
+  describe("empty grants (degenerate case)", () => {
+    it("is not recordable", () => {
+      const approval = SessionApproval.forGrants([]);
+      expect(approval.isRecordable).toBe(false);
     });
   });
 
   describe("toForwardedData", () => {
-    it("returns surface and all patterns for a single approval", () => {
+    it("returns the single grant for a single approval", () => {
       const approval = SessionApproval.single("bash", "git *");
       expect(approval.toForwardedData()).toEqual({
-        surface: "bash",
-        patterns: ["git *"],
+        grants: [{ surface: "bash", pattern: "git *" }],
       });
     });
 
-    it("returns surface and all patterns for a multiple approval", () => {
-      const approval = SessionApproval.multiple("external_directory", [
-        "/outside/a/*",
-        "/outside/b/*",
+    it("returns every grant, each with its own surface", () => {
+      const approval = SessionApproval.forGrants([
+        { surface: "external_directory_read", pattern: "/outside/a/*" },
+        { surface: "external_directory_write", pattern: "/outside/b/*" },
       ]);
       expect(approval.toForwardedData()).toEqual({
-        surface: "external_directory",
-        patterns: ["/outside/a/*", "/outside/b/*"],
+        grants: [
+          { surface: "external_directory_read", pattern: "/outside/a/*" },
+          { surface: "external_directory_write", pattern: "/outside/b/*" },
+        ],
       });
     });
 
-    it("defensive copy — mutating the result patterns does not affect the approval", () => {
+    it("defensive copy — mutating the result grants does not affect the approval", () => {
       const approval = SessionApproval.single("bash", "git *");
       const data = approval.toForwardedData();
-      (data.patterns as string[]).push("rm *");
-      expect(approval.patterns).toEqual(["git *"]);
+      (data.grants as { surface: string; pattern: string }[]).push({
+        surface: "bash",
+        pattern: "rm *",
+      });
+      expect(approval.grants).toEqual([{ surface: "bash", pattern: "git *" }]);
+    });
+  });
+
+  describe("atWidth", () => {
+    it("returns itself at the proven width", () => {
+      const approval = SessionApproval.single(
+        "external_directory_write",
+        "/tmp/*",
+      );
+      expect(approval.atWidth("proven")).toBe(approval);
+    });
+
+    it("folds a directional grant to its family at the family width", () => {
+      const approval = SessionApproval.single(
+        "external_directory_write",
+        "/tmp/*",
+      );
+      expect(approval.atWidth("family").grants).toEqual([
+        { surface: "external_directory", pattern: "/tmp/*" },
+      ]);
+    });
+
+    it("folds every grant individually, keeping each pattern", () => {
+      const approval = SessionApproval.forGrants([
+        { surface: "external_directory_read", pattern: "/outside/a/*" },
+        { surface: "path_write", pattern: "/outside/b/*" },
+      ]);
+      expect(approval.atWidth("family").grants).toEqual([
+        { surface: "external_directory", pattern: "/outside/a/*" },
+        { surface: "path", pattern: "/outside/b/*" },
+      ]);
+    });
+
+    it("leaves a non-directional grant alone at the family width", () => {
+      const approval = SessionApproval.single("bash", "git *");
+      expect(approval.atWidth("family").grants).toEqual([
+        { surface: "bash", pattern: "git *" },
+      ]);
+    });
+
+    it("does not mutate the approval it widens", () => {
+      const approval = SessionApproval.single(
+        "external_directory_write",
+        "/tmp/*",
+      );
+      approval.atWidth("family");
+      expect(approval.grants).toEqual([
+        { surface: "external_directory_write", pattern: "/tmp/*" },
+      ]);
     });
   });
 });

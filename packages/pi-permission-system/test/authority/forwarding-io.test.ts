@@ -287,6 +287,97 @@ describe("readForwardedPermissionRequest — accessIntent field", () => {
   });
 });
 
+describe("readForwardedPermissionRequest — sessionApproval field", () => {
+  let root: string;
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function baseRequest(): ForwardedPermissionRequest {
+    return {
+      id: "req-1",
+      createdAt: 1000,
+      requesterSessionId: "child-session",
+      targetSessionId: "parent-session",
+      requesterAgentName: "researcher",
+      surface: "bash",
+    };
+  }
+
+  function readSessionApproval(sessionApproval: unknown) {
+    root = mkdtempSync(join(tmpdir(), "io-approval-"));
+    const filePath = join(root, "req.json");
+    writeJsonFileAtomic(null, filePath, {
+      ...baseRequest(),
+      sessionApproval,
+    });
+    return readForwardedPermissionRequest(null, filePath)?.sessionApproval;
+  }
+
+  it("round-trips a single grant", () => {
+    expect(
+      readSessionApproval({ grants: [{ surface: "bash", pattern: "git *" }] }),
+    ).toEqual({ grants: [{ surface: "bash", pattern: "git *" }] });
+  });
+
+  it("round-trips several grants naming different surfaces", () => {
+    const grants = [
+      { surface: "external_directory_read", pattern: "/outside/*" },
+      { surface: "external_directory_write", pattern: "/elsewhere/*" },
+    ];
+    expect(readSessionApproval({ grants })).toEqual({ grants });
+  });
+
+  it("ignores unknown sibling keys on a grant", () => {
+    expect(
+      readSessionApproval({
+        grants: [{ surface: "bash", pattern: "git *", effect: "read" }],
+      }),
+    ).toEqual({ grants: [{ surface: "bash", pattern: "git *" }] });
+  });
+
+  it("reads a request with no session approval as undefined (version skew)", () => {
+    root = mkdtempSync(join(tmpdir(), "io-approval-"));
+    const filePath = join(root, "req.json");
+    writeJsonFileAtomic(null, filePath, baseRequest());
+    const parsed = readForwardedPermissionRequest(null, filePath);
+    expect(parsed?.sessionApproval).toBeUndefined();
+    // The rest of the request still reconstructs.
+    expect(parsed?.requesterAgentName).toBe("researcher");
+  });
+
+  it("rejects the pre-#810 shape rather than normalizing it", () => {
+    expect(
+      readSessionApproval({ surface: "bash", patterns: ["git *"] }),
+    ).toBeUndefined();
+  });
+
+  it.each([
+    ["a non-object", "bash"],
+    ["null", null],
+    ["an object with no grants", {}],
+    ["an empty grant list", { grants: [] }],
+    ["a non-array grants", { grants: "bash" }],
+    ["a null grant", { grants: [null] }],
+    ["an empty surface", { grants: [{ surface: "", pattern: "git *" }] }],
+    ["a missing pattern", { grants: [{ surface: "bash" }] }],
+    ["a missing surface", { grants: [{ pattern: "git *" }] }],
+    ["a non-string pattern", { grants: [{ surface: "bash", pattern: 42 }] }],
+    [
+      "one bad grant among good ones",
+      {
+        grants: [
+          { surface: "bash", pattern: "git *" },
+          { surface: "bash", pattern: 42 },
+        ],
+      },
+    ],
+  ])("drops a malformed session approval to undefined (%s)", (_label, raw) => {
+    expect(readSessionApproval(raw)).toBeUndefined();
+  });
+});
+
 describe("readForwardedPermissionRequest — payload field", () => {
   let root: string;
 
@@ -465,6 +556,61 @@ describe("readForwardedPermissionResponse — decidedBy field", () => {
 
   it("leaves decidedBy absent for an older responder", () => {
     expect(writeAndRead(baseResponse())?.decidedBy).toBeUndefined();
+  });
+});
+
+describe("readForwardedPermissionResponse — sessionGrantWidth field", () => {
+  let root: string;
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  function writeAndRead(raw: unknown) {
+    root = mkdtempSync(join(tmpdir(), "io-grant-width-"));
+    const filePath = join(root, "res.json");
+    writeJsonFileAtomic(null, filePath, raw);
+    return readForwardedPermissionResponse(null, filePath);
+  }
+
+  function baseResponse() {
+    return {
+      approved: true,
+      state: "approved_for_session",
+      responderSessionId: "parent-session",
+      respondedAt: 1000,
+    };
+  }
+
+  it("round-trips the width the responder's human chose", () => {
+    expect(
+      writeAndRead({ ...baseResponse(), sessionGrantWidth: "family" })
+        ?.sessionGrantWidth,
+    ).toBe("family");
+  });
+
+  it("round-trips the proven width", () => {
+    expect(
+      writeAndRead({ ...baseResponse(), sessionGrantWidth: "proven" })
+        ?.sessionGrantWidth,
+    ).toBe("proven");
+  });
+
+  it("drops an unrecognized width without rejecting the response", () => {
+    const parsed = writeAndRead({
+      ...baseResponse(),
+      sessionGrantWidth: "everything",
+    });
+
+    // Least privilege in the skew direction: the grant still reaches the
+    // child, recorded at the width the gate proved.
+    expect(parsed?.approved).toBe(true);
+    expect(parsed?.state).toBe("approved_for_session");
+    expect(parsed?.sessionGrantWidth).toBeUndefined();
+  });
+
+  it("leaves the width absent for an older responder", () => {
+    expect(writeAndRead(baseResponse())?.sessionGrantWidth).toBeUndefined();
   });
 });
 

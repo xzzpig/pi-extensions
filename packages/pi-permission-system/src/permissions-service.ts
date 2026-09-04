@@ -7,10 +7,12 @@ import type { PathNormalizer } from "./path-normalizer";
 import type { PermissionsService } from "./service";
 import type {
   ToolAccessExtractor,
+  ToolAccessExtractorLookup,
   ToolAccessExtractorRegistrar,
 } from "./tool-access-extractor-registry";
 import type {
   ToolInputFormatter,
+  ToolInputFormatterLookup,
   ToolInputFormatterRegistrar,
 } from "./tool-input-formatter-registry";
 import type {
@@ -27,6 +29,7 @@ import type {
 interface ResolverForService {
   resolve(intent: AccessIntent): PermissionCheckResult;
   getToolPermission(toolName: string, agentName?: string): PermissionState;
+  isToolFullyDenied(toolName: string, agentName?: string): boolean;
 }
 
 /** Narrow session view: hands out the cwd-bound path normalizer and config knobs. */
@@ -49,8 +52,10 @@ export class LocalPermissionsService implements PermissionsService {
   constructor(
     private readonly resolver: ResolverForService,
     private readonly session: PathNormalizerProvider,
-    private readonly formatterRegistry: ToolInputFormatterRegistrar,
-    private readonly accessExtractorRegistry: ToolAccessExtractorRegistrar,
+    private readonly formatterRegistry: ToolInputFormatterRegistrar &
+      ToolInputFormatterLookup,
+    private readonly accessExtractorRegistry: ToolAccessExtractorRegistrar &
+      ToolAccessExtractorLookup,
     private readonly authorizerRegistry: AuthorizerRegistrar,
   ) {}
 
@@ -84,6 +89,13 @@ export class LocalPermissionsService implements PermissionsService {
     return this.resolver.getToolPermission(toolName, agentName);
   }
 
+  isToolFullyDenied(
+    toolName: string,
+    agentName?: string,
+  ): ReturnType<PermissionsService["isToolFullyDenied"]> {
+    return this.resolver.isToolFullyDenied(toolName, agentName);
+  }
+
   registerToolInputFormatter(
     toolName: string,
     formatter: ToolInputFormatter,
@@ -96,6 +108,20 @@ export class LocalPermissionsService implements PermissionsService {
     extractor: ToolAccessExtractor,
   ): ReturnType<PermissionsService["registerToolAccessExtractor"]> {
     return this.accessExtractorRegistry.register(toolName, extractor);
+  }
+
+  getToolAccessExtractor(
+    toolName: string,
+  ): ReturnType<PermissionsService["getToolAccessExtractor"]> {
+    // The origin is the gates' concern, not a caller's: this surface answers
+    // the capability, and where it came from rides the gate's log context.
+    return this.accessExtractorRegistry.resolve(toolName)?.extractor;
+  }
+
+  getToolInputFormatter(
+    toolName: string,
+  ): ReturnType<PermissionsService["getToolInputFormatter"]> {
+    return this.formatterRegistry.get(toolName);
   }
 
   registerAuthorizer(

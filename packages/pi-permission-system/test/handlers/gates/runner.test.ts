@@ -4,7 +4,11 @@ import type { GateBypass } from "#src/handlers/gates/descriptor";
 import type { PermissionDecisionEvent } from "#src/permission-events";
 import { EXTENSION_TAG } from "#src/presentation/agent-renderer";
 import { SessionApproval } from "#src/session-approval";
-import { DECIDED_BY_HUMAN } from "#test/helpers/decision-fixtures";
+import {
+  DECIDED_BY_ABSENT_AUTHORITY,
+  DECIDED_BY_AUTHORIZER,
+  DECIDED_BY_HUMAN,
+} from "#test/helpers/decision-fixtures";
 import { makeDescriptor, makeGateRunner } from "#test/helpers/gate-fixtures";
 import { makeCheckResult } from "#test/helpers/handler-fixtures";
 import { makePromptPayload } from "#test/helpers/prompt-details-fixtures";
@@ -194,6 +198,54 @@ describe("GateRunner — descriptor path", () => {
     );
   });
 
+  it("auto-approves an unparsed-subtree ask under yolo without prompting", async () => {
+    const { runner, deps } = makeGateRunner({
+      yolo: true,
+      resolveResult: makeCheckResult({
+        state: "ask",
+        source: "bash",
+        toolName: "bash",
+        matchedPattern: "<unparsed-bash-subtree>",
+      }),
+    });
+
+    const result = await runner.run(makeDescriptor(), null);
+
+    expect(result).toEqual({ action: "allow" });
+    expect(deps.escalate).not.toHaveBeenCalled();
+    expect(deps.reporter.emitDecision).toHaveBeenCalledWith(
+      expect.objectContaining({
+        result: "allow",
+        resolution: "auto_approved",
+        origin: "yolo",
+        matchedPattern: "<unparsed-bash-subtree>",
+      }),
+    );
+  });
+
+  it("honours a session grant that survived the unparsed-subtree floor", async () => {
+    // The floor clamps state and leaves `source` alone, and this fast path
+    // tests the source before the state — which is what keeps a grant the
+    // user already gave for this exact command from re-prompting (#840).
+    const { runner, deps } = makeGateRunner({
+      resolveResult: makeCheckResult({
+        state: "ask",
+        source: "session",
+        toolName: "bash",
+        matchedPattern: "<unparsed-bash-subtree>",
+      }),
+    });
+
+    const result = await runner.run(makeDescriptor(), null);
+
+    expect(result).toEqual({ action: "allow" });
+    expect(deps.escalate).not.toHaveBeenCalled();
+    expect(deps.reporter.writeReviewLog).toHaveBeenCalledWith(
+      "permission_request.session_approved",
+      expect.objectContaining({ resolution: "session_approved" }),
+    );
+  });
+
   it("blocks an explicit deny under yolo without prompting", async () => {
     const { runner, deps } = makeGateRunner({
       yolo: true,
@@ -267,6 +319,49 @@ describe("GateRunner — descriptor path", () => {
     );
   });
 
+  it("records the grants folded to their families when the decision names the family width", async () => {
+    const { runner, deps } = makeGateRunner({
+      resolveResult: makeCheckResult({ state: "ask", matchedPattern: "*" }),
+      escalate: vi.fn().mockResolvedValue({
+        approved: true,
+        state: "approved_for_session",
+        sessionGrantWidth: "family",
+        decidedBy: DECIDED_BY_HUMAN,
+      }),
+    });
+    const descriptor = makeDescriptor({
+      sessionApproval: SessionApproval.single(
+        "external_directory_write",
+        "/outside/a/*",
+      ),
+    });
+    await runner.run(descriptor, null);
+    expect(deps.recordSessionApproval).toHaveBeenCalledWith(
+      SessionApproval.single("external_directory", "/outside/a/*"),
+    );
+  });
+
+  it("records the grants on their proven surfaces when the decision names no width", async () => {
+    const { runner, deps } = makeGateRunner({
+      resolveResult: makeCheckResult({ state: "ask", matchedPattern: "*" }),
+      escalate: vi.fn().mockResolvedValue({
+        approved: true,
+        state: "approved_for_session",
+        decidedBy: DECIDED_BY_HUMAN,
+      }),
+    });
+    const descriptor = makeDescriptor({
+      sessionApproval: SessionApproval.single(
+        "external_directory_write",
+        "/outside/a/*",
+      ),
+    });
+    await runner.run(descriptor, null);
+    expect(deps.recordSessionApproval).toHaveBeenCalledWith(
+      SessionApproval.single("external_directory_write", "/outside/a/*"),
+    );
+  });
+
   it("calls recordSessionApproval once with the full SessionApproval when sessionApproval has multiple patterns", async () => {
     const { runner, deps } = makeGateRunner({
       resolveResult: makeCheckResult({ state: "ask", matchedPattern: "*" }),
@@ -276,9 +371,9 @@ describe("GateRunner — descriptor path", () => {
         decidedBy: DECIDED_BY_HUMAN,
       }),
     });
-    const approval = SessionApproval.multiple("external_directory", [
-      "/outside/a/*",
-      "/outside/b/*",
+    const approval = SessionApproval.forGrants([
+      { surface: "external_directory", pattern: "/outside/a/*" },
+      { surface: "external_directory", pattern: "/outside/b/*" },
     ]);
     const descriptor = makeDescriptor({ sessionApproval: approval });
     const result = await runner.run(descriptor, null);
@@ -313,6 +408,7 @@ describe("GateRunner — descriptor path", () => {
         approved: false,
         state: "denied",
         confirmationUnavailable: true,
+        decidedBy: DECIDED_BY_ABSENT_AUTHORITY,
       }),
     });
     const result = await runner.run(makeDescriptor(), null);
@@ -325,13 +421,13 @@ describe("GateRunner — descriptor path", () => {
     );
   });
 
-  it("emits auto_approved resolution when decision has autoApproved flag", async () => {
+  it("emits auto_approved resolution when yolo decided the escalated ask", async () => {
     const { runner, deps } = makeGateRunner({
       resolveResult: makeCheckResult({ state: "ask", matchedPattern: "*" }),
       escalate: vi.fn().mockResolvedValue({
         approved: true,
         state: "approved",
-        autoApproved: true,
+        decidedBy: { kind: "yolo", pattern: "*" },
       }),
     });
     const result = await runner.run(makeDescriptor(), null);
@@ -341,6 +437,99 @@ describe("GateRunner — descriptor path", () => {
         resolution: "auto_approved",
       }),
     );
+  });
+
+  describe("attributes the ask to what decided it", () => {
+    it("emits authorizer_denied when a chain link refused the ask", async () => {
+      const { runner, deps } = makeGateRunner({
+        resolveResult: makeCheckResult({ state: "ask", matchedPattern: "*" }),
+        escalate: vi.fn().mockResolvedValue({
+          approved: false,
+          state: "denied_with_reason",
+          denialReason: "reads outside the project",
+          decidedBy: DECIDED_BY_AUTHORIZER,
+        }),
+      });
+      const result = await runner.run(makeDescriptor(), null);
+      expect(result).toMatchObject({ action: "block" });
+      expect(deps.reporter.emitDecision).toHaveBeenCalledWith(
+        expect.objectContaining({
+          result: "deny",
+          resolution: "authorizer_denied",
+        }),
+      );
+    });
+
+    it("emits authorizer_allowed when a chain link granted the ask", async () => {
+      const { runner, deps } = makeGateRunner({
+        resolveResult: makeCheckResult({ state: "ask", matchedPattern: "*" }),
+        escalate: vi.fn().mockResolvedValue({
+          approved: true,
+          state: "approved",
+          decidedBy: {
+            kind: "authorizer",
+            name: "model-judge",
+            verdict: "allow",
+            reason: null,
+          },
+        }),
+      });
+      const result = await runner.run(makeDescriptor(), null);
+      expect(result).toEqual({ action: "allow" });
+      expect(deps.reporter.emitDecision).toHaveBeenCalledWith(
+        expect.objectContaining({
+          result: "allow",
+          resolution: "authorizer_allowed",
+        }),
+      );
+    });
+
+    it("emits policy_allow when a rule in the serving session answered the forwarded ask", async () => {
+      const { runner, deps } = makeGateRunner({
+        resolveResult: makeCheckResult({ state: "ask", matchedPattern: "*" }),
+        escalate: vi.fn().mockResolvedValue({
+          approved: true,
+          state: "approved",
+          decidedBy: {
+            kind: "forwarded",
+            responderSessionId: "parent-1",
+            decision: {
+              kind: "rule",
+              surface: "external_directory",
+              pattern: "/tmp/*",
+              origin: "global",
+            },
+          },
+        }),
+      });
+      const result = await runner.run(makeDescriptor(), null);
+      expect(result).toEqual({ action: "allow" });
+      expect(deps.reporter.emitDecision).toHaveBeenCalledWith(
+        expect.objectContaining({
+          result: "allow",
+          resolution: "policy_allow",
+        }),
+      );
+    });
+
+    it("still emits user_approved when a human in the serving session answered", async () => {
+      const { runner, deps } = makeGateRunner({
+        resolveResult: makeCheckResult({ state: "ask", matchedPattern: "*" }),
+        escalate: vi.fn().mockResolvedValue({
+          approved: true,
+          state: "approved",
+          decidedBy: {
+            kind: "forwarded",
+            responderSessionId: "parent-1",
+            decision: DECIDED_BY_HUMAN,
+          },
+        }),
+      });
+      await runner.run(makeDescriptor(), null);
+      expect(deps.reporter.emitDecision).toHaveBeenCalledWith(
+        expect.objectContaining({ resolution: "user_approved" }),
+      );
+    });
   });
 
   it("uses preResolved.state instead of calling resolve", async () => {
@@ -412,7 +601,7 @@ describe("GateRunner — descriptor path", () => {
     await runner.run(makeDescriptor({ sessionApproval: approval }), null);
     expect(deps.escalate).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionApproval: { surface: "bash", patterns: ["git *"] },
+        sessionApproval: { grants: [{ surface: "bash", pattern: "git *" }] },
       }),
     );
   });
@@ -542,6 +731,7 @@ describe("GateRunner — descriptor path", () => {
           approved: false,
           state: "denied",
           confirmationUnavailable: true,
+          decidedBy: DECIDED_BY_ABSENT_AUTHORITY,
         }),
       });
       const result = await runner.run(makeDescriptor(), null);
@@ -560,6 +750,10 @@ describe("GateRunner — descriptor path", () => {
           state: "denied",
           confirmationUnavailable: true,
           denialReason: "Session 'parent-1' is not serving forwarded requests",
+          decidedBy: {
+            kind: "unavailable",
+            reason: "Session 'parent-1' is not serving forwarded requests",
+          },
         }),
       });
       const result = await runner.run(makeDescriptor(), null);
@@ -571,6 +765,85 @@ describe("GateRunner — descriptor path", () => {
       }
     });
 
+    it("names the authorizer link that refused, not the user", async () => {
+      const { runner } = makeGateRunner({
+        resolveResult: makeCheckResult({ state: "ask", matchedPattern: "*" }),
+        escalate: vi.fn().mockResolvedValue({
+          approved: false,
+          state: "denied_with_reason",
+          denialReason: "reads outside the project",
+          decidedBy: DECIDED_BY_AUTHORIZER,
+        }),
+      });
+      const result = await runner.run(makeDescriptor(), null);
+      expect(result.action).toBe("block");
+      if (result.action === "block") {
+        expect(result.reason).toContain("The 'model-judge' authorizer denied");
+        expect(result.reason).not.toContain("The user denied");
+        expect(result.reason).toContain("Reason: reads outside the project.");
+      }
+    });
+
+    it("names the serving session's rule that refused, not the user", async () => {
+      const { runner } = makeGateRunner({
+        resolveResult: makeCheckResult({ state: "ask", matchedPattern: "*" }),
+        escalate: vi.fn().mockResolvedValue({
+          approved: false,
+          state: "denied_with_reason",
+          denialReason: "force pushes are blocked",
+          decidedBy: {
+            kind: "forwarded",
+            responderSessionId: "parent-1",
+            decision: {
+              kind: "rule",
+              surface: "bash",
+              pattern: "git push --force*",
+              origin: "project",
+            },
+          },
+        }),
+      });
+      const result = await runner.run(makeDescriptor(), null);
+      expect(result.action).toBe("block");
+      if (result.action === "block") {
+        expect(result.reason).toContain(
+          "A policy rule in the session serving this request denied",
+        );
+        expect(result.reason).not.toContain("The user denied");
+        // The deciding rule replaces the ask's own, so the child's pattern
+        // must be absent — present-only would pass under both renders.
+        expect(result.reason).toContain("rule 'git push --force*'");
+        expect(result.reason).not.toContain("rule '*'");
+        expect(result.reason).toContain("Reason: force pushes are blocked.");
+      }
+    });
+
+    it("reports a serving session's failed escalation as an authority failure", async () => {
+      const { runner } = makeGateRunner({
+        resolveResult: makeCheckResult({ state: "ask", matchedPattern: "*" }),
+        escalate: vi.fn().mockResolvedValue({
+          approved: false,
+          state: "denied",
+          decidedBy: {
+            kind: "forwarded",
+            responderSessionId: "parent-1",
+            decision: { kind: "gate_error", reason: "boom" },
+          },
+        }),
+      });
+      const result = await runner.run(makeDescriptor(), null);
+      expect(result.action).toBe("block");
+      if (result.action === "block") {
+        expect(result.reason).toContain(
+          "The permission authority in the session serving this request failed to answer",
+        );
+        expect(result.reason).not.toContain("The user denied");
+        // The detail rides `decidedBy.reason`; this decision carries no
+        // `denialReason`, so a render reading that would drop it silently.
+        expect(result.reason).toContain("Reason: boom.");
+      }
+    });
+
     it("renders the user's denial reason with the extension tag", async () => {
       const { runner } = makeGateRunner({
         resolveResult: makeCheckResult({ state: "ask", matchedPattern: "*" }),
@@ -578,6 +851,7 @@ describe("GateRunner — descriptor path", () => {
           approved: false,
           state: "denied",
           denialReason: "too risky",
+          decidedBy: DECIDED_BY_HUMAN,
         }),
       });
       const result = await runner.run(makeDescriptor(), null);

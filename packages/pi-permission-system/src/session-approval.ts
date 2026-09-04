@@ -1,54 +1,62 @@
+import {
+  type ApprovalGrant,
+  type SessionGrantWidth,
+  widenGrant,
+} from "#src/approval-grant";
 import type { ForwardedSessionApproval } from "#src/authority/permission-forwarding";
 
 /**
- * Value object for a session-scoped approval: one surface, one-or-more patterns.
+ * Value object for a session-scoped approval: one or more
+ * {@link ApprovalGrant}s, each pairing a pattern with the surface it was
+ * proven on.
  *
  * Owned by gate descriptors and passed to the session store — the runner never
- * needs to know whether there is one pattern or many.
+ * needs to know how many grants an approval carries, and the store records
+ * each on the surface the grant itself names rather than one shared by all
+ * (#810).
  */
 export class SessionApproval {
-  private constructor(
-    readonly surface: string,
-    readonly patterns: readonly string[],
-  ) {}
+  private constructor(readonly grants: readonly ApprovalGrant[]) {}
 
   /** Create an approval for a single pattern (the common case). */
   static single(surface: string, pattern: string): SessionApproval {
-    return new SessionApproval(surface, [pattern]);
+    return new SessionApproval([{ surface, pattern }]);
   }
 
   /**
-   * Create an approval for multiple patterns (e.g. bash external-directory
-   * gates that cover several uncovered paths in one prompt).
+   * Create an approval from grants that may name different surfaces (e.g. a
+   * bash external-directory ask whose uncovered paths proved different
+   * directions). Returns a defensive copy.
    */
-  static multiple(
-    surface: string,
-    patterns: readonly string[],
-  ): SessionApproval {
-    return new SessionApproval(surface, [...patterns]);
+  static forGrants(grants: readonly ApprovalGrant[]): SessionApproval {
+    return new SessionApproval([...grants]);
   }
 
-  /** Representative pattern for the interactive prompt — the first, if any. */
-  get representativePattern(): string | undefined {
-    return this.patterns[0];
+  /** Whether this approval carries anything for the session store to record. */
+  get isRecordable(): boolean {
+    return this.grants.length > 0;
   }
 
   /**
-   * Single-pattern shape `applyPermissionGate` echoes back to the caller.
-   * Returns `undefined` when patterns is empty (degenerate case).
+   * This approval as recorded at `width`.
+   *
+   * The runner holds a width and an approval and tells the approval to produce
+   * itself — it never inspects a grant's surface. Each grant is folded
+   * individually, so an approval whose patterns proved different directions
+   * keeps one grant per pattern (#810) at either width.
    */
-  toGateApproval(): { surface: string; pattern: string } | undefined {
-    const pattern = this.representativePattern;
-    if (pattern === undefined) return undefined;
-    return { surface: this.surface, pattern };
+  atWidth(width: SessionGrantWidth): SessionApproval {
+    return width === "proven"
+      ? this
+      : new SessionApproval(this.grants.map(widenGrant));
   }
 
   /**
    * Plain data shape for relaying this approval on a forwarded request, so the
-   * serving node can record the same pattern(s) as a whole-session grant.
-   * Returns a defensive copy of the patterns.
+   * serving node can record the same grants as a whole-session grant.
+   * Returns a defensive copy.
    */
   toForwardedData(): ForwardedSessionApproval {
-    return { surface: this.surface, patterns: [...this.patterns] };
+    return { grants: [...this.grants] };
   }
 }

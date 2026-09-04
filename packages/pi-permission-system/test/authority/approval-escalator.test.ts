@@ -136,6 +136,24 @@ describe("ParentAuthorizer provenance relay", () => {
     }
   });
 
+  test("relays the width the responder's human chose for the session grant", async () => {
+    const temp = createForwardingTempDir("parent-session");
+    try {
+      // The child records the grant, so the width has to survive the hop or
+      // the parent's choice is silently narrowed back (#813).
+      await expect(
+        exchangeWith(temp, {
+          approved: true,
+          state: "approved_for_session",
+          sessionGrantWidth: "family",
+          responderSessionId: "parent-session",
+        }),
+      ).resolves.toMatchObject({ sessionGrantWidth: "family" });
+    } finally {
+      temp.cleanup();
+    }
+  });
+
   test("discards a malformed decider rather than relaying a corrupt one", async () => {
     const temp = createForwardingTempDir("parent-session");
     try {
@@ -231,14 +249,13 @@ describe("ParentAuthorizer", () => {
           agentName: "Explore",
           toolName: "bash",
           command: "git push",
-          sessionApproval: { surface: "bash", patterns: ["git *"] },
+          sessionApproval: { grants: [{ surface: "bash", pattern: "git *" }] },
         }),
       );
 
       const request = await waitForRequestFile(temp.location.requestsDir);
       expect(request.sessionApproval).toEqual({
-        surface: "bash",
-        patterns: ["git *"],
+        grants: [{ surface: "bash", pattern: "git *" }],
       });
 
       writeFileSync(

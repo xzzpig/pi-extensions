@@ -1,10 +1,30 @@
+import type { SessionGrantWidth } from "#src/approval-grant";
 import type { DecisionSource } from "#src/authority/decision-source";
 import type { PermissionPromptDecision } from "#src/authority/permission-dialog";
 
-/** Result of applying the permission gate. */
+/**
+ * Result of applying the permission gate.
+ *
+ * Both arms name what decided. The gate is the one place that knows whether
+ * recorded authority answered or an escalation did, so it reports the decider
+ * rather than leaving the caller to reconstruct it from a captured decision
+ * (#772).
+ */
 export type PermissionGateResult =
-  | { action: "allow"; sessionApproval?: { surface: string; pattern: string } }
-  | { action: "block"; reason: string };
+  | {
+      action: "allow";
+      decidedBy: DecisionSource;
+      /**
+       * Set when the human granted the ask for the whole session, carrying the
+       * width to record it at.
+       *
+       * One field rather than a `forSession` flag beside a width: the width is
+       * meaningless without the grant, and two optional fields could represent
+       * a width for a grant that never happened.
+       */
+      sessionGrant?: { width: SessionGrantWidth };
+    }
+  | { action: "block"; decidedBy: DecisionSource; reason: string };
 
 /** Everything the gate needs — no direct dependency on ExtensionContext. */
 export interface PermissionGateParams {
@@ -19,11 +39,16 @@ export interface PermissionGateParams {
   promptForApproval: () => Promise<PermissionPromptDecision>;
 
   /**
-   * Session approval suggestion to record when the user selects
-   * "for this session". When present and the decision is `approved_for_session`,
-   * the result carries the suggestion back to the caller for recording.
+   * Whether this ask has a session-approval suggestion to record when the user
+   * selects "for this session".
+   *
+   * A boolean rather than the suggestion itself: the gate decides only whether
+   * a whole-session grant happened, and the caller records the suggestion it
+   * already holds. Handing the gate the value would ask it to name a single
+   * representative `(surface, pattern)`, which a multi-pattern approval has no
+   * way to choose (#810).
    */
-  sessionApproval?: { surface: string; pattern: string };
+  canGrantForSession: boolean;
 
   /** Write a review-log entry. Called for deny and ask-but-unavailable paths. */
   writeLog: (event: string, extra: Record<string, unknown>) => void;
@@ -32,7 +57,8 @@ export interface PermissionGateParams {
   logContext: Record<string, unknown>;
 
   /**
-   * The rule that resolved this gate, for the deny arm's review entry.
+   * The rule that resolved this gate — the decider for both arms that never
+   * escalate, and the deny arm's review entry.
    *
    * A sibling of `logContext` rather than a member of it: the context holds
    * what every resolution of this gate shares, and the decider is by
@@ -42,9 +68,16 @@ export interface PermissionGateParams {
 
   /** Message strings/factories for each outcome. */
   messages: {
+    /** What the agent is told when recorded authority denied the request. */
     denyReason: string;
-    unavailableReason: (decision: PermissionPromptDecision) => string;
-    userDeniedReason: (decision: PermissionPromptDecision) => string;
+    /**
+     * What the agent is told when an escalation refused it.
+     *
+     * One factory rather than one per outcome: which sentence a refusal earns
+     * follows from the decision's own decider, and that dispatch belongs with
+     * the renderers rather than here (#772).
+     */
+    refusedReason: (decision: PermissionPromptDecision) => string;
   };
 }
 
@@ -64,26 +97,38 @@ export async function applyPermissionGate(
       resolution: "policy_denied",
       decidedBy: params.decidedByRule,
     });
-    return { action: "block", reason: messages.denyReason };
+    return {
+      action: "block",
+      decidedBy: params.decidedByRule,
+      reason: messages.denyReason,
+    };
   }
 
   if (state === "ask") {
     const decision = await promptForApproval();
+    const decidedBy = decision.decidedBy;
     if (!decision.approved) {
       // The gate writes no review entry for an ask denial — the prompter
-      // brackets it (waiting/denied). The block reason distinguishes an
-      // absent-authority denial (confirmationUnavailable) from a user denial.
+      // brackets it (waiting/denied).
       return {
         action: "block",
-        reason: decision.confirmationUnavailable
-          ? messages.unavailableReason(decision)
-          : messages.userDeniedReason(decision),
+        decidedBy,
+        reason: messages.refusedReason(decision),
       };
     }
-    if (decision.state === "approved_for_session" && params.sessionApproval) {
-      return { action: "allow", sessionApproval: params.sessionApproval };
+    if (
+      decision.state === "approved_for_session" &&
+      params.canGrantForSession
+    ) {
+      return {
+        action: "allow",
+        decidedBy,
+        // Absent means the width every producer chose before #813.
+        sessionGrant: { width: decision.sessionGrantWidth ?? "proven" },
+      };
     }
+    return { action: "allow", decidedBy };
   }
 
-  return { action: "allow" };
+  return { action: "allow", decidedBy: params.decidedByRule };
 }

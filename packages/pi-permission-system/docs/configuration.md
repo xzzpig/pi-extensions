@@ -41,9 +41,9 @@ Scalar fields (`debugLog`, `permissionReviewLog`, `yoloMode`, `doublePressToConf
 **Invalid higher-precedence scope fails closed.**
 If a non-global scope (project config, global agent frontmatter, or project agent frontmatter) is present but fails to load or validate, it no longer contributes an empty scope that silently inherits the lower scope's rules.
 Instead the effective policy is floored so nothing resolves more permissively than `ask`: every `allow` (including one inherited from a lower scope) is clamped to `ask`, while `deny` and `ask` are unchanged.
-So a global `bash: allow` cannot remain effective behind a project scope that was meant to deny bash but contains a typo â bash prompts until the invalid config is fixed.
+So a global `bash: allow` cannot remain effective behind a project scope that was meant to deny bash but contains a typo — bash prompts until the invalid config is fixed.
 A validation warning plus a distinct fail-closed notice are emitted, and a fix + reload restores the intended policy.
-An invalid **global** scope does not trigger the clamp â it is the lowest precedence, so nothing more permissive is inherited when it fails.
+An invalid **global** scope does not trigger the clamp — it is the lowest precedence, so nothing more permissive is inherited when it fails.
 This clamp is deny-preserving and, like `yoloMode`, applied at composition; when `yoloMode` is on it re-permits the floored `ask` back to `allow`, since yolo is an explicit full-permissive opt-in.
 
 ## Full Example
@@ -122,17 +122,22 @@ In an interactive **TUI** session, an `ask` decision opens an inline keybind dia
 | Key | Action                                                            |
 | --- | ----------------------------------------------------------------- |
 | `y` | Approve once                                                      |
-| `s` | Approve for this session                                          |
+| `s` | Approve for this session, in the direction the gate proved        |
+| `b` | Approve for this session in **both** directions (see below)       |
 | `n` | Deny                                                              |
 | `r` | Deny with a reason (opens an inline editor; a reason is required) |
+
+`b` appears only for an ask whose paths all prove the same direction — a read or a write, but not both.
+Every other ask shows the four options above without it.
+See [session-approvals.md](session-approvals.md#grant-direction) for what the two widths grant.
 
 Arrow keys / `j`/`k` move the highlight, `enter` confirms the highlighted option, and `esc` denies.
 With `doublePressToConfirm` enabled (the default), a letter hotkey **arms** its action and shows a `Press y again to approve.` hint; press the same key again to commit.
 Set `doublePressToConfirm` to `false` to commit on the first press.
 
 Pi's tool-expansion binding (`app.tools.expand`, `Ctrl+O` by default) stays live while the dialog is open.
-It expands both the prompt itself â to the complete request, unbounded by `promptMaxRows` and `promptFieldMaxWidth` â and the host's pending tool call, so one keystroke shows you everything before you decide.
-It only toggles the display â it never resolves, commits, or arms the pending decision.
+It expands both the prompt itself — to the complete request, unbounded by `promptMaxRows` and `promptFieldMaxWidth` — and the host's pending tool call, so one keystroke shows you everything before you decide.
+It only toggles the display — it never resolves, commits, or arms the pending decision.
 While you are typing a denial reason it is not intercepted, so a rebound printable key still reaches the reason editor.
 
 The reason editor is Pi's own line editor, so it behaves like the chat input: pasting works, as do cursor movement, word and line deletion, the kill ring, and undo.
@@ -141,11 +146,11 @@ The reason is a single line — a pasted line break becomes a space, and a long 
 
 ### What a prompt shows
 
-The prompt renders one fact per line, with the requesting agent (and, for a forwarded subagent ask, its session), the tool, the gate surface, the matched rule, the decision-relevant value, and â for a wrapper such as `xargs` â the command that will actually run.
+The prompt renders one fact per line, with the requesting agent (and, for a forwarded subagent ask, its session), the tool, the gate surface, the matched rule, the decision-relevant value, and — for a wrapper such as `xargs` — the command that will actually run.
 Those facts are always present: a budget may shorten a long one, never drop it.
-A fact the line above already states is not repeated â a bash ask shows `tool : bash` without a second `surface : bash` line, and a path ask's `path :` line names the surface itself.
+A fact the line above already states is not repeated — a bash ask shows `tool : bash` without a second `surface : bash` line, and a path ask's `path :` line names the surface itself.
 
-Everything else is evidence â the full command a gated sub-command came from, the working directory a path escaped, the tool-input preview â and it is what gives way when the render does not fit.
+Everything else is evidence — the full command a gated sub-command came from, the working directory a path escaped, the tool-input preview — and it is what gives way when the render does not fit.
 A shortened field or a dropped entry is marked with an ellipsis, and `Ctrl+O` shows the complete request.
 Raise `promptMaxRows` to see more evidence inline; raise `promptFieldMaxWidth` to see more of a long command.
 
@@ -158,9 +163,9 @@ Non-TUI contexts (RPC / frontend-driven sessions) keep the single-select prompt 
 Each entry is either a plain directory prefix or a wildcard pattern.
 Plain entries match any path that starts with the given directory (after `~`/`$HOME`/`${HOME}` expansion).
 Wildcard entries use `*` (any characters, including `/`) and `?` (exactly one character).
-`*` and `**` are equivalent â both cross directory boundaries.
+`*` and `**` are equivalent — both cross directory boundaries.
 
-Example â allow reads from a Homebrew-managed Pi install at any version:
+Example — allow reads from a Homebrew-managed Pi install at any version:
 
 ```jsonc
 {
@@ -170,13 +175,13 @@ Example â allow reads from a Homebrew-managed Pi install at any version:
 }
 ```
 
-### `shellTools` â gating aliased shell tools
+### `shellTools` — gating aliased shell tools
 
 The native `bash` tool goes through the full bash enforcement stack: command decomposition, wrapper flooring, path and external-directory token gates, and `bash:` rules.
-Some extensions replace `bash` with a differently-named tool â for example [`@howaboua/pi-codex-conversion`](https://github.com/IgorWarzocha/howaboua-pi-stuff) registers `exec_command`, which carries the shell command in a `cmd` argument and an optional working directory in `workdir`.
+Some extensions replace `bash` with a differently-named tool — for example [`@howaboua/pi-codex-conversion`](https://github.com/IgorWarzocha/howaboua-pi-stuff) registers `exec_command`, which carries the shell command in a `cmd` argument and an optional working directory in `workdir`.
 Without a hint, the permission system cannot tell that such a tool is really a shell, so it gates it as a generic extension tool and the bash rules never apply.
 
-`shellTools` records that hint, and an aliased tool is then gated at full parity with native `bash` â command decomposition, wrapper flooring, path and external-directory token gates, and `bash:` rules â with the invoked tool name preserved in the review log.
+`shellTools` records that hint, and an aliased tool is then gated at full parity with native `bash` — command decomposition, wrapper flooring, path and external-directory token gates, and `bash:` rules — with the invoked tool name preserved in the review log.
 Each key is a tool name; its value maps the tool's input arguments (the keys of the tool call's `arguments` object):
 
 ```jsonc
@@ -195,18 +200,18 @@ Each key is a tool name; its value maps the tool's input arguments (the keys of 
 When `workdirArgument` is set, the tool's working directory is the base the command's relative paths resolve against, and the working directory itself is gated by `external_directory` when it falls outside the session's working directory.
 
 Merge semantics: `shellTools` **shallow-merges by tool name** across global â project.
-A project entry overrides a specific tool's mapping on a key collision but never drops a global entry â so adding a project-scoped alias cannot silently remove enforcement for a tool the global config already covers.
+A project entry overrides a specific tool's mapping on a key collision but never drops a global entry — so adding a project-scoped alias cannot silently remove enforcement for a tool the global config already covers.
 To change a specific tool's mapping, set that tool's key at the project scope (the alias object is replaced wholesale, not deep-merged).
 
 `shellTools` only ever *tightens* enforcement and is inert when the named tool is not registered in the current session.
 Opting a project out of a shell-aliasing extension is a package-disable concern, not a `shellTools` edit.
 
-### Authorizer chain â case-by-case decision links
+### Authorizer chain — case-by-case decision links
 
 The deterministic policy above decides `allow` / `deny` / `ask` for every request.
 When a request lands on `ask`, the **authorizer chain** decides who answers it.
 By default that is you (an interactive prompt), the subagent-forwarding path, or a headless deny.
-A downstream extension can register a **link** â a reviewer that sees the `ask` and returns `allow`, `deny` (with an optional teaching reason), or `defer` to the next link â and the chain ends at the default terminal that always decides.
+A downstream extension can register a **link** — a reviewer that sees the `ask` and returns `allow`, `deny` (with an optional teaching reason), or `defer` to the next link — and the chain ends at the default terminal that always decides.
 The canonical use case is a light model judge that reviews asks case by case (e.g. auto-denying an errant typo-path with a corrective reason).
 
 `authorizerChain` is the ordered list of link names to consult, ahead of the terminal:
@@ -220,28 +225,28 @@ The canonical use case is a light model judge that reviews asks case by case (e.
 Three invariants govern the chain:
 
 1. **Config order wins, never registration order.**
-   The order in `authorizerChain` â not the order extensions happen to register in â fixes the security-relevant chain order.
+   The order in `authorizerChain` — not the order extensions happen to register in — fixes the security-relevant chain order.
 2. **A missing link is skipped fail-safe.**
    A name with no registered link is skipped with a logged warning; the `ask` still reaches the terminal.
    Absence of a judge means *more* prompting, never less.
 3. **Registration alone grants no authority.**
    Installing a judge extension gives it nothing; a link decides nothing until you name it here (opt-in activation).
 
-The chain owner caps every link with a **bounded-delegation checkpoint**: a link's `allow` on an excluded surface (`external_directory` or the `path` surface) is downgraded to `defer`, so a buggy or over-eager judge can never approve access outside your policy.
+The chain owner caps every link with a **bounded-delegation checkpoint**: a link's `allow` on an excluded surface *family* (`external_directory` or `path`, including each family's directional members) is downgraded to `defer`, so a buggy or over-eager judge can never approve access outside your policy.
 Deny and defer are never capped.
-The excluded surface is the **gate** surface the rule fired on, not the tool name displayed in the prompt â so a `write` blocked by a `path` rule is capped.
+The excluded surface is the **gate** surface the rule fired on, not the tool name displayed in the prompt — so a `write` blocked by a `path` rule is capped.
 This holds for an ask forwarded up from a subagent exactly as it does for a local one.
 See [migration/0635-forwarded-ask-delegation-envelope.md](migration/0635-forwarded-ask-delegation-envelope.md).
 
 When a **subagent** raises the ask, the chain runs one hop up.
-The subagent forwards the request to the session serving it, and that session resolves it against its own rules and then runs *its* chain over the same evidence â so your configured links do review a subagent's asks, in the session you are watching.
+The subagent forwards the request to the session serving it, and that session resolves it against its own rules and then runs *its* chain over the same evidence — so your configured links do review a subagent's asks, in the session you are watching.
 The subagent itself resolves no links (an extension cannot register one in a child session at all), and records `authorizer_chain_delegated` in the review log to say so.
 
 Three review-log records make the chain observable, all keyed by the ask's `requestId`:
 
 | Record                               | Meaning                                                                                                  |
 | ------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| `authorizer_chain_resolved`          | the links consulted on this ask, recorded before they run â a link that defers otherwise leaves no trace |
+| `authorizer_chain_resolved`          | the links consulted on this ask, recorded before they run — a link that defers otherwise leaves no trace |
 | `authorizer_chain_delegated`         | the ask came from a relaying subagent node; the named links were deliberately not run here               |
 | `authorizer_chain_unregistered_link` | a configured name had no registered link — a real misconfiguration; the ask still reaches the terminal   |
 | `authorizer_link_vacant`             | a link was registered on a relaying node, which runs no chain — accepted and recorded, never consulted   |
@@ -255,7 +260,7 @@ For a complete working example, see [`@gotgenes/pi-permission-model-judge`](http
 
 ## Policy Reference
 
-### `permission["*"]` â Universal Fallback
+### `permission["*"]` — Universal Fallback
 
 The `"*"` key sets the action used when no surface-specific rule matches:
 
@@ -295,13 +300,17 @@ A string value is a catch-all for that surface.
 Unknown or absent tools are not required in the config.
 If a tool is not registered at runtime, this extension blocks it before permission checks run.
 
+A tool is withheld from the model entirely only when **every** pattern configured under its surface resolves to `deny`.
+So `"bash": "deny"` hides the tool, while `"bash": { "*": "deny", "git *": "ask" }` keeps it visible — the agent can attempt a `git` command and be prompted, and everything else is denied at the gate.
+Ordering follows the same last-match-wins rule as every other lookup: an exception written *after* the `deny` catch-all is reachable, while one written *before* it is shadowed and the tool is hidden.
+
 #### Path Patterns for File Tools
 
 For path-bearing tools (`read`, `write`, `edit`, `find`, `grep`, `ls`), an object value maps file-path patterns to actions.
 Patterns are matched against `input.path` using the same last-match-wins wildcard semantics as bash command patterns.
 When Pi's current working directory is known, a relative path input is matched with both its original relative form and its cwd-normalized absolute form, so an absolute allowlist rule and a legacy relative rule can both apply to the same file.
 Per-tool path patterns also match the canonical (symlink-resolved) form, at parity with the `path` surface, so a per-tool deny on a sensitive spelling cannot be evaded through a symlink alias (see Symlinked paths below).
-`*` matches zero or more of any character **including** path separators â `src/*` matches both `src/foo.ts` and `src/deep/nested/foo.ts`.
+`*` matches zero or more of any character **including** path separators — `src/*` matches both `src/foo.ts` and `src/deep/nested/foo.ts`.
 There is no single-segment vs. multi-segment distinction; `**` is not a supported token and behaves identically to `*`.
 
 ```jsonc
@@ -326,7 +335,7 @@ There is no single-segment vs. multi-segment distinction; `**` is not a supporte
 }
 ```
 
-String shorthand is still supported and behaves identically â `"read": "allow"` is equivalent to `"read": { "*": "allow" }`, which permits reads of any path.
+String shorthand is still supported and behaves identically — `"read": "allow"` is equivalent to `"read": { "*": "allow" }`, which permits reads of any path.
 
 Tool injection at agent start is unaffected: a config like `"read": { "*": "allow", "*.env": "deny" }` still exposes the `read` tool to the agent.
 Only specific paths are restricted at call time.
@@ -335,17 +344,17 @@ Only specific paths are restricted at call time.
 
 Command patterns use wildcards matched against each top-level command in the chain:
 
-- `*` matches zero or more of any character (including `/` and other separators â there is no single-segment vs. multi-segment distinction; `**` is not a supported token and is equivalent to `*`).
+- `*` matches zero or more of any character (including `/` and other separators — there is no single-segment vs. multi-segment distinction; `**` is not a supported token and is equivalent to `*`).
 - `?` matches exactly one character.
 
-**Last matching rule wins** within a single command â put broad catch-alls first, specific overrides after.
+**Last matching rule wins** within a single command — put broad catch-alls first, specific overrides after.
 
 A bash invocation may be a chain of commands joined by `&&`, `||`, `;`, `|`, `&`, or newlines.
 Each top-level command is evaluated independently against the patterns, and the most restrictive result wins (`deny` > `ask` > `allow`).
 So `cd /repo && npm install x` evaluates both `cd /repo` and `npm install x`; if `npm *` is denied, the whole invocation is denied even when `cd *` is allowed.
 
-Quotes are respected (an operator inside `'â¦'` or `"â¦"` does not split the command).
-Commands nested inside command substitution (`$(â¦)`, backticks), process substitution (`<(â¦)`/`>(â¦)`), and subshells (`( â¦ )`) are evaluated against the bash patterns too, in addition to their enclosing command â since those inner commands really execute.
+Quotes are respected (an operator inside `'…'` or `"…"` does not split the command).
+Commands nested inside command substitution (`$(…)`, backticks), process substitution (`<(…)`/`>(…)`), and subshells (`( … )`) are evaluated against the bash patterns too, in addition to their enclosing command — since those inner commands really execute.
 So `echo $(rm -rf foo)` evaluates both `echo $(rm -rf foo)` and the inner `rm -rf foo`; if `rm *` is denied, the whole invocation is denied.
 The deny reason and the approval prompt note the nested origin (e.g. `inside command substitution`).
 
@@ -353,15 +362,15 @@ This holds wherever the substitution appears, not only in argument position.
 A substitution in a **redirect target** (`echo hi > $(rm *.txt)`, `cat < <(rm c)`, ``echo hi 2> `rm d` ``) and one in an **interpolating heredoc body** (`cat <<EOF` with `$(rm e)` in the body) are evaluated the same way.
 A quoted heredoc delimiter (`<<'EOF'` or `<<"EOF"`) does not interpolate, so its body is literal text and nothing in it is evaluated as a command.
 The enclosing command is still matched without its redirect, so a rule like `npm install` keeps matching `npm install > out.txt`.
-Control-flow bodies (`if`/`while`/`for`/`case`) and `{ â¦ }` brace groups are not descended into; their contents are matched as part of the enclosing statement's text.
+Control-flow bodies (`if`/`while`/`for`/`case`) and `{ … }` brace groups are not descended into; their contents are matched as part of the enclosing statement's text.
 
 A leading environment-variable assignment prefix is stripped before matching, so the rule gates the underlying command rather than the prefix.
-So `AWS_PROFILE=prod aws ec2 â¦` is matched as `aws ec2 â¦` â a `aws *` rule applies even though the invocation begins with `AWS_PROFILE=`.
+So `AWS_PROFILE=prod aws ec2 …` is matched as `aws ec2 …` — a `aws *` rule applies even though the invocation begins with `AWS_PROFILE=`.
 Prefixes like `PGPASSWORD=` and `KUBECONFIG=` are handled the same way.
 
 A pattern ending with `*` (space + wildcard) also matches the bare command without arguments.
 For example, `"git *"` matches both `"git status"` and bare `"git"`.
-Place a more specific pattern *after* it to carve out exceptions â the later matching rule wins.
+Place a more specific pattern *after* it to carve out exceptions — the later matching rule wins.
 
 > **Patterns match individual commands, not whole chains.**
 > A pattern that embeds a chain operator (e.g. `"cd * && npm *"`) will not match, because each command in the chain is evaluated separately.
@@ -410,7 +419,7 @@ The reason is appended to the block message shown to the agent, so it learns why
 [pi-permission-system] is not permitted to run 'bash' command 'npm install' (matched 'npm *'). Reason: Use pnpm instead.
 ```
 
-The object form is only valid at the pattern-value level (inside a pattern map) and only for `deny` â `action` must be `"deny"`, and `reason` must be a string (a non-string reason is ignored).
+The object form is only valid at the pattern-value level (inside a pattern map) and only for `deny` — `action` must be `"deny"`, and `reason` must be a string (a non-string reason is ignored).
 A bare `"deny"` string is unchanged and carries no reason.
 
 #### Fail-closed behavior
@@ -419,25 +428,34 @@ The bash gate fails closed: when in doubt it blocks or prompts, never silently a
 
 - If the permission gate throws an internal error (for example a transient tree-sitter parser-init failure), the tool call is **blocked** rather than passed ungated, and a `gate_error` entry is written to the review log naming the failure.
 - A non-empty command that cannot be parsed into command units resolves to **`ask`** (the synthetic `<unparseable-bash-command>` pattern in the review log) instead of falling through to a permissive top-level `*`.
-  A `deny` rule covering the whole command still denies outright â the synthetic `ask` never masks a hard deny into an approvable prompt.
+  A `deny` rule covering the whole command still denies outright — the synthetic `ask` never masks a hard deny into an approvable prompt.
   An empty, whitespace-only, or comment-only command has nothing to gate and is resolved normally.
-- An opaque-payload wrapper â `bash`/`sh`/`dash`/`zsh`/`ksh` invoked with `-c`, or `eval` â carries its inner program in a quoted argument. The fork **re-parses the payload** with the same tree-sitter parser and gates its inner commands as their own units (marked `inside an opaque wrapper payload (eval/bash -c)` in prompts), so `eval "git status"` matches `git status *`/`*` like a plain command, while `eval "rm -rf /"` still hits `rm -rf *: ask` and `eval "sudo rm â¦"` still hits `sudo rm *: deny`. A provably empty invocation â a bare `eval`, a missing/blank payload (`eval ""`), or a payload that cleanly parses to no commands (comments, pure assignments) â executes nothing and is gated as an ordinary command by its own text instead of being floored. Only when a non-empty payload fails to parse is the wrapper's `allow` floored to at least **`ask`** (the synthetic `<opaque-bash-wrapper>` pattern in the review log).
-- An indirection wrapper â `sudo`, `env`, `xargs`, `time`, `nohup`, `timeout`, `nice`, `parallel`, `rust-parallel`, `rush`, `doas`, `setsid`, `stdbuf`, `watch`, `flock`, or `find`/`fd` carrying a per-result exec flag (`find` with `-exec`/`-execdir`/`-ok`/`-okdir`, `fd` with `-x`/`--exec`/`-X`/`--exec-batch`) â runs a following command. The fork **locates the inner command** (skipping the wrapper's own options, option values, `env`-assignments, `timeout` durations, `flock` lockfiles, and `--`) and gates it as its own unit (marked `inside an indirection wrapper (env/xargs/â¦)` in prompts), so `sudo aws s3 ls` is gated by the `aws s3 ls` rules and `timeout 570 nix eval â¦` is gated by `nix eval â¦`. A bare `find . -name '*.py'` search (no exec flag) is unaffected.
+- A command the parser could only *partly* resolve is floored the same way (the synthetic `<unparsed-bash-subtree>` pattern in the review log).
+  Recovered structure is not evidence of what runs, so any command unit at or beneath the statement holding the unresolved region has its `allow` clamped up to `ask`; an explicit `deny` or `ask` on that unit still decides.
+  The prompt names the **whole** command rather than the unit, because a partial failure can drop a command from the parse entirely and the fragment that did parse is not what you need to see.
+  A statement beside the failed one keeps its own rule.
+  Most such commands are simply malformed, and the shell would refuse them too — but not all: `git commit -F - <<'MSG' 2>&1 | tail -4` is valid bash that `tree-sitter-bash` cannot parse, because a heredoc redirect combined with `2>&1` **and** a pipe defeats the grammar though each pairing alone is fine.
+- An opaque-payload wrapper — `bash`/`sh`/`dash`/`zsh`/`ksh` invoked with `-c`, or `eval` — carries its inner program in a quoted argument. The fork **re-parses the payload** with the same tree-sitter parser and gates its inner commands as their own units (marked `inside an opaque wrapper payload (eval/bash -c)` in prompts), so `eval "git status"` matches `git status *`/`*` like a plain command, while `eval "rm -rf /"` still hits `rm -rf *: ask` and `eval "sudo rm …"` still hits `sudo rm *: deny`. A provably empty invocation — a bare `eval`, a missing/blank payload (`eval ""`), or a payload that cleanly parses to no commands (comments, pure assignments) — executes nothing and is gated as an ordinary command by its own text instead of being floored. Only when a non-empty payload fails to parse is the wrapper's `allow` floored to at least **`ask`** (the synthetic `<opaque-bash-wrapper>` pattern in the review log).
+- An indirection wrapper — `sudo`, `env`, `xargs`, `time`, `nohup`, `timeout`, `nice`, `parallel`, `rust-parallel`, `rush`, `doas`, `setsid`, `stdbuf`, `watch`, `flock`, or `find`/`fd` carrying a per-result exec flag (`find` with `-exec`/`-execdir`/`-ok`/`-okdir`, `fd` with `-x`/`--exec`/`-X`/`--exec-batch`) — runs a following command. The fork **locates the inner command** (skipping the wrapper's own options, option values, `env`-assignments, `timeout` durations, `flock` lockfiles, and `--`) and gates it as its own unit (marked `inside an indirection wrapper (env/xargs/…)` in prompts), so `sudo aws s3 ls` is gated by the `aws s3 ls` rules and `timeout 570 nix eval …` is gated by `nix eval …`. A bare `find . -name '*.py'` search (no exec flag) is unaffected.
 
   A provably payload-less invocation is likewise gated as an ordinary command by its own text rather than being floored: whenever every argument is consumed by the wrapper's own syntax — no arguments at all (`sudo`, `env`, `xargs`), a duration/lockfile operand only (`timeout 5`, `flock lockfile`), option values (`env -u HOME`, `sudo -u root`), or `env` carrying only environment assignments (`env FOO=bar BAZ=qux`) — nothing executes beyond the wrapper binary's own usage error or environment output, so `timeout 5` matches your `timeout`/`*` bash rules directly. The exceptions that stay floored to **`ask`**: wrappers whose bare or flags-only form executes each stdin line as a shell command (`parallel`, `rust-parallel`, `rush` — e.g. `echo rm x | parallel` would run it) keep the fail-closed `<indirection-bash-wrapper>` floor. And `env -S '…'` carries a command string in its option value, so it is re-parsed like an opaque payload and its inner commands are gated individually.
 
   The extension config knob `wrapperFloors` controls this behavior:
 
-  - `"fallback"` (default): the behavior above â inner commands are gated individually; the wrapper unit is floored only when its inner content cannot be statically resolved (fail-closed).
-  - `"always"`: the upstream v24 behavior â every wrapper `allow` (including a permissive top-level `*` or an explicit rule) is clamped to `ask`, with no way to auto-allow a wrapper.
+  - `"fallback"` (default): the behavior above — inner commands are gated individually; the wrapper unit is floored only when its inner content cannot be statically resolved (fail-closed).
+  - `"always"`: the upstream blanket floor — every wrapper `allow` (including a permissive top-level `*` or an explicit rule) is clamped to `ask`, with no way to auto-allow a wrapper.
 
-Every synthetic `ask` above — the unparseable sentinel and both wrapper floors — is auto-approved under `yoloMode: true`, which is an explicit full-permissive opt-in rather than a rule that could ride through.
+  A wrapper running a [pure-reader command](#wrapper-transparency) is exempt in both modes: its direction is provable however unknown its argument feed is, so the command it runs resolves by its own `bash` rules and the review log records `floorExemption: "core-reader"` beside the rule that decided.
+
+
+Every synthetic `ask` above — the two parse sentinels and both wrapper floors — is auto-approved under `yoloMode: true`, which is an explicit full-permissive opt-in rather than a rule that could ride through.
 An explicit `deny` still denies under yolo, and with yolo off the floors are unaffected.
+Approving one for the session works normally: the floors clamp the decision and leave the grant's provenance intact, so a command you have already approved does not prompt again.
 
 Because of this, set an explicit `bash` policy rather than relying on a permissive top-level `*`.
 A config whose top-level `*` is `"allow"` with no `bash` `*` policy lets every bash command silently inherit `allow`; the extension emits a startup warning in that case.
 To gate bash commands, add `"bash": { "*": "ask" }` (or `"deny"`).
-To deliberately opt into permissive bash, set `"bash": { "*": "allow" }` explicitly â that suppresses the warning.
+To deliberately opt into permissive bash, set `"bash": { "*": "allow" }` explicitly — that suppresses the warning.
 
 ### `mcp` Surface
 
@@ -466,7 +484,7 @@ MCP permissions match against derived targets from tool input:
 
 > **Note:** Baseline discovery targets auto-allow when any explicit `mcp: allow` rule exists.
 
-String shorthand grants broad MCP access â useful for per-agent overrides:
+String shorthand grants broad MCP access — useful for per-agent overrides:
 
 ```yaml
 # ~/.pi/agent/agents/researcher.md (respects PI_CODING_AGENT_DIR)
@@ -495,9 +513,9 @@ Skill name patterns use `*` and `?` wildcards (note: surface is `skill`, not `sk
 
 ### `path` Surface
 
-Cross-cutting gate that applies to **all** file access â built-in Pi tools (`read`, `write`, `edit`, `find`, `grep`, `ls`), bash commands, MCP calls (via `input.arguments.path`), and extension tools (via `input.path` or a registered access extractor).
+Cross-cutting gate that applies to **all** file access — built-in Pi tools (`read`, `write`, `edit`, `find`, `grep`, `ls`), bash commands, MCP calls (via `input.arguments.path`), and extension tools (via `input.path` or a registered access extractor).
 A `path` deny cannot be overridden by a per-tool allow.
-Extension and MCP path tools are gated by default â no registration needed â so a `path` deny protects sensitive files from every path-aware tool, not just the built-in six.
+Extension and MCP path tools are gated by default — no registration needed — so a `path` deny protects sensitive files from every path-aware tool, not just the built-in six.
 
 ```jsonc
 {
@@ -514,7 +532,7 @@ Extension and MCP path tools are gated by default â no registration needed 
 ```
 
 The path gate runs before the external-directory and tool gates.
-If it denies, the command is blocked without reaching subsequent gates â no wasted prompts.
+If it denies, the command is blocked without reaching subsequent gates — no wasted prompts.
 
 Path patterns match both the path **as the agent references it** and its canonical (symlink-resolved) form, so a deny on a sensitive spelling cannot be evaded through a symlink alias (see Symlinked paths below).
 
@@ -522,10 +540,10 @@ For bash commands, the extension extracts path-candidate tokens from the command
 The most restrictive result across all tokens determines the outcome.
 When the current working directory is known, relative bash tokens are matched with cwd-normalized policy values, resolved against the effective directory after literal `cd` commands; a token after a non-literal `cd` (e.g. `cd "$DIR"`) stays conservative and matches only its literal form.
 
-A bare filename with no path shape at all (e.g. `id_rsa` in `cat id_rsa`) is also gated, provided it names a file that actually exists â so `"id_rsa": "deny"` or `"*.pem": "deny"` blocks the file whether it is referenced by a bare name, a relative path, or the `read` tool.
+A bare filename with no path shape at all (e.g. `id_rsa` in `cat id_rsa`) is also gated, provided it names a file that actually exists — so `"id_rsa": "deny"` or `"*.pem": "deny"` blocks the file whether it is referenced by a bare name, a relative path, or the `read` tool.
 Because the resolved path is matched, this covers a bare **symlink** whose target a rule names: with `".some.secret": "deny"`, `cat a_sym` is denied when `a_sym` points at `.some.secret`.
 A bare token that names nothing (e.g. `status` in `git status`, `build` in `npm run build`) is left alone, so ordinary subcommands and branch names never prompt.
-An existing file that matches no `path` rule is likewise left alone â the catch-all `"*"` entry alone does not gate it.
+An existing file that matches no `path` rule is likewise left alone — the catch-all `"*"` entry alone does not gate it.
 
 A path embedded in a long option (e.g. `--file=/tmp/patterns` in `grep --file=/tmp/patterns target`) is extracted and gated like any other path token; an option value that is not path-shaped (e.g. `--format=json`) is ignored.
 
@@ -543,10 +561,10 @@ Four orthogonal layers compose with most-restrictive-wins:
 
 **Which surface for "allow this directory"?**
 Use `path` to **deny** sensitive files everywhere (`.env`, `~/.ssh/*`); use `external_directory` to **allow** a directory outside the working tree (a cache, a sibling project).
-Because the layers compose with most-restrictive-wins, a `path` allow cannot loosen an `external_directory: ask` boundary â `ask` is more restrictive than `allow`, so the prompt still fires.
+Because the layers compose with most-restrictive-wins, a `path` allow cannot loosen an `external_directory: ask` boundary — `ask` is more restrictive than `allow`, so the prompt still fires.
 Adding `"~/.cargo/registry": "allow"` to the `path` surface therefore does **not** stop the outside-CWD prompt; put the rule on `external_directory` instead (see below).
 
-Configs without a `path` key behave identically to before â the gate does not fire.
+Configs without a `path` key behave identically to before — the gate does not fire.
 When no `path` key is present, the universal fallback (`permission["*"]`) applies: `"*": "allow"` keeps the gate transparent, while `"*": "deny"` would deny all file access via every surface including `path`.
 
 > **Ordering matters.**
@@ -576,7 +594,7 @@ Bash commands like `cat .env`, `cp .env .env.backup`, and `echo secret > .env` (
 
 #### Composition with per-tool rules
 
-A per-tool allow does not override a `path` deny â the path gate runs first.
+A per-tool allow does not override a `path` deny — the path gate runs first.
 Conversely, a per-tool deny still blocks even when the `path` surface allows:
 
 ```jsonc
@@ -612,7 +630,7 @@ Optional-path search tools (`find`, `grep`, `ls`) skip this check when no `path`
 
 #### Allow an outside-CWD cache directory
 
-When an agent keeps reading a local cache outside the working tree â `~/.cargo/registry`, `~/.npm`, `~/go/pkg/mod` â and you want to stop confirming it every time, allow that directory on the `external_directory` surface:
+When an agent keeps reading a local cache outside the working tree — `~/.cargo/registry`, `~/.npm`, `~/go/pkg/mod` — and you want to stop confirming it every time, allow that directory on the `external_directory` surface:
 
 ```jsonc
 {
@@ -626,11 +644,11 @@ When an agent keeps reading a local cache outside the working tree â `~/.ca
 ```
 
 The trailing `*` is required and it crosses subdirectory boundaries: `*` is a greedy match (not a single path segment), so `~/.cargo/registry/*` allows every file beneath the directory, however deep.
-Do not write `~/.cargo/registry/**` â `**` is not a distinct globstar, and a single `*` already recurses.
+Do not write `~/.cargo/registry/**` — `**` is not a distinct globstar, and a single `*` already recurses.
 A bare `~/.cargo/registry` (no `*`) matches only the directory entry itself, not the files inside it, which is the usual reason a hand-written allow rule appears to do nothing.
 The pattern is stored and displayed as written (`~/.cargo/registry/*`) in logs and approval dialogs.
 
-For caches you only ever **read**, `piInfrastructureReadPaths` is a lighter alternative â it auto-allows read-only tools (`read`, `find`, `grep`, `ls`) and bypasses the gate entirely, but it does not cover `write`/`edit` or bash.
+For caches you only ever **read**, `piInfrastructureReadPaths` is a lighter alternative — it auto-allows read-only tools (`read`, `find`, `grep`, `ls`) and bypasses the gate entirely, but it does not cover `write`/`edit` or bash.
 Use `external_directory` when the allowance must apply to every tool.
 
 Bash commands are also covered: the extension parses the command and applies the same gate to every token that resolves outside `ctx.cwd`.
@@ -693,13 +711,194 @@ POSIX matching remains case-sensitive and does not fold separators.
 On Windows, Pi executes bash commands through Git Bash, so a bash token that looks like a POSIX absolute path carries MSYS mount semantics rather than native `node:path.win32` semantics.
 The `external_directory` and `path` gates interpret bash tokens accordingly (tool-input paths for `read`/`write`/`edit` keep native Windows semantics, since those tools resolve them through Node's filesystem):
 
-- The safe device paths (`/dev/null`, `/dev/stdin`, `/dev/stdout`, `/dev/stderr`) are recognized as MSYS devices rather than filesystem paths, so they never trigger the `external_directory` gate â the same exclusion that holds on POSIX.
+- The safe device paths (`/dev/null`, `/dev/stdin`, `/dev/stdout`, `/dev/stderr`) are recognized as MSYS devices rather than filesystem paths, so they never trigger the `external_directory` gate — the same exclusion that holds on POSIX.
   The cross-cutting `path` surface still governs them on both platforms: if a `path` rule matches the token, it decides.
-  A device is therefore allow-listed the way any other path is, written as typed â `path: { "/dev/null": "allow" }`.
-- MSYS drive mounts (`/c/â¦`, `/d/â¦`) are translated to their Windows equivalent (`C:\â¦`), so a project file referenced through a mount is matched against its real Windows path and an in-CWD mount is not flagged.
+  A device is therefore allow-listed the way any other path is, written as typed — `path: { "/dev/null": "allow" }`.
+- MSYS drive mounts (`/c/…`, `/d/…`) are translated to their Windows equivalent (`C:\…`), so a project file referenced through a mount is matched against its real Windows path and an in-CWD mount is not flagged.
 - Every other POSIX-absolute token (`/tmp/foo`, `/usr/bin`) has an install-dependent target this extension cannot resolve deterministically (Git Bash mounts `/tmp` to `%TEMP%`, MSYS2 to its own root), so it is treated as an external path matched and displayed exactly as typed, never rewritten to `C:\tmp\foo`.
 
-To allow-list such a path, write the rule using the path as typed â for example `external_directory: { "/tmp/*": "allow" }` â and the Windows separator folding above makes the forward-slash rule match the Git Bash token.
+To allow-list such a path, write the rule using the path as typed — for example `external_directory: { "/tmp/*": "allow" }` — and the Windows separator folding above makes the forward-slash rule match the Git Bash token.
+
+### Directional Path Surfaces
+
+The `path` and `external_directory` surfaces each carry a **direction**, so a policy can permit reading somewhere without permitting writing there.
+Four keys express it:
+
+| Key                        | Governs                                                      |
+| -------------------------- | ------------------------------------------------------------ |
+| `path_read`                | Reading a file, by path pattern, across all path-aware tools |
+| `path_write`               | Writing a file, by path pattern, across all path-aware tools |
+| `external_directory_read`  | Reading a path outside the working directory                 |
+| `external_directory_write` | Writing to a path outside the working directory              |
+
+The two directions are **independent**, not tiers.
+An `allow` on `path_write` does not grant reading, and a `deny` on `path_read` does not restrict writing.
+Each direction is decided on its own surface and composed with the others by the usual most-restrictive-wins rule.
+
+#### Bare `path` and `external_directory` are sugar
+
+A bare key expands at load into both of its directional keys.
+These two configs mean exactly the same thing:
+
+```jsonc
+{ "permission": { "path": { "*": "ask", "~/.ssh/*": "deny" } } }
+```
+
+```jsonc
+{
+  "permission": {
+    "path_read": { "*": "ask", "~/.ssh/*": "deny" },
+    "path_write": { "*": "ask", "~/.ssh/*": "deny" }
+  }
+}
+```
+
+So every config written before this feature existed keeps its exact meaning, and nothing prompts differently on upgrade.
+Bare `path` remains valid and idiomatic indefinitely — it is the right spelling whenever direction does not matter, which is most of the time.
+
+When a bare key and a directional key are both present, the **sugar-derived entries come first and the explicit directional entries append after them**, whatever order the keys appear in the file.
+Since rules are last-match-wins, the explicit entry always has the final say, and a config and its key-order-swapped twin mean the same thing.
+
+#### Which direction is a given access?
+
+A tool's identity establishes its direction, and on the bash surface a redirect operator or a known read-only command word can establish it too:
+
+| Access                                                                     | Consults                  |
+| -------------------------------------------------------------------------- | ------------------------- |
+| `read`, `grep`, `find`, `ls`                                               | the `_read` surface only  |
+| `write`                                                                    | the `_write` surface only |
+| `edit`                                                                     | both, most-restrictive    |
+| An MCP tool or extension tool                                              | both, most-restrictive    |
+| A bash output redirect destination (`>`, `>>`, `>\|`, `&>`)                | the `_write` surface only |
+| A bash input redirect destination (`<`, `<<<`)                             | the `_read` surface only  |
+| An argument of a [pure-reader core](#the-pure-reader-command-core) command | the `_read` surface only  |
+| Any other bash path token                                                  | both, most-restrictive    |
+
+An access whose direction cannot be established consults **both** surfaces and takes the more restrictive answer.
+That is deliberate: an unproven access is never treated as the narrower one.
+
+A redirect the parser could not make sense of is unproven for the same reason.
+The read-write open `<>` is the clearest case: `tree-sitter-bash` has no node for it, so neither half of the operator can be trusted to describe the whole, and its destination consults both surfaces rather than the one the surviving half would name.
+The rule is about the parse rather than about `<>`, so it also covers a redirect that is itself well-formed but sits beside something the parser could not read: in `cat $(( > out.txt`, the `> out.txt` consults both surfaces too.
+That is deliberate — a command nobody could parse is the last place to assume a file is only being read — and it does not reach past the neighbour, so a redirect in a later statement keeps its proof.
+
+Attribution is per **token**, not per command, so one invocation can do both: in `cat notes.md > /backup/notes.md`, `notes.md` is a read and `/backup/notes.md` is a write.
+A redirect operator's proof is absolute — it overrides whatever the command in front of it proved, because `> out.txt` writes `out.txt` however read-only that command is.
+When the same path is reached twice with disagreeing directions (`cat a.txt > a.txt`), the two fold to unproven, which consults both surfaces.
+
+#### The pure-reader command core
+
+A small, frozen set of command words is read-only for any arguments, in any implementation.
+A path token owned by one of them consults the `_read` surface alone:
+
+<!-- BEGIN PURE_READER_CORE -->
+
+`basename`, `cat`, `cd`, `diff`, `dirname`, `echo`, `egrep`, `fd`, `fgrep`, `find`, `grep`, `head`, `ls`, `pwd`, `realpath`, `rg`, `sort`, `stat`, `tail`, `wc`, `which`
+
+<!-- END PURE_READER_CORE -->
+
+The bar for admission is structural, not popularity: implementation-independent read-only-ness across GNU and BSD alike, no option that redirects output to a file, and effects that do not depend on argument content.
+`awk` and `sed` are excluded because their program text and `-i` flag can write; `uniq`, `tee`, `dd`, and `split` each have a positional or option that writes a file; `file` is excluded because `-C`/`--compile` writes a `magic.mgc` file; `less` and `more` can escape to a shell; `git`, `pnpm`, and `node` are subcommand-dependent.
+
+Three members are read-only **until an argument says otherwise**, and naming one of these options withdraws the claim — the token falls back to consulting both surfaces:
+
+| Command | Withdrawn by                                                                                |
+| ------- | ------------------------------------------------------------------------------------------- |
+| `find`  | `-exec`, `-execdir`, `-ok`, `-okdir`, `-delete`, `-fprint`, `-fprint0`, `-fprintf`, `-fls`  |
+| `fd`    | `-x`, `-X`, `--exec`, `--exec-batch`                                                        |
+| `sort`  | `-o`, `--output`                                                                            |
+
+A long option is matched by any unambiguous abbreviation too (`sort --out=…` withdraws the claim exactly as `--output` does), and a short letter is matched anywhere in a cluster (`-uo`) or with its value attached (`-o/tmp/x`).
+
+A core word counts only as a **bare basename**.
+`./grep`, `/usr/bin/grep`, and `bin\grep` name programs this audit never saw, so they prove nothing and consult both surfaces.
+
+The core cannot be extended or removed from configuration.
+If you do not trust a member of it, deny or ask on the paths themselves — an effect proof only chooses which surface answers, and never overrides the answer.
+
+#### Wrapper transparency
+
+The [indirection-wrapper floor](#fail-closed-behavior) exists because a wrapper hides the command that should be gated.
+For one class the hiding is immaterial: a pure-reader command is read-only for **any** arguments, so `xargs grep -l foo` is provably a read even though what `xargs` feeds it is unknowable.
+The floor guards unknowability of *scope*, and scope stays the path surfaces' job — for a wrapped command exactly as for a bare one.
+
+Such a unit is therefore **not** floored.
+It resolves by the inner command's own `bash` rules instead, and the review log records `floorExemption: "core-reader"` beside the rule that decided, so an allow the floor would once have prompted for is auditable to the reason that let it through.
+
+All four of these must hold, and each is a way the floor's reason could still apply:
+
+1. The unit is an indirection wrapper.
+   An `sh -c`/`eval` payload is not one — see below.
+2. The command it runs can be established without passing through an inline shell.
+3. That command **proves** a read: a bare-basename core word with no option that withdraws the claim.
+   So `xargs sort -o /tmp/x` and `xargs find . -delete` stay floored, and so does `xargs ./grep foo`.
+4. The enclosing statement provably writes no file through a redirect.
+   A destination the parse cannot resolve — `> $OUT`, `> $(mktemp)` — counts against the exemption rather than for it.
+
+So `xargs grep -l foo`, `xargs wc -l`, and `find . -name '*.ts' -exec cat {} +` stop prompting under a matching `bash` allow, while `xargs rm`, `xargs sed -i`, `time pnpm test`, and `find . -exec sh -c '…' \;` still prompt.
+
+Three things this does **not** change:
+
+- An explicit `deny` or `ask` on the wrapper is never weakened.
+  Only a unit whose own text already resolved to `allow` is affected, so `bash: {"xargs *": "ask"}` still asks.
+- A `deny` on the inner command now reaches the wrapper.
+  Under `bash: {"*": "allow", "grep *": "deny"}`, `xargs grep foo` is denied rather than merely prompted.
+- Path gating is untouched.
+  The exemption decides the `bash` surface only, and every path token the command projects still goes through `path` and `external_directory` with the direction its command proved.
+  Clause 4 is what keeps that from being a weaker promise than it sounds: a redirect destination the parse cannot resolve (`> $OUT`, `> $(mktemp)`) is not projected onto those surfaces either, so the wrapper keeps its floor rather than relying on a gate that would not see the write.
+
+A user `commandEffects` declaration participates in effect classification but does **not** lift the floor.
+The core's argument-independence is audited here; a claim about a wrapped command is not, and a wrong claim behind a wrapper fails open.
+
+`sudo` and `doas` are ordinary wrappers to this rule.
+The path surfaces gate `sudo cat /etc/shadow` exactly as they gate `cat /etc/shadow`, so nothing about the *file set* changes — what `sudo` adds is that the operating system would have refused, which this extension has never modelled.
+If you run a permissive `bash` policy and want privilege elevation to prompt regardless, say so directly:
+
+```jsonc
+{
+  "permission": {
+    "bash": {
+      "*": "allow",
+      "sudo *": "ask",
+      "doas *": "ask"
+    }
+  }
+}
+```
+
+That rule matches the wrapper's own text, so it is decided before the exemption is ever consulted.
+
+#### Which key to actually write
+
+The useful *grants* are `*_read: allow` and the bare sugar key.
+
+```jsonc
+{
+  "permission": {
+    "external_directory": { "*": "ask" },
+    "external_directory_read": { "~/dev/*": "allow" }
+  }
+}
+```
+
+A `read` of `~/dev/x` is silent; a `write` or `edit` of the same path still prompts.
+Granting an external root takes one line in one surface — no parallel `path_read` entry is needed, because the `path` family only speaks when one of its own patterns matches.
+
+`*_write` earns its keep as a **restriction** far more than as a grant.
+`path_write: { "*": "deny" }` is a coherent read-only-agent posture.
+
+A `*_write: allow` on its own does not silence an `edit`, which also reads — grant the read direction too, or use the bare key.
+
+A key that looks directional but is misspelled (`path_wrote`, `external_directory_reed`) is rejected when the config loads, rather than sitting inert.
+That matters most for a restriction: a misspelled *grant* merely produces more prompts, but a misspelled *deny* would enforce nothing at all.
+
+#### What you will see change
+
+Prompts, the review log, and the `permissions:decision` event now name the directional surface that decided — `path_read` rather than `path` — when the tool's identity proved a direction.
+`/permission-system show` likewise lists the expanded directional rules for a config written with a bare key, so the display matches what is enforced.
+
+One cross-version note for subagent permission forwarding: a child running a newer version sends a directional surface to a parent running an older one, which has no such rules and falls back to its default — more prompting, never less.
+Upgrade the parent session to match.
 
 ### Home Directory Expansion in Patterns
 
@@ -819,10 +1018,13 @@ Avoid arrays, multi-line scalars, and YAML anchors.
 }
 ```
 
+The Bash tool stays visible to the agent here: the three `git` patterns are written after the `deny` catch-all, so they are reachable.
+Every other command is denied at the gate.
+
 ### Read-Only Bash Command Allowlist
 
 The [Read-Only Mode](#read-only-mode) recipe above gates *tools*; this one gates the *bash* surface.
-It allows a curated set of commands whose only effect is to read or report â none can create or modify a file, register, or system state by itself â while every other command falls through to `ask`.
+It allows a curated set of commands whose only effect is to read or report — none can create or modify a file, register, or system state by itself — while every other command falls through to `ask`.
 
 ```jsonc
 {
@@ -899,19 +1101,21 @@ It allows a curated set of commands whose only effect is to read or report â�
 }
 ```
 
-Four existing behaviors keep this allowlist safe â you do not have to enumerate the destructive commands to block them:
+Four existing behaviors keep this allowlist safe — you do not have to enumerate the destructive commands to block them:
 
 1. **Redirects are gated by the `path` surface, not `bash`.**
    Allowing `cat *` allows the `cat` command, not a redirect it carries: `cat secret > out.txt` writes `out.txt` through the `path`/`external_directory` gate.
    That is why this recipe ships with `write` and `edit` denied and a `path` deny block for sensitive files.
    Keep the `path` surface locked down for anything you would not want an allowed read command to overwrite via `>`.
 2. **`find`/`fd` with an exec flag are floored to `ask`.**
-   A bare `find *` search is read-only, so it is safe to allow; the moment an exec flag appears (`find -exec`/`-execdir`/`-ok`/`-okdir`, `fd -x`/`-X`), the [indirection-wrapper floor](#fail-closed-behavior) clamps the decision back to `ask`.
-   So `find . -type f -exec rm {} +` still prompts even under `find *: allow`.
+   A bare `find *` search is read-only, so it is safe to allow; the moment an exec flag appears (`find -exec`/`-execdir`/`-ok`/`-okdir`, `fd -x`/`-X`), the [indirection-wrapper floor](#fail-closed-behavior) clamps the decision back to `ask` — unless the command it runs is itself a pure reader ([wrapper transparency](#wrapper-transparency)), in which case that command's own rule decides.
+   So `find . -type f -exec rm {} +` still prompts even under `find *: allow`, while `find . -type f -exec cat {} +` is decided by the `cat *` rule this recipe already grants.
+   The same options — plus `find -delete`/`-fprint`/`-fprint0`/`-fprintf`/`-fls` and `fd --exec`/`--exec-batch` — also withdraw the [pure-reader claim](#the-pure-reader-command-core) on that command's path tokens, so they stop resolving on the `_read` surface alone.
 3. **Chained commands resolve most-restrictive.**
-   `find . -name '*.log' && rm -f found.log` decomposes into `find â¦` and `rm â¦`; `rm` matches only `"*": "ask"`, and the most restrictive result governs the whole invocation, so the chain prompts.
+   `find . -name '*.log' && rm -f found.log` decomposes into `find …` and `rm …`; `rm` matches only `"*": "ask"`, and the most restrictive result governs the whole invocation, so the chain prompts.
 4. **Wrappers cannot ride the allowlist.**
-   `sudo grep â¦`, `env X=1 cat â¦`, `sh -c "â¦"`, and `eval "â¦"` are floored to `ask` (the [wrapper floors](#fail-closed-behavior)), so an allowed command cannot be smuggled past through a wrapper.
+   `sudo aws …`, `env X=1 npm …`, `sh -c "…"`, and `eval "…"` are floored to `ask` (the [wrapper floors](#fail-closed-behavior)), so a command this recipe does not allow cannot be smuggled past through a wrapper.
+   The wrapper text is what a rule matches, so `sudo grep foo` matches only `"*": "ask"` here and prompts on that rule rather than on the floor — add `"sudo *": "ask"` if you want that stated in the config rather than inherited from the fallback.
 
 `git` is enumerated by read subcommand rather than a broad `git *`, because `git` has mutating subcommands (`commit`, `push`, `branch -D`, `remote add`, `config <key> <value>`).
 Exact patterns like `git status` and `git branch` match only their literal form, so `git branch -D feature` falls through to `"*": "ask"`.
@@ -965,12 +1169,13 @@ The extension integrates via Pi's lifecycle hooks:
 Additional behaviors:
 
 - Unknown/unregistered tools are blocked before permission checks (prevents bypass attempts)
-- Tool filtering is restrict-only: the active set starts from pi's already-active tools (`pi.getActiveTools()`) and only ever has denied tools removed â the permission system never activates a tool pi left off by default (e.g. `find`, `grep`, `ls`)
 - The `Available tools:` system prompt section is narrowed to match the filtered active tool set: denied tools' lines are dropped, the rest are kept, and the section is removed entirely only when no tool is allowed
 - The narrowed prompt is recomputed and returned on every turn but is byte-stable for a stable policy/agent, so the provider's prompt cache (tools + system prefix) is preserved rather than rewritten each turn
 - Extension-provided tools like `task`, `mcp`, and third-party tools are handled by exact registered name
 - Generic extension-tool approval prompts include a bounded input preview; built-in file tools use concise human-readable summaries
 - Permission review logs include `toolInputPreview` values for non-bash/non-MCP tool calls, with sensitive-keyed values masked and every value bounded by `reviewLogFieldMaxWidth` (see [Log file sensitivity](#log-file-sensitivity))
+- A tool whose path came from an extractor registered in an **ancestor** session rather than this one records `extractorSource: "inherited"` beside the decision; the field is absent for every path this session resolved itself.
+  This happens in a subagent child when the extractor's provider was kept out of the child but the tool's own package was not — the child borrows the declaration so its `path` and `external_directory` gates still see the path (see [Subagent Integration](https://github.com/gotgenes/pi-packages/blob/main/packages/pi-permission-system/docs/subagent-integration.md#loading-asymmetry))
 
 ---
 
@@ -985,8 +1190,8 @@ Both logs are created **owner-only** (`0600`, in a `0700` directory), and a log 
 The permission-forwarding request and response files are written the same way.
 This closes the shared-host case: another user on the same machine cannot read them.
 
-Values bound to a **sensitive key name** â `authorization`, `token`, `secret`, `password`, `credential`, `cookie`, `api_key`, `private_key`, matched case-insensitively â are masked as `[redacted]` before anything is written.
-So a tool called with `{"authorization": "Bearer â¦"}` records `{"authorization": "[redacted]"}`.
+Values bound to a **sensitive key name** — `authorization`, `token`, `secret`, `password`, `credential`, `cookie`, `api_key`, `private_key`, matched case-insensitively — are masked as `[redacted]` before anything is written.
+So a tool called with `{"authorization": "Bearer …"}` records `{"authorization": "[redacted]"}`.
 
 The boundary is worth stating exactly, because it is easy to over-read:
 
@@ -1025,5 +1230,7 @@ npx --yes ajv-cli@5 validate \
 ```json
 "$schema": "https://raw.githubusercontent.com/gotgenes/pi-packages/main/packages/pi-permission-system/schemas/permissions.schema.json"
 ```
+
+The well-known surface keys — `*`, `path`, `external_directory`, `bash`, `mcp`, `skill`, and the four directional keys — are named properties in the schema, so an editor completes them and shows each key's own documentation on hover; any other registered tool name still validates as a surface.
 
 The schema is generated from the extension's zod source of truth (`src/config-schema.ts`); regenerate it with `pnpm run gen:schema` after changing the config shape.

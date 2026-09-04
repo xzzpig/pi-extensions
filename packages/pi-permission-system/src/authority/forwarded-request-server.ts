@@ -1,10 +1,14 @@
 import { join } from "node:path";
+import { resolutionFor } from "#src/authority/decision-resolution";
 import type { DecisionSource } from "#src/authority/decision-source";
 import {
   type ForwarderContext,
   getSessionId,
 } from "#src/authority/forwarder-context";
-import type { PermissionPromptDecision } from "#src/authority/permission-dialog";
+import {
+  createDeniedPermissionDecision,
+  type PermissionPromptDecision,
+} from "#src/authority/permission-dialog";
 import {
   emitForwardedDecisionEvent,
   type PermissionEventBus,
@@ -20,10 +24,7 @@ import {
 } from "#src/authority/permission-forwarding";
 import type { SubagentSessionRegistry } from "#src/authority/subagent-registry";
 import type { DecisionBroadcaster } from "#src/decision-reporter";
-import type {
-  PermissionDecisionEvent,
-  PermissionDecisionResolution,
-} from "#src/permission-events";
+import type { PermissionDecisionEvent } from "#src/permission-events";
 import { buildForwardedAskPayload } from "#src/presentation/forwarded-ask-payload";
 import { SessionApproval } from "#src/session-approval";
 import type { SessionApprovalRecorder } from "#src/session-approval-recorder";
@@ -197,39 +198,20 @@ function buildServedDecisionEvent(
     value: details.value ?? facts.value,
     agentName: details.agentName,
     result: decision.approved ? "allow" : "deny",
-    resolution: servedResolution(decision),
+    resolution: resolutionFor(decision.decidedBy, {
+      approved: decision.approved,
+      // The grant scope is reported as the human chose it. `applyGrantScope`
+      // rewrites a whole-serving-session grant to a plain approval on the
+      // wire, but that translation is about what the *child* records, not
+      // about what was allowed here.
+      forSession:
+        decision.state === "approved_for_session" ||
+        decision.state === "approved_for_serving_session",
+    }),
     origin: null,
     matchedPattern: null,
     forwarding: details.forwarding ?? null,
   };
-}
-
-/**
- * Name how a served ask resolved, reading the decision's own stamp rather than
- * re-deriving it from the outcome: the site that decided already recorded what
- * it was (#726).
- *
- * The grant scope is reported as the human chose it. {@link applyGrantScope}
- * rewrites a whole-serving-session grant to a plain approval on the wire, but
- * that translation is about what the *child* records, not about what was
- * allowed here.
- */
-function servedResolution(
-  decision: PermissionPromptDecision,
-): PermissionDecisionResolution {
-  if (decision.decidedBy.kind === "gate_error") {
-    return "gate_error";
-  }
-  if (decision.confirmationUnavailable) {
-    return "confirmation_unavailable";
-  }
-  if (!decision.approved) {
-    return "user_denied";
-  }
-  return decision.state === "approved_for_session" ||
-    decision.state === "approved_for_serving_session"
-    ? "user_approved_for_session"
-    : "user_approved";
 }
 
 // ── ForwardedRequestServer ────────────────────────────────────────────────
@@ -392,16 +374,14 @@ export class ForwardedRequestServer implements InboxProcessor {
       return decision;
     }
     if (request.sessionApproval) {
-      this.recorder.recordSessionApproval(
-        SessionApproval.multiple(
-          request.sessionApproval.surface,
-          request.sessionApproval.patterns,
-        ),
+      const { grants } = request.sessionApproval;
+      const approval = SessionApproval.forGrants(grants).atWidth(
+        decision.sessionGrantWidth ?? "proven",
       );
+      this.recorder.recordSessionApproval(approval);
       this.logger.review("forwarded_permission.session_recorded", {
         ...logDetails,
-        surface: request.sessionApproval.surface,
-        patterns: request.sessionApproval.patterns,
+        grants: approval.grants,
       });
     }
     return {
@@ -450,6 +430,9 @@ export class ForwardedRequestServer implements InboxProcessor {
       // Carried onto the wire so the requester can name what decided inside
       // this session, not merely that this session answered (#726).
       decidedBy: decision.decidedBy,
+      // The child records a subagent-scoped grant itself, so the width the
+      // human chose has to reach it (#813).
+      sessionGrantWidth: decision.sessionGrantWidth,
     } satisfies ForwardedPermissionResponse;
     try {
       this.writeResponse(this.logger, responsePath, response);
@@ -536,13 +519,19 @@ export class ForwardedRequestServer implements InboxProcessor {
           : "forwarded_permission.auto_denied",
         { ...logDetails, decidedBy },
       );
+      // A deny-with-reason rule's text is the operator's own explanation, and
+      // the requesting session relays it to its agent — so it travels with the
+      // verdict rather than stopping at the node that holds the config (#844).
       return approved
         ? {
             decision: { approved: true, state: "approved", decidedBy },
             resolution: "policy_allow",
           }
         : {
-            decision: { approved: false, state: "denied", decidedBy },
+            decision: {
+              ...createDeniedPermissionDecision(check.reason),
+              decidedBy,
+            },
             resolution: "policy_deny",
           };
     }
@@ -625,22 +614,19 @@ export class ForwardedRequestServer implements InboxProcessor {
 function resolutionForPromptDecision(
   decision: PermissionPromptDecision,
 ): PermissionForwardedDecisionResolution {
-  if (decision.autoApproved) {
-    return "auto_approved";
+  // The serving-session scope is the fork event's own resolution value:
+  // upstream's #813 translation happens after this point, and its shared
+  // map reports only the session width, so name it here while the state
+  // still carries it.
+  if (decision.state === "approved_for_serving_session") {
+    return "user_approved_for_serving_session";
   }
-  if (decision.confirmationUnavailable) {
-    return "confirmation_unavailable";
-  }
-
-  switch (decision.state) {
-    case "approved":
-      return "user_approved";
-    case "approved_for_session":
-      return "user_approved_for_session";
-    case "approved_for_serving_session":
-      return "user_approved_for_serving_session";
-    case "denied":
-    case "denied_with_reason":
-      return "user_denied";
-  }
+  // #772: the decider stamped on the decision names the resolution, shared
+  // with the gate runner so both records of one ask cannot disagree. The
+  // pre-#772 `autoApproved` flag became the `yolo` decider; an unavailable
+  // confirmer names itself; everything else maps from the stamp below.
+  return resolutionFor(decision.decidedBy, {
+    approved: decision.approved,
+    forSession: decision.state === "approved_for_session",
+  });
 }

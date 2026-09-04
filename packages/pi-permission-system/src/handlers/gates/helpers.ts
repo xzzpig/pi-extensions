@@ -1,9 +1,75 @@
 import type { AccessPath } from "#src/access-intent/access-path";
+import type { ToolPathSource } from "#src/access-intent/tool-input-path";
 import { classifyToolKind } from "#src/access-intent/tool-kind";
 import type { ForwardedAccessFacts } from "#src/authority/permission-forwarding";
+import type { PromptPermissionDetails } from "#src/authority/permission-prompter";
 import type { PermissionDecisionResolution } from "#src/permission-events";
 import type { PermissionCheckResult } from "#src/types";
 import type { DecisionEventFacts } from "./descriptor";
+import type { ToolCallContext } from "./types";
+
+/**
+ * The identity fields every path-shaped tool gate reports about its call.
+ *
+ * Narrower than {@link ToolCallContext} (ISP): the fact builders below read
+ * who asked and which call it was, never the raw input or the cwd.
+ */
+type PathGateRequestFacts = Pick<
+  ToolCallContext,
+  "toolCallId" | "toolName" | "agentName"
+>;
+
+/**
+ * Build the review-log context for a path-shaped tool gate.
+ *
+ * The `path` and `external_directory` gates report the same five facts about a
+ * call, so they share one builder — a field added here reaches both, and the
+ * two cannot drift.
+ * The request facts and the request id are stamped by the runner, not here.
+ *
+ * `pathSource` adds `extractorSource` only when the path came from an
+ * **inherited** extractor — a decision that depended on another node's
+ * registration says so, and every other decision stays exactly as wide as it
+ * was. Stamping the ordinary case too would put a constant on effectively
+ * every record in the log.
+ */
+export function buildPathGateLogContext(
+  tcc: PathGateRequestFacts,
+  path: string,
+  pathSource?: ToolPathSource,
+): Record<string, unknown> {
+  return {
+    source: "tool_call",
+    toolCallId: tcc.toolCallId,
+    toolName: tcc.toolName,
+    agentName: tcc.agentName,
+    path,
+    ...(pathSource === "inherited_extractor"
+      ? { extractorSource: "inherited" }
+      : {}),
+  };
+}
+
+/**
+ * Build the prompt details for a path-shaped tool gate.
+ *
+ * The same five facts as {@link buildPathGateLogContext}, plus the child-fixed
+ * access facts the ask carries onto the wire.
+ */
+export function buildPathGatePromptDetails(
+  tcc: PathGateRequestFacts,
+  path: string,
+  accessIntent: ForwardedAccessFacts,
+): Omit<PromptPermissionDetails, "requestId" | "payload"> {
+  return {
+    source: "tool_call",
+    agentName: tcc.agentName,
+    toolCallId: tcc.toolCallId,
+    toolName: tcc.toolName,
+    path,
+    accessIntent,
+  };
+}
 
 /**
  * Build the child-fixed access facts for a path-shaped gate from its
@@ -87,43 +153,17 @@ export function buildDecisionEvent(
 }
 
 /**
- * Map the gate outcome back to a PermissionDecisionResolution.
- *
- * @param state     - The permission state passed to the gate.
- * @param action    - The gate's resulting action ("allow" | "block").
- * @param hasSession - True when the gate result carries a sessionApproval
- *                    (indicates the user chose "for this session").
- * @param confirmationUnavailable - True when the denial came from the
- *                    DenyingAuthorizer (no live authority was reachable).
- */
-export function deriveResolution(
-  state: "allow" | "deny" | "ask",
-  action: "allow" | "block",
-  hasSession: boolean,
-  confirmationUnavailable: boolean,
-  autoApproved = false,
-): PermissionDecisionResolution {
-  if (state === "allow") return autoApproved ? "auto_approved" : "policy_allow";
-  if (state === "deny") return "policy_deny";
-  // state === "ask"
-  if (action === "allow") {
-    if (autoApproved) return "auto_approved";
-    return hasSession ? "user_approved_for_session" : "user_approved";
-  }
-  return confirmationUnavailable ? "confirmation_unavailable" : "user_denied";
-}
-
-/**
  * The standing yolo grant covering a gate's resolved check, or `null` when
  * yolo does not answer it.
  *
  * yolo is primarily recorded authority: `rewriteAsksToYolo` turns every `ask`
  * rule into an `allow` tagged `origin: "yolo"` at composition (#526), and the
  * first arm recognizes that grant. The second arm covers an `ask` synthesized
- * *after* resolution — the bash wrapper floor (#481, #490) and the fail-closed
- * `<unparseable-bash-command>` sentinel (#452) — which the ruleset rewrite
- * cannot reach because the floor is a property of a parsed command unit, not of
- * a pattern (#712). The synthetic `matchedPattern` is preserved so the review
+ * *after* resolution — the bash wrapper floor (#481, #490) and the two
+ * fail-closed parse sentinels, `<unparseable-bash-command>` (#452) and
+ * `<unparsed-bash-subtree>` (#840) — which the ruleset rewrite cannot reach
+ * because the floor is a property of a parsed command unit, not of a pattern
+ * (#712). The synthetic `matchedPattern` is preserved so the review
  * log still shows why the ask was raised, while `origin: "yolo"` records why it
  * was granted.
  *

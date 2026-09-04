@@ -155,6 +155,13 @@ async function runPrompt(
   return promise;
 }
 
+/** The hotkeys of the decision step's option rows, in rendered order. */
+function decisionOptionKeys(captured: { component?: CapturedComponent }) {
+  return (captured.component?.render(80) ?? [])
+    .map((line) => /^[ ▶] \((\w)\) /.exec(line)?.[1])
+    .filter((key) => key !== undefined);
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 describe("presentInlinePermissionPrompt", () => {
@@ -169,6 +176,12 @@ describe("presentInlinePermissionPrompt", () => {
     expect(text).toContain("No, provide reason");
     expect(text).toContain("y");
     expect(text).toContain("r");
+  });
+
+  it("renders the decision options in the model's display order", () => {
+    const { view, captured } = makeFakeView(true);
+    void presentInlinePermissionPrompt(view, "Permission Required", ASK);
+    expect(decisionOptionKeys(captured)).toEqual(["y", "s", "n", "r"]);
   });
 
   it("clips every rendered line to the terminal width", () => {
@@ -461,6 +474,45 @@ describe("presentInlinePermissionPrompt", () => {
         approved: false,
         state: "denied",
         decidedBy: { kind: "user", via: "select" },
+      });
+    });
+  });
+
+  describe("both-directions session grant (#813)", () => {
+    const sessionWidth = {
+      label: 'Yes, allow reads and writes to "/tmp/*" for this session',
+    };
+
+    it("renders the width row after the session row when the ask is widenable", () => {
+      const { view, captured } = makeFakeView(true);
+      void presentInlinePermissionPrompt(view, "Permission Required", ASK, {
+        sessionLabel: 'Yes, allow writes to "/tmp/*" for this session',
+        sessionWidth,
+      });
+      expect(decisionOptionKeys(captured)).toEqual(["y", "s", "b", "n", "r"]);
+      expect(captured.component?.render(120).join("\n")).toContain(
+        sessionWidth.label,
+      );
+    });
+
+    it("renders no width row for an ask that is not widenable", () => {
+      const { view, captured } = makeFakeView(true);
+      void presentInlinePermissionPrompt(view, "Permission Required", ASK);
+      expect(decisionOptionKeys(captured)).toEqual(["y", "s", "n", "r"]);
+    });
+
+    it("commits the family width on the b hotkey", async () => {
+      expect(await runPrompt(false, ["b"], { sessionWidth })).toEqual({
+        approved: true,
+        state: "approved_for_session",
+        sessionGrantWidth: "family",
+      });
+    });
+
+    it("leaves the s hotkey at the proven width", async () => {
+      expect(await runPrompt(false, ["s"], { sessionWidth })).toEqual({
+        approved: true,
+        state: "approved_for_session",
       });
     });
   });
