@@ -5,6 +5,23 @@ This fork tracks [`carderne/pi-sandbox`](https://github.com/carderne/pi-sandbox)
 via git subtree; entries below describe only fork-specific deviations from
 upstream.
 
+## 0.4.1
+
+### Changed
+
+- **Synced upstream 0.6.5 → 0.6.6.** Adopted upstream's bundled-seccomp
+  helper exposure on Linux (`buildRuntimeConfig` gains a platform parameter
+  and adds the runtime's `vendor/seccomp` directory to `allowRead`, resolved
+  from `@xzzpig/sandbox-runtime`), the `sandboxUserShell: false` config that
+  skips sandboxing of user shell (`!cmd`) input, the exec teardown fix that
+  stops hangs after an agent subprocess daemonizes while holding stdio pipes
+  (#76), and `allowPty` passthrough to the sandbox extension (#75). Fork
+  features preserved: the `network.disabled` guard composes with upstream's
+  `sandboxUserShell` early return in the `user_bash` handler, and
+  `protectNonexistentFiles` lstat existence filtering is unchanged. Upstream
+  tests are taken with the fork's denyWrite / protectNonexistentFiles /
+  network.disabled tests re-appended.
+
 ## 0.4.0
 
 ### Added
