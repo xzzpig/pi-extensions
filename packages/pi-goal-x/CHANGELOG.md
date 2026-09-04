@@ -3,6 +3,22 @@
 All notable changes to pi-goal-x are documented here.
 
 ## [Unreleased]
+## [0.3.1] — 2026-09-05 (fork release)
+
+### Changed
+
+- **Synced upstream v0.30.0 → v0.30.5** (patch releases). Adopted upstream's
+  `networkRecovery` settings-key validation (`maxAttempts` / `maxDelayMs`
+  nested-key diagnostics) and the live-pi e2e network-recovery regression
+  tests. Upstream 0.30.5 makes goal recovery survive provider-side aborts
+  (`stopReason:"aborted"` arriving without a user abort signal) and classifies
+  HTTP 429 rate-limit payloads as recoverable transient errors, with
+  quota/billing exhaustion staying fail-fast. Upstream README/logo and
+  upstream-changelog edits are absorbed; this fork changelog keeps its own
+  release history. Fork features preserved: delegation-based completion
+  auditor, `auditorAgent`, `max` thinking level, and the `subagents.agents`
+  manifest block.
+
 ## [0.3.0] — 2026-08-24 (fork release)
 
 ### Changed
