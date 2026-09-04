@@ -153,6 +153,9 @@ export class ConfigStore implements SessionConfigStore, CommandConfigStore {
       debugLog: normalized.debugLog,
       permissionReviewLog: normalized.permissionReviewLog,
       yoloMode: normalized.yoloMode,
+      // Fork knob: without this the modal's save silently dropped the
+      // wrapper-floor mode from the persisted config.
+      wrapperFloors: normalized.wrapperFloors,
     };
 
     const tmpPath = `${globalPath}.tmp`;
