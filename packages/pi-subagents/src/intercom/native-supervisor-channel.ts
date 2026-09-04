@@ -4,17 +4,17 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import {
-	SUBAGENT_CHILD_AGENT_ENV,
-	SUBAGENT_CHILD_INDEX_ENV,
-	SUBAGENT_ORCHESTRATOR_SESSION_ID_ENV,
-	SUBAGENT_ORCHESTRATOR_TARGET_ENV,
-	SUBAGENT_RUN_ID_ENV,
-	SUBAGENT_SUPERVISOR_CHANNEL_DIR_ENV,
-} from "../runs/shared/pi-args.ts";
-import { INTERCOM_DETACH_REQUEST_EVENT, POLL_INTERVAL_MS, TEMP_ROOT_DIR, type IntercomEventBus, type SubagentState } from "../shared/types.ts";
+import type { ChildSupervisorMetadata } from "../runs/shared/child-runtime-config.ts";
+import { INTERCOM_DETACH_REQUEST_EVENT, POLL_INTERVAL_MS, TEMP_ROOT_DIR, type ControlEvent, type IntercomEventBus, type SubagentState } from "../shared/types.ts";
 import { writeAtomicJson } from "../shared/atomic-json.ts";
 import { shouldUseNativeFsWatch } from "../shared/watch-strategy.ts";
+import {
+	SUPERVISOR_REQUEST_MESSAGE_TYPE,
+	SUPERVISOR_REPLY_ENTRY_TYPE,
+	supervisorReplyHint,
+	type SupervisorReason,
+	type SupervisorReplyEntryData,
+} from "./supervisor-ui.ts";
 
 const SUPERVISOR_CHANNEL_ROOT = path.join(TEMP_ROOT_DIR, "supervisor-channels");
 const REQUESTS_DIR = "requests";
@@ -26,8 +26,10 @@ const CHANNEL_POLL_MS = Math.min(POLL_INTERVAL_MS, 500);
 const CHANNEL_SAFETY_POLL_MS = 5000;
 const STALE_EMPTY_CHANNEL_AGE_MS = 60 * 1000;
 const STALE_EMPTY_CHANNEL_CLEANUP_INTERVAL_MS = 60 * 1000;
+const MAX_SUPERVISOR_REQUEST_CORRELATIONS = 256;
+const SUPERVISOR_REQUEST_CORRELATION_RETENTION_MS = 10 * 60 * 1000;
 
-type SupervisorReason = "need_decision" | "interview_request" | "progress_update";
+export type SupervisorRequestState = "pending" | "resolved" | "unknown";
 
 interface SupervisorRequest {
 	type: "subagent.supervisor.request";
@@ -42,6 +44,7 @@ interface SupervisorRequest {
 	runId: string;
 	agent: string;
 	childIndex: number;
+	toolCallId?: string;
 	childTarget?: string;
 	interview?: unknown;
 }
@@ -49,6 +52,12 @@ interface SupervisorRequest {
 interface PendingSupervisorRequest extends SupervisorRequest {
 	channelDir: string;
 	requestFile: string;
+}
+
+interface SupervisorRequestCorrelation {
+	request: PendingSupervisorRequest;
+	state: Exclude<SupervisorRequestState, "unknown">;
+	updatedAt: number;
 }
 
 interface SupervisorReply {
@@ -111,37 +120,6 @@ function requestPath(channelDir: string, requestId: string): string {
 
 function replyPath(channelDir: string, requestId: string): string {
 	return path.join(channelDir, REPLIES_DIR, `${safeSegment(requestId)}.json`);
-}
-
-function readTextEnv(name: string): string | undefined {
-	const value = process.env[name]?.trim();
-	return value ? value : undefined;
-}
-
-function readChildMetadata(): {
-	channelDir: string;
-	runId: string;
-	agent: string;
-	childIndex: number;
-	orchestratorTarget?: string;
-	orchestratorSessionId?: string;
-	childTarget?: string;
-} | undefined {
-	const channelDir = readTextEnv(SUBAGENT_SUPERVISOR_CHANNEL_DIR_ENV);
-	const runId = readTextEnv(SUBAGENT_RUN_ID_ENV);
-	const agent = readTextEnv(SUBAGENT_CHILD_AGENT_ENV);
-	const rawIndex = readTextEnv(SUBAGENT_CHILD_INDEX_ENV);
-	const orchestratorSessionId = readTextEnv(SUBAGENT_ORCHESTRATOR_SESSION_ID_ENV);
-	if (!channelDir || !runId || !agent || !orchestratorSessionId || rawIndex === undefined || !/^\d+$/.test(rawIndex)) return undefined;
-	return {
-		channelDir,
-		runId,
-		agent,
-		childIndex: Number(rawIndex),
-		orchestratorTarget: readTextEnv(SUBAGENT_ORCHESTRATOR_TARGET_ENV),
-		orchestratorSessionId,
-		childTarget: readTextEnv("PI_SUBAGENT_INTERCOM_SESSION_NAME"),
-	};
 }
 
 function reasonHeading(reason: SupervisorReason): string {
@@ -231,9 +209,7 @@ async function waitForReply(channelDir: string, requestId: string, deadline: num
 	throw new Error("Timed out waiting for supervisor reply.");
 }
 
-async function sendSupervisorRequest(params: ContactSupervisorParams, signal?: AbortSignal): Promise<AgentToolResult<Record<string, unknown>>> {
-	const metadata = readChildMetadata();
-	if (!metadata) throw new Error("Native supervisor channel is not available for this subagent.");
+async function sendSupervisorRequest(params: ContactSupervisorParams, metadata: ChildSupervisorMetadata, signal?: AbortSignal, toolCallId?: string): Promise<AgentToolResult<Record<string, unknown>>> {
 	if (params.reason !== "progress_update" && !params.message?.trim() && params.reason !== "interview_request") {
 		throw new Error("message is required for supervisor decisions.");
 	}
@@ -244,6 +220,7 @@ async function sendSupervisorRequest(params: ContactSupervisorParams, signal?: A
 	const replyDeadline = createdAt + askTimeoutMs();
 	const expiresAt = expectsReply ? replyDeadline : undefined;
 	const message = formatChildMessage({ ...metadata, reason: params.reason, message: params.message, interview: params.interview });
+	const requestToolCallId = typeof toolCallId === "string" && toolCallId.length > 0 ? toolCallId : undefined;
 	const request: SupervisorRequest = {
 		type: "subagent.supervisor.request",
 		id: requestId,
@@ -257,6 +234,7 @@ async function sendSupervisorRequest(params: ContactSupervisorParams, signal?: A
 		runId: metadata.runId,
 		agent: metadata.agent,
 		childIndex: metadata.childIndex,
+		...(requestToolCallId ? { toolCallId: requestToolCallId } : {}),
 		...(metadata.childTarget ? { childTarget: metadata.childTarget } : {}),
 		...(params.interview !== undefined ? { interview: params.interview } : {}),
 	};
@@ -297,15 +275,19 @@ function hasTool(pi: ExtensionAPI, name: string): boolean {
 	}
 }
 
-export function registerNativeSupervisorClient(pi: ExtensionAPI): void {
-	if (!readChildMetadata() || hasTool(pi, "contact_supervisor")) return;
+/**
+ * Register the child-side `contact_supervisor` tool. The host passes the
+ * channel metadata in the child runtime config.
+ */
+export function registerNativeSupervisorClient(pi: ExtensionAPI, metadata: ChildSupervisorMetadata | undefined): void {
+	if (!metadata || hasTool(pi, "contact_supervisor")) return;
 	const tool: ToolDefinition<typeof ContactSupervisorParamsSchema, Record<string, unknown>> = {
 		name: "contact_supervisor",
 		label: "Contact Supervisor",
 		description: "Contact the parent/supervisor session for a blocking decision, structured interview, or progress update.",
 		parameters: ContactSupervisorParamsSchema,
-		execute(_id, params, signal) {
-			return sendSupervisorRequest(params as ContactSupervisorParams, signal);
+		execute(id, params, signal) {
+			return sendSupervisorRequest(params as ContactSupervisorParams, metadata, signal, id);
 		},
 	};
 	pi.registerTool(tool);
@@ -319,7 +301,12 @@ function parseRequestFile(file: string, channelDir: string): PendingSupervisorRe
 		if (parsed.reason !== "need_decision" && parsed.reason !== "interview_request" && parsed.reason !== "progress_update") return undefined;
 		if (typeof parsed.message !== "string" || !parsed.message) return undefined;
 		if (typeof parsed.runId !== "string" || typeof parsed.agent !== "string" || typeof parsed.childIndex !== "number") return undefined;
-		return { ...parsed as SupervisorRequest, channelDir, requestFile: file };
+		return {
+			...parsed as SupervisorRequest,
+			...(typeof parsed.toolCallId === "string" && parsed.toolCallId.length > 0 ? { toolCallId: parsed.toolCallId } : { toolCallId: undefined }),
+			channelDir,
+			requestFile: file,
+		};
 	} catch {
 		return undefined;
 	}
@@ -483,6 +470,7 @@ function removeRequestFile(file: string): void {
 }
 
 type SupervisorRequestLifecycle = "pending" | "resolved" | "expired" | "inactive" | "missing" | "wrong-session";
+type SupervisorRequestLifecycleObserver = (request: PendingSupervisorRequest, lifecycle: SupervisorRequestLifecycle) => void;
 
 function requestExpiresAt(request: SupervisorRequest, now: number): number {
 	const expiresAt = (request as { expiresAt?: unknown }).expiresAt;
@@ -515,30 +503,31 @@ function cleanupRequestLifecycle(request: PendingSupervisorRequest, lifecycle: S
 	if (lifecycle === "resolved" || lifecycle === "expired" || lifecycle === "inactive") removeRequestFile(request.requestFile);
 }
 
-function refreshPendingRequests(pending: Map<string, PendingSupervisorRequest>, state: SubagentState, ctx: ExtensionContext | undefined): void {
+function refreshPendingRequests(pending: Map<string, PendingSupervisorRequest>, state: SubagentState, ctx: ExtensionContext | undefined, onLifecycle: SupervisorRequestLifecycleObserver): void {
 	const now = Date.now();
 	for (const request of pending.values()) {
 		const lifecycle = requestLifecycle(request, state, ctx, now);
 		if (lifecycle === "pending") continue;
 		pending.delete(request.id);
+		onLifecycle(request, lifecycle);
 		cleanupRequestLifecycle(request, lifecycle);
 	}
 }
 
 function formatPendingLine(request: PendingSupervisorRequest): string {
-	const replyHint = request.expectsReply ? ` Reply: ${NATIVE_SUPERVISOR_TOOL_NAME}({ action: "reply", replyTo: "${request.id}", message: "..." })` : "";
+	const replyHint = request.expectsReply ? ` Reply: ${supervisorReplyHint(request.id)}` : "";
 	return `- ${request.id}: ${request.agent} [${request.runId}#${request.childIndex}] ${request.reason}.${replyHint}`;
 }
 
 function requestVisibleText(request: PendingSupervisorRequest): string {
 	const lines = [request.message];
 	if (request.expectsReply) {
-		lines.push("", `Reply with: ${NATIVE_SUPERVISOR_TOOL_NAME}({ action: "reply", replyTo: "${request.id}", message: "..." })`);
+		lines.push("", `Reply with: ${supervisorReplyHint(request.id)}`);
 	}
 	return lines.join("\n");
 }
 
-function writeReply(request: PendingSupervisorRequest, message: string): void {
+function writeReply(request: PendingSupervisorRequest, message: string): SupervisorReply {
 	if (!message.trim()) throw new Error("message is required for supervisor replies.");
 	const reply: SupervisorReply = {
 		type: "subagent.supervisor.reply",
@@ -548,6 +537,29 @@ function writeReply(request: PendingSupervisorRequest, message: string): void {
 	};
 	writeAtomicJson(replyPath(request.channelDir, request.id), reply);
 	removeRequestFile(request.requestFile);
+	return reply;
+}
+
+function appendSupervisorReplyEntry(pi: ExtensionAPI, request: PendingSupervisorRequest, reply: SupervisorReply): void {
+	const appendEntry = (pi as unknown as {
+		appendEntry?: (customType: string, data?: SupervisorReplyEntryData) => void;
+	}).appendEntry;
+	if (typeof appendEntry !== "function") return;
+	try {
+		appendEntry.call(pi, SUPERVISOR_REPLY_ENTRY_TYPE, {
+			requestId: request.id,
+			reason: request.reason,
+			runId: request.runId,
+			agent: request.agent,
+			childIndex: request.childIndex,
+			...(request.childTarget ? { childTarget: request.childTarget } : {}),
+			message: reply.message,
+			createdAt: reply.createdAt,
+		});
+	} catch (error) {
+		// The reply file is authoritative; a UI journal failure must not undo a delivered reply.
+		console.error("Failed to journal native supervisor reply:", error);
+	}
 }
 
 function resolvePendingRequest(pending: Map<string, PendingSupervisorRequest>, params: IntercomParams): PendingSupervisorRequest {
@@ -583,14 +595,14 @@ function publicPendingRequests(pending: Map<string, PendingSupervisorRequest>): 
 	}));
 }
 
-function buildParentSupervisorTool(pending: Map<string, PendingSupervisorRequest>, state: SubagentState): ToolDefinition<typeof IntercomParamsSchema, Record<string, unknown>> {
+function buildParentSupervisorTool(pi: ExtensionAPI, pending: Map<string, PendingSupervisorRequest>, state: SubagentState, onLifecycle: SupervisorRequestLifecycleObserver): ToolDefinition<typeof IntercomParamsSchema, Record<string, unknown>> {
 	return {
 		name: NATIVE_SUPERVISOR_TOOL_NAME,
 		label: "Subagent Supervisor",
 		description: "Native pi-subagents supervisor channel. Use reply/pending/status to answer child subagent requests without overriding pi-intercom.",
 		parameters: IntercomParamsSchema,
 		async execute(_id, params) {
-			refreshPendingRequests(pending, state, state.lastUiContext ?? undefined);
+			refreshPendingRequests(pending, state, state.lastUiContext ?? undefined, onLifecycle);
 			const input = params as IntercomParams;
 			if (input.action === "status") {
 				return { content: [{ type: "text", text: `Native supervisor channel active. Pending replies: ${pending.size}.` }], details: { active: true, pending: pending.size, root: SUPERVISOR_CHANNEL_ROOT } };
@@ -601,7 +613,9 @@ function buildParentSupervisorTool(pending: Map<string, PendingSupervisorRequest
 			}
 			if (input.action === "reply") {
 				const request = resolvePendingRequest(pending, input);
-				writeReply(request, input.message ?? "");
+				const reply = writeReply(request, input.message ?? "");
+				appendSupervisorReplyEntry(pi, request, reply);
+				onLifecycle(request, "resolved");
 				pending.delete(request.id);
 				clearForegroundSupervisorAttention(request, pending, state);
 				return { content: [{ type: "text", text: `Replied to supervisor request ${request.id}.` }], details: { replyTo: request.id, runId: request.runId, agent: request.agent } };
@@ -614,10 +628,66 @@ function buildParentSupervisorTool(pending: Map<string, PendingSupervisorRequest
 	};
 }
 
-export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentState, deps: NativeSupervisorChannelDeps = {}): { start: () => void; activateTransport: () => void; dispose: () => void; pending: Map<string, PendingSupervisorRequest> } {
+export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentState, deps: NativeSupervisorChannelDeps = {}): {
+	start: () => void;
+	activateTransport: () => void;
+	dispose: () => void;
+	pending: Map<string, PendingSupervisorRequest>;
+	getSupervisorRequestState: (event: ControlEvent) => SupervisorRequestState;
+} {
 	const watch = deps.watch ?? fs.watch;
 	const timers = deps.timers ?? globalThis;
 	const pending = new Map<string, PendingSupervisorRequest>();
+	const requestCorrelations = new Map<string, SupervisorRequestCorrelation>();
+	const correlationKey = (request: { runId: string; agent: string; childIndex: number; toolCallId?: string }): string | undefined => {
+		if (!request.toolCallId) return undefined;
+		return JSON.stringify([request.runId, request.agent, request.childIndex, request.toolCallId]);
+	};
+	const pruneRequestCorrelations = (now = Date.now()): void => {
+		for (const [key, correlation] of requestCorrelations) {
+			if (correlation.state === "resolved" && now - correlation.updatedAt > SUPERVISOR_REQUEST_CORRELATION_RETENTION_MS) requestCorrelations.delete(key);
+		}
+		while (requestCorrelations.size > MAX_SUPERVISOR_REQUEST_CORRELATIONS) {
+			const oldest = requestCorrelations.keys().next().value;
+			if (oldest === undefined) break;
+			requestCorrelations.delete(oldest);
+		}
+	};
+	const rememberPendingRequest = (request: PendingSupervisorRequest): void => {
+		const key = correlationKey(request);
+		if (!key || !request.expectsReply) return;
+		requestCorrelations.set(key, { request, state: "pending", updatedAt: Date.now() });
+		pruneRequestCorrelations();
+	};
+	const rememberResolvedRequest = (request: PendingSupervisorRequest): void => {
+		const key = correlationKey(request);
+		if (!key || !request.expectsReply) return;
+		requestCorrelations.set(key, { request, state: "resolved", updatedAt: Date.now() });
+		pruneRequestCorrelations();
+	};
+	const observeRequestLifecycle: SupervisorRequestLifecycleObserver = (request, lifecycle) => {
+		if (lifecycle !== "wrong-session") rememberResolvedRequest(request);
+	};
+	const getSupervisorRequestState = (event: ControlEvent): SupervisorRequestState => {
+		if (event.currentTool === "intercom" || event.index === undefined) return "unknown";
+		const toolCallId = typeof event.toolCallId === "string" && event.toolCallId.length > 0 ? event.toolCallId : undefined;
+		if (!toolCallId) return "unknown";
+		pruneRequestCorrelations();
+		const key = correlationKey({ runId: event.runId, agent: event.agent, childIndex: event.index, toolCallId });
+		if (!key) return "unknown";
+		const correlation = requestCorrelations.get(key);
+		if (!correlation) return "unknown";
+		if (correlation.state === "resolved") return "resolved";
+		const now = Date.now();
+		if (!fs.existsSync(correlation.request.requestFile)
+			|| fs.existsSync(replyPath(correlation.request.channelDir, correlation.request.id))
+			|| now > requestExpiresAt(correlation.request, now)
+			|| requestRunInactive(correlation.request, state)) {
+			rememberResolvedRequest(correlation.request);
+			return "resolved";
+		}
+		return "pending";
+	};
 	const seenFiles = new Set<string>();
 	const requestWatchers = new Map<string, fs.FSWatcher>();
 	let rootWatcher: fs.FSWatcher | undefined;
@@ -635,7 +705,7 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 	};
 
 	const registerParentTools = (): void => {
-		if (!hasTool(pi, NATIVE_SUPERVISOR_TOOL_NAME)) pi.registerTool(buildParentSupervisorTool(pending, state));
+		if (!hasTool(pi, NATIVE_SUPERVISOR_TOOL_NAME)) pi.registerTool(buildParentSupervisorTool(pi, pending, state, observeRequestLifecycle));
 	};
 
 	const cleanupStaleChannelsIfDue = (): void => {
@@ -653,7 +723,7 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 		cleanupStaleChannelsIfDue();
 		const ctx = state.lastUiContext;
 		if (!ctx) return;
-		refreshPendingRequests(pending, state, ctx);
+		refreshPendingRequests(pending, state, ctx, observeRequestLifecycle);
 		const now = Date.now();
 		for (const { channelDir, file } of listRequestFiles()) {
 			if (seenFiles.has(file)) continue;
@@ -662,11 +732,13 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 			const lifecycle = requestLifecycle(request, state, undefined, now);
 			if (lifecycle !== "pending") {
 				seenFiles.add(file);
+				observeRequestLifecycle(request, lifecycle);
 				cleanupRequestLifecycle(request, lifecycle);
 				continue;
 			}
 			seenFiles.add(file);
 			if (request.expectsReply) {
+				rememberPendingRequest(request);
 				pending.set(request.id, request);
 				markForegroundSupervisorAttention(request, state);
 			}
@@ -674,16 +746,20 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 				removeRequestFile(request.requestFile);
 			}
 			pi.sendMessage({
-				customType: "subagent_supervisor_request",
+				customType: SUPERVISOR_REQUEST_MESSAGE_TYPE,
 				content: requestVisibleText(request),
 				display: true,
 				details: {
 					id: request.id,
+					requestId: request.id,
 					reason: request.reason,
 					expectsReply: request.expectsReply,
 					runId: request.runId,
 					agent: request.agent,
 					childIndex: request.childIndex,
+					...(request.childTarget ? { childTarget: request.childTarget } : {}),
+					...(request.interview !== undefined ? { interview: request.interview } : {}),
+					...(request.expectsReply ? { replyHint: supervisorReplyHint(request.id) } : {}),
 				},
 			}, { triggerTurn: true });
 			if (request.expectsReply) {
@@ -805,8 +881,10 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 			if (deferredWatcherRefresh) timers.clearImmediate(deferredWatcherRefresh);
 			deferredWatcherRefresh = undefined;
 			pending.clear();
+			requestCorrelations.clear();
 			seenFiles.clear();
 		},
 		pending,
+		getSupervisorRequestState,
 	};
 }

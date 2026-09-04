@@ -6,6 +6,8 @@ export interface RunnerSubagentStep {
 	/** Resolved opt-in rules for native Pi child tool calls. */
 	permissionRules?: import("./permissions.ts").PermissionRules;
 	agent: string;
+	/** Human-readable display name for the child session, derived internally at launch. */
+	sessionName?: string;
 	task: string;
 	runner?: ResolvedRunnerConfig;
 	externalJobFollowUp?: {
@@ -28,25 +30,33 @@ export interface RunnerSubagentStep {
 	outputName?: string;
 	structured?: boolean;
 	cwd?: string;
+	/** Original cwd input retained for launch diagnostics. */
+	requestedCwd?: string;
 	model?: string;
+	contextLimit?: number;
 	fast?: boolean;
 	thinking?: string;
 	thinkingCeiling?: import("../../shared/model-info.ts").ThinkingLevel;
 	modelCandidates?: string[];
 	/** The primary model is inherited from the parent session and should not be verified against the child-reported active registry model. */
 	skipPrimaryModelVerification?: boolean;
-	modelVerificationRegistry?: Array<{ provider: string; id: string; fullId: string }>;
+	modelVerificationRegistry?: Array<{ provider: string; id: string; fullId: string; contextWindow?: number }>;
 	tools?: string[];
+	excludeTools?: string[];
+	allowNestedSubagents?: boolean;
 	extensions?: string[];
 	subagentOnlyExtensions?: string[];
 	mcpDirectTools?: string[];
+	mutationTools?: string[];
 	completionGuard?: boolean;
 	systemPrompt?: string | null;
 	systemPromptMode?: "append" | "replace";
 	inheritProjectContext: boolean;
+	inheritGlobalContext: boolean;
 	inheritSkills: boolean;
 	skills?: string[];
 	outputPath?: string;
+	outputClaimPath?: string;
 	/** Defer the authoritative output instruction until a dynamic fanout item is materialized. */
 	namespaceOutputPath?: boolean;
 	outputMode?: "inline" | "file-only";
@@ -56,12 +66,8 @@ export interface RunnerSubagentStep {
 	/** Resolved configured hard per-tool-call timeout (ms); fast tools still have a default when undefined. */
 	toolTimeoutMs?: number;
 	waitToolEnabled?: boolean;
-	structuredOutput?: {
-		schema: import("../../shared/types.ts").JsonSchemaObject;
-		schemaPath: string;
-		outputPath: string;
-		acceptanceReportPath?: string;
-	};
+	waitToolDefaultTimeoutMs?: number;
+	structuredOutput?: import("./structured-output.ts").StructuredOutputRuntime;
 	structuredOutputSchema?: import("../../shared/types.ts").JsonSchemaObject;
 	agentContract?: import("../../shared/types.ts").AgentContract;
 	definitionDigest?: string;
@@ -81,6 +87,8 @@ export interface RunnerSubagentStep {
 	runFanoutPath?: string;
 	/** Run this single child in one managed worktree. */
 	worktree?: boolean;
+	/** Bounded launch-declared lane metadata; display/triage only. */
+	lane?: import("../../shared/types.ts").WorkflowLaneMetadata;
 }
 
 export interface ParallelStepGroup {

@@ -59,6 +59,8 @@ export function loadNativeTranscriptSupport(): Promise<NativeTranscriptModule | 
 export interface NativeFleetBuildInput {
 	filePath: string;
 	trustedRoots: string[];
+	trustedFiles?: string[];
+	trustedFileRoot?: string;
 	width: number;
 	expandedTools: boolean;
 	cwd?: string;
@@ -314,6 +316,8 @@ export function buildNativeFleetTranscript(
 	mod.ensureTranscriptTheme();
 	const readOptions: FleetTranscriptReadOptions = {
 		trustedRoots: input.trustedRoots,
+		...(input.trustedFiles ? { trustedFiles: input.trustedFiles } : {}),
+		...(input.trustedFileRoot ? { trustedFileRoot: input.trustedFileRoot } : {}),
 		...(input.maxRecords !== undefined ? { maxRecords: input.maxRecords } : {}),
 	};
 	const read = readTranscriptRecords(input.filePath, readOptions);

@@ -24,7 +24,7 @@ const READ_ONLY_BUILTIN_TOOLS = new Set([
 const CURSOR_FILE_MUTATION_THINKING =
 	/(?:^|\n)\s*Cursor (?:edit|write)\s*:/i;
 
-const REVIVED_TASK_PREFIX = /^You are reviving a previous subagent conversation\.\n\nOriginal run: .+\nOriginal agent: .+(?:\nOriginal session file: .+)?\n\nUse the stored session context as background\. Answer the orchestrator's follow-up below\. Do not assume the original child process is still alive\.\n\nFollow-up:\n/;
+const REVIVED_TASK_PREFIX = /^You are reviving a previous subagent conversation\.\n\nOriginal run: .+\nOriginal agent: .+(?:\nOriginal session file: .+)?\n\nUse the stored session context as background\. Answer the orchestrator's follow-up below\. Do not assume the original child session is still running\.\n\nFollow-up:\n/;
 const IMPLEMENTATION_CHALLENGE_FOLLOW_UP_PATTERN = /^(?:Run )?implementation challenge pass (?:one|two|\d+)(?:\s+and implement any better current[- ]scope change\.?|\s+for the accepted candidate\.\s+Reconsider it and implement any better current[- ]scope change\.?)?$/i;
 const NO_BETTER_CHANGE_NEEDED_PATTERN = /^\s*no (?:better|further|additional) (?:current[- ]scope )?(?:code |source |file )?(?:change|changes|edit|edits|patch|patches) (?:is|are) needed\b/i;
 const KEPT_CURRENT_IMPLEMENTATION_PATTERN = /\b(?:kept (?:the )?current (?:implementation|candidate|shape)|(?:the )?current (?:implementation|candidate|shape) was kept)\b/i;
@@ -47,11 +47,12 @@ interface CompletionMutationGuardInput {
 	messages: Message[];
 	tools?: string[];
 	mcpDirectTools?: string[];
+	mutationTools?: string[];
 	toolAvailabilityError?: string;
 	mutationEvidence?: TrackedMutationEvidence;
 }
 
-interface CompletionMutationGuardResult {
+export interface CompletionMutationGuardResult {
 	expectedMutation: boolean;
 	attemptedMutation: boolean;
 	triggered: boolean;
@@ -128,7 +129,7 @@ function hasCheckpointMutationEvidence(message: Message): boolean {
 		&& data.beforeCommit !== data.afterCommit;
 }
 
-export function hasMutationToolCall(messages: Message[]): boolean {
+export function hasMutationToolCall(messages: Message[], mutationTools?: readonly string[]): boolean {
 	for (const message of messages) {
 		if (hasCheckpointMutationEvidence(message)) return true;
 		if (message.role !== "assistant") continue;
@@ -138,7 +139,7 @@ export function hasMutationToolCall(messages: Message[]): boolean {
 			const args = typeof part.arguments === "object" && part.arguments !== null && !Array.isArray(part.arguments)
 				? part.arguments as Record<string, unknown>
 				: {};
-			if (isMutatingTool(part.name, args)) return true;
+			if (isMutatingTool(part.name, args, mutationTools)) return true;
 		}
 	}
 	return false;
@@ -239,7 +240,7 @@ export function evaluateCompletionMutationGuard(input: CompletionMutationGuardIn
 	const expectedMutation = hasMutationToolCapability(input.tools, input.mcpDirectTools)
 		? expectsImplementationMutation(input.agent, input.task)
 		: false;
-	const attemptedMutation = hasMutationToolCall(input.messages) || input.mutationEvidence?.attemptedMutation === true;
+	const attemptedMutation = hasMutationToolCall(input.messages, input.mutationTools) || input.mutationEvidence?.attemptedMutation === true;
 	const noEditChallengeComplete = isImplementationChallengeTask(input.task)
 		&& reportsNoBetterChallengeChange(input.messages);
 	return {

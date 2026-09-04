@@ -985,7 +985,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			assert.equal(result.isError, undefined);
 			assert.match(result.content[0]?.text ?? "", /Revived async subagent from/);
 			assert.match(result.content[0]?.text ?? "", /Do not run sleep timers or polling loops/);
-			assert.match(result.content[0]?.text ?? "", /call subagent_wait\(\)/);
+			assert.match(result.content[0]?.text ?? "", /Use bg_wait only/);
 			assert.match(result.content[0]?.text ?? "", /Status if needed: subagent\(\{ action: "status"/);
 			assert.doesNotMatch(result.content[0]?.text ?? "", /Follow:/);
 			const revivedId = result.details?.asyncId;
@@ -1199,7 +1199,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 			try {
 				const failed = await executor.execute(
 					"workflow-resume-start-failure",
-					{ workflowScript: `return await runs.run("resume-child", { resume: "${sourceRunId}", task: "Continue" });`, async: true },
+					{ workflowScript: `return await runs.run("resume-child", { resume: "${sourceRunId}", task: "Continue", lane: { version: 1, key: "resume-child", mode: "mutation", sourceRef: "owner/repo#1621", claims: ["retained.txt"] } });`, async: true },
 					new AbortController().signal,
 					undefined,
 					ctx,
@@ -1208,11 +1208,12 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 				assert.ok(workflowRunId, "expected async workflow id");
 				await waitForFile(path.join(RESULTS_DIR, `${workflowRunId}.json`));
 				const workflowStatusPath = path.join(ASYNC_DIR, workflowRunId, "status.json");
-				const workflowStatus = await waitForStatus(workflowStatusPath, (value) => value?.state === "failed") as { steps?: Array<{ async?: boolean; runId?: string }>; error?: string };
+				const workflowStatus = await waitForStatus(workflowStatusPath, (value) => value?.state === "failed") as { steps?: Array<{ async?: boolean; runId?: string; lane?: unknown }>; error?: string };
 				revivedRunId = workflowStatus.steps?.[0]?.runId;
 
 				assert.equal(workflowStatus.steps?.[0]?.async, true);
 				assert.ok(revivedRunId, "expected the workflow step to keep revived run identity");
+				assert.deepEqual(workflowStatus.steps?.[0]?.lane, { version: 1, key: "resume-child", mode: "mutation", sourceRef: "owner/repo#1621", claims: ["retained.txt"] });
 				assert.match(workflowStatus.error ?? "", /already owned by run 'workflow-competing-revival'/);
 				assert.deepEqual(getActiveAsyncCapacitySnapshot(parentSessionId, 1), { used: 0, limit: 1 });
 			} finally {
@@ -1441,7 +1442,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 
 		assert.doesNotMatch(statusText, /Async run not found/);
 		assert.match(statusText, /State: remembered foreground/);
-		assert.match(statusText, /a completed/);
+		assert.match(statusText, /a: ask supervisor completed/);
 		assert.match(statusText, /final recovered answer/);
 
 		const transcript = await executor.execute(
@@ -1493,7 +1494,7 @@ describe("intercom result delivery cutover", { skip: !available ? "executor not 
 		const runId = original.details?.runId;
 		assert.ok(runId, "expected foreground run id");
 		assert.equal(original.details?.results?.[0]?.acceptance?.status, "pending");
-		assert.match(original.content[0]?.text ?? "", /subagent_wait\(\{ id:/);
+		assert.match(original.content[0]?.text ?? "", /bg_wait\(\{ id:/);
 		const metadataPath = original.details?.results?.[0]?.artifactPaths?.metadataPath;
 		assert.ok(metadataPath);
 		const pendingMetadata = JSON.parse(fs.readFileSync(metadataPath, "utf-8")) as { acceptance?: { status?: string } };

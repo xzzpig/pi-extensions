@@ -113,10 +113,14 @@ test("published extension APIs use supported package entrypoints", async () => {
 		"./agent-management": "./src/api/agent-management.ts",
 		"./control-channel": "./src/api/control-channel.ts",
 		"./intercom-bridge": "./src/api/intercom-bridge.ts",
-		"./pi-args": "./src/api/pi-args.ts",
+		"./child-tool-plan": "./src/api/child-tool-plan.ts",
 		"./shared-types": "./src/api/shared-types.ts",
 		"./project-panes": "./src/api/project-panes.ts",
 	});
+	const agents = await import("@xzzpig/pi-subagents/agents");
+	assert.equal(agents.RUNTIME_AGENT_REGISTER_EVENT, "pi-subagents:runtime-agent-register:v1");
+	assert.equal(agents.RUNTIME_AGENT_REGISTER_VERSION, 1);
+	assert.equal(typeof agents.registerAgentViaEvents, "function");
 	const backgroundWork = await import("@xzzpig/pi-subagents/background-work");
 	assert.equal(backgroundWork.BACKGROUND_WORK_PROTOCOL_VERSION, 1);
 	assert.equal(backgroundWork.BACKGROUND_WORK_REGISTRY_KEY, "pi-subagents.background-work.v1");
@@ -145,9 +149,9 @@ test("published extension APIs use supported package entrypoints", async () => {
 	assert.equal(typeof controlChannel.requestAsyncStop, "function");
 	const intercomBridge = await import("@xzzpig/pi-subagents/intercom-bridge");
 	assert.equal(typeof intercomBridge.resolveIntercomSessionTarget, "function");
-	const piArgs = await import("@xzzpig/pi-subagents/pi-args");
-	assert.equal(typeof piArgs.resolvePiLaunchToolPlan, "function");
-	assert.equal("buildPiArgs" in piArgs, false);
+	const childToolPlan = await import("@xzzpig/pi-subagents/child-tool-plan");
+	assert.equal(typeof childToolPlan.resolvePiLaunchToolPlan, "function");
+	assert.deepEqual(Object.keys(childToolPlan).sort(), ["resolvePiLaunchToolPlan"]);
 	const sharedTypes = await import("@xzzpig/pi-subagents/shared-types");
 	assert.equal(typeof sharedTypes.wrapForkTask, "function");
 	assert.equal(typeof sharedTypes.DEFAULT_FORK_PREAMBLE, "string");

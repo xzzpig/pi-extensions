@@ -5,8 +5,8 @@ import { mergeAgentsForScope } from "../agents/agent-selection.ts";
 import { resolveInjectableAgents } from "./context-injection.ts";
 import { isAsyncAvailable } from "../runs/background/async-execution.ts";
 import { formatSpawnBudgetSummary, getSpawnBudgetSnapshot } from "../runs/shared/spawn-budget.ts";
-import { getActiveAsyncCapacitySnapshot, resolveMaxActiveAsyncRunsPerSession } from "../runs/background/active-async-capacity.ts";
-import { decodeRunFanoutBudgetDescriptor, formatRunFanoutBudget, getRunFanoutBudgetSnapshot, RUN_FANOUT_BUDGET_ENV } from "../runs/shared/run-fanout-budget.ts";
+import { getActiveAsyncCapacitySnapshot, resolveAbandonedSlotReleaseAfterMs, resolveMaxActiveAsyncRunsPerSession } from "../runs/background/active-async-capacity.ts";
+
 import { diagnoseIntercomBridge, type IntercomBridgeDiagnostic } from "../intercom/intercom-bridge.ts";
 import { discoverAvailableSkills, type SkillSource } from "../agents/skills.ts";
 import {
@@ -189,14 +189,6 @@ function formatSpawnBudgetSection(input: DoctorReportInput): string[] {
 }
 
 function formatRunFanoutSection(input: DoctorReportInput): string[] {
-	try {
-		const inherited = decodeRunFanoutBudgetDescriptor(process.env[RUN_FANOUT_BUDGET_ENV]);
-		if (inherited) {
-			return [`- usage: ${formatRunFanoutBudget(getRunFanoutBudgetSnapshot(inherited)).replace(/^Run fan-out: /, "")}`, `- root run: ${inherited.rootRunId}`, "- reset boundary: cumulative claims are never released; a new top-level run creates a new budget"];
-		}
-	} catch (error) {
-		return [`- inherited budget: invalid — ${errorText(error)}`];
-	}
 	const configured = resolveMaxSubagentSpawnsPerRun(input.config.maxSubagentSpawnsPerRun);
 	const source = normalizeMaxSubagentSpawnsPerRun(process.env.PI_SUBAGENT_MAX_SPAWNS_PER_RUN) !== undefined
 		? "environment"
@@ -208,13 +200,13 @@ function formatActiveAsyncCapacitySection(input: DoctorReportInput): string[] {
 	const limit = resolveMaxActiveAsyncRunsPerSession(input.config.maxActiveAsyncRunsPerSession);
 	const sessionId = input.currentSessionId ?? input.state.currentSessionId;
 	const snapshot = sessionId
-		? getActiveAsyncCapacitySnapshot(sessionId, limit, { liveWorkflowRunIds: new Set(input.state.workflowControllers?.keys() ?? []) })
+		? getActiveAsyncCapacitySnapshot(sessionId, limit, { liveWorkflowRunIds: new Set(input.state.workflowControllers?.keys() ?? []), abandonedSlotReleaseAfterMs: resolveAbandonedSlotReleaseAfterMs(input.config.capacity?.abandonedSlotReleaseAfterMs) })
 		: { used: 0, limit: limit ?? 0 };
 	input.state.activeAsyncCapacity = snapshot;
 	return [
 		`- usage: ${snapshot.used}/${snapshot.limit || "unlimited"} used`,
 		"- scope: top-level async runs in the current parent session; foreground and nested workflow children are not charged again",
-		"- release: terminal logical state plus verified process exit; missing or unknown cleanup proof retains capacity",
+		"- release: terminal state plus matching observed process-terminal proof, or abandoned-timeout for failed runs with a dead runner PID and stale activity when enabled; false keeps unknown-proof slots",
 	];
 }
 
@@ -225,7 +217,7 @@ function formatPermissionSystemSection(): string[] {
 	if (trimmed) {
 		lines.push(`- parent session: set (${trimmed})`);
 	} else {
-		lines.push("- parent session: not set — ask forwarding from subprocess children will not reach a parent UI");
+		lines.push("- parent session: not set — ask forwarding from background children will not reach a parent UI");
 	}
 	const isChild = process.env["PI_SUBAGENT_CHILD"] === "1";
 	lines.push(`- subagent process: ${isChild ? "yes (PI_SUBAGENT_CHILD=1)" : "no"}`);
