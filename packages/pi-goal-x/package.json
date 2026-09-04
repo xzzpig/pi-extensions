@@ -52,7 +52,7 @@
         "./agents"
       ]
     },
-    "image": "https://github.com/tmonk/pi-goal-x/raw/main/screenshot.png"
+    "image": "https://github.com/tmonk/pi-goal-x/raw/main/pi-goal-x.png"
   },
   "scripts": {
     "check": "tsc --noEmit",

@@ -1,3 +1,16 @@
+<div align="center">
+  <img src="pi-goal-x.png" alt="pi-goal-x logo" width="560">
+</div>
+
+<div align="center">
+  <a href="https://pi.dev/packages" target="_blank" rel="noopener noreferrer">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="assets/badge-dark.svg">
+      <img src="assets/badge-light.svg" alt="TOP 1% of Pi coding agent packages: #45 of 5,380 by downloads, as of Aug 2026" width="420">
+    </picture>
+  </a>
+</div>
+
 # pi-goal-x
 
 `pi-goal-x` is a goal-management extension for [pi](https://github.com/earendil-works/pi-coding-agent).

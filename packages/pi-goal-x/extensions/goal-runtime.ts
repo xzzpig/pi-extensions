@@ -12,7 +12,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { GoalCheckpointDetailsV2, GoalRecord } from "./goal-record.ts";
 import { checkpointTriggerPrompt } from "./prompts/goal-prompts.ts";
 import { POST_STOP_ALLOWED_TOOLS } from "./goal-tool-names.ts";
-import { networkErrorBackoffPlan, type NetworkErrorBackoffPlan } from "./network-error-backoff.ts";
+import { networkErrorBackoffPlan, type NetworkErrorBackoffPlan, type NetworkErrorRecoveryPolicy } from "./network-error-backoff.ts";
 
 export const CONTINUATION_IDLE_RETRY_MS = 50;
 
@@ -111,13 +111,13 @@ export class GoalRuntime {
 	 * have failed. The counter stays in memory and is cleared on a successful
 	 * turn or any user-owned cancellation path.
 	 */
-	scheduleNetworkErrorRetry(ctx: ExtensionContext, goal: GoalRecord): NetworkErrorBackoffPlan | null {
+	scheduleNetworkErrorRetry(ctx: ExtensionContext, goal: GoalRecord, policy?: NetworkErrorRecoveryPolicy): NetworkErrorBackoffPlan | null {
 		if (goal.status !== "active" || !goal.autoContinue || this.networkErrorRetryTimer) return null;
 		if (this.networkErrorRetryGoalId !== goal.id) {
 			this.networkErrorRetryGoalId = goal.id;
 			this.networkErrorRetryAttempt = 0;
 		}
-		const plan = networkErrorBackoffPlan(this.networkErrorRetryAttempt + 1);
+		const plan = networkErrorBackoffPlan(this.networkErrorRetryAttempt + 1, policy);
 		if (!plan) return null;
 		this.networkErrorRetryAttempt = plan.attempt;
 		this.networkErrorRetryTimer = setTimeout(() => {

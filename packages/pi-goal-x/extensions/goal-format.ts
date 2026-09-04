@@ -226,14 +226,55 @@ export function isErrorAssistantMessage(message: unknown): boolean {
 	return raw?.role === "assistant" && raw.stopReason === "error";
 }
 
-/** A provider-declared network failure is safe for the bounded goal backoff. */
+/**
+ * Transient provider failures are safe for goal-level recovery backoff:
+ * Pi-declared network errors plus HTTP 429/5xx-style outages surfaced by
+ * providers (429 rate limits, 503 server_error, "Endpoint is unavailable",
+ * overloaded, gateway failures). Deliberately excludes auth and
+ * malformed-request failures (and quota/billing text), which retrying
+ * cannot fix.
+ */
+const TRANSIENT_PROVIDER_ERROR_RE = new RegExp(
+	[
+		"\\bnetwork[_\\s-]?error\\b",
+		"\\bserver[_\\s]?error\\b",
+		"\\b(?:429|502|503|504|529)\\b",
+		"\\brate[_\\s-]?limited\\b",
+		"\\brate[_\\s-]?limit\\b",
+		"\\btoo many requests\\b",
+		"\\bservice unavailable\\b",
+		"\\bbad gateway\\b",
+		"\\bgateway timeout\\b",
+		"\\bupstream request failed\\b",
+		"\\bendpoint is unavailable\\b",
+		"\\boverloaded[_\\s]?error\\b",
+	].join("|"),
+	"i",
+);
+
+/** Quota/billing exhaustion is deterministic; retrying cannot fix it. */
+const NON_TRANSIENT_PROVIDER_ERROR_RE = new RegExp(
+	[
+		"\\binsufficient[_\\s]?quota\\b",
+		"\\bout of budget\\b",
+		"\\bquota exceeded\\b",
+		"\\bbilling\\b",
+		"GoUsageLimitError",
+		"FreeUsageLimitError",
+	].join("|"),
+	"i",
+);
+
+/** A transient provider failure is safe for the bounded goal backoff. */
 export function isNetworkErrorAssistantMessage(message: unknown): boolean {
 	if (!isErrorAssistantMessage(message)) return false;
 	const raw = asRecord(message);
 	const details = [raw?.rawStopReason, raw?.errorMessage]
 		.filter((value): value is string => typeof value === "string")
 		.join(" ");
-	return /\bnetwork[_\s-]?error\b/i.test(details);
+	// Quota/billing exhaustion is deterministic and must never be retried.
+	if (NON_TRANSIENT_PROVIDER_ERROR_RE.test(details)) return false;
+	return TRANSIENT_PROVIDER_ERROR_RE.test(details);
 }
 
 export function isToolUseAssistantMessage(message: unknown): boolean {
