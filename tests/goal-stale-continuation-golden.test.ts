@@ -321,7 +321,7 @@ test("network-error recovery waits for agent_settled before scheduling its backo
 
 		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
 		assert.equal(await countCheckpoints(h), 0, "the first recovery is delayed by the backoff policy");
-		assert.match(h.notifications.at(-1)?.message ?? "", /Retrying the goal in 5s \(recovery 1\/5\)/);
+		assert.match(h.notifications.at(-1)?.message ?? "", /Retrying the goal in 5s \(recovery 1, unbounded\)/);
 	} finally {
 		// The delayed timer is unref'd and needs no test teardown.
 	}

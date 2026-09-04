@@ -144,8 +144,12 @@ describe("P1-3 per-turn transaction buffer", () => {
 			await h.handlers.get("session_start")?.({ reason: "start" }, h.ctx);
 			await h.handlers.get("before_agent_start")?.({ systemPrompt: "p", prompt: "p", systemPromptOptions: {} }, h.ctx);
 			await h.handlers.get("turn_start")?.({}, h.ctx);
-			// User Esc → message_end aborted → pauseActiveGoal.
-			await h.handlers.get("message_end")?.({ message: { role: "assistant", stopReason: "aborted", usage: { input: 0, output: 0 } } }, h.ctx);
+			// User Esc → the session abort signal fires → message_end aborted
+			// arrives with the signal set → pauseActiveGoal.
+			const controller = new AbortController();
+			controller.abort(); // user Esc fires the session abort signal
+			const escCtx = { ...h.ctx, signal: controller.signal } as typeof h.ctx;
+			await h.handlers.get("message_end")?.({ message: { role: "assistant", stopReason: "aborted", usage: { input: 0, output: 0 } } }, escCtx);
 			const disk = goalFileText(f.cwd, f.goal);
 			assert.match(disk, /Status: paused/, "pause persists immediately, not at turn end");
 		} finally {

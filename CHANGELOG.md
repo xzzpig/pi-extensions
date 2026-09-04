@@ -2,6 +2,105 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.30.5] — 2026-08-25
+
+### Fixed
+
+- **Provider-side aborts no longer pause goals mid-outage** — an assistant
+  message with `stopReason:"aborted"` arriving without a user abort signal
+  (transport-level termination during a provider outage) now routes into the
+  bounded unbounded recovery instead of pausing the goal. All three lifecycle
+  handlers (`message_end`, `turn_end`, `agent_end`) are signal-aware: only a
+  genuine user Esc (`ctx.signal.aborted`) pauses.
+- **429 rate limits are recoverable** — HTTP 429 payloads ("Provider returned
+  error ... temporarily rate-limited upstream") were not classified as
+  transient, so recovery never scheduled. Classification now covers `\b429\b`
+  and rate-limit wording; quota/billing exhaustion (`insufficient_quota`,
+  `out of budget`, usage-limit errors) remains fail-fast via a new exclusion
+  list that wins over transient matches.
+
+### Added
+
+- Live-pi e2e scenario for sustained 429 outages and a full real event-ordering
+  regression test (`message_end → turn_end → agent_end → agent_settled`)
+  proving provider-side aborts engage recovery without pausing.
+
+## [0.30.4] — 2026-08-25
+
+### Added
+
+- **Live-pi e2e regression guard for network-error recovery** —
+  `tests/e2e/network-recovery-rpc.test.ts` drives a real pi subprocess
+  against a mock provider returning the exact reported failure
+  (`503 server_error: Upstream request failed: Endpoint is unavailable.`)
+  and asserts the full unbounded backoff loop engages: escalating
+  "(recovery N, unbounded)" notifications, checkpoint continuation
+  delivery after settle. Skips automatically when the `pi` CLI is absent.
+
+### Verified
+
+- Field report of "unlimited retry not working" reproduced against real pi
+  on this tree: classification, scheduling, escalation, and checkpoint
+  delivery all work; the failing session predated 0.30.3 (extensions load
+  once per session). Restarting sessions loads the fixed behavior. See
+  `specs/2026-08-23-network-error-backoff/MILESTONES.md`.
+
+## [0.30.3] — 2026-08-25
+
+### Fixed
+
+- **503 `server_error` outages now engage goal recovery** — regression fix:
+  transient provider failures such as `Error: 503: {"type":"server_error",
+  "message":"...Upstream request failed: Endpoint is unavailable."}` were not
+  classified as network errors (the old matcher required the literal text
+  "network error"), so the goal-level backoff never scheduled and active
+  auto-continue goals stranded after Pi's built-in retries exhausted.
+  Classification now covers HTTP 5xx-style outages (`server_error`,
+  502/503/504/529, service unavailable, bad gateway, gateway timeout,
+  upstream request failed, endpoint unavailable, overloaded); 4xx auth and
+  malformed-request errors remain non-retryable.
+
+### Changed
+
+- **Unbounded-by-default recovery** — after Pi settles with a transient
+  provider failure, an active auto-continue goal keeps retrying on the
+  escalating backoff ladder (5–80s), plateauing at the maximum delay until
+  the provider recovers, instead of giving up after five attempts. The cap
+  and delays are configurable via layered settings:
+  `networkRecovery.maxAttempts` (0/unset = unbounded) and
+  `networkRecovery.maxDelayMs` (default 80000), or the
+  `PI_GOAL_NETWORK_RECOVERY_MAX_ATTEMPTS` /
+  `PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS` environment overrides.
+- Recovery notifications distinguish bounded progress (`recovery 2/5`) from
+  unbounded (`recovery 2, unbounded`).
+
+## [0.30.2] — 2026-08-24
+
+### Added
+
+- **pi.dev ranking badge** — README badge linking to `pi.dev/packages`,
+  rendered as theme-aware SVG images (dark and light variants) so it displays
+  correctly on GitHub in either color scheme. Meta text now reads
+  "as of Aug 2026".
+
+## [0.30.1] — 2026-08-24
+
+### Added
+
+- **Project logo** — added `pi-goal-x.png` as the README logo and as the
+  package gallery image for `pi.dev/packages`.
+
+## [0.30.0] — 2026-08-23
+
+### Fixed
+
+- **Network-error recovery for active goals (#36)** — after Pi exhausts its own
+  provider retries with `network_error`, an active auto-continue goal now
+  retries through a bounded 5/10/20/40/80-second backoff ladder. The fallback
+  begins only after Pi settles, cancels cleanly on user interaction or goal
+  lifecycle changes, and leaves the goal active with a clear warning after the
+  capped recovery budget is exhausted.
+
 ## [0.29.0] — 2026-08-23
 
 ### Added
@@ -26,19 +125,6 @@ All notable changes to pi-goal-x are documented here.
 - `update_goal({status:"blocked"})` now requires a `reason` describing the
   concrete blocker (feeds the blocker fingerprint and ledger record).
 - Tool schemas grew by +136 bytes/request (`attempted_actions` parameter).
-
-## [0.30.0] — 2026-08-23
-
-### Fixed
-
-- **Network-error recovery for active goals (#36)** — after Pi exhausts its own
-  provider retries with `network_error`, an active auto-continue goal now
-  retries through a bounded 5/10/20/40/80-second backoff ladder. The fallback
-  begins only after Pi settles, cancels cleanly on user interaction or goal
-  lifecycle changes, and leaves the goal active with a clear warning after the
-  capped recovery budget is exhausted.
-
-## [0.29.0] — 2026-08-23
 
 ## [0.28.0] — 2026-08-23
 

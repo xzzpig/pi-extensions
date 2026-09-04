@@ -62,6 +62,12 @@ export const DEFAULT_GOAL_KEYBINDINGS: GoalKeybindings = {
 	},
 };
 
+/**
+ * Default ceiling for a single recovery delay; the escalation ladder
+ * plateaus here. Configurable via networkRecovery.maxDelayMs.
+ */
+export const DEFAULT_NETWORK_RECOVERY_MAX_DELAY_MS = 80_000;
+
 export function formatGoalKeybinding(key: string): string {
 	return key.split("+").map((part) => ({
 		ctrl: "Ctrl",
@@ -108,6 +114,11 @@ export interface GoalSettingsResolvedShape {
 	hideUnfocusedBanner?: boolean;
 	/** Issue #26: opt-in read-only blocker Oracle configuration (sparse). */
 	oracle?: GoalOracleSettingsLayer;
+	/**
+	 * Goal-level provider-error recovery backoff (sparse). maxAttempts 0 or
+	 * unset = unbounded retry (default); maxDelayMs caps the delay plateau.
+	 */
+	networkRecovery?: GoalNetworkRecoverySettingsLayer;
 }
 
 // Resolved Oracle settings are attached to the resolved runtime shape below
@@ -126,7 +137,6 @@ export interface GoalOracleSettingsLayer {
 	maxFailedAttemptsPerBlocker?: number;
 }
 
-/** Resolved Oracle settings (concrete defaults). */
 export interface ResolvedGoalOracleSettings {
 	enabled: boolean;
 	provider?: string;
@@ -134,6 +144,18 @@ export interface ResolvedGoalOracleSettings {
 	thinkingLevel?: ThinkingLevel;
 	projectResources: boolean;
 	maxFailedAttemptsPerBlocker: number;
+}
+
+/** Sparse per-leaf network-recovery settings (maxAttempts 0 = unbounded). */
+export interface GoalNetworkRecoverySettingsLayer {
+	maxAttempts?: number;
+	maxDelayMs?: number;
+}
+
+/** Resolved network-recovery settings (concrete defaults). */
+export interface ResolvedGoalNetworkRecoverySettings {
+	maxAttempts: number;
+	maxDelayMs: number;
 }
 
 /**
@@ -151,6 +173,8 @@ export interface GoalSettingsLayer extends GoalSettingsResolvedShape {}
 export interface ResolvedGoalSettingsShape extends GoalSettingsResolvedShape {
 	/** Issue #26: resolved opt-in blocker Oracle configuration. */
 	oracle?: ResolvedGoalOracleSettings;
+	/** Resolved goal-level provider-error recovery configuration. */
+	networkRecovery?: ResolvedGoalNetworkRecoverySettings;
 }
 
 export type ResolvedGoalSettings = ResolvedGoalSettingsShape;
@@ -306,7 +330,10 @@ const ALLOWED_SETTINGS_KEYS = new Set([
 	"keybindings",
 	"hideUnfocusedBanner",
 	"oracle",
+	"networkRecovery",
 ]);
+
+const ALLOWED_NETWORK_RECOVERY_KEYS = new Set(["maxAttempts", "maxDelayMs"]);
 
 const ALLOWED_ORACLE_KEYS = new Set([
 	"enabled",
@@ -473,6 +500,31 @@ export function parseSettingsLayer(
 					}
 				}
 				layer.oracle = oracle;
+				break;
+			}
+			case "networkRecovery": {
+				if (!value || typeof value !== "object" || Array.isArray(value)) {
+					diagnostics.push(diagnostic("invalid_nested_key", "networkRecovery must be an object", key));
+					break;
+				}
+				const nrRecord = value as Record<string, unknown>;
+				const nr: GoalNetworkRecoverySettingsLayer = {};
+				for (const [nKey, nValue] of Object.entries(nrRecord)) {
+					if (!ALLOWED_NETWORK_RECOVERY_KEYS.has(nKey)) {
+						diagnostics.push(diagnostic("unknown_key", `unknown networkRecovery key: ${nKey}`, `networkRecovery.${nKey}`));
+						continue;
+					}
+					if (nKey === "maxAttempts") {
+						const parsed = asNonNegativeInt(nValue);
+						if (parsed === undefined) diagnostics.push(diagnostic("invalid_value", "networkRecovery.maxAttempts must be an integer >= 0 (0 = unbounded)", `networkRecovery.${nKey}`));
+						else nr.maxAttempts = parsed;
+					} else {
+						const parsed = asNonNegativeInt(nValue);
+						if (parsed === undefined || parsed < 1_000) diagnostics.push(diagnostic("invalid_value", "networkRecovery.maxDelayMs must be an integer >= 1000", `networkRecovery.${nKey}`));
+						else nr.maxDelayMs = parsed;
+					}
+				}
+				if (Object.keys(nr).length > 0) layer.networkRecovery = nr;
 				break;
 			}
 			default:
@@ -733,6 +785,20 @@ export function loadSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv = proce
 		defaultValue: 0,
 		envVar: "PI_GOAL_OBJECTIVE_MAX_CHARS",
 	}));
+	const networkRecoveryMaxAttempts = track("networkRecovery.maxAttempts", resolveLeaf<number>({
+		envValue: envInt("PI_GOAL_NETWORK_RECOVERY_MAX_ATTEMPTS"),
+		projectValue: project.layer.networkRecovery?.maxAttempts,
+		globalValue: global.layer.networkRecovery?.maxAttempts,
+		defaultValue: 0,
+		envVar: "PI_GOAL_NETWORK_RECOVERY_MAX_ATTEMPTS",
+	}));
+	const networkRecoveryMaxDelayMs = track("networkRecovery.maxDelayMs", resolveLeaf<number>({
+		envValue: envInt("PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS"),
+		projectValue: project.layer.networkRecovery?.maxDelayMs,
+		globalValue: global.layer.networkRecovery?.maxDelayMs,
+		defaultValue: DEFAULT_NETWORK_RECOVERY_MAX_DELAY_MS,
+		envVar: "PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS",
+	}));
 
 	const keybindings: GoalKeybindings = {
 		dashboard: {
@@ -768,6 +834,10 @@ export function loadSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv = proce
 		stallTimeoutMinutes,
 		objectiveMaxChars,
 		keybindings,
+		networkRecovery: {
+			maxAttempts: networkRecoveryMaxAttempts,
+			maxDelayMs: networkRecoveryMaxDelayMs,
+		},
 		oracle: {
 			enabled: oracleEnabled,
 			...(oracleProvider ? { provider: oracleProvider } : {}),
@@ -1076,6 +1146,13 @@ function buildPersistedLayer(settings: GoalSettings): Record<string, unknown> {
 	if (settings.autoSelectSingleGoal !== undefined) persisted.autoSelectSingleGoal = settings.autoSelectSingleGoal;
 	if (settings.auditorProjectResources !== undefined) persisted.auditorProjectResources = settings.auditorProjectResources;
 	if (settings.hideUnfocusedBanner !== undefined) persisted.hideUnfocusedBanner = settings.hideUnfocusedBanner;
+	if ((settings as { networkRecovery?: ResolvedGoalNetworkRecoverySettings }).networkRecovery) {
+		const nr = (settings as { networkRecovery?: ResolvedGoalNetworkRecoverySettings }).networkRecovery!;
+		const o: Record<string, unknown> = {};
+		if (nr.maxAttempts !== undefined) o.maxAttempts = nr.maxAttempts;
+		if (nr.maxDelayMs !== undefined) o.maxDelayMs = nr.maxDelayMs;
+		if (Object.keys(o).length > 0) persisted.networkRecovery = o;
+	}
 	if ((settings as { oracle?: ResolvedGoalOracleSettings }).oracle) {
 		const o: Record<string, unknown> = {};
 		const so = (settings as { oracle?: ResolvedGoalOracleSettings }).oracle!;
@@ -1104,6 +1181,10 @@ export function envOverrideFor(key: keyof GoalSettings | "settingsFile", env: No
 	if (key === "disableTasks" && env.PI_GOAL_DISABLE_TASKS !== undefined) return "PI_GOAL_DISABLE_TASKS";
 	if (key === "disableContracts" && env.PI_GOAL_DISABLE_CONTRACTS !== undefined) return "PI_GOAL_DISABLE_CONTRACTS";
 	if (key === "objectiveMaxChars" && env.PI_GOAL_OBJECTIVE_MAX_CHARS !== undefined) return "PI_GOAL_OBJECTIVE_MAX_CHARS";
+	if (key === "networkRecovery") {
+		if (env.PI_GOAL_NETWORK_RECOVERY_MAX_ATTEMPTS !== undefined) return "PI_GOAL_NETWORK_RECOVERY_MAX_ATTEMPTS";
+		if (env.PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS !== undefined) return "PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS";
+	}
 	if (key === "settingsFile" && env[PI_GOAL_SETTINGS_FILE_ENV] !== undefined) return PI_GOAL_SETTINGS_FILE_ENV;
 	return null;
 }
@@ -1128,6 +1209,8 @@ export function effectiveSettingsReport(cwd: string, env: NodeJS.ProcessEnv = pr
 		{ key: "hideUnfocusedBanner", label: "hide unfocused banner", format: () => String(snapshot.value.hideUnfocusedBanner) },
 		{ key: "stallTimeoutMinutes", label: "stall timeout (minutes)", format: () => String(snapshot.value.stallTimeoutMinutes) },
 		{ key: "objectiveMaxChars", label: "max objective length (0 = none)", format: () => String(snapshot.value.objectiveMaxChars) },
+		{ key: "networkRecovery", label: "network recovery attempts (0 = unbounded)", format: () => String(snapshot.value.networkRecovery?.maxAttempts ?? 0) },
+		{ key: "networkRecovery", label: "network recovery max delay (ms)", format: () => String(snapshot.value.networkRecovery?.maxDelayMs ?? DEFAULT_NETWORK_RECOVERY_MAX_DELAY_MS) },
 		{ key: "keybindings", label: "dashboard keybindings", format: () => `${snapshot.value.keybindings!.dashboard.toggleExpand}, ${snapshot.value.keybindings!.dashboard.scrollUp}, ${snapshot.value.keybindings!.dashboard.scrollDown}` },
 	];
 	for (const row of rows) {

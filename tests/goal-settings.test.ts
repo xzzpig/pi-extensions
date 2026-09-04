@@ -284,6 +284,36 @@ test("loadGoalSettings: objectiveMaxChars defaults to no limit and honors the en
 	assert.equal(loadGoalSettings("/tmp/does-not-exist", {}).objectiveMaxChars, 0, "unset resolves to the default 0 (no limit)");
 });
 
+// ── networkRecovery (provider-error recovery backoff) ─────────────────
+
+test("parseGoalSettings: networkRecovery accepts valid layers and rejects invalid leaves", () => {
+	assert.deepEqual(parseGoalSettings({ networkRecovery: { maxAttempts: 0 } }), { networkRecovery: { maxAttempts: 0 } });
+	assert.deepEqual(parseGoalSettings({ networkRecovery: { maxAttempts: 8, maxDelayMs: 30_000 } }), {
+		networkRecovery: { maxAttempts: 8, maxDelayMs: 30_000 },
+	});
+	assert.deepEqual(parseGoalSettings({ networkRecovery: { maxAttempts: -1 } }), {}, "negative attempts rejected");
+	assert.deepEqual(parseGoalSettings({ networkRecovery: { maxDelayMs: 500 } }), {}, "plateau below 1s rejected");
+	assert.deepEqual(parseGoalSettings({ networkRecovery: "nope" }), {}, "non-object rejected");
+});
+
+test("loadGoalSettings: networkRecovery defaults to unbounded and honors file + env layers", () => {
+	withTempDir((dir) => {
+		const configPath = goalSettingsPath(dir);
+		fs.mkdirSync(path.dirname(configPath), { recursive: true });
+		fs.writeFileSync(configPath, JSON.stringify({ networkRecovery: { maxAttempts: 3 } }), "utf8");
+		assert.deepEqual(loadGoalSettings(dir, {}).networkRecovery, { maxAttempts: 3, maxDelayMs: 80_000 }, "file config read with default plateau");
+		assert.deepEqual(
+			loadGoalSettings(dir, { PI_GOAL_NETWORK_RECOVERY_MAX_ATTEMPTS: "10", PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS: "20000" }).networkRecovery,
+			{ maxAttempts: 10, maxDelayMs: 20_000 },
+			"env vars override file",
+		);
+	});
+	assert.deepEqual(loadGoalSettings("/tmp/does-not-exist", {}).networkRecovery, {
+		maxAttempts: 0,
+		maxDelayMs: 80_000,
+	}, "unset resolves to unbounded default policy");
+});
+
 test("saveGoalSettingsFileConfig: task keybindings round-trip", () => {
 	withTempDir((dir) => {
 		saveGoalSettingsFileConfig(dir, { keybindings: { dashboard: {
