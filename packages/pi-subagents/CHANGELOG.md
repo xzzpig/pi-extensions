@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.9.0] - 2026-09-05 (fork release)
+
+### Changed
+
+- **Synced upstream v0.56.0 → v0.65.0.** Highlights: subagents now run as
+  native Pi `AgentSession`s instead of spawned `pi` CLI processes (#1844),
+  managed worktrees gain validated `baseRef` and per-project nesting,
+  compact workflow lane summaries, fail-closed model selection, agent scan
+  dirs (`subagents.agentScanDirs`), a file-watched agent discovery cache,
+  and the `pi-subagents/pi-args` subpath rename to `pi-subagents/child-tool-plan`.
+  Upstream's own tests now cover `resolvePermissionSystemExtension()`
+  (child-tool-plan-permission-system.test.ts); the fork's `@xzzpig`
+  candidate-priority test merged into that suite.
+- Dropped the fork's Pi SDK `streamFn` option-naming divergence: upstream
+  ships `agentStreamOptions()` (dual `streamFn`/`streamFunction`) at every
+  call site, which is strictly more compatible than the fork's single-name form.
+- Raised dev-dependency SDK baseline stays at 0.84.2 while adopting
+  upstream's oxlint tooling.
+
+### Preserved fork features across the merge
+
+- `@xzzpig/pi-permission-system` priority in `resolvePermissionSystemExtension()`
+  (re-applied to the new `src/runs/shared/child-tool-plan.ts`).
+- Context injection: `injectToContext` frontmatter, `subagents.injectAgents`
+  setting, session snapshot + `before_agent_start` injection, and
+  `/subagents-doctor` reporting, re-woven into upstream's
+  `discoverAgentSnapshot` discovery architecture.
+- Fleet native transcript rendering (`v` key renderer toggle, native module
+  loader, mode-aware transcript cache) plus mouse-wheel scrolling, extended
+  to upstream's new `trustedFiles`/`trustedFileRoot` transcript read options.
+- Foreground tool-result normalization with bounded `toolCallId` de-duplication
+  for mixed Pi host event shapes, ported to upstream's `processEvent`
+  child-session event architecture (shared `handleToolResult` path).
+- The shared agent-eject API (`src/api/agent-management.ts`,
+  `ejectAgentDefinition`) used by pi-goal-x, adapted to upstream's renamed
+  imports (`resolveEffectiveThinking`, `child-tool-plan`).
+- Fork package naming (`@xzzpig/pi-subagents`), env-isolated test scripts,
+  `prepack` bundle build, and `@xzzpig/pi-components` bundledDependencies.
+
 ## [0.7.0] - 2026-08-24
 
 ## [0.65.0] - 2026-09-04

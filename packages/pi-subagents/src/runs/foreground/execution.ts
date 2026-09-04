@@ -979,7 +979,8 @@ async function runSingleAttempt(
 		// message_end whose message role is toolResult; both funnel through here
 		// so one result updates budget, output, and mutating-failure state once.
 		const handleToolResult = (message: Message, completion: { toolCallId?: unknown }, now: number): void => {
-			const callId = typeof completion.toolCallId === "string" && completion.toolCallId.length > 0 ? completion.toolCallId : undefined;
+			const rawCallId = completion.toolCallId ?? (message as { toolCallId?: unknown }).toolCallId;
+			const callId = typeof rawCallId === "string" && rawCallId.length > 0 ? rawCallId : undefined;
 			if (callId) {
 				if (handledToolResultIds.has(callId)) return;
 				if (handledToolResultIds.size >= MAX_HANDLED_TOOL_RESULT_IDS) {
