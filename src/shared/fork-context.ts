@@ -37,6 +37,8 @@ interface ForkableSessionManager {
 
 interface ForkContextResolverOptions {
 	openSession?: (path: string, sessionDir?: string) => BranchSessionManager;
+	/** Rewrite a created fork before its path can be used to spawn a child. */
+	pruneSession?: (sessionFile: string) => Promise<void>;
 	/** Decide per child index whether a sanitized transcript must also disable the child's
 	 * thinking. Defaults to true (the pre-existing conservative behavior) when omitted. */
 	forceThinkingOffForIndex?: (index: number) => boolean;
@@ -48,6 +50,7 @@ interface ForkContextResolution {
 }
 
 interface ForkContextResolver {
+	prepareSessionForIndex(index?: number): Promise<void>;
 	sessionFileForIndex(index?: number): string | undefined;
 	thinkingOverrideForIndex(index?: number): "off" | undefined;
 }
@@ -171,18 +174,6 @@ function readSessionEntries(sessionFile: string): BranchSessionEntry[] {
 	});
 }
 
-/** Keep Pi from restoring a forked session into the parent's cwd instead of the child launch cwd. */
-export function alignForkedSessionCwd(sessionFile: string, cwd: string): void {
-	const entries = readSessionEntries(sessionFile);
-	const header = entries[0];
-	if (header?.type !== "session") throw new Error(`Forked session ${sessionFile} does not start with a session header.`);
-	const resolvedCwd = path.resolve(cwd);
-	const effectiveCwd = fs.realpathSync.native(resolvedCwd);
-	if (header.cwd === effectiveCwd) return;
-	header.cwd = effectiveCwd;
-	fs.writeFileSync(sessionFile, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`, "utf-8");
-}
-
 export function createForkContextResolver(
 	sessionManager: ForkableSessionManager,
 	requestedContext: unknown,
@@ -190,6 +181,7 @@ export function createForkContextResolver(
 ): ForkContextResolver {
 	if (resolveSubagentContext(requestedContext) !== "fork") {
 		return {
+			prepareSessionForIndex: async () => {},
 			sessionFileForIndex: () => undefined,
 			thinkingOverrideForIndex: () => undefined,
 		};
@@ -226,6 +218,8 @@ export function createForkContextResolver(
 		"forks",
 	);
 	const cachedResolutions = new Map<number, ForkContextResolution>();
+	const preparedIndexes = new Set<number>();
+	const preparationPromises = new Map<number, Promise<void>>();
 
 	const resolveFork = (index = 0): ForkContextResolution => {
 		const cached = cachedResolutions.get(index);
@@ -274,7 +268,22 @@ export function createForkContextResolver(
 	};
 
 	return {
+		async prepareSessionForIndex(index = 0): Promise<void> {
+			const resolution = resolveFork(index);
+			if (!options.pruneSession || preparedIndexes.has(index)) return;
+			let preparation = preparationPromises.get(index);
+			if (!preparation) {
+				preparation = options.pruneSession(resolution.sessionFile).then(() => {
+					preparedIndexes.add(index);
+				});
+				preparationPromises.set(index, preparation);
+			}
+			await preparation;
+		},
 		sessionFileForIndex(index = 0): string | undefined {
+			if (options.pruneSession && !preparedIndexes.has(index)) {
+				throw new Error(`Pruned fork session ${index} was used before pruning completed.`);
+			}
 			return resolveFork(index).sessionFile;
 		},
 		thinkingOverrideForIndex(index = 0): "off" | undefined {

@@ -6,7 +6,7 @@ import { describe, it } from "node:test";
 import { updateActiveRunIndex } from "../../src/runs/background/active-run-index.ts";
 import { writeAsyncResultFile } from "../../src/runs/background/result-files.ts";
 import { createRunFanoutBudget } from "../../src/runs/shared/run-fanout-budget.ts";
-import { WAIT_TOOL_ENABLED_ENV, resolveWaitToolConfig, waitForSubagents, type SubagentWaitDeps } from "../../src/runs/background/subagent-wait.ts";
+import { WAIT_TOOL_DEFAULT_TIMEOUT_MS_ENV, WAIT_TOOL_ENABLED_ENV, resolveWaitToolConfig, waitForSubagents, type SubagentWaitDeps } from "../../src/runs/background/subagent-wait.ts";
 import { recordWaitCompletion } from "../../src/runs/background/wait-completions.ts";
 import type { AsyncStatus, SubagentState } from "../../src/shared/types.ts";
 
@@ -41,6 +41,7 @@ function writeRecoveryDescriptor(asyncRoot: string, runId: string, agent: string
 		cwd,
 		systemPromptMode: "append",
 		outputMode: "inline",
+		inheritGlobalContext: false,
 		inheritProjectContext: false,
 		inheritSkills: false,
 		maxSubagentDepth: 0,
@@ -83,15 +84,20 @@ function baseDeps(root: string, state: SubagentState, overrides: Partial<Subagen
 	};
 }
 
-describe("subagent_wait tool", () => {
+describe("bg_wait tool", () => {
 	it("resolves waitTool config and environment overrides strictly", () => {
 		assert.deepEqual(resolveWaitToolConfig(undefined, {}), { enabled: true });
 		assert.deepEqual(resolveWaitToolConfig(false, {}), { enabled: false });
 		assert.deepEqual(resolveWaitToolConfig({ enabled: false }, {}), { enabled: false });
+		assert.deepEqual(resolveWaitToolConfig({ defaultTimeoutMs: 120_000 }, {}), { enabled: true, defaultTimeoutMs: 120_000 });
+		assert.deepEqual(resolveWaitToolConfig({ defaultTimeoutMs: 120_000 }, { [WAIT_TOOL_DEFAULT_TIMEOUT_MS_ENV]: "3000" }), { enabled: true, defaultTimeoutMs: 3_000 });
 		assert.deepEqual(resolveWaitToolConfig({ enabled: false }, { [WAIT_TOOL_ENABLED_ENV]: "true" }), { enabled: true });
 		assert.deepEqual(resolveWaitToolConfig(true, { [WAIT_TOOL_ENABLED_ENV]: "off" }), { enabled: false });
 		assert.throws(() => resolveWaitToolConfig("false" as never, {}), /config\.waitTool/);
 		assert.throws(() => resolveWaitToolConfig({ enabled: "false" } as never, {}), /config\.waitTool\.enabled/);
+		assert.throws(() => resolveWaitToolConfig({ defaultTimeoutMs: 0 }, {}), /config\.waitTool\.defaultTimeoutMs/);
+		assert.throws(() => resolveWaitToolConfig({ defaultTimeoutMs: 1.5 }, {}), /config\.waitTool\.defaultTimeoutMs/);
+		assert.throws(() => resolveWaitToolConfig(undefined, { [WAIT_TOOL_DEFAULT_TIMEOUT_MS_ENV]: "0" }), /PI_SUBAGENT_WAIT_TOOL_DEFAULT_TIMEOUT_MS/);
 		assert.throws(() => resolveWaitToolConfig(undefined, { [WAIT_TOOL_ENABLED_ENV]: "maybe" }), /PI_SUBAGENT_WAIT_TOOL_ENABLED/);
 	});
 
@@ -106,7 +112,7 @@ describe("subagent_wait tool", () => {
 				enabled: false,
 				sleep: async () => {
 					slept = true;
-					throw new Error("disabled subagent_wait should not sleep");
+					throw new Error("disabled bg_wait should not sleep");
 				},
 			}));
 
@@ -302,7 +308,7 @@ describe("subagent_wait tool", () => {
 
 			const text = textOf(result);
 			assert.match(text, /Reply to the supervisor request first/);
-			assert.match(text, /wait with subagent_wait/);
+			assert.match(text, /wait with bg_wait/);
 			assert.match(text, /do not resume or launch a replacement/);
 			assert.doesNotMatch(text, /Resume-first/);
 		} finally {
@@ -335,6 +341,7 @@ describe("subagent_wait tool", () => {
 							success: true,
 							outputState: "present",
 							output: "full output text stays out of details",
+							usage: { input: 100, output: 50, cacheRead: 25, cacheWrite: 5, cost: 0.001, turns: 1 },
 							artifactPaths: {
 								outputPath: "/tmp/a1b2c3d4_reviewer_0_output.md",
 								metadataPath: "/tmp/a1b2c3d4_reviewer_0_meta.json",
@@ -350,6 +357,7 @@ describe("subagent_wait tool", () => {
 			assert.equal(completions![0]!.runId, "run-a");
 			assert.equal(completions![0]!.mode, "workflow");
 			assert.equal(completions![0]!.success, true);
+			assert.deepEqual(result.usage, { input: 100, output: 50, cacheRead: 25, cacheWrite: 5, totalTokens: 180, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.001 } });
 			const child = completions![0]!.results?.[0];
 			assert.equal(child?.agent, "reviewer");
 			assert.equal(child?.runId, "a1b2c3d4");
@@ -357,6 +365,60 @@ describe("subagent_wait tool", () => {
 			assert.equal("output" in (child ?? {}), false);
 			// The result file is the watcher's to consume; the wait must not delete it.
 			assert.equal(fs.existsSync(path.join(resultsDir, "run-a.json")), true);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("surfaces bounded recovery guidance for a failed completion", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-recovery-completion-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const resultsDir = path.join(root, "results");
+			fs.mkdirSync(resultsDir, { recursive: true });
+			const state = makeState("sess-1");
+			writeStatus(asyncRoot, "run-recovery", "running", { sessionId: "sess-1", pid: 999999 });
+			const result = await waitForSubagents({ all: true }, undefined, baseDeps(root, state, {
+				sleep: async () => {
+					const recovery = {
+						termination: "timed-out",
+						changedFiles: ["input.md"],
+						recoveryNeeded: true,
+						reason: "timed-out-with-dirty-worktree",
+						reportStatus: "missing",
+						message: "raw recovery message must not cross the wait boundary",
+						effects: { settlementDiagnostic: { finalTextPresent: true } },
+					};
+					writeStatus(asyncRoot, "run-recovery", "failed", {
+						sessionId: "sess-1",
+						steps: [{ agent: "worker", status: "failed", timedOut: true, timeoutRecovery: recovery }],
+					});
+					fs.writeFileSync(path.join(resultsDir, "run-recovery.json"), JSON.stringify({
+						id: "run-recovery",
+						runId: "run-recovery",
+						mode: "single",
+						state: "failed",
+						success: false,
+						results: [{ agent: "worker", success: false, error: "Subagent timed out.", output: "raw output must not be copied", timeoutRecovery: recovery }],
+					}), "utf-8");
+				},
+			}));
+
+			assert.equal(result.isError, undefined);
+			const text = textOf(result);
+			assert.match(text, /Recovery needed: review the diff and artifacts before resuming or launching dependent stages\./);
+			assert.match(text, /requested report: missing/);
+			assert.match(text, /changed tracked files: input\.md/);
+			assert.doesNotMatch(text, /raw recovery message|settlementDiagnostic|raw output/);
+			const completion = result.details.completions?.[0];
+			assert.equal(completion?.success, false);
+			assert.deepEqual(completion?.results?.[0]?.timeoutRecovery, {
+				termination: "timed-out",
+				changedFiles: ["input.md"],
+				recoveryNeeded: true,
+				reason: "timed-out-with-dirty-worktree",
+				reportStatus: "missing",
+			});
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
@@ -1145,11 +1207,62 @@ describe("subagent_wait tool", () => {
 				clock += ms + 10_000;
 			};
 
-			const result = await waitForSubagents({ timeoutMs: 5_000 }, undefined, baseDeps(root, state, { now, sleep }));
-			assert.equal(result.isError, true);
+			const result = await waitForSubagents({ timeoutMs: 5_000 }, undefined, baseDeps(root, state, { now, sleep, defaultTimeoutMs: 1_000 }));
+			assert.equal(result.isError, undefined);
 			const text = textOf(result);
-			assert.match(text, /timed out/i);
+			assert.match(text, /window elapsed after 5\.0s/i, "explicit timeoutMs must override the configured default");
 			assert.match(text, /run-stuck \(running\)/);
+			assert.deepEqual(result.details.wait, {
+				reason: "window_elapsed",
+				timedOut: true,
+				activeRunIds: ["run-stuck"],
+				activeProviderItems: [],
+			});
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("uses the configured wait window when timeoutMs is omitted", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-config-timeout-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const state = makeState("sess-1");
+			writeStatus(asyncRoot, "run-configured", "running", { sessionId: "sess-1", pid: 999999 });
+			let clock = 0;
+			const result = await waitForSubagents({}, undefined, baseDeps(root, state, {
+				now: () => clock,
+				sleep: async (ms) => { clock += ms + 10_000; },
+				defaultTimeoutMs: 2_000,
+			}));
+
+			assert.equal(result.isError, undefined);
+			assert.match(textOf(result), /window elapsed after 2\.0s/i);
+			assert.equal(result.details.wait?.reason, "window_elapsed");
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("reports still-active provider identities when the wait window elapses", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-wait-provider-timeout-"));
+		try {
+			const state = makeState("sess-1");
+			let clock = 0;
+			const result = await waitForSubagents({ timeoutMs: 1_000 }, undefined, baseDeps(root, state, {
+				now: () => clock,
+				sleep: async (ms) => { clock += ms + 10_000; },
+				backgroundWork: {
+					snapshot: () => ({
+						providers: ["herdr"],
+						items: [{ provider: "herdr", id: "pane-1", sessionId: "sess-1" }],
+					}),
+					wakeChannels: () => [],
+				},
+			}));
+
+			assert.equal(result.isError, undefined);
+			assert.deepEqual(result.details.wait?.activeProviderItems, [{ provider: "herdr", id: "pane-1" }]);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
@@ -1221,7 +1334,7 @@ describe("subagent_wait tool", () => {
 
 			const result = await Promise.race([
 				p,
-				new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("event wake did not resolve subagent_wait")), 1_000)),
+				new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("event wake did not resolve bg_wait")), 1_000)),
 			]);
 			assert.equal(result.isError, undefined);
 			assert.match(textOf(result), /done/i);

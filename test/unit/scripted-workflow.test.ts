@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, it } from "node:test";
 import { Worker } from "node:worker_threads";
-import { formatWorkflowJsonPreview, previewSimpleWorkflowRun, runWorkflowScript, WorkflowScriptError } from "../../src/workflows/scripted-workflow.ts";
+import { formatWorkflowJsonPreview, previewSimpleWorkflowRun, runWorkflowScript, validateWorkflowScript, WorkflowScriptError } from "../../src/workflows/scripted-workflow.ts";
 
 describe("scripted workflow runtime", () => {
 	it("uses ordinary statement-body return semantics", async () => {
@@ -61,6 +61,160 @@ describe("scripted workflow runtime", () => {
 				&& error.message.includes("Unexpected token")
 				&& error.message.includes("SyntaxError"),
 		);
+	});
+
+	it("validates workflow syntax and portable structure offline", () => {
+		const syntax = validateWorkflowScript(["const value = 1;", "return (;"].join("\n"));
+		assert.equal(syntax.ok, false);
+		assert.equal(syntax.errors[0]?.line, 2);
+		assert.ok((syntax.errors[0]?.column ?? 0) > 0);
+		assert.doesNotMatch(syntax.errors[0]?.message ?? "", /\(3:\d+\)$/);
+
+		const structural = validateWorkflowScript([
+			`const results = await runs.all([{ key: "bad key", agent: "worker" }, { key: "someChild", agent: "reviewer" }]);`,
+			`async function helper() { return "no"; }`,
+			`return results.someChild;`,
+		].join("\n"));
+		assert.equal(structural.ok, false);
+		assert.ok(structural.errors.some((error) => error.message.includes("runs.all item key")));
+		assert.ok(structural.errors.some((error) => error.message.includes("nested async functions")));
+		assert.ok(structural.errors.some((error) => error.message.includes("ordered array")));
+
+		const invalidRunKey = validateWorkflowScript(`return runs.run("bad key", { agent: "worker" });`);
+		assert.equal(invalidRunKey.ok, false);
+		assert.ok(invalidRunKey.errors.some((error) => error.message.includes("runs.run key")));
+
+		for (const script of [
+			`return runs.run("single", { agent: "worker", task: undefined });`,
+			`return runs.all([{ key: "same", agent: "worker", task: undefined }]);`,
+		]) {
+			const invalidParams = validateWorkflowScript(script);
+			assert.equal(invalidParams.ok, false);
+			assert.ok(invalidParams.errors.some((error) => error.message.includes("undefined is not JSON-representable")));
+		}
+		assert.deepEqual(validateWorkflowScript(`return runs.run("single", { agent: "worker", task: undefined, task: "real" });`), { ok: true, errors: [] });
+
+		assert.deepEqual(validateWorkflowScript(`return runs.all([{ ...{ key: "bad key" }, agent: "worker" }]);`), { ok: true, errors: [] });
+		assert.deepEqual(validateWorkflowScript(`return runs.run("same", { agent: selectedAgent });`), { ok: true, errors: [] });
+	});
+
+	it("validates runs.host shape offline without executing it", () => {
+		assert.deepEqual(validateWorkflowScript(`return runs.host("tests", { kind: "command", command: "npm test", timeoutMs: 1000, output: "reports/tests.log", role: "ci" });`), { ok: true, errors: [] });
+		for (const script of [
+			`return runs.host("tests", { command: "npm test", timeoutMs: 1000 });`,
+			`return runs.host("tests", { kind: "http", command: "npm test", timeoutMs: 1000 });`,
+			`return runs.host("tests", { kind: "command", command: "npm test" });`,
+			`return runs.host("tests", { kind: "command", command: "npm test", timeoutMs: 1000, output: "../tests.log" });`,
+		]) assert.equal(validateWorkflowScript(script).ok, false);
+		const cwd = validateWorkflowScript(`return runs.host("tests", { kind: "command", command: "npm test", timeoutMs: 1000, cwd: "/tmp" });`);
+		assert.equal(cwd.ok, false);
+		assert.ok(cwd.errors.some((error) => /unsupported field 'cwd'.*does not accept per-step cwd.*workflow cwd.*outer subagent request.*cd \/path\/to\/worktree/.test(error.message)));
+	});
+
+	it("explains the workflow cwd workaround for dynamic runs.host params", async () => {
+		let called = false;
+		await assert.rejects(
+			runWorkflowScript({
+				script: `const params = { kind: "command", command: "npm test", timeoutMs: 1000, cwd: "/tmp" }; return await runs.host("tests", params);`,
+				async host() {
+					called = true;
+					return { key: "tests", kind: "command", ok: true, state: "passed", exitCode: 0, stdout: "", stderr: "", outputPath: "tests.log", durationMs: 1 };
+				},
+				async launch(key) { return { key, ok: true, output: "unused", artifactPaths: [] }; },
+				async status(key) { return { key, ok: true, output: "unused", artifactPaths: [] }; },
+			}),
+			(error: unknown) => error instanceof WorkflowScriptError
+				&& /does not accept per-step cwd.*workflow cwd.*outer subagent request.*cd \/path\/to\/worktree/.test(error.message),
+		);
+		assert.equal(called, false);
+	});
+
+	it("runs an awaited host command through the host boundary", async () => {
+		const steps: string[] = [];
+		const result = await runWorkflowScript({
+			script: `return await runs.host("tests", { kind: "command", command: "npm test", timeoutMs: 1000, role: "ci", provider: "local" });`,
+			async host(key, params) {
+				assert.equal(params.kind, "command");
+				return { key, kind: "command", ok: true, state: "passed", exitCode: 0, stdout: "ok", stderr: "", outputPath: "tests.log", durationMs: 2 };
+			},
+			onHostStep(step) { steps.push(`${step.state}:${step.role ?? ""}`); },
+			async launch(key) { return { key, ok: true, output: "unused", artifactPaths: [] }; },
+			async status(key) { return { key, ok: true, output: "unused", artifactPaths: [] }; },
+		});
+		assert.equal((result.value as { state: string }).state, "passed");
+		assert.deepEqual(steps, ["running:ci", "done:ci"]);
+		assert.deepEqual(result.trace.map(({ operation, state }) => [operation, state]), [["host", "started"], ["host", "completed"]]);
+	});
+
+	it("fails the workflow when a host command fails", async () => {
+		await assert.rejects(runWorkflowScript({
+			script: `return await runs.host("tests", { kind: "command", command: "npm test", timeoutMs: 1000 });`,
+			async host(key) { return { key, kind: "command", ok: false, state: "failed", exitCode: 2, stdout: "", stderr: "bad", outputPath: "tests.log", durationMs: 2, error: "Command exited with code 2." }; },
+			async launch(key) { return { key, ok: true, output: "unused", artifactPaths: [] }; },
+			async status(key) { return { key, ok: true, output: "unused", artifactPaths: [] }; },
+		}), /Host command 'tests' failed/);
+		await assert.rejects(runWorkflowScript({
+			script: `return await runs.host("tests", { kind: "command", command: "npm test", timeoutMs: 1000 });`,
+			host() { throw new Error("host boundary failed"); },
+			async launch(key) { return { key, ok: true, output: "unused", artifactPaths: [] }; },
+			async status(key) { return { key, ok: true, output: "unused", artifactPaths: [] }; },
+		}), /host boundary failed/);
+	});
+
+	it("rejects an unawaited host command", async () => {
+		await assert.rejects(runWorkflowScript({
+			script: `runs.host("tests", { kind: "command", command: "npm test", timeoutMs: 1000 }); return "done";`,
+			async host(key) { return { key, kind: "command", ok: true, state: "passed", exitCode: 0, stdout: "", stderr: "", outputPath: "tests.log", durationMs: 1 }; },
+			async launch(key) { return { key, ok: true, output: "unused", artifactPaths: [] }; },
+			async status(key) { return { key, ok: true, output: "unused", artifactPaths: [] }; },
+		}), /unawaited runs\.host/);
+	});
+
+	it("bounds host command rows", async () => {
+		const calls = Array.from({ length: 33 }, (_, index) => `await runs.host("host-${index}", { kind: "command", command: "true", timeoutMs: 1000 });`).join("\n");
+		await assert.rejects(runWorkflowScript({
+			script: `${calls}\nreturn "done";`,
+			async host(key) { return { key, kind: "command", ok: true, state: "passed", exitCode: 0, stdout: "", stderr: "", outputPath: `${key}.log`, durationMs: 1 }; },
+			async launch(key) { return { key, ok: true, output: "unused", artifactPaths: [] }; },
+			async status(key) { return { key, ok: true, output: "unused", artifactPaths: [] }; },
+		}), /at most 32 runs\.host calls/);
+	});
+
+	it("keeps dynamic workflow keys silent during offline validation", () => {
+		const result = validateWorkflowScript([
+			`const prefix = "lane";`,
+			`const child = await runs.run(prefix + "-writer", { agent: selectedAgent, task: taskText });`,
+			`const results = await runs.all(items.map((item) => ({ key: item.key, agent: item.agent, task: item.task })));`,
+			`return { child: child.output, outputs: results.map((entry) => entry.output) };`,
+		].join("\n"));
+		assert.deepEqual(result, { ok: true, errors: [] });
+	});
+
+	it("allows Array properties that match runs.all child keys", () => {
+		const valid = validateWorkflowScript([
+			`const mapResults = await runs.all([{ key: "map", agent: "reviewer", task: "Review" }]);`,
+			`const lengthResults = await runs.all([{ key: "length", agent: "reviewer", task: "Review" }]);`,
+			`return { outputs: mapResults.map((result) => result.output), count: lengthResults.length };`,
+		].join("\n"));
+		assert.deepEqual(valid, { ok: true, errors: [] });
+
+		const keyed = validateWorkflowScript([
+			`const results = await runs.all([{ key: "someChild", agent: "reviewer", task: "Review" }]);`,
+			`return results.someChild;`,
+		].join("\n"));
+		assert.equal(keyed.ok, false);
+		assert.ok(keyed.errors.some((error) => error.message.includes("'results.someChild' is keyed access")));
+	});
+
+	it("rejects statically non-JSON workflow boundary values", () => {
+		assert.deepEqual(validateWorkflowScript(`return void 0;`), { ok: true, errors: [] });
+		assert.deepEqual(validateWorkflowScript(`return undefined;`), { ok: true, errors: [] });
+		assert.deepEqual(validateWorkflowScript(`return [void 0, { value: void 0 }];`), { ok: true, errors: [] });
+		assert.deepEqual(validateWorkflowScript(`return [undefined, { value: undefined }];`), { ok: true, errors: [] });
+		const result = validateWorkflowScript(`emit(void 0); emit(undefined); state.set("void", void 0); state.set("undefined", undefined); return [1, , 2];`);
+		assert.equal(result.ok, false);
+		assert.equal(result.errors.filter((error) => error.message.includes("undefined is not JSON-representable")).length, 4);
+		assert.ok(result.errors.some((error) => error.message.includes("sparse arrays")));
 	});
 
 	it("previews only simple explicit-return child scripts", () => {
@@ -265,6 +419,320 @@ describe("scripted workflow runtime", () => {
 		]);
 	});
 
+	it("caps concurrent workflow child launches across runs.all", async () => {
+		let active = 0;
+		let maxActive = 0;
+		const result = await runWorkflowScript({
+			script: `return await runs.all([
+				{ key: "one", agent: "worker", task: "one" },
+				{ key: "two", agent: "worker", task: "two" },
+				{ key: "three", agent: "worker", task: "three" },
+				{ key: "four", agent: "worker", task: "four" }
+			]);`,
+			globalConcurrencyLimit: 2,
+			async launch(key) {
+				active += 1;
+				maxActive = Math.max(maxActive, active);
+				await new Promise((resolve) => setTimeout(resolve, 20));
+				active -= 1;
+				return { key, ok: true, output: key, artifactPaths: [] };
+			},
+			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+		});
+
+		assert.equal(maxActive, 2);
+		assert.deepEqual((result.value as Array<{ key: string }>).map(({ key }) => key), ["one", "two", "three", "four"]);
+	});
+
+	it("runs parallel lane starts and sequential stages with retained resume", async () => {
+		const launches: Array<{ key: string; params: Record<string, unknown> }> = [];
+		let active = 0;
+		let maxActive = 0;
+		let betaWriterDone = false;
+		let alphaChallengeStartedBeforeBetaWriter = false;
+		const result = await runWorkflowScript({
+			script: `return await runs.lanes([
+				{ key: "alpha", stages: [
+					{ key: "writer", agent: "worker", task: "alpha write" },
+					{ key: "challenge", resume: "previous", task: "alpha challenge" }
+				] },
+				{ key: "beta", stages: [
+					{ key: "writer", agent: "worker", task: "beta write" },
+					{ key: "review", agent: "reviewer", task: "beta review" }
+				] }
+			]);`,
+			timeoutMs: 2_000,
+			async launch(key, params) {
+				launches.push({ key, params });
+				active += 1;
+				maxActive = Math.max(maxActive, active);
+				await new Promise((resolve) => setTimeout(resolve, key === "beta.writer" ? 50 : 5));
+				if (key === "beta.writer") betaWriterDone = true;
+				if (key === "alpha.challenge") alphaChallengeStartedBeforeBetaWriter = !betaWriterDone;
+				active -= 1;
+				return {
+					key,
+					ok: true,
+					runId: "run-" + key,
+					output: key + " output",
+					outputReference: "/tmp/" + key + ".md",
+					artifactPaths: [],
+					results: [],
+				};
+			},
+			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+		});
+
+		assert.equal(maxActive, 2, "first stages should be admitted together");
+		assert.equal(alphaChallengeStartedBeforeBetaWriter, true, "a settled lane should advance without waiting for slower siblings");
+		assert.deepEqual(launches.map(({ key }) => key), ["alpha.writer", "beta.writer", "alpha.challenge", "beta.review"]);
+		assert.deepEqual(launches.find(({ key }) => key === "alpha.challenge")?.params, { resume: "run-alpha.writer", task: "alpha challenge" });
+		for (const lane of ["alpha", "beta"]) {
+			const stageTrace = result.trace.filter((entry) => entry.operation === "run" && entry.key.startsWith(`${lane}.`));
+			assert.ok(stageTrace.length > 0);
+			assert.equal(stageTrace.every((entry) => entry.generatedLaneKey === lane), true);
+		}
+		assert.deepEqual(result.value, [
+			{
+				key: "alpha",
+				state: "complete",
+				stages: [
+					{ key: "writer", runId: "run-alpha.writer", ok: true, state: "completed", outputReference: "/tmp/alpha.writer.md" },
+					{ key: "challenge", runId: "run-alpha.challenge", ok: true, state: "completed", outputReference: "/tmp/alpha.challenge.md" },
+				],
+			},
+			{
+				key: "beta",
+				state: "complete",
+				stages: [
+					{ key: "writer", runId: "run-beta.writer", ok: true, state: "completed", outputReference: "/tmp/beta.writer.md" },
+					{ key: "review", runId: "run-beta.review", ok: true, state: "completed", outputReference: "/tmp/beta.review.md" },
+				],
+			},
+		]);
+	});
+
+	it("marks only runs.lanes stages with generated lane provenance", async () => {
+		const result = await runWorkflowScript({
+			script: `const direct = await runs.run("audit.shadow", { agent: "worker", task: "direct" }); const lanes = await runs.lanes([{ key: "audit", stages: [{ key: "writer", agent: "worker", task: "generated" }] }]); return { direct: direct.output, lanes };`,
+			timeoutMs: 2_000,
+			async launch(key) { return { key, ok: true, runId: "run-" + key, output: key, artifactPaths: [], results: [] }; },
+			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+		});
+		const directTrace = result.trace.filter((entry) => entry.operation === "run" && entry.key === "audit.shadow");
+		const generatedTrace = result.trace.filter((entry) => entry.operation === "run" && entry.key === "audit.writer");
+		assert.ok(directTrace.length > 0);
+		assert.equal(directTrace.every((entry) => entry.generatedLaneKey === undefined), true);
+		assert.ok(generatedTrace.length > 0);
+		assert.equal(generatedTrace.every((entry) => entry.generatedLaneKey === "audit"), true);
+	});
+
+	it("keeps a rejected first-stage result local to its lane", async () => {
+		const launches: string[] = [];
+		const result = await runWorkflowScript({
+			script: `return await runs.lanes([
+				{ key: "broken", stages: [
+					{ key: "writer", agent: "worker", task: "boundary failure" },
+					{ key: "review", agent: "reviewer", task: "must be skipped" }
+				] },
+				{ key: "healthy", stages: [
+					{ key: "writer", agent: "worker", task: "continue" },
+					{ key: "review", agent: "reviewer", task: "continue review" }
+				] }
+			]);`,
+			timeoutMs: 2_000,
+			async launch(key) {
+				launches.push(key);
+				if (key === "broken.writer") {
+					const structuredOutput: Record<string, unknown> = {};
+					structuredOutput.self = structuredOutput;
+					return { key, ok: true, runId: "broken-run", output: "not persisted", structuredOutput, artifactPaths: [], results: [] };
+				}
+				return { key, ok: true, runId: "run-" + key, output: "done", artifactPaths: [], results: [] };
+			},
+			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+		});
+
+		assert.deepEqual(launches, ["broken.writer", "healthy.writer", "healthy.review"]);
+		const board = result.value as Array<{ key: string; state: string; failedStage?: string; stages: Array<Record<string, unknown>> }>;
+		assert.equal(board.length, 2);
+		assert.deepEqual(board[0], {
+			key: "broken",
+			state: "blocked",
+			failedStage: "writer",
+			stages: [
+				{ key: "writer", ok: false, state: "failed", error: board[0].stages[0].error },
+				{ key: "review", state: "skipped" },
+			],
+		});
+		assert.match(String(board[0].stages[0].error), /must contain only JSON data/);
+		assert.deepEqual(board[1], {
+			key: "healthy",
+			state: "complete",
+			stages: [
+				{ key: "writer", runId: "run-healthy.writer", ok: true, state: "completed" },
+				{ key: "review", runId: "run-healthy.review", ok: true, state: "completed" },
+			],
+		});
+		assert.doesNotThrow(() => JSON.stringify(result));
+		assert.equal(result.children.find((child) => child.key === "broken.writer")?.ok, false);
+		assert.equal(result.children.find((child) => child.key === "broken.writer")?.structuredOutput, undefined);
+		assert.equal(result.children.find((child) => child.key === "healthy.writer")?.ok, true);
+	});
+
+	it("blocks one lane on an explicit structured verdict while siblings continue", async () => {
+		const launches: string[] = [];
+		const result = await runWorkflowScript({
+			script: `return await runs.lanes([
+				{ key: "blocked", stages: [
+					{ key: "review", agent: "reviewer", task: "block this lane" },
+					{ key: "followup", agent: "worker", task: "must not run" }
+				] },
+				{ key: "healthy", stages: [
+					{ key: "review", agent: "reviewer", task: "continue this lane" },
+					{ key: "followup", agent: "worker", task: "continue followup" }
+				] }
+			]);`,
+			timeoutMs: 2_000,
+			async launch(key) {
+				launches.push(key);
+				return {
+					key,
+					ok: true,
+					runId: "run-" + key,
+					output: "done",
+					structuredOutput: key === "blocked.review" ? { verdict: "blocked" } : { verdict: "ready" },
+					artifactPaths: [],
+					results: [],
+				};
+			},
+			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+		});
+
+		assert.deepEqual(launches, ["blocked.review", "healthy.review", "healthy.followup"]);
+		assert.deepEqual(result.value, [
+			{
+				key: "blocked",
+				state: "blocked",
+				failedStage: "review",
+				stages: [
+					{ key: "review", runId: "run-blocked.review", ok: true, state: "blocked", verdict: "blocked", error: "Stage returned a blocked verdict." },
+					{ key: "followup", state: "skipped" },
+				],
+			},
+			{
+				key: "healthy",
+				state: "complete",
+				stages: [
+					{ key: "review", runId: "run-healthy.review", ok: true, state: "completed", verdict: "ready" },
+					{ key: "followup", runId: "run-healthy.followup", ok: true, state: "completed", verdict: "ready" },
+				],
+			},
+		]);
+	});
+
+	it("settles a failed lane without aborting later stages in sibling lanes", async () => {
+		const launches: string[] = [];
+		const result = await runWorkflowScript({
+			script: `return await runs.lanes([
+				{ key: "fails", stages: [
+					{ key: "writer", agent: "worker", task: "write" },
+					{ key: "challenge", agent: "worker", task: "fail challenge" },
+					{ key: "final", agent: "worker", task: "must be skipped" }
+				] },
+				{ key: "passes", stages: [
+					{ key: "writer", agent: "worker", task: "write" },
+					{ key: "challenge", agent: "worker", task: "pass challenge" }
+				] }
+			]);`,
+			timeoutMs: 2_000,
+			async launch(key) {
+				launches.push(key);
+				if (key === "fails.challenge") return { key, ok: false, runId: "failed-run", output: "challenge failed", error: "challenge failed", artifactPaths: [], results: [] };
+				return { key, ok: true, runId: "run-" + key, output: "done", artifactPaths: [], results: [] };
+			},
+			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+		});
+
+		assert.deepEqual(launches, ["fails.writer", "passes.writer", "fails.challenge", "passes.challenge"]);
+		assert.deepEqual(result.value, [
+			{
+				key: "fails",
+				state: "blocked",
+				failedStage: "challenge",
+				stages: [
+					{ key: "writer", runId: "run-fails.writer", ok: true, state: "completed" },
+					{ key: "challenge", runId: "failed-run", ok: false, state: "failed", error: "challenge failed" },
+					{ key: "final", state: "skipped" },
+				],
+			},
+			{
+				key: "passes",
+				state: "complete",
+				stages: [
+					{ key: "writer", runId: "run-passes.writer", ok: true, state: "completed" },
+					{ key: "challenge", runId: "run-passes.challenge", ok: true, state: "completed" },
+				],
+			},
+		]);
+	});
+
+	it("gives actionable guidance for a retained stage-0 resume", async () => {
+		let launches = 0;
+		await assert.rejects(
+			runWorkflowScript({
+				script: `return runs.lanes([{ key: "lane", stages: [{ key: "writer", resume: "retained-run", task: "continue" }] }]);`,
+				timeoutMs: 2_000,
+				async launch(key) { launches += 1; return { key, ok: true, output: "unexpected", artifactPaths: [], results: [] }; },
+				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+			}),
+			(error: unknown) => error instanceof WorkflowScriptError
+				&& error.message.includes("runs.lanes lane 0 stage 0 cannot resume a retained run id in runs.lanes")
+				&& error.message.includes("use runs.run(key, { resume: id }) outside lanes")
+				&& error.message.includes('start the lane with an agent stage and use resume: "previous" later'),
+		);
+		assert.equal(launches, 0);
+	});
+
+	it("validates all lane stages before launching any child", async () => {
+		const malformedScripts = [
+			`return runs.lanes([{ key: "bad lane", stages: [{ key: "writer", agent: "worker", task: "write" }] }]);`,
+			`return runs.lanes([{ key: "lane", stages: [{ key: "writer", agent: "worker", task: "write" }, { key: "writer", agent: "worker", task: "again" }] }]);`,
+			`return runs.lanes([{ key: "lane", stages: [{ key: "writer", resume: "previous", task: "cannot start" }] }]);`,
+			`return runs.lanes([{ key: "lane", stages: [{ key: "writer", agent: "worker", task: "write" }, { key: "review", resume: "raw-run-id", task: "invalid" }] }]);`,
+		];
+		for (const script of malformedScripts) {
+			let launches = 0;
+			await assert.rejects(
+				runWorkflowScript({
+					script,
+					timeoutMs: 2_000,
+					async launch(key) { launches += 1; return { key, ok: true, output: "unexpected", artifactPaths: [], results: [] }; },
+					async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+				}),
+				(error: unknown) => error instanceof WorkflowScriptError && /runs\.lanes/.test(error.message),
+			);
+			assert.equal(launches, 0, script);
+		}
+	});
+
+	it("rejects an invalid workflow concurrency limit before launching", async () => {
+		let launches = 0;
+		await assert.rejects(
+			runWorkflowScript({
+				script: `return runs.run("one", { agent: "worker", task: "one" });`,
+				globalConcurrencyLimit: 0,
+				async launch(key) {
+					launches += 1;
+					return { key, ok: true, output: key, artifactPaths: [] };
+				},
+				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+			}),
+			/workflow script global concurrency limit must be a positive integer/,
+		);
+		assert.equal(launches, 0);
+	});
+
 	it("returns runs.all launch errors without aborting successful siblings", async () => {
 		const result = await runWorkflowScript({
 			script: `
@@ -326,11 +794,433 @@ describe("scripted workflow runtime", () => {
 			runWorkflowScript({
 				script: `return await runs.run("fails", { agent: "worker", task: "fail" });`,
 				timeoutMs: 2_000,
-				async launch(key) { return { key, ok: false, output: "failed", artifactPaths: [], results: [] }; },
+				async launch(key) { return { key, ok: false, output: "failed", artifactPaths: [], results: [{ acceptance: { status: "rejected" } }] }; },
 				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
 			}),
 			(error: unknown) => error instanceof WorkflowScriptError && /Run 'fails' failed: failed/.test(error.message),
 		);
+	});
+
+	it("continues with a later review after a durable acceptance metadata rejection", async () => {
+		const launches: string[] = [];
+		const recovery = {
+			status: "available-for-review" as const,
+			reason: "acceptance-metadata-rejected" as const,
+			reportPath: "/tmp/writer-report.md",
+			reportHash: "a".repeat(64),
+		};
+		const result = await runWorkflowScript({
+			script: `
+				const writer = await runs.run("writer", { agent: "worker", task: "write" });
+				const review = await runs.run("review", { agent: "reviewer", task: "Read-only review. Do not edit files, commit, push, comment, merge, or launch subagents. Review the patch and return findings only. Do not run workers. Do not launch worker subagents. Do not hand off remediation to workers. Do not use worker subagents. Do not have a worker continue follow-up. Do not tell a worker to continue follow-up. Do not get a worker to continue follow-up. Do not let a worker continue follow-up. Do not request implementation follow-up from a worker. Do not ask a reviewer to implement changes. Do not ask for a review from another reviewer. Delta since prior review: fixed quoted git option handling and added exact regressions; mutation detection now includes move/rename/copy file mutation imperatives; Delegation now catches target-after-preposition forms using from/with/via/by and request phrasing: 'Get implementation follow-up via a worker.', 'Get a review via another reviewer.', 'Have implementation follow-up done by a worker.', and 'Request implementation follow-up from a worker.'; 'Launch two workers for implementation follow-up.' and 'Launch review subagents for follow-up.' are blocked; 'Launch two reviewers for follow-up.' is blocked; \`rm -rf .\` is blocked. RECOVERY_REVIEW_MUTATION_VERB_PATTERN now includes append, prepend, and save, with gerund forms. Added exact regressions for 'Append a regression test.', 'Prepend a guard clause.', and 'Save the updated report.' This keeps a later object phrase visible, so a prompt ending with \`save the updated report\` remains blocked. Accepted contract: after rejected durable acceptance-metadata recovery, sequential workflow continuation may only launch explicit read-only review children with acceptance:false, must not mutate durable state, and must not launch mutating/destructive work. state.get remains allowed; state.set, runs.host, runs.steer, ordinary/mutating children, and destructive command wording are blocked. Existing regressions cover plain rm and git clean/reset/restore. Prior regressions covering rm/git clean as evidence only. Validation after fix: npm exec -- tsx --test test/unit/scripted-workflow.test.ts --test-name-pattern \\\"acceptance metadata rejection|mission state writes\\\" (101 pass), npm run typecheck, git diff --check HEAD^..HEAD. (Validation after fix: npm run typecheck) Write findings to reports/review.md.", acceptance: false });
+				return { writerOk: writer.ok, writerStatus: writer.results?.[0]?.acceptance?.status, writerRecovery: writer.recovery, reviewOk: review.ok };
+			`,
+			launch(key) {
+				launches.push(key);
+				if (key === "writer") {
+					return Promise.resolve({
+						key,
+						ok: false,
+						output: "saved writer report",
+						error: "Acceptance rejected: malformed acceptance-report",
+						runId: "writer-run",
+						outputReference: recovery.reportPath,
+						recovery,
+						artifactPaths: [recovery.reportPath],
+						results: [{ acceptance: { status: "rejected", recovery } }],
+					});
+				}
+				return Promise.resolve({ key, ok: true, output: "review complete", runId: "review-run", artifactPaths: [] });
+			},
+			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+		});
+
+		assert.deepEqual(launches, ["writer", "review"]);
+		assert.deepEqual(result.value, { writerOk: false, writerStatus: "rejected", writerRecovery: recovery, reviewOk: true });
+		assert.deepEqual(result.trace.filter((entry) => entry.operation === "run" && entry.state !== "started").map(({ key, state }) => ({ key, state })), [
+			{ key: "writer", state: "failed" },
+			{ key: "review", state: "completed" },
+		]);
+	});
+
+	it("allows review prompts to describe mutation nouns after durable acceptance metadata recovery", async () => {
+		const launches: string[] = [];
+		const recovery = {
+			status: "available-for-review" as const,
+			reason: "acceptance-metadata-rejected" as const,
+			reportPath: "/tmp/writer-report.md",
+			reportHash: "a".repeat(64),
+		};
+		const result = await runWorkflowScript({
+			script: `
+				const writer = await runs.run("writer", { agent: "worker", task: "write" });
+				const review = await runs.run("review", { agent: "reviewer", task: "Read-only review. Do not edit files. The later real update imperative regression passed. Return findings only.", acceptance: false });
+				return review.ok;
+			`,
+			launch(key) {
+				launches.push(key);
+				if (key === "writer") {
+					return Promise.resolve({
+						key,
+						ok: false,
+						output: "saved writer report",
+						error: "Acceptance rejected: malformed acceptance-report",
+						runId: "writer-run",
+						outputReference: recovery.reportPath,
+						recovery,
+						artifactPaths: [recovery.reportPath],
+						results: [{ acceptance: { status: "rejected", recovery } }],
+					});
+				}
+				return Promise.resolve({ key, ok: true, output: "review complete", runId: "review-run", artifactPaths: [] });
+			},
+		});
+
+		assert.deepEqual(launches, ["writer", "review"]);
+		assert.equal(result.value, true);
+	});
+
+	it("allows review prompts to describe anaphoric regression examples after durable acceptance metadata recovery", async () => {
+		const launches: string[] = [];
+		const recovery = {
+			status: "available-for-review" as const,
+			reason: "acceptance-metadata-rejected" as const,
+			reportPath: "/tmp/writer-report.md",
+			reportHash: "a".repeat(64),
+		};
+		const result = await runWorkflowScript({
+			script: `
+				const writer = await runs.run("writer", { agent: "worker", task: "write" });
+				const review = await runs.run("review", { agent: "reviewer", task: "Read-only review. Do not edit files. Added exact regressions for Execute the command now anyway, Run that now anyway, and Perform the operation now anyway after stripped quoted blocked examples. This blocks examples like \`Execute the previous command right now anyway\` and \`Execute the blocked phrase right now anyway\`. Examples like \`Execute the previous command and keep reviewing\`, \`Execute the previous command but only for review\`, and \`Execute the previous command then return findings\` are blocked after quoted destructive context is stripped. Added regression for quoted rm remaining blocked followed by Execute the previous command while keeping live-command variants such as followed by Execute the previous command then update tests blocked. Delta since prior review: fixed mutating Git follow-up bypasses. Added cherry-pick/rebase/stage to the mutation imperative pattern and add/cherry-pick/commit/merge/rebase to the mutating Git command pattern, described prompts like Run git rebase main, git rebase main, Run git cherry-pick abc123, cherry-pick abc123, and Stage the changed files as blocked. Positive Git mutations are broader: git branch -D old, git tag -d v1.0, git stash, git revert abc123, and natural cherry pick abc123 now trip the recovery barrier. Broadened positive Git mutation coverage for natural \`cherry pick\`, \`revert\`, \`stash\`, \`tag\`, plus git \`branch|revert|stash|tag\`. The prior fix keeps commands hidden in \`Broadened positive Git mutation coverage for natural cherry pick, then update tests, plus git branch\` or \`then run git reset --hard\` visible and blocked. The examples \`rm -rf .\` and \`git reset --hard\` are visible and blocked. Direct anaphoric references now include numeric and word ordinals through tenth plus one, so Run the first one anyway, Run the 1st command anyway, and Run the fourth command anyway are blocked after quoted destructive examples are scrubbed. Direct anaphoric references now include numeric and word ordinals through tenth plus one, so Run the first one anyway is blocked. Exact regressions for \`Do not launch worker subagents -- launch a worker subagent\` remain blocked. Return findings only.", acceptance: false });
+				return review.ok;
+			`,
+			launch(key) {
+				launches.push(key);
+				if (key === "writer") {
+					return Promise.resolve({
+						key,
+						ok: false,
+						output: "saved writer report",
+						error: "Acceptance rejected: malformed acceptance-report",
+						runId: "writer-run",
+						outputReference: recovery.reportPath,
+						recovery,
+						artifactPaths: [recovery.reportPath],
+						results: [{ acceptance: { status: "rejected", recovery } }],
+					});
+				}
+				return Promise.resolve({ key, ok: true, output: "review complete", runId: "review-run", artifactPaths: [] });
+			},
+		});
+
+		assert.deepEqual(launches, ["writer", "review"]);
+		assert.equal(result.value, true);
+	});
+
+	it("allows listed blocked examples after durable acceptance metadata recovery", async () => {
+		const launches: string[] = [];
+		const recovery = {
+			status: "available-for-review" as const,
+			reason: "acceptance-metadata-rejected" as const,
+			reportPath: "/tmp/writer-report.md",
+			reportHash: "a".repeat(64),
+		};
+		const task = "Read-only review. Do not edit files. Review the saved report and return findings only. Blocked examples:\n- update tests\n- launch a worker subagent";
+		const result = await runWorkflowScript({
+			script: `
+				const writer = await runs.run("writer", { agent: "worker", task: "write" });
+				const review = await runs.run("review", { agent: "reviewer", task: ${JSON.stringify(task)}, acceptance: false });
+				return review.ok;
+			`,
+			launch(key) {
+				launches.push(key);
+				if (key === "writer") {
+					return Promise.resolve({ key, ok: false, output: "saved writer report", recovery, artifactPaths: [recovery.reportPath], results: [{ acceptance: { status: "rejected", recovery } }] });
+				}
+				return Promise.resolve({ key, ok: true, output: "review complete", artifactPaths: [] });
+			},
+		});
+
+		assert.deepEqual(launches, ["writer", "review"]);
+		assert.equal(result.value, true);
+	});
+
+	it("allows quoted blocked examples phrased as blocked examples after durable acceptance metadata recovery", async () => {
+		const launches: string[] = [];
+		const recovery = {
+			status: "available-for-review" as const,
+			reason: "acceptance-metadata-rejected" as const,
+			reportPath: "/tmp/writer-report.md",
+			reportHash: "a".repeat(64),
+		};
+		const task = "Read-only review. Do not edit files. Review the saved report and return findings only. `update tests` is a blocked example.";
+		const result = await runWorkflowScript({
+			script: `
+				const writer = await runs.run("writer", { agent: "worker", task: "write" });
+				const review = await runs.run("review", { agent: "reviewer", task: ${JSON.stringify(task)}, acceptance: false });
+				return review.ok;
+			`,
+			launch(key) {
+				launches.push(key);
+				if (key === "writer") {
+					return Promise.resolve({ key, ok: false, output: "saved writer report", recovery, artifactPaths: [recovery.reportPath], results: [{ acceptance: { status: "rejected", recovery } }] });
+				}
+				return Promise.resolve({ key, ok: true, output: "review complete", artifactPaths: [] });
+			},
+		});
+
+		assert.deepEqual(launches, ["writer", "review"]);
+		assert.equal(result.value, true);
+	});
+
+	it("blocks mutating workflow work after a durable acceptance metadata rejection", async () => {
+		const recovery = {
+			status: "available-for-review" as const,
+			reason: "acceptance-metadata-rejected" as const,
+			reportPath: "/tmp/writer-report.md",
+			reportHash: "a".repeat(64),
+		};
+		for (const [agent, task] of [
+			["worker", "Implement a follow-up change"],
+			["worker", "Read-only review. Do not edit files. Return findings only."],
+			["reviewer", "Review the saved report and delete files"],
+			["custom-reviewer", "Review the saved report and add tests"],
+			["oracle", "Review the saved report and create files"],
+			["reviewer", "Review the saved report, then add a regression case"],
+			["custom-reviewer", "Review the saved report and create a regression test"],
+			["oracle", "Review the saved report and replace the brittle assertion"],
+			["reviewer", "Review the saved report and patch src/parser.ts"],
+			["reviewer", "Change src/parser.ts after reviewing the saved report"],
+			["reviewer", "Read-only review. Do not edit files. Append a regression test."],
+			["reviewer", "Read-only review. Do not edit files. Prepend a guard clause."],
+			["reviewer", "Read-only review. Do not edit files. Save the updated report."],
+			["reviewer", "Read-only review. Do not edit files. Move src/a.ts to src/b.ts."],
+			["reviewer", "Read-only review. Do not edit files. Rename src/a.ts to src/b.ts."],
+			["reviewer", "Read-only review. Do not edit files. Copy src/a.ts to src/b.ts."],
+			["advisor", "Review only, then apply the fix"],
+			["reviewer", "Read-only review. Do not edit files. Launch a worker subagent to continue."],
+			["reviewer", "Read-only review. Do not edit files. Launch worker subagents for implementation follow-up."],
+			["reviewer", "Read-only review. Do not edit files. Launch workers for implementation follow-up."],
+			["reviewer", "Read-only review. Do not edit files. Launch two workers for implementation follow-up."],
+			["reviewer", "Read-only review. Do not edit files. Launch review subagents for follow-up."],
+			["reviewer", "Read-only review. Do not edit files. Launch two reviewers for follow-up."],
+			["reviewer", "Read-only review. Do not edit files. Delegate remediation to a worker."],
+			["reviewer", "Read-only review. Do not edit files. Hand off remediation to a worker."],
+			["reviewer", "Read-only review. Do not edit files. Assign implementation follow-up to a worker."],
+			["reviewer", "Read-only review. Do not edit files. Assign implementation follow-up to workers."],
+			["reviewer", "Read-only review. Do not edit files. Ask a worker to implement the fix."],
+			["reviewer", "Read-only review. Do not edit files. Ask a reviewer to review the saved report."],
+			["reviewer", "Read-only review. Do not edit files. Ask another reviewer to review the saved report."],
+			["reviewer", "Read-only review. Do not edit files. Ask for a review from another reviewer."],
+			["reviewer", "Read-only review. Do not edit files. Do not ask for a review from another reviewer and ask for a review from a worker."],
+			["reviewer", "Read-only review. Do not edit files. Do not ask for a review from another reviewer however ask for a review from a worker."],
+			["reviewer", "Read-only review. Do not edit files. Use a worker subagent for follow-up."],
+			["reviewer", "Read-only review. Do not edit files. Get a worker to continue follow-up."],
+			["reviewer", "Read-only review. Do not edit files. Let a worker continue follow-up."],
+			["reviewer", "Read-only review. Do not edit files. Ask a worker for follow-up."],
+			["reviewer", "Read-only review. Do not edit files. Get implementation follow-up from a worker."],
+			["reviewer", "Read-only review. Do not edit files. Get a review from another reviewer."],
+			["reviewer", "Read-only review. Do not edit files. Let follow-up continue with a worker."],
+			["reviewer", "Read-only review. Do not edit files. Get implementation follow-up via a worker."],
+			["reviewer", "Read-only review. Do not edit files. Get a review via another reviewer."],
+			["reviewer", "Read-only review. Do not edit files. Have implementation follow-up done by a worker."],
+			["reviewer", "Read-only review. Do not edit files. Request implementation follow-up from a worker."],
+			["reviewer", "Read-only review. Do not edit files. Have a worker continue follow-up."],
+			["reviewer", "Read-only review. Do not edit files. Tell a worker to continue follow-up."],
+			["reviewer", "Read-only review. Do not edit files. Do not launch worker subagents and launch a worker subagent to continue."],
+			["reviewer", "Read-only review. Do not edit files. Do not launch worker subagents however launch a worker subagent to continue."],
+			["reviewer", "Read-only review. Do not edit files. Do not launch worker subagents — launch a worker subagent. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Do not execute the previous command — delete src/a. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Do not launch worker subagents -- launch a worker subagent. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Do not execute the previous command -- delete src/a. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Do not launch worker subagents: launch a worker subagent. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Do not run workers: run a worker. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Do not execute the previous command: delete src/a. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Do not launch worker subagents / launch a worker subagent. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. `update tests` is a blocked example, then update tests."],
+			["reviewer", "Read-only review. Do not edit files. Blocked examples:\n- update tests\n- launch a worker subagent\nThen update tests."],
+			["reviewer", "Read-only review. Do not edit files. Not blocked examples:\n- launch a worker subagent"],
+			["reviewer", "Read-only review. Do not edit files. Destructive command wording is blocked, then run rm -rf ."],
+			["reviewer", "Read-only review. Do not edit files. state.set is forbidden. Run rm -rf . This is blocked."],
+			["reviewer", "Read-only review. Do not edit files. state.set: Run rm -rf /tmp/worktree because it is blocked."],
+			["reviewer", "Read-only review. Do not edit files. Prior validation after the fix: npm run typecheck."],
+			["reviewer", "Read-only review. Do not edit files. Validation after fix: npm run typecheck, then update tests."],
+			["reviewer", "Read-only review. Do not edit files. Validation after fix: npm run typecheck and update tests."],
+			["reviewer", "Read-only review. Do not edit files. Validation after fix: npm run typecheck and launch a worker subagent."],
+			["reviewer", "Read-only review. Do not edit files. Validation after fix: npm run typecheck and run a worker subagent."],
+			["reviewer", "Read-only review. Do not edit files. Mutation detection now includes move/rename/copy file mutation imperatives, then update tests."],
+			["reviewer", "Read-only review. Do not edit files. Mutation detection now includes delete src/a.ts. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Delegation detection now blocks get/let/have/tell/ask follow-up forms, then launch a worker subagent."],
+			["reviewer", "Read-only review. Do not edit files. Delegation detection now blocks get/let/have/tell/ask follow-up forms and then launch a worker subagent."],
+			["reviewer", "Read-only review. Do not edit files. Mutation detection now includes move/rename/copy file mutation imperatives and update tests."],
+			["reviewer", "Read-only review. Do not edit files. Delegation detection now blocks get/let/have/tell/ask follow-up forms and launch a worker subagent."],
+			["reviewer", "Read-only review. Do not edit files. RECOVERY_REVIEW_MUTATION_VERB_PATTERN now includes append, prepend, and save, then update tests."],
+			["reviewer", "Read-only review. Do not edit files. RECOVERY_REVIEW_MUTATION_VERB_PATTERN now includes append, prepend, and save the updated report."],
+			["reviewer", "Read-only review. Do not edit files. A prompt ending with `save the updated report` remains blocked, then update tests."],
+			["reviewer", "Read-only review. Do not edit files. Prompts like update tests are blocked, then update tests. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Examples like `update tests` are blocked because they are dangerous, then update tests. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Examples like `rm -rf .` are blocked because they are destructive, then run rm -rf . Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Examples like `launch a worker` are blocked because delegation is unsafe, then launch a worker subagent. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Positive Git mutations are broader: run rm -rf . now trips the recovery barrier. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Positive Git mutations are broader: then launch a worker subagent now trips the recovery barrier. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. `update tests` remains blocked. Do it anyway."],
+			["reviewer", "Read-only review. Do not edit files. `rm -rf .` remains blocked. Run it anyway."],
+			["reviewer", "Read-only review. Do not edit files. `rm -rf .` remains blocked. Execute the command anyway."],
+			["reviewer", "Read-only review. Do not edit files. `update tests` remains blocked. Run that anyway."],
+			["reviewer", "Read-only review. Do not edit files. `update tests` remains blocked. Apply the quoted example anyway."],
+			["reviewer", "Read-only review. Do not edit files. `rm -rf .` remains blocked. Execute the command now anyway."],
+			["reviewer", "Read-only review. Do not edit files. `rm -rf .` remains blocked. Execute the command right now anyway."],
+			["reviewer", "Read-only review. Do not edit files. `rm -rf .` remains blocked. Execute the previous command right now anyway."],
+			["reviewer", "Read-only review. Do not edit files. `rm -rf .` remains blocked. Execute the previous command."],
+			["reviewer", "Read-only review. Do not edit files. `rm -rf .` remains blocked. Execute the previous command please."],
+			["reviewer", "Read-only review. Do not edit files. `rm -rf .` remains blocked. Execute the previous command while reviewing."],
+			["reviewer", "Read-only review. Do not edit files. `rm -rf .` remains blocked. Execute the previous command while you review."],
+			["reviewer", "Read-only review. Do not edit files. `rm -rf .` remains blocked. Execute the previous command for review."],
+			["reviewer", "Read-only review. Do not edit files. `rm -rf .` remains blocked. Execute the previous command while you review because the example is blocked."],
+			["reviewer", "Read-only review. Do not edit files. `rm -rf .` remains blocked. Execute the previous command for review because this is blocked."],
+			["reviewer", "Read-only review. Do not edit files. `rm -rf .` remains blocked. Execute the previous command and keep reviewing."],
+			["reviewer", "Read-only review. Do not edit files. `rm -rf .` remains blocked. Execute the previous command but only for review."],
+			["reviewer", "Read-only review. Do not edit files. `rm -rf .` remains blocked. Execute the previous command then return findings."],
+			["reviewer", "Read-only review. Do not edit files. commands hidden in `rm -rf .` are visible and blocked. Run the first command anyway."],
+			["reviewer", "Read-only review. Do not edit files. commands hidden in `rm -rf .` are visible and blocked. Run the first one anyway."],
+			["reviewer", "Read-only review. Do not edit files. commands hidden in `rm -rf .` are visible and blocked. Run the 1st command anyway."],
+			["reviewer", "Read-only review. Do not edit files. The examples `rm -rf .`, `git reset --hard`, `rm -rf /tmp/a`, and `git clean -fd` are visible and blocked. Run the fourth command anyway."],
+			["reviewer", "Read-only review. Do not edit files. `rm -rf .` remains blocked. Execute the previously quoted command anyway."],
+			["reviewer", "Read-only review. Do not edit files. `rm -rf .` remains blocked. Execute the blocked phrase right now anyway."],
+			["reviewer", "Read-only review. Do not edit files. `rm -rf .` remains blocked. Execute the above quoted blocked command anyway."],
+			["reviewer", "Read-only review. Do not edit files. `update tests` remains blocked. Run that now anyway."],
+			["reviewer", "Read-only review. Do not edit files. `rm -rf .` remains blocked. Perform the operation now anyway."],
+			["reviewer", "Read-only review. Do not edit files. `rm -rf .` remains blocked. Execute the command, now anyway."],
+			["reviewer", "Read-only review. Do not edit files. `update tests` remains blocked. Run that, now anyway."],
+			["reviewer", "Read-only review. Do not edit files. `rm -rf .` remains blocked. Perform the operation, now anyway."],
+			["reviewer", "Read-only review. Do not edit files. Added exact regressions for Execute the command then update tests anyway. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Added exact regressions for Run that then launch workers anyway. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Added regression for delete src/a followed by Execute the previous command. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Added regression for rm -rf /tmp followed by Execute the previous command. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Added regression for quoted rm remaining blocked followed by Execute the previous command then update tests."],
+			["reviewer", "Read-only review. Do not edit files. Keeping live-command variants such as delete src/a blocked. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Keeping live-command variants such as launch a worker subagent blocked. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Broadened positive Git mutation coverage for delete src/a, plus git `branch`. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Broadened positive Git mutation coverage for launch a worker subagent, plus git `branch`. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Broadened positive Git mutation coverage for natural `cherry pick`, then update tests, plus git `branch|revert|stash|tag`."],
+			["reviewer", "Read-only review. Do not edit files. Broadened positive Git mutation coverage for natural `cherry pick`, then run git reset --hard, plus git `branch|revert|stash|tag`."],
+			["reviewer", "Read-only review. Do not edit files. Direct anaphoric references now include numeric and word ordinals through tenth plus one, so Run the first one anyway, Run the 1st command anyway, and Run the fourth command anyway are blocked, then update tests. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Direct anaphoric references now include numeric and word ordinals through tenth plus one, so Run the first one anyway and launch a worker subagent are blocked. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Direct anaphoric references now include numeric and word ordinals through tenth plus one, so Run the first one anyway plus launch a worker subagent are blocked. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Direct anaphoric references now include numeric and word ordinals through tenth plus one, so Run the first one anyway or launch a worker subagent are blocked. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Direct anaphoric references now include numeric and word ordinals through tenth plus one, so Run the first one and update tests anyway are blocked. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Direct anaphoric references now include numeric and word ordinals through tenth plus one, so Run the first one and launch workers anyway are blocked. Return findings only."],
+			["reviewer", "Read-only review. Do not edit files. Run a worker."],
+			["reviewer", "Read-only review. Do not edit files. Open a PR."],
+			["reviewer", "Read-only review. Do not edit files. Merge the branch."],
+			["reviewer", "Read-only review. Do not edit files, merge the branch."],
+			["reviewer", "Read-only review. Do not edit files, commit the changes."],
+			["reviewer", "Read-only review. Do not edit files. Do not use a worker subagent, use a worker subagent for follow-up."],
+			["reviewer", "Read-only review. Do not edit files. Do not hand off to a worker, hand off remediation to a worker."],
+			["reviewer", "Read-only review. Do not edit files. Do not assign this to a worker, assign implementation follow-up to a worker."],
+			["reviewer", "Read-only review. Do not edit files; update tests."],
+			["reviewer", "Read-only review. Do not edit files; updating tests is required."],
+			["reviewer", "Do not edit files, run git clean -fd"],
+			["reviewer", "Review only; do not edit files. Run git clean -fd"],
+			["reviewer", "Read-only review. Do not edit files. Validation after fix: rm -rf ."],
+			["reviewer", "Read-only review. Do not edit files. Existing regressions cover plain rm, then run rm -rf ."],
+			["reviewer", "Read-only review. Do not edit files. git clean -fd; existing regressions cover git clean."],
+			["reviewer", "Read-only review. Do not edit files. Existing regressions cover rm/git clean. Write findings."],
+			["reviewer", "Read-only review. Do not edit files. Existing regressions cover rm. Write findings."],
+			["reviewer", "Read-only review. Do not edit files. Existing regressions cover git clean and run git clean -fd."],
+			["reviewer", "Read-only review. Do not edit files. Existing regressions cover git clean and launch a worker subagent."],
+			["reviewer", "Read-only review. Do not edit files. rm -rf ."],
+			["reviewer", "Read-only review. Do not edit files. `rm -rf .`"],
+			["reviewer", "Read-only review. Do not edit files. 'rm -rf .'"],
+			["reviewer", "Read-only review. Do not edit files. /bin/rm -rf ."],
+			["reviewer", "Read-only review. Do not edit files. /usr/bin/rm -rf ."],
+			["reviewer", "Read-only review. Do not edit files. /usr/local/bin/rm -rf ."],
+			["reviewer", "Read-only review. Do not edit files. Validation after fix: git -C . reset --hard."],
+			["reviewer", "Read-only review. Do not edit files. git --work-tree . reset --hard."],
+			["reviewer", "Read-only review. Do not edit files. git --work-tree \"/tmp/my repo\" reset --hard."],
+			["reviewer", "Read-only review. Do not edit files. git --work-tree '/tmp/my repo' reset --hard."],
+			["reviewer", "Read-only review. Do not edit files. Run git rebase main."],
+			["reviewer", "Read-only review. Do not edit files. git rebase main."],
+			["reviewer", "Read-only review. Do not edit files. Run git cherry-pick abc123."],
+			["reviewer", "Read-only review. Do not edit files. cherry-pick abc123."],
+			["reviewer", "Read-only review. Do not edit files. cherry pick abc123."],
+			["reviewer", "Read-only review. Do not edit files. git branch -D old."],
+			["reviewer", "Read-only review. Do not edit files. git tag -d v1.0."],
+			["reviewer", "Read-only review. Do not edit files. git stash."],
+			["reviewer", "Read-only review. Do not edit files. git revert abc123."],
+			["reviewer", "Read-only review. Do not edit files. Stage the changed files."],
+			["reviewer", "Read-only review. Do not edit files. git reset --hard"],
+			["reviewer", "Read-only review. Do not edit files. git restore src/workflows/scripted-workflow.ts"],
+		]) {
+			const launches: string[] = [];
+			await assert.rejects(
+				runWorkflowScript({
+					script: `
+						await runs.run("writer", { agent: "worker", task: "write" });
+						await runs.run("mutate", { agent: ${JSON.stringify(agent)}, task: ${JSON.stringify(task)}, acceptance: false });
+					`,
+					launch(key) {
+						launches.push(key);
+						if (key === "mutate") return Promise.resolve({ key, ok: true, output: "mutated", artifactPaths: [] });
+						return Promise.resolve({
+							key,
+							ok: false,
+							output: "saved writer report",
+							error: "Acceptance rejected: malformed acceptance-report",
+							runId: "writer-run",
+							outputReference: recovery.reportPath,
+							recovery,
+							artifactPaths: [recovery.reportPath],
+							results: [{ acceptance: { status: "rejected", recovery } }],
+						});
+					},
+					async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+				}),
+				(error: unknown) => error instanceof WorkflowScriptError && /only explicit read-only review children with acceptance:false may follow/.test(error.message),
+			);
+			assert.deepEqual(launches, ["writer"]);
+		}
+	});
+
+	it("blocks mission state writes after a durable acceptance metadata rejection", async () => {
+		const recovery = {
+			status: "available-for-review" as const,
+			reason: "acceptance-metadata-rejected" as const,
+			reportPath: "/tmp/writer-report.md",
+			reportHash: "a".repeat(64),
+		};
+		const values = new Map<string, unknown>();
+		const launches: string[] = [];
+		await assert.rejects(
+			runWorkflowScript({
+				script: `
+					const writer = await runs.run("writer", { agent: "worker", task: "write" });
+					await state.set("recovered.output", writer.output);
+				`,
+				state: {
+					get: (key) => values.get(key),
+					set: (key, value) => { values.set(key, value); },
+				},
+				launch(key) {
+					launches.push(key);
+					return Promise.resolve({
+						key,
+						ok: false,
+						output: "saved writer report",
+						error: "Acceptance rejected: malformed acceptance-report",
+						runId: "writer-run",
+						outputReference: recovery.reportPath,
+						recovery,
+						artifactPaths: [recovery.reportPath],
+						results: [{ acceptance: { status: "rejected", recovery } }],
+					});
+				},
+				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+			}),
+			(error: unknown) => error instanceof WorkflowScriptError && /Run 'state\.set\('recovered\.output'\)' cannot launch after run 'writer' returned rejected acceptance recovery/.test(error.message),
+		);
+		assert.deepEqual(launches, ["writer"]);
+		assert.deepEqual([...values.entries()], []);
 	});
 
 	it("tags only fail-fast detached child errors as detached-child", async () => {
@@ -371,6 +1261,8 @@ describe("scripted workflow runtime", () => {
 			`return await runs.all([{ key: "valid", agent: "worker", task: "run" }, { key: "undefined-action", agent: "worker", task: "run", action: undefined }]);`,
 			`return await runs.all([{ key: "valid", agent: "worker", task: "run" }, { key: "uncloneable", agent: "worker", task: () => "run" }]);`,
 			`return await runs.all([{ key: "valid", agent: "worker", task: "run" }, { key: "bad-binding", agent: "worker", task: "run", extensionBindings: { invalid: true } }]);`,
+			`return await runs.all([{ key: "valid", agent: "worker", task: "run" }, { key: "bad-capacity", agent: "worker", task: "run", globalConcurrencyLimit: 2 }]);`,
+			`return await runs.all([{ key: "valid", agent: "worker", task: "run" }, { key: "bad-budget", agent: "worker", task: "run", maxSubagentSpawnsPerRun: 2 }]);`,
 			`const items = []; items[1] = { key: "valid", agent: "worker", task: "run" }; return await runs.all(items);`,
 		];
 		for (const script of malformedScripts) {
@@ -469,6 +1361,23 @@ describe("scripted workflow runtime", () => {
 		assert.deepEqual(result.value, [{ key: "review", output: "completed", values: [null] }]);
 	});
 
+	it("reports completed child references when return serialization fails", async () => {
+		await assert.rejects(
+			runWorkflowScript({
+				script: `const child = await runs.run("writer", { agent: "worker", task: "write" }); return { child, invalid: new Map([["key", "value"]]) };`,
+				timeoutMs: 2_000,
+				async launch(key) { return { key, ok: true, runId: "run-writer", output: "saved", outputReference: "/tmp/writer-output.md", artifactPaths: ["/tmp/writer-artifact.md"] }; },
+				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+			}),
+			(error: unknown) => error instanceof WorkflowScriptError
+				&& error.message.includes("return.invalid must contain only plain JSON objects")
+				&& error.message.includes("Child work completed before return serialization failed")
+				&& error.message.includes("'writer' (runId=run-writer, outputReference=/tmp/writer-output.md, artifact=/tmp/writer-artifact.md)")
+				&& error.message.includes("Return a plain projection")
+				&& error.partial.children[0]?.runId === "run-writer",
+		);
+	});
+
 	it("omits non-JSON child result metadata before returning reused runs.run results", async () => {
 		let launches = 0;
 		const result = await runWorkflowScript({
@@ -520,29 +1429,93 @@ describe("scripted workflow runtime", () => {
 		);
 	});
 
-	it("passes per-child worktree controls through runs.run and runs.all", async () => {
-		const launches: Array<{ key: string; worktree: unknown }> = [];
+	it("passes per-child baseRef through runs.run and runs.all", async () => {
+		const launches: Array<{ key: string; baseRef: unknown }> = [];
 		await runWorkflowScript({
 			script: `
-				const one = await runs.run("one", { agent: "worker", task: "one", worktree: true });
-				const rest = await runs.all([
-					{ key: "two", agent: "worker", task: "two", worktree: true },
-					{ key: "three", agent: "reviewer", task: "three", worktree: false }
-				]);
+				const one = await runs.run("one", { agent: "worker", task: "one", baseRef: "refs/heads/release" });
+				const rest = await runs.all([{ key: "two", agent: "worker", task: "two", baseRef: "refs/heads/topic" }]);
 				return [one.key, ...rest.map((entry) => entry.key)];
 			`,
 			timeoutMs: 2_000,
 			async launch(key, params) {
-				launches.push({ key, worktree: params.worktree });
+				launches.push({ key, baseRef: params.baseRef });
 				return { key, ok: true, output: key, artifactPaths: [], results: [] };
 			},
 			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
 		});
 		assert.deepEqual(launches, [
-			{ key: "one", worktree: true },
-			{ key: "two", worktree: true },
-			{ key: "three", worktree: false },
+			{ key: "one", baseRef: "refs/heads/release" },
+			{ key: "two", baseRef: "refs/heads/topic" },
 		]);
+	});
+
+	it("rejects revision aliases as workflow child baseRef values", async () => {
+		const launches: string[] = [];
+		for (const baseRef of ["@", "a".repeat(40), "a".repeat(64)] as const) {
+			await assert.rejects(
+				runWorkflowScript({
+					script: `await runs.run("alias", { agent: "worker", task: "alias", baseRef: ${JSON.stringify(baseRef)} });`,
+					timeoutMs: 2_000,
+					async launch(key) {
+						launches.push(key);
+						return { key, ok: true, output: key, artifactPaths: [], results: [] };
+					},
+					async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+				}),
+				(error: unknown) => error instanceof WorkflowScriptError && /baseRef must be a valid Git ref/.test(error.message),
+			);
+		}
+		assert.deepEqual(launches, []);
+	});
+
+	it("passes per-child workflow controls through runs.run and runs.all", async () => {
+		const launches: Array<{ key: string; worktree: unknown; control: unknown }> = [];
+		await runWorkflowScript({
+			script: `
+				const one = await runs.run("one", { agent: "worker", task: "one", worktree: true, control: { needsAttentionAfterMs: 111 } });
+				const rest = await runs.all([
+					{ key: "two", agent: "worker", task: "two", worktree: true, control: { activeNoticeAfterMs: 222 } },
+					{ key: "three", agent: "reviewer", task: "three", worktree: false, control: { enabled: false } }
+				]);
+				return [one.key, ...rest.map((entry) => entry.key)];
+			`,
+			timeoutMs: 2_000,
+			async launch(key, params) {
+				launches.push({ key, worktree: params.worktree, control: params.control });
+				return { key, ok: true, output: key, artifactPaths: [], results: [] };
+			},
+			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+		});
+		assert.deepEqual(launches, [
+			{ key: "one", worktree: true, control: { needsAttentionAfterMs: 111 } },
+			{ key: "two", worktree: true, control: { activeNoticeAfterMs: 222 } },
+			{ key: "three", worktree: false, control: { enabled: false } },
+		]);
+	});
+
+	it("validates bounded lane metadata and passes it to child launch", async () => {
+		const launches: Array<{ key: string; lane: unknown }> = [];
+		await runWorkflowScript({
+			script: `return runs.run("writer", { agent: "worker", task: "write", lane: { version: 1, key: "writer", mode: "mutation", sourceRef: "owner/repo#1621", claims: ["src/shared/types.ts"], outputPaths: ["reports/writer.md"] } });`,
+			timeoutMs: 2_000,
+			async launch(key, params) {
+				launches.push({ key, lane: params.lane });
+				return { key, ok: true, output: key, artifactPaths: [], results: [] };
+			},
+			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+		});
+		assert.deepEqual(launches, [{ key: "writer", lane: { version: 1, key: "writer", mode: "mutation", sourceRef: "owner/repo#1621", claims: ["src/shared/types.ts"], outputPaths: ["reports/writer.md"] } }]);
+
+		await assert.rejects(
+			runWorkflowScript({
+				script: `return runs.run("writer", { agent: "worker", task: "write", lane: { version: 1, key: "other" } });`,
+				timeoutMs: 2_000,
+				async launch(key) { return { key, ok: true, output: "unexpected", artifactPaths: [] }; },
+				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+			}),
+			(error: unknown) => error instanceof WorkflowScriptError && /must match workflow key/.test(error.message),
+		);
 	});
 
 	it("passes distinct namespaced bindings to parallel children", async () => {
@@ -602,7 +1575,7 @@ describe("scripted workflow runtime", () => {
 	});
 
 	it("rejects legacy orchestration params in runs.run", async () => {
-		for (const params of [`tasks: [{ agent: "scout", task: "scan" }]`, `parallel: [{ agent: "scout", task: "scan" }]`]) {
+		for (const params of [`tasks: [{ agent: "scout", task: "scan" }]`, `parallel: [{ agent: "scout", task: "scan" }]`, `globalConcurrencyLimit: 2`, `maxSubagentSpawnsPerRun: 2`]) {
 			let launches = 0;
 			await assert.rejects(
 				runWorkflowScript({
@@ -832,6 +1805,18 @@ describe("scripted workflow runtime", () => {
 		);
 	});
 
+	it("rejects an unawaited runs.lanes launch", async () => {
+		await assert.rejects(
+			runWorkflowScript({
+				script: `runs.lanes([{ key: "lane", stages: [{ key: "writer", agent: "worker", task: "write" }] }]); return "done";`,
+				timeoutMs: 2_000,
+				async launch(key) { return { key, ok: true, output: "done", artifactPaths: [], results: [] }; },
+				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+			}),
+			(error: unknown) => error instanceof WorkflowScriptError && error.message.includes("unawaited runs.run launch(es): 'lane.writer'"),
+		);
+	});
+
 	it("rejects an unawaited native Promise.all over runs.run", async () => {
 		await assert.rejects(
 			runWorkflowScript({
@@ -892,6 +1877,9 @@ describe("scripted workflow runtime", () => {
 			}),
 			(error: unknown) => error instanceof WorkflowScriptError
 				&& error.message.includes("does not support nested async functions")
+				&& error.message.includes("validation failed before child launch; no children launched")
+				&& error.message.includes("Parallel plus sequential rewrite")
+				&& error.message.includes("const [aResult] = await Promise.all([a])")
 				&& error.partial.children.length === 0,
 		);
 		assert.equal(launches, 0);
@@ -1314,6 +2302,68 @@ describe("scripted workflow runtime", () => {
 			(error: unknown) => error instanceof WorkflowScriptError && /timed out after 500ms/.test(error.message),
 		);
 		assert.equal(childAborted, true);
+	});
+
+	it("flushes result assembly after abort when every child is terminal", async () => {
+		const controller = new AbortController();
+		let launchCount = 0;
+		const result = await runWorkflowScript({
+			script: `const child = await runs.run("done", { agent: "worker", task: "finish" }); return { phase: "assembled", output: child.output };`,
+			signal: controller.signal,
+			continueAfterAbortWhenChildrenSettled: (error) => error.message === "Workflow stopped because the extension session was replaced or reloaded.",
+			onTrace(trace) {
+				if (!controller.signal.aborted && trace.some((entry) => entry.operation === "run" && entry.key === "done" && entry.state === "completed")) controller.abort(new Error("Workflow stopped because the extension session was replaced or reloaded."));
+			},
+			async launch(key) {
+				launchCount += 1;
+				return { key, ok: true, output: "child output", artifactPaths: [], results: [] };
+			},
+			async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+		});
+
+		assert.deepEqual(result.value, { phase: "assembled", output: "child output" });
+		assert.equal(launchCount, 1);
+	});
+
+	it("fails closed with diagnostics when graceful-abort eligibility throws", async () => {
+		const controller = new AbortController();
+		await assert.rejects(
+			runWorkflowScript({
+				script: `await runs.run("done", { agent: "worker", task: "finish" }); return { phase: "assembled" };`,
+				signal: controller.signal,
+				continueAfterAbortWhenChildrenSettled: () => { throw new Error("liveness unavailable"); },
+				onTrace(trace) {
+					if (!controller.signal.aborted && trace.some((entry) => entry.operation === "run" && entry.key === "done" && entry.state === "completed")) controller.abort(new Error("Workflow stopped because the extension session was replaced or reloaded."));
+				},
+				async launch(key) {
+					return { key, ok: true, output: "child output", artifactPaths: [], results: [] };
+				},
+				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+			}),
+			(error: unknown) => error instanceof WorkflowScriptError && /liveness unavailable/.test(error.message),
+		);
+	});
+
+	it("fails closed if assembly tries to launch after a graceful abort", async () => {
+		const controller = new AbortController();
+		let launchCount = 0;
+		await assert.rejects(
+			runWorkflowScript({
+				script: `await runs.run("done", { agent: "worker", task: "finish" }); return runs.run("late", { agent: "worker", task: "must not launch" });`,
+				signal: controller.signal,
+				continueAfterAbortWhenChildrenSettled: (error) => error.message === "Workflow stopped because the extension session was replaced or reloaded.",
+				onTrace(trace) {
+					if (!controller.signal.aborted && trace.some((entry) => entry.operation === "run" && entry.key === "done" && entry.state === "completed")) controller.abort(new Error("Workflow stopped because the extension session was replaced or reloaded."));
+				},
+				async launch(key) {
+					launchCount += 1;
+					return { key, ok: true, output: "child output", artifactPaths: [], results: [] };
+				},
+				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+			}),
+			(error: unknown) => error instanceof WorkflowScriptError && error.message === "Workflow stopped because the extension session was replaced or reloaded.",
+		);
+		assert.equal(launchCount, 1);
 	});
 
 	it("ignores a queued child launch message after workflow abort", async () => {

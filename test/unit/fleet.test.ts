@@ -309,6 +309,37 @@ describe("native subagent fleet", () => {
 		}
 	});
 
+	it("does not crash Fleet render when live prompt audit stores a non-string authored task", () => {
+		const state = stateForTest();
+		const control = {
+			runId: "bad-prompt-run",
+			sessionId: "session-current",
+			mode: "single" as const,
+			startedAt: 10,
+			updatedAt: 20,
+			activeChildren: new Map([[0, { index: 0, agent: "worker", startedAt: 10, updatedAt: 20 }]]),
+		};
+		state.foregroundControls.set(control.runId, control);
+		registerLivePromptAudit(control, 0, { nested: "task payload" } as unknown as string, "effective prompt");
+		const component = new SubagentFleetComponent(
+			{ terminal: { rows: 28, columns: 100 }, requestRender() {} } as never,
+			theme as never,
+			state,
+			() => {},
+			{ refreshMs: 60_000, markdownTheme },
+		);
+		try {
+			assert.doesNotThrow(() => component.render(100));
+			const rendered = component.render(100).join("\n");
+			assert.doesNotMatch(rendered, /nested|task payload/);
+			component.handleInput("p");
+			assert.doesNotThrow(() => component.render(100));
+			assert.match(component.render(100).join("\n"), /Selected prompt unavailable/);
+		} finally {
+			component.dispose();
+		}
+	});
+
 	it("shows live prompt summaries and opens Prompt Audit with the authored prompt visible", async () => {
 		const sentinel = "PROMPT_AUDIT_SENTINEL_1021";
 		const secondSentinel = "PROMPT_AUDIT_SECOND_CHILD";
@@ -698,6 +729,7 @@ describe("native subagent fleet", () => {
 			writeAsyncRun(root, { id: "older", lastUpdate: 200 });
 			const state = stateForTest();
 			let closed = false;
+			let inspectCalls = 0;
 			const component = new SubagentFleetComponent(
 				{ terminal: { rows: 28, columns: 100 }, requestRender() {} } as never,
 				theme as never,
@@ -708,7 +740,7 @@ describe("native subagent fleet", () => {
 					resultsDir: path.join(root, "results"),
 					refreshMs: 60_000,
 					fleetKeybindings: {
-						selectDown: ["n"],
+						selectDown: ["return"],
 						selectUp: ["p"],
 						steer: ["m"],
 						close: ["z"],
@@ -716,6 +748,7 @@ describe("native subagent fleet", () => {
 					actions: {
 						async steer() { return { text: "unused" }; },
 						stop() { return { text: "unused" }; },
+						async inspect() { inspectCalls++; return { text: "unexpected" }; },
 					},
 				},
 			);
@@ -724,8 +757,9 @@ describe("native subagent fleet", () => {
 				assert.match(selectedLine(), /newer/);
 				component.handleInput("j");
 				assert.match(selectedLine(), /newer/, "default j should not move when selectDown is overridden");
-				component.handleInput("\x1b[110;1u");
-				assert.match(selectedLine(), /older/, "custom selectDown should accept Kitty CSI-u input");
+				component.handleInput("\r");
+				assert.match(selectedLine(), /older/, "custom Enter binding should move instead of opening Herdr");
+				assert.equal(inspectCalls, 0);
 				component.handleInput("p");
 				assert.match(selectedLine(), /newer/);
 				component.handleInput("m");
@@ -761,7 +795,7 @@ describe("native subagent fleet", () => {
 				cwd,
 				sessionId: "session-current",
 				updatedAt: 200,
-				children: [{ agent: "worker", index: 0, status: "completed", finalOutput: "do not persist this when an artifact exists", savedOutputPath: outputPath, extensionBindings: { "shepherd.dispatch/1": { role: "coder" } } }],
+				children: [{ agent: "worker", index: 0, status: "completed", finalOutput: "do not persist this when an artifact exists", savedOutputPath: outputPath, resumeContract: { outputSchema: { type: "object" }, agentContract: { version: 1 }, acceptance: false, output: false, outputMode: "inline" }, extensionBindings: { "shepherd.dispatch/1": { role: "coder" } } }],
 			});
 			state.foregroundRuns!.set("other-session", {
 				runId: "other-session",
@@ -779,6 +813,7 @@ describe("native subagent fleet", () => {
 			restored.baseCwd = cwd;
 			restored.artifactDirPreference = "project";
 			assert.equal(restoreForegroundRunHistory(restored, { resultsDir }), 1);
+			assert.deepEqual(restored.foregroundRuns?.get("restored")?.children[0]?.resumeContract, { outputSchema: { type: "object" }, agentContract: { version: 1 }, acceptance: false, output: false, outputMode: "inline" });
 			assert.deepEqual(restored.foregroundRuns?.get("restored")?.children[0]?.extensionBindings, { "shepherd.dispatch/1": { role: "coder" } });
 			const snapshot = collectFleetSnapshot(restored);
 			assert.deepEqual(snapshot.items.map((item) => item.key), ["foreground-recent:restored:0"]);
@@ -847,6 +882,45 @@ describe("native subagent fleet", () => {
 			persistForegroundRunHistory(state, { resultsDir });
 			const persisted = JSON.parse(fs.readFileSync(path.join(resultsDir, "foreground-history.json"), "utf-8")) as { runs: Array<{ runId: string }> };
 			assert.deepEqual(persisted.runs.map((run) => run.runId), ["terminal"]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("does not restore or persist oversized foreground resume contracts", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-fleet-foreground-contract-bound-"));
+		try {
+			const resultsDir = path.join(root, "results");
+			fs.mkdirSync(resultsDir, { recursive: true });
+			const oversizedContract = { outputSchema: { type: "object", description: "x".repeat(65 * 1024) } };
+			fs.writeFileSync(path.join(resultsDir, "foreground-history.json"), JSON.stringify({
+				version: 1,
+				runs: [{
+					runId: "oversized",
+					mode: "single",
+					cwd: root,
+					sessionId: "session-current",
+					updatedAt: 200,
+					children: [{ agent: "worker", index: 0, status: "completed", resumeContract: oversizedContract }],
+				}],
+			}), "utf-8");
+
+			const restored = stateForTest();
+			assert.equal(restoreForegroundRunHistory(restored, { resultsDir }), 0);
+			assert.equal(restored.foregroundRuns?.has("oversized"), false);
+
+			const state = stateForTest();
+			state.foregroundRuns!.set("oversized", {
+				runId: "oversized",
+				mode: "single",
+				cwd: root,
+				sessionId: "session-current",
+				updatedAt: 200,
+				children: [{ agent: "worker", index: 0, status: "completed", resumeContract: oversizedContract }],
+			});
+			persistForegroundRunHistory(state, { resultsDir });
+			const persisted = JSON.parse(fs.readFileSync(path.join(resultsDir, "foreground-history.json"), "utf-8")) as { runs: Array<{ runId: string }> };
+			assert.deepEqual(persisted.runs, []);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
@@ -969,6 +1043,44 @@ describe("native subagent fleet", () => {
 			try {
 				const rendered = component.render(100).join("\n");
 				assert.match(rendered, /TRUSTED SESSION FALLBACK/);
+				assert.doesNotMatch(rendered, /without a trusted root|Session read failed/);
+			} finally {
+				component.dispose();
+			}
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("previews an exact runtime-recorded workflow session under the Pi sessions base", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-fleet-recorded-session-"));
+		try {
+			const asyncDir = writeAsyncRun(root, { id: "async-recorded-session" });
+			const sessionsBase = path.join(root, "sessions");
+			const projectDir = path.join(sessionsBase, "project");
+			fs.mkdirSync(projectDir, { recursive: true });
+			const sessionFile = path.join(projectDir, "workflow-child.jsonl");
+			fs.writeFileSync(sessionFile, `${JSON.stringify({ role: "assistant", content: "RECORDED WORKFLOW SESSION" })}\n`, "utf-8");
+			const statusPath = path.join(asyncDir, "status.json");
+			const status = JSON.parse(fs.readFileSync(statusPath, "utf-8")) as { sessionFile?: string; steps?: Array<{ sessionFile?: string; transcriptPath?: string }> };
+			status.sessionFile = sessionFile;
+			status.steps![0]!.sessionFile = sessionFile;
+			delete status.steps![0]!.transcriptPath;
+			fs.writeFileSync(statusPath, JSON.stringify(status, null, 2), "utf-8");
+
+			const state = stateForTest();
+			state.trustedSessionRoots = [];
+			state.trustedSessionFileRoot = sessionsBase;
+			const component = new SubagentFleetComponent(
+				{ terminal: { rows: 32, columns: 100 }, requestRender() {} } as never,
+				theme as never,
+				state,
+				() => {},
+				{ asyncDirRoot: root, resultsDir: path.join(root, "results"), refreshMs: 60_000 },
+			);
+			try {
+				const rendered = component.render(100).join("\n");
+				assert.match(rendered, /RECORDED WORKFLOW SESSION/);
 				assert.doesNotMatch(rendered, /without a trusted root|Session read failed/);
 			} finally {
 				component.dispose();
@@ -1496,9 +1608,15 @@ describe("native subagent fleet", () => {
 				},
 			);
 			try {
-				component.handleInput("H");
+				component.handleInput("\r");
 				await new Promise((resolve) => setImmediate(resolve));
 				assert.deepEqual(calls, [{ runId: "async-herdr", asyncDir, index: 0 }]);
+				component.handleInput("H");
+				await new Promise((resolve) => setImmediate(resolve));
+				assert.deepEqual(calls, [
+					{ runId: "async-herdr", asyncDir, index: 0 },
+					{ runId: "async-herdr", asyncDir, index: 0 },
+				]);
 				assert.ok(component.render(100).some((line) => line.includes("Inspector opened.")));
 			} finally {
 				component.dispose();
@@ -1514,6 +1632,7 @@ describe("native subagent fleet", () => {
 			const asyncDir = writeAsyncRun(root, { id: "async-stop" });
 			const state = stateForTest();
 			const calls: Array<{ runId: string; asyncDir: string; index?: number }> = [];
+			let inspectCalls = 0;
 			const component = new SubagentFleetComponent(
 				{ terminal: { rows: 28, columns: 100 }, requestRender() {} } as never,
 				theme as never,
@@ -1523,6 +1642,7 @@ describe("native subagent fleet", () => {
 					asyncDirRoot: root,
 					resultsDir: path.join(root, "results"),
 					refreshMs: 60_000,
+					fleetKeybindings: { stop: ["return"] },
 					actions: {
 						async steer() {
 							return { text: "unused" };
@@ -1531,15 +1651,17 @@ describe("native subagent fleet", () => {
 							calls.push(input);
 							return { text: "Stop requested." };
 						},
+						async inspect() { inspectCalls++; return { text: "unexpected" }; },
 					},
 				},
 			);
 			try {
-				component.handleInput("D");
+				component.handleInput("\r");
 				assert.ok(component.render(100).some((line) => line.includes("Confirm stop for async run async-stop")));
+				assert.equal(inspectCalls, 0);
 				component.handleInput("n");
 				assert.deepEqual(calls, []);
-				component.handleInput("D");
+				component.handleInput("\r");
 				component.handleInput("y");
 				await new Promise((resolve) => setImmediate(resolve));
 				assert.deepEqual(calls, [{ runId: "async-stop", asyncDir, index: 0 }]);

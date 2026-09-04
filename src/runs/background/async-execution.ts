@@ -5,40 +5,45 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { AgentConfig } from "../../agents/agents.ts";
+import { discoverAgents, formatUnknownAgentError, unknownAgentDiagnosticContext, type AgentConfig, type UnknownAgentDiagnosticContext } from "../../agents/agents.ts";
 import { appendAgentRefinementOverlay } from "../../agents/agent-refinements.ts";
-import { writePrivateAtomicJson } from "../../shared/atomic-json.ts";
+import { createAtomicJsonWriter, writePrivateAtomicJson } from "../../shared/atomic-json.ts";
 import { currentCompletionOwnerId } from "../../shared/completion-owner.ts";
-import { applyThinkingSuffix, projectLaunchResolvedChildExtensions, resolvePiLaunchToolPlan } from "../shared/pi-args.ts";
+import { planChildLaunch, resolveStepBehavior, suppressProgressForReadOnlyTask, type ResolvedStepBehavior } from "../shared/child-launch-plan.ts";
+import { applyThinkingSuffix, projectLaunchResolvedChildExtensions, resolvePiLaunchToolPlan } from "../shared/child-tool-plan.ts";
 import { injectOutputPathSystemPrompt, injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
-import { buildChainInstructions, isDynamicParallelStep, isParallelStep, resolveChainPath, resolveExistingReadPaths, resolveStepBehavior, suppressProgressForReadOnlyTask, writeInitialProgressFile, type ChainStep, type ResolvedStepBehavior, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
+import { applyWatchdogLaunchRules, sendRuleViolationWarning } from "../../watchdog/rules.ts";
+import { buildChainInstructions, isDynamicParallelStep, isParallelStep, resolveExistingReadInstructionPaths, resolveExistingReadPaths, writeInitialProgressFile, type ChainStep, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
 import type { RunnerStep } from "../shared/parallel-utils.ts";
 import type { ContextMode } from "../shared/context-mode.ts";
-import { resolvePiPackageRoot } from "../shared/pi-spawn.ts";
+import { PI_CODING_AGENT_PACKAGE, resolveInstalledPiPackageRoot, resolvePiPackageRoot } from "../shared/pi-spawn.ts";
+import { JITI_ALIAS_ENV, resolveHostPeerAliases } from "./runner-aliases.ts";
+import { preflightLaunchCwd } from "../shared/launch-cwd.ts";
 import { resolveNodeExecutable } from "../../shared/node-executable.ts";
+import { backgroundProcessOptions } from "../shared/background-process-options.ts";
 import { buildSkillInjection, normalizeSkillInput, resolveSkillsWithFallback } from "../../agents/skills.ts";
 import { buildAgentMemoryInjection } from "../../agents/agent-memory.ts";
 import { PI_CODING_AGENT_PACKAGE_ROOT_ENV, PROMPT_REDACTED, resolveChildCwd } from "../../shared/utils.ts";
-import { buildModelCandidates, inheritsParentModel, resolveEffectiveSubagentModel, resolveModelCandidate, resolveSubagentModelOverride, type AvailableModelInfo, type ParentModel } from "../shared/model-fallback.ts";
+import { buildModelCandidates, resolveEffectiveSubagentModel, resolveModelOrigin, resolveSubagentModelOverride, type AvailableModelInfo, type ModelOrigin, type ParentModel } from "../shared/model-fallback.ts";
 import { resolveToolTimeoutMs, toolTimeoutFromEnv } from "../shared/tool-timeout.ts";
 import { resolveModelScopesForAgent, type ModelScopeConfig } from "../shared/model-scope.ts";
-import { resolveEffectiveThinking } from "../../shared/model-info.ts";
-import { assertThinkingWithinCeiling, decodeThinkingCeiling, intersectThinkingCeilings, SUBAGENT_THINKING_CEILING_ENV, type ThinkingLevel } from "../../shared/thinking-ceiling.ts";
-import { resolveExpectedWorktreeAgentCwd } from "../shared/worktree.ts";
+import { findModelInfo, resolveEffectiveThinking } from "../../shared/model-info.ts";
+import { assertThinkingWithinCeiling, intersectThinkingCeilings, type ThinkingLevel } from "../../shared/thinking-ceiling.ts";
+import { resolveExpectedWorktreeAgentCwd, resolveWorktreeProvider, shouldDeferWorktreeCwd, WORKTREE_AGENT_CWD_PLACEHOLDER } from "../shared/worktree.ts";
 import { buildWorkflowGraphSnapshot } from "../shared/workflow-graph.ts";
 import { ChainOutputValidationError, validateChainOutputBindings } from "../shared/chain-outputs.ts";
 import { createStructuredOutputRuntime } from "../shared/structured-output.ts";
-import { resolveEffectiveAcceptance, validateAcceptanceInput, validateExecutionAcceptance } from "../shared/acceptance.ts";
+import { resolveAcceptanceReportMode, resolveEffectiveAcceptance, validateAcceptanceInput, validateExecutionAcceptance } from "../shared/acceptance.ts";
 import { createRunFanoutBudget, writeRunFanoutBudgetDescriptor } from "../shared/run-fanout-budget.ts";
 import { validateImplementationToolContract } from "../shared/completion-guard.ts";
 import {
 	type AcceptanceInput,
 	type AgentContract,
+	type AsyncParallelGroupStatus,
 	type AsyncStatus,
 	type ArtifactConfig,
 	type Details,
@@ -47,12 +52,12 @@ import {
 	type MaxOutputConfig,
 	type NestedRouteInfo,
 	type ResolvedControlConfig,
-	type ResolvedTurnBudget,
 	type ResolvedToolBudget,
 	type RunFanoutBudgetDescriptor,
 	type ToolBudgetConfig,
 	type SubagentRunMode,
 	type SteeringRecoveryDescriptor,
+	type WorkflowLaneMetadata,
 	type UsageBudgetConfig,
 	DIRS,
 	SUBAGENT_ASYNC_STARTED_EVENT,
@@ -61,23 +66,27 @@ import {
 	getAsyncConfigPath,
 	resolveChildMaxSubagentDepth,
 } from "../../shared/types.ts";
-import { nestedResultsPath, nestedSummaryFromAsyncStatus, resolveInheritedNestedRouteFromEnv, resolveNestedParentAddressFromEnv, writeNestedEvent } from "../shared/nested-events.ts";
+import { inheritedNestedParentAddressOf, inheritedNestedRouteOf, nestedResultsPath, nestedSummaryFromAsyncStatus, writeNestedEvent } from "../shared/nested-events.ts";
+import type { ChildRuntimeConfig } from "../shared/child-runtime-config.ts";
+import { childSessionFactoryModule } from "../shared/child-session.ts";
+import { inheritedChildRuntime } from "../shared/child-launch.ts";
 import { resultFilePath } from "./result-files.ts";
-import { appendTurnBudgetSystemPrompt, initialTurnBudgetState } from "../shared/turn-budget.ts";
 import { validateToolBudgetConfig } from "../shared/tool-budget.ts";
 import { usageBudgetState } from "../shared/usage-budget.ts";
 import type { ImportedAsyncRoot } from "./chain-root-attachment.ts";
 import type { SessionLeaseRequest } from "../shared/session-lease.ts";
-import { finalizeProcessTerminal, readProcessTerminal } from "./process-terminal.ts";
+import { finalizeProcessTerminal, initializeProcessTerminal, readProcessTerminal } from "./process-terminal.ts";
 import type { ActiveAsyncCapacityHandle } from "./active-async-capacity.ts";
+import { statusStepDescription } from "./chain-append.ts";
 import { SUBAGENT_PROCESS_TERMINAL_EVENT } from "../../shared/types.ts";
-import { assertAgentAllowedByCapabilityCeiling, decodeSubagentCapabilityCeiling, intersectSubagentCapabilityCeilings, resolveCurrentSubagentCapabilityCeiling, SUBAGENT_CAPABILITY_CEILING_ENV, type ResolvedSubagentCapabilityCeiling } from "../shared/capability-ceiling.ts";
+import { assertAgentAllowedByCapabilityCeiling, intersectSubagentCapabilityCeilings, resolveCurrentSubagentCapabilityCeiling, type ResolvedSubagentCapabilityCeiling } from "../shared/capability-ceiling.ts";
 import { agentDefinitionDigest, launchBindingDigest } from "../../shared/launch-contract.ts";
 import { resolvePermissionRules, type PermissionConfig } from "../shared/permissions.ts";
 import { normalizeExtensionBindings, omitExtensionBindingsEnv, type ExtensionBindings } from "../shared/extension-bindings.ts";
+import { assertWorkflowLaneKey, normalizeWorkflowLaneMetadata } from "../shared/lane-metadata.ts";
 
 const require = createRequire(import.meta.url);
-const piPackageRoot = resolvePiPackageRoot();
+const piPackageRoot = resolvePiPackageRoot() ?? resolveInstalledPiPackageRoot();
 
 function resolveJitiCliFromPackageJson(packageJsonPath: string): string | undefined {
 	if (!fs.existsSync(packageJsonPath)) return undefined;
@@ -139,6 +148,8 @@ interface AsyncExecutionContext {
 	modelScope?: ModelScopeConfig;
 	/** Whether the parent session has an interactive UI. */
 	interactive?: boolean;
+	/** The executor's own child runtime when the launch comes from an in-process child. */
+	childRuntime?: ChildRuntimeConfig;
 }
 
 export const DEFAULT_ASYNC_TIMEOUT_MS = 30 * 60 * 1000;
@@ -151,6 +162,8 @@ interface AsyncChainParams {
 	attachRoot?: ImportedAsyncRoot & { agent: string; outputName?: string; label?: string };
 	resultMode?: SubagentRunMode;
 	agents: AgentConfig[];
+	/** Original discovery provenance, retained by normal callers for unknown-agent diagnostics. */
+	unknownAgentDiagnosticContext?: UnknownAgentDiagnosticContext;
 	ctx: AsyncExecutionContext;
 	availableModels?: AvailableModelInfo[];
 	cwd?: string;
@@ -168,9 +181,13 @@ interface AsyncChainParams {
 	dynamicFanoutMaxItems?: number;
 	maxSubagentDepth: number;
 	waitToolEnabled?: boolean;
+	waitToolDefaultTimeoutMs?: number;
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
 	worktreeBaseDir?: string;
+	baseRef?: string;
+	worktreeProvider?: import("../../shared/types.ts").WorktreeProvider;
+	worktreeBranchPrefix?: string;
 	controlConfig?: ResolvedControlConfig;
 	controlIntercomTarget?: string;
 	childIntercomTarget?: (agent: string, index: number) => string | undefined;
@@ -178,7 +195,6 @@ interface AsyncChainParams {
 	acceptance?: AcceptanceInput;
 	fast?: boolean;
 	timeoutMs?: number;
-	turnBudget?: ResolvedTurnBudget;
 	toolBudget?: ResolvedToolBudget;
 	usageBudget?: UsageBudgetConfig;
 	configToolBudget?: ResolvedToolBudget;
@@ -195,6 +211,7 @@ interface AsyncChainParams {
 	runFanoutBudget?: RunFanoutBudgetDescriptor;
 	parentWorkflowRunId?: string;
 	workflowKey?: string;
+	lane?: WorkflowLaneMetadata;
 	activeAsyncCapacity?: ActiveAsyncCapacityHandle;
 }
 
@@ -208,6 +225,7 @@ interface AsyncSingleParams {
 	recoveryAgentConfig?: AgentConfig;
 	ctx: AsyncExecutionContext;
 	cwd?: string;
+	requestedCwd?: string;
 	maxOutput?: MaxOutputConfig;
 	artifactsDir?: string;
 	artifactConfig: ArtifactConfig;
@@ -222,18 +240,24 @@ interface AsyncSingleParams {
 	reads?: string[] | false;
 	outputMode?: "inline" | "file-only";
 	outputBaseDir?: string;
+	outputClaimPath?: string;
 	agentContract?: AgentContract;
 	structuredOutputSchema?: JsonSchemaObject;
 	modelOverride?: string;
 	modelOverrideFromParent?: boolean;
+	modelOrigin?: ModelOrigin;
 	fast?: boolean;
 	thinkingOverride?: AgentConfig["thinking"];
 	availableModels?: AvailableModelInfo[];
 	maxSubagentDepth: number;
 	waitToolEnabled?: boolean;
+	waitToolDefaultTimeoutMs?: number;
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
 	worktreeBaseDir?: string;
+	baseRef?: string;
+	worktreeProvider?: import("../../shared/types.ts").WorktreeProvider;
+	worktreeBranchPrefix?: string;
 	worktree?: boolean;
 	controlConfig?: ResolvedControlConfig;
 	intercomBridge?: IntercomBridgeConfig;
@@ -245,7 +269,6 @@ interface AsyncSingleParams {
 	absoluteDeadlineAt?: number;
 	/** Optional per-call hard toolTimeoutMs override (highest precedence). */
 	toolTimeoutMs?: number;
-	turnBudget?: { maxTurns: number; graceTurns?: number };
 	toolBudget?: ResolvedToolBudget | ToolBudgetConfig;
 	usageBudget?: UsageBudgetConfig;
 	configToolBudget?: ResolvedToolBudget;
@@ -259,6 +282,7 @@ interface AsyncSingleParams {
 	runFanoutBudget?: RunFanoutBudgetDescriptor;
 	parentWorkflowRunId?: string;
 	workflowKey?: string;
+	lane?: WorkflowLaneMetadata;
 	workflowAwaitAsync?: boolean;
 	activeAsyncCapacity?: ActiveAsyncCapacityHandle;
 	externalJobFollowUp?: {
@@ -283,6 +307,8 @@ export interface AsyncRunnerStepBuildParams {
 	attachRoot?: ImportedAsyncRoot & { agent: string; outputName?: string; label?: string };
 	resultMode?: SubagentRunMode;
 	agents: AgentConfig[];
+	/** Exact discovery provenance for failed resolution; omission triggers defensive fallback discovery. */
+	unknownAgentDiagnosticContext?: UnknownAgentDiagnosticContext;
 	ctx: AsyncExecutionContext;
 	availableModels?: AvailableModelInfo[];
 	cwd?: string;
@@ -295,7 +321,10 @@ export interface AsyncRunnerStepBuildParams {
 	dynamicFanoutMaxItems?: number;
 	maxSubagentDepth: number;
 	waitToolEnabled?: boolean;
+	waitToolDefaultTimeoutMs?: number;
 	worktreeBaseDir?: string;
+	worktreeProvider?: import("../../shared/types.ts").WorktreeProvider;
+	worktreeBranchPrefix?: string;
 	asyncDir: string;
 	outputBaseDir?: string;
 	validateOutputBindings?: boolean;
@@ -326,15 +355,15 @@ export function formatAsyncStartedMessage(headline: string, interactive: boolean
 	const guidance = interactive
 		? [
 			"The async run is detached and running in the background.",
-			"You are in an interactive session. By default, return control to the user now; Pi will wake you on completion when the run finishes or needs attention. Do NOT call subagent_wait() merely to wait, and do not run sleep/polling loops to wait for it.",
-			"When you need an explicit wake for one known run but do not need same-turn results, call subagent_wait({ id: \"...\", nonBlocking: true }) to arm a subscription and return immediately.",
-			"Override the default and call blocking subagent_wait() before ending the turn only when the current request is run-to-completion — for example, the user asked you to report results back here before continuing, or a skill must finish in one turn. In that case, call subagent_wait() to block until the run completes so its results are delivered in this turn instead of deferred.",
+			"You are in an interactive session. Return control to the user now; Pi will wake you through the native completion notification when this subagent completes or needs attention. Do not run sleep/polling loops to wait for this async subagent; it does not need a wait call.",
+			"Use bg_wait only for provider, detached, or other background work that lacks a native completion notification.",
+			"If the current turn must receive results from work without a native notification before it ends, call blocking bg_wait(); ordinary async subagent runs do not need a wait call because their completion is delivered natively.",
 			"Otherwise, continue any independent work or return control to the user. Use subagent({ action: \"status\", id: \"...\" }) for a one-shot status/result or to inspect a blocked/stale run, never as a wait loop.",
 		]
 		: [
 			"The async run is detached. Do not run sleep timers or polling loops just to wait for it.",
-			"This is a non-interactive run: Pi auto-drains current-session background work at agent_end so detached children are not abandoned; call subagent_wait() when this turn must receive the run's results before it ends, otherwise let the headless auto-drain finish the work.",
-			"Use subagent({ action: \"status\", id: \"...\" }) when you need a one-shot status/result or to inspect a blocked/stale run. To block until completion, use subagent_wait() — do not poll in a loop.",
+			"This is a non-interactive run: Pi auto-drains current-session subagent work at agent_end so detached children are not abandoned. Use bg_wait only when this turn must receive provider, detached, or other background-work results that have no native completion notification.",
+			"Use subagent({ action: \"status\", id: \"...\" }) when you need a one-shot status/result or to inspect a blocked/stale run; do not poll in a loop.",
 		];
 	return [headline, "", ...guidance].join("\n");
 }
@@ -418,13 +447,15 @@ function waitForRunnerStartup(startupPath: string, expectedState: RunnerStartupS
 	return { ok: false, error: `Timed out after ${timeoutMs}ms waiting for the async runner startup state '${expectedState}'.`, startupDidNotProceed: true };
 }
 
+const writePrivateStartupControlJson = createAtomicJsonWriter({ mode: 0o600, ignoreCleanupErrorAfterSuccess: true });
+
 function writeRunnerStartupControl(filePath: string, payload: { action: "ack" | "proceed"; token: string }): void {
 	// Delegate to the shared atomic JSON writer (temp file + rename, retrying
 	// transient Windows EPERM/EBUSY/EACCES locks and cleaning up the temp file
 	// on failure), so the startup handshake gets the same locking resilience as
 	// every other async control/result file. This is exercised by
 	// test/unit/atomic-json.test.ts.
-	writePrivateAtomicJson(filePath, payload);
+	writePrivateStartupControlJson(filePath, payload);
 }
 
 function runnerIsAlive(pid: number): boolean {
@@ -493,24 +524,40 @@ interface SpawnRunnerResult {
 	startupDidNotProceed?: boolean;
 }
 
-function spawnRunner(cfg: object, suffix: string, cwd: string, onProcessTerminal?: (proof: unknown) => void): SpawnRunnerResult {
+function isStaleExtensionContextError(error: unknown): boolean {
+	return error instanceof Error && /extension ctx is stale|stale after session replacement or reload/i.test(error.message);
+}
+
+export function emitProcessTerminalEvent(ctx: AsyncExecutionContext, proof: unknown): void {
+	try {
+		ctx.pi.events.emit(SUBAGENT_PROCESS_TERMINAL_EVENT, proof);
+	} catch (error) {
+		if (isStaleExtensionContextError(error)) return;
+		console.error("Failed to emit subagent process-terminal event:", error);
+	}
+}
+
+function spawnRunner(cfg: object, suffix: string, cwd: string, initialStatus: Omit<AsyncStatus, "pid" | "processTerminal">, initialStatusPath: string, onProcessTerminal?: (proof: unknown) => void, onBeforeProceed?: (runnerProcessInstanceId: string) => void, requestedCwd = cwd): SpawnRunnerResult {
+	const cwdError = preflightLaunchCwd(requestedCwd, cwd);
+	if (cwdError) return { error: cwdError };
+
 	if (!jitiCliPath) {
 		return { error: "upstream jiti for TypeScript execution could not be found; ensure package dependencies are installed" };
 	}
-
-	try {
-		const cwdStats = fs.statSync(cwd);
-		if (!cwdStats.isDirectory()) {
-			return { error: `cwd is not a directory: ${cwd}` };
-		}
-	} catch {
-		return { error: `cwd does not exist: ${cwd}` };
+	if (!piPackageRoot) {
+		return { error: `Background children require pi installed as the npm package (${PI_CODING_AGENT_PACKAGE}); a standalone pi binary has no package directory, so the async runner cannot create child sessions. Run this child in the foreground (async: false) or install pi from npm.` };
+	}
+	const hostPeerAliases = resolveHostPeerAliases(piPackageRoot);
+	if (hostPeerAliases.missing.length > 0) {
+		return { error: `Background children require pi installed as the npm package (${PI_CODING_AGENT_PACKAGE}) with its dependencies; ${piPackageRoot} does not provide ${hostPeerAliases.missing.join(", ")}, so the async runner cannot create child sessions. A standalone pi binary cannot run background children.` };
 	}
 
 	fs.mkdirSync(TEMP_ROOT_DIR, { recursive: true });
 	const cfgPath = getAsyncConfigPath(suffix);
 	const runnerProcessInstanceId = randomUUID();
-	const launchConfig = { ...cfg, runnerProcessInstanceId };
+	const hasRevivalLease = typeof (cfg as { revivalLease?: unknown }).revivalLease === "object";
+	const launchBarrierToken = hasRevivalLease ? undefined : runnerProcessInstanceId;
+	const launchConfig = { ...cfg, runnerProcessInstanceId, ...(launchBarrierToken ? { launchBarrierToken } : {}) };
 	writePrivateAtomicJson(cfgPath, launchConfig);
 	const runner = path.join(path.dirname(fileURLToPath(import.meta.url)), "subagent-runner.ts");
 	const nodeCommand = resolveNodeExecutable();
@@ -523,7 +570,9 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, onProcessTerminal
 		? path.join(launchAsyncDir, "runner-startup.json")
 		: undefined;
 	const startupAckPath = startupPath ? path.join(path.dirname(startupPath), "runner-startup-ack.json") : undefined;
-	const startupProceedPath = startupPath ? path.join(path.dirname(startupPath), "runner-startup-proceed.json") : undefined;
+	const startupProceedPath = launchAsyncDir && (startupPath || launchBarrierToken)
+		? path.join(launchAsyncDir, "runner-startup-proceed.json")
+		: undefined;
 	if (startupPath) fs.rmSync(startupPath, { force: true });
 	if (startupAckPath) fs.rmSync(startupAckPath, { force: true });
 	if (startupProceedPath) fs.rmSync(startupProceedPath, { force: true });
@@ -539,12 +588,12 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, onProcessTerminal
 		}
 		const proc = spawn(nodeCommand, [jitiCliPath, runner, cfgPath], {
 			cwd,
-			detached: true,
+			...backgroundProcessOptions(),
 			stdio: ["ignore", stdoutFd ?? "ignore", stderrFd ?? "ignore"],
-			windowsHide: true,
 			env: {
 				...omitExtensionBindingsEnv(process.env),
-				...(piPackageRoot ? { [PI_CODING_AGENT_PACKAGE_ROOT_ENV]: piPackageRoot } : {}),
+				[PI_CODING_AGENT_PACKAGE_ROOT_ENV]: piPackageRoot,
+				[JITI_ALIAS_ENV]: JSON.stringify(hostPeerAliases.aliases),
 			},
 		});
 		closeFd(stdoutFd);
@@ -604,6 +653,45 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, onProcessTerminal
 		});
 		if (typeof proc.pid !== "number") {
 			return { error: `async runner did not produce a pid for cwd: ${cwd}` };
+		}
+		try {
+			writePrivateAtomicJson(initialStatusPath, {
+				...initialStatus,
+				pid: proc.pid,
+				processTerminal: { version: 1, state: "pending", runId: initialStatus.runId, runnerProcessInstanceId },
+			});
+		} catch (error) {
+			const message = `Failed to persist initial async status: ${error instanceof Error ? error.message : String(error)}`;
+			if (launchAsyncDir) persistPreProceedStartupFailure(launchAsyncDir, launchRunId, runnerProcessInstanceId, launchSessionId, launchCompletionOwnerId, message);
+			const terminationObserved = terminateRunnerBeforeProceed(proc.pid);
+			return { pid: proc.pid, runnerProcessInstanceId, error: message, terminationObserved, startupDidNotProceed: true };
+		}
+		try {
+			if (!launchAsyncDir) throw new Error("Async runner is missing its lifecycle directory.");
+			initializeProcessTerminal(launchAsyncDir, launchRunId, runnerProcessInstanceId);
+		} catch (error) {
+			const message = `Failed to establish async runner lifecycle sidecar: ${error instanceof Error ? error.message : String(error)}`;
+			if (launchAsyncDir) persistPreProceedStartupFailure(launchAsyncDir, launchRunId, runnerProcessInstanceId, launchSessionId, launchCompletionOwnerId, message);
+			const terminationObserved = terminateRunnerBeforeProceed(proc.pid);
+			return { pid: proc.pid, runnerProcessInstanceId, error: message, terminationObserved, startupDidNotProceed: true };
+		}
+		try {
+			onBeforeProceed?.(runnerProcessInstanceId);
+		} catch (error) {
+			const message = `Failed to establish async runner capacity ownership: ${error instanceof Error ? error.message : String(error)}`;
+			if (launchAsyncDir) persistPreProceedStartupFailure(launchAsyncDir, launchRunId, runnerProcessInstanceId, launchSessionId, launchCompletionOwnerId, message);
+			const terminationObserved = terminateRunnerBeforeProceed(proc.pid);
+			return { pid: proc.pid, runnerProcessInstanceId, error: message, terminationObserved, startupDidNotProceed: true };
+		}
+		if (launchBarrierToken && startupProceedPath) {
+			try {
+				writeRunnerStartupControl(startupProceedPath, { action: "proceed", token: launchBarrierToken });
+			} catch (error) {
+				const message = `Failed to authorize async runner startup: ${error instanceof Error ? error.message : String(error)}`;
+				if (launchAsyncDir) persistPreProceedStartupFailure(launchAsyncDir, launchRunId, runnerProcessInstanceId, launchSessionId, launchCompletionOwnerId, message);
+				const terminationObserved = terminateRunnerBeforeProceed(proc.pid);
+				return { pid: proc.pid, runnerProcessInstanceId, error: message, terminationObserved, startupDidNotProceed: true };
+			}
 		}
 		proc.unref();
 		if (startupPath && startupAckPath && startupProceedPath) {
@@ -675,6 +763,8 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		thinkingOverridesByFlatIndex,
 		maxSubagentDepth,
 		worktreeBaseDir,
+		worktreeProvider,
+		worktreeBranchPrefix,
 		asyncDir,
 	} = params;
 	const outputBaseDir = params.outputBaseDir;
@@ -682,6 +772,15 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 	const chainSkills = params.chainSkills ?? [];
 	const availableModels = params.availableModels;
 	const runnerCwd = resolveChildCwd(ctx.cwd, cwd);
+	let managedWorktreeProvider: "native" | "worktrunk" | undefined;
+	try {
+		if (chain.some((step) => "worktree" in step && step.worktree === true)) {
+			const resolved = resolveWorktreeProvider(worktreeProvider, worktreeBaseDir);
+			managedWorktreeProvider = shouldDeferWorktreeCwd(worktreeProvider, worktreeBaseDir) ? "worktrunk" : resolved;
+		}
+	} catch (error) {
+		return { error: error instanceof Error ? error.message : String(error) };
+	}
 	const progressDir = params.progressDir ?? runnerCwd;
 	const graphChain: ChainStep[] = params.attachRoot
 		? [{
@@ -709,6 +808,8 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 	}
 	const workflowGraph = buildWorkflowGraphSnapshot({ runId: id, mode: resultMode, steps: graphChain });
 
+	const diagnosticContext = params.unknownAgentDiagnosticContext
+		?? unknownAgentDiagnosticContext(discoverAgents(path.resolve(runnerCwd), "both"));
 	for (const s of chain) {
 		const stepAgents = isParallelStep(s)
 			? s.parallel.map((t) => t.agent)
@@ -716,9 +817,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 				? [s.parallel.agent]
 				: [(s as SequentialStep).agent];
 		for (const agentName of stepAgents) {
-			if (!agents.find((x) => x.name === agentName)) {
-				return { error: `Unknown agent: ${agentName}` };
-			}
+			if (!agents.find((x) => x.name === agentName)) return { error: formatUnknownAgentError(agentName, diagnosticContext) };
 		}
 	}
 
@@ -750,7 +849,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			if (unsupported.length > 0) throw new AsyncStartValidationError(`Agent '${a.name}' uses runner.type='${externalRunnerType}' and does not support: ${unsupported.join(", ")}.`);
 		}
 		try {
-			assertAgentAllowedByCapabilityCeiling(a.name, intersectSubagentCapabilityCeilings(params.capabilityCeiling, decodeSubagentCapabilityCeiling(process.env[SUBAGENT_CAPABILITY_CEILING_ENV])));
+			assertAgentAllowedByCapabilityCeiling(a.name, intersectSubagentCapabilityCeilings(params.capabilityCeiling, ctx.childRuntime?.capabilityCeiling));
 		} catch (error) {
 			throw new AsyncStartValidationError(error instanceof Error ? error.message : String(error));
 		}
@@ -764,19 +863,21 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			envValue: params.toolTimeoutMsEnv ?? toolTimeoutFromEnv(),
 		});
 		if (resolvedToolTimeout.error) throw new AsyncStartValidationError(resolvedToolTimeout.error);
-		const stepCwd = resolveChildCwd(runnerCwd, s.cwd);
-		const instructionCwd = behaviorCwd ?? stepCwd;
-		const readExistenceCwd = behaviorCwd ? stepCwd : instructionCwd;
-		let behavior = suppressProgressForReadOnlyTask(resolvedBehavior ?? resolveStepBehavior(a, buildStepOverrides(s), chainSkills), s.task, originalTask);
-		const inheritedRelativeParallelOutput = parallelOutputNamespace && s.output === undefined && typeof behavior.output === "string" && !path.isAbsolute(behavior.output);
-		if (inheritedRelativeParallelOutput && parallelOutputNamespace.taskIndex !== undefined) {
-			behavior = {
-				...behavior,
-				output: path.join(`parallel-${parallelOutputNamespace.stepIndex}`, `${parallelOutputNamespace.taskIndex}-${s.agent}`, behavior.output as string),
-			};
-		}
-		const namespaceOutputPath = Boolean(inheritedRelativeParallelOutput && parallelOutputNamespace.taskIndex === undefined);
-		const skillNames = behavior.skills === false ? [] : behavior.skills;
+		const launchPlan = planChildLaunch({
+			agentConfig: a,
+			stepOverrides: buildStepOverrides(s),
+			task: s.task,
+			originalTask,
+			runnerCwd,
+			runtimeCwd: ctx.cwd,
+			stepCwdInput: s.cwd,
+			behaviorCwd,
+			chainSkills,
+			outputBaseDir,
+			parallelOutputNamespace,
+			resolvedBehavior,
+		});
+		const { stepCwd, instructionCwd, readExistenceCwd, behavior, namespaceOutputPath, outputPath, skillNames } = launchPlan;
 		const { resolved: resolvedSkills, missing: missingSkills } = resolveSkillsWithFallback(
 			skillNames,
 			stepCwd,
@@ -801,33 +902,34 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		const isFirstProgressAgent = behavior.progress && !progressPrecreated && !progressInstructionCreated;
 		if (behavior.progress) progressInstructionCreated = true;
 		const progressInstructions = buildChainInstructions({ ...behavior, output: false, reads: false }, progressDir, isFirstProgressAgent);
-		const outputPath = resolveSingleOutputPath(behavior.output, ctx.cwd, instructionCwd, outputBaseDir);
 		if (!namespaceOutputPath) systemPrompt = injectOutputPathSystemPrompt(systemPrompt, outputPath, a);
 		const validationError = validateFileOnlyOutputMode(behavior.outputMode, outputPath, `Async step (${s.agent})`);
 		if (validationError) throw new AsyncStartValidationError(validationError);
 		let taskTemplate = s.task ?? "{previous}";
 		taskTemplate = taskTemplate.replace(/\{task\}/g, originalTask ?? "");
-		taskTemplate = taskTemplate.replace(/\{chain_dir\}/g, runnerCwd);
+		taskTemplate = taskTemplate.replace(/\{chain_dir\}/g, behaviorCwd ?? runnerCwd);
 		const taskText = `${readInstructions.prefix}${taskTemplate}${progressInstructions.suffix}`;
 		const task = namespaceOutputPath ? taskText : injectSingleOutputInstruction(taskText, outputPath, a);
 
 		const modelScopes = resolveModelScopesForAgent(ctx.modelScope, a.name, ctx.currentModel);
-		const primaryModelFromParent = inheritsParentModel(s.model, a.model, ctx.currentModel);
+		const modelOrigin = resolveModelOrigin({ explicitModel: s.model, agentModel: a.model, parentModel: ctx.currentModel });
+		const primaryModelFromParent = modelOrigin === "inherited";
 		const primaryModel = externalRunner ? undefined : resolveEffectiveSubagentModel(
 			s.model,
 			a.model,
 			ctx.currentModel,
 			availableModels,
 			a.modelProvider ?? ctx.currentModelProvider,
-			{ scope: modelScopes },
+			{ scope: modelScopes, source: modelOrigin === "explicit" ? "explicit" : "inherited" },
 		);
 		const thinkingOverride = flatIndex === undefined ? undefined : thinkingOverridesByFlatIndex?.[flatIndex];
 		const effectiveThinking = externalRunner ? undefined : thinkingOverride ?? a.thinking;
 		const model = externalRunner ? undefined : applyThinkingSuffix(primaryModel, effectiveThinking, thinkingOverride !== undefined);
+		const contextLimit = model ? findModelInfo(model, availableModels, a.modelProvider ?? ctx.currentModelProvider)?.contextWindow : undefined;
 		const thinkingCeiling = externalRunner ? undefined : intersectThinkingCeilings(
 			params.thinkingCeiling,
 			a.maxThinking,
-			decodeThinkingCeiling(process.env[SUBAGENT_THINKING_CEILING_ENV]),
+			ctx.childRuntime?.thinkingCeiling,
 		);
 		if (!externalRunner) {
 			try {
@@ -838,23 +940,29 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		}
 		const agentContract = s.agentContract ?? params.agentContract;
 		const permissionRules = resolvePermissionRules(ctx.permissions, a.permissions);
-		const modelCandidates = externalRunner ? [] : buildModelCandidates(primaryModel, a.fallbackModels, availableModels, a.modelProvider ?? ctx.currentModelProvider, {
-			scope: modelScopes,
-			primaryModelFromParent,
-		}).flatMap((candidate) => {
-			const resolved = applyThinkingSuffix(candidate, effectiveThinking, thinkingOverride !== undefined);
-			return resolved ? [resolved] : [];
-		});
+		let modelCandidates: string[] = [];
 		if (!externalRunner) {
 			try {
+				modelCandidates = buildModelCandidates(primaryModel, a.fallbackModels, availableModels, a.modelProvider ?? ctx.currentModelProvider, {
+					scope: modelScopes,
+					primaryModelFromParent,
+					origin: modelOrigin,
+				}).flatMap((candidate) => {
+					const resolved = applyThinkingSuffix(candidate, effectiveThinking, thinkingOverride !== undefined);
+					return resolved ? [resolved] : [];
+				});
 				for (const candidate of modelCandidates) assertThinkingWithinCeiling({ model: candidate, configThinking: effectiveThinking, ceiling: thinkingCeiling, agent: a.name, runId: id });
 			} catch (error) {
 				throw new AsyncStartValidationError(error instanceof Error ? error.message : String(error));
 			}
 		}
+		const launchRuleError = applyWatchdogLaunchRules({ cwd: stepCwd, agent: a.name, model: modelCandidates[0] ?? model, warn: (violation) => sendRuleViolationWarning(ctx.pi, violation) });
+		if (launchRuleError) throw new AsyncStartValidationError(launchRuleError);
 		const fast = s.fast ?? params.fast ?? a.fast;
 		const toolPlan = resolvePiLaunchToolPlan({
 			tools: a.tools,
+			excludeTools: a.excludeTools,
+			allowNestedSubagents: a.allowNestedSubagents,
 			extensions: a.extensions,
 			subagentOnlyExtensions: a.subagentOnlyExtensions,
 			mcpDirectTools: a.mcpDirectTools,
@@ -865,9 +973,10 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			model,
 			modelCandidates,
 			capabilityCeiling: params.capabilityCeiling,
-			inheritedCapabilityCeiling: decodeSubagentCapabilityCeiling(process.env[SUBAGENT_CAPABILITY_CEILING_ENV]),
+			inheritedCapabilityCeiling: ctx.childRuntime?.capabilityCeiling,
 			agentName: a.name,
 			permissionRules,
+			runtimeSnapshotHost: ctx.pi,
 		});
 		const launchResolvedExtensions = externalRunner ? undefined : projectLaunchResolvedChildExtensions(toolPlan);
 		if (externalRunner && permissionRules) {
@@ -902,7 +1011,9 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			outputName: s.as,
 			structured: Boolean(s.outputSchema),
 			cwd: stepCwd,
+			requestedCwd: s.cwd ?? stepCwd,
 			model,
+			...(contextLimit !== undefined ? { contextLimit } : {}),
 			...(fast !== undefined ? { fast } : {}),
 			thinking: resolveEffectiveThinking(model, effectiveThinking),
 			...(thinkingCeiling ? { thinkingCeiling } : {}),
@@ -911,13 +1022,17 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			...(primaryModelFromParent ? { skipPrimaryModelVerification: true } : {}),
 			...(availableModels && availableModels.length > 0 ? { modelVerificationRegistry: availableModels } : {}),
 			tools: a.tools,
+			excludeTools: a.excludeTools,
+			allowNestedSubagents: a.allowNestedSubagents,
 			extensions: a.extensions,
 			subagentOnlyExtensions: a.subagentOnlyExtensions,
 			mcpDirectTools: a.mcpDirectTools,
+			mutationTools: a.mutationTools,
 			completionGuard: a.completionGuard,
 			systemPrompt,
 			systemPromptMode: a.systemPromptMode,
 			inheritProjectContext: a.inheritProjectContext,
+			inheritGlobalContext: a.inheritGlobalContext,
 			inheritSkills: a.inheritSkills,
 			skills: resolvedSkills.map((r) => r.name),
 			outputPath,
@@ -928,6 +1043,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			timeoutMs: a.defaultTimeoutMs ?? DEFAULT_ASYNC_TIMEOUT_MS,
 			toolTimeoutMs: resolvedToolTimeout.toolTimeoutMs,
 			waitToolEnabled: params.waitToolEnabled,
+			waitToolDefaultTimeoutMs: params.waitToolDefaultTimeoutMs,
 			effectiveAcceptance: resolveEffectiveAcceptance({
 				explicit: s.acceptance,
 				agentName: s.agent,
@@ -942,7 +1058,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			acceptanceRole: a.acceptanceRole,
 			...(s.gateOn ? { gateOn: s.gateOn } : {}),
 			...(s.outputSchema ? { structuredOutputSchema: s.outputSchema } : {}),
-			...(s.outputSchema ? { structuredOutput: createStructuredOutputRuntime(s.outputSchema, path.join(asyncDir, "structured-output"), { captureAcceptanceReport: s.acceptance !== false }) } : {}),
+			...(s.outputSchema ? { structuredOutput: createStructuredOutputRuntime(s.outputSchema, path.join(asyncDir, "structured-output"), { acceptanceReport: resolveAcceptanceReportMode(s.acceptance) }) } : {}),
 			...(resolvedToolBudget.budget ? { toolBudget: resolvedToolBudget.budget } : {}),
 			...(s.worktree ? { worktree: true } : {}),
 		};
@@ -976,7 +1092,9 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 				return {
 					parallel: s.parallel.map((t, taskIndex) => {
 						let behaviorCwd: string | undefined;
-						if (s.worktree) {
+						if (s.worktree && managedWorktreeProvider === "worktrunk") {
+							behaviorCwd = WORKTREE_AGENT_CWD_PLACEHOLDER;
+						} else if (s.worktree && managedWorktreeProvider === "native") {
 							try {
 								behaviorCwd = resolveExpectedWorktreeAgentCwd(runnerCwd, `${id}-s${stepIndex}`, taskIndex, worktreeBaseDir);
 							} catch {
@@ -1031,7 +1149,9 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			}
 			const sequential = s as SequentialStep;
 			let behaviorCwd: string | undefined;
-			if (sequential.worktree) {
+			if (sequential.worktree && managedWorktreeProvider === "worktrunk") {
+				behaviorCwd = WORKTREE_AGENT_CWD_PLACEHOLDER;
+			} else if (sequential.worktree && managedWorktreeProvider === "native") {
 				try {
 					behaviorCwd = resolveExpectedWorktreeAgentCwd(runnerCwd, `${id}-s${stepIndex}`, 0, worktreeBaseDir);
 				} catch {
@@ -1054,6 +1174,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 						index: params.attachRoot.index,
 					},
 					inheritProjectContext: false,
+					inheritGlobalContext: false,
 					inheritSkills: false,
 				}, ...builtSteps]
 			: builtSteps;
@@ -1100,6 +1221,9 @@ export function executeAsyncChain(
 		worktreeSetupHook,
 		worktreeSetupHookTimeoutMs,
 		worktreeBaseDir,
+		baseRef,
+		worktreeProvider,
+		worktreeBranchPrefix,
 		controlConfig,
 		controlIntercomTarget,
 		childIntercomTarget,
@@ -1110,13 +1234,13 @@ export function executeAsyncChain(
 		chain: chain.map((step) => {
 			if (isParallelStep(step)) return { parallel: step.parallel };
 			if (isDynamicParallelStep(step)) return { acceptance: step.acceptance, parallel: step.parallel };
-			return { acceptance: step.acceptance };
+			return { acceptance: step.acceptance, outputSchema: step.outputSchema };
 		}),
 	});
 	if (acceptanceErrors.length > 0) return formatAsyncStartError(resultMode, acceptanceErrors.join(" "));
 	const capabilityCeiling = params.capabilityCeiling ?? resolveCurrentSubagentCapabilityCeiling(ctx.currentSessionId);
-	const inheritedNestedRoute = resolveInheritedNestedRouteFromEnv();
-	const nestedAddress = inheritedNestedRoute ? resolveNestedParentAddressFromEnv() : undefined;
+	const inheritedNestedRoute = inheritedNestedRouteOf(ctx.childRuntime);
+	const nestedAddress = inheritedNestedRoute ? inheritedNestedParentAddressOf(ctx.childRuntime) : undefined;
 	const asyncDir = inheritedNestedRoute
 		? path.join(TEMP_ROOT_DIR, "nested-subagent-runs", inheritedNestedRoute.rootRunId, id)
 		: path.join(DIRS.async, id);
@@ -1140,6 +1264,7 @@ export function executeAsyncChain(
 		attachRoot: params.attachRoot,
 		resultMode,
 		agents,
+		unknownAgentDiagnosticContext: params.unknownAgentDiagnosticContext,
 		ctx,
 		availableModels: params.availableModels,
 		cwd,
@@ -1153,7 +1278,10 @@ export function executeAsyncChain(
 		dynamicFanoutMaxItems: params.dynamicFanoutMaxItems,
 		maxSubagentDepth,
 		waitToolEnabled: params.waitToolEnabled,
+		waitToolDefaultTimeoutMs: params.waitToolDefaultTimeoutMs,
 		worktreeBaseDir,
+		worktreeProvider,
+		worktreeBranchPrefix,
 		asyncDir,
 		fast: params.fast,
 		toolBudget: params.toolBudget,
@@ -1174,7 +1302,6 @@ export function executeAsyncChain(
 	}
 	const { steps, runnerCwd, workflowGraph, eventChain } = built;
 	const deadlineAt = params.timeoutMs !== undefined ? Date.now() + params.timeoutMs : undefined;
-	const initialTurnBudget = params.turnBudget ? initialTurnBudgetState(params.turnBudget) : undefined;
 	const initialUsageBudget = usageBudgetState(params.usageBudget, undefined);
 	let childTargetIndex = 0;
 	const childIntercomTargets = childIntercomTarget ? steps.flatMap((step) => {
@@ -1191,6 +1318,21 @@ export function executeAsyncChain(
 		}
 		return "agent" in step ? [childIntercomTarget(step.agent, childTargetIndex++)] : [undefined];
 	}) : undefined;
+	const initialStatusSteps = eventChain.flatMap((step) => isParallelStep(step)
+		? step.parallel.map((task) => ({ agent: task.agent, ...(statusStepDescription(task.task) ? { description: statusStepDescription(task.task) } : {}), ...(task.label ? { label: task.label } : {}), ...(task.as ? { outputName: task.as } : {}), status: "pending" as const }))
+		: isDynamicParallelStep(step)
+			? [{ agent: `expand:${step.parallel.agent}`, label: step.label ?? step.parallel.label ?? `Dynamic fanout (${step.collect.as})`, outputName: step.collect.as, status: "pending" as const }]
+			: [{ agent: (step as SequentialStep).agent, ...(statusStepDescription((step as SequentialStep).task) ? { description: statusStepDescription((step as SequentialStep).task) } : {}), ...((step as SequentialStep).label ? { label: (step as SequentialStep).label } : {}), ...((step as SequentialStep).as ? { outputName: (step as SequentialStep).as } : {}), status: "pending" as const }]);
+	const initialParallelGroups: AsyncParallelGroupStatus[] = [];
+	let initialFlatIndex = 0;
+	for (let stepIndex = 0; stepIndex < eventChain.length; stepIndex++) {
+		const step = eventChain[stepIndex]!;
+		if (isParallelStep(step)) initialParallelGroups.push({ start: initialFlatIndex, count: step.parallel.length, stepIndex });
+		else if (isDynamicParallelStep(step)) initialParallelGroups.push({ start: initialFlatIndex, count: 1, stepIndex });
+		initialFlatIndex += isParallelStep(step) ? step.parallel.length : 1;
+	}
+	const initialStatusAt = Date.now();
+	const initialCompletionOwnerId = ctx.completionOwnerId ?? currentCompletionOwnerId();
 
 	let spawnResult: SpawnRunnerResult = {};
 	try {
@@ -1211,12 +1353,15 @@ export function executeAsyncChain(
 				completionOwnerId: ctx.completionOwnerId ?? currentCompletionOwnerId(),
 				...(capabilityCeiling ? { capabilityCeiling } : {}),
 				piPackageRoot,
-				piArgv1: process.argv[1],
+				childSessionFactoryModule: childSessionFactoryModule(),
+				inheritedChildRuntime: inheritedChildRuntime(ctx.childRuntime),
 				worktreeSetupHook,
 				worktreeSetupHookTimeoutMs,
 				worktreeBaseDir,
+				baseRef,
+				worktreeProvider,
+				worktreeBranchPrefix,
 				controlConfig,
-				turnBudget: params.turnBudget,
 				toolBudget: params.toolBudget,
 				usageBudget: params.usageBudget,
 				controlIntercomTarget,
@@ -1240,7 +1385,23 @@ export function executeAsyncChain(
 			},
 			id,
 			runnerCwd,
-			(proof) => ctx.pi.events.emit(SUBAGENT_PROCESS_TERMINAL_EVENT, proof),
+			{
+				lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
+				runId: id,
+				...(ctx.currentSessionId ? { sessionId: ctx.currentSessionId } : {}),
+				...(initialCompletionOwnerId ? { completionOwnerId: initialCompletionOwnerId } : {}),
+				mode: resultMode,
+				state: "running",
+				startedAt: initialStatusAt,
+				lastUpdate: initialStatusAt,
+				currentStep: 0,
+				chainStepCount: eventChain.length,
+				...(initialParallelGroups.length ? { parallelGroups: initialParallelGroups } : {}),
+				steps: initialStatusSteps,
+			},
+			path.join(asyncDir, "status.json"),
+			(proof) => emitProcessTerminalEvent(ctx, proof),
+			(runnerProcessInstanceId) => params.activeAsyncCapacity?.markStarted(runnerProcessInstanceId),
 		);
 	} catch (error) {
 		params.activeAsyncCapacity?.rollback();
@@ -1249,7 +1410,10 @@ export function executeAsyncChain(
 	}
 
 	if (spawnResult.error) {
-		if (!spawnResult.pid || !spawnResult.runnerProcessInstanceId || (spawnResult.startupDidNotProceed && spawnResult.terminationObserved)) params.activeAsyncCapacity?.rollback();
+		if (spawnResult.startupDidNotProceed) {
+			if (!spawnResult.runnerProcessInstanceId || params.activeAsyncCapacity?.rollbackBeforeRunnerProceed(spawnResult.runnerProcessInstanceId) !== true) params.activeAsyncCapacity?.rollback();
+		}
+		else if (!spawnResult.pid || !spawnResult.runnerProcessInstanceId) params.activeAsyncCapacity?.rollback();
 		else params.activeAsyncCapacity?.markStarted(spawnResult.runnerProcessInstanceId);
 		return formatAsyncStartError(resultMode, `Failed to start async ${resultMode} '${id}': ${spawnResult.error}`);
 	}
@@ -1257,8 +1421,6 @@ export function executeAsyncChain(
 		params.activeAsyncCapacity?.rollback();
 		return formatAsyncStartError(resultMode, `Failed to start async ${resultMode} '${id}': runner identity unavailable`);
 	}
-	params.activeAsyncCapacity?.markStarted(spawnResult.runnerProcessInstanceId);
-
 	if (spawnResult.pid) {
 		const eventFirstStep = eventChain[0];
 		if (!eventFirstStep) {
@@ -1309,7 +1471,7 @@ export function executeAsyncChain(
 						path: nestedAddress.path,
 						asyncDir,
 						pid: spawnResult.pid,
-						ownerIntercomTarget: process.env.PI_SUBAGENT_INTERCOM_SESSION_NAME,
+						ownerIntercomTarget: ctx.childRuntime?.intercomSessionName,
 						leafIntercomTarget: childIntercomTargets?.[0],
 						intercomTarget: childIntercomTargets?.[0],
 						ownerState: "live",
@@ -1320,7 +1482,6 @@ export function executeAsyncChain(
 						chainStepCount: eventChain.length,
 						parallelGroups,
 						...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs, deadlineAt } : {}),
-						...(initialTurnBudget ? { turnBudget: initialTurnBudget } : {}),
 						startedAt: now,
 						lastUpdate: now,
 						...(capabilityCeiling ? { capabilityCeiling } : {}),
@@ -1351,7 +1512,6 @@ export function executeAsyncChain(
 			asyncDir,
 			...(sessionRoot ? { sessionRoot } : {}),
 			...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs, deadlineAt } : {}),
-			...(initialTurnBudget ? { turnBudget: initialTurnBudget } : {}),
 			...(initialUsageBudget ? { usageBudget: initialUsageBudget } : {}),
 			...(capabilityCeiling ? { capabilityCeiling } : {}),
 			...(params.parentWorkflowRunId ? { parentWorkflowRunId: params.parentWorkflowRunId } : {}),
@@ -1368,7 +1528,7 @@ export function executeAsyncChain(
 
 	return {
 		content: [{ type: "text", text: formatAsyncStartedMessage(`Async ${resultMode}: ${chainDesc} [${id}]`, ctx.interactive === true) }],
-		details: { mode: resultMode, runId: id, results: [], asyncId: id, asyncDir, workflowGraph, ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(params.parentWorkflowRunId ? { parentWorkflowRunId: params.parentWorkflowRunId } : {}), ...(params.workflowKey ? { workflowKey: params.workflowKey } : {}), ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs, deadlineAt } : {}), ...(params.turnBudget ? { turnBudget: params.turnBudget } : {}), ...(params.toolBudget ? { toolBudget: params.toolBudget } : {}), ...(initialUsageBudget ? { usageBudget: initialUsageBudget } : {}) },
+		details: { mode: resultMode, runId: id, results: [], asyncId: id, asyncDir, workflowGraph, ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(params.parentWorkflowRunId ? { parentWorkflowRunId: params.parentWorkflowRunId } : {}), ...(params.workflowKey ? { workflowKey: params.workflowKey } : {}), ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs, deadlineAt } : {}), ...(params.toolBudget ? { toolBudget: params.toolBudget } : {}), ...(initialUsageBudget ? { usageBudget: initialUsageBudget } : {}) },
 	};
 }
 
@@ -1398,11 +1558,21 @@ export function executeAsyncSingle(
 		worktreeSetupHook,
 		worktreeSetupHookTimeoutMs,
 		worktreeBaseDir,
+		baseRef,
+		worktreeProvider,
+		worktreeBranchPrefix,
 		controlConfig,
 		controlIntercomTarget,
 		childIntercomTarget,
 		nestedRoute,
 	} = params;
+	let lane: WorkflowLaneMetadata | undefined;
+	try {
+		lane = normalizeWorkflowLaneMetadata(params.lane, "lane");
+		assertWorkflowLaneKey(lane, params.workflowKey, "lane");
+	} catch (error) {
+		return formatAsyncStartError("single", error instanceof Error ? error.message : String(error));
+	}
 	const task = params.task ?? "";
 	let extensionBindings: ExtensionBindings | undefined;
 	try {
@@ -1429,14 +1599,25 @@ export function executeAsyncSingle(
 		if (extensionBindings !== undefined) unsupported.push("extension bindings");
 		if (unsupported.length > 0) return formatAsyncStartError("single", `Agent '${agentConfig.name}' uses runner.type='${externalRunnerType}' and does not support: ${unsupported.join(", ")}.`);
 	}
-	const capabilityCeiling = intersectSubagentCapabilityCeilings(params.capabilityCeiling ?? resolveCurrentSubagentCapabilityCeiling(ctx.currentSessionId), decodeSubagentCapabilityCeiling(process.env[SUBAGENT_CAPABILITY_CEILING_ENV]));
+	const capabilityCeiling = intersectSubagentCapabilityCeilings(params.capabilityCeiling ?? resolveCurrentSubagentCapabilityCeiling(ctx.currentSessionId), ctx.childRuntime?.capabilityCeiling);
 	try {
 		assertAgentAllowedByCapabilityCeiling(agentConfig.name, capabilityCeiling);
 	} catch (error) {
 		return formatAsyncStartError("single", error instanceof Error ? error.message : String(error));
 	}
 	const runnerCwd = resolveChildCwd(ctx.cwd, cwd);
-	const instructionCwd = params.worktree === true
+	let managedWorktreeProvider: "native" | "worktrunk" | undefined;
+	if (params.worktree === true) {
+		try {
+			const resolved = resolveWorktreeProvider(params.worktreeProvider, worktreeBaseDir);
+			managedWorktreeProvider = shouldDeferWorktreeCwd(params.worktreeProvider, worktreeBaseDir) ? "worktrunk" : resolved;
+		} catch (error) {
+			return formatAsyncStartError("single", error instanceof Error ? error.message : String(error));
+		}
+	}
+	const instructionCwd = params.worktree === true && managedWorktreeProvider === "worktrunk"
+		? WORKTREE_AGENT_CWD_PLACEHOLDER
+		: params.worktree === true && managedWorktreeProvider === "native"
 		? resolveExpectedWorktreeAgentCwd(runnerCwd, `${id}-s0`, 0, worktreeBaseDir)
 		: runnerCwd;
 	const readExistenceCwd = params.worktree === true ? runnerCwd : instructionCwd;
@@ -1461,8 +1642,8 @@ export function executeAsyncSingle(
 	}
 	systemPrompt = appendAgentRefinementOverlay(systemPrompt, { cwd: runnerCwd, agentName: agentConfig.name });
 
-	const inheritedNestedRoute = resolveInheritedNestedRouteFromEnv();
-	const nestedAddress = inheritedNestedRoute ? resolveNestedParentAddressFromEnv() : undefined;
+	const inheritedNestedRoute = inheritedNestedRouteOf(ctx.childRuntime);
+	const nestedAddress = inheritedNestedRoute ? inheritedNestedParentAddressOf(ctx.childRuntime) : undefined;
 	const asyncDir = inheritedNestedRoute
 		? path.join(TEMP_ROOT_DIR, "nested-subagent-runs", inheritedNestedRoute.rootRunId, id)
 		: path.join(DIRS.async, id);
@@ -1490,27 +1671,44 @@ export function executeAsyncSingle(
 	// Reads: caller override > agent defaultReads > none. `~`/`~/` expand to home;
 	// absolute paths pass through; relative paths resolve against the child cwd.
 	const reads = params.reads !== undefined ? params.reads : agentConfig.defaultReads ?? false;
-	const readPaths = Array.isArray(reads) ? resolveExistingReadPaths(reads, readExistenceCwd) : [];
+	const readPaths = Array.isArray(reads)
+		? managedWorktreeProvider === "worktrunk"
+			? resolveExistingReadInstructionPaths(reads, instructionCwd, readExistenceCwd)
+			: resolveExistingReadPaths(reads, readExistenceCwd)
+		: [];
 	const readsInstruction = readPaths.length > 0
 		? `[Read from: ${readPaths.join(", ")}]\n\n`
 		: "";
 	const taskText = readsInstruction + taskWithOutputInstruction;
 	const modelScopes = resolveModelScopesForAgent(ctx.modelScope, agentConfig.name, ctx.currentModel);
-	const primaryModel = externalRunner ? undefined : params.modelOverrideFromParent
-		? params.modelOverride
-		: resolveSubagentModelOverride(
-			params.modelOverride ?? agentConfig.model,
-			ctx.currentModel,
-			availableModels,
-			ctx.currentModelProvider,
-			{ scope: modelScopes },
-		);
+	const modelOrigin = resolveModelOrigin({
+		fromParent: params.modelOverrideFromParent,
+		storedOrigin: params.modelOrigin,
+		explicitModel: params.modelOverrideFromParent ? undefined : params.modelOverride,
+		agentModel: agentConfig.model,
+		parentModel: ctx.currentModel,
+	});
+	let primaryModel: string | undefined;
+	try {
+		primaryModel = externalRunner ? undefined : modelOrigin === "inherited"
+			? params.modelOverride ?? (ctx.currentModel ? `${ctx.currentModel.provider}/${ctx.currentModel.id}` : undefined)
+			: resolveSubagentModelOverride(
+				params.modelOverride ?? agentConfig.model,
+				ctx.currentModel,
+				availableModels,
+				ctx.currentModelProvider,
+				{ scope: modelScopes, source: modelOrigin === "explicit" ? "explicit" : "inherited" },
+			);
+	} catch (error) {
+		return formatAsyncStartError("single", error instanceof Error ? error.message : String(error));
+	}
 	const effectiveThinking = externalRunner ? undefined : params.thinkingOverride ?? agentConfig.thinking;
 	const model = externalRunner ? undefined : applyThinkingSuffix(primaryModel, effectiveThinking, params.thinkingOverride !== undefined);
+	const contextLimit = model ? findModelInfo(model, availableModels, agentConfig.modelProvider ?? ctx.currentModelProvider)?.contextWindow : undefined;
 	const thinkingCeiling = externalRunner ? undefined : intersectThinkingCeilings(
 		params.thinkingCeiling,
 		agentConfig.maxThinking,
-		decodeThinkingCeiling(process.env[SUBAGENT_THINKING_CEILING_ENV]),
+		ctx.childRuntime?.thinkingCeiling,
 	);
 	if (!externalRunner) {
 		try {
@@ -1535,32 +1733,31 @@ export function executeAsyncSingle(
 	});
 	if (resolvedToolTimeout.error) return formatAsyncStartError("single", resolvedToolTimeout.error);
 	const toolTimeoutMs = resolvedToolTimeout.toolTimeoutMs;
-	const initialTurnBudget = params.turnBudget ? initialTurnBudgetState(params.turnBudget) : undefined;
 	const initialUsageBudget = usageBudgetState(params.usageBudget, undefined);
 	const resolvedSessionDir = params.sessionDir ?? (sessionRoot ? path.join(sessionRoot, `async-${id}`) : undefined);
 	const structuredOutput = params.structuredOutputSchema
-		? createStructuredOutputRuntime(params.structuredOutputSchema, path.join(asyncDir, "structured-output"), { captureAcceptanceReport: params.acceptance !== false })
+		? createStructuredOutputRuntime(params.structuredOutputSchema, path.join(asyncDir, "structured-output"), { acceptanceReport: resolveAcceptanceReportMode(params.acceptance) })
 		: undefined;
-	const modelCandidates = externalRunner
-		? []
-		: buildModelCandidates(primaryModel, agentConfig.fallbackModels, availableModels, agentConfig.modelProvider ?? ctx.currentModelProvider, {
-			scope: modelScopes,
-			primaryModelFromParent: params.modelOverrideFromParent,
-		})
-			.flatMap((candidate) => {
+	let modelCandidates: string[] = [];
+	if (!externalRunner) {
+		try {
+			modelCandidates = buildModelCandidates(primaryModel, agentConfig.fallbackModels, availableModels, agentConfig.modelProvider ?? ctx.currentModelProvider, {
+				scope: modelScopes,
+				primaryModelFromParent: modelOrigin === "inherited",
+				origin: modelOrigin,
+			}).flatMap((candidate) => {
 				const resolved = applyThinkingSuffix(candidate, effectiveThinking, params.thinkingOverride !== undefined);
 				return resolved ? [resolved] : [];
 			});
-	if (!externalRunner) {
-		try {
 			for (const candidate of modelCandidates) assertThinkingWithinCeiling({ model: candidate, configThinking: effectiveThinking, ceiling: thinkingCeiling, agent: agentConfig.name, runId: id });
 		} catch (error) {
 			return formatAsyncStartError("single", error instanceof Error ? error.message : String(error));
 		}
 	}
-	const effectiveSystemPrompt = appendTurnBudgetSystemPrompt(systemPrompt, params.turnBudget);
 	const toolPlan = resolvePiLaunchToolPlan({
 		tools: agentConfig.tools,
+		excludeTools: agentConfig.excludeTools,
+		allowNestedSubagents: agentConfig.allowNestedSubagents,
 		extensions: agentConfig.extensions,
 		subagentOnlyExtensions: agentConfig.subagentOnlyExtensions,
 		mcpDirectTools: agentConfig.mcpDirectTools,
@@ -1571,9 +1768,10 @@ export function executeAsyncSingle(
 		model,
 		modelCandidates,
 		capabilityCeiling,
-		inheritedCapabilityCeiling: decodeSubagentCapabilityCeiling(process.env[SUBAGENT_CAPABILITY_CEILING_ENV]),
+		inheritedCapabilityCeiling: ctx.childRuntime?.capabilityCeiling,
 		agentName: agentConfig.name,
 		permissionRules: resolvePermissionRules(ctx.permissions, agentConfig.permissions),
+		runtimeSnapshotHost: ctx.pi,
 	});
 	const launchResolvedExtensions = externalRunner ? undefined : projectLaunchResolvedChildExtensions(toolPlan);
 	if (!externalRunner) {
@@ -1598,12 +1796,14 @@ export function executeAsyncSingle(
 		...((params.fast ?? agentConfig.fast) !== undefined ? { fast: params.fast ?? agentConfig.fast } : {}),
 		...(resolveEffectiveThinking(model, effectiveThinking) ? { thinking: resolveEffectiveThinking(model, effectiveThinking) } : {}),
 		...(thinkingCeiling ? { thinkingCeiling } : {}),
-		systemPrompt: effectiveSystemPrompt,
+		systemPrompt,
 		systemPromptMode: agentConfig.systemPromptMode,
 		inheritProjectContext: agentConfig.inheritProjectContext,
+		inheritGlobalContext: agentConfig.inheritGlobalContext,
 		inheritSkills: agentConfig.inheritSkills,
 		skills: resolvedSkills.map((skill) => skill.name),
 		tools: toolPlan.effectiveToolAllowlist,
+		...(toolPlan.excludeTools.length > 0 ? { excludeTools: toolPlan.excludeTools } : {}),
 		extensions: toolPlan.extensionArgs,
 		mcpDirectTools: toolPlan.effectiveMcpTools,
 		...(outputPath ? { outputPath } : {}),
@@ -1623,6 +1823,7 @@ export function executeAsyncSingle(
 	const recoveryAgentConfig = params.recoveryAgentConfig ?? agentConfig;
 	const recoveryDescriptor: SteeringRecoveryDescriptor = {
 		version: 1,
+		...(lane ? { lane } : {}),
 		launchContractDigest,
 		...(extensionBindings ? { extensionBindings } : {}),
 		runFanoutBudget,
@@ -1635,17 +1836,22 @@ export function executeAsyncSingle(
 		...(model ? { model } : {}),
 		...(params.fast ?? recoveryAgentConfig.fast ? { fast: params.fast ?? recoveryAgentConfig.fast } : {}),
 		...(recoveryAgentConfig.modelProvider ? { modelProvider: recoveryAgentConfig.modelProvider } : {}),
-		...(params.modelOverrideFromParent ? { modelOverrideFromParent: true } : {}),
+		...(modelOrigin === "inherited" ? { modelOverrideFromParent: true } : {}),
+		modelOrigin,
 		...(recoveryAgentConfig.fallbackModels ? { fallbackModels: [...recoveryAgentConfig.fallbackModels] } : {}),
 		...(effectiveThinking ? { thinking: resolveEffectiveThinking(model, effectiveThinking) } : {}),
 		...(thinkingCeiling ? { thinkingCeiling } : {}),
 		...(recoveryAgentConfig.tools ? { tools: [...recoveryAgentConfig.tools] } : {}),
+		...(recoveryAgentConfig.excludeTools ? { excludeTools: [...recoveryAgentConfig.excludeTools] } : {}),
+		...(recoveryAgentConfig.allowNestedSubagents !== undefined ? { allowNestedSubagents: recoveryAgentConfig.allowNestedSubagents } : {}),
 		...(recoveryAgentConfig.extensions ? { extensions: [...recoveryAgentConfig.extensions] } : {}),
 		...(recoveryAgentConfig.subagentOnlyExtensions ? { subagentOnlyExtensions: [...recoveryAgentConfig.subagentOnlyExtensions] } : {}),
 		...(recoveryAgentConfig.mcpDirectTools ? { mcpDirectTools: [...recoveryAgentConfig.mcpDirectTools] } : {}),
+		...(recoveryAgentConfig.mutationTools ? { mutationTools: [...recoveryAgentConfig.mutationTools] } : {}),
 		...(recoveryAgentConfig.systemPrompt ? { systemPrompt: recoveryAgentConfig.systemPrompt } : {}),
 		systemPromptMode: recoveryAgentConfig.systemPromptMode,
 		inheritProjectContext: recoveryAgentConfig.inheritProjectContext,
+		inheritGlobalContext: recoveryAgentConfig.inheritGlobalContext,
 		inheritSkills: recoveryAgentConfig.inheritSkills,
 		...(resolvedSkills.length ? { skills: resolvedSkills.map((skill) => skill.name) } : {}),
 		...(recoveryAgentConfig.skillPath ? { skillPath: [...recoveryAgentConfig.skillPath] } : {}),
@@ -1659,8 +1865,8 @@ export function executeAsyncSingle(
 		...(controlConfig ? { controlConfig } : {}),
 		...(params.context ? { context: params.context } : {}),
 		...(params.intercomBridge !== undefined ? { intercomBridge: params.intercomBridge } : {}),
+		...(params.baseRef !== undefined ? { baseRef: params.baseRef } : {}),
 		...(deadlineAt !== undefined ? { absoluteDeadlineAt: deadlineAt } : {}),
-		...(initialTurnBudget ? { initialTurnBudget: { maxTurns: initialTurnBudget.maxTurns, graceTurns: initialTurnBudget.graceTurns } } : {}),
 		...(resolvedToolBudget.budget ? { initialToolBudget: resolvedToolBudget.budget } : {}),
 		maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, recoveryAgentConfig.maxSubagentDepth),
 		...(maxOutput ? { maxOutput } : {}),
@@ -1678,6 +1884,8 @@ export function executeAsyncSingle(
 		}
 	}
 	let spawnResult: SpawnRunnerResult = {};
+	const initialStatusAt = Date.now();
+	const initialCompletionOwnerId = ctx.completionOwnerId ?? currentCompletionOwnerId();
 	try {
 		spawnResult = spawnRunner(
 			{
@@ -1693,28 +1901,36 @@ export function executeAsyncSingle(
 						...(params.externalJobFollowUp ? { externalJobFollowUp: params.externalJobFollowUp } : {}),
 						...(params.context ? { context: params.context } : {}),
 						cwd: runnerCwd,
+						requestedCwd: params.requestedCwd ?? runnerCwd,
 						model,
+						...(contextLimit !== undefined ? { contextLimit } : {}),
 						...(params.fast ?? agentConfig.fast ? { fast: params.fast ?? agentConfig.fast } : {}),
 						thinking: resolveEffectiveThinking(model, effectiveThinking),
 						...(thinkingCeiling ? { thinkingCeiling } : {}),
 						modelCandidates,
-						...(params.modelOverrideFromParent ? { skipPrimaryModelVerification: true } : {}),
+						...(modelOrigin === "inherited" ? { skipPrimaryModelVerification: true } : {}),
 						...(availableModels && availableModels.length > 0 ? { modelVerificationRegistry: availableModels } : {}),
 						tools: agentConfig.tools,
+						excludeTools: agentConfig.excludeTools,
+						allowNestedSubagents: agentConfig.allowNestedSubagents,
 						extensions: agentConfig.extensions,
 						subagentOnlyExtensions: agentConfig.subagentOnlyExtensions,
 						mcpDirectTools: agentConfig.mcpDirectTools,
+						mutationTools: agentConfig.mutationTools,
 						completionGuard: agentConfig.completionGuard,
 						systemPrompt,
 						systemPromptMode: agentConfig.systemPromptMode,
 						inheritProjectContext: agentConfig.inheritProjectContext,
+						inheritGlobalContext: agentConfig.inheritGlobalContext,
 						inheritSkills: agentConfig.inheritSkills,
 						skills: resolvedSkills.map((r) => r.name),
 						outputPath,
+						...(params.outputClaimPath ? { outputClaimPath: params.outputClaimPath } : {}),
 						outputMode,
 						...(!externalRunner && sessionFile ? { sessionFile } : {}),
 						maxSubagentDepth: resolveChildMaxSubagentDepth(maxSubagentDepth, agentConfig.maxSubagentDepth),
 						waitToolEnabled: params.waitToolEnabled,
+						waitToolDefaultTimeoutMs: params.waitToolDefaultTimeoutMs,
 						...(params.agentContract ? { agentContract: params.agentContract } : {}),
 						definitionDigest: agentDefinitionDigest(agentConfig),
 						launchBindingTask: task,
@@ -1722,10 +1938,12 @@ export function executeAsyncSingle(
 						...(extensionBindings ? { extensionBindings } : {}),
 						launchResolvedExtensions,
 						effectiveAcceptance: resolvedAcceptance,
+						acceptanceInput: params.acceptance,
 						...(structuredOutput ? { structuredOutput } : {}),
 						...(params.structuredOutputSchema ? { structuredOutputSchema: params.structuredOutputSchema } : {}),
 						...(resolvedToolBudget.budget ? { toolBudget: resolvedToolBudget.budget } : {}),
 						...(params.worktree === true ? { worktree: true } : {}),
+						...(lane ? { lane } : {}),
 					},
 				],
 				resultPath: params.parentWorkflowRunId !== undefined && (params.revivalLease !== undefined || params.workflowAwaitAsync === true)
@@ -1743,15 +1961,18 @@ export function executeAsyncSingle(
 				completionOwnerId: ctx.completionOwnerId ?? currentCompletionOwnerId(),
 				...(capabilityCeiling ? { capabilityCeiling } : {}),
 				piPackageRoot,
-				piArgv1: process.argv[1],
+				childSessionFactoryModule: childSessionFactoryModule(),
+				inheritedChildRuntime: inheritedChildRuntime(ctx.childRuntime),
 				worktreeSetupHook,
 				worktreeSetupHookTimeoutMs,
 				worktreeBaseDir,
+				baseRef,
+				worktreeProvider,
+				worktreeBranchPrefix,
 				controlConfig,
 				timeoutMs,
 				deadlineAt,
 				toolTimeoutMs,
-				turnBudget: params.turnBudget,
 				toolBudget: params.toolBudget,
 				usageBudget: params.usageBudget,
 				controlIntercomTarget,
@@ -1762,6 +1983,7 @@ export function executeAsyncSingle(
 				runFanoutBudget,
 				...(params.parentWorkflowRunId ? { parentWorkflowRunId: params.parentWorkflowRunId } : {}),
 				...(params.workflowKey ? { workflowKey: params.workflowKey } : {}),
+				...(lane ? { lane } : {}),
 				...(params.revivalLease ? { revivalLease: params.revivalLease } : {}),
 				nestedRoute: nestedRoute ?? inheritedNestedRoute,
 				nestedSelf: inheritedNestedRoute && nestedAddress ? {
@@ -1773,7 +1995,24 @@ export function executeAsyncSingle(
 			},
 			id,
 			runnerCwd,
-			(proof) => ctx.pi.events.emit(SUBAGENT_PROCESS_TERMINAL_EVENT, proof),
+			{
+				lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
+				runId: id,
+				...(ctx.currentSessionId ? { sessionId: ctx.currentSessionId } : {}),
+				...(initialCompletionOwnerId ? { completionOwnerId: initialCompletionOwnerId } : {}),
+				mode: "single",
+				state: "running",
+				startedAt: initialStatusAt,
+				lastUpdate: initialStatusAt,
+				currentStep: 0,
+				chainStepCount: 1,
+				...(lane ? { lane } : {}),
+				steps: [{ agent, status: "pending", ...(lane ? { lane } : {}), ...(model ? { model } : {}), ...(contextLimit !== undefined ? { contextLimit } : {}) }],
+			},
+			path.join(asyncDir, "status.json"),
+			(proof) => emitProcessTerminalEvent(ctx, proof),
+			(runnerProcessInstanceId) => params.activeAsyncCapacity?.markStarted(runnerProcessInstanceId),
+			params.requestedCwd ?? runnerCwd,
 		);
 	} catch (error) {
 		params.activeAsyncCapacity?.rollback();
@@ -1782,7 +2021,10 @@ export function executeAsyncSingle(
 	}
 
 	if (spawnResult.error) {
-		if (!spawnResult.pid || !spawnResult.runnerProcessInstanceId || (spawnResult.startupDidNotProceed && spawnResult.terminationObserved)) params.activeAsyncCapacity?.rollback();
+		if (spawnResult.startupDidNotProceed) {
+			if (!spawnResult.runnerProcessInstanceId || params.activeAsyncCapacity?.rollbackBeforeRunnerProceed(spawnResult.runnerProcessInstanceId) !== true) params.activeAsyncCapacity?.rollback();
+		}
+		else if (!spawnResult.pid || !spawnResult.runnerProcessInstanceId) params.activeAsyncCapacity?.rollback();
 		else params.activeAsyncCapacity?.markStarted(spawnResult.runnerProcessInstanceId);
 		return formatAsyncStartError("single", `Failed to start async run '${id}': ${spawnResult.error}`);
 	}
@@ -1790,8 +2032,6 @@ export function executeAsyncSingle(
 		params.activeAsyncCapacity?.rollback();
 		return formatAsyncStartError("single", `Failed to start async run '${id}': runner identity unavailable`);
 	}
-	params.activeAsyncCapacity?.markStarted(spawnResult.runnerProcessInstanceId);
-
 	if (spawnResult.pid) {
 		if (inheritedNestedRoute && nestedAddress) {
 			const now = Date.now();
@@ -1809,7 +2049,7 @@ export function executeAsyncSingle(
 						path: nestedAddress.path,
 						asyncDir,
 						pid: spawnResult.pid,
-						ownerIntercomTarget: process.env.PI_SUBAGENT_INTERCOM_SESSION_NAME,
+						ownerIntercomTarget: ctx.childRuntime?.intercomSessionName,
 						leafIntercomTarget: childIntercomTarget?.(agent, 0),
 						intercomTarget: childIntercomTarget?.(agent, 0),
 						ownerState: "live",
@@ -1819,7 +2059,6 @@ export function executeAsyncSingle(
 						agents: [agent],
 						chainStepCount: 1,
 						...(timeoutMs !== undefined ? { timeoutMs, deadlineAt } : {}),
-						...(initialTurnBudget ? { turnBudget: initialTurnBudget } : {}),
 						startedAt: now,
 						lastUpdate: now,
 						...(capabilityCeiling ? { capabilityCeiling } : {}),
@@ -1847,7 +2086,6 @@ export function executeAsyncSingle(
 			...(params.parentWorkflowRunId ? { parentWorkflowRunId: params.parentWorkflowRunId } : {}),
 			...(params.workflowKey ? { workflowKey: params.workflowKey } : {}),
 			...(timeoutMs !== undefined ? { timeoutMs, deadlineAt } : {}),
-			...(initialTurnBudget ? { turnBudget: initialTurnBudget } : {}),
 			...(initialUsageBudget ? { usageBudget: initialUsageBudget } : {}),
 			...(capabilityCeiling ? { capabilityCeiling } : {}),
 			nestedRoute,
@@ -1856,6 +2094,6 @@ export function executeAsyncSingle(
 
 	return {
 		content: [{ type: "text", text: formatAsyncStartedMessage(`Async: ${agent} [${id}]`, ctx.interactive === true) }],
-		details: { mode: "single", runId: id, results: [], asyncId: id, asyncDir, launchContractDigest, launchResolvedExtensions, ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(params.context ? { context: params.context } : {}), ...(timeoutMs !== undefined ? { timeoutMs, deadlineAt } : {}), ...(params.turnBudget ? { turnBudget: params.turnBudget } : {}), ...(params.toolBudget ? { toolBudget: resolvedToolBudget.budget ?? params.toolBudget } : {}), ...(initialUsageBudget ? { usageBudget: initialUsageBudget } : {}) } as Details,
+		details: { mode: "single", runId: id, results: [], asyncId: id, asyncDir, launchContractDigest, launchResolvedExtensions, ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(params.context ? { context: params.context } : {}), ...(timeoutMs !== undefined ? { timeoutMs, deadlineAt } : {}), ...(params.toolBudget ? { toolBudget: resolvedToolBudget.budget ?? params.toolBudget } : {}), ...(initialUsageBudget ? { usageBudget: initialUsageBudget } : {}) } as Details,
 	};
 }

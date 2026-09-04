@@ -43,6 +43,7 @@ export function projectAgentDefinition(agent: AgentConfig): Record<string, unkno
 		systemPrompt: agent.systemPrompt,
 		systemPromptMode: agent.systemPromptMode,
 		inheritProjectContext: agent.inheritProjectContext,
+		inheritGlobalContext: agent.inheritGlobalContext,
 		inheritSkills: agent.inheritSkills,
 		model: agent.model,
 		modelProvider: agent.modelProvider,
@@ -50,9 +51,12 @@ export function projectAgentDefinition(agent: AgentConfig): Record<string, unkno
 		fast: agent.fast,
 		thinking: agent.thinking,
 		tools: agent.tools,
+		excludeTools: agent.excludeTools,
+		allowNestedSubagents: agent.allowNestedSubagents,
 		mcpDirectTools: agent.mcpDirectTools,
 		extensions: agent.extensions,
 		subagentOnlyExtensions: agent.subagentOnlyExtensions,
+		mutationTools: agent.mutationTools,
 		skills: agent.skills,
 		skillPath: agent.skillPath,
 		output: agent.output,
@@ -61,7 +65,6 @@ export function projectAgentDefinition(agent: AgentConfig): Record<string, unkno
 		defaultContext: agent.defaultContext,
 		defaultAsync: agent.defaultAsync,
 		defaultTimeoutMs: agent.defaultTimeoutMs,
-		defaultTurnBudget: agent.defaultTurnBudget,
 		defaultAcceptance: agent.defaultAcceptance,
 		acceptanceRole: agent.acceptanceRole,
 		interactive: agent.interactive,
@@ -87,9 +90,11 @@ export interface LaunchBindingInput {
 	systemPrompt?: string | null;
 	systemPromptMode?: AgentConfig["systemPromptMode"];
 	inheritProjectContext: boolean;
+	inheritGlobalContext: boolean;
 	inheritSkills: boolean;
 	skills?: string[];
 	tools?: string[];
+	excludeTools?: string[];
 	extensions?: string[];
 	subagentOnlyExtensions?: string[];
 	mcpDirectTools?: string[];
@@ -113,9 +118,11 @@ export function projectLaunchBinding(input: LaunchBindingInput): Record<string, 
 		systemPromptDigest: input.systemPrompt === undefined || input.systemPrompt === null ? undefined : stableJsonDigest(input.systemPrompt),
 		systemPromptMode: input.systemPromptMode,
 		inheritProjectContext: input.inheritProjectContext,
+		inheritGlobalContext: input.inheritGlobalContext,
 		inheritSkills: input.inheritSkills,
 		skills: input.skills,
 		tools: input.tools,
+		excludeTools: input.excludeTools,
 		extensions: input.extensions,
 		subagentOnlyExtensions: input.subagentOnlyExtensions,
 		mcpDirectTools: input.mcpDirectTools,

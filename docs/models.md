@@ -8,9 +8,10 @@ Builtin agents inherit your current Pi default model. This keeps new installs fr
 - `subagents.defaultProvider` — a provider preference for bare model ids, such as `llama-3`, when multiple providers expose the same id.
 - `subagents.agentOverrides.<name>.model` — pin one role.
 - `subagents.agentOverrides.<name>.defaultProvider` — choose or clear the provider preference for one role.
+- `subagents.agentOverridesByProvider.<provider>.<name>` — layer role fields for the active parent provider.
 - Per-run overrides — for one launch only.
 
-Precedence, strongest first: per-run override → agent frontmatter `model` → `agentOverrides.<name>.model` → `subagents.defaultModel` → the parent session model. A provider preference does not replace this order; it only resolves bare model ids when the active registry has more than one match. Fully qualified `provider/model` strings still win exactly.
+Precedence, strongest first: per-run override → provider-scoped role override → `agentOverrides.<name>.model` → agent frontmatter `model` → `subagents.defaultModel` → the parent session model. A provider preference does not replace this order; it only resolves bare model ids when the active registry has more than one match. Fully qualified `provider/model` strings still win exactly.
 
 Use `model: "inherit"` in agent frontmatter or `agentOverrides.<name>.model` to select the current parent session model explicitly.
 
@@ -36,6 +37,28 @@ In `~/.pi/agent/settings.json` (user) or the project config settings file (`.pi/
 }
 ```
 
+To keep one role definition but configure it differently for work and personal providers, add the unambiguous provider map beside `agentOverrides`:
+
+```json
+{
+  "subagents": {
+    "agentOverrides": {
+      "worker": { "thinking": "medium" }
+    },
+    "agentOverridesByProvider": {
+      "github-copilot": {
+        "worker": { "model": "github-copilot/gpt-5-mini" }
+      },
+      "openrouter": {
+        "worker": { "model": "openrouter/openai/gpt-5-mini" }
+      }
+    }
+  }
+}
+```
+
+The provider key comes from the active parent session model (or an explicit host `preferredProvider`) before fallback selection. Provider-scoped fields layer over the ordinary override in the same settings file; project settings still win over user settings. A fallback attempt does not switch the selected provider configuration.
+
 For one run, put the override in the command:
 
 ```text
@@ -51,14 +74,14 @@ For a persistent role override with a backup model for provider failures:
       "reviewer": {
         "model": "anthropic/claude-sonnet-4",
         "thinking": "high",
-        "fallbackModels": ["openai/gpt-5-mini"]
+        "fallbackModels": ["openai-codex/gpt-5.6-luna:low"]
       }
     }
   }
 }
 ```
 
-`subagents.defaultModel` and `subagents.defaultProvider` apply to builtin, package, user, and project agents. `defaultModel` fills only agents that do not set `model` in frontmatter. `defaultProvider` is also applied to frontmatter and override models so bare ids resolve against the intended provider. Per-run model overrides and `agentOverrides.<name>.model` still win, and explicit agent frontmatter still wins over the global default. The same `agentOverrides` block can change `tools`, `skills`, inherited context, prompt text, or disable a builtin (see [agents.md](agents.md)). Matching user and project agents also receive override fields that their frontmatter leaves unset, so a shared project config agent can keep the persona while local settings choose the model or provider.
+`subagents.defaultModel` and `subagents.defaultProvider` apply to builtin, package, user, and project agents. `defaultModel` fills only agents that do not set `model` in frontmatter. `defaultProvider` is also applied to frontmatter and override models so bare ids resolve against the intended provider. Per-run model overrides and `agentOverrides.<name>.model` win over frontmatter and the global default. The same `agentOverrides` block can change `tools`, `skills`, inherited context, prompt text, or disable an agent (see [agents.md](agents.md)); matching custom-agent frontmatter is replaced for any field set by the override.
 
 ## Fast mode
 
@@ -77,7 +100,7 @@ A setup that works well in practice: route agents by task shape instead of runni
 
 The routing rule: use the capability tiers (1–3) when the task is well-scoped, and the intent tier (4) when scoping or judging is the task itself.
 
-Give tier-4 agents cross-provider `fallbackModels` so subscription usage limits degrade gracefully instead of failing the run. Fallback triggers on rate-limit and overload errors automatically:
+Give tier-4 agents cross-provider `fallbackModels` so subscription usage limits degrade gracefully instead of failing the run. Fallback triggers on retryable provider/model failures such as rate-limit, overload, unavailable-model, and provider-reported timeout errors. The outer run-level `timeoutMs` / `maxRuntimeMs` deadline is terminal and does not start another fallback attempt:
 
 ```yaml
 ---
@@ -93,7 +116,7 @@ One interaction worth knowing for tier 4: forked context over an Anthropic paren
 
 ## Thinking level defaults
 
-Set `subagents.defaultThinking` to give builtin, package, user, and project agents without a `thinking` value a shared thinking level, independent of the parent session's default. Project settings win over user settings. Explicit frontmatter, `agentOverrides.<name>.thinking`, and per-run thinking overrides still win. `thinking: false` remains an explicit opt-out:
+Set `subagents.defaultThinking` to give builtin, package, user, and project agents without a `thinking` value a shared thinking level, independent of the parent session's default. Project settings win over user settings. Matching `agentOverrides.<name>.thinking` and per-run thinking overrides replace frontmatter; otherwise explicit frontmatter remains in effect. `thinking: false` remains an explicit opt-out:
 
 ```json
 {
@@ -106,7 +129,7 @@ Set `subagents.defaultThinking` to give builtin, package, user, and project agen
 }
 ```
 
-If your provider rejects model IDs with thinking suffixes, set `subagents.disableThinking: true` in user or project settings. That clears bundled builtin thinking defaults in one place. An explicit higher-precedence `agentOverrides.<name>.thinking` value can opt a role back in. Existing custom-agent frontmatter remains authoritative.
+If your provider rejects model IDs with thinking suffixes, set `subagents.disableThinking: true` in user or project settings. That clears bundled builtin thinking defaults in one place. An explicit higher-precedence `agentOverrides.<name>.thinking` value can opt a role back in or replace custom-agent frontmatter thinking.
 
 ### Thinking ceiling
 
@@ -131,7 +154,7 @@ Set `subagents.defaultExtensions` to give builtin, package, user, and project ag
 - Empty array: sets `extensions: []` for agents that do not explicitly define it, disabling ambient extension loading.
 - Non-empty array: supplies that allowlist to agents that do not explicitly define one.
 
-Project settings win over user settings. Use `agentOverrides.<name>.extensions` for per-agent settings; explicit custom-agent frontmatter remains authoritative.
+Project settings win over user settings. Use `agentOverrides.<name>.extensions` for per-agent settings; a matching override replaces custom-agent frontmatter for that field.
 
 ```json
 {
@@ -182,9 +205,9 @@ To keep subagents inside a budget or compliance profile, enforce a model scope. 
     "modelScope": {
       "enforce": true,
       "strict": true,
-      "allow": ["inherit", "openai/gpt-5-*"],
+      "allow": ["inherit", "openai/gpt-5-*", "openai-codex/gpt-5.6-*"],
       "agents": {
-        "worker": { "allow": ["openai/gpt-5-mini"] },
+        "worker": { "allow": ["openai-codex/gpt-5.6-luna"] },
         "reviewer": { "allow": ["inherit"] }
       }
     }

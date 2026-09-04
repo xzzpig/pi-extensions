@@ -88,6 +88,27 @@ describe("tracked mutation evidence", () => {
 		});
 	});
 
+	it("does not invoke repository fsmonitor while collecting mutation evidence", () => {
+		withRepo((repo) => {
+			const marker = path.join(repo, "fsmonitor-invoked");
+			const hook = path.join(repo, "fsmonitor-hook.cjs");
+			fs.writeFileSync(hook, `require("node:fs").appendFileSync(${JSON.stringify(marker)}, "invoked\\n");\n`, "utf-8");
+			git(repo, ["config", "core.fsmonitor", `${JSON.stringify(process.execPath)} ${JSON.stringify(hook)}`]);
+			git(repo, ["status", "--short"]);
+			assert.equal(fs.existsSync(marker), true);
+			fs.rmSync(marker);
+			fs.writeFileSync(path.join(repo, "tracked.txt"), "dirty before child\n", "utf-8");
+
+			const snapshot = snapshotTrackedMutations(repo);
+			fs.writeFileSync(path.join(repo, "tracked.txt"), "dirty after child\n", "utf-8");
+			const evidence = collectTrackedMutationEvidence(snapshot, repo);
+
+			assert.equal(snapshot.unavailable, undefined);
+			assert.equal(evidence.attemptedMutation, true);
+			assert.equal(fs.existsSync(marker), false);
+		});
+	});
+
 	it("uses tracked evidence as completion guard mutation proof", () => {
 		const guard = evaluateCompletionMutationGuard({
 			agent: "worker",
@@ -125,5 +146,32 @@ describe("tracked mutation evidence", () => {
 		assert.match(summary.message, /termination: timed-out/);
 		assert.match(summary.message, /changed tracked files: tracked\.txt/);
 		assert.match(summary.message, /active tool: edit/);
+	});
+
+	it("classifies dirty timeouts with a missing requested report as recovery-needed", () => {
+		const changedFiles = Array.from({ length: 25 }, (_, index) => `src/file-${String(index + 1).padStart(2, "0")}.ts`);
+		const summary = buildTimeoutRecoverySummary({
+			termination: "timed-out",
+			evidence: {
+				source: "tracked-files",
+				trackedOnly: true,
+				changedFiles,
+				attemptedMutation: true,
+			},
+			requiredOutputMissing: true,
+		});
+
+		assert.equal(summary.changedFiles.length, 20);
+		assert.deepEqual(summary.changedFiles.slice(0, 2), ["src/file-01.ts", "src/file-02.ts"]);
+		assert.equal(summary.truncated, true);
+		assert.match(summary.message, /\.\.\. \(5 more\)/);
+		assert.doesNotMatch(summary.message, /src\/file-25\.ts/);
+		assert.equal(summary.recoveryNeeded, true);
+		assert.equal(summary.reason, "timed-out-with-dirty-worktree");
+		assert.equal(summary.reportStatus, "missing");
+		assert.match(summary.message, /Recovery needed/i);
+		assert.match(summary.message, /requested report: missing/i);
+		assert.match(summary.message, /review (?:the )?diff and artifacts before resuming/i);
+		assert.match(summary.message, /dependent stages/i);
 	});
 });
