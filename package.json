@@ -1,6 +1,6 @@
 {
   "name": "@gotgenes/pi-permission-system",
-  "version": "27.0.1",
+  "version": "31.0.2",
   "description": "Permission enforcement extension for the Pi coding agent.",
   "type": "module",
   "exports": {
@@ -34,6 +34,11 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "verify:public-types": "bash scripts/verify-public-types.sh",
+    "measure:core-coverage": "node scripts/measure-core-coverage.mjs",
+    "measure:statement-descent": "node scripts/measure-statement-descent.mjs",
+    "measure:statement-operands": "node scripts/measure-statement-operands.mjs",
+    "measure:unresolved-redirects": "node scripts/measure-unresolved-redirects.mjs",
+    "measure:wrapper-transparency": "node scripts/measure-wrapper-transparency.mjs",
     "lint:md": "rumdl check *.md docs/**/*.md",
     "lint": "biome check . && eslint . && pnpm run lint:md"
   },

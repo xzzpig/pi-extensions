@@ -12,12 +12,13 @@ describe("buildPathAskPayload", () => {
       pathValue: "/etc/passwd",
       agentName: "my-agent",
       matchedPattern: "/etc/*",
+      surface: "path_read",
     });
 
     expect(payload.kind).toBe("path");
     expect(payload.request).toEqual({
       requester: { agentName: "my-agent", forwarded: false, sessionId: null },
-      surface: "path",
+      surface: "path_read",
       toolName: "read",
       invokedToolName: null,
       value: "/etc/passwd",
@@ -34,6 +35,7 @@ describe("buildPathAskPayload", () => {
         toolName: "read",
         pathValue: "/etc/passwd",
         agentName: null,
+        surface: "path_read",
       }).request.requester,
     ).toEqual({ agentName: null, forwarded: false, sessionId: null });
   });
@@ -46,6 +48,7 @@ describe("buildExternalDirectoryAskPayload", () => {
       pathValue: "/tmp/out.txt",
       cwd: "/projects/my-app",
       agentName: "my-agent",
+      surface: "external_directory_write",
     });
 
     expect(payload.kind).toBe("external_directory");
@@ -65,6 +68,7 @@ describe("buildExternalDirectoryAskPayload", () => {
         resolvedPath: "/etc/passwd",
         cwd: "/projects/my-app",
         agentName: null,
+        surface: "external_directory_read",
       }).evidence,
     ).toEqual([
       { label: "resolves to", text: "/etc/passwd", detail: null },
@@ -78,6 +82,7 @@ describe("buildExternalDirectoryAskPayload", () => {
       pathValue: "/etc/passwd",
       cwd: "/projects/my-app",
       agentName: null,
+      surface: "external_directory_read",
     });
 
     expect(payload.evidence).toEqual([
@@ -94,10 +99,13 @@ describe("buildBashExternalDirectoryAskPayload", () => {
       cwd: "/projects/my-app",
       agentName: "my-agent",
       toolName: "bash",
+      surface: "external_directory_read",
     });
 
     expect(payload.kind).toBe("bash_external_directory");
     expect(payload.request.value).toBe("cat /etc/passwd");
+    // The surface names the direction; the kind stays coarse for the renderer.
+    expect(payload.request.surface).toBe("external_directory_read");
     expect(payload.request.requester.agentName).toBe("my-agent");
     expect(payload.evidence).toEqual([
       { label: "working directory", text: "/projects/my-app", detail: null },
@@ -113,6 +121,7 @@ describe("buildBashExternalDirectoryAskPayload", () => {
         { path: "/b" },
       ],
       cwd: "/repo",
+      surface: "external_directory",
       agentName: null,
       toolName: "bash",
     });

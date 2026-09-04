@@ -5,7 +5,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { AskEscalator } from "#src/authority/authorizer-selection";
-import { DECIDED_BY_HUMAN } from "#test/helpers/decision-fixtures";
+import {
+  DECIDED_BY_ABSENT_AUTHORITY,
+  DECIDED_BY_HUMAN,
+} from "#test/helpers/decision-fixtures";
 import {
   getDecisionEvents,
   makeCheckResult,
@@ -204,7 +207,7 @@ describe("handleToolCall decision events — confirmation_unavailable", () => {
           approved: false,
           state: "denied",
           confirmationUnavailable: true,
-          decidedBy: DECIDED_BY_HUMAN,
+          decidedBy: DECIDED_BY_ABSENT_AUTHORITY,
         }),
       },
     });
@@ -255,7 +258,7 @@ describe("handleToolCall decision events — infrastructure_auto_allowed", () =>
 // ── auto_approved path (yolo mode) ───────────────────────────────────
 
 describe("handleToolCall decision events — auto_approved", () => {
-  it("emits allow with auto_approved when prompt returns autoApproved:true", async () => {
+  it("emits allow with auto_approved when yolo decided the escalated ask", async () => {
     const { handler, events } = makeHandler({
       session: {
         checkPermission: vi
@@ -266,8 +269,7 @@ describe("handleToolCall decision events — auto_approved", () => {
         escalate: vi.fn<AskEscalator["escalate"]>().mockResolvedValue({
           approved: true,
           state: "approved",
-          autoApproved: true,
-          decidedBy: DECIDED_BY_HUMAN,
+          decidedBy: { kind: "yolo", pattern: "*" },
         }),
       },
     });

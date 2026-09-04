@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import type { ResolvedAccessIntent } from "./access-intent/access-intent";
 import { normalizeInput } from "./access-intent/input-normalizer";
-import { PATH_SURFACES } from "./access-intent/path-surfaces";
+import { PATH_SURFACES, surfaceFamilyOf } from "./access-intent/path-surfaces";
 import { classifyToolKind } from "./access-intent/tool-kind";
 import {
   getGlobalConfigPath,
@@ -22,6 +22,7 @@ import {
   evaluateAnyValue,
   evaluateFirst,
   floorAllowsToAsk,
+  isSurfaceFullyDenied,
   rewriteAsksToYolo,
 } from "./rule";
 import { mergeScopesWithOrigins } from "./scope-merge";
@@ -83,6 +84,7 @@ export interface ScopedPermissionManager {
     sessionRules?: Ruleset,
   ): PermissionCheckResult;
   getToolPermission(toolName: string, agentName?: string): PermissionState;
+  isToolFullyDenied(toolName: string, agentName?: string): boolean;
   getConfigIssues(agentName?: string): string[];
 }
 
@@ -269,6 +271,24 @@ export class PermissionManager implements ScopedPermissionManager {
   }
 
   /**
+   * Whether every value under a tool's surface resolves to `deny`.
+   *
+   * This is the question tool exposure asks, and it is not
+   * {@link PermissionManager.getToolPermission} — that reports the surface's
+   * catch-all, so `bash: {"*": "deny", "git *": "ask"}` reads as `deny` even
+   * though `git status` would be asked about (#815).
+   *
+   * Reads the same composed rules the catch-all query does, so it inherits the
+   * fail-closed floor and not the yolo rewrite. Neither matters: one touches
+   * only `allow` and the other only `ask`, so neither can create or remove the
+   * `deny` this answer turns on.
+   */
+  isToolFullyDenied(toolName: string, agentName?: string): boolean {
+    const { composedRules } = this.resolvePermissions(agentName);
+    return isSurfaceFullyDenied(toolName.trim(), composedRules, this.flavor);
+  }
+
+  /**
    * Unified resolution entry point — dispatches on intent kind.
    *
    * `"tool"` → normalizes raw input through `normalizeInput` (bash, skill, mcp,
@@ -408,7 +428,8 @@ function deriveSource(
   toolName: string,
 ): PermissionCheckResult["source"] {
   if (rule.layer === "session") return "session";
-  if (SPECIAL_PERMISSION_KEYS.has(toolName)) return "special";
+  // Family membership, so a directional surface keeps reporting "special".
+  if (SPECIAL_PERMISSION_KEYS.has(surfaceFamilyOf(toolName))) return "special";
 
   switch (classifyToolKind(toolName)) {
     case "mcp":

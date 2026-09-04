@@ -167,7 +167,8 @@ describe("describeBashExternalDirectoryGate", () => {
     const intent = resolver.resolve.mock.calls[0][0];
     expect(intent).toMatchObject({
       kind: "access-path",
-      surface: "external_directory",
+      // `cat` is a pure-reader core word, so the path routes directionally.
+      surface: "external_directory_read",
       agentName: undefined,
     });
     expect(intentValues(intent)).toEqual(["/outside/a.ts"]);
@@ -183,7 +184,7 @@ describe("describeBashExternalDirectoryGate", () => {
     const path = intent.kind === "access-path" ? intent.path : undefined;
     expect(path).toBeDefined();
     expect(result.promptDetails.accessIntent).toEqual({
-      surface: "external_directory",
+      surface: "external_directory_read",
       matchValues: path?.matchValues(),
       boundaryValue: path?.boundaryValue(),
     });
@@ -235,7 +236,7 @@ describe("describeBashExternalDirectoryGate", () => {
     const desc = result as GateDescriptor;
     expect(desc.sessionApproval).toBeDefined();
     if (!desc.sessionApproval) return;
-    expect(desc.sessionApproval.patterns.length).toBeGreaterThan(0);
+    expect(desc.sessionApproval.grants.length).toBeGreaterThan(0);
   });
 
   it("returns GateBypass when all external paths are config-level allowed", async () => {
@@ -269,22 +270,114 @@ describe("describeBashExternalDirectoryGate", () => {
     expect(desc.preCheck?.state).toBe("deny");
   });
 
-  it("descriptor surface is 'external_directory'", async () => {
+  it("descriptor surface names what the deciding path proved", async () => {
     const result = await describeGate(
       makeTcc(),
       makeResolver(makeCheckResult("ask")),
     );
     const desc = result as GateDescriptor;
-    expect(desc.surface).toBe("external_directory");
+    expect(desc.surface).toBe("external_directory_read");
   });
 
-  it("descriptor decision surface is 'external_directory'", async () => {
+  it("descriptor decision surface names what the deciding path proved", async () => {
     const result = await describeGate(
       makeTcc(),
       makeResolver(makeCheckResult("ask")),
     );
     const desc = result as GateDescriptor;
-    expect(desc.decision.surface).toBe("external_directory");
+    expect(desc.decision.surface).toBe("external_directory_read");
+  });
+
+  describe("directional routing (#807)", () => {
+    it("routes a proven read to the read surface, end to end", async () => {
+      const result = (await describeGate(
+        makeTcc({ input: { command: "cat /outside/a.ts" } }),
+        makeResolver(makeCheckResult("ask")),
+      )) as GateDescriptor;
+
+      expect(result.surface).toBe("external_directory_read");
+      expect(result.payload.request.surface).toBe("external_directory_read");
+      expect(result.decision.surface).toBe("external_directory_read");
+      expect(result.sessionApproval?.grants[0]?.surface).toBe(
+        "external_directory_read",
+      );
+    });
+
+    it("routes a proven write to the write surface", async () => {
+      const result = (await describeGate(
+        makeTcc({ input: { command: "echo hi > /outside/out.txt" } }),
+        makeResolver(makeCheckResult("ask")),
+      )) as GateDescriptor;
+
+      expect(result.surface).toBe("external_directory_write");
+      expect(result.sessionApproval?.grants[0]?.surface).toBe(
+        "external_directory_write",
+      );
+    });
+
+    it("routes an unproven path to the bare family, which folds both", async () => {
+      const result = (await describeGate(
+        makeTcc({ input: { command: "rm -rf /outside/gone" } }),
+        makeResolver(makeCheckResult("ask")),
+      )) as GateDescriptor;
+
+      expect(result.surface).toBe("external_directory");
+      expect(result.sessionApproval?.grants[0]?.surface).toBe(
+        "external_directory",
+      );
+    });
+
+    it("grants each path only the direction its own token proved", async () => {
+      const result = (await describeGate(
+        makeTcc({ input: { command: "cat /outside/a.ts > /elsewhere/b.ts" } }),
+        makeResolver(makeCheckResult("ask")),
+      )) as GateDescriptor;
+
+      expect(result.sessionApproval?.grants).toEqual([
+        { surface: "external_directory_read", pattern: "/outside/*" },
+        { surface: "external_directory_write", pattern: "/elsewhere/*" },
+      ]);
+    });
+
+    it("grants both directions when two directions share a directory", async () => {
+      const result = (await describeGate(
+        makeTcc({ input: { command: "cat /outside/a.ts > /outside/b.ts" } }),
+        makeResolver(makeCheckResult("ask")),
+      )) as GateDescriptor;
+
+      // Both tokens derive the same directory glob, so the two grants
+      // reconstitute what the bare family sugar-expands to. That is correct:
+      // the user did approve a read and a write in this directory.
+      expect(result.sessionApproval?.grants).toEqual([
+        { surface: "external_directory_read", pattern: "/outside/*" },
+        { surface: "external_directory_write", pattern: "/outside/*" },
+      ]);
+    });
+
+    it("records the deciding path's effect and blame source in the log", async () => {
+      const result = (await describeGate(
+        makeTcc({ input: { command: "cat /outside/a.ts" } }),
+        makeResolver(makeCheckResult("ask")),
+      )) as GateDescriptor;
+
+      expect(result.logContext).toMatchObject({
+        effect: "read",
+        effectSource: "core",
+      });
+    });
+
+    it("records a retraction as the blame source for a guarded word", async () => {
+      const result = (await describeGate(
+        makeTcc({ input: { command: "find /outside -delete" } }),
+        makeResolver(makeCheckResult("ask")),
+      )) as GateDescriptor;
+
+      expect(result.surface).toBe("external_directory");
+      expect(result.logContext).toMatchObject({
+        effect: "unproven",
+        effectSource: "retracted",
+      });
+    });
   });
 
   it("payload carries the command and the boundary it escaped", async () => {
@@ -331,7 +424,7 @@ describe("describeBashExternalDirectoryGate", () => {
     const desc = result as GateDescriptor;
     expect(desc.sessionApproval).toBeDefined();
     if (!desc.sessionApproval) return;
-    expect(desc.sessionApproval.patterns.length).toBe(1);
+    expect(desc.sessionApproval.grants.length).toBe(1);
     expect(desc.preCheck?.state).toBe("ask");
   });
 
@@ -353,7 +446,7 @@ describe("describeBashExternalDirectoryGate", () => {
     // Both paths are uncovered (neither is allow), so both patterns are included.
     expect(desc.sessionApproval).toBeDefined();
     if (!desc.sessionApproval) return;
-    expect(desc.sessionApproval.patterns.length).toBe(2);
+    expect(desc.sessionApproval.grants.length).toBe(2);
   });
 
   it("only includes uncovered paths when some are session-covered", async () => {
@@ -372,7 +465,7 @@ describe("describeBashExternalDirectoryGate", () => {
     // Should have patterns only for the uncovered path
     expect(desc.sessionApproval).toBeDefined();
     if (!desc.sessionApproval) return;
-    expect(desc.sessionApproval.patterns.length).toBe(1);
+    expect(desc.sessionApproval.grants.length).toBe(1);
   });
 });
 
@@ -412,9 +505,11 @@ describe("describeBashExternalDirectoryGate — Git Bash semantics (win32)", () 
       makeResolver(makeCheckResult("ask")),
     );
     expect(isGateDescriptor(result)).toBe(true);
-    expect((result as GateDescriptor).sessionApproval?.patterns).toEqual([
-      "c:\\other\\data\\*",
-    ]);
+    expect(
+      (result as GateDescriptor).sessionApproval?.grants.map(
+        (grant) => grant.pattern,
+      ),
+    ).toEqual(["c:\\other\\data\\*"]);
   });
 
   // Invariant pin, not a probe: the pre-#655 ambient derivation also produced
@@ -428,8 +523,10 @@ describe("describeBashExternalDirectoryGate — Git Bash semantics (win32)", () 
       makeResolver(makeCheckResult("ask")),
     );
     expect(isGateDescriptor(result)).toBe(true);
-    expect((result as GateDescriptor).sessionApproval?.patterns).toEqual([
-      "/tmp/logs/*",
-    ]);
+    expect(
+      (result as GateDescriptor).sessionApproval?.grants.map(
+        (grant) => grant.pattern,
+      ),
+    ).toEqual(["/tmp/logs/*"]);
   });
 });

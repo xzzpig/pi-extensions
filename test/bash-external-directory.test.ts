@@ -71,6 +71,51 @@ describe("extractExternalPathsFromBashCommand", () => {
     });
   });
 
+  // The reported bypass (#821): a shell glob is expanded by the shell, so a
+  // path-shaped token carrying one names a real access. It is gated by its
+  // literal text, exactly as `?` and `*` tokens already were.
+  describe("glob-bearing paths (#821)", () => {
+    test("detects a bracket glob in an absolute path", async () => {
+      const result = await extractExternalPathsFromBashCommand(
+        "cat /etc/[p]asswd",
+        cwd,
+      );
+      expect(result).toEqual(["/etc/[p]asswd"]);
+    });
+
+    test("detects a bracket glob inside a directory name", async () => {
+      const result = await extractExternalPathsFromBashCommand(
+        "ls /et[c]/pa*",
+        cwd,
+      );
+      expect(result).toEqual(["/et[c]/pa*"]);
+    });
+
+    test("detects a dot-star glob in an absolute path", async () => {
+      const result = await extractExternalPathsFromBashCommand(
+        "rm -rf /tmp/tmp.*",
+        cwd,
+      );
+      expect(result).toEqual(["/tmp/tmp.*"]);
+    });
+
+    test("detects a bracket glob in a home-relative path", async () => {
+      const result = await extractExternalPathsFromBashCommand(
+        "cat ~/.ssh/[i]d_rsa",
+        cwd,
+      );
+      expect(result).toEqual(["/mock/home/.ssh/[i]d_rsa"]);
+    });
+
+    test("does not flag a glob resolving within CWD", async () => {
+      const result = await extractExternalPathsFromBashCommand(
+        "cat /projects/my-app/src/[i]ndex.ts",
+        cwd,
+      );
+      expect(result).toHaveLength(0);
+    });
+  });
+
   describe("home-relative paths", () => {
     test("detects ~/path outside CWD", async () => {
       const result = await extractExternalPathsFromBashCommand(
@@ -85,6 +130,42 @@ describe("extractExternalPathsFromBashCommand", () => {
       const result = await extractExternalPathsFromBashCommand(
         "cat ~/myproject/file.ts",
         "/mock/home/myproject",
+      );
+      expect(result).toHaveLength(0);
+    });
+  });
+
+  describe("operands a statement names directly (#839)", () => {
+    test("detects a for loop's word-list operand outside CWD", async () => {
+      // The body carries only `$f`, which ADR 0009 declines to resolve, so the
+      // word list is the sole place the literal appears.
+      const result = await extractExternalPathsFromBashCommand(
+        "for f in ~/other/secret; do cat $f; done",
+        cwd,
+      );
+      expect(result).toEqual(["/mock/home/other/secret"]);
+    });
+
+    test("detects a select statement's word-list operand outside CWD", async () => {
+      const result = await extractExternalPathsFromBashCommand(
+        "select f in /etc/shadow; do echo $f; done",
+        cwd,
+      );
+      expect(result).toEqual(["/etc/shadow"]);
+    });
+
+    test("detects a case subject outside CWD", async () => {
+      const result = await extractExternalPathsFromBashCommand(
+        "case /etc/shadow in a) echo b;; esac",
+        cwd,
+      );
+      expect(result).toEqual(["/etc/shadow"]);
+    });
+
+    test("does not flag a word-list operand that stays within CWD", async () => {
+      const result = await extractExternalPathsFromBashCommand(
+        "for f in src/a.ts src/b.ts; do echo $f; done",
+        cwd,
       );
       expect(result).toHaveLength(0);
     });
@@ -772,28 +853,73 @@ describe("extractExternalPathsFromBashCommand", () => {
       });
     });
 
-    describe("known limitations", () => {
-      test("sed -i without extension (GNU sed): /etc/hosts is missed (false negative)", async () => {
-        // GNU sed treats -i as a flag with no argument, so 's/foo/bar/' is
-        // the inline script and /etc/hosts is the input file.  Our logic
-        // treats -i as arg-consuming (correct for BSD sed -i ''), so it
-        // consumes the script as the -i extension and /etc/hosts becomes
-        // the first positional — which is skipped as the inline script.
-        // This is a known false negative.  The bash permission gate still
-        // applies, so external access is not silently allowed.
+    describe("sed -i, whose argument is separate on BSD and glued on GNU (#823)", () => {
+      test("GNU spelling: /etc/hosts is detected", async () => {
+        // GNU sed reads -i as a flag whose suffix must be attached, so
+        // 's/foo/bar/' is the inline script and /etc/hosts is the input file.
+        // Treating -i as unconditionally arg-consuming (correct only for BSD
+        // `sed -i ''`) consumed the script as the suffix and left /etc/hosts
+        // as the first positional, which was skipped as the inline script — a
+        // write target that reached no path surface.  The flag now consumes a
+        // following argument only when it is empty, which no GNU spelling
+        // produces.
         const result = await extractExternalPathsFromBashCommand(
           "sed -i 's/foo/bar/' /etc/hosts",
           cwd,
         );
-        // Ideally this would detect /etc/hosts, but position tracking
-        // treats it as the inline script.  Assert current behavior so
-        // a future fix can flip this expectation.
+        expect(result).toEqual(["/etc/hosts"]);
+      });
+
+      test("BSD spelling: /etc/hosts is detected", async () => {
+        const result = await extractExternalPathsFromBashCommand(
+          "sed -i '' 's/foo/bar/' /etc/hosts",
+          cwd,
+        );
+        expect(result).toEqual(["/etc/hosts"]);
+      });
+
+      test("glued suffix: /etc/hosts is detected", async () => {
+        const result = await extractExternalPathsFromBashCommand(
+          "sed -i.bak 's/foo/bar/' /etc/hosts",
+          cwd,
+        );
+        expect(result).toEqual(["/etc/hosts"]);
+      });
+    });
+
+    describe("flag spellings of a pattern-first command (#823)", () => {
+      test("the issue's repro: grep -A 3 root /etc/passwd", async () => {
+        const result = await extractExternalPathsFromBashCommand(
+          "grep -A 3 root /etc/passwd",
+          cwd,
+        );
+        expect(result).toEqual(["/etc/passwd"]);
+      });
+
+      test("an =-embedded pattern flag does not hide the operand", async () => {
+        const result = await extractExternalPathsFromBashCommand(
+          "grep --regexp=harmless /etc/passwd",
+          cwd,
+        );
+        expect(result).toEqual(["/etc/passwd"]);
+      });
+
+      test("an =-embedded pattern flag's value is not a path candidate", async () => {
+        const result = await extractExternalPathsFromBashCommand(
+          "grep --regexp=/etc/passwd file.txt",
+          cwd,
+        );
         expect(result).toHaveLength(0);
       });
     });
   });
 
-  describe("regex patterns are not mistaken for paths", () => {
+  // These arguments reach no path surface because `PATTERN_FIRST_COMMANDS`
+  // (token-collection.ts) skips a pattern-first command's inline pattern
+  // positional — not because the classifier inspects the token's characters.
+  // The character-level regex heuristic was deleted in #821; this block pins
+  // that the command-aware collector is what keeps these quiet.
+  describe("regex arguments of pattern-first commands are not mistaken for paths", () => {
     test("grep -v with //.*pattern is not flagged", async () => {
       const result = await extractExternalPathsFromBashCommand(
         'grep -n "glob" src/foo.ts 2>/dev/null | grep -v "//.*glob\\|globalConfig" | head -30',
@@ -829,6 +955,22 @@ describe("extractExternalPathsFromBashCommand", () => {
     test("sed with regex containing slashes is not flagged", async () => {
       const result = await extractExternalPathsFromBashCommand(
         'sed "s/foo.*/bar/g" file.txt',
+        cwd,
+      );
+      expect(result).toHaveLength(0);
+    });
+
+    test("awk pattern containing an escaped absolute path is not flagged", async () => {
+      const result = await extractExternalPathsFromBashCommand(
+        'awk "/\\/etc\\/.*/" file.txt',
+        cwd,
+      );
+      expect(result).toHaveLength(0);
+    });
+
+    test("rg pattern shaped like an absolute path is not flagged", async () => {
+      const result = await extractExternalPathsFromBashCommand(
+        'rg "/etc/.*passwd" -l',
         cwd,
       );
       expect(result).toHaveLength(0);
@@ -933,6 +1075,7 @@ describe("the bash external-directory ask payload", () => {
       ...facts,
       agentName: facts.agentName ?? null,
       toolName: "bash",
+      surface: "external_directory",
     });
   }
 
@@ -1119,6 +1262,7 @@ describe("the bash external-directory denial the agent sees", () => {
         cwd: "/projects/my-app",
         agentName: null,
         toolName: "bash",
+        surface: "external_directory",
         matchedPattern: "*",
       }),
       null,

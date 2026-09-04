@@ -1,14 +1,14 @@
 ---
 status: accepted
 date: 2026-08-22
-amended: 2026-08-23
+amended: 2026-08-25
 ---
 
 # 0013 — The permission policy model: capability as an axis
 
 ## Status
 
-Accepted, as amended 2026-08-23.
+Accepted, as amended 2026-08-29.
 
 This decision settles the shape of the deterministic policy model: whether access capability (reading versus writing a path) becomes first-class, how it is spelled in config, what composes with what, and where the enforcement boundary of this package lies.
 It composes with `docs/decisions/0009-bash-path-projection-completeness-contract.md`, whose layering asymmetry it preserves and whose per-command-table rejection it deliberately re-scopes (§7), and with `docs/decisions/0007-model-judge-authorizer-chain-adr.md`, to which it routes judgment the deterministic layer cannot supply and whose delegation exclusions it restates as surface families (§4) so they survive the new key names unamended.
@@ -22,6 +22,79 @@ This amendment corrects the evidence (recency-weighted, instrument committed), d
 
 One meta-decision is recorded with it: **this record, like every ADR here, is revisable on new information.**
 Its measurements are dated, its instrument is committed alongside the data, and a future re-run that falsifies a table falsifies the analysis built on it.
+
+### Amendment, 2026-08-25 — tool-identity effect attribution
+
+Staging step 1 ([#806]) landed the axis, and implementing it settled one rule the record left to be derived: **how a tool access establishes its direction.**
+It is recorded here so steps 2 ([#807]) and 3 ([#803]) do not re-derive it.
+
+A tool's *identity* is a structural effect proof in the sense of §7 — the narrowest and least contestable one available, since it needs no command knowledge at all.
+A gate therefore names the narrowest surface the tool name proves:
+
+| Access                           | Proven effects | Surface named    |
+| -------------------------------- | -------------- | ---------------- |
+| `read`, `grep`, `find`, `ls`     | read           | `<family>_read`  |
+| `write`                          | write          | `<family>_write` |
+| `edit`                           | read + write   | `<family>`       |
+| An MCP tool or extension tool    | unknown        | `<family>`       |
+| A bash path token (until [#807]) | unknown        | `<family>`       |
+
+The bare family name carries both meanings at once, and that conflation is intentional: proven-both and unproven-at-all consult the same two surfaces and take the more restrictive answer. §10's fail-closed base case and §2's honest `["read", "write"]` effect set are therefore the same mechanism, not two.
+
+Two consequences of that reading, both settled by the implementation:
+
+1. The **two directions are independent bits, not tiers** — for a tool access as for a bash one.
+   An `allow` on `path_write` grants no read, and a `deny` on `path_read` floors no write.
+   The capability-chain alternative (write implies read; a read deny floors write) is intuitive but reintroduces exactly the cross-surface interaction §4 exists to prevent, needs a new precedence rule for a `path_write: allow` written after a `path_read: deny`, and grants read implicitly wherever write is granted — which is the exfiltration surface the axis exists to let an operator withhold.
+   The intuition it serves is discharged in documentation instead: the useful grants are `*_read: allow` and the bare sugar key, while `*_write` earns its keep as a restriction.
+2. The **family fold is a read-side operation, not a gate-side one.**
+   Expansion (§4) leaves no rule on a bare surface, so a family name is answerable only because the resolver folds it over its members.
+   That fold belongs at the single resolution entry point every reader shares — the gates, the cross-extension policy query, and the recorded-authority view a serving node resolves a **forwarded child request** against.
+   A gate-side fold would leave that last reader resolving an emptied surface, and a parent's recorded `path` deny would stop hard-denying a child's request and escalate it to an approvable prompt instead.
+   The fold returns the losing member's own result, which is the blame fact §10 wants, delivered rather than re-derived.
+
+### Amendment, 2026-08-29 — which §10 combinator clauses exist, and what an `ERROR` node is
+
+Staging step 4 ([#742]) wrote the *subshell, substitution, heredoc-hosted command* clause out to the statement node types, so §10's combinator list is now partly implemented and partly not.
+What exists, in `src/access-intent/bash/command-enumeration.ts`, is the enumeration half: every node is emitted whole and its children are enumerated beneath it, so the fold's most-restrictive property is delivered by the existing flat unit list rather than by a tree of verdicts.
+Blame propagation, per-node verdict objects, and the effect judgment as a second ordered value remain unwritten.
+
+One clause is decided against for a specific node type: **an `ERROR` node's recovered structure is not evidence, so the unparsed blob is emitted whole and never descended.**
+Tree-sitter's error recovery *invents* structure rather than reporting it.
+Measured on the local review log, descending an `ERROR` subtree turns an unterminated heredoc's backtick-quoted prose into command units named after whatever the prose mentions — so a plan mentioning `` `rm -rf node_modules` `` would deny the command writing it.
+
+That is a fail-open on its face, and it is deliberate for now: `ERROR` is usually malformed input but not always.
+`git commit -F - <<'MSG' 2>&1 | tail -4` is valid bash that `tree-sitter-bash` 0.25.1 cannot parse (each pairing parses alone; the three together do not), and 0.25.1 is npm's latest, so no upgrade lever exists.
+When the parse fails on *valid* bash, the recovered structure is certainly not the real structure — which is the argument for emitting whole rather than for descending.
+
+The *any unhandled node type: fail closed* clause is therefore the one part of §10 still unwritten, and step 4 made it reachable rather than satisfying it: the unparsed blob is now a first-class unit that a permissive fallback allows.
+Flooring it needs a marker on `BashCommand` plus a sentinel in `bash-command.ts` — the verdict fold's behavior, not the enumerator's — and is tracked as [#840].
+
+### Amendment, 2026-09-04 — the fail-closed clause, and what the paragraph above got wrong
+
+Step 14 ([#840]) implements the clause, and measuring the population first overturned the sentence directly above.
+
+That sentence says the unparsed blob is a first-class unit a permissive fallback allows.
+Measured against the local review log — 5636 deduplicated `bash` commands, 367 excluded as truncated by the 1000-character field cap, **5269 intact** — exactly **2** have a parse error, and **0** emit an `ERROR` node's text as a command unit.
+Both are the shape this record already names as the grammar gap, and in it the `ERROR` sits under `heredoc_redirect → file_redirect`, an `EXECUTION_HOST_TYPES` member the enumerator descends for substitutions and never reads for text.
+So the real failure is not a blob matched permissively but a command **dropped from enumeration entirely**: `git add -A . && git commit -F - <<'MSG' 2>&1 | rm -rf /tmp/x` enumerates `git add -A .` and `git commit -F`, and nothing else.
+
+Two consequences.
+
+The blob population and the running population are disjoint.
+Emitted-`ERROR` units come from input `bash -n` rejects — an unbalanced quote, an unterminated `if` — which the shell refuses to run, so flooring only those would have been a change with no measured effect.
+The clause is therefore triggered by the **parse's health**, not by a node type: `parseUnresolvedWithin` (subtree only, distinct from `parseUnresolvedAt`'s redirect-shaped predecessor clause) marks every unit at or beneath any non-container node whose subtree failed, and `floorUnparsedUnit` clamps a marked `allow` to `ask` with `<unparsed-bash-subtree>`.
+Excluding `program`/`list`/`pipeline` is what keeps the answer per-statement, since those report an error whenever anything anywhere beneath them failed.
+
+The floor is a verdict, and enumeration is a separate question it does not reach.
+A dropped command is consulted against no rule at all, so an explicit `deny` on it does not fire and the floor converts silence into a prompt rather than restoring the denial — narrower than a hard block, because the prompt names the whole command line including the text the parse dropped.
+That residual is [#875], and the three candidate fixes are all outside this record's fold: an upstream grammar fix (no lever; `tree-sitter-bash` 0.25.1 is npm's latest), a heredoc pre-pass introducing a second notion of what a bash program is, or amending §10's `ask` to `deny`.
+
+The rest of §10 — blame propagation, per-node verdict objects, and the effect judgment as a second ordered value — remains unwritten.
+
+§10's *control-flow body* case earns no `BashCommandContext` variant.
+A body runs in the current shell, so it has no distinct execution context to name, and the enum is validated by `BASH_COMMAND_CONTEXTS` in the tolerant reader a serving node uses on a forwarded request read off disk (ADR 0012) — an unknown value there makes an older node reject the whole payload.
+The "why is the gate showing me this fragment" question the variant would have served is §10's blame propagation, still unwritten.
 
 ## Context
 
@@ -282,7 +355,8 @@ The boundary is therefore kept distinct from `path`, and it gains direction, whi
 OpenCode v2 preserved the same separation independently.
 
 The everyday consequence, stated so nobody has to derive it: **granting an external root takes one line in one surface.**
-`external_directory_read: { "~/dev/**": "allow" }` needs no parallel `path_read` entry — the `path` family only speaks when one of its own patterns matches, and its idiomatic use is carving denials (`~/.ssh/**`), not boundary grants.
+`external_directory_read: { "~/dev/*": "allow" }` needs no parallel `path_read` entry — the `path` family only speaks when one of its own patterns matches, and its idiomatic use is carving denials (`~/.ssh/*`), not boundary grants.
+A single `*` already crosses directory boundaries here; `**` is not a distinct globstar in this matcher, so the doubled form is redundant rather than more powerful.
 
 ### 6. Composition is unchanged
 
@@ -576,7 +650,9 @@ An externally launched sandbox remains the supported containment route (unverifi
 ## Staging
 
 1. **The direction axis.**
+   — landed ([#806]).
    `path_read`, `path_write`, `external_directory_read`, `external_directory_write`, decision 4's sugar expansion and normative merge order, schema, examples, and docs.
+   Tool-identity direction attribution is recorded in the 2026-08-25 amendment above.
    Relieves band A (~19% of current prompts, cause-joint) and gives the rest somewhere to land.
    This step must also convert ADR 0007 §5's delegation exclusion from literal-name membership to family membership, per decision 4, in the same commit as the new surface names — a directional key reaching an authorizer ahead of that conversion is a silent widening of the envelope.
 2. **Effect leaf rules.**
@@ -616,9 +692,14 @@ Issue [#620] carries the judgment slice the chain retains under §7.
 [#698]: https://github.com/gotgenes/pi-packages/issues/698
 [#706]: https://github.com/gotgenes/pi-packages/issues/706
 [#741]: https://github.com/gotgenes/pi-packages/issues/741
+[#742]: https://github.com/gotgenes/pi-packages/issues/742
 [#785]: https://github.com/gotgenes/pi-packages/issues/785
 [#799]: https://github.com/gotgenes/pi-packages/issues/799
 [#802]: https://github.com/gotgenes/pi-packages/issues/802
 [#803]: https://github.com/gotgenes/pi-packages/issues/803
 [#804]: https://github.com/gotgenes/pi-packages/issues/804
+[#806]: https://github.com/gotgenes/pi-packages/issues/806
+[#807]: https://github.com/gotgenes/pi-packages/issues/807
+[#840]: https://github.com/gotgenes/pi-packages/issues/840
+[#875]: https://github.com/gotgenes/pi-packages/issues/875
 [openai/codex#28732]: https://github.com/openai/codex/issues/28732

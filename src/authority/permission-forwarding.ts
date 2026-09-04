@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import type { ApprovalGrant, SessionGrantWidth } from "#src/approval-grant";
 import type { DecisionSource } from "#src/authority/decision-source";
 import type { PermissionUiPromptSource } from "#src/permission-events";
 import type { PromptPayload } from "#src/presentation/prompt-payload";
@@ -83,16 +84,21 @@ export interface ForwardedPromptDisplay {
 
 /**
  * The child's session-approval suggestion, relayed to the serving node so a
- * human who grants "the whole session" records the same pattern the child
- * would have recorded locally.
+ * human who grants "the whole session" records the same grants the child would
+ * have recorded locally.
  *
  * A plain data shape (not the `SessionApproval` value object) so it serializes
  * onto the forwarded request; the serving node rebuilds a `SessionApproval`
- * from it via `SessionApproval.multiple`.
+ * from it via `SessionApproval.forGrants`.
+ *
+ * Each grant carries its own surface (#810). The pre-#810 shape — one
+ * `surface` plus a `patterns` list — is rejected by the reader rather than
+ * normalized, so a version-skewed pair drops the suggestion and the serving
+ * dialog offers no whole-session scope; the requesting child still records its
+ * own grant, so the failure is narrow in both directions.
  */
 export interface ForwardedSessionApproval {
-  surface: string;
-  patterns: readonly string[];
+  grants: readonly ApprovalGrant[];
 }
 
 /**
@@ -192,6 +198,16 @@ export type ForwardedPermissionResponse = {
    * rejecting the answer.
    */
   decidedBy?: DecisionSource;
+  /**
+   * How wide a session grant the responder's human chose (#813).
+   *
+   * The child records a subagent-scoped grant itself, so the width has to
+   * survive the hop or the parent's choice is silently narrowed back.
+   * Optional for version-skew tolerance in both directions: an older
+   * responder omits it, and an older requester's allowlist rebuild drops it —
+   * both landing on `"proven"`, the least-privilege width.
+   */
+  sessionGrantWidth?: SessionGrantWidth;
 };
 
 export type PermissionForwardingLocation = {

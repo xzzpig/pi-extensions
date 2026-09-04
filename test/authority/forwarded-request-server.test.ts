@@ -10,6 +10,7 @@ import {
   test,
   vi,
 } from "vitest";
+import { buildResolvedIntentFromMatchValues } from "#src/access-intent/input-normalizer";
 import type { Authorizer } from "#src/authority/authorizer";
 import { AuthorizerRegistry } from "#src/authority/authorizer-registry";
 import { AuthorizerSelection } from "#src/authority/authorizer-selection";
@@ -21,6 +22,7 @@ import {
 import type { ForwarderContext } from "#src/authority/forwarder-context";
 import type { PermissionPromptDecision } from "#src/authority/permission-dialog";
 import type {
+  ForwardedAccessIntent,
   ForwardedPermissionRequest,
   ForwardedPermissionResponse,
 } from "#src/authority/permission-forwarding";
@@ -29,13 +31,19 @@ import {
   type PromptPermissionDetails,
 } from "#src/authority/permission-prompter";
 import type { PermissionDecisionEvent } from "#src/permission-events";
+import { PermissionResolver } from "#src/permission-resolver";
 import type { PermissionQuery } from "#src/service";
+import { SessionRules } from "#src/session-rules";
+import type { PermissionCheckResult } from "#src/types";
 import {
   makeAuthorizerSelectionDeps,
   registerLink,
 } from "#test/helpers/authorizer-fixtures";
 import { makeAuthorizerLog } from "#test/helpers/authorizer-log-fixtures";
-import { DECIDED_BY_HUMAN } from "#test/helpers/decision-fixtures";
+import {
+  DECIDED_BY_AUTHORIZER,
+  DECIDED_BY_HUMAN,
+} from "#test/helpers/decision-fixtures";
 import {
   createForwardingTempDir,
   type ForwardingTempDir,
@@ -45,6 +53,7 @@ import {
   makeSubagentRegistry,
 } from "#test/helpers/forwarding-fixtures";
 import { makeCheckResult } from "#test/helpers/handler-fixtures";
+import { createManagerWithConfig } from "#test/helpers/manager-harness";
 import { makePromptPayload } from "#test/helpers/prompt-details-fixtures";
 
 let temp: ForwardingTempDir | undefined;
@@ -216,7 +225,8 @@ describe("processInbox — recorded-authority resolution", () => {
 
     expect(resolve).toHaveBeenCalledWith(accessIntent);
     expect(escalate).not.toHaveBeenCalled();
-    expect(readResponse(temp, "req-deny")).toMatchObject({
+    const response = readResponse(temp, "req-deny");
+    expect(response).toMatchObject({
       approved: false,
       state: "denied",
       decidedBy: {
@@ -226,6 +236,9 @@ describe("processInbox — recorded-authority resolution", () => {
         origin: "project",
       },
     });
+    // A rule with no reason carries none; `toMatchObject` cannot assert a
+    // key's absence, so the state above is not enough on its own.
+    expect(response).not.toHaveProperty("denialReason");
     expect(logger.review).toHaveBeenCalledWith(
       "forwarded_permission.auto_denied",
       expect.objectContaining({
@@ -233,6 +246,48 @@ describe("processInbox — recorded-authority resolution", () => {
         decidedBy: expect.objectContaining({ kind: "rule" }),
       }),
     );
+  });
+
+  test("carries the denying rule's own reason onto the response", async () => {
+    temp = createForwardingTempDir("parent-session");
+    temp.writeRequest({
+      id: "req-deny-reason",
+      source: "tool_call",
+      surface: "bash",
+      value: "git push --force",
+      accessIntent: makeForwardedAccessIntent({
+        matchValues: ["git push --force"],
+      }),
+    });
+
+    const server = new ForwardedRequestServer(
+      makeServerDeps({
+        forwardingDir: temp.forwardingDir,
+        policy: {
+          resolve: vi.fn(() =>
+            makeCheckResult({
+              state: "deny",
+              matchedPattern: "git push --force*",
+              origin: "project",
+              reason: "force pushes are blocked",
+            }),
+          ),
+        },
+      }),
+    );
+
+    await server.processInbox(
+      makeForwarderContext({ hasUI: true, sessionId: "parent-session" }),
+    );
+
+    // The requesting session relays this to its own agent, so the operator's
+    // explanation reaches the caller instead of stopping at the serving node.
+    expect(readResponse(temp, "req-deny-reason")).toMatchObject({
+      approved: false,
+      state: "denied_with_reason",
+      denialReason: "force pushes are blocked",
+      decidedBy: { kind: "rule", pattern: "git push --force*" },
+    });
   });
 
   test("relays the escalated decision's own decider onto the response", async () => {
@@ -786,7 +841,7 @@ describe("processInbox — grant-scope selection", () => {
       surface: "bash",
       value: "git push",
       accessIntent: makeForwardedAccessIntent({ matchValues: ["git push"] }),
-      sessionApproval: { surface: "bash", patterns: ["git *"] },
+      sessionApproval: { grants: [{ surface: "bash", pattern: "git *" }] },
     });
 
     const resolve = vi.fn(() => makeCheckResult({ state: "ask" }));
@@ -811,7 +866,9 @@ describe("processInbox — grant-scope selection", () => {
     );
 
     expect(recordSessionApproval).toHaveBeenCalledWith(
-      expect.objectContaining({ surface: "bash", patterns: ["git *"] }),
+      expect.objectContaining({
+        grants: [{ surface: "bash", pattern: "git *" }],
+      }),
     );
     // Translated: the child receives a plain approve and records nothing.
     // The translation rewrites the scope, never the decider.
@@ -819,6 +876,144 @@ describe("processInbox — grant-scope selection", () => {
       approved: true,
       state: "approved",
       decidedBy: { kind: "user", via: "dialog" },
+    });
+  });
+
+  test("records every grant, each on the surface the child proved for it", async () => {
+    temp = createForwardingTempDir("parent-session");
+    const grants = [
+      { surface: "external_directory_read", pattern: "/outside/*" },
+      { surface: "external_directory_write", pattern: "/elsewhere/*" },
+    ];
+    temp.writeRequest({
+      id: "req-mixed",
+      source: "tool_call",
+      surface: "external_directory",
+      value: "cat /outside/a.ts > /elsewhere/b.ts",
+      accessIntent: makeForwardedAccessIntent({
+        matchValues: ["/outside/a.ts"],
+      }),
+      sessionApproval: { grants },
+    });
+
+    const recorder = new SessionRules();
+    const server = new ForwardedRequestServer(
+      makeServerDeps({
+        forwardingDir: temp.forwardingDir,
+        policy: { resolve: vi.fn(() => makeCheckResult({ state: "ask" })) },
+        escalator: {
+          escalate: vi.fn().mockResolvedValue({
+            approved: true,
+            state: "approved_for_serving_session",
+            decidedBy: { kind: "user", via: "dialog" },
+          }),
+        },
+        recorder,
+      }),
+    );
+
+    await server.processInbox(
+      makeForwarderContext({ hasUI: true, sessionId: "parent-session" }),
+    );
+
+    expect(
+      recorder.getRuleset().map(({ surface, pattern }) => [surface, pattern]),
+    ).toEqual([
+      ["external_directory_read", "/outside/*"],
+      ["external_directory_write", "/elsewhere/*"],
+    ]);
+  });
+
+  test("records a whole-session grant at the width the human chose", async () => {
+    temp = createForwardingTempDir("parent-session");
+    temp.writeRequest({
+      id: "req-wide",
+      source: "tool_call",
+      surface: "external_directory",
+      value: "echo hi > /outside/out.txt",
+      accessIntent: makeForwardedAccessIntent({
+        matchValues: ["/outside/out.txt"],
+      }),
+      sessionApproval: {
+        grants: [
+          { surface: "external_directory_write", pattern: "/outside/*" },
+        ],
+      },
+    });
+
+    const recorder = new SessionRules();
+    const server = new ForwardedRequestServer(
+      makeServerDeps({
+        forwardingDir: temp.forwardingDir,
+        policy: { resolve: vi.fn(() => makeCheckResult({ state: "ask" })) },
+        escalator: {
+          escalate: vi.fn().mockResolvedValue({
+            approved: true,
+            state: "approved_for_serving_session",
+            sessionGrantWidth: "family",
+            decidedBy: { kind: "user", via: "dialog" },
+          }),
+        },
+        recorder,
+      }),
+    );
+
+    await server.processInbox(
+      makeForwarderContext({ hasUI: true, sessionId: "parent-session" }),
+    );
+
+    // The family surface sugar-expands onto both members, so the serving
+    // node's later read of the same directory resolves without a prompt.
+    expect(
+      recorder.getRuleset().map(({ surface, pattern }) => [surface, pattern]),
+    ).toEqual([
+      ["external_directory_read", "/outside/*"],
+      ["external_directory_write", "/outside/*"],
+    ]);
+  });
+
+  test("carries the chosen width back to the child on the response", async () => {
+    temp = createForwardingTempDir("parent-session");
+    temp.writeRequest({
+      id: "req-width-wire",
+      source: "tool_call",
+      surface: "external_directory",
+      value: "echo hi > /outside/out.txt",
+      accessIntent: makeForwardedAccessIntent({
+        matchValues: ["/outside/out.txt"],
+      }),
+      sessionApproval: {
+        grants: [
+          { surface: "external_directory_write", pattern: "/outside/*" },
+        ],
+      },
+    });
+
+    const server = new ForwardedRequestServer(
+      makeServerDeps({
+        forwardingDir: temp.forwardingDir,
+        policy: { resolve: vi.fn(() => makeCheckResult({ state: "ask" })) },
+        escalator: {
+          escalate: vi.fn().mockResolvedValue({
+            approved: true,
+            state: "approved_for_session",
+            sessionGrantWidth: "family",
+            decidedBy: { kind: "user", via: "dialog" },
+          }),
+        },
+      }),
+    );
+
+    await server.processInbox(
+      makeForwarderContext({ hasUI: true, sessionId: "parent-session" }),
+    );
+
+    // A subagent-scoped grant is recorded by the child, so the width has to
+    // reach it or the child records the narrow grant the parent overrode.
+    expect(readResponse(temp, "req-width-wire")).toMatchObject({
+      approved: true,
+      state: "approved_for_session",
+      sessionGrantWidth: "family",
     });
   });
 
@@ -830,7 +1025,7 @@ describe("processInbox — grant-scope selection", () => {
       surface: "bash",
       value: "git push",
       accessIntent: makeForwardedAccessIntent({ matchValues: ["git push"] }),
-      sessionApproval: { surface: "bash", patterns: ["git *"] },
+      sessionApproval: { grants: [{ surface: "bash", pattern: "git *" }] },
     });
 
     const resolve = vi.fn(() => makeCheckResult({ state: "ask" }));
@@ -854,7 +1049,7 @@ describe("processInbox — grant-scope selection", () => {
 
     expect(escalate).toHaveBeenCalledWith(
       expect.objectContaining({
-        sessionApproval: { surface: "bash", patterns: ["git *"] },
+        sessionApproval: { grants: [{ surface: "bash", pattern: "git *" }] },
       }),
     );
   });
@@ -867,7 +1062,7 @@ describe("processInbox — grant-scope selection", () => {
       surface: "bash",
       value: "git push",
       accessIntent: makeForwardedAccessIntent({ matchValues: ["git push"] }),
-      sessionApproval: { surface: "bash", patterns: ["git *"] },
+      sessionApproval: { grants: [{ surface: "bash", pattern: "git *" }] },
     });
 
     const resolve = vi.fn(() => makeCheckResult({ state: "ask" }));
@@ -1133,7 +1328,7 @@ describe("processInbox — terminal decision broadcast", () => {
       id: "req-serving-grant",
       surface: "bash",
       value: "git push",
-      sessionApproval: { surface: "bash", patterns: ["git *"] },
+      sessionApproval: { grants: [{ surface: "bash", pattern: "git *" }] },
     });
     const server = makeServer({
       escalator: escalatorAnswering({
@@ -1174,6 +1369,28 @@ describe("processInbox — terminal decision broadcast", () => {
 
     expect(broadcastDecisions()).toMatchObject([
       { result: "allow", resolution: "user_approved_for_session" },
+    ]);
+  });
+
+  test("broadcasts a chain link's denial as authorizer_denied", async () => {
+    dir.writeRequest({
+      id: "req-link-denied",
+      surface: "bash",
+      value: "git push",
+    });
+    const server = makeServer({
+      escalator: escalatorAnswering({
+        approved: false,
+        state: "denied_with_reason",
+        denialReason: "reads outside the project",
+        decidedBy: DECIDED_BY_AUTHORIZER,
+      }),
+    });
+
+    await server.processInbox(servingContext());
+
+    expect(broadcastDecisions()).toMatchObject([
+      { result: "deny", resolution: "authorizer_denied" },
     ]);
   });
 
@@ -1250,5 +1467,153 @@ describe("processInbox — terminal decision broadcast", () => {
     expect(broadcastDecisions()).toMatchObject([
       { surface: "read", value: "read" },
     ]);
+  });
+});
+
+// ── ServingPolicy over the real resolver ───────────────────────────────────
+
+describe("ServingPolicy resolves a forwarded request against real recorded authority", () => {
+  // Every other test in this file stubs `policy`, so none of them exercises
+  // the composition the serving side actually runs. This one rebuilds it —
+  // `buildResolvedIntentFromMatchValues` + a real `PermissionResolver` over a
+  // filesystem-backed `PermissionManager`, exactly as `index.ts` wires it —
+  // because the surface-family fold is what keeps a parent's recorded `path`
+  // deny answering a child's bare-surface request. Resolving an emptied bare
+  // surface would fall through to the universal default and escalate a hard
+  // deny into an approvable prompt (#712, #806).
+  function servingPolicyOver(permission: Record<string, unknown>): {
+    resolve: (intent: ForwardedAccessIntent) => PermissionCheckResult;
+    cleanup: () => void;
+  } {
+    const { manager, cleanup } = createManagerWithConfig(permission);
+    const resolver = new PermissionResolver(manager, new SessionRules());
+    return {
+      resolve: (intent) =>
+        resolver.resolve(
+          buildResolvedIntentFromMatchValues(
+            intent.surface,
+            intent.matchValues,
+            intent.principal.agentName,
+          ),
+        ),
+      cleanup,
+    };
+  }
+
+  /**
+   * The child-fixed match set a real child sends for `/secrets/id_rsa`: an
+   * out-of-cwd absolute path has no cwd-relative alias, so `matchValues()`
+   * yields the one entry.
+   */
+  const secretMatchValues = ["/secrets/id_rsa"];
+
+  test("hard-denies a bare-surface child request the parent's bare path config denies", () => {
+    const policy = servingPolicyOver({
+      "*": "allow",
+      path: { "/secrets/*": "deny" },
+    });
+    try {
+      const result = policy.resolve(
+        makeForwardedAccessIntent({
+          surface: "path",
+          matchValues: secretMatchValues,
+          boundaryValue: "/secrets/id_rsa",
+        }),
+      );
+      expect(result.state).toBe("deny");
+      expect(result.matchedPattern).toBe("/secrets/*");
+    } finally {
+      policy.cleanup();
+    }
+  });
+
+  test("hard-denies when only one direction of the parent's config denies", () => {
+    const policy = servingPolicyOver({
+      "*": "allow",
+      path_write: { "/secrets/*": "deny" },
+    });
+    try {
+      const result = policy.resolve(
+        makeForwardedAccessIntent({
+          surface: "path",
+          matchValues: secretMatchValues,
+          boundaryValue: "/secrets/id_rsa",
+        }),
+      );
+      expect(result.state).toBe("deny");
+      expect(result.toolName).toBe("path_write");
+    } finally {
+      policy.cleanup();
+    }
+  });
+
+  test("answers a child that already named a direction on that surface alone", () => {
+    const policy = servingPolicyOver({
+      "*": "allow",
+      external_directory: { "*": "ask" },
+      external_directory_read: { "/dev-root/*": "allow" },
+    });
+    try {
+      const forRead = policy.resolve(
+        makeForwardedAccessIntent({
+          surface: "external_directory_read",
+          matchValues: ["/dev-root/x"],
+          boundaryValue: "/dev-root/x",
+        }),
+      );
+      expect(forRead.state).toBe("allow");
+
+      const forWrite = policy.resolve(
+        makeForwardedAccessIntent({
+          surface: "external_directory_write",
+          matchValues: ["/dev-root/x"],
+          boundaryValue: "/dev-root/x",
+        }),
+      );
+      expect(forWrite.state).toBe("ask");
+    } finally {
+      policy.cleanup();
+    }
+  });
+
+  test("hard-denies a directional child request the parent's bare path config denies (#807)", () => {
+    // Since #807 a child's bash gate can prove a direction, so `path_read` is
+    // the first surface a *bash* child sends. The parent's config names only
+    // the bare family, and the deny must still reach it — here through
+    // load-time sugar expansion rather than through the resolver's fold, which
+    // a directional request bypasses entirely.
+    const policy = servingPolicyOver({
+      "*": "allow",
+      path: { "/secrets/*": "deny" },
+    });
+    try {
+      const result = policy.resolve(
+        makeForwardedAccessIntent({
+          surface: "path_read",
+          matchValues: secretMatchValues,
+          boundaryValue: "/secrets/id_rsa",
+        }),
+      );
+      expect(result.state).toBe("deny");
+      expect(result.matchedPattern).toBe("/secrets/*");
+    } finally {
+      policy.cleanup();
+    }
+  });
+
+  test("leaves an unmatched path request without a pattern, so no gate fires (#58)", () => {
+    const policy = servingPolicyOver({ "*": "allow", read: "allow" });
+    try {
+      const result = policy.resolve(
+        makeForwardedAccessIntent({
+          surface: "path",
+          matchValues: ["/some/file.ts"],
+          boundaryValue: "/some/file.ts",
+        }),
+      );
+      expect(result.matchedPattern).toBeUndefined();
+    } finally {
+      policy.cleanup();
+    }
   });
 });

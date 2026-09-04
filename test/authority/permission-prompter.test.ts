@@ -6,7 +6,10 @@ import {
   type PermissionPrompterDeps,
   type PromptPermissionDetails,
 } from "#src/authority/permission-prompter";
-import { DECIDED_BY_HUMAN } from "#test/helpers/decision-fixtures";
+import {
+  DECIDED_BY_ABSENT_AUTHORITY,
+  DECIDED_BY_HUMAN,
+} from "#test/helpers/decision-fixtures";
 import {
   makePromptDetails,
   makePromptPayload,
@@ -109,6 +112,62 @@ describe("PermissionPrompter", () => {
       );
     });
 
+    it("names the width a session grant was recorded at", async () => {
+      const logger = { review: vi.fn() };
+      const prompter = new PermissionPrompter(makeDeps({ logger }));
+      const authorizer = makeAuthorizer({
+        approved: true,
+        state: "approved_for_session",
+        sessionGrantWidth: "family",
+        decidedBy: DECIDED_BY_HUMAN,
+      });
+
+      await prompter.prompt(authorizer, makeDetails());
+
+      expect(logger.review).toHaveBeenCalledWith(
+        "permission_request.approved",
+        expect.objectContaining({
+          resolution: "approved_for_session",
+          sessionGrantWidth: "family",
+        }),
+      );
+    });
+
+    it("names the proven width when a session grant chose no width", async () => {
+      const logger = { review: vi.fn() };
+      const prompter = new PermissionPrompter(makeDeps({ logger }));
+      const authorizer = makeAuthorizer({
+        approved: true,
+        state: "approved_for_session",
+        decidedBy: DECIDED_BY_HUMAN,
+      });
+
+      await prompter.prompt(authorizer, makeDetails());
+
+      expect(logger.review).toHaveBeenCalledWith(
+        "permission_request.approved",
+        expect.objectContaining({ sessionGrantWidth: "proven" }),
+      );
+    });
+
+    it("names no width for an approval that granted nothing for the session", async () => {
+      const logger = { review: vi.fn() };
+      const prompter = new PermissionPrompter(makeDeps({ logger }));
+      const authorizer = makeAuthorizer({
+        approved: true,
+        state: "approved",
+        decidedBy: DECIDED_BY_HUMAN,
+      });
+
+      await prompter.prompt(authorizer, makeDetails());
+
+      const [, details] = logger.review.mock.calls.at(-1) as [
+        string,
+        Record<string, unknown>,
+      ];
+      expect(details).not.toHaveProperty("sessionGrantWidth");
+    });
+
     it("logs permission_request.denied when the authorizer denies", async () => {
       const logger = { review: vi.fn() };
       const prompter = new PermissionPrompter(makeDeps({ logger }));
@@ -136,7 +195,7 @@ describe("PermissionPrompter", () => {
         approved: false,
         state: "denied",
         confirmationUnavailable: true,
-        decidedBy: DECIDED_BY_HUMAN,
+        decidedBy: DECIDED_BY_ABSENT_AUTHORITY,
       });
 
       await prompter.prompt(authorizer, makeDetails());

@@ -118,7 +118,7 @@ describe("describePathGate", () => {
     expect(result).not.toBeNull();
     expect(isGateDescriptor(result)).toBe(true);
     const desc = result as GateDescriptor;
-    expect(desc.surface).toBe("path");
+    expect(desc.surface).toBe("path_read");
     expect(desc.preCheck?.state).toBe("deny");
   });
 
@@ -130,7 +130,7 @@ describe("describePathGate", () => {
     expect(result).not.toBeNull();
     expect(isGateDescriptor(result)).toBe(true);
     const desc = result as GateDescriptor;
-    expect(desc.surface).toBe("path");
+    expect(desc.surface).toBe("path_read");
     expect(desc.preCheck?.state).toBe("ask");
   });
 
@@ -144,8 +144,8 @@ describe("describePathGate", () => {
       normalizer,
     ) as GateDescriptor;
     expect(result.sessionApproval).toBeDefined();
-    expect(result.sessionApproval?.surface).toBe("path");
-    expect(result.sessionApproval?.representativePattern).toBeDefined();
+    expect(result.sessionApproval?.grants[0]?.surface).toBe("path_read");
+    expect(result.sessionApproval?.grants).toHaveLength(1);
   });
 
   it("binds a current-directory file's session approval to the cwd subtree", () => {
@@ -157,10 +157,10 @@ describe("describePathGate", () => {
       resolver,
       normalizer,
     ) as GateDescriptor;
-    expect(result.sessionApproval?.surface).toBe("path");
-    expect(result.sessionApproval?.representativePattern).toBe(
-      "/test/project/*",
-    );
+    expect(result.sessionApproval?.grants[0]?.surface).toBe("path_read");
+    expect(
+      result.sessionApproval?.grants.map((grant) => grant.pattern),
+    ).toEqual(["/test/project/*"]);
   });
 
   it("descriptor denialContext references the file path and tool name", () => {
@@ -192,9 +192,30 @@ describe("describePathGate", () => {
       flavor: posixPathFlavor,
     });
     expect(result.promptDetails.accessIntent).toEqual({
-      surface: "path",
+      surface: "path_read",
       matchValues: accessPath.matchValues(),
       boundaryValue: accessPath.boundaryValue(),
+    });
+  });
+
+  it("logContext carries the request facts and no prompt wording", () => {
+    const resolver = makeResolver(
+      makeCheckResult({ state: "ask", matchedPattern: "*.env" }),
+    );
+    const result = describePathGate(
+      makeTcc({ agentName: "agent-1", toolCallId: "tc-5" }),
+      resolver,
+      normalizer,
+    ) as GateDescriptor;
+    // Full-shape rather than a subset: the request facts and the request id are
+    // stamped by the runner, so these five fields are the whole of the gate's
+    // own contribution.
+    expect(result.logContext).toEqual({
+      source: "tool_call",
+      toolCallId: "tc-5",
+      toolName: "read",
+      agentName: "agent-1",
+      path: ".env",
     });
   });
 
@@ -222,7 +243,7 @@ describe("describePathGate", () => {
       resolver,
       normalizer,
     ) as GateDescriptor;
-    expect(result.decision.surface).toBe("path");
+    expect(result.decision.surface).toBe("path_read");
     expect(result.decision.value).toBe(".env");
   });
 
@@ -231,7 +252,7 @@ describe("describePathGate", () => {
     describePathGate(makeTcc({ agentName: "my-agent" }), resolver, normalizer);
     expect(resolver.resolve).toHaveBeenCalledWith({
       kind: "access-path",
-      surface: "path",
+      surface: "path_read",
       path: AccessPath.forPath(".env", {
         cwd: "/test/project",
         flavor: posixPathFlavor,
@@ -281,7 +302,7 @@ describe("describePathGate — home-relative paths", () => {
     expect(result.payload.request.value).toBe("~/.ssh/config");
     expect(resolver.resolve).toHaveBeenCalledWith({
       kind: "access-path",
-      surface: "path",
+      surface: "path_read",
       path: AccessPath.forPath("~/.ssh/config", {
         cwd: "/test/project",
         flavor: posixPathFlavor,
@@ -322,10 +343,13 @@ describe("describePathGate — home-relative paths", () => {
 describe("describePathGate — extension and MCP tools (#352)", () => {
   function extractorLookup(toolName: string, key: string) {
     return {
-      get: (name: string) =>
+      resolve: (name: string) =>
         name === toolName
-          ? (input: Record<string, unknown>) =>
-              typeof input[key] === "string" ? input[key] : undefined
+          ? {
+              extractor: (input: Record<string, unknown>) =>
+                typeof input[key] === "string" ? input[key] : undefined,
+              origin: "local" as const,
+            }
           : undefined,
     };
   }
@@ -404,6 +428,75 @@ describe("describePathGate — extension and MCP tools (#352)", () => {
     expect(resolver.resolve).not.toHaveBeenCalled();
   });
 
+  describe("tool-identity direction routing", () => {
+    /** The gate names the narrowest `path`-family surface the tool proves. */
+    function surfacesFor(toolName: string) {
+      const resolver = makeResolver(
+        makeCheckResult({ state: "ask", matchedPattern: "*.env" }),
+      );
+      const descriptor = describePathGate(
+        makeTcc({ toolName, input: { path: ".env" } }),
+        resolver,
+        normalizer,
+      ) as GateDescriptor;
+      return {
+        intent: vi.mocked(resolver.resolve).mock.calls[0][0].surface,
+        descriptor: descriptor.surface,
+        approval: descriptor.sessionApproval?.grants[0]?.surface,
+        facts: descriptor.promptDetails.accessIntent?.surface,
+        decision: descriptor.decision.surface,
+        payload: descriptor.payload.request.surface,
+      };
+    }
+
+    it.each(["read", "grep", "find", "ls"])(
+      "names path_read for %s, whose read is proven by its identity",
+      (toolName) => {
+        expect(surfacesFor(toolName)).toEqual({
+          intent: "path_read",
+          descriptor: "path_read",
+          approval: "path_read",
+          facts: "path_read",
+          decision: "path_read",
+          payload: "path_read",
+        });
+      },
+    );
+
+    it("names path_write for write", () => {
+      expect(surfacesFor("write")).toEqual({
+        intent: "path_write",
+        descriptor: "path_write",
+        approval: "path_write",
+        facts: "path_write",
+        decision: "path_write",
+        payload: "path_write",
+      });
+    });
+
+    it("names the bare family for edit, which reads and writes", () => {
+      expect(surfacesFor("edit")).toEqual({
+        intent: "path",
+        descriptor: "path",
+        approval: "path",
+        facts: "path",
+        decision: "path",
+        payload: "path",
+      });
+    });
+
+    it("keeps the payload kind 'path' so renderer dispatch is untouched", () => {
+      const result = describePathGate(
+        makeTcc({ toolName: "read" }),
+        makeResolver(
+          makeCheckResult({ state: "ask", matchedPattern: "*.env" }),
+        ),
+        normalizer,
+      ) as GateDescriptor;
+      expect(result.payload.kind).toBe("path");
+    });
+  });
+
   it("derives the session approval through the injected flavor, not the host", () => {
     // A native Windows path carries backslash separators the *host* POSIX
     // `node:path` cannot see, so an ambient derivation collapses it to `./*`
@@ -417,8 +510,10 @@ describe("describePathGate — extension and MCP tools (#352)", () => {
       new PathNormalizer(win32PathFlavor, "C:\\Projects\\App"),
     );
     expect(isGateDescriptor(result)).toBe(true);
-    expect((result as GateDescriptor).sessionApproval?.patterns).toEqual([
-      "c:\\projects\\app\\src\\*",
-    ]);
+    expect(
+      (result as GateDescriptor).sessionApproval?.grants.map(
+        (grant) => grant.pattern,
+      ),
+    ).toEqual(["c:\\projects\\app\\src\\*"]);
   });
 });

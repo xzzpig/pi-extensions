@@ -59,9 +59,12 @@ describe("deriveApprovalPattern", () => {
       ["/tmp/logs", "/tmp/*"],
       ["/foo", "/*"],
       ["/", "/*"],
-    ])("keeps a Git Bash token's own separator: %s -> %s", (value, expected) => {
-      expect(deriveApprovalPattern(value, win32PathFlavor)).toBe(expected);
-    });
+    ])(
+      "keeps a Git Bash token's own separator: %s -> %s",
+      (value, expected) => {
+        expect(deriveApprovalPattern(value, win32PathFlavor)).toBe(expected);
+      },
+    );
 
     it("falls back to the windows current directory for a separator-free value", () => {
       expect(deriveApprovalPattern("index.html", win32PathFlavor)).toBe(".\\*");
@@ -71,13 +74,13 @@ describe("deriveApprovalPattern", () => {
   describe("session-grant round trip", () => {
     it("grants siblings of the approved file", () => {
       const session = grantFor(
-        "external_directory",
+        "external_directory_read",
         "/other/project/src/foo.ts",
         posixPathFlavor,
       );
       expect(
         evaluate(
-          "external_directory",
+          "external_directory_read",
           "/other/project/src/bar.ts",
           session.getRuleset(),
           posixPathFlavor,
@@ -87,13 +90,13 @@ describe("deriveApprovalPattern", () => {
 
     it("does not grant sibling directories", () => {
       const session = grantFor(
-        "external_directory",
+        "external_directory_read",
         "/other/project/src/foo.ts",
         posixPathFlavor,
       );
       expect(
         evaluate(
-          "external_directory",
+          "external_directory_read",
           "/other/project/lib/bar.ts",
           session.getRuleset(),
           posixPathFlavor,
@@ -129,13 +132,13 @@ describe("deriveApprovalPattern", () => {
       // `windowsSeparators` fold (#653) matches against every sibling of the
       // approved directory — the grant this pins bounded (#655).
       const session = grantFor(
-        "external_directory",
+        "external_directory_read",
         "/tmp/logs/",
         win32PathFlavor,
       );
       expect(
         evaluate(
-          "external_directory",
+          "external_directory_read",
           "/tmp/logs/app.log",
           session.getRuleset(),
           win32PathFlavor,
@@ -143,7 +146,7 @@ describe("deriveApprovalPattern", () => {
       ).toBe("allow");
       expect(
         evaluate(
-          "external_directory",
+          "external_directory_read",
           "/tmp/other/secrets.env",
           session.getRuleset(),
           win32PathFlavor,

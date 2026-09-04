@@ -7,6 +7,7 @@ import {
   ObservedAuthorizerRegistrar,
 } from "./authority/authorizer-registry";
 import { AuthorizerSelection } from "./authority/authorizer-selection";
+import { ChildNodeAudit } from "./authority/child-node-audit";
 import {
   ForwardedRequestServer,
   type ServingPolicy,
@@ -16,6 +17,11 @@ import {
   ServingHeartbeatStore,
 } from "./authority/forwarding-liveness";
 import { ForwardingManager } from "./authority/forwarding-manager";
+import {
+  AncestorNodes,
+  InheritingToolAccessExtractorLookup,
+  InheritingToolInputFormatterLookup,
+} from "./authority/inherited-registrations";
 import { PERMISSION_FORWARDING_TIMEOUT_MS } from "./authority/permission-forwarding";
 import { requestPermissionDecision } from "./authority/permission-prompt-component";
 import { PermissionPrompter } from "./authority/permission-prompter";
@@ -50,7 +56,7 @@ import { PermissionResolver } from "./permission-resolver";
 import { PermissionSession } from "./permission-session";
 import { LocalPermissionsService } from "./permissions-service";
 import { resolveRenderBudget } from "./presentation/dialog-renderer";
-import type { PermissionsService } from "./service";
+import { getPermissionsService, type PermissionsService } from "./service";
 import { PermissionServiceLifecycle } from "./service-lifecycle";
 import { PermissionSessionLogger } from "./session-logger";
 import { SessionRules } from "./session-rules";
@@ -259,22 +265,28 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
   );
 
   // Subscribe to @gotgenes/pi-subagents' child lifecycle events so child
-  // sessions register/unregister without the core calling us (ADR 0002).
+  // sessions register/unregister without the core calling us (ADR 0002), and
+  // so a child that bound its extensions without loading one of ours is
+  // reported rather than silently ungated (#792). The lookup is a thunk over
+  // the locator, never a cached reference, per the guidance in service.ts.
+  const childNodeAudit = new ChildNodeAudit(
+    (sessionId) => getPermissionsService(sessionId) !== undefined,
+    logger,
+  );
   const unsubSubagentLifecycle = subscribeSubagentLifecycle(
     pi.events,
     subagentRegistry,
+    childNodeAudit,
   );
 
   // PermissionServiceLifecycle owns the process-global service publication:
-  // activate() publishes this node's service under its own session id (and to
-  // the legacy root slot unless this is a registered subagent child — see
-  // #302), then announces the node's session id and chain role on the ready
-  // channel; teardown() unsubscribes all session listeners and unpublishes.
+  // activate() publishes this node's service under its own session id, then
+  // announces the node's session id and chain role on the ready channel;
+  // teardown() unsubscribes all session listeners and unpublishes.
   // Deferred to session_start because both facts come from ctx, unavailable at
   // factory-init time.
   const serviceLifecycle = new PermissionServiceLifecycle(
     permissionsService,
-    subagentDetection,
     authorizerSelection,
     pi.events,
     [unsubSubagentLifecycle],
@@ -315,11 +327,25 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     reporter,
     isYoloEnabled,
   );
+  // This node's ancestors in the current process. The gates read their
+  // fact-shaping registrations through the inheriting lookups below, so a
+  // child whose own registry is missing an extractor still sees the path its
+  // tool touches (ADR 0012 decision 1, the fact-shaping clause; #793).
+  // Registration itself is untouched: the service's registrars still write to
+  // the undecorated registries, so an entry lands in this node alone.
+  const ancestorNodes = new AncestorNodes(
+    serviceLifecycle,
+    subagentRegistry,
+    getPermissionsService,
+  );
   const toolCallGatePipeline = new ToolCallGatePipeline(
     resolver,
     session,
-    formatterRegistry,
-    accessExtractorRegistry,
+    new InheritingToolInputFormatterLookup(formatterRegistry, ancestorNodes),
+    new InheritingToolAccessExtractorLookup(
+      accessExtractorRegistry,
+      ancestorNodes,
+    ),
   );
   const skillInputGatePipeline = new SkillInputGatePipeline(resolver);
   const gates = new PermissionGateHandler(

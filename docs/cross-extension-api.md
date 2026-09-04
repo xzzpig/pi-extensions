@@ -49,11 +49,9 @@ Each node therefore publishes its own service at `session_start`, into a `global
 Consumers call `getPermissionsService(sessionId)` to retrieve it — even though their `import()` loads a fresh module copy, the accessor reads from the shared `globalThis` slot.
 The session id arrives as a field on the `permissions:ready` broadcast, which each node emits at its own `session_start`, right after publishing — and again at that node's first `before_agent_start`, so a consumer whose own `session_start` ran later still hears it.
 
-`getRootPermissionsService()` remains, reading a separate legacy slot that holds the **process root's** service, but it is deprecated: in any node but the root it answers the wrong question, handing an in-process child the parent's service.
-Calling it emits a once-guarded Node `DeprecationWarning` (code `PI_PERMISSION_SYSTEM_DEP0001`); run with `--trace-deprecation` to locate your call site, or `--no-deprecation` to silence it.
-Removal is deferred to a future major release.
-
-Both accessors were renamed in the major that reclaimed `getPermissionsService` for the keyed locator; if you are upgrading from a release whose `getPermissionsService()` took no argument, see [migration/0794-keyed-service-locator.md](migration/0794-keyed-service-locator.md).
+That keyed map is the only service slot.
+A separate legacy slot once held the process root's service, read by a deprecated `getRootPermissionsService()`; both were removed, because in any node but the root that accessor answered the wrong question — handing an in-process child the parent's service.
+If you are upgrading from a release that had it, see [migration/0796-remove-process-root-slot.md](migration/0796-remove-process-root-slot.md); if you are upgrading from one whose `getPermissionsService()` took no argument, start with [migration/0794-keyed-service-locator.md](migration/0794-keyed-service-locator.md).
 
 All types below are directly importable and type-check with `tsc` out of the box.
 `@gotgenes/pi-permission-system`'s published `exports` resolve `import type { … }` to a self-contained, bundled declaration file with no internal module references, so a downstream `tsconfig.json` needs no special path configuration.
@@ -71,8 +69,11 @@ interface PermissionsService {
     agentName?: string,
   ): PermissionCheckResult;
 
-  /** Query tool-level permission state for pre-filtering before session creation. */
+  /** Query a surface's catch-all permission state — its blanket policy. */
   getToolPermission(toolName: string, agentName?: string): PermissionState;
+
+  /** Whether every value under a tool's surface resolves to deny; use this to pre-filter a tool list. */
+  isToolFullyDenied(toolName: string, agentName?: string): boolean;
 
   /**
    * Register a custom preview formatter for a specific tool name.
@@ -94,6 +95,22 @@ interface PermissionsService {
     toolName: string,
     extractor: (input: Record<string, unknown>) => string | undefined,
   ): () => void;
+
+  /**
+   * The access extractor registered on this node for `toolName`, or
+   * `undefined` when it has none.
+   */
+  getToolAccessExtractor(
+    toolName: string,
+  ): ((input: Record<string, unknown>) => string | undefined) | undefined;
+
+  /**
+   * The preview formatter registered on this node for `toolName`, or
+   * `undefined` when it has none.
+   */
+  getToolInputFormatter(
+    toolName: string,
+  ): ((input: Record<string, unknown>) => string | undefined) | undefined;
 }
 ```
 
@@ -116,13 +133,26 @@ Decomposition needs the tree-sitter parser, which is warmed at `before_agent_sta
 #### `getToolPermission`
 
 Returns `"allow"` | `"deny"` | `"ask"` for a tool name without considering command-level rules.
-Use this to pre-filter a tool list before creating a child session — it avoids calling `checkPermission` per tool and interpreting the full result.
+It reports the surface's own catch-all, so it answers what a surface's blanket policy is.
 
 ```typescript
-const denied = tools.filter(
-  (t) => permissions.getToolPermission(t, agentName) === "deny",
-);
+const blanketPolicy = permissions.getToolPermission("bash", agentName);
 ```
+
+This is not the question to ask when pre-filtering a tool list — use `isToolFullyDenied` for that.
+A surface written as `bash: {"*": "deny", "git *": "ask"}` reports `"deny"` here while `git status` would still be asked about.
+
+#### `isToolFullyDenied`
+
+Returns `true` when every value under the tool's surface resolves to `deny`, and `false` when anything at all could get through.
+Use this to pre-filter a tool list before creating a child session — it avoids calling `checkPermission` per tool and interpreting the full result, and unlike `getToolPermission` it does not withhold a tool that is only partially restricted.
+
+```typescript
+const usable = tools.filter((t) => !permissions.isToolFullyDenied(t, agentName));
+```
+
+Rule ordering is honored (last-match-wins), so an exception written after a `deny` catch-all keeps the tool reachable while one written before it does not.
+It considers config-layer rules only; a runtime session approval does not change the answer.
 
 #### `registerToolInputFormatter`
 
@@ -282,6 +312,22 @@ const dispose = permissions.registerToolAccessExtractor("ffgrep", (input) =>
 Registration rules mirror `registerToolInputFormatter`: one extractor per tool name (a second `register` for the same name throws), and the returned disposer is identity-guarded.
 The extractor must not throw — guard your parsing and return `undefined` on anything unexpected.
 
+#### `getToolAccessExtractor` and `getToolInputFormatter`
+
+Read back what a node has registered for a tool.
+
+```typescript
+getToolAccessExtractor(toolName: string): ToolAccessExtractor | undefined;
+getToolInputFormatter(toolName: string): ToolInputFormatter | undefined;
+```
+
+These are the read face of the two **fact-shaping** registries, and unlike every other surface here they are meant to be read across a node boundary.
+An extractor produces a fact about a call (the path it touches) and a formatter produces display text; neither decides anything, so a node whose own registry has no entry may resolve an ancestor's service and use its answer.
+The permission system does exactly that internally: a subagent child that is missing an extractor for a tool falls back to its ancestors in the same process, so excluding an extractor's provider from child sessions cannot leave that tool's path invisible to the child's gates ([ADR 0012] decision 1, the fact-shaping clause).
+
+There is deliberately **no** equivalent reader for `registerAuthorizer`.
+A chain link returns a verdict, and live authority converges at the adjudicating node ([ADR 0007] §7) — inheriting one would run authority an operator's own extension exclusion removed.
+
 #### Subagent session registration
 
 Subagent registration is announcement-driven, and the spawner makes no service call.
@@ -301,7 +347,7 @@ Best practice: resolve the service per use rather than caching the reference.
 The `import()` throws if the package is not installed.
 Wrap both in `try/catch` + `if` guard as shown in the Quick Start example.
 
-It also returns `undefined` when called with no session id at all — a shape TypeScript rejects but JavaScript reaches — rather than falling back to the process root's service, since answering with another node's service is the defect the keyed locator exists to prevent.
+It also returns `undefined` when called with no session id at all — a shape TypeScript rejects but JavaScript reaches — rather than guessing a node, since answering with another node's service is the defect the keyed locator exists to prevent.
 That call emits a once-guarded Node warning (code `PI_PERMISSION_SYSTEM_WARN0001`), because the guard above turns the missing service into a registration that silently never happens.
 It is deliberately not a `DeprecationWarning`: `--no-deprecation` does not silence it.
 
@@ -420,6 +466,8 @@ A session serving another session's forwarded request emits one too, on its own 
 That is what makes a forwarded prompt clearable: the ask is gated in the requesting session — a different process for an out-of-process subagent — so without it the serving session broadcasts a `permissions:ui_prompt` whose outcome never appears.
 A forwarded request the serving session's own policy allows or denies is answered without a prompt and broadcasts nothing, matching the UI-prompt channel.
 A served decision carries a non-null `forwarding` context; the requesting session still emits its own decision when the answer comes back.
+That requesting-side decision is attributed to whatever decided **inside** the responding session: a rule there reports `policy_allow` / `policy_deny`, a chain link reports `authorizer_allowed` / `authorizer_denied`, and a human there reports `user_approved` / `user_denied`.
+The `resolution` names what decided, never where.
 
 The `requestId` is the same id the request's review-log entries carry, and the same one `permissions:ui_prompt` carried if the request reached a prompt — so a prompt and its outcome are joinable, as are two concurrent prompts for the same command.
 A request that reaches a prompt is answered by exactly one terminal event on that prompt's own bus, including when the dialog itself fails.
@@ -460,6 +508,8 @@ pi.events.on("permissions:decision", (raw) => {
 | `user_approved`               | User approved once via dialog                                        |
 | `user_approved_for_session`   | User approved for the rest of the session                            |
 | `user_denied`                 | User denied via dialog                                               |
+| `authorizer_allowed`          | A registered `authorizerChain` link granted the ask — no human asked |
+| `authorizer_denied`           | A registered `authorizerChain` link refused the ask — no human asked |
 | `auto_approved`               | Yolo mode — approved automatically without dialog                    |
 | `confirmation_unavailable`    | State was `ask` but no UI was available — blocked                    |
 | `gate_error`                  | The gate threw, or an escalation failed — blocked, fail-closed       |
@@ -512,3 +562,7 @@ pi.on("session_shutdown", () => {
 
 A registration needs no branch on `adjudicatesLocally`.
 Formatters and access extractors are read by every node's own gates, and a chain link registered on a relaying node is accepted (its disposer works) and recorded in the review log as `authorizer_link_vacant` rather than refused — so registering everywhere is the correct default.
+Registering on _every_ node also stays the best practice for a formatter or extractor provider: the ancestor fallback is a repair for a node that could not register, not a reason to register in one place on purpose.
+
+[ADR 0007]: https://github.com/gotgenes/pi-packages/blob/main/packages/pi-permission-system/docs/decisions/0007-model-judge-authorizer-chain-adr.md
+[ADR 0012]: https://github.com/gotgenes/pi-packages/blob/main/packages/pi-permission-system/docs/decisions/0012-cross-node-extension-contract.md

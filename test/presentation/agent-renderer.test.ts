@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
+import type { DecisionSource } from "#src/authority/decision-source";
 import {
   EXTENSION_TAG,
+  renderAuthorizerDenial,
+  renderEscalatedPolicyDenial,
+  renderGateErrorDenial,
   renderPolicyDenial,
+  renderRefusal,
   renderUnavailableDenial,
   renderUserDenial,
 } from "#src/presentation/agent-renderer";
@@ -122,6 +127,7 @@ describe("renderPolicyDenial", () => {
     "<indirection-bash-wrapper>",
     "<opaque-bash-wrapper>",
     "<unparseable-bash-command>",
+    "<unparsed-bash-subtree>",
   ])("surfaces the %s sentinel as the matched rule", (sentinel) => {
     expect(
       renderPolicyDenial(bashPayload({ matchedPattern: sentinel }), null),
@@ -387,6 +393,301 @@ describe("renderUnavailableDenial", () => {
       ),
     ).toBe(
       "[pi-permission-system] This 'external_directory' call for tool 'write' for path '/etc/hosts' (rule '*') requires approval, but no interactive UI is available.",
+    );
+  });
+});
+
+describe("renderAuthorizerDenial", () => {
+  it("attributes the refusal to the named link, not the user", () => {
+    expect(renderAuthorizerDenial(bashPayload(), "model-judge", null)).toBe(
+      "[pi-permission-system] The 'model-judge' authorizer denied this 'bash' call (rule 'rm *').",
+    );
+  });
+
+  it("carries the link's corrective reason", () => {
+    expect(
+      renderAuthorizerDenial(
+        payload(
+          "external_directory",
+          {
+            surface: "external_directory",
+            toolName: "read",
+            value: "/elsewhere/service.test.ts",
+            matchedPattern: "*",
+          },
+          [{ label: "working directory", text: "/repo", detail: null }],
+        ),
+        "model-judge",
+        "Doubled package segment detected",
+      ),
+    ).toBe(
+      "[pi-permission-system] The 'model-judge' authorizer denied this 'external_directory' call for tool 'read' for path '/elsewhere/service.test.ts' (rule '*'): outside working directory '/repo'. Reason: Doubled package segment detected.",
+    );
+  });
+
+  it("never echoes the command", () => {
+    expect(
+      renderAuthorizerDenial(
+        bashPayload({ value: "x".repeat(70_000), matchedPattern: "*" }),
+        "model-judge",
+        "too big",
+      ),
+    ).toBe(
+      "[pi-permission-system] The 'model-judge' authorizer denied this 'bash' call (rule '*'). Reason: too big.",
+    );
+  });
+});
+
+describe("renderEscalatedPolicyDenial", () => {
+  it("names the rule that decided, not the rule that raised the ask", () => {
+    // The payload's own pattern is 'rm *'; the deciding node's is not.
+    expect(
+      renderEscalatedPolicyDenial(
+        bashPayload(),
+        { pattern: "git push --force*", decidedElsewhere: true },
+        null,
+      ),
+    ).toBe(
+      "[pi-permission-system] A policy rule in the session serving this request denied this 'bash' call (rule 'git push --force*').",
+    );
+  });
+
+  it("carries the deciding rule's deny-with-reason text", () => {
+    expect(
+      renderEscalatedPolicyDenial(
+        bashPayload(),
+        { pattern: "git push --force*", decidedElsewhere: true },
+        "force pushes are blocked",
+      ),
+    ).toBe(
+      "[pi-permission-system] A policy rule in the session serving this request denied this 'bash' call (rule 'git push --force*'). Reason: force pushes are blocked.",
+    );
+  });
+
+  it("omits the rule clause when the deciding node recorded no pattern", () => {
+    expect(
+      renderEscalatedPolicyDenial(
+        bashPayload(),
+        { pattern: null, decidedElsewhere: true },
+        null,
+      ),
+    ).toBe(
+      "[pi-permission-system] A policy rule in the session serving this request denied this 'bash' call.",
+    );
+  });
+
+  it("claims no other session when the rule decided here", () => {
+    expect(
+      renderEscalatedPolicyDenial(
+        bashPayload(),
+        { pattern: "git push --force*", decidedElsewhere: false },
+        null,
+      ),
+    ).toBe(
+      "[pi-permission-system] A policy rule denied this 'bash' call (rule 'git push --force*').",
+    );
+  });
+
+  it("keeps the nested context the substituted pattern fired in", () => {
+    // The pattern comes from the decider; where the unit runs is a fact about
+    // this call, so it still comes from the payload.
+    expect(
+      renderEscalatedPolicyDenial(
+        bashPayload({ commandContext: "command_substitution" }),
+        { pattern: "git push --force*", decidedElsewhere: true },
+        null,
+      ),
+    ).toBe(
+      "[pi-permission-system] A policy rule in the session serving this request denied this 'bash' call (rule 'git push --force*', inside command substitution).",
+    );
+  });
+
+  it("names the escaped boundary for a path ask", () => {
+    expect(
+      renderEscalatedPolicyDenial(
+        payload(
+          "external_directory",
+          {
+            surface: "external_directory",
+            toolName: "read",
+            value: "/elsewhere/service.ts",
+            matchedPattern: "*",
+          },
+          [{ label: "working directory", text: "/repo", detail: null }],
+        ),
+        { pattern: "/elsewhere/*", decidedElsewhere: true },
+        null,
+      ),
+    ).toBe(
+      "[pi-permission-system] A policy rule in the session serving this request denied this 'external_directory' call for tool 'read' for path '/elsewhere/service.ts' (rule '/elsewhere/*'): outside working directory '/repo'.",
+    );
+  });
+
+  it("never echoes the command", () => {
+    expect(
+      renderEscalatedPolicyDenial(
+        bashPayload({ value: "x".repeat(70_000) }),
+        { pattern: "*", decidedElsewhere: true },
+        "too big",
+      ),
+    ).toBe(
+      "[pi-permission-system] A policy rule in the session serving this request denied this 'bash' call (rule '*'). Reason: too big.",
+    );
+  });
+});
+
+describe("renderGateErrorDenial", () => {
+  it("states that the authority failed and the call was blocked fail-closed", () => {
+    expect(
+      renderGateErrorDenial(bashPayload(), {
+        reason: "Cannot read properties of undefined",
+        decidedElsewhere: true,
+      }),
+    ).toBe(
+      "[pi-permission-system] The permission authority in the session serving this request failed to answer this 'bash' call (rule 'rm *'), so it was blocked (fail-closed). Reason: Cannot read properties of undefined.",
+    );
+  });
+
+  it("claims no other session when the failure happened here", () => {
+    expect(
+      renderGateErrorDenial(bashPayload(), {
+        reason: "boom",
+        decidedElsewhere: false,
+      }),
+    ).toBe(
+      "[pi-permission-system] The permission authority failed to answer this 'bash' call (rule 'rm *'), so it was blocked (fail-closed). Reason: boom.",
+    );
+  });
+
+  it("omits the escaped boundary, which no retry shape would change", () => {
+    expect(
+      renderGateErrorDenial(
+        payload(
+          "external_directory",
+          {
+            surface: "external_directory",
+            toolName: "read",
+            value: "/elsewhere/service.ts",
+            matchedPattern: "*",
+          },
+          [{ label: "working directory", text: "/repo", detail: null }],
+        ),
+        { reason: "boom", decidedElsewhere: true },
+      ),
+    ).toBe(
+      "[pi-permission-system] The permission authority in the session serving this request failed to answer this 'external_directory' call for tool 'read' for path '/elsewhere/service.ts' (rule '*'), so it was blocked (fail-closed). Reason: boom.",
+    );
+  });
+
+  it("never echoes the command", () => {
+    expect(
+      renderGateErrorDenial(
+        bashPayload({ value: "x".repeat(70_000), matchedPattern: "*" }),
+        { reason: "boom", decidedElsewhere: true },
+      ),
+    ).toBe(
+      "[pi-permission-system] The permission authority in the session serving this request failed to answer this 'bash' call (rule '*'), so it was blocked (fail-closed). Reason: boom.",
+    );
+  });
+});
+
+describe("renderRefusal", () => {
+  const link: DecisionSource = {
+    kind: "authorizer",
+    name: "model-judge",
+    verdict: "deny",
+    reason: "reads outside the project",
+  };
+  const human: DecisionSource = { kind: "user", via: "dialog" };
+  const absent: DecisionSource = {
+    kind: "unavailable",
+    reason: "no serving session",
+  };
+
+  it("names the link when a chain link refused", () => {
+    expect(renderRefusal(bashPayload(), link, "reads outside")).toBe(
+      "[pi-permission-system] The 'model-judge' authorizer denied this 'bash' call (rule 'rm *'). Reason: reads outside.",
+    );
+  });
+
+  it("names the user when a human refused", () => {
+    expect(renderRefusal(bashPayload(), human, "not with sudo")).toBe(
+      "[pi-permission-system] The user denied this 'bash' call (rule 'rm *'). Reason: not with sudo.",
+    );
+  });
+
+  it("states that approval was unreachable when nobody could rule", () => {
+    expect(renderRefusal(bashPayload(), absent, "no serving session")).toBe(
+      "[pi-permission-system] This 'bash' call (rule 'rm *') requires approval, but no interactive UI is available. Reason: no serving session.",
+    );
+  });
+
+  it("names the link that refused inside a serving session", () => {
+    // The hop says where; the agent is told what refused.
+    expect(
+      renderRefusal(
+        bashPayload(),
+        { kind: "forwarded", responderSessionId: "parent-1", decision: link },
+        "reads outside",
+      ),
+    ).toBe(
+      "[pi-permission-system] The 'model-judge' authorizer denied this 'bash' call (rule 'rm *'). Reason: reads outside.",
+    );
+  });
+
+  it("names the serving session's rule when its policy refused", () => {
+    expect(
+      renderRefusal(
+        bashPayload(),
+        {
+          kind: "forwarded",
+          responderSessionId: "parent-1",
+          decision: {
+            kind: "rule",
+            surface: "bash",
+            pattern: "git push",
+            origin: "global",
+          },
+        },
+        null,
+      ),
+    ).toBe(
+      "[pi-permission-system] A policy rule in the session serving this request denied this 'bash' call (rule 'git push').",
+    );
+  });
+
+  it("reports an escalation that threw in the serving session as a failure", () => {
+    expect(
+      renderRefusal(
+        bashPayload(),
+        {
+          kind: "forwarded",
+          responderSessionId: "parent-1",
+          decision: { kind: "gate_error", reason: "boom" },
+        },
+        // The detail rides `decidedBy.reason`; this path carries no
+        // `denialReason` at all, so a render reading it would say nothing.
+        null,
+      ),
+    ).toBe(
+      "[pi-permission-system] The permission authority in the session serving this request failed to answer this 'bash' call (rule 'rm *'), so it was blocked (fail-closed). Reason: boom.",
+    );
+  });
+
+  it("claims no other session for a rule that decided here", () => {
+    expect(
+      renderRefusal(
+        bashPayload(),
+        {
+          kind: "rule",
+          surface: "bash",
+          pattern: "git push",
+          origin: "global",
+        },
+        null,
+      ),
+    ).toBe(
+      "[pi-permission-system] A policy rule denied this 'bash' call (rule 'git push').",
     );
   });
 });
