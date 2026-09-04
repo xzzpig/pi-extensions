@@ -109,12 +109,8 @@ export type MouseConfig = {
 	wheelRouting: boolean;
 	/** Show a "copied to clipboard" notice for a copy Starline itself performs. */
 	copyNotice: boolean;
-	/** Copy on mouse release. When false the highlight waits for ctrl+c. */
-	copyOnSelect: boolean;
 	/** Clicking a tool box's `ctrl+o to expand` hint expands that one box. */
 	clickToExpandTools: boolean;
-	/** Double/triple-click word selection stops at path separators. */
-	pathAwareWords: boolean;
 	/** Copy transcript selections without the painted rails, rules and frames. */
 	transcriptCleanCopy: boolean;
 };
@@ -123,7 +119,6 @@ const FIXED_EDITOR_KEY_MAP: Record<string, keyof MouseConfig> = {
 	enabled: "enabled",
 	mouseScroll: "wheelRouting",
 	copyNotice: "copyNotice",
-	copyOnSelect: "copyOnSelect",
 	clickToExpandTools: "clickToExpandTools",
 };
 
@@ -415,9 +410,7 @@ export const defaultConfig: PolishedTuiConfig = {
 		enabled: true,
 		wheelRouting: true,
 		copyNotice: true,
-		copyOnSelect: true,
 		clickToExpandTools: true,
-		pathAwareWords: true,
 		transcriptCleanCopy: true,
 	},
 };
@@ -831,18 +824,10 @@ function normalizeMouseConfig(record: Record<string, unknown>): MouseConfig {
 				: defaultConfig.mouse.wheelRouting,
 		copyNotice:
 			typeof record.copyNotice === "boolean" ? record.copyNotice : defaultConfig.mouse.copyNotice,
-		copyOnSelect:
-			typeof record.copyOnSelect === "boolean"
-				? record.copyOnSelect
-				: defaultConfig.mouse.copyOnSelect,
 		clickToExpandTools:
 			typeof record.clickToExpandTools === "boolean"
 				? record.clickToExpandTools
 				: defaultConfig.mouse.clickToExpandTools,
-		pathAwareWords:
-			typeof record.pathAwareWords === "boolean"
-				? record.pathAwareWords
-				: defaultConfig.mouse.pathAwareWords,
 		transcriptCleanCopy:
 			typeof record.transcriptCleanCopy === "boolean"
 				? record.transcriptCleanCopy
@@ -1304,11 +1289,9 @@ export function saveMousePatch(patch: Partial<MouseConfig>, path = configPath): 
 			...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
 			...(patch.wheelRouting !== undefined ? { wheelRouting: patch.wheelRouting } : {}),
 			...(patch.copyNotice !== undefined ? { copyNotice: patch.copyNotice } : {}),
-			...(patch.copyOnSelect !== undefined ? { copyOnSelect: patch.copyOnSelect } : {}),
 			...(patch.clickToExpandTools !== undefined
 				? { clickToExpandTools: patch.clickToExpandTools }
 				: {}),
-			...(patch.pathAwareWords !== undefined ? { pathAwareWords: patch.pathAwareWords } : {}),
 			...(patch.transcriptCleanCopy !== undefined
 				? { transcriptCleanCopy: patch.transcriptCleanCopy }
 				: {}),
