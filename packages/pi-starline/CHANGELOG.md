@@ -5,6 +5,35 @@ This fork tracks [`Andy8647/pi-starline`](https://github.com/Andy8647/pi-starlin
 via git subtree; entries below describe only fork-specific deviations from
 upstream.
 
+## [0.3.0] — 2026-09-06 (fork release)
+
+### Changed
+
+- **Click-to-expand toggles from any row, both directions.** A plain click
+  anywhere on an expandable component — tool/bash box, skill block, branch or
+  compaction summary, custom entry or message — toggles just that one; the
+  click no longer has to land on the `… ctrl+o to expand` hint row. The
+  direction comes from the hint row when one is rendered and from the
+  component's own expansion state otherwise, so boxes that drop their hint
+  once expanded (read/grep/ls/write/find results, the summaries) can finally
+  be closed by clicking them. The toggle happens on the release of a click
+  (press and release on the same cell, no drag): the press itself is never
+  consumed, so dragging across a box still selects and copies its text, a
+  double-click still word-selects, and a click on an OSC 8 link still opens
+  the link. A component whose path declares `onMouse` keeps its clicks.
+- **The mouse feature set no longer patches `TuiAltScreen.prototype`.** All
+  mouse handling moved on top of the new
+  [`@xzzpig/pi-mouse-events`](https://www.npmjs.com/package/@xzzpig/pi-mouse-events)
+  extension (optional peer dependency): it owns the prototype patches, dispatches
+  `onMouse` events to components before the built-in scrollbar/selection
+  handling, and exposes handler slots that Starline's wheel routing,
+  click-to-expand, click-to-caret, range delete and clean copies register
+  with. If that extension is not installed, the mouse features are all off —
+  there is no patch-based fallback. The keyboard half of click-to-caret (range
+  delete) now rides `ctx.ui.onTerminalInput`, and the selection and
+  external-editor hints are derived at render time instead of being refreshed
+  from a viewport-input patch.
+
 ## 0.1.0
 
 ## [0.2.0] — 2026-09-05 (fork release)

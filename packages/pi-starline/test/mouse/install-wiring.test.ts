@@ -1,15 +1,12 @@
 /**
- * The extension entry point actually installing the mouse patches.
+ * The extension entry point actually wiring the mouse features to the
+ * `pi-mouse-events` extension.
  *
- * Task 5 built `installMouse` and Task 8a is what finally calls it, so this is
- * the test that would have failed for every commit in between: it drives the
- * real `session_start`/`session_shutdown` handlers and checks the real
- * `TuiAltScreen.prototype` — the same prototype the running Pi renders through
- * — rather than a fake target that nobody's mouse ever reaches.
- *
- * Restoration is asserted just as strictly as installation. A patch left on
- * this shared prototype would leak into every test file that runs after this
- * one, so each test disposes and re-checks the original function references.
+ * Starline no longer touches `TuiAltScreen.prototype` — that is the new
+ * extension's job — so what this file pins is the other half of the contract:
+ * the real `session_start`/`session_shutdown` handlers register and unregister
+ * the features through the API published on `globalThis`, register nothing
+ * when the API is absent, and leave the prototype exactly as they found it.
  */
 import { TuiAltScreen } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -25,8 +22,8 @@ vi.mock("../../extensions/starline/config", async (importOriginal) => {
 		loadConfig: () => ({
 			...actual.defaultConfig,
 			projectRefreshIntervalMs: 0,
-			// `statusLine: false` is load-bearing, not incidental — see the
-			// hint test at the bottom of this file.
+			// `editor: false` keeps the editor factory out of the wiring under
+			// test; `statusLine: false` keeps the footer out of it too.
 			features: { ...actual.defaultConfig.features, editor: false, statusLine: false },
 			mouse: { ...actual.defaultConfig.mouse, enabled: mouseEnabled },
 		}),
@@ -35,25 +32,49 @@ vi.mock("../../extensions/starline/config", async (importOriginal) => {
 
 import starline from "../../extensions/starline/index";
 
-// Typed `private` in pi-tui's `.d.ts`, plain prototype functions at runtime —
-// the same view `test/contract/mouse-install.test.ts` documents.
-type TuiAltScreenPrototype = {
-	copyActiveSelectionToClipboard: () => Promise<boolean>;
-	handleViewportInput: (data: string) => { consume: boolean } | undefined;
-	handleSelectionMouseEvent: (event: unknown) => void;
-};
-const prototype = TuiAltScreen.prototype as unknown as TuiAltScreenPrototype;
+type MouseHandler = (context: { event?: unknown; tui: unknown }) => unknown;
+type CopyHandler = (context: { tui: unknown }) => unknown;
 
-const originals = {
-	copyActiveSelectionToClipboard: prototype.copyActiveSelectionToClipboard,
-	handleViewportInput: prototype.handleViewportInput,
-	handleSelectionMouseEvent: prototype.handleSelectionMouseEvent,
+const MOUSE_EVENTS_API_KEY = Symbol.for("pi-mouse-events.api.v1");
+
+type PublishedApi = {
+	mouseHandlers: MouseHandler[];
+	copyHandlers: CopyHandler[];
+	live: unknown;
 };
 
-function expectRestored(): void {
-	expect(prototype.copyActiveSelectionToClipboard).toBe(originals.copyActiveSelectionToClipboard);
-	expect(prototype.handleViewportInput).toBe(originals.handleViewportInput);
-	expect(prototype.handleSelectionMouseEvent).toBe(originals.handleSelectionMouseEvent);
+/**
+ * A stand-in for the `pi-mouse-events` API at its published shape, parked on
+ * the same `Symbol.for` key the real extension uses, so Starline's own
+ * consumer accessor finds it. `live` is what `liveReceiver()` reports — the
+ * tests point it at a fixture receiver the way the real input wrapper binds
+ * the live renderer on first input.
+ */
+function publishFakeApi(copySlot = true): PublishedApi {
+	const published: PublishedApi = { mouseHandlers: [], copyHandlers: [], live: undefined };
+	(globalThis as Record<symbol, unknown>)[MOUSE_EVENTS_API_KEY] = {
+		version: 1,
+		eventChannel: "pi-mouse-events:mouse",
+		copySlotAvailable: copySlot,
+		liveReceiver: () => published.live,
+		addMouseHandler(handler: MouseHandler) {
+			published.mouseHandlers.push(handler);
+			return () => {
+				published.mouseHandlers = published.mouseHandlers.filter((entry) => entry !== handler);
+			};
+		},
+		addCopyHandler(handler: CopyHandler) {
+			published.copyHandlers.push(handler);
+			return () => {
+				published.copyHandlers = published.copyHandlers.filter((entry) => entry !== handler);
+			};
+		},
+	};
+	return published;
+}
+
+function unpublishFakeApi(): void {
+	delete (globalThis as Record<symbol, unknown>)[MOUSE_EVENTS_API_KEY];
 }
 
 type Handler = (event: unknown, ctx: unknown) => unknown | Promise<unknown>;
@@ -77,13 +98,57 @@ async function emit(handlers: Map<string, Handler[]>, name: string, ctx: unknown
 }
 
 /**
- * A minimal TUI context for exercising the real `session_start` /
- * `session_shutdown` handlers: the mouse installer probes for the editor
- * shape and degrades cleanly when it is absent, so a bare context is enough
- * to prove the wiring and its restoration.
+ * A minimal extension context. `ui` is Pi's extension-UI surface only — the
+ * methods Starline installs through — while `receiver` is the renderer-like
+ * fixture the fake API's `liveReceiver()` reports, the way the real input
+ * wrapper binds the live `TuiAltScreen` on first input. Keeping them separate
+ * is the whole point: in a real session `ctx.ui` is not the renderer, and
+ * probing it instead of the live receiver would disable every feature.
  */
 function makeCtx(overrides: { hasUI?: boolean; mode?: string } = {}) {
 	let editorFactory: unknown;
+	const receiver = {
+		selectionBounds: { start: { row: 0, col: 0 }, end: { row: 0, col: 5 } },
+		previousScreen: ["hello world"],
+		copyOnSelect: false,
+		getCopyOnSelect(this: { copyOnSelect: boolean }) {
+			return this.copyOnSelect;
+		},
+		hasActiveSelection(this: { selectionBounds: unknown }) {
+			return this.selectionBounds !== undefined;
+		},
+		getSelectionBounds(this: { selectionBounds: unknown }) {
+			return this.selectionBounds;
+		},
+		getSelectionColumns(
+			line: string,
+			row: number,
+			selection: { start: { row: number; col: number }; end: { row: number; col: number } },
+		) {
+			return {
+				start: row === selection.start.row ? selection.start.col : 0,
+				end: row === selection.end.row ? selection.end.col : line.length,
+			};
+		},
+		flash() {},
+		hasOverlay() {
+			return false;
+		},
+		requestRender() {},
+	};
+	const ui = {
+		theme: {} as never,
+		onTerminalInput(_handler: (data: string) => unknown) {
+			return () => {};
+		},
+		setFooter() {},
+		setEditorComponent(factory: unknown) {
+			editorFactory = factory;
+		},
+		getEditorComponent() {
+			return editorFactory;
+		},
+	};
 	return {
 		hasUI: overrides.hasUI ?? true,
 		mode: overrides.mode ?? "tui",
@@ -95,24 +160,14 @@ function makeCtx(overrides: { hasUI?: boolean; mode?: string } = {}) {
 			getSessionName: () => undefined,
 		},
 		getContextUsage: () => null,
-		ui: {
-			theme: {} as never,
-			setFooter() {},
-			setEditorComponent(factory: unknown) {
-				editorFactory = factory;
-			},
-			getEditorComponent() {
-				return editorFactory;
-			},
-		},
+		ui,
+		receiver,
 	};
 }
 
-describe("extension wiring of installMouse", () => {
-	// The session a test opened, so teardown can close it even when an assertion
-	// throws first. A patch left on this shared prototype would poison every test
-	// file that runs after this one, invisibly and depending on run order.
-	let open: { handlers: Map<string, Handler[]>; ctx: unknown } | undefined;
+describe("extension wiring of the mouse features", () => {
+	let open: { handlers: Map<string, Handler[]>; ctx: ReturnType<typeof makeCtx> } | undefined;
+	let published: PublishedApi | undefined;
 
 	async function startSession(ctx = makeCtx()) {
 		const handlers = loadExtension();
@@ -133,65 +188,106 @@ describe("extension wiring of installMouse", () => {
 			await endSession();
 		} finally {
 			mouseEnabled = true;
-			expectRestored();
+			unpublishFakeApi();
+			published = undefined;
 		}
 	});
 
-	it("patches the real TuiAltScreen prototype on session_start", async () => {
+	it("registers the mouse handlers on session_start and unregisters them on shutdown", async () => {
+		published = publishFakeApi();
 		await startSession();
 
-		expect(prototype.copyActiveSelectionToClipboard).not.toBe(
-			originals.copyActiveSelectionToClipboard,
-		);
-		expect(prototype.handleViewportInput).not.toBe(originals.handleViewportInput);
-		expect(prototype.handleSelectionMouseEvent).not.toBe(originals.handleSelectionMouseEvent);
+		// Three mouse handlers (expand, wheel, caret) plus the copy handler.
+		expect(published.mouseHandlers).toHaveLength(3);
+		expect(published.copyHandlers).toHaveLength(1);
+
+		await endSession();
+		expect(published.mouseHandlers).toHaveLength(0);
+		expect(published.copyHandlers).toHaveLength(0);
 	});
 
-	it("installs nothing when mouse.enabled is false", async () => {
+	it("never touches the TuiAltScreen prototype", async () => {
+		published = publishFakeApi();
+		const proto = TuiAltScreen.prototype as unknown as Record<string, unknown>;
+		const before = {
+			viewport: proto.handleViewportInput,
+			copy: (TuiAltScreen.prototype as unknown as Record<string, unknown>)
+				.copyActiveSelectionToClipboard,
+			selection: (TuiAltScreen.prototype as unknown as Record<string, unknown>)
+				.handleSelectionMouseEvent,
+			wheel: (TuiAltScreen.prototype as unknown as Record<string, unknown>).routeWheel,
+		};
+
+		await startSession();
+		await endSession();
+
+		expect(proto.handleViewportInput).toBe(before.viewport);
+		expect(
+			(TuiAltScreen.prototype as unknown as Record<string, unknown>).copyActiveSelectionToClipboard,
+		).toBe(before.copy);
+		expect(
+			(TuiAltScreen.prototype as unknown as Record<string, unknown>).handleSelectionMouseEvent,
+		).toBe(before.selection);
+		expect((TuiAltScreen.prototype as unknown as Record<string, unknown>).routeWheel).toBe(
+			before.wheel,
+		);
+	});
+
+	it("registers nothing when mouse.enabled is false", async () => {
+		published = publishFakeApi();
 		mouseEnabled = false;
 		await startSession();
 
-		expectRestored();
+		expect(published.mouseHandlers).toHaveLength(0);
+		expect(published.copyHandlers).toHaveLength(0);
 	});
 
-	it("leaves the prototype clean after two session_starts and one shutdown", async () => {
-		// A second session_start must not stack a second set of patches whose
-		// disposer nobody holds: the one shutdown in teardown has to undo both.
+	it("registers nothing — with one console note — when the extension is not installed", async () => {
+		// No publishFakeApi(): the package is missing. No fallback, no patches —
+		// the features are simply off.
+		const info = vi.spyOn(console, "info").mockImplementation(() => {});
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		try {
+			await startSession();
+			// The capability warning never fires either: without the API the
+			// install stops before probing.
+			expect(warn).not.toHaveBeenCalled();
+			expect(info).toHaveBeenCalled();
+		} finally {
+			info.mockRestore();
+			warn.mockRestore();
+		}
+	});
+
+	it("registers no copy handler when the extension's copy slot is unavailable", async () => {
+		published = publishFakeApi(false);
+		await startSession();
+
+		expect(published.copyHandlers).toHaveLength(0);
+		// The pointer features do not need the copy slot.
+		expect(published.mouseHandlers).toHaveLength(3);
+	});
+
+	it("registers without duplication across two session_starts", async () => {
+		published = publishFakeApi();
 		const { handlers, ctx } = await startSession();
 		await emit(handlers, "session_start", ctx);
 
-		expect(prototype.handleViewportInput).not.toBe(originals.handleViewportInput);
+		expect(published.mouseHandlers).toHaveLength(3);
+		expect(published.copyHandlers).toHaveLength(1);
 	});
 
-	/**
-	 * The hint is derived, so nothing about a release needs Starline's help: Pi
-	 * 0.84.4's `copyOnSelect: false` keeps the selection highlighted and its own
-	 * repaints put the hint on screen via the metadata row. This drives the real
-	 * prototype the way a real session would — selection on the live renderer,
-	 * one input event to register the instance — and reads the derived hint.
-	 */
-	it("derives the selection hint from the real prototype's own state", async () => {
-		await startSession();
+	it("derives the selection hint from the live receiver once one exists", async () => {
+		published = publishFakeApi();
+		const { ctx } = await startSession();
 
-		const receiver = Object.create(TuiAltScreen.prototype) as {
-			copyOnSelect: boolean;
-			selectionAnchor: { row: number; col: number } | undefined;
-			selectionFocus: { row: number; col: number } | undefined;
-			previousScreen: string[];
-			overlayStack: unknown[];
-			handleViewportInput: (data: string) => { consume: boolean } | undefined;
-			stopped: boolean;
-		};
-		receiver.copyOnSelect = false;
-		receiver.previousScreen = ["hello world"];
-		receiver.selectionAnchor = { row: 0, col: 0 };
-		receiver.selectionFocus = { row: 0, col: 5 };
-		receiver.overlayStack = [];
-		receiver.stopped = true;
+		// No renderer has been seen yet — install binds lazily, so there is
+		// nothing to read a selection from and the hint stays quiet.
+		expect(activeSelectionHintText()).toBeNull();
 
-		// An input event registers the live instance the hint reads.
-		receiver.handleViewportInput("");
-
+		// The first input binds the live receiver (the fake reports the
+		// fixture here), and the hint reads it from then on.
+		published.live = ctx.receiver;
 		expect(activeSelectionHintText()).toContain("5 characters selected");
 
 		await endSession();
@@ -199,8 +295,10 @@ describe("extension wiring of installMouse", () => {
 	});
 
 	it("stays out of a non-TUI context", async () => {
+		published = publishFakeApi();
 		await startSession(makeCtx({ hasUI: false }));
 
-		expectRestored();
+		expect(published.mouseHandlers).toHaveLength(0);
+		expect(published.copyHandlers).toHaveLength(0);
 	});
 });

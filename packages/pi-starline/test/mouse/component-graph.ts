@@ -161,6 +161,54 @@ export class ExpandableText implements Component {
 }
 
 /**
+ * Custom entries and messages spell their state `_expanded`
+ * (`custom-entry.js:11`, `custom-message.js:13`) — the second spelling the
+ * state-field rule has to duck-type.
+ */
+export class UnderscoreStateComponent implements Component {
+	_expanded = false;
+	setExpanded(expanded: boolean): void {
+		this._expanded = expanded;
+	}
+	invalidate(): void {}
+	render(): string[] {
+		return [`state ${this._expanded ? "open" : "shut"}`];
+	}
+}
+
+/**
+ * An expandable whose state field is spelled neither `expanded` nor
+ * `_expanded` — the shape the direction rule must decline rather than guess
+ * at. The real state is kept in a private field so no duck-type can read it.
+ */
+export class StatelessExpandableComponent implements Component {
+	#state = false;
+	setExpanded(expanded: boolean): void {
+		this.#state = expanded;
+	}
+	invalidate(): void {}
+	render(): string[] {
+		return [`state ${this.#state ? "open" : "shut"}`];
+	}
+}
+
+/**
+ * A component that handles the mouse itself. The layout folds the transcript
+ * into one box, so `pi-mouse-events` dispatch can never deliver an event to
+ * it — which is exactly why the expand rule must bow out when one appears on
+ * a clicked row's path.
+ */
+export class MouseAwareComponent implements Component {
+	invalidate(): void {}
+	onMouse(): undefined {
+		return undefined;
+	}
+	render(): string[] {
+		return ["clicks are mine"];
+	}
+}
+
+/**
  * `keyText("app.tools.expand")` as a default Pi prints it. Fixtures spell it
  * out rather than reading the global keybinding registry, because a test that
  * shares that global with every other test file is a test that depends on run

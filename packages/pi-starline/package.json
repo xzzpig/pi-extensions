@@ -1,6 +1,6 @@
 {
 	"name": "@xzzpig/pi-starline",
-	"version": "0.2.0",
+	"version": "0.3.0",
 	"description": "A Starship-inspired statusline and Opencode-style TUI for Pi.",
 	"type": "module",
 	"license": "MIT",
@@ -37,7 +37,13 @@
 	"peerDependencies": {
 		"@earendil-works/pi-ai": ">=0.84.4",
 		"@earendil-works/pi-coding-agent": ">=0.84.4",
-		"@earendil-works/pi-tui": ">=0.84.4"
+		"@earendil-works/pi-tui": ">=0.84.4",
+		"@xzzpig/pi-mouse-events": ">=0.1.0 <2"
+	},
+	"peerDependenciesMeta": {
+		"@xzzpig/pi-mouse-events": {
+			"optional": true
+		}
 	},
 	"pi": {
 		"extensions": [
@@ -54,6 +60,7 @@
 		"@earendil-works/pi-coding-agent": "^0.84.4",
 		"@earendil-works/pi-tui": "^0.84.4",
 		"@types/node": "^26.0.0",
+		"@xzzpig/pi-mouse-events": "workspace:*",
 		"typescript": "^7.0.2",
 		"vitest": "^4.1.8"
 	}

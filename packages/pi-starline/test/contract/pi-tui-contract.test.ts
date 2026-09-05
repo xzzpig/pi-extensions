@@ -1,8 +1,15 @@
 /**
- * Asserts the shape of Pi that Starline patches, against the real installed
+ * Asserts the shape of Pi that Starline reads, against the real installed
  * package rather than a fake. When Pi renames or freezes one of these, CI goes
- * red here — loudly, at build time — instead of a feature silently vanishing at
- * runtime on a user's machine.
+ * red here — loudly, at build time — instead of a feature silently vanishing
+ * at runtime on a user's machine.
+ *
+ * Starline no longer patches any of `TuiAltScreen.prototype` — the mouse
+ * methods belong to the `pi-mouse-events` extension, and its own contract test
+ * pins the dispatch surface (`handleViewportInput`, the parsers, the layout
+ * fields). What Starline still needs Pi to expose is the read surface below:
+ * the selection state its features interpret, and the editor internals its
+ * caret/copy arithmetic drives.
  */
 import { Editor, TuiAltScreen } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
@@ -17,18 +24,11 @@ function descriptorInChain(target: object, name: string): PropertyDescriptor | u
 	return undefined;
 }
 
-const PATCHED_METHODS = [
-	"handleViewportInput",
-	"routeWheel",
-	"handleSelectionMouseEvent",
-	"copyActiveSelectionToClipboard",
-];
-
 // Read, not patched — the selection itself stays Pi's, and `hasOverlay` is
 // asked the same question Pi's own press path asks before it resolves a scroll
 // view, so click-to-expand does not reach through a dialog. `getCopyOnSelect`
 // and `hasActiveSelection` are read the same way: the hint is derived from
-// them, never patched.
+// them, never intercepted.
 const READ_METHODS = [
 	"getSelectionBounds",
 	"getSelectionColumns",
@@ -52,14 +52,6 @@ const EDITOR_METHODS = [
 ];
 
 describe("TuiAltScreen contract", () => {
-	it.each(PATCHED_METHODS)("exposes %s as a replaceable method", (name) => {
-		const descriptor = descriptorInChain(TuiAltScreen.prototype, name);
-		expect(descriptor, `TuiAltScreen.prototype.${name} is gone`).toBeDefined();
-		expect(typeof descriptor?.value).toBe("function");
-		expect(descriptor?.writable).toBe(true);
-		expect(descriptor?.configurable).toBe(true);
-	});
-
 	it.each(READ_METHODS)("exposes %s for reading", (name) => {
 		expect(typeof descriptorInChain(TuiAltScreen.prototype, name)?.value).toBe("function");
 	});

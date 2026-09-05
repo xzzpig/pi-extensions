@@ -47,6 +47,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { isExpandableComponent } from "../../extensions/starline/mouse/component-tree";
 import type { BoxLike } from "../../extensions/starline/mouse/hit-test";
 import {
+	expandedStateOf,
 	expandHintAction,
 	expandKeyText,
 	expandTargetAt,
@@ -179,13 +180,31 @@ describe("a real tool box under the pointer", () => {
 		expect(target?.expanded).toBe(true);
 	});
 
-	it("leaves the command line and the output rows to selection", () => {
+	it("resolves the command line and the output rows too, direction from the state field", () => {
 		const box = makeBashBox();
 		const scene = layout(box, 60);
 		const lookup = { root: scene.root, keyText: expandKeyText() };
 
-		expect(expandTargetAt(lookup, 4, scene.screenY("$ echo hi"))).toBeUndefined();
-		expect(expandTargetAt(lookup, 4, scene.screenY("line 25"))).toBeUndefined();
+		// The real component's state is a runtime-public boolean, so a click on
+		// any row it renders — not only the hint — resolves to it, with the
+		// field, not a hint, naming the direction.
+		const command = expandTargetAt(lookup, 4, scene.screenY("$ echo hi"));
+		expect(command?.component).toBe(box);
+		expect(command?.expanded).toBe(true);
+
+		const output = expandTargetAt(lookup, 4, scene.screenY("line 25"));
+		expect(output?.component).toBe(box);
+		expect(output?.expanded).toBe(true);
+	});
+
+	it("reads the expansion off the real component's own state field", () => {
+		// The direction rule's second source, pinned against the component it
+		// will actually be asked about: `expanded` is runtime-public and every
+		// mutation path — ctrl+o's fan-out included — writes it.
+		const box = makeBashBox();
+		expect(expandedStateOf(box)).toBe(false);
+		box.setExpanded(true);
+		expect(expandedStateOf(box)).toBe(true);
 	});
 
 	it("asks to collapse once the box has been expanded and its rows have moved", () => {

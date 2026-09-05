@@ -1,81 +1,78 @@
 /**
- * Installs the mouse feature set on Pi's live renderer prototype.
+ * Starline's mouse feature set, as a consumer of the `pi-mouse-events`
+ * extension.
  *
- * This is the first module that actually touches Pi rather than describing
- * what it would do to it. `installMouse` probes what the running Pi build
- * exposes, logs once if something is missing, and installs each feature gated
- * on exactly its own declared requirement (`capabilities.ts`). Today that is
- * six features across four patches. Two of those methods carry two features
- * each, and in every case the two share a single patch, because the patch
- * registry holds one behaviour per adapter key and a second registration would
- * silently replace the first:
+ * Starline used to install this feature set itself, by wrapping four methods
+ * on `TuiAltScreen.prototype`. It no longer touches any prototype: the
+ * `pi-mouse-events` extension owns that surface now, and everything here
+ * rides on the API it publishes (`mouse/api-consumer.ts` reads it off
+ * `globalThis`). When that extension is not installed there is no fallback —
+ * `installMouseFeaturesOn` is never called, no handler is registered, the
+ * hints derive from nothing, and every mouse feature is simply off. That is
+ * the deal: one owner for the prototype, Starline as a plain consumer.
  *
- * `selectionHint`, one patch plus a derived hint:
- * - `copyActiveSelectionToClipboard` — the method Pi 0.84.4's Ctrl+X handler
- *   reaches (`handleCopyCommand` with `preferSelection`). Wrapped so a
- *   selection the clean-copy features recognise copies clean, calling
- *   through for everything else.
- * - The hint is derived, not owned: `activeSelectionHintText()` renders the
- *   live renderer's state — an active selection that is not being
- *   auto-copied (`getCopyOnSelect() === false`) — so select-without-copy is
- *   Pi's own `fullscreenCopyOnSelect`, and this module only tells the user
- *   what to press. The copy key is `app.message.copy` (default ctrl+x),
- *   resolved from Pi's keybinding registry so a rebind shows up in the hint.
+ * The features themselves are unchanged, and each maps onto one API slot:
  *
- * `clickToExpandTools`, one patch:
- * - `handleSelectionMouseEvent` — watched for a left-button press that landed
- *   on a tool box's `ctrl+o to expand` hint row. On a hit it toggles that one
- *   box and consumes the press, so the click does not also drop a selection
- *   anchor into the box it just opened; every other press, including one
- *   anywhere else inside the same box, calls through and starts a selection as
- *   usual. `tool-box.ts` carries the reasoning for why the hint row is the
- *   only target and why resolution goes through the component tree.
+ * `editorWheelScroll` → `addMouseHandler`
+ * - A wheel notch that landed on the input box scrolls the *draft*, when the
+ *   draft is taller than the box. `pi-mouse-events` delivers the notch before
+ *   Pi's built-in wheel routing; consuming it here is what stops the
+ *   transcript from scrolling too. `editor-mouse.ts` carries how the box is
+ *   located and how the live editor is reached; the scroll itself is
+ *   `editor-scroll.ts`.
  *
- * `editorWheelScroll`, one patch:
- * - `routeWheel` — Pi's own wheel routing, which knows only about scroll views
- *   and therefore always scrolls the transcript. Wrapped so a notch that landed
- *   on the input box scrolls the *draft* instead, when the draft is taller than
- *   the box. `editor-mouse.ts` carries how the box is located (not where the
- *   plan for this said it would be) and how the live editor is reached; the
- *   scroll itself is `editor-scroll.ts` — see its header for why it lives in
- *   its own module. Every other notch calls through.
+ * `clickToExpandTools` → `addMouseHandler`
+ * - A left-button press anywhere on an expandable component records the
+ *   candidate; when the button is released on the same cell with no motion in
+ *   between — a plain click — that one component is toggled and the release
+ *   is consumed, so the click does not also drop a selection anchor into the
+ *   box it just opened. The press itself is never consumed: a drag that
+ *   starts on a box, hint row included, still selects and copies, a click on
+ *   an OSC 8 link still opens the link, and a second same-cell click inside
+ *   Pi's double-click window stays a word selection. Direction comes from the
+ *   hint row when one is rendered and from the component's own `expanded`
+ *   state otherwise; `tool-box.ts` carries the reasoning and the accepted
+ *   limitation about a box's own output reading like its hint.
  *
- * `editorClickToCaret`, across two shared patches:
- * - `handleSelectionMouseEvent` — a left-button press inside the input box moves
- *   the caret to the character under it, then calls through, so Pi still drops
- *   its selection anchor there and a drag from that point still selects and
- *   highlights as it always did. `editor-caret.ts` carries the screen-to-buffer
- *   arithmetic and why the box's rectangle is not the text.
- * - `handleViewportInput` — backspace or delete over a live selection inside the
+ * `editorClickToCaret` → `addMouseHandler` + `ctx.ui.onTerminalInput`
+ * - The press half: a left-button press inside the input box moves the caret
+ *   to the character under it and never consumes, so Pi still drops its
+ *   selection anchor there and a drag from that point still selects and
+ *   highlights as it always did. `editor-caret.ts` carries the
+ *   screen-to-buffer arithmetic.
+ * - The keyboard half: backspace or delete over a live selection inside the
  *   input box removes the whole range instead of one character, through the
- *   editor's own `handleForwardDelete` under a single undo snapshot. It runs
- *   *after* the ctrl+c branch and refuses ctrl+c and ctrl+d outright, so the
- *   interrupt and exit chords cannot be swallowed by it from either direction.
- *   Every backspace it does not act on falls through and deletes one character.
+ *   editor's own `handleForwardDelete` under a single undo snapshot. This
+ *   used to ride the same viewport-input patch as everything else; it is
+ *   keyboard, and `ctx.ui.onTerminalInput` — Pi's official extension input
+ *   listener, which the renderer's mouse handling never swallows — is the
+ *   honest place for it. `isRangeDeleteKey` refuses ctrl+c and ctrl+d
+ *   outright, so the interrupt and exit chords cannot be swallowed by it from
+ *   either direction. Every backspace it does not act on falls through and
+ *   deletes one character.
  *
- * `editorBufferCopy`, sharing the `copyActiveSelectionToClipboard` patch:
- * - A selection lying inside the input box is copied from the *draft* rather
- *   than from the rendered rows. That is the one place this module builds
- *   clipboard bytes itself, and the reason is that the rendered rows are not
- *   the draft: they carry the rail glyph down the left, the padding each row is
- *   filled out to, and a hard newline wherever the draft happened to wrap.
+ * `editorBufferCopy` + `transcriptCleanCopy` → `addCopyHandler`
+ * - The copy key's path. A selection lying inside the input box is copied
+ *   from the *draft* rather than from the rendered rows — the rows carry the
+ *   rail glyph, the frame's padding, and a hard newline wherever the draft
+ *   happened to wrap. A selection in the transcript is copied with the chrome
+ *   two components paint around their content removed (Starline's rails and
+ *   border rules, `pi-toolbox`'s rounded frames); the cleaning itself is
+ *   `transcript-copy.ts`, and a selection with no recognised decoration falls
+ *   back to Pi's verbatim copy.
  *
- * `transcriptCleanCopy`, sharing the same patch:
- * - A selection in the transcript is copied with the chrome two components
- *   paint around their content removed: Starline's user message rails and
- *   border rules, and `pi-toolbox`'s rounded tool box frames. The cleaning
- *   itself is `transcript-copy.ts`, which recognises only those exact markers
- *   and passes everything else through untouched; a selection with no
- *   recognised decoration falls back to Pi's verbatim copy, so nothing that
- *   was clean before changes.
- *
- * Everywhere else the clipboard gets exactly what Pi's own
- * `copyActiveSelectionToClipboard` puts there — see `installMouse` for why frame-free
- * selection is not part of this.
+ * `selectionHint` → derived, no slot at all
+ * - `activeSelectionHintText()` renders the live renderer's state — an active
+ *   selection that is not being auto-copied (`getCopyOnSelect() === false`) —
+ *   so select-without-copy is Pi's own `fullscreenCopyOnSelect`, and this
+ *   module only tells the user what to press. It is computed on demand at
+ *   render time from the lazily bound renderer reference (`bindReceiver`);
+ *   there is nothing to intercept.
  */
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { getKeybindings, sliceByColumn, stripTerminalSequences } from "@earendil-works/pi-tui";
+import type { MouseEventsApi } from "@xzzpig/pi-mouse-events/api";
 import type { PolishedTuiConfig } from "../config";
-import { installPrototypePatch } from "../prototype-patch-registry";
 import {
 	disabledFeatureWarning,
 	enabledFeatures,
@@ -88,7 +85,7 @@ import {
 	editorSelectionTextFor,
 	moveEditorCaretTo,
 } from "./editor-caret";
-import { activeEditor, wheelTarget } from "./editor-mouse";
+import { activeEditor, pointerOverEditor } from "./editor-mouse";
 import { scrollEditorBy } from "./editor-scroll";
 import { editorVisualRowCount } from "./editor-text-cursor";
 import { type BoxLike, scrollContentLinesFor } from "./hit-test";
@@ -104,14 +101,21 @@ const CTRL_D = "\x04";
 /** The binding Pi's selection copy lives on (`app.message.copy`, default ctrl+x). */
 const COPY_KEYBINDING = "app.message.copy";
 
+/**
+ * Pi's own double-click window (`DOUBLE_CLICK_INTERVAL_MS` in
+ * `tui-alt-screen.js`). A second same-cell click inside it is a word
+ * selection to Pi; without the debounce the expand flow would read it as
+ * another plain click and toggle the box right back.
+ */
+const DOUBLE_CLICK_MS = 500;
+
 /** Opens the draft in `$EDITOR` — the hint an editor selection's hint carries. */
 const EXTERNAL_EDITOR_KEYBINDING = "app.editor.external";
 
 /**
- * SGR mouse bits, as `parseSgrMouseEvent` decodes them
- * (`tui-alt-screen.js:390`). `button & 3` is the button — 0 is left — bit 32
- * marks a motion (drag) report and bit 64 a wheel notch. `release` is the
- * `m`/`M` terminator.
+ * SGR mouse bits, as pi-tui's `parseSgrMouseEvent` decodes them. `button & 3`
+ * is the button — 0 is left — bit 32 marks a motion (drag) report and bit 64
+ * a wheel notch. `release` is the `m`/`M` terminator.
  */
 const BUTTON_MASK = 3;
 const LEFT_BUTTON = 0;
@@ -120,89 +124,37 @@ const WHEEL_BIT = 64;
 
 type MouseEventLike = { button: number; x: number; y: number; release?: boolean };
 
-/** `parseWheelEvent`'s output (`tui-alt-screen.js:345`): -1 is up, 1 is down. */
-type WheelEventLike = { direction: number; x: number; y: number };
-
 type SelectionPoint = { scrollView?: unknown; row: number; col: number; boundary?: boolean };
 type SelectionBounds = { start: SelectionPoint; end: SelectionPoint };
 type SelectionColumns = { start: number; end: number };
 
-/** The slice of `TuiAltScreen` this module reads or wraps. */
-type MouseCapablePrototype = {
-	getSelectionBounds(this: unknown): SelectionBounds | undefined;
+/**
+ * The slice of the live renderer this module reads. Reached through the
+ * `pi-mouse-events` handler context (`tui`) and its `liveReceiver()` hook —
+ * pi-tui 0.84.x internals, TS-private but runtime-present, the same surface
+ * its own consumers reach.
+ */
+export type MouseCapableReceiver = {
+	getSelectionBounds?(): SelectionBounds | undefined;
 	getSelectionColumns(
 		this: unknown,
 		line: string,
 		row: number,
 		selection: SelectionBounds,
 	): SelectionColumns;
-	/**
-	 * Pi 0.84.4's public selection-copy entry (`tui-alt-screen.ts`): true when
-	 * the active selection was copied, false when there was none. This is what
-	 * coding-agent's Ctrl+X handler reaches, so a clean copy answering this
-	 * method answers exactly the copies that key performs.
-	 */
-	copyActiveSelectionToClipboard(this: unknown): Promise<boolean>;
-	/**
-	 * Pi 0.84.4's select-without-copy state. The hint reads it to decide
-	 * whether a selection is waiting for the copy key or was already copied on
-	 * release.
-	 */
-	getCopyOnSelect(this: unknown): boolean;
-	/** Whether the fullscreen viewport has a non-empty active text selection. */
-	hasActiveSelection(this: unknown): boolean;
-	handleViewportInput(this: unknown, data: string): { consume: boolean } | undefined;
-	flash(this: unknown, message: string, durationMs?: number): void;
-	hasOverlay(this: unknown): boolean;
-	/**
-	 * `TuiAltScreen.routeWheel(event)` (`tui-alt-screen.js:375`). `event` is
-	 * `parseWheelEvent`'s output — `{ direction: -1 | 1, x, y }`, zero-based —
-	 * and the method returns nothing.
-	 */
-	routeWheel(this: unknown, event: WheelEventLike): void;
-	/**
-	 * `TuiBase.requestRender(force = false)` (`tui.js:495`), inherited by
-	 * `TuiAltScreen` and public. The only method here this module calls rather
-	 * than patches — see `capabilities.ts`.
-	 */
-	requestRender(this: unknown, force?: boolean): void;
+	getCopyOnSelect?(this: unknown): boolean;
+	hasActiveSelection?(this: unknown): boolean;
+	flash?(this: unknown, message: string, durationMs?: number): void;
+	hasOverlay?(this: unknown): boolean;
+	requestRender?(this: unknown, force?: boolean): void;
 	previousScreen?: readonly string[];
-	// Not probed capabilities (see capabilities.ts): plain instance fields
-	// this module only ever reads.
 	currentLayout?: { root: BoxLike };
-	/**
-	 * `TuiAltScreen.selectionAnchor` / `.selectionFocus` (`tui-alt-screen.js:45`).
-	 * Plain instance fields, which Pi assigns and clears throughout its own
-	 * selection handling; the range delete clears them the same way once the text
-	 * they described is gone.
-	 */
 	selectionAnchor?: unknown;
 	selectionFocus?: unknown;
-	/**
-	 * `TuiBase.terminal` (`tui.js:101`); `rows` is a getter on it, and `write` is
-	 * how `copyActiveSelectionToClipboard` reaches the clipboard — it emits OSC 52
-	 * through the terminal rather than through any renderer method.
-	 */
 	terminal?: { rows?: number; write?: (data: string) => void };
-	/**
-	 * How many lines one notch moves, `max(1, options.wheelScrollLines ?? 1)`
-	 * (`tui-alt-screen.js:73`). Read so the editor scrolls by the same amount
-	 * the transcript would have.
-	 */
 	wheelScrollLines?: number;
 };
 
-/**
- * Repaints go through the receiver, not through a callback the caller supplies.
- *
- * The renderer these patches run inside is the thing that needs to repaint, and
- * `TuiAltScreen` calls `this.requestRender()` all through its own mouse handling
- * for exactly this. Routing it back out to the extension instead made the hint
- * depend on whatever repaint path the extension happened to own — which, until
- * this was fixed, was the footer's, so with `features.statusLine` off the
- * pending hint never appeared until some unrelated frame came along. The hint
- * lives in the editor's metadata row; it was never the footer's to schedule.
- */
 export type InstallMouseDeps = {
 	getConfig: () => PolishedTuiConfig;
 };
@@ -211,48 +163,106 @@ export type InstallMouseDeps = {
 let hasWarned = false;
 
 /**
- * The live renderer the hint reads. `installMouse` receives only the
- * prototype, so the instance is captured here from the first patched call
- * that sees one — `handleViewportInput` sees every key and mouse event, and
- * repaints ride Pi's own `requestRender`, so the hint is never more than one
- * input away from the current renderer.
+ * The live renderer, bound lazily — see `bindReceiver`.
  */
-let activeReceiver: MouseCapablePrototype | undefined;
+let activeReceiver: MouseCapableReceiver | undefined;
 
 /**
- * Reader for the derived selection hint of whichever `installMouse` call is
- * currently active, mirroring `pasteExpandHintText`'s pattern in
- * `../paste-collapse.ts`. `ui.ts` composes this with the paste hint on every
- * render; there is nothing to wire when no mouse install is active.
+ * Reader for the derived selection hint, mirroring `pasteExpandHintText`'s
+ * pattern in `../paste-collapse.ts`. `ui.ts` composes this with the paste hint
+ * on every render; there is nothing to wire when no mouse install is active.
  *
  * The hint is computed on demand from the live renderer, never cached:
- * "selected, ctrl+x to copy" is true exactly while Pi is not auto-copying
- * and something is actually selected. The character count goes through the
- * same two copy paths the copy key itself would answer, so the hint's
- * promise and the clipboard's bytes stay in agreement.
+ * "selected, ctrl+x to copy" is true exactly while Pi is not auto-copying and
+ * something is actually selected. The character count goes through the same
+ * two copy paths the copy key itself would answer, so the hint's promise and
+ * the clipboard's bytes stay in agreement.
  */
 let activeHint:
 	| { getConfig: () => PolishedTuiConfig; bufferCopy: boolean; cleanCopy: boolean }
 	| undefined;
 
+/**
+ * Per-install state: how to reach the live renderer (`api.liveReceiver()`),
+ * whether the copy slot exists, and the config reader the hint needs. Set at
+ * install, cleared on dispose.
+ */
+let installRefs:
+	| {
+			liveReceiver: () => unknown;
+			copySlot: boolean;
+			deps: InstallMouseDeps;
+	  }
+	| undefined;
+
+/** Whether the probed receiver supports `feature` — false before a first bind. */
+function featureOn(feature: MouseFeature): boolean {
+	return featureSet?.has(feature) ?? false;
+}
+
+/**
+ * The press a release-click is waiting to complete. `component` is the
+ * candidate resolved at press time — the release re-resolves and requires the
+ * same object, so content that scrolled between the two cannot redirect the
+ * toggle. `dragged` mirrors Pi's own `selectionDragged`: any button motion
+ * between press and release makes it a selection, not a click.
+ */
+let expandPress: { x: number; y: number; component: object; dragged: boolean } | undefined;
+
+/** The last completed toggle, for the double-click debounce. */
+let lastToggle: { x: number; y: number; at: number } | undefined;
+
+let featureSet: ReadonlySet<MouseFeature> | undefined;
+
+/**
+ * Binds the renderer this mouse event (or the API's live reference) points at.
+ *
+ * In a real session there is no renderer to probe at install time: `ctx.ui`
+ * is Pi's extension-UI surface, not the renderer, and the live `TuiAltScreen`
+ * first appears as `tui` inside a handler invocation and in the API's
+ * `liveReceiver()` — which the input wrapper refreshes on every keystroke as
+ * well as on every mouse report. Features are therefore registered
+ * unconditionally at install and gated here, on the capability set the first
+ * bind of each distinct renderer instance computes.
+ *
+ * With no candidate the last bound receiver stands, so the render-time hint
+ * readers and the keyboard listener can work from it without an event of
+ * their own.
+ */
+function bindReceiver(candidate?: unknown): MouseCapableReceiver | undefined {
+	if (!installRefs) return undefined;
+	const receiver = candidate ?? installRefs.liveReceiver();
+	if (!receiver) return activeReceiver;
+	if (receiver !== activeReceiver) {
+		activeReceiver = receiver as MouseCapableReceiver;
+		featureSet = enabledFeatures(probeCapabilities(activeReceiver), installRefs.copySlot);
+		const warning = disabledFeatureWarning(featureSet);
+		if (warning && !hasWarned) {
+			hasWarned = true;
+			console.warn(warning);
+		}
+		const { deps } = installRefs;
+		const bufferCopy = featureOn("editorBufferCopy");
+		const cleanCopy = featureOn("transcriptCleanCopy");
+		activeHint =
+			bufferCopy || cleanCopy ? { getConfig: deps.getConfig, bufferCopy, cleanCopy } : undefined;
+	}
+	return activeReceiver;
+}
+
 export function activeSelectionHintText(): string | null {
-	if (!activeHint || !activeReceiver) return null;
+	const receiver = bindReceiver();
+	if (!receiver || !activeHint) return null;
 	const { getConfig, bufferCopy, cleanCopy } = activeHint;
 	try {
 		// Pi auto-copies on release; a selection that is already on the
 		// clipboard needs no hint. `getCopyOnSelect()` is the live value, so a
 		// setting flipped at runtime flips the hint with it.
-		if (activeReceiver.getCopyOnSelect()) return null;
-		if (!activeReceiver.hasActiveSelection()) return null;
-		const bounds = activeReceiver.getSelectionBounds();
+		if (receiver.getCopyOnSelect?.()) return null;
+		if (!receiver.hasActiveSelection?.()) return null;
+		const bounds = receiver.getSelectionBounds?.();
 		if (!bounds) return null;
-		const pending = pendingSelectionText(
-			activeReceiver,
-			getConfig(),
-			bounds,
-			bufferCopy,
-			cleanCopy,
-		);
+		const pending = pendingSelectionText(receiver, getConfig(), bounds, bufferCopy, cleanCopy);
 		return selectionHintText(
 			pending.text.length,
 			copyKeyText(),
@@ -270,8 +280,39 @@ export function activeSelectionHintText(): string | null {
 }
 
 /**
+ * The "ctrl+g to edit in $EDITOR" hint while the draft outgrows the box.
+ *
+ * An editor selection cannot grow past the visible window — there is no
+ * drag-scroll — so when the draft has more visual rows than the box shows,
+ * some of it is unreachable by mouse no matter how you drag. That is exactly
+ * when the external editor is the way to act on the whole draft, so the hint
+ * is offered whenever the draft outgrows the box, not only while a selection
+ * is live. Computed on demand at render time (it used to be refreshed from
+ * the viewport patch on every key; the value is a pure read of the live
+ * renderer, so deriving it when asked is always at least as fresh).
+ */
+export function externalEditorHintText(): string | null {
+	const receiver = bindReceiver();
+	if (!receiver || !activeHint) return null;
+	try {
+		const viewport = activeEditorViewport(receiver, activeHint.getConfig());
+		if (!viewport) return null;
+		const visualRows = editorVisualRowCount(viewport.editor);
+		if (visualRows > viewport.viewport.contentRows) {
+			return `${keyTextFor(EXTERNAL_EDITOR_KEYBINDING)} to edit in ${
+				externalEditorName() ?? "$EDITOR"
+			}`;
+		}
+		return null;
+	} catch {
+		// Best effort: an editor this module cannot read offers no hint.
+		return null;
+	}
+}
+
+/**
  * The rendered name of the copy key, for the hint. `app.message.copy` is what
- * Pi 0.84.4's Ctrl+X path is bound to (see `handleCopyCommand` in
+ * Pi's Ctrl+X path is bound to (see `handleCopyCommand` in
  * interactive-mode.ts), and the registry resolves a user rebind so the hint
  * always quotes the key that really copies.
  */
@@ -280,53 +321,14 @@ function copyKeyText(): string {
 }
 
 /**
- * The "ctrl+g to edit in $EDITOR" hint while the draft outgrows the box.
- *
- * An editor selection cannot grow past the visible window — there is no
- * drag-scroll — so when the draft has more visual rows than the box shows,
- * some of it is unreachable by mouse no matter how you drag. That is exactly
- * when the external editor is the way to act on the whole draft, so the hint
- * is offered whenever the draft outgrows the box, not only while a selection
- * is live. Refreshed on every `handleViewportInput` call (keystrokes and
- * mouse events both land there), read by `ui.ts` when nothing else owns the
- * metadata row's right side.
- */
-let externalEditorHint: string | null = null;
-
-export function externalEditorHintText(): string | null {
-	return externalEditorHint;
-}
-
-function refreshExternalEditorHint(
-	receiver: MouseCapablePrototype,
-	config: PolishedTuiConfig,
-): void {
-	externalEditorHint = null;
-	try {
-		const viewport = activeEditorViewport(receiver, config);
-		if (!viewport) return;
-		const visualRows = editorVisualRowCount(viewport.editor);
-		if (visualRows > viewport.viewport.contentRows) {
-			externalEditorHint = `${keyTextFor(EXTERNAL_EDITOR_KEYBINDING)} to edit in ${
-				externalEditorName() ?? "$EDITOR"
-			}`;
-		}
-	} catch {
-		// Best effort: an editor this module cannot read offers no hint.
-	}
-}
-
-/**
  * The exact text Pi's selection copy would produce, built the same way it
  * builds it: per row, through the receiver's own `getSelectionColumns`, then
  * `sliceByColumn` and `stripTerminalSequences` (both exported by pi-tui),
- * joined with "\n" — see `copyActiveSelectionToClipboard` in
- * `node_modules/@earendil-works/pi-tui/dist/tui-alt-screen.js`. Reusing Pi's
- * own helpers instead of re-deriving the column math is what keeps this exact
- * rather than an estimate. The scroll-view case needs the box behind
- * `bounds.start.scrollView`; `getScrollViewBox` that finds it is not exported
- * from pi-tui's published entry point, so `scrollContentLinesFor` mirrors its
- * (trivial) tree walk in `hit-test.ts`.
+ * joined with "\n". Reusing Pi's own helpers instead of re-deriving the
+ * column math is what keeps this exact rather than an estimate. The
+ * scroll-view case needs the box behind `bounds.start.scrollView`;
+ * `getScrollViewBox` is not exported from pi-tui's published entry point, so
+ * `scrollContentLinesFor` mirrors its (trivial) tree walk in `hit-test.ts`.
  *
  * This is a *measurement*, not a copy: nothing here writes a clipboard. The
  * pending hint needs to say how many characters ctrl+c would put there. Rows
@@ -336,7 +338,7 @@ function refreshExternalEditorHint(
  * counts the cleaned text — the hint's promise and the clipboard's bytes are
  * kept in agreement there, by counting whichever text the copy will send.
  */
-function selectionText(receiver: MouseCapablePrototype, bounds: SelectionBounds): string {
+function selectionText(receiver: MouseCapableReceiver, bounds: SelectionBounds): string {
 	const scrollView = bounds.start.scrollView;
 	const sourceLines = scrollView
 		? scrollContentLinesFor(receiver.currentLayout?.root, scrollView)
@@ -345,7 +347,8 @@ function selectionText(receiver: MouseCapablePrototype, bounds: SelectionBounds)
 	const rows: string[] = [];
 	for (let row = bounds.start.row; row <= bounds.end.row; row++) {
 		const line = sourceLines[row] ?? "";
-		const columns = receiver.getSelectionColumns(line, row, bounds);
+		const columns = receiver.getSelectionColumns?.(line, row, bounds);
+		if (!columns) return "";
 		rows.push(
 			stripTerminalSequences(
 				sliceByColumn(line, columns.start, Math.max(0, columns.end - columns.start), true),
@@ -360,22 +363,18 @@ function selectionText(receiver: MouseCapablePrototype, bounds: SelectionBounds)
  * the input box, and reports whether it did — `false` means this selection was
  * not the editor's and Pi's own copy must run instead.
  *
- * This is the one place in the module that builds clipboard bytes rather than
- * letting predecessor build them, and it is deliberate: Pi copies *rendered*
- * rows, so a selection in the input box picks up the rail glyph, the padding
- * the frame fills each row out to, and a newline wherever the draft happened to
- * wrap. None of that is in the draft. The bytes go out the same way Pi's own
- * copy sends them — OSC 52 through `terminal.write`, see
- * `copyActiveSelectionToClipboard` in
- * `node_modules/@earendil-works/pi-tui/dist/tui-alt-screen.js` — so nothing
- * downstream can tell the two copies apart.
+ * Pi copies *rendered* rows, so a selection in the input box picks up the rail
+ * glyph, the padding the frame fills each row out to, and a newline wherever
+ * the draft happened to wrap. None of that is in the draft. The bytes go out
+ * the same way Pi's own copy sends them — OSC 52 through `terminal.write` — so
+ * nothing downstream can tell the two copies apart.
  *
  * The flash is gated on `copyNotice` at the write itself, exactly once — Pi's
  * own copy flashes unconditionally, so this check is the whole notice path for
  * a clean copy.
  */
 function editorTextForSelection(
-	receiver: MouseCapablePrototype,
+	receiver: MouseCapableReceiver,
 	config: PolishedTuiConfig,
 	bounds: SelectionBounds,
 ): string | undefined {
@@ -384,16 +383,16 @@ function editorTextForSelection(
 		// so without this a selection dropped on a dialog would be read as text
 		// from the draft hidden behind it. Both callers ask it, or the hint could
 		// count one text while the copy sends another.
-		if (receiver.hasOverlay()) return undefined;
+		if (receiver.hasOverlay?.()) return undefined;
 		return editorSelectionTextFor(receiver, config, bounds);
 	} catch {
 		return undefined;
 	}
 }
 
-function copyEditorSelection(receiver: MouseCapablePrototype, config: PolishedTuiConfig): boolean {
+function copyEditorSelection(receiver: MouseCapableReceiver, config: PolishedTuiConfig): boolean {
 	try {
-		const bounds = receiver.getSelectionBounds();
+		const bounds = receiver.getSelectionBounds?.();
 		if (!bounds) return false;
 		const text = editorTextForSelection(receiver, config, bounds);
 		// undefined is "not the editor's"; "" is the editor's and empty, which is
@@ -404,7 +403,7 @@ function copyEditorSelection(receiver: MouseCapablePrototype, config: PolishedTu
 		const write = receiver.terminal?.write;
 		if (typeof write !== "function") return false;
 		write.call(receiver.terminal, `\x1b]52;c;${Buffer.from(text).toString("base64")}\x07`);
-		if (config.mouse.copyNotice) receiver.flash("Copied!");
+		if (config.mouse.copyNotice) receiver.flash?.("Copied!");
 		return true;
 	} catch {
 		// Reading the editor and the layout is best effort. Anything this trips
@@ -429,18 +428,17 @@ function copyEditorSelection(receiver: MouseCapablePrototype, config: PolishedTu
  * Column mapping: `leftTrim` columns came off the left of a cleaned row, so
  * the selection's start and end columns shift by the same amount on the rows
  * they touch. The shifted bounds go through the receiver's own
- * `getSelectionColumns`, which aligns both ends to grapheme cell ranges
- * (`tui-alt-screen.js:716`) — the end column can no more cut a grapheme here
- * than it can in Pi's own copy.
+ * `getSelectionColumns`, which aligns both ends to grapheme cell ranges — the
+ * end column can no more cut a grapheme here than it can in Pi's own copy.
  */
 function transcriptSelectionText(
-	receiver: MouseCapablePrototype,
+	receiver: MouseCapableReceiver,
 	config: PolishedTuiConfig,
 	bounds: SelectionBounds,
 ): string | undefined {
 	const scrollView = bounds.start.scrollView;
 	if (!scrollView) return undefined;
-	if (receiver.hasOverlay()) return undefined;
+	if (receiver.hasOverlay?.()) return undefined;
 	const sourceLines = scrollContentLinesFor(receiver.currentLayout?.root, scrollView);
 	if (!sourceLines) return undefined;
 	const cleaned = cleanTranscriptRows(
@@ -467,7 +465,8 @@ function transcriptSelectionText(
 				adjusted.end = { ...bounds.end, col: Math.max(0, bounds.end.col - entry.leftTrim) };
 			}
 		}
-		const columns = receiver.getSelectionColumns(entry.text, row, adjusted);
+		const columns = receiver.getSelectionColumns?.(entry.text, row, adjusted);
+		if (!columns) return undefined;
 		rows.push(
 			sliceByColumn(
 				entry.text,
@@ -485,19 +484,18 @@ function transcriptSelectionText(
  * carried recognised chrome, and reports whether it did — `false` means
  * there was nothing to clean and Pi's own copy must run instead. The bytes
  * go out the same way Pi's own copy sends them (OSC 52 through
- * `terminal.write`), for the same reason `copyEditorSelection` does: nothing
- * downstream can tell the two copies apart.
+ * `terminal.write`), for the same reason `copyEditorSelection` does.
  *
  * A selection over pure decoration cleans to "" and is consumed without a
  * clipboard write — Pi's own copy has the same shape (`if (text.length === 0)
  * return`), it just gets there after building a string of rails.
  */
 function copyTranscriptSelection(
-	receiver: MouseCapablePrototype,
+	receiver: MouseCapableReceiver,
 	config: PolishedTuiConfig,
 ): boolean {
 	try {
-		const bounds = receiver.getSelectionBounds();
+		const bounds = receiver.getSelectionBounds?.();
 		if (!bounds) return false;
 		const text = transcriptSelectionText(receiver, config, bounds);
 		if (text === undefined) return false;
@@ -505,7 +503,7 @@ function copyTranscriptSelection(
 		const write = receiver.terminal?.write;
 		if (typeof write !== "function") return false;
 		write.call(receiver.terminal, `\x1b]52;c;${Buffer.from(text).toString("base64")}\x07`);
-		if (config.mouse.copyNotice) receiver.flash("Copied!");
+		if (config.mouse.copyNotice) receiver.flash?.("Copied!");
 		return true;
 	} catch {
 		// Cleaning reads the layout and the selection, both best effort.
@@ -518,12 +516,10 @@ function copyTranscriptSelection(
  * Whether `data` is the backspace or delete the range delete acts on.
  *
  * The question is asked of Pi's own keybinding registry, against the two
- * bindings Pi's editor itself dispatches on (`editor.js:599-606`), so a user who
- * has rebound either gets the key they bound rather than a hardcoded byte. A
- * registry that disagrees — this repo has two copies of pi-tui, though
- * production resolves both to Pi's, see `expandKeyText` in `tool-box.ts` — makes
- * this return false, which falls through to Pi's own one-character delete. That
- * is the safe direction to be wrong in.
+ * bindings Pi's editor itself dispatches on, so a user who has rebound either
+ * gets the key they bound rather than a hardcoded byte. A registry that
+ * disagrees makes this return false, which falls through to Pi's own
+ * one-character delete. That is the safe direction to be wrong in.
  *
  * ctrl+c and ctrl+d are refused outright, before the registry is consulted at
  * all. `tui.editor.deleteCharForward` binds `ctrl+d` by default, and ctrl+c and
@@ -553,13 +549,13 @@ function isRangeDeleteKey(data: unknown): boolean {
  * Returns false for every selection that is not the input box's, which leaves
  * the key to Pi and an ordinary backspace deleting one character.
  */
-function deleteSelectedRange(receiver: MouseCapablePrototype, config: PolishedTuiConfig): boolean {
+function deleteSelectedRange(receiver: MouseCapableReceiver, config: PolishedTuiConfig): boolean {
 	try {
 		if (!config.editorClickCursor) return false;
 		// The same overlay question the rest of this feature asks: a selection
 		// dropped on a dialog must not delete the draft behind it.
-		if (receiver.hasOverlay()) return false;
-		const bounds = receiver.getSelectionBounds();
+		if (receiver.hasOverlay?.()) return false;
+		const bounds = receiver.getSelectionBounds?.();
 		if (!bounds) return false;
 		if (!deleteEditorSelection(receiver, config, bounds)) return false;
 		// The highlight described text that is gone. Pi clears these two fields
@@ -583,7 +579,7 @@ function deleteSelectedRange(receiver: MouseCapablePrototype, config: PolishedTu
  * the hint promises a number the copy does not deliver.
  */
 function pendingSelectionText(
-	receiver: MouseCapablePrototype,
+	receiver: MouseCapableReceiver,
 	config: PolishedTuiConfig,
 	bounds: SelectionBounds,
 	bufferCopy: boolean,
@@ -606,132 +602,12 @@ function pendingSelectionText(
 }
 
 /**
- * Installs the clean-copy features on Pi 0.84.4's public copy entry, and the
- * derived selection hint.
- *
- * `editorBufferCopy` and `transcriptCleanCopy` sit in front of
- * `copyActiveSelectionToClipboard` — the method coding-agent's Ctrl+X handler
- * reaches (`handleCopyCommand` with `preferSelection`) — so the clean copy
- * answers exactly the copies that key performs. They share one patch rather
- * than taking a key each because `installPrototypePatch` holds exactly one
- * behaviour per adapter key: a second registration under `mouse-copy` would
- * silently replace the first, and two different keys would leave the order
- * they run in — and which of them gets to consume the call — implicit. Here
- * the precedence is written down: the buffer copy answers first, and only
- * when it declines does the clean copy or predecessor see the call.
- *
- * `selectionHint` owns no state at all: it records the config reader and the
- * clean-copy flags so `activeSelectionHintText()` can derive the hint on
- * demand from the live renderer. Either clean-copy feature can be off; with
- * neither available the clipboard is Pi's own bytes, exactly as before.
- */
-function installCopying(
-	prototype: MouseCapablePrototype,
-	deps: InstallMouseDeps,
-	features: ReadonlySet<MouseFeature>,
-): () => void {
-	const bufferCopy = features.has("editorBufferCopy");
-	const cleanCopy = features.has("transcriptCleanCopy");
-	const rangeDelete = features.has("editorClickToCaret");
-	const hint = features.has("selectionHint");
-	const previousHint = activeHint;
-	if (hint) activeHint = { getConfig: deps.getConfig, bufferCopy, cleanCopy };
-
-	const cleanups: Array<() => void> = [];
-
-	// Only installed when a feature that answers `copyActiveSelectionToClipboard`
-	// is on. With just `editorClickToCaret` or `selectionHint` the method is
-	// not ours to touch, and a Pi that has moved it must not make this install
-	// throw.
-	if (bufferCopy || cleanCopy) {
-		cleanups.push(
-			installPrototypePatch(
-				prototype,
-				"copyActiveSelectionToClipboard",
-				"mouse-copy",
-				({ predecessor, receiver, args }) => {
-					const typedReceiver = receiver as MouseCapablePrototype;
-					const config = deps.getConfig();
-					if (bufferCopy && copyEditorSelection(typedReceiver, config)) return true;
-					if (
-						cleanCopy &&
-						config.mouse.transcriptCleanCopy &&
-						copyTranscriptSelection(typedReceiver, config)
-					) {
-						return true;
-					}
-					return Reflect.apply(predecessor, receiver, args);
-				},
-			),
-		);
-	}
-
-	if (!hint && !rangeDelete) {
-		return () => {
-			for (const cleanup of cleanups) cleanup();
-		};
-	}
-
-	cleanups.push(
-		installPrototypePatch(
-			prototype,
-			"handleViewportInput",
-			"mouse-viewport-input",
-			({ predecessor, receiver, args }) => {
-				const data = args[0];
-				const typedReceiver = receiver as MouseCapablePrototype;
-				// Keystrokes and mouse events both land here, so this is the one
-				// place that sees every draft change; keep the outgrew-the-box
-				// hint current with it, and keep the selection hint's renderer
-				// reference pointed at the live instance.
-				activeReceiver = typedReceiver;
-				refreshExternalEditorHint(typedReceiver, deps.getConfig());
-				// ---- Backspace and delete, `editorClickToCaret`'s. ------------
-				//
-				// Range delete consumes the key only when it really removed
-				// something; every other backspace falls through and goes on
-				// deleting one character, which is the behaviour it must not
-				// break. `isRangeDeleteKey` refuses ctrl+c and ctrl+d outright,
-				// so Pi's interrupt and exit chords can never be swallowed by
-				// this branch.
-				if (rangeDelete && isRangeDeleteKey(data)) {
-					if (deleteSelectedRange(typedReceiver, deps.getConfig())) {
-						// Pi's `handleInput` returns as soon as a listener consumes,
-						// so the focused editor never sees the key and Pi never
-						// reaches its own `requestImmediateRender` (`tui.js:620`).
-						// Redrawing the changed draft is this branch's job.
-						typedReceiver.requestRender();
-						return { consume: true };
-					}
-				}
-				return Reflect.apply(predecessor, receiver, args);
-			},
-		),
-	);
-
-	return () => {
-		for (const cleanup of cleanups) cleanup();
-	};
-}
-
-/**
- * A left-button press: not a release, not a drag, not another button.
- *
- * Pi's own handler returns immediately unless `(button & 3) === 0`, treats
- * `release` as the end of a drag and bit 32 as motion during one. Only the
- * press opens a selection, so only the press is the one this feature may take
- * instead.
- *
- * Bit 64 is excluded too, even though `handleInput` peels wheel reports off
- * before this method is reached (`parseWheelEvent` claims anything with bit 64
- * and a direction of 0 or 1): a notch of scroll that landed on a hint row
- * would otherwise expand a box the pointer was only passing over, and that
- * depends on a dispatch order in a file this package does not own.
- *
- * The shape is checked rather than assumed — this runs on whatever Pi passes,
+ * A left-button press: not a release, not a drag, not another button, not a
+ * wheel notch. `pi-mouse-events` classifies the event before handing it here
+ * (`event.kind === "down"`); the shape is still checked rather than assumed,
  * and a malformed event must fall through, never throw.
  */
-function isLeftButtonPress(event: unknown): event is MouseEventLike {
+function isLeftButtonPress(event: unknown): boolean {
 	if (typeof event !== "object" || event === null) return false;
 	const candidate = event as Partial<MouseEventLike>;
 	if (typeof candidate.button !== "number") return false;
@@ -742,25 +618,56 @@ function isLeftButtonPress(event: unknown): event is MouseEventLike {
 }
 
 /**
- * The box a press should toggle, or undefined for every press that should go
- * on being a press.
+ * A left-button release: the `m` terminator, encoded as button 0 by SGR
+ * terminals and as button 3 by the legacy fallback — Pi's own click handling
+ * accepts either (`tui-alt-screen.js`'s release branch), so both are here.
+ */
+function isLeftButtonRelease(event: unknown): boolean {
+	if (typeof event !== "object" || event === null) return false;
+	const candidate = event as Partial<MouseEventLike>;
+	if (typeof candidate.button !== "number") return false;
+	if (typeof candidate.x !== "number" || typeof candidate.y !== "number") return false;
+	if (!candidate.release) return false;
+	if ((candidate.button & (MOTION_BIT | WHEEL_BIT)) !== 0) return false;
+	const button = candidate.button & BUTTON_MASK;
+	return button === LEFT_BUTTON || button === 3;
+}
+
+/**
+ * A motion report with a button held — the drag that turns a press into a
+ * selection rather than a click. Motion without a button bit never arrives
+ * from SGR terminals while tracking is button-only, but the bit is checked
+ * rather than assumed.
+ */
+function isButtonMotion(event: unknown): boolean {
+	if (typeof event !== "object" || event === null) return false;
+	const candidate = event as Partial<MouseEventLike>;
+	if (typeof candidate.button !== "number") return false;
+	if (candidate.release) return false;
+	return (candidate.button & MOTION_BIT) !== 0;
+}
+
+/**
+ * The expandable component a click should toggle, and the expansion to set —
+ * resolved identically at press (identity only) and at release (action), so
+ * the release can tell content that scrolled from the box it started on.
  *
  * Everything is resolved here, inside the one call: the layout is read as it
- * is right now, the component tree is built and dropped, and nothing is
- * carried to the release. A tool that is still running re-renders between the
- * two, so an answer kept that long would be about rows that have moved.
+ * is right now, the component tree is built and dropped, and nothing inside
+ * the answer outlives the event. A tool that is still running re-renders
+ * between press and release, which is exactly why the release re-resolves
+ * instead of trusting the press's answer.
  */
-function pressExpandTarget(
-	receiver: MouseCapablePrototype,
-	event: unknown,
+function expandClickTarget(
+	receiver: MouseCapableReceiver,
+	event: MouseEventLike,
 	deps: InstallMouseDeps,
 ): ExpandTarget | undefined {
 	try {
 		if (!deps.getConfig().mouse.clickToExpandTools) return undefined;
-		if (!isLeftButtonPress(event)) return undefined;
 		// Pi resolves no scroll view while an overlay is up, so neither does this
 		// — a click on a dialog must not reach the transcript behind it.
-		if (receiver.hasOverlay()) return undefined;
+		if (receiver.hasOverlay?.()) return undefined;
 		return expandTargetAt(
 			{ root: receiver.currentLayout?.root, keyText: expandKeyText() },
 			event.x,
@@ -768,9 +675,19 @@ function pressExpandTarget(
 		);
 	} catch {
 		// Resolution is a best-effort read of Pi's internals. Anything it trips
-		// over means this press was an ordinary press.
+		// over means this click was an ordinary click.
 		return undefined;
 	}
+}
+
+/**
+ * The OSC 8 link Pi's built-in press branch stored for this press, if any.
+ * The built-in runs after this handler declines the press, so by release time
+ * a non-empty `pressedUrl` means Pi is about to open a link — the box stays
+ * as it is and the release goes through unconsumed.
+ */
+function pressedUrlAt(receiver: MouseCapableReceiver): unknown {
+	return (receiver as { pressedUrl?: unknown }).pressedUrl;
 }
 
 /**
@@ -779,12 +696,11 @@ function pressExpandTarget(
  * Nothing is consumed: the press goes on to Pi, which drops its selection
  * anchor there exactly as it always did, so a drag from that point still
  * highlights and still copies. That is also what pays for the repaint — Pi's
- * own press branch ends in `requestRender()` unconditionally
- * (`tui-alt-screen.js:699`), so this feature never has to ask for one itself,
- * and `requestRender` is correspondingly absent from its requirements.
+ * own press branch ends in `requestRender()` unconditionally, so this feature
+ * never has to ask for one itself.
  */
 function moveCaretForPress(
-	receiver: MouseCapablePrototype,
+	receiver: MouseCapableReceiver,
 	event: unknown,
 	deps: InstallMouseDeps,
 ): void {
@@ -794,8 +710,8 @@ function moveCaretForPress(
 		if (!isLeftButtonPress(event)) return;
 		// Pi resolves no scroll view while an overlay is up, so neither does this
 		// — a click on a dialog must not move a caret in the box behind it.
-		if (receiver.hasOverlay()) return;
-		moveEditorCaretTo(receiver, config, event.x, event.y);
+		if (receiver.hasOverlay?.()) return;
+		moveEditorCaretTo(receiver, config, (event as MouseEventLike).x, (event as MouseEventLike).y);
 	} catch {
 		// Moving the caret is a best-effort read of Pi's internals and of an
 		// editor this module did not necessarily build. Anything it trips over
@@ -804,79 +720,12 @@ function moveCaretForPress(
 }
 
 /**
- * Installs the two features that live on `handleSelectionMouseEvent`.
- *
- * They share one patch because `installPrototypePatch` holds exactly one
- * behaviour per adapter key — a second registration under
- * `mouse-selection-event` would silently replace the first, and giving them a
- * key each would leave the order they run in implicit, which matters here
- * because only one of them may consume the press. Written as one patch the
- * precedence is explicit and testable:
- *
- * 1. `clickToExpandTools` gets the press first, and *consumes* it when it lands
- *    on a tool box's hint row. That is what keeps the click from also dropping
- *    a selection anchor into the box it just opened.
- * 2. `editorClickToCaret` gets every press expand did not take, moves the caret
- *    if the press was inside the input box, and never consumes.
- * 3. Pi gets the press either way, unless expand took it.
- *
- * The two cannot collide in practice — the hint rows are in the transcript and
- * the caret rows are in the dock — but the ordering is what makes that a fact
- * rather than a hope, and either feature may be off without disturbing the
- * other.
- */
-function installSelectionMouse(
-	prototype: MouseCapablePrototype,
-	deps: InstallMouseDeps,
-	features: ReadonlySet<MouseFeature>,
-): () => void {
-	const expandTools = features.has("clickToExpandTools");
-	const clickToCaret = features.has("editorClickToCaret");
-	return installPrototypePatch(
-		prototype,
-		"handleSelectionMouseEvent",
-		"mouse-selection-event",
-		({ predecessor, receiver, args }) => {
-			const typedReceiver = receiver as MouseCapablePrototype;
-			if (expandTools) {
-				const target = pressExpandTarget(typedReceiver, args[0], deps);
-				if (target) {
-					target.component.setExpanded(target.expanded);
-					typedReceiver.requestRender();
-					return undefined;
-				}
-			}
-			if (clickToCaret) moveCaretForPress(typedReceiver, args[0], deps);
-			return Reflect.apply(predecessor, receiver, args);
-		},
-	);
-}
-
-/**
- * The shape `parseWheelEvent` produces, checked rather than assumed — this runs
- * on whatever Pi hands `routeWheel`, and anything unrecognised must fall
- * through to Pi's own routing, never throw.
- */
-function isWheelEvent(event: unknown): event is WheelEventLike {
-	if (typeof event !== "object" || event === null) return false;
-	const candidate = event as Partial<WheelEventLike>;
-	return (
-		typeof candidate.direction === "number" &&
-		typeof candidate.x === "number" &&
-		typeof candidate.y === "number"
-	);
-}
-
-/**
  * Scrolls the input box for this notch, or reports that the notch was not the
  * input box's — in which case Pi routes it as it always did.
  *
  * Pi does not scroll the editor: the editor's `scrollOffset` is re-derived from
- * the caret on every render, pulled back whenever the caret would fall outside
- * the visible window (`components/editor.js:392-401`). So a scroll here is an
- * offset *and* a caret move, which is what `scrollEditorBy` does — the same
- * function that has been in daily use since pi-powerline-footer, so a notch
- * behaves the way it always has.
+ * the caret on every render. So a scroll here is an offset *and* a caret move,
+ * which is what `scrollEditorBy` does.
  *
  * The window it scrolls within is Pi's own `max(5, rows * 0.3)`, taken from the
  * terminal rather than from the box's rect: the rect includes Starline's border
@@ -885,25 +734,20 @@ function isWheelEvent(event: unknown): event is WheelEventLike {
  * it from, so the notch falls through.
  */
 function scrollEditorForWheel(
-	receiver: MouseCapablePrototype,
-	event: unknown,
+	receiver: MouseCapableReceiver,
+	event: { direction: number; x: number; y: number },
 	deps: InstallMouseDeps,
 ): boolean {
 	try {
 		if (!deps.getConfig().mouse.wheelRouting) return false;
-		if (!isWheelEvent(event)) return false;
 		// An overlay is composited over a layout that still contains the editor,
 		// so the box is still "under" a pointer aimed at the dialog on top of it.
-		if (receiver.hasOverlay()) return false;
+		if (receiver.hasOverlay?.()) return false;
 		const editor = activeEditor();
 		if (!editor) return false;
 		const rows = receiver.terminal?.rows;
 		if (typeof rows !== "number") return false;
-		if (
-			wheelTarget(receiver.currentLayout?.root, editor.component, event.x, event.y) !== "editor"
-		) {
-			return false;
-		}
+		if (!pointerOverEditorBox(receiver, editor.component, event.x, event.y)) return false;
 		const lines = event.direction * Math.max(1, receiver.wheelScrollLines ?? 1);
 		return scrollEditorBy(editor.scrollable, lines, rows);
 	} catch {
@@ -914,97 +758,184 @@ function scrollEditorForWheel(
 	}
 }
 
-/**
- * Installs `editorWheelScroll` on `routeWheel`.
- *
- * A thin wrapper with one job: a notch that landed on a draft taller than the
- * input box scrolls the box and is consumed; everything else calls through and
- * scrolls the transcript exactly as before. "Everything else" includes a notch
- * over the transcript, a notch over an overlay, a draft that fits entirely, an
- * editor this module cannot read, and `mouse.wheelRouting` being off.
- *
- * Reaching the top or bottom of a draft that *does* scroll is deliberately not
- * in that list: the notch stays with the box. Chaining on to the transcript at
- * the boundary would make the box feel like it slipped out from under the
- * pointer — see `editor-scroll.ts`.
- */
-function installEditorWheelScroll(
-	prototype: MouseCapablePrototype,
-	deps: InstallMouseDeps,
-): () => void {
-	return installPrototypePatch(
-		prototype,
-		"routeWheel",
-		"mouse-wheel",
-		({ predecessor, receiver, args }) => {
-			const typedReceiver = receiver as MouseCapablePrototype;
-			if (!scrollEditorForWheel(typedReceiver, args[0], deps)) {
-				return Reflect.apply(predecessor, receiver, args);
-			}
-			// Pi's own `routeWheel` repaints at the end of every notch; consuming
-			// the event means reaching that repaint is now this wrapper's job.
-			typedReceiver.requestRender();
-			return undefined;
-		},
-	);
+/** Whether the input box is what is painted at `(x, y)` — see `editor-mouse.ts`. */
+function pointerOverEditorBox(
+	receiver: MouseCapableReceiver,
+	editor: unknown,
+	x: number,
+	y: number,
+): boolean {
+	return pointerOverEditor(receiver.currentLayout?.root, editor, x, y);
 }
 
 /**
- * Probes Pi, warns once about whatever this build cannot support, and
- * installs the mouse features that are available. Returns a disposer that
- * removes every patch this call installed.
+ * Registers the mouse features with the `pi-mouse-events` extension and
+ * returns a disposer that unregisters them all.
+ *
+ * Every handler is registered unconditionally and gated inside on the
+ * capability set `bindReceiver` computes from the live renderer — there is
+ * nothing to probe at install time (see `bindReceiver`). The one install-time
+ * gate left is `api.copySlotAvailable` for the two copy features: without the
+ * copy slot they would register into a method that is never reached (pi-tui
+ * < 0.84.3 has no `copyActiveSelectionToClipboard`), and a feature that
+ * silently cannot answer its own copy is exactly the half-working install
+ * `capabilities.ts` exists to prevent.
  */
-export function installMouse(prototype: object, deps: InstallMouseDeps): () => void {
-	const available = probeCapabilities(prototype);
-	const enabled = enabledFeatures(available);
+export function installMouseFeaturesOn(
+	api: MouseEventsApi,
+	ctx: ExtensionContext,
+	deps: InstallMouseDeps,
+): () => void {
+	installRefs = {
+		liveReceiver: () => api.liveReceiver?.(),
+		copySlot: api.copySlotAvailable,
+		deps,
+	};
+	activeReceiver = undefined;
+	featureSet = undefined;
+	activeHint = undefined;
 
-	const warning = disabledFeatureWarning(enabled);
-	if (warning && !hasWarned) {
-		hasWarned = true;
-		console.warn(warning);
-	}
-
-	const typedPrototype = prototype as MouseCapablePrototype;
 	const cleanups: Array<() => void> = [];
-	// Frame-free selection is deliberately not installed, and is not a feature
-	// in `capabilities.ts` either. It rewrote the clipboard text to drop a tool
-	// box's border, which meant *inferring* where a frame was from the rendered
-	// rows — and a frame is not a structural concept in Pi. It is a visual
-	// convention `pi-toolbox` paints, so every discriminator (rule-capped
-	// edges, `setExpanded`, blank-row trimming, verticals) was a guess that a
-	// new component could falsify: `BashExecutionComponent` is rule-capped and
-	// expandable and draws no frame, so any box-drawn table inside bash output
-	// lost its borders.
-	//
-	// `transcriptCleanCopy` is the narrower successor that lesson produced: it
-	// removes only the exact markers two named renderers are known to paint
-	// (Starline's rail + full-width rule pairs, pi-toolbox's equal-width
-	// rounded-corner pairs), never inferred ones — a square-cornered markdown
-	// table, a blockquote gutter and bash output all pass through verbatim,
-	// and a selection with no recognised marker falls back to Pi's own copy
-	// untouched. The full frame-geometry version still wants what is written
-	// below: `pi-toolbox` publishing which rows it drew a border on, at which
-	// columns, so Starline reads a fact instead of inferring one.
-	if (
-		enabled.has("selectionHint") ||
-		enabled.has("editorBufferCopy") ||
-		enabled.has("editorClickToCaret") ||
-		enabled.has("transcriptCleanCopy")
-	) {
-		cleanups.push(installCopying(typedPrototype, deps, enabled));
-	}
-	if (enabled.has("clickToExpandTools") || enabled.has("editorClickToCaret")) {
-		cleanups.push(installSelectionMouse(typedPrototype, deps, enabled));
-	}
-	if (enabled.has("editorWheelScroll")) {
-		cleanups.push(installEditorWheelScroll(typedPrototype, deps));
+
+	// The expand flow never consumes the press — Pi's selection machinery
+	// anchors on it, so a drag that starts anywhere on a box still selects —
+	// and consumes the release of a plain click, which Pi's own release path
+	// treats as a no-op. It still registers ahead of the caret handler, the
+	// same precedence the old shared selection patch made explicit.
+	cleanups.push(
+		api.addMouseHandler(
+			({ event, tui }) => {
+				const receiver = bindReceiver(tui);
+				if (!receiver || !featureOn("clickToExpandTools")) {
+					expandPress = undefined;
+					return undefined;
+				}
+				// One cast, here: the guards below classify without narrowing, and
+				// the parsed event already carries every field this reads.
+				const mouse = event as MouseEventLike;
+				if (isLeftButtonPress(mouse)) {
+					// Identity only: the release re-resolves, because a running tool
+					// re-renders between the two and rows move under the pointer.
+					const candidate = expandClickTarget(receiver, mouse, deps);
+					expandPress = candidate
+						? { x: mouse.x, y: mouse.y, component: candidate.component, dragged: false }
+						: undefined;
+					return undefined;
+				}
+				if (expandPress && isButtonMotion(mouse)) {
+					expandPress.dragged = true;
+					return undefined;
+				}
+				if (!isLeftButtonRelease(mouse)) return undefined;
+				const press = expandPress;
+				expandPress = undefined;
+				if (!press || press.dragged) return undefined;
+				if (press.x !== mouse.x || press.y !== mouse.y) return undefined;
+				// A press on an OSC 8 link: Pi's own release opens it, and the box
+				// keeps its state.
+				if (pressedUrlAt(receiver) !== undefined) return undefined;
+				const target = expandClickTarget(receiver, event, deps);
+				if (!target || target.component !== press.component) return undefined;
+				const now = Date.now();
+				if (
+					lastToggle &&
+					lastToggle.x === press.x &&
+					lastToggle.y === press.y &&
+					now - lastToggle.at < DOUBLE_CLICK_MS
+				) {
+					return undefined;
+				}
+				target.component.setExpanded(target.expanded);
+				receiver.requestRender?.();
+				lastToggle = { x: press.x, y: press.y, at: now };
+				return { handled: true };
+			},
+			{ priority: 20 },
+		),
+	);
+
+	cleanups.push(
+		api.addMouseHandler(
+			({ event, tui }) => {
+				if (event.wheel === undefined) return undefined;
+				const receiver = bindReceiver(tui);
+				if (!receiver || !featureOn("editorWheelScroll")) return undefined;
+				const notch = { direction: event.wheel, x: event.x, y: event.y };
+				if (!scrollEditorForWheel(receiver, notch, deps)) {
+					return undefined;
+				}
+				// Pi's own wheel routing repaints at the end of every notch;
+				// consuming the event means reaching that repaint is now this
+				// handler's job.
+				receiver.requestRender?.();
+				return { handled: true };
+			},
+			{ priority: 10 },
+		),
+	);
+
+	cleanups.push(
+		api.addMouseHandler(
+			({ event, tui }) => {
+				const receiver = bindReceiver(tui);
+				if (!receiver || !featureOn("editorClickToCaret")) return undefined;
+				moveCaretForPress(receiver, event, deps);
+				return undefined;
+			},
+			{ priority: 0 },
+		),
+	);
+
+	if (api.copySlotAvailable) {
+		cleanups.push(
+			api.addCopyHandler(({ tui }) => {
+				const receiver = bindReceiver(tui);
+				if (!receiver) return undefined;
+				const config = deps.getConfig();
+				// Precedence written down, as it always was: the buffer copy
+				// answers first, and only when it declines does the clean copy or
+				// Pi's own copy see the call.
+				if (featureOn("editorBufferCopy") && copyEditorSelection(receiver, config)) {
+					return { handled: true };
+				}
+				if (
+					featureOn("transcriptCleanCopy") &&
+					config.mouse.transcriptCleanCopy &&
+					copyTranscriptSelection(receiver, config)
+				) {
+					return { handled: true };
+				}
+				return undefined;
+			}),
+		);
 	}
 
-	if (cleanups.length === 0) return () => {};
+	// The keyboard half of click-to-caret: `ctx.ui.onTerminalInput` is Pi's
+	// official extension input listener, and the renderer's own handling never
+	// swallows a keystroke before it reaches the listener — mouse reports do,
+	// which is exactly why they are not handled here.
+	if (typeof ctx.ui.onTerminalInput === "function") {
+		cleanups.push(
+			ctx.ui.onTerminalInput((data: string) => {
+				if (!isRangeDeleteKey(data)) return undefined;
+				const receiver = bindReceiver();
+				if (!receiver || !featureOn("editorClickToCaret")) return undefined;
+				if (!deleteSelectedRange(receiver, deps.getConfig())) return undefined;
+				// Consuming the key means Pi's `handleInput` never reaches its own
+				// repaint; redrawing the changed draft is this branch's job.
+				receiver.requestRender?.();
+				return { consume: true };
+			}),
+		);
+	}
+
 	return () => {
-		externalEditorHint = null;
-		activeReceiver = undefined;
-		activeHint = undefined;
 		for (const cleanup of cleanups) cleanup();
+		if (activeHint?.getConfig === deps.getConfig) activeHint = undefined;
+		installRefs = undefined;
+		activeReceiver = undefined;
+		featureSet = undefined;
+		expandPress = undefined;
+		lastToggle = undefined;
 	};
 }

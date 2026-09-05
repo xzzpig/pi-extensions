@@ -1,40 +1,56 @@
 /**
- * Expanding one tool box by clicking it.
+ * Toggling an expandable transcript component by clicking it.
  *
  * `ctrl+o` toggles every box in the transcript at once, which is a screenful
  * for the one line of output you wanted. This resolves the component under a
- * mouse press and, when the press landed on that component's *hint row*,
- * toggles just it.
+ * mouse click and toggles just that one — from any row it renders, not only
+ * its hint row.
  *
- * ## Why the hint row is the only target
+ * ## The click, not the press
  *
- * The plan for this feature started as "click the box's border". Pi 0.84's own
- * tool boxes have no border: there is not a single box-drawing character
- * anywhere in `pi-coding-agent`'s tool rendering, and a collapsed box is a
- * plain `Container` of preview lines with an inline hint. The `╭─╮ │ ╰─╯` in a
- * real session comes from `pi-toolbox`, a separate extension that patches
- * `ToolExecutionComponent.prototype.render`. So a border is conditional on
- * what else is installed and cannot be the target — and inferring one from the
- * rendered rows is exactly what frame-free selection was cut for.
+ * The caller (`mouse/index.ts`) never consumes the press: Pi's selection
+ * machinery anchors on it, so a drag that starts anywhere on a box — hint row
+ * included — still selects and copies text. The toggle happens when the
+ * button is released on the very cell it was pressed on with no motion in
+ * between. Pi's own release path treats such a plain click as a no-op (an
+ * empty selection copies nothing), so consuming the release costs nothing;
+ * every other release — a drag, a different cell, a link — goes to Pi
+ * untouched.
  *
- * The hint row can be. Pi renders it through `keyHint("app.tools.expand",
- * description)` (`keybinding-hints.js`), which is `theme.fg("dim", keyText) +
- * theme.fg("muted", " " + description)`, and every call site wraps it in
- * parentheses:
+ * ## Which way to toggle
  *
- * - `bash-execution.js:140,143` — `(ctrl+o to collapse)` when expanded,
- *   `... 3 more lines (ctrl+o to expand)` when collapsed.
- * - `core/tools/{bash,find,grep,ls,read,write}.js` — `... (N more lines,
- *   ctrl+o to expand)`.
- * - `read.js:91`, `skill-invocation-message.js:42`,
- *   `branch-summary-message.js:39`, `compaction-summary-message.js:40` —
- *   `(ctrl+o to expand)` on the title line.
+ * Two sources, in order:
  *
- * The description carries the *direction*: `to expand` when collapsed, `to
- * collapse` when expanded. That is what this module toggles on, rather than
- * tracking expansion itself — a `WeakMap` of "what I last set" would desync
- * the first time `ctrl+o` toggled everything behind its back, whereas the row
- * on screen is by definition current.
+ * 1. **The hint row.** Pi renders it through `keyHint("app.tools.expand",
+ *    description)` (`keybinding-hints.js`), which is `theme.fg("dim",
+ *    keyText) + theme.fg("muted", " " + description)`, and every call site
+ *    wraps it in parentheses: `bash-execution.js:140,143`,
+ *    `core/tools/{bash,find,grep,ls,read,write}.js`,
+ *    `read.js:91`, `skill-invocation-message.js:42`,
+ *    `branch-summary-message.js:39`, `compaction-summary-message.js:40`.
+ *    The description carries the *direction*: `to expand` when collapsed, `to
+ *    collapse` when expanded.
+ * 2. **The component's own state field.** Every expandable component keeps
+ *    its state in a runtime-public boolean — `expanded` (bash-execution,
+ *    tool-execution, skill/branch/compaction summaries) or `_expanded`
+ *    (custom entries and messages) — and every mutation path writes it,
+ *    ctrl+o's global fan-out included. Reading it cannot desync the way a
+ *    `WeakMap` of "what I last set" would (the row on screen and the field
+ *    are both the component's own truth); `expandedStateOf` duck-types both
+ *    spellings and declines to guess when neither is a boolean.
+ *
+ * The field is what lets a click *collapse* from any row. Most of Pi's tool
+ * renderers emit the hint only while collapsed (`remaining > 0` in
+ * `core/tools/{read,grep,ls,write,find}.js`; the `else` branch of the
+ * skill/branch/compaction summaries), so an expanded box used to have no
+ * clickable way back at all without `pi-toolbox`'s collapse anchor.
+ *
+ * ## A component that handles the mouse keeps its clicks
+ *
+ * If any component on the clicked row's path implements `onMouse`, resolution
+ * declines. The layout folds the whole transcript into one box, so
+ * `pi-mouse-events` dispatch can never deliver an event to such a component —
+ * bowing out here is the only way its `onMouse` can mean what it says.
  *
  * ## Why resolution goes through the component tree
  *
@@ -50,56 +66,24 @@
  * ## What this deliberately does not do
  *
  * Nothing here looks at how a component *renders* to decide what it is:
- * `isExpandableComponent` asks whether `setExpanded` is callable, and the hint
- * rule is scoped to that component's own rows. An ordinary message that quotes
- * the hint — an assistant explaining `ctrl+o`, a paste of these very docs — is
- * a `Text` or a `Markdown` with no `setExpanded` anywhere in its path, so it
- * resolves to nothing and the press starts a selection as usual.
+ * `isExpandableComponent` asks whether `setExpanded` is callable, and the
+ * hint rule is scoped to that component's own rows. An ordinary message that
+ * quotes the hint — an assistant explaining `ctrl+o`, a paste of these very
+ * docs — is a `Text` or a `Markdown` with no `setExpanded` anywhere in its
+ * path, so it resolves to nothing and the click stays a selection.
  *
- * ## Two accepted limitations
+ * ## Accepted limitation: a box's own output can read like its hint
  *
- * Both are known, both were weighed, and neither has a fix worth its cost.
- * They are recorded here and in `docs/configuration.md` because a user meets
- * them before they meet any of the reasoning above.
- *
- * **1. Clicking cannot always collapse what it expanded.** The premise that
- * "the hint row exists in both states, so one rule covers both directions" is
- * only true of `bash-execution` and of `tool-execution` results that still
- * have a preview to hide. For everything else Pi renders the hint *only while
- * collapsed*, so expanding it removes the very row that would close it again:
- *
- * - `core/tools/{read,grep,ls,write,find}.js` append the hint inside `if
- *   (remaining > 0)`, and expanding sets `maxLines` to `lines.length`, so
- *   `remaining` becomes 0 and the row is not emitted at all (`read.js:113-118`
- *   is the clearest instance).
- * - `skill-invocation-message.js:42`, `branch-summary-message.js:39` and
- *   `compaction-summary-message.js:40` build the hint in their `else` branch,
- *   i.e. only when `this.expanded` is false.
- *
- * For the first group there is a way back: current `pi-toolbox` appends a
- * `(ctrl+o to collapse)` anchor row as the last line inside the frame of an
- * expanded `ToolExecutionComponent` — the same text `bash-execution` renders
- * natively — and the hint rule above matches it exactly as it matches Pi's
- * own rows, because it is the component's own rendered row. That closes
- * `read`/`grep`/`ls`/`write`/`find` boxes with one click. The second group
- * (skill, branch and compaction summaries) keeps the limitation: no anchor
- * exists for them, `ctrl+o` (which closes everything) is the way back, and
- * inventing a second target (the title line, the first output row) would
- * mean guessing at a component's layout, which is the inference this module
- * exists to avoid. Without `pi-toolbox` installed the first group keeps the
- * limitation too — no anchor is rendered, and nothing here invents one.
- *
- * **2. A box's own output can read like its hint.** The component scoping
- * above stops a *different* message from being clickable, but not the box's
- * own body: a line inside an expandable component that literally contains
- * `(ctrl+o to expand)` — `cat` of a file documenting the keybinding, a
- * transcript of this very docstring — is indistinguishable from the real hint,
- * because Pi renders the box's output and the box's hint through the same
- * `Text` with the same structure and only different theme colours. Matching
- * the colours instead would make the rule depend on the user's theme.
- * Accepted: the worst case is that a click on a box opens the box it is
- * already inside — no crash, no lost input, and the same click a row above or
- * below behaves normally.
+ * The component scoping above stops a *different* message from being
+ * clickable, but not the box's own body: a line inside an expandable
+ * component that literally contains `(ctrl+o to expand)` — `cat` of a file
+ * documenting the keybinding, a transcript of this very docstring — matches
+ * the hint rule and its direction, because Pi renders the box's output and
+ * the box's hint through the same `Text` with the same structure and only
+ * different theme colours. Matching the colours instead would make the rule
+ * depend on the user's theme. Accepted: the worst case is that a click on a
+ * box toggles the box it is already inside — no crash, no lost input, and the
+ * same click a row above or below behaves normally.
  */
 
 import { keyText } from "@earendil-works/pi-coding-agent";
@@ -162,6 +146,32 @@ export function expandHintAction(line: string, keyText: string): "expand" | "col
 	const match = hintPattern(keyText).exec(stripTerminalSequences(line));
 	if (!match) return undefined;
 	return match[1] === "collapse" ? "collapse" : "expand";
+}
+
+/**
+ * The component's current expansion, read off its own state field.
+ *
+ * Pi's expandable message components keep a runtime-public boolean —
+ * `expanded` on bash-execution, tool-execution and the skill/branch/compaction
+ * summaries, `_expanded` on custom entries and messages — and every mutation
+ * path writes it, ctrl+o's global fan-out included, so it is the component's
+ * own current truth rather than a cached copy. A component that exposes
+ * neither spelling gets `undefined`: the caller declines to guess.
+ */
+export function expandedStateOf(component: object): boolean | undefined {
+	const fields = component as { expanded?: unknown; _expanded?: unknown };
+	if (typeof fields.expanded === "boolean") return fields.expanded;
+	if (typeof fields._expanded === "boolean") return fields._expanded;
+	return undefined;
+}
+
+/** Whether the component declares its own mouse handling (`onMouse`). */
+function handlesMouse(component: unknown): boolean {
+	return (
+		typeof component === "object" &&
+		component !== null &&
+		typeof (component as { onMouse?: unknown }).onMouse === "function"
+	);
 }
 
 /**
@@ -242,14 +252,15 @@ function scrollViewAt(root: BoxLike, x: number, y: number): unknown {
 }
 
 /**
- * The expandable component whose hint row is at screen cell (`x`, `y`), or
- * undefined when that cell is anything else.
+ * The expandable component under screen cell (`x`, `y`) and the expansion to
+ * set on it, or undefined when that cell is anything else.
  *
- * Resolution is done end to end here and thrown away: the component tree it
- * builds holds no invalidation and a running tool re-renders under it (a
+ * The whole component tree is built and thrown away on every call: it holds
+ * no invalidation and a running tool re-renders under it (a
  * `BashExecutionComponent` carries a ticking `Loader`), so the answer is only
  * true of the frame that is on screen at this instant. Callers act on it
- * inside the same press or not at all.
+ * inside the same event or not at all — the click flow in `mouse/index.ts`
+ * resolves once at press (identity only) and once more at release (action).
  */
 export function expandTargetAt(
 	lookup: ExpandLookup,
@@ -259,6 +270,9 @@ export function expandTargetAt(
 	// Renamed on the way out of `lookup` so it cannot be read as this module's
 	// imported `keyText` function.
 	const { root, keyText: keys } = lookup;
+	// The keybinding gates the whole feature, hint rule included: an unbound
+	// `app.tools.expand` is a user with the expand affordances off, and "" is
+	// read as "no hint rule at all" rather than as a wildcard.
 	if (!root || !keys) return undefined;
 
 	const scrollView = scrollViewAt(root, x, y);
@@ -276,15 +290,30 @@ export function expandTargetAt(
 
 	const tree = createComponentTree(origin.component, origin.rect.width, lines);
 	const path = tree.pathAt(row);
+
+	// A component anywhere on the path that handles the mouse itself owns this
+	// click. The layout folds the transcript into one box, so `pi-mouse-events`
+	// dispatch can never deliver an event to it — the only way its `onMouse`
+	// can mean what it says is for this module to bow out.
+	for (const span of path) {
+		if (handlesMouse(span.component)) return undefined;
+	}
+
 	for (let index = path.length - 1; index >= 0; index--) {
 		const span = path[index];
 		if (!isExpandableComponent(span.component)) continue;
+		const component = span.component as ExpandableComponent;
 		// The hint is matched against this component's own rendered row, not
 		// against the transcript, so nothing outside the box it would toggle can
 		// stand in for its hint.
 		const action = expandHintAction(span.lines[row - span.start] ?? "", keys);
-		if (!action) return undefined;
-		return { component: span.component as ExpandableComponent, expanded: action === "expand" };
+		if (action) return { component, expanded: action === "expand" };
+		// No hint on this row — or none rendered in this state, which is most
+		// components once expanded. The state field is the direction now, and a
+		// component that exposes neither source is not guessed at.
+		const state = expandedStateOf(component);
+		if (state === undefined) return undefined;
+		return { component, expanded: !state };
 	}
 	return undefined;
 }

@@ -21,10 +21,9 @@ import {
 	VStack,
 } from "@earendil-works/pi-tui";
 import { renderLayoutFrame } from "@earendil-works/pi-tui/dist/layout.js";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PolishedTuiConfig } from "../../extensions/starline/config";
 import type { BoxLike } from "../../extensions/starline/mouse/hit-test";
-import { installMouse } from "../../extensions/starline/mouse/index";
 import {
 	expandHintAction,
 	expandKeyText,
@@ -33,9 +32,14 @@ import {
 import {
 	AnchoredFramedToolComponent,
 	EXPAND_KEY_TEXT,
+	ExpandableText,
 	expandHintLine,
 	HintedToolComponent,
+	MouseAwareComponent,
+	StatelessExpandableComponent,
+	UnderscoreStateComponent,
 } from "./component-graph";
+import { installMouseShim } from "./shim";
 
 const WIDTH = 60;
 
@@ -185,12 +189,26 @@ describe("expandTargetAt", () => {
 		expect(target?.expanded).toBe(true);
 	});
 
-	it("leaves every other row of the same box alone", () => {
+	it("resolves any row of the box, with the direction from its state field", () => {
 		const scene = makeScene();
 		const { lookup, screenY } = lookupFor(scene);
 
-		expect(expandTargetAt(lookup, 4, screenY("bash echo hi"))).toBeUndefined();
-		expect(expandTargetAt(lookup, 4, screenY("out one"))).toBeUndefined();
+		// Collapsed: title and body rows carry no hint, so the state field
+		// (expanded === false) is the direction — open it.
+		const title = expandTargetAt(lookup, 4, screenY("bash echo hi"));
+		expect(title?.component).toBe(scene.tool);
+		expect(title?.expanded).toBe(true);
+		const body = expandTargetAt(lookup, 4, screenY("out one"));
+		expect(body?.component).toBe(scene.tool);
+		expect(body?.expanded).toBe(true);
+
+		// Expanded: the same body row now reads the field the other way — close
+		// it. This is the click the old hint-only rule had no target for.
+		scene.tool.setExpanded(true);
+		const reopened = lookupFor(scene);
+		const shut = expandTargetAt(reopened.lookup, 4, reopened.screenY("out one"));
+		expect(shut?.component).toBe(scene.tool);
+		expect(shut?.expanded).toBe(false);
 	});
 
 	it("does not fire on a message that merely quotes the hint", () => {
@@ -202,7 +220,7 @@ describe("expandTargetAt", () => {
 		expect(expandTargetAt(lookup, 4, screenY("for the rest"))).toBeUndefined();
 	});
 
-	it("asks to collapse once the box is open", () => {
+	it("asks to collapse once the box is open, via the hint the row carries", () => {
 		const scene = makeScene();
 		scene.tool.setExpanded(true);
 		const { lookup, screenY } = lookupFor(scene);
@@ -243,6 +261,67 @@ describe("expandTargetAt", () => {
 
 		expect(originY).toBeLessThan(0);
 		expect(expandTargetAt(lookup, 4, screenY("to expand)"))?.component).toBe(scene.tool);
+	});
+
+	it("takes the direction from the state field when no row carries a hint", () => {
+		// `ExpandableText` renders no hint in either state — the shape of the
+		// skill/branch/compaction summaries once expanded, which the old
+		// hint-only rule could never close.
+		const scene = makeScene();
+		const stateful = new ExpandableText(["shut", "for now"]);
+		scene.chat.addChild(stateful);
+		const { lookup, screenY } = lookupFor(scene);
+
+		const target = expandTargetAt(lookup, 4, screenY("for now"));
+		expect(target?.component).toBe(stateful);
+		expect(target?.expanded).toBe(true);
+
+		stateful.setExpanded(true);
+		const reopened = lookupFor(scene);
+		const shut = expandTargetAt(reopened.lookup, 4, reopened.screenY("for now"));
+		expect(shut?.component).toBe(stateful);
+		expect(shut?.expanded).toBe(false);
+	});
+
+	it("reads the state under its other spelling too — custom entries use `_expanded`", () => {
+		const scene = makeScene();
+		const stateful = new UnderscoreStateComponent();
+		scene.chat.addChild(stateful);
+		const { lookup, screenY } = lookupFor(scene);
+
+		const target = expandTargetAt(lookup, 4, screenY("state shut"));
+		expect(target?.component).toBe(stateful);
+		expect(target?.expanded).toBe(true);
+	});
+
+	it("declines a component it cannot read the state of, rather than guessing", () => {
+		const scene = makeScene();
+		const stateless = new StatelessExpandableComponent();
+		scene.chat.addChild(stateless);
+		const { lookup, screenY } = lookupFor(scene);
+
+		expect(expandTargetAt(lookup, 4, screenY("state shut"))).toBeUndefined();
+	});
+
+	it("leaves a click alone when a component on the row's path handles the mouse", () => {
+		// The target itself declares `onMouse`: the layout folds the transcript
+		// into one box, so dispatch can never hand it the event, and the only
+		// way its handler can mean what it says is for this rule to bow out.
+		const direct = makeScene();
+		direct.chat.addChild(new MouseAwareComponent());
+		const directLookup = lookupFor(direct);
+		expect(
+			expandTargetAt(directLookup.lookup, 4, directLookup.screenY("clicks are mine")),
+		).toBeUndefined();
+
+		// The same guard for a child *deeper* than the expandable target: the
+		// box would be toggled, but the row belongs to the child.
+		const nested = makeScene();
+		nested.tool.addChild(new MouseAwareComponent());
+		const nestedLookup = lookupFor(nested);
+		expect(
+			expandTargetAt(nestedLookup.lookup, 4, nestedLookup.screenY("clicks are mine")),
+		).toBeUndefined();
 	});
 
 	it("declines a point outside any scroll view", () => {
@@ -305,8 +384,9 @@ function makeInstallScene(options?: {
 		hasOverlay() {
 			return options?.overlay === true;
 		},
-		// The feature consumes the press, so Pi never reaches its own repaint for
-		// it; asking the receiver is the only thing that draws the toggled box.
+		// The feature consumes the *release* of a plain click, so Pi never
+		// reaches its own repaint for it; asking the receiver is the only thing
+		// that draws the toggled box.
 		requestRender() {
 			renders.push("render");
 		},
@@ -330,57 +410,120 @@ describe("installMouse clickToExpandTools", () => {
 	const originalKeybindings = getKeybindings();
 	let dispose: (() => void) | undefined;
 
+	beforeEach(() => {
+		// The double-click debounce reads the wall clock; owning it is what lets
+		// a test place its second click inside or past the window.
+		vi.useFakeTimers();
+	});
 	afterEach(() => {
 		dispose?.();
 		dispose = undefined;
 		setKeybindings(originalKeybindings);
+		vi.useRealTimers();
 	});
 
 	function install(scene: ReturnType<typeof makeInstallScene>, enabled = true) {
 		setKeybindings(
 			new KeybindingsManager({ "app.tools.expand": { defaultKeys: "ctrl+o" } }) as never,
 		);
-		dispose = installMouse(scene.prototype, { getConfig: makeConfig(enabled) });
+		dispose = installMouseShim(scene.prototype, { getConfig: makeConfig(enabled) });
+	}
+
+	function send(
+		scene: ReturnType<typeof makeInstallScene>,
+		y: number,
+		button: number,
+		release: boolean,
+	): void {
+		(
+			scene.prototype as { handleSelectionMouseEvent(event: FakeMouseEvent): void }
+		).handleSelectionMouseEvent({ button, x: 4, y, release });
 	}
 
 	function press(scene: ReturnType<typeof makeInstallScene>, y: number, button = PRESS): void {
-		(
-			scene.prototype as { handleSelectionMouseEvent(event: FakeMouseEvent): void }
-		).handleSelectionMouseEvent({ button, x: 4, y, release: false });
+		send(scene, y, button, false);
 	}
 
-	it("expands the clicked box and swallows the press", () => {
+	function release(scene: ReturnType<typeof makeInstallScene>, y: number, button = PRESS): void {
+		send(scene, y, button, true);
+	}
+
+	/** A plain click: press and release on the same cell, no motion between. */
+	function click(scene: ReturnType<typeof makeInstallScene>, y: number): void {
+		press(scene, y);
+		release(scene, y);
+	}
+
+	function dragTo(scene: ReturnType<typeof makeInstallScene>, y: number): void {
+		send(scene, y, DRAG, false);
+	}
+
+	function elapse(ms: number): void {
+		vi.setSystemTime(Date.now() + ms);
+	}
+
+	it("expands the clicked box on release, and consumes the release", () => {
 		const scene = makeInstallScene();
 		install(scene);
-		const screenY = scene.relayout();
+		const y = scene.relayout()("to expand)");
 
-		press(scene, screenY("to expand)"));
+		press(scene, y);
+		// The press is not the click: the box is still shut, and the event went
+		// through to Pi's selection anchor.
+		expect(scene.scene.tool.expanded).toBe(false);
+		expect(scene.throughCalls).toEqual([{ button: PRESS, x: 4, y, release: false }]);
 
+		release(scene, y);
 		expect(scene.scene.tool.expanded).toBe(true);
 		expect(scene.renders).toEqual(["render"]);
-		// The press must not also start a selection.
-		expect(scene.throughCalls).toEqual([]);
+		// The consumed release never reaches Pi's own selection handling.
+		expect(scene.throughCalls).toHaveLength(1);
 	});
 
-	it("collapses it again on a press over the reopened box's hint", () => {
+	it("toggles from the box's body too — the row need not be the hint", () => {
+		const scene = makeInstallScene();
+		install(scene);
+		const y = scene.relayout()("out one");
+
+		click(scene, y);
+
+		expect(scene.scene.tool.expanded).toBe(true);
+	});
+
+	it("collapses it again on a later click over the reopened box's hint", () => {
 		const scene = makeInstallScene();
 		install(scene);
 
-		press(scene, scene.relayout()("to expand)"));
+		click(scene, scene.relayout()("to expand)"));
 		expect(scene.scene.tool.expanded).toBe(true);
 
 		// The box re-rendered: the hint moved down and now reads "to collapse".
-		press(scene, scene.relayout()("to collapse)"));
+		// A different cell, so the double-click debounce does not apply.
+		click(scene, scene.relayout()("to collapse)"));
 
 		expect(scene.scene.tool.expanded).toBe(false);
-		expect(scene.throughCalls).toEqual([]);
+	});
+
+	it("collapses a hint-less expanded box through its state field", () => {
+		// `AnchoredFramedToolComponent` without `pi-toolbox`'s anchor is the
+		// shape of the skill/branch/compaction summaries expanded: no hint row
+		// anywhere, so the field is the only direction there is.
+		const tool = new AnchoredFramedToolComponent("read file.ts", [
+			"line one",
+			"line two",
+			"line three",
+		]);
+		tool.setExpanded(true);
+		const scene = makeInstallScene({ tool });
+		install(scene);
+		const y = scene.relayout()("line two");
+
+		click(scene, y);
+
+		expect(tool.expanded).toBe(false);
 	});
 
 	it("collapses a framed tool box through pi-toolbox's anchor row", () => {
-		// The end-to-end version of the expandTargetAt case above: expand with
-		// one click on Pi's own hint, then close with one click on the anchor
-		// row pi-toolbox appended inside the frame — the row that did not exist
-		// before the collapse-anchor change.
 		const tool = new AnchoredFramedToolComponent("read file.ts", [
 			"line one",
 			"line two",
@@ -389,37 +532,115 @@ describe("installMouse clickToExpandTools", () => {
 		const scene = makeInstallScene({ tool });
 		install(scene);
 
-		press(scene, scene.relayout()("to expand)"));
+		click(scene, scene.relayout()("to expand)"));
 		expect(tool.expanded).toBe(true);
 
-		press(scene, scene.relayout()("to collapse)"));
+		click(scene, scene.relayout()("to collapse)"));
 		expect(tool.expanded).toBe(false);
-		expect(scene.throughCalls).toEqual([]);
 	});
 
-	it("still starts a selection on any other row", () => {
+	it("still starts a selection when the click drags away", () => {
 		const scene = makeInstallScene();
 		install(scene);
 		const y = scene.relayout()("out one");
 
 		press(scene, y);
+		dragTo(scene, y + 1);
+		release(scene, y + 1);
 
 		expect(scene.scene.tool.expanded).toBe(false);
-		expect(scene.throughCalls).toEqual([{ button: PRESS, x: 4, y, release: false }]);
+		// Press, motion and release all reached Pi untouched — the drag is a
+		// selection, and copy-on-select is Pi's own business.
+		expect(scene.throughCalls).toHaveLength(3);
 	});
 
-	it("ignores a drag and a release over the hint row", () => {
+	it("does not toggle when the pointer moved between press and release, even back to the same cell", () => {
 		const scene = makeInstallScene();
 		install(scene);
 		const y = scene.relayout()("to expand)");
 
-		press(scene, y, DRAG);
-		(
-			scene.prototype as { handleSelectionMouseEvent(event: FakeMouseEvent): void }
-		).handleSelectionMouseEvent({ button: PRESS, x: 4, y, release: true });
+		press(scene, y);
+		dragTo(scene, y + 1);
+		release(scene, y);
 
 		expect(scene.scene.tool.expanded).toBe(false);
+		expect(scene.throughCalls).toHaveLength(3);
+	});
+
+	it("does not toggle when the content moved between press and release", () => {
+		const scene = makeInstallScene();
+		install(scene);
+		const y = scene.relayout()("to expand)");
+		press(scene, y);
+
+		// A different transcript slides under the pointer before the button
+		// comes up: the press's answer is stale, and the release must re-resolve
+		// and decline instead of trusting it.
+		const other = makeInstallScene();
+		other.relayout();
+		scene.prototype.currentLayout.root = other.prototype.currentLayout.root;
+		release(scene, y);
+
+		expect(scene.scene.tool.expanded).toBe(false);
+		// The declined release goes through unconsumed — press and release both
+		// reached Pi.
 		expect(scene.throughCalls).toHaveLength(2);
+	});
+
+	it("lets Pi open the link a click landed on", () => {
+		const scene = makeInstallScene();
+		(scene.prototype as { pressedUrl?: string }).pressedUrl = "https://example.com";
+		install(scene);
+		const y = scene.relayout()("to expand)");
+
+		click(scene, y);
+
+		expect(scene.scene.tool.expanded).toBe(false);
+		// Press and release both reached Pi — the release is the one that opens
+		// the link, and the box keeps its state.
+		expect(scene.throughCalls).toHaveLength(2);
+	});
+
+	it("stays out of a double-click's second release", () => {
+		const scene = makeInstallScene();
+		install(scene);
+		// The title row keeps its position across the toggle, so both clicks
+		// land on the same cell — the shape Pi reads as a word selection.
+		const y = scene.relayout()("bash echo hi");
+
+		click(scene, y);
+		expect(scene.scene.tool.expanded).toBe(true);
+		expect(scene.renders).toEqual(["render"]);
+
+		click(scene, y);
+		expect(scene.scene.tool.expanded).toBe(true);
+		expect(scene.renders).toEqual(["render"]);
+	});
+
+	it("toggles again once the double-click window has passed", () => {
+		const scene = makeInstallScene();
+		install(scene);
+		const y = scene.relayout()("bash echo hi");
+
+		click(scene, y);
+		expect(scene.scene.tool.expanded).toBe(true);
+
+		// The same cell, a new click: the field — not the stale hint — now says
+		// the box is open, so this one closes it.
+		elapse(600);
+		click(scene, scene.relayout()("bash echo hi"));
+		expect(scene.scene.tool.expanded).toBe(false);
+	});
+
+	it("lets a release through when no press of this feature preceded it", () => {
+		const scene = makeInstallScene();
+		install(scene);
+		const y = scene.relayout()("to expand)");
+
+		release(scene, y);
+
+		expect(scene.scene.tool.expanded).toBe(false);
+		expect(scene.throughCalls).toEqual([{ button: PRESS, x: 4, y, release: true }]);
 	});
 
 	it("ignores a wheel notch over the hint row", () => {
@@ -448,11 +669,13 @@ describe("installMouse clickToExpandTools", () => {
 	it("calls through with the feature switched off", () => {
 		const scene = makeInstallScene();
 		install(scene, false);
+		const y = scene.relayout()("to expand)");
 
-		press(scene, scene.relayout()("to expand)"));
+		press(scene, y);
+		release(scene, y);
 
 		expect(scene.scene.tool.expanded).toBe(false);
-		expect(scene.throughCalls).toHaveLength(1);
+		expect(scene.throughCalls).toHaveLength(2);
 	});
 
 	it("calls through while an overlay is up", () => {
@@ -461,10 +684,12 @@ describe("installMouse clickToExpandTools", () => {
 		// be a click the user never aimed at it.
 		const scene = makeInstallScene({ overlay: true });
 		install(scene);
+		const y = scene.relayout()("to expand)");
 
-		press(scene, scene.relayout()("to expand)"));
+		press(scene, y);
+		release(scene, y);
 
 		expect(scene.scene.tool.expanded).toBe(false);
-		expect(scene.throughCalls).toHaveLength(1);
+		expect(scene.throughCalls).toHaveLength(2);
 	});
 });

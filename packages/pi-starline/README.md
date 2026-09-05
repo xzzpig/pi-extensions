@@ -44,16 +44,17 @@ pieces of one product, not a theme:
 
 The second half of the product: the statusline tells you where you are, the
 mouse lets you act on what you see. Starline drives Pi 0.84's own renderer
-(`tuiMode: "fullscreen"`) by patching its methods directly — the extension API
-stops at high-level hooks, and the selection hint, click-to-expand and clean-copy all
-need to reach into the renderer itself. That is also why they live in Starline:
-they sit on the same prototype patches the footer and editor already use, and
-Pi keeps its core deliberately minimal — behaviours belong in extensions.
+(`tuiMode: "fullscreen"`) through the [`@xzzpig/pi-mouse-events`](https://www.npmjs.com/package/@xzzpig/pi-mouse-events)
+extension, which owns the renderer prototype and dispatches mouse events to
+components — the extension API stops at high-level hooks, and the selection
+hint, click-to-expand and clean-copy all need to reach into the renderer
+itself. Install it alongside Starline; without it Starline's mouse features
+are simply off (everything else keeps working).
 
 - **Select and copy anywhere.** Drag to select in the transcript or the input box; double-click a word (paths and kebab-case stay whole), triple-click a line. Releasing copies — or set Pi's `fullscreenCopyOnSelect: false` and the selection stays highlighted, waiting for the copy key ([Pi #7720](https://github.com/earendil-works/pi/issues/7720), shipped in Pi 0.84.4).
 - **Clean copies.** Transcript selections drop Starline's rails, rule rows and pi-toolbox frame borders before they reach the clipboard; editor selections copy the draft's text, not the painted rows.
 - **Selection hint.** A selection that is not auto-copying shows exactly how many characters the copy key (`ctrl+x` by default, whatever `app.message.copy` is bound to) will copy, and a selection inside the editor names your editor — `ctrl+g to edit in nvim`.
-- **Click to expand one tool box.** A click on a box's hint row expands just that box (MCP boxes included), and the `(ctrl+o to collapse)` anchor row closes it again.
+- **Click to expand one component.** A plain click anywhere on a tool box — title, output, hint row, borders — toggles just that box (MCP boxes included); bash boxes, skill blocks, branch summaries, compaction summaries and custom entries count too. The direction comes from the hint row when one is on screen and from the component's own state otherwise, so a box with no hint left once expanded still closes on a click. Only a plain click toggles: dragging across a box still selects and copies, a double-click still word-selects, and a click on a link still opens it.
 - **Click to move the caret** in the input box; **backspace/delete remove a selected range**; the **wheel scrolls the draft** over the input box, and a draft taller than the box keeps the `ctrl+g` external-editor hint on screen.
 
 0.2.x's `fixedEditor` config block was renamed to `mouse` (migrated

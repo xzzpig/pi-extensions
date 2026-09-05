@@ -1,18 +1,3 @@
-/**
- * Wheel notches over the input box, against Pi's real layout engine.
- *
- * The layout is built the way `interactive-mode.js` builds it — a scroll view
- * over a dock `VStack`, with the editor inside a `Container` inside that dock —
- * and run through pi-tui's own `renderLayoutFrame`. That matters: the plan for
- * this task assumed the editor is a direct child of a stack and therefore has
- * its own `LayoutBox`. It is not, and it does not. `Container` carries no
- * `LAYOUT_NODE`, so the box the layout produces belongs to the *container*,
- * with `children: []` — the same finding `test/contract/transcript-layout.test.ts`
- * pinned for the transcript. These tests pin it for the editor, and pin the
- * resolution that works instead: the box whose component is the container the
- * live editor is mounted in, found by identity through `Container.children`.
- */
-
 import { Container, ScrollView, Text, VStack } from "@earendil-works/pi-tui";
 import { renderLayoutFrame } from "@earendil-works/pi-tui/dist/layout.js";
 import { afterEach, describe, expect, it } from "vitest";
@@ -23,7 +8,7 @@ import {
 	wheelTarget,
 } from "../../extensions/starline/mouse/editor-mouse";
 import { type BoxLike, boxFor } from "../../extensions/starline/mouse/hit-test";
-import { installMouse } from "../../extensions/starline/mouse/index";
+import { installMouseFeaturesOn } from "../../extensions/starline/mouse/index";
 
 const WIDTH = 40;
 const HEIGHT = 12;
@@ -144,50 +129,35 @@ describe("wheelTarget", () => {
 	});
 });
 
-type WheelEvent = { direction: number; x: number; y: number };
-
 type FakeAltScreen = {
 	currentLayout?: { root: BoxLike };
 	terminal: { rows: number };
 	wheelScrollLines: number;
 	overlay: boolean;
-	routeWheel(event: WheelEvent): void;
 	hasOverlay(): boolean;
 	requestRender(): void;
-	handleViewportInput(): void;
-	handleSelectionMouseEvent(): void;
-	copyActiveSelectionToClipboard(): Promise<boolean>;
 	getSelectionBounds(): undefined;
 	getSelectionColumns(): { start: number; end: number };
 	flash(): void;
 };
 
-function makePrototype(): { prototype: FakeAltScreen; routed: WheelEvent[]; renders: number[] } {
-	const routed: WheelEvent[] = [];
+function makePrototype(): { prototype: FakeAltScreen; renders: number[] } {
 	const renders: number[] = [];
 	const prototype: FakeAltScreen = {
 		terminal: { rows: TERMINAL_ROWS },
 		wheelScrollLines: 3,
 		overlay: false,
-		routeWheel(event) {
-			routed.push(event);
-		},
 		hasOverlay() {
 			return this.overlay;
 		},
 		requestRender() {
 			renders.push(1);
 		},
-		handleViewportInput() {},
-		handleSelectionMouseEvent() {},
-		async copyActiveSelectionToClipboard() {
-			return false;
-		},
 		getSelectionBounds: () => undefined,
 		getSelectionColumns: () => ({ start: 0, end: 0 }),
 		flash() {},
 	};
-	return { prototype, routed, renders };
+	return { prototype, renders };
 }
 
 function makeConfig(wheelRouting: boolean): () => PolishedTuiConfig {
@@ -209,38 +179,85 @@ afterEach(() => {
 	setActiveEditor(undefined);
 });
 
-function install(prototype: object, wheelRouting = true) {
-	const dispose = installMouse(prototype, { getConfig: makeConfig(wheelRouting) });
+type MouseContext = { event: Record<string, unknown>; tui: unknown };
+type RegisteredHandler = (context: MouseContext) => unknown;
+
+/**
+ * Registers the features the way `pi-mouse-events` would, capturing the
+ * handlers. The wheel handler is `mouseHandlers[1]`: registration order is
+ * fixed by `installMouseFeaturesOn` — expand (20), wheel (10), caret (0) —
+ * and the sub-option config is read at event time, not registration time, so
+ * the index does not depend on the config here.
+ */
+function install(receiver: object, wheelRouting = true) {
+	const mouseHandlers: RegisteredHandler[] = [];
+	const copyHandlers: Array<(context: { tui: unknown }) => unknown> = [];
+	const api = {
+		version: 1,
+		eventChannel: "pi-mouse-events:mouse",
+		copySlotAvailable: true,
+		addMouseHandler(handler: RegisteredHandler) {
+			mouseHandlers.push(handler);
+			return () => {
+				const index = mouseHandlers.indexOf(handler);
+				if (index !== -1) mouseHandlers.splice(index, 1);
+			};
+		},
+		addCopyHandler(handler: (context: { tui: unknown }) => unknown) {
+			copyHandlers.push(handler);
+			return () => {};
+		},
+	} as never;
+	const dispose = installMouseFeaturesOn(api, { ui: receiver } as never, {
+		getConfig: makeConfig(wheelRouting),
+	});
+	const wheelHandler = (): RegisteredHandler | undefined => mouseHandlers[1];
 	disposers.push(dispose);
-	return dispose;
+	return { wheelHandler, mouseHandlers, dispose };
 }
 
-describe("the mouse-wheel patch", () => {
+function wheelEvent(direction: 1 | -1, x: number, y: number): Record<string, unknown> {
+	return {
+		kind: "wheel",
+		wheel: direction,
+		x,
+		y,
+		button: direction === 1 ? 65 : 64,
+		release: false,
+	};
+}
+
+/**
+ * What the wheel handler answers, per notch. The extension's own suite covers
+ * the fall-through to Pi's routing for an unhandled notch; what Starline
+ * owes is the consumption decision, which is what these assert.
+ */
+describe("the mouse-wheel handler", () => {
 	function arrange(lines: number) {
 		const editor = new FakeEditor(draft(lines));
 		const { frame } = mount(editor);
-		const { prototype, routed, renders } = makePrototype();
+		const { prototype, renders } = makePrototype();
 		prototype.currentLayout = frame;
 		setActiveEditor({ component: editor, scrollable: editor });
-		return { editor, prototype, routed, renders };
+		return { editor, prototype, renders };
 	}
 
-	it("scrolls the input box instead of the transcript", () => {
-		const { editor, prototype, routed, renders } = arrange(20);
-		install(prototype);
+	it("scrolls the input box instead of the transcript, and consumes the notch", () => {
+		const { editor, prototype, renders } = arrange(20);
+		const { wheelHandler } = install(prototype);
 
-		prototype.routeWheel({ direction: 1, x: 10, y: HEIGHT - 1 });
+		const result = wheelHandler()!({ event: wheelEvent(1, 10, HEIGHT - 1), tui: prototype });
 
+		expect(result).toEqual({ handled: true });
 		expect(editor.scrollOffset).toBe(3);
-		expect(routed).toEqual([]);
 		expect(renders).toHaveLength(1);
 	});
 
 	it("drags the caret into the new window so the next frame keeps the offset", () => {
 		const { editor, prototype } = arrange(20);
-		install(prototype);
+		const { wheelHandler } = install(prototype);
 
-		prototype.routeWheel({ direction: 1, x: 10, y: HEIGHT - 1 });
+		wheelHandler()!({ event: wheelEvent(1, 10, HEIGHT - 1), tui: prototype });
 
 		// Pi re-derives `scrollOffset` from the caret on every render, so an
 		// offset the caret is not inside of is undone by the very next frame.
@@ -249,89 +266,86 @@ describe("the mouse-wheel patch", () => {
 		expect(editor.snappedFromCursorCol).toBeNull();
 	});
 
-	it("lets the transcript have a notch that landed outside the input box", () => {
-		const { editor, prototype, routed, renders } = arrange(20);
-		install(prototype);
+	it("does not consume a notch that landed outside the input box", () => {
+		const { editor, prototype, renders } = arrange(20);
+		const { wheelHandler } = install(prototype);
 
-		prototype.routeWheel({ direction: -1, x: 10, y: 0 });
+		const result = wheelHandler()!({ event: wheelEvent(-1, 10, 0), tui: prototype });
 
+		expect(result).toBeUndefined();
 		expect(editor.scrollOffset).toBe(0);
-		expect(routed).toHaveLength(1);
 		expect(renders).toHaveLength(0);
 	});
 
-	it("lets the transcript have a notch over a draft that fits", () => {
-		const { editor, prototype, routed } = arrange(VISIBLE);
-		install(prototype);
+	it("does not consume a notch over a draft that fits", () => {
+		const { editor, prototype } = arrange(VISIBLE);
+		const { wheelHandler } = install(prototype);
 
-		prototype.routeWheel({ direction: 1, x: 10, y: HEIGHT - 1 });
+		const result = wheelHandler()!({ event: wheelEvent(1, 10, HEIGHT - 1), tui: prototype });
 
+		expect(result).toBeUndefined();
 		expect(editor.scrollOffset).toBe(0);
-		expect(routed).toHaveLength(1);
 	});
 
 	it("keeps the notch once the box is scrolled to its end", () => {
 		// Chaining on to the transcript at the boundary would make the box feel
 		// like it slipped out from under the pointer.
-		const { editor, prototype, routed } = arrange(20);
-		install(prototype);
+		const { editor, prototype } = arrange(20);
+		const { wheelHandler } = install(prototype);
 		editor.scrollOffset = 15;
 		editor.state.cursorLine = 19;
 
-		prototype.routeWheel({ direction: 1, x: 10, y: HEIGHT - 1 });
+		const result = wheelHandler()!({ event: wheelEvent(1, 10, HEIGHT - 1), tui: prototype });
 
+		expect(result).toEqual({ handled: true });
 		expect(editor.scrollOffset).toBe(15);
-		expect(routed).toEqual([]);
 	});
 
 	it("lets the transcript have every notch when wheelRouting is off", () => {
-		const { editor, prototype, routed } = arrange(20);
-		install(prototype, false);
+		const { editor, prototype } = arrange(20);
+		const { wheelHandler } = install(prototype, false);
 
-		prototype.routeWheel({ direction: 1, x: 10, y: HEIGHT - 1 });
+		const result = wheelHandler()!({ event: wheelEvent(1, 10, HEIGHT - 1), tui: prototype });
 
+		expect(result).toBeUndefined();
 		expect(editor.scrollOffset).toBe(0);
-		expect(routed).toHaveLength(1);
 	});
 
 	it("lets the transcript have a notch aimed at an overlay", () => {
-		const { editor, prototype, routed } = arrange(20);
+		const { editor, prototype } = arrange(20);
 		prototype.overlay = true;
-		install(prototype);
+		const { wheelHandler } = install(prototype);
 
-		prototype.routeWheel({ direction: 1, x: 10, y: HEIGHT - 1 });
+		const result = wheelHandler()!({ event: wheelEvent(1, 10, HEIGHT - 1), tui: prototype });
 
+		expect(result).toBeUndefined();
 		expect(editor.scrollOffset).toBe(0);
-		expect(routed).toHaveLength(1);
 	});
 
 	it("lets the transcript have every notch when no editor is registered", () => {
-		const { editor, prototype, routed } = arrange(20);
+		const { editor, prototype } = arrange(20);
 		setActiveEditor(undefined);
-		install(prototype);
+		const { wheelHandler } = install(prototype);
 
-		prototype.routeWheel({ direction: 1, x: 10, y: HEIGHT - 1 });
+		const result = wheelHandler()!({ event: wheelEvent(1, 10, HEIGHT - 1), tui: prototype });
 
+		expect(result).toBeUndefined();
 		expect(editor.scrollOffset).toBe(0);
-		expect(routed).toHaveLength(1);
 	});
 
-	it("lets the transcript have a malformed wheel event", () => {
-		const { prototype, routed } = arrange(20);
-		install(prototype);
+	it("stops acting once the handler is unsubscribed", () => {
+		const { editor, prototype } = arrange(20);
+		const { wheelHandler, mouseHandlers, dispose } = install(prototype);
+		const handler = wheelHandler()!;
+		dispose();
 
-		(prototype.routeWheel as (event: unknown) => void)({ direction: 1, x: "10", y: 0 });
+		expect(mouseHandlers).toHaveLength(0);
+		const result = handler({ event: wheelEvent(1, 10, HEIGHT - 1), tui: prototype });
 
-		expect(routed).toHaveLength(1);
-	});
-
-	it("puts routeWheel back when the install is disposed", () => {
-		const { editor, prototype, routed } = arrange(20);
-		install(prototype)();
-
-		prototype.routeWheel({ direction: 1, x: 10, y: HEIGHT - 1 });
-
+		// The extension no longer holds the handler, and the dispose also tore
+		// down the install the handler would bind its receiver through — a
+		// stale reference declines, and Pi's own routing answers the notch.
+		expect(result).toBeUndefined();
 		expect(editor.scrollOffset).toBe(0);
-		expect(routed).toHaveLength(1);
 	});
 });

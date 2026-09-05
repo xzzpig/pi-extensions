@@ -53,10 +53,10 @@ import type { BoxLike } from "../../extensions/starline/mouse/hit-test";
 import {
 	activeSelectionHintText,
 	externalEditorHintText,
-	installMouse,
 } from "../../extensions/starline/mouse/index";
 import { PolishedEditor } from "../../extensions/starline/ui";
 import { HintedToolComponent } from "./component-graph";
+import { installMouseShim } from "./shim";
 
 const WIDTH = 40;
 const HEIGHT = 24;
@@ -640,11 +640,15 @@ describe("the two features that share handleSelectionMouseEvent", () => {
 			new KeybindingsManager({ "app.tools.expand": { defaultKeys: "ctrl+o" } }) as never,
 		);
 		setActiveEditor({ component: scene.editor, scrollable: scene.editor });
-		dispose = installMouse(scene.prototype, { getConfig: () => scene.config });
+		dispose = installMouseShim(scene.prototype, { getConfig: () => scene.config });
 	}
 
 	function press(scene: ReturnType<typeof makeScene>, x: number, y: number) {
 		scene.prototype.handleSelectionMouseEvent({ button: PRESS, x, y, release: false });
+	}
+
+	function release(scene: ReturnType<typeof makeScene>, x: number, y: number) {
+		scene.prototype.handleSelectionMouseEvent({ button: PRESS, x, y, release: true });
 	}
 
 	it("runs both behaviours from one install, neither shadowing the other", () => {
@@ -657,21 +661,25 @@ describe("the two features that share handleSelectionMouseEvent", () => {
 		install(scene);
 		const { hintY, textY } = scene.relayout();
 
-		// Click-to-expand, on a row in the transcript.
+		// Click-to-expand, on a row in the transcript: the press goes through to
+		// Pi's selection anchor, and the release — same cell, no motion — is the
+		// click that toggles.
 		press(scene, 4, hintY("to expand"));
+		expect(scene.tool.expanded).toBe(false);
+		release(scene, 4, hintY("to expand"));
 		expect(scene.tool.expanded).toBe(true);
-		// It consumed the press, so Pi never saw it.
-		expect(scene.throughCalls).toHaveLength(0);
+		// The release was consumed, so Pi saw the press but not the release.
+		expect(scene.throughCalls).toHaveLength(1);
 
 		// Click-to-caret, on a row in the input box — same install, same patch.
 		press(scene, 4, textY(2));
 		expect(scene.editor.getCursor()).toEqual({ line: 7, col: 2 });
 		// It did *not* consume: Pi still gets the press and drops its anchor.
-		expect(scene.throughCalls).toHaveLength(1);
+		expect(scene.throughCalls).toHaveLength(2);
 	});
 
-	it("still expands when a press in the transcript follows one in the editor", () => {
-		// Order must not matter: each press is resolved from scratch.
+	it("still expands when a click in the transcript follows a press in the editor", () => {
+		// Order must not matter: each click is resolved from scratch.
 		const scene = makeScene(numbered(12));
 		install(scene);
 		const first = scene.relayout();
@@ -681,6 +689,7 @@ describe("the two features that share handleSelectionMouseEvent", () => {
 
 		const second = scene.relayout();
 		press(scene, 4, second.hintY("to expand"));
+		release(scene, 4, second.hintY("to expand"));
 		expect(scene.tool.expanded).toBe(true);
 	});
 
@@ -764,7 +773,7 @@ describe("the clean-copy patch on copyActiveSelectionToClipboard", () => {
 
 	function install(scene: ReturnType<typeof makeScene>) {
 		setActiveEditor({ component: scene.editor, scrollable: scene.editor });
-		dispose = installMouse(scene.prototype, { getConfig: () => scene.config });
+		dispose = installMouseShim(scene.prototype, { getConfig: () => scene.config });
 	}
 
 	/** A selection over two whole text rows of the input box. */
@@ -899,7 +908,7 @@ describe("the overlay guard is asked by both halves of the copy patch", () => {
 		// the other way round.
 		const scene = makeScene(numbered(12), makeConfig());
 		setActiveEditor({ component: scene.editor, scrollable: scene.editor });
-		dispose = installMouse(scene.prototype, { getConfig: () => scene.config });
+		dispose = installMouseShim(scene.prototype, { getConfig: () => scene.config });
 		const { textY } = scene.relayout();
 		scene.prototype.overlay = true;
 		scene.prototype.selectionBounds = {
@@ -1107,7 +1116,7 @@ describe("the two features that share handleViewportInput", () => {
 
 	function install(scene: ReturnType<typeof makeScene>) {
 		setActiveEditor({ component: scene.editor, scrollable: scene.editor });
-		dispose = installMouse(scene.prototype, { getConfig: () => scene.config });
+		dispose = installMouseShim(scene.prototype, { getConfig: () => scene.config });
 	}
 
 	/** A selection over the first two text rows of the input box. */
@@ -1264,8 +1273,8 @@ describe("the two features that share handleViewportInput", () => {
 
 	it("offers the external-editor hint once the draft outgrows the box", () => {
 		// No drag-scroll, so a draft taller than the box is partly unreachable by
-		// mouse; that is when the hint points at the external editor, refreshed
-		// by the same input path that sees the draft change.
+		// mouse; that is when the hint points at the external editor. The hint is
+		// derived at render time — no input event is needed to refresh it.
 		const original = getKeybindings();
 		setKeybindings(
 			new KeybindingsManager({ "app.editor.external": { defaultKeys: "ctrl+g" } }) as never,
@@ -1273,17 +1282,18 @@ describe("the two features that share handleViewportInput", () => {
 		try {
 			const scene = makeScene(numbered(12), makeConfig());
 			install(scene);
+
+			// No layout yet: the hint cannot know whether the draft outgrows the
+			// box, so it stays quiet.
+			expect(externalEditorHintText()).toBeNull();
+
 			scene.relayout();
 
-			// Nothing has landed on `handleViewportInput` yet, so no refresh.
-			expect(externalEditorHintText()).toBeNull();
 			// Unset EDITOR keeps the literal variable name in the hint.
 			vi.stubEnv("EDITOR", "");
-			scene.prototype.handleViewportInput("x");
 			expect(externalEditorHintText()).toBe("ctrl+g to edit in $EDITOR");
 			// With $EDITOR set, the hint names the editor it would open.
 			vi.stubEnv("EDITOR", "/opt/homebrew/bin/nvim");
-			scene.prototype.handleViewportInput("x");
 			expect(externalEditorHintText()).toBe("ctrl+g to edit in nvim");
 		} finally {
 			setKeybindings(original);
@@ -1294,7 +1304,6 @@ describe("the two features that share handleViewportInput", () => {
 		const scene = makeScene("alpha beta\ngamma delta", makeConfig());
 		install(scene);
 		scene.relayout();
-		scene.prototype.handleViewportInput("x");
 		expect(externalEditorHintText()).toBeNull();
 	});
 
@@ -1338,12 +1347,19 @@ describe("the two features that share handleViewportInput", () => {
 		install(scene);
 		const first = scene.relayout();
 
-		// mouse-selection-event, behaviour 1: click-to-expand.
+		// mouse-selection-event, behaviour 1: click-to-expand. The press anchors,
+		// the release — same cell, no motion — toggles and is consumed.
 		scene.prototype.handleSelectionMouseEvent({
 			button: 0,
 			x: 4,
 			y: first.hintY("to expand"),
 			release: false,
+		});
+		scene.prototype.handleSelectionMouseEvent({
+			button: 0,
+			x: 4,
+			y: first.hintY("to expand"),
+			release: true,
 		});
 		expect(scene.tool.expanded).toBe(true);
 

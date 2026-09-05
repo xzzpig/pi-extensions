@@ -2,20 +2,24 @@ import { describe, expect, it } from "vitest";
 import {
 	disabledFeatureWarning,
 	enabledFeatures,
+	type MouseFeature,
 	probeCapabilities,
 } from "../../extensions/starline/mouse/capabilities";
 
-function prototypeWith(names: string[]): object {
-	const proto: Record<string, unknown> = {};
-	for (const name of names) proto[name] = function stub() {};
-	return proto;
+/**
+ * The probe runs against the live renderer (`ctx.ui`), not a prototype being
+ * patched, so a capability is simply a callable method. The copy slot is not
+ * on the receiver at all — it is the `pi-mouse-events` extension's
+ * `addCopyHandler` backing, reported as `copySlotAvailable` — which is why it
+ * is a separate argument rather than something this probe can see.
+ */
+function receiverWith(names: string[]): object {
+	const receiver: Record<string, unknown> = {};
+	for (const name of names) receiver[name] = function stub() {};
+	return receiver;
 }
 
 const ALL = [
-	"handleViewportInput",
-	"routeWheel",
-	"handleSelectionMouseEvent",
-	"copyActiveSelectionToClipboard",
 	"getCopyOnSelect",
 	"hasActiveSelection",
 	"getSelectionBounds",
@@ -25,61 +29,40 @@ const ALL = [
 	"requestRender",
 ];
 
+const ALL_FEATURES = [
+	"clickToExpandTools",
+	"editorBufferCopy",
+	"editorClickToCaret",
+	"editorWheelScroll",
+	"selectionHint",
+	"transcriptCleanCopy",
+];
+
+function featuresWith(names: string[], copySlot = true): ReadonlySet<MouseFeature> {
+	return enabledFeatures(probeCapabilities(receiverWith(names)), copySlot);
+}
+
 describe("probeCapabilities", () => {
-	it("finds every capability on a complete prototype", () => {
-		expect([...probeCapabilities(prototypeWith(ALL))].sort()).toEqual([...ALL].sort());
+	it("finds every capability on a complete receiver", () => {
+		expect([...probeCapabilities(receiverWith(ALL))].sort()).toEqual([...ALL].sort());
 	});
 
 	it("skips a non-function property", () => {
-		const proto = prototypeWith(ALL) as Record<string, unknown>;
-		proto.routeWheel = 42;
-		expect(probeCapabilities(proto).has("routeWheel")).toBe(false);
+		const receiver = receiverWith(ALL) as Record<string, unknown>;
+		receiver.getSelectionBounds = 42;
+		expect(probeCapabilities(receiver).has("getSelectionBounds")).toBe(false);
 	});
 
-	it("skips a non-writable method", () => {
-		const proto = prototypeWith(ALL);
-		Object.defineProperty(proto, "copyActiveSelectionToClipboard", {
-			value: () => undefined,
-			writable: false,
-			configurable: true,
-		});
-		expect(probeCapabilities(proto).has("copyActiveSelectionToClipboard")).toBe(false);
-	});
-
-	it("skips a non-configurable method", () => {
-		const proto = prototypeWith(ALL);
-		Object.defineProperty(proto, "getSelectionBounds", {
-			value: () => undefined,
-			writable: true,
-			configurable: false,
-		});
-		expect(probeCapabilities(proto).has("getSelectionBounds")).toBe(false);
-	});
-
-	it("skips an accessor property", () => {
-		const proto = prototypeWith(ALL);
-		Object.defineProperty(proto, "routeWheel", {
-			get() {
-				throw new Error("boom");
-			},
-			configurable: true,
-		});
-		expect(probeCapabilities(proto).has("routeWheel")).toBe(false);
-	});
-
-	it("disables a capability when the prototype throws on inspection", () => {
-		// Pi 0.84 hands extensions a Proxy over its renderer, so a probe can be
-		// pointed at one whose traps throw. The rule is that a probe never
-		// propagates: it reports the capability as unavailable and the feature
-		// depending on it stays off.
+	it("never propagates a receiver that throws on inspection", () => {
+		// `ctx.ui` is a Proxy over Pi's renderer, so a probe can be pointed at
+		// one whose traps throw. The rule is that a probe never propagates: it
+		// reports the capability as unavailable and the feature depending on it
+		// stays off.
 		const hostile = new Proxy(
 			{},
 			{
-				getOwnPropertyDescriptor() {
+				get() {
 					throw new Error("boom");
-				},
-				getPrototypeOf() {
-					return null;
 				},
 			},
 		);
@@ -89,126 +72,97 @@ describe("probeCapabilities", () => {
 });
 
 describe("enabledFeatures", () => {
-	it("enables everything when every capability is present", () => {
-		const features = enabledFeatures(probeCapabilities(prototypeWith(ALL)));
-		expect(features.size).toBe(6);
+	it("enables everything when every capability is present and the copy slot exists", () => {
+		const features = featuresWith(ALL, true);
+		expect([...features].sort()).toEqual(ALL_FEATURES);
 	});
 
-	it("disables the hint when Pi 0.84.4's selection APIs are missing", () => {
+	it("disables both copy features without the extension's copy slot", () => {
+		// The copy features answer the copy key through `addCopyHandler`; on a
+		// pi-tui without `copyActiveSelectionToClipboard` (< 0.84.3) the slot is
+		// not installed, and a feature that cannot answer its own copy is the
+		// half-working install the table exists to prevent.
+		const features = featuresWith(ALL, false);
+		expect(features.has("editorBufferCopy")).toBe(false);
+		expect(features.has("transcriptCleanCopy")).toBe(false);
+		expect(features.has("editorClickToCaret")).toBe(true);
+		expect(features.has("selectionHint")).toBe(true);
+	});
+
+	it("disables the hint when Pi's selection APIs are missing", () => {
 		// The hint is derived from Pi's own select-without-copy state; without
 		// `getCopyOnSelect` or `hasActiveSelection` there is nothing to derive
 		// it from. Copying still answers the copy key, which needs neither.
 		for (const capability of ["getCopyOnSelect", "hasActiveSelection"] as const) {
-			const without = ALL.filter((name) => name !== capability);
-			const features = enabledFeatures(probeCapabilities(prototypeWith(without)));
+			const features = featuresWith(ALL.filter((name) => name !== capability));
 			expect(features.has("selectionHint")).toBe(false);
 			expect(features.has("transcriptCleanCopy")).toBe(true);
 		}
 	});
 
-	it("claims no feature that installMouse would not install", () => {
-		// A capability probe is a report on Pi's surface; a *feature* is a
-		// promise that installMouse installs something. Frame-free selection is
-		// cut, so neither it nor the `applySelection` it was highlighted
-		// through survives anywhere in here.
-		const features = enabledFeatures(probeCapabilities(prototypeWith(ALL)));
-		expect([...features].sort()).toEqual([
-			"clickToExpandTools",
-			"editorBufferCopy",
-			"editorClickToCaret",
-			"editorWheelScroll",
-			"selectionHint",
-			"transcriptCleanCopy",
-		]);
-	});
-
 	it("disables both repainting features when the renderer cannot be asked to repaint", () => {
 		// `requestRender` is the one capability these features only ever *call*.
-		// Installing without it leaves a toggled tool box off screen until some
-		// unrelated frame arrives, which is the half-working install this table
-		// exists to prevent. The hint needs no repaint of its own — it rides
-		// Pi's repaints, so it survives.
-		const without = ALL.filter((name) => name !== "requestRender");
-		const features = enabledFeatures(probeCapabilities(prototypeWith(without)));
+		// Consuming a press or a notch means Pi never reaches its own repaint,
+		// so without one of its own a toggled tool box would stay off screen
+		// until some unrelated frame arrived.
+		const features = featuresWith(ALL.filter((name) => name !== "requestRender"));
 		expect(features.has("selectionHint")).toBe(true);
 		expect(features.has("clickToExpandTools")).toBe(false);
-		// The wheel patch consumes the notch, so Pi never reaches the repaint at
-		// the end of its own `routeWheel`: without one of its own, the box would
-		// scroll and not be redrawn.
 		expect(features.has("editorWheelScroll")).toBe(false);
-		// Click-to-caret needs it too, but only because of its *second* half: the
-		// caret alone calls through and rides Pi's own repaint, while the range
-		// delete consumes the key, so Pi never reaches `requestImmediateRender`
-		// and the shortened draft would stay on screen unchanged.
 		expect(features.has("editorClickToCaret")).toBe(false);
+		// The copy features call through to Pi's own copy on the fall-through
+		// path, which repaints on its own; they stay on.
+		expect(features.has("editorBufferCopy")).toBe(true);
 	});
 
-	it("disables click-to-expand when overlays cannot be detected", () => {
-		// Without `hasOverlay` the feature would resolve a tool box through an
-		// open dialog and toggle it on a click aimed at the dialog. It is a
-		// capability the feature *calls*, so it gates installation like any other.
-		const without = ALL.filter((name) => name !== "hasOverlay");
-		const features = enabledFeatures(probeCapabilities(prototypeWith(without)));
+	it("disables the pointer features when overlays cannot be detected", () => {
+		// Without `hasOverlay` the features would act through an open dialog:
+		// expanding a tool box behind it, scrolling a draft behind it, moving a
+		// caret behind it, or reading a dialog's rows as a selection.
+		const features = featuresWith(ALL.filter((name) => name !== "hasOverlay"));
 		expect(features.has("clickToExpandTools")).toBe(false);
-		// An overlay is composited over a layout that still contains the editor,
-		// so without this the wheel would scroll a draft hidden behind a dialog.
 		expect(features.has("editorWheelScroll")).toBe(false);
-		expect(features.has("selectionHint")).toBe(true);
-		// The same layout an overlay is composited over still holds the editor, so
-		// both editor click features would answer for rows a dialog is covering,
-		// and a clean copy would read a dialog's rows as the transcript's.
 		expect(features.has("editorClickToCaret")).toBe(false);
 		expect(features.has("editorBufferCopy")).toBe(false);
 		expect(features.has("transcriptCleanCopy")).toBe(false);
+		expect(features.has("selectionHint")).toBe(true);
 	});
 
-	it("disables both click features when the mouse event handler is missing", () => {
-		const without = ALL.filter((name) => name !== "handleSelectionMouseEvent");
-		const features = enabledFeatures(probeCapabilities(prototypeWith(without)));
-		expect(features.has("clickToExpandTools")).toBe(false);
-		expect(features.has("editorClickToCaret")).toBe(false);
-	});
-
-	it("disables buffer copy without the selection it would have to recognise", () => {
-		// It has to read the bounds to find out whether the selection is the
-		// editor's at all, and it raises its own "Copied!" itself because it
-		// answers the copy instead of calling through. `flash` is shared with
-		// the clean copy, which is why only the bounds check gates it here.
-		for (const capability of ["getSelectionBounds"] as const) {
-			const without = ALL.filter((name) => name !== capability);
-			const features = enabledFeatures(probeCapabilities(prototypeWith(without)));
-			expect(features.has("editorBufferCopy")).toBe(false);
-			expect(features.has("transcriptCleanCopy")).toBe(false);
+	it("disables the copy features without the selection they would have to recognise", () => {
+		// They have to read the bounds to find out which selection they are
+		// answering; the clean copy additionally slices through
+		// `getSelectionColumns`.
+		for (const capability of ["getSelectionBounds", "getSelectionColumns"] as const) {
+			const features = featuresWith(ALL.filter((name) => name !== capability));
+			if (capability === "getSelectionBounds") {
+				expect(features.has("editorBufferCopy")).toBe(false);
+				expect(features.has("transcriptCleanCopy")).toBe(false);
+			} else {
+				expect(features.has("editorBufferCopy")).toBe(true);
+				expect(features.has("transcriptCleanCopy")).toBe(false);
+			}
 		}
 	});
 
-	it("disables click-to-caret without the key path its range delete needs", () => {
-		// Backspace and delete over a live selection arrive through
-		// `handleViewportInput`, and the branch reads `getSelectionBounds` to find
-		// out whether the selection is the editor's. Losing either would leave a
-		// caret that installs while its delete silently did not.
-		for (const capability of ["handleViewportInput", "getSelectionBounds"] as const) {
-			const without = ALL.filter((name) => name !== capability);
-			const features = enabledFeatures(probeCapabilities(prototypeWith(without)));
-			expect(features.has("editorClickToCaret")).toBe(false);
-		}
-		// `flash` is the copy features', not the caret's.
-		const withoutFlash = ALL.filter((name) => name !== "flash");
-		expect(
-			enabledFeatures(probeCapabilities(prototypeWith(withoutFlash))).has("editorClickToCaret"),
-		).toBe(true);
+	it("disables the copy features without the notice channel they answer through", () => {
+		// `flash` is how a copy Starline answers itself says "Copied!" — Pi's
+		// own copy flashes unconditionally, so a clean copy without one would be
+		// the only silent copy on screen.
+		const features = featuresWith(ALL.filter((name) => name !== "flash"));
+		expect(features.has("editorBufferCopy")).toBe(false);
+		expect(features.has("transcriptCleanCopy")).toBe(false);
+		// The caret is not the copy features', so it survives.
+		expect(features.has("editorClickToCaret")).toBe(true);
 	});
 });
 
 describe("disabledFeatureWarning", () => {
 	it("is silent when nothing is disabled", () => {
-		expect(
-			disabledFeatureWarning(enabledFeatures(probeCapabilities(prototypeWith(ALL)))),
-		).toBeNull();
+		expect(disabledFeatureWarning(featuresWith(ALL, true))).toBeNull();
 	});
 
 	it("names every disabled feature in one message", () => {
-		const features = enabledFeatures(probeCapabilities(prototypeWith([])));
+		const features = featuresWith([], false);
 		const warning = disabledFeatureWarning(features);
 		expect(warning).toContain("selectionHint");
 		expect(warning).toContain("editorWheelScroll");

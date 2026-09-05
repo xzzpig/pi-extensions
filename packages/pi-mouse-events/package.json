@@ -1,0 +1,64 @@
+{
+  "name": "@xzzpig/pi-mouse-events",
+  "version": "0.1.1",
+  "description": "Mouse event dispatch for Pi's fullscreen TUI: Component.onMouse, a global mouse event channel, and handler slots for other extensions.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xzzpig/pi-extensions.git",
+    "directory": "packages/pi-mouse-events"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-tui",
+    "mouse",
+    "tui"
+  ],
+  "files": [
+    "extensions",
+    "api.ts",
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "package.json"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/public.d.ts",
+      "default": "./api.ts"
+    },
+    "./api": {
+      "types": "./dist/public.d.ts",
+      "default": "./api.ts"
+    }
+  },
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "build:types": "rollup -c rollup.dts.config.mjs",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.84.2 <0.85",
+    "@earendil-works/pi-tui": ">=0.84.2 <0.85"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.84.4",
+    "@earendil-works/pi-tui": "^0.84.4",
+    "@types/node": "catalog:",
+    "rollup": "^4.62.2",
+    "rollup-plugin-dts": "^6.4.1",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

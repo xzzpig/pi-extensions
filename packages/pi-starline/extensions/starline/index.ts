@@ -4,7 +4,8 @@ import type {
 	KeybindingsManager,
 	Theme,
 } from "@earendil-works/pi-coding-agent";
-import { type EditorTheme, type TUI, TuiAltScreen } from "@earendil-works/pi-tui";
+import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
+import type { MouseEventsApi } from "@xzzpig/pi-mouse-events/api";
 import {
 	type ColorSourcesConfig,
 	type ContextStyle,
@@ -42,7 +43,8 @@ import { installFooter } from "./footer";
 import { buildSessionDurationLabel, invalidateUsageTotalsCache } from "./format";
 import { emptyGitStatus, readGitHost, readGitStatus } from "./git";
 import { LiveContextController } from "./live-context";
-import { installMouse } from "./mouse";
+import { installMouseFeaturesOn } from "./mouse";
+import { getMouseEventsApi } from "./mouse/api-consumer";
 import { setActiveEditor } from "./mouse/editor-mouse";
 import { readPackageVersionResult } from "./package-version";
 import { installPasteCollapse } from "./paste-collapse";
@@ -99,6 +101,7 @@ export default function (pi: ExtensionAPI) {
 	let lastProjectCwd: string | undefined;
 	let disposePasteCollapse: (() => void) | undefined;
 	let disposeMouse: (() => void) | undefined;
+	let lastTuiCtx: ExtensionContext | undefined;
 
 	const refresh = () => {
 		if (sessionLifecycle.isCurrent()) requestFooterRender?.();
@@ -236,43 +239,40 @@ export default function (pi: ExtensionAPI) {
 	};
 
 	/**
-	 * Install the mouse features on `TuiAltScreen.prototype`.
+	 * Register Starline's mouse features with the `pi-mouse-events` extension.
 	 *
-	 * The prototype, not an instance: from 0.84 Pi hands extensions a Proxy over
-	 * the live renderer and swaps the renderer itself when the TUI mode changes,
-	 * so an instance captured at session start is not necessarily the one drawing
-	 * later. The shared prototype survives both.
-	 *
-	 * Reinstalling is already safe — `installPrototypePatch` keeps one wrapper per
-	 * adapter and only swaps the behaviour behind it — but disposing first keeps
-	 * exactly one live registration, so the disposer held here always removes
-	 * everything this extension put on the prototype.
+	 * That extension owns `TuiAltScreen.prototype` now — Starline wraps none of
+	 * it — so this only hands it behaviour: handlers for the wheel, press, and
+	 * copy slots, and the keyboard half of click-to-caret on
+	 * `ctx.ui.onTerminalInput`. Without the extension installed there is no
+	 * fallback and nothing is registered; the mouse features are simply off,
+	 * with one console note per process so the silence is diagnosable.
 	 *
 	 * `mouse.enabled` is read here rather than captured, and every sub-option is
-	 * read inside the patches themselves, so `/starline` toggles apply without a
-	 * restart.
+	 * read inside the handlers themselves, so `/starline` toggles apply without
+	 * a restart.
 	 */
-	const installMousePatches = () => {
+	const installMouseFeatures = (ctx: ExtensionContext) => {
 		uninstallMouse();
+		lastTuiCtx = ctx;
 		if (!getCurrentConfig().mouse.enabled) return;
-		// `TuiAltScreen` only ships with pi-tui >= 0.84.0 (the peer range below
-		// already says so). This guard is for environments that bypass peer
-		// resolution: fail with a readable hint instead of a TypeError on
-		// `TuiAltScreen.prototype`.
-		if (!TuiAltScreen) {
-			console.warn(
-				"starline: mouse support needs @earendil-works/pi-tui >= 0.84.0 (" +
-					"TuiAltScreen is not exported by the installed pi-tui). Upgrade Pi, " +
-					"or wait for your distribution to bundle a newer one.",
-			);
+		const api = getMouseEventsApi();
+		if (!api) {
+			warnMouseApiMissing();
 			return;
 		}
-		// Repaints are not wired from here: each patch asks its own receiver —
-		// the live renderer it is running inside — to render. Handing it the
-		// extension's `refresh` instead tied the pending hint to the footer's
-		// existence, and the hint is in the editor.
-		disposeMouse = installMouse(TuiAltScreen.prototype, { getConfig: getCurrentConfig });
+		disposeMouse = installMouseFeaturesOn(api, ctx, { getConfig: getCurrentConfig });
 	};
+
+	let mouseApiWarned = false;
+	function warnMouseApiMissing() {
+		if (mouseApiWarned) return;
+		mouseApiWarned = true;
+		console.info(
+			"[starline] mouse features need the pi-mouse-events extension " +
+				"(`pi install npm:@xzzpig/pi-mouse-events`); they are off until it is installed.",
+		);
+	}
 
 	/**
 	 * `editorCursor: "terminal"` hides the software cursor so the real one shows
@@ -484,7 +484,7 @@ export default function (pi: ExtensionAPI) {
 		syncFooterState(ctx);
 		stopProjectRefresh();
 		applyConfiguredUi(ctx);
-		installMousePatches();
+		installMouseFeatures(ctx);
 		refresh();
 	};
 
@@ -509,6 +509,7 @@ export default function (pi: ExtensionAPI) {
 			stopProjectRefresh();
 			requestFooterRender = undefined;
 			getActiveExtensionStatuses = () => new Map();
+			lastTuiCtx = undefined;
 			if (isTuiContext(ctx)) {
 				ctx.ui.setFooter(undefined);
 				const currentFactory = ctx.ui.getEditorComponent();
@@ -595,10 +596,10 @@ export default function (pi: ExtensionAPI) {
 		setExtensionStatusColorMode(key: string, colorMode: ExtensionStatusColorMode) {
 			currentConfig = saveExtensionStatusColorMode(key, colorMode);
 		},
-		setMouseConfig(patch: Partial<MouseConfig>, _ctx: ExtensionContext) {
+		setMouseConfig(patch: Partial<MouseConfig>, ctx: ExtensionContext) {
 			currentConfig = saveMousePatch(patch);
 			if (patch.enabled === true) {
-				installMousePatches();
+				installMouseFeatures(lastTuiCtx ?? ctx);
 			} else if (patch.enabled === false) {
 				uninstallMouse();
 			}

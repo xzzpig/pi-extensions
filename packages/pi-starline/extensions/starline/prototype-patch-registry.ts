@@ -11,14 +11,17 @@ export const STARLINE_PROTOTYPE_PATCH_REGISTRY = Symbol.for("pi-starline.prototy
  */
 const LEGACY_PROTOTYPE_PATCH_REGISTRY = Symbol.for("pi-zentui.prototype-patch-registry");
 
+/**
+ * The adapters Starline still patches itself. The four mouse adapters
+ * (`mouse-viewport-input`, `mouse-wheel`, `mouse-selection-event`,
+ * `mouse-copy`) retired with the mouse patches: Starline's mouse features
+ * register with the `pi-mouse-events` extension instead of wrapping
+ * `TuiAltScreen.prototype` — see `mouse/index.ts`.
+ */
 type PrototypePatchAdapter =
 	| "user-message-render"
 	| "user-message-invalidate"
-	| "selector-border-render"
-	| "mouse-viewport-input"
-	| "mouse-wheel"
-	| "mouse-selection-event"
-	| "mouse-copy";
+	| "selector-border-render";
 
 type PrototypeMethodName = string;
 

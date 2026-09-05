@@ -15,7 +15,7 @@ describe("patching an arbitrary method name", () => {
 		const dispose = installPrototypePatch(
 			target,
 			"handleViewportInput",
-			"mouse-viewport-input",
+			"user-message-render",
 			({ predecessor, receiver, args }) => {
 				calls.push(`patched:${args[0]}`);
 				return Reflect.apply(predecessor, receiver, args);
@@ -29,7 +29,7 @@ describe("patching an arbitrary method name", () => {
 		expect(target.handleViewportInput).toBe(original);
 	});
 
-	it("restores the original when two mouse adapters are disposed out of order", () => {
+	it("restores the original when two adapters are disposed out of order", () => {
 		const target = {
 			routeWheel() {
 				return "wheel";
@@ -44,13 +44,13 @@ describe("patching an arbitrary method name", () => {
 		const disposeWheel = installPrototypePatch(
 			target,
 			"routeWheel",
-			"mouse-wheel",
+			"user-message-render",
 			({ predecessor, receiver, args }) => Reflect.apply(predecessor, receiver, args),
 		);
 		const disposeSelect = installPrototypePatch(
 			target,
 			"handleSelectionMouseEvent",
-			"mouse-selection-event",
+			"selector-border-render",
 			({ predecessor, receiver, args }) => Reflect.apply(predecessor, receiver, args),
 		);
 
