@@ -103,6 +103,7 @@ function makeRuntime(overrides: Partial<{
 	const sent: Array<{ content: string; details: Record<string, unknown> }> = [];
 	const runtime = new GoalRuntime({
 		sendFollowUp: (content, details) => { sent.push({ content, details }); },
+		sendStateSnapshot: () => {},
 		getGoal: () => overrides.getGoal?.() ?? null,
 		isActionable: (id) => overrides.isActionable ? overrides.isActionable(id) : false,
 	});
@@ -151,18 +152,6 @@ describe("GoalRuntime turn-stop guard", () => {
 });
 
 describe("GoalRuntime reminders", () => {
-	it("post-compaction reminder is one-shot", () => {
-		const { runtime } = makeRuntime();
-		assert.equal(runtime.isPostCompactReminderPending(), false);
-		runtime.armPostCompactReminder();
-		assert.equal(runtime.isPostCompactReminderPending(), true);
-		runtime.clearPostCompactReminder();
-		assert.equal(runtime.isPostCompactReminderPending(), false);
-		runtime.armPostCompactReminder();
-		assert.equal(runtime.consumePostCompactReminder(), true);
-		assert.equal(runtime.consumePostCompactReminder(), false);
-	});
-
 	it("post-budget reminder is one-shot", () => {
 		const { runtime } = makeRuntime();
 		assert.equal(runtime.consumePostBudgetReminder(), false);

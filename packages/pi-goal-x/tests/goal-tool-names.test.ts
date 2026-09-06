@@ -14,7 +14,6 @@ import {
 	POST_STOP_ALLOWED_TOOLS,
 	PROPOSE_DRAFT_TOOL_NAME,
 	QUESTIONNAIRE_TOOL_NAME,
-	QUESTION_TOOL_NAME,
 	SET_GOAL_TASKS_TOOL_NAME,
 	TASK_TOOL_NAMES,
 	UPDATE_GOAL_TASK_TOOL_NAME,
@@ -25,7 +24,7 @@ const CORE = ["create_goal", "get_goal", "update_goal"];
 
 // Drafting tools belong to the separate transient user-started draft profile,
 // never to the steady three/five execution surface.
-const DRAFTING = ["goal_question", "goal_questionnaire", "propose_goal_draft"];
+const DRAFTING = ["goal_questionnaire", "propose_goal_draft"];
 
 // Removed steady-state lifecycle tools — none may exist in the module.
 const REMOVED_STEADY = [
@@ -54,7 +53,6 @@ test("fixed profiles: core three, task two, all five registered", () => {
 });
 
 test("the module declares drafting names only in the transient profile", () => {
-	assert.equal(QUESTION_TOOL_NAME, "goal_question");
 	assert.equal(QUESTIONNAIRE_TOOL_NAME, "goal_questionnaire");
 	assert.equal(PROPOSE_DRAFT_TOOL_NAME, "propose_goal_draft");
 	// Drafting tools must never leak into the fixed execution profiles.
@@ -64,6 +62,13 @@ test("the module declares drafting names only in the transient profile", () => {
 		assert.equal(GOAL_WORK_TOOL_NAMES.includes(name as never), false, `${name} must not be a work tool`);
 		assert.equal(GOAL_PROGRESS_TOOL_NAMES.includes(name as never), false, `${name} must not be a progress tool`);
 	}
+});
+
+test("goal_question is removed — goal_questionnaire covers single-question drafts", async () => {
+	const fs = await import("node:fs/promises");
+	const source = await fs.readFile("extensions/goal-tool-names.ts", "utf8");
+	assert.ok(!source.includes("QUESTION_TOOL_NAME"), "QUESTION_TOOL_NAME constant must be gone");
+	assert.ok(!source.includes('"goal_question"'), "goal_question must not be a registered name");
 });
 
 test("no steady-state lifecycle tools or phase heuristics remain", async () => {

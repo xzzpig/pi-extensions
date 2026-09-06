@@ -23,7 +23,7 @@ handlers from their dedicated modules:
 | `goal-widget.ts` | Terminal input keybindings (Esc pause / abort-audit, Ctrl+Shift+T overlay) and the hidden debug helpers |
 | `goal-format.ts` | Pure formatting/message-introspection helpers and renderers |
 | `goal-service.ts` | `GoalService` — the sole mutation boundary: ordered reconcile → id/focus-revision validation → clone-mutate → write/archive → ledger → memory commit → returned effects |
-| `goal-runtime.ts` | `GoalRuntime` — continuation scheduling, stale checkpoint state, turn-stop guard, one-shot steering reminders |
+| `goal-runtime.ts` | `GoalRuntime` — continuation scheduling (per-turn state snapshot + checkpoint marker dispatch), stale checkpoint state, turn-stop guard, one-shot budget wrap-up reminder |
 | `goal-accounting.ts` | `GoalAccounting` — serialized idempotent token/time accounting, budget helpers |
 | `goal-record.ts` | Goal record types, creation, cloning, usage normalization, persisted-record migration |
 | `goal-pool.ts` | Open-goal pool helpers, focus resolution, list output, selector labels, unfocused summaries |
@@ -33,10 +33,10 @@ handlers from their dedicated modules:
 | `goal-auditor.ts` | Independent pi auditor agent prompt/config/decision parsing and completion audit execution |
 | `goal-ledger.ts` | Single-file goal ledger append/read/reconstruction (18 event types incl. `task_reopened`) |
 | `goal-draft.ts` | Drafting prompt/confirmation text helpers (goalDraftingPrompt, buildDraftConfirmationText, renderConfirmationTasks, GoalDraftingFocus) |
-| `goal-drafting.ts` | Guided drafting orchestration: durable `pi-goal-draft` session entries (survive compaction/tree navigation), resume/replace/cancel protection, transient drafting profile, `goal_question`/`goal_questionnaire`/`propose_goal_draft` tools, per-draft auditor selection |
+| `goal-drafting.ts` | Guided drafting orchestration: durable `pi-goal-draft` session entries (survive compaction/tree navigation), resume/replace/cancel protection, `core.goalDraftActive` flag consumed by execution-tool guards, `goal_question`/`goal_questionnaire`/`propose_goal_draft` tools, per-draft auditor selection |
 | `goal-questionnaire.ts` | Structured question/answer UI (`runGoalQuestionnaire`, `showProposalDialog`) used by the drafting tools and confirmations |
-| `goal-tool-names.ts` | The five published tool-name constants, fixed three/five profiles, work/progress classification, post-stop allowlist |
-| `prompts/goal-prompts.ts` | Bounded five-tool steering prompts (active-goal, continuation, stale-checkpoint, unfocused, budget-limited) |
+| `goal-tool-names.ts` | The seven published tool-name constants (five execution + two drafting), work/progress classification, post-stop allowlist, draft-guard text |
+| `prompts/goal-prompts.ts` | Bounded message builders: full goal-context message (objective/contract/policy/tree), per-turn state snapshot (turn/continuation modes, folded notes), stale-checkpoint and unfocused notices |
 | `storage/goal-files.ts` | Goal path safety, serialization/parsing, active-file scanning, active-file writes, archive writes, prompt-body merge from disk |
 | `widgets/goal-widget.ts` | Above-editor Goal Beacon component |
 | `widgets/goal-notifications.ts` | Widget-style notification text for goal lifecycle toasts |
@@ -165,8 +165,10 @@ prompt/criteria level:
 
 ## Creation and tweaking
 
-`/goal [seed]` and `/sisyphus [seed]` begin guided drafting. The temporary
-draft profile exposes only question/questionnaire/proposal tools. The agent
+`/goal [seed]` and `/sisyphus [seed]` begin guided drafting. The tool surface
+stays constant; while the draft is active, `core.goalDraftActive` makes the
+execution tools (create/update/set tasks) return a redirect to
+`propose_goal_draft`, leaving only drafting conversations. The agent
 clarifies intent, proposes the full objective and an optional task tree, and
 the user explicitly confirms or continues refining. `/goal-direct` and
 `/sisyphus-direct` bypass this only when the objective is already final.
@@ -175,6 +177,34 @@ the user explicitly confirms or continues refining. `/goal-direct` and
 focused goal. It preserves the task list when no replacement is proposed and
 records `goal_tweaked` (plus `task_list_set` if applicable) only after the
 user confirms.
+
+## Goal context messages (no goal content in the system prompt)
+
+The system prompt carries no goal content, and no lifecycle event ever
+modifies the request prefix. Goal context rides three write-once,
+append-only custom messages (`display: false`):
+
+- `pi-goal-context-event` — full context: objective (untrusted-blocked),
+  verification contract, the `[OUTCOMES]` lifecycle policy, sisyphus
+  discipline, and the task tree. Sent at creation, re-sent after every
+  compaction (the summary eats the earlier copy), and re-sent on session
+  load when the branch has no copy after its last compaction entry.
+- `pi-goal-state-event` — bounded per-turn snapshot (status + standing
+  paused/budget gates, budget line, objective excerpt, task focus + gate,
+  compact rules). Dispatched before every auto-continue checkpoint marker
+  and on every user turn via the `before_agent_start` message return.
+  One-shot notes fold in and are consumed: the [GOAL STALLED] note, the
+  one-time [TOKEN BUDGET REACHED] wrap-up, and an unresolved auditor
+  rejection. No volatile usage counters — content is byte-identical between
+  state changes.
+- `pi-goal-steering-event` — one-shot notices, currently the
+  edge-triggered unfocused-with-open-goals reminder.
+
+`before_agent_start` keeps only bookkeeping (checkpoint detection, stale
+abort, continuation reset, focus reconciliation); it never returns a
+`systemPrompt` override. `session_compact` re-sends the full context message
+directly, so mid-run auto-compaction queues it into the live run's next
+request.
 
 ## Command focus behavior
 
@@ -192,7 +222,7 @@ user confirms.
 
 ## Tool surface
 
-The extension registers five normal-execution tools and three drafting-only tools:
+The extension registers five normal-execution tools and two drafting-only tools:
 
 | Tool | Purpose |
 |---|---|
@@ -201,15 +231,20 @@ The extension registers five normal-execution tools and three drafting-only tool
 | `update_goal` | Run outcomes: `complete` (audited from actual evidence; optional `completion_summary` is an untrusted claim), `blocked` (after three consecutive identical blockers), or `paused` (immediate agent pause with required `reason`). |
 | `set_goal_tasks` | Create or structurally replace the task tree (flat parent-linked input, confirmation dialog, id-stable merge). |
 | `update_goal_task` | Update one task without stopping the turn: complete (evidence for contracted tasks), skipped (reason), pending (reopens skipped). |
-| `goal_question` | Drafting-only structured clarification question. |
-| `goal_questionnaire` | Drafting-only multi-question clarification UI. |
+| `goal_questionnaire` | Drafting-only clarification UI for one or many structured questions (a single question with no options is a free-text prompt). |
 | `propose_goal_draft` | Drafting-only objective/task proposal with Confirm or Continue Chatting. |
 
-The normal execution profile is fixed: exactly five goal tools when tasks are
-enabled, exactly three when disabled. A user-started guided draft is the sole
-exception: it replaces those goal tools with question/questionnaire/proposal
-tools until confirmation or cancellation. Ordinary pi work tools are never
-touched. Invalid lifecycle calls return concise state-aware tool results.
+The surface is constant: all seven tools are activated once at session start
+(on top of the host's ordinary work-tool selection) and are never added,
+removed, or re-ordered by any lifecycle event, command, draft transition, or
+settings change — every `setActiveTools` call rebuilds the base system prompt
+and swaps the tools block, invalidating the provider prompt-cache prefix.
+Drafting conversations are isolated by guards in the execution tools instead
+of tool removal: while `core.goalDraftActive` is set, `create_goal`,
+`update_goal`, `set_goal_tasks`, and `update_goal_task` return a concise
+redirect to `propose_goal_draft` (`get_goal` stays callable for reads), and
+`disableTasks` is enforced inside the task tools' own guards. Invalid
+lifecycle calls return concise state-aware tool results.
 
 The `tool_call` interceptor blocks work tools after a stop tool has fired in
 the same turn, and blocks work tools when the checkpoint that triggered the

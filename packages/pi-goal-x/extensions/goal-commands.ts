@@ -181,7 +181,6 @@ export function registerGoalCommands(core: GoalCore): void {
 		core.setFocusedGoalId(null, ctx, "unfocused", { recordLedger: false });
 		core.runningGoalId = null;
 		core.runtime.setCheckpoint(null);
-		core.runtime.clearPostCompactReminder();
 		if (core.auditAbortController) core.auditAbortController.abort();
 		if (detachedGoalId && wasBusy) {
 			try {
@@ -496,16 +495,13 @@ export function registerGoalCommands(core: GoalCore): void {
 		}
 
 		/**
-		 * After any mutation: reinstall the fixed three/five tool profile when
-		 * the effective disableTasks value changed since the last install, and
-		 * refresh the UI. This is the central settings side-effect hook — no
-		 * ad hoc per-row refresh code.
+		 * After any mutation: sync the core's tasksEnabled view (the tool
+		 * surface itself is constant — the task tools enforce disableTasks in
+		 * their execute() guards) and refresh the UI. This is the central
+		 * settings side-effect hook — no ad hoc per-row refresh code.
 		 */
 		const applyEffectiveSettings = (): void => {
-			const tasksEnabledNow = !loadGoalSettings(ctx.cwd).disableTasks;
-			if (tasksEnabledNow !== core.tasksEnabled) {
-				core.installGoalToolProfile(tasksEnabledNow);
-			}
+			core.tasksEnabled = !loadGoalSettings(ctx.cwd).disableTasks;
 			// PR #29: settings changes must be visible immediately — the banner
 			// hide/restore happens through this coalesced UI refresh.
 			core.updateUI(ctx);

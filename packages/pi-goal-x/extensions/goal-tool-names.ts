@@ -3,7 +3,6 @@ export const GET_GOAL_TOOL_NAME = "get_goal";
 export const UPDATE_GOAL_TOOL_NAME = "update_goal";
 export const SET_GOAL_TASKS_TOOL_NAME = "set_goal_tasks";
 export const UPDATE_GOAL_TASK_TOOL_NAME = "update_goal_task";
-export const QUESTION_TOOL_NAME = "goal_question";
 export const QUESTIONNAIRE_TOOL_NAME = "goal_questionnaire";
 export const PROPOSE_DRAFT_TOOL_NAME = "propose_goal_draft";
 
@@ -21,12 +20,11 @@ export const CORE_GOAL_TOOLS = CORE_GOAL_TOOL_NAMES;
 
 /** User-started drafting uses a separate transient model profile. */
 export const DRAFTING_GOAL_TOOLS = [
-	QUESTION_TOOL_NAME,
 	QUESTIONNAIRE_TOOL_NAME,
 	PROPOSE_DRAFT_TOOL_NAME,
 ] as const;
 
-/** Every goal tool this extension registers (used by installGoalToolProfile). */
+/** Every goal tool this extension registers (used by installGoalTools). */
 export const ALL_REGISTERED_GOAL_TOOLS = [...FIVE_GOAL_TOOLS, ...DRAFTING_GOAL_TOOLS] as const;
 
 /**
@@ -68,3 +66,13 @@ export const GOAL_PROGRESS_TOOL_NAMES = [
 
 /** Tools the model may still call on a stopped turn (state reads only). */
 export const POST_STOP_ALLOWED_TOOLS = ["get_goal"] as const;
+
+/**
+ * Guard text returned by the mutating execution tools while a guided goal
+ * draft is active. With the tool surface constant (no drafting profile
+ * switch), this guard — not the tool list — is what keeps draft conversations
+ * from mutating goal state outside propose_goal_draft.
+ */
+export function executionToolDraftGuardMessage(): string {
+	return "A guided goal draft is active. Do not mutate goal state directly: confirm or cancel the draft with propose_goal_draft first. get_goal remains available for read-only state checks.";
+}

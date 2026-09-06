@@ -111,26 +111,24 @@ The curated fourteen-command palette:
 
 ## 6. Goal creation flow
 
-`/goal [seed]` and `/sisyphus [seed]` enter a temporary draft profile.
-The agent can ask questions, select a questionnaire when it adds value, and
-propose both a full objective and a task tree in a single confirmation dialog.
-Confirm creates and focuses the goal atomically; Continue Chatting retains the
-draft. `/goal-direct` and `/sisyphus-direct` are the explicit immediate paths.
+`/goal [seed]` and `/sisyphus [seed]` enter guided drafting. The agent can ask
+questions via `goal_questionnaire`, and propose both a full objective and a
+task tree in a single confirmation dialog. Confirm creates and focuses the goal
+atomically; Continue Chatting retains the draft. `/goal-direct` and
+`/sisyphus-direct` are the explicit immediate paths.
 
 ## 7. Tool surface and runtime gates
 
-The normal execution surface is a FIXED three/five profile; guided drafting
-temporarily replaces it with three draft tools:
+The model surface is CONSTANT — all seven goal tools are installed once at
+session start and never change (see 0.4.0): execution isolation during drafts
+and with `disableTasks` is enforced by guards inside tool execute(), not by
+swapping the advertised tool list. The registered set:
 
-- exactly five goal tools are installed when tasks are enabled — `create_goal`,
-  `get_goal`, `update_goal`, `set_goal_tasks`, `update_goal_task`;
-- exactly the three core tools when tasks are disabled;
-- during a user-started `/goal`, `/sisyphus`, or `/goal-tweak` draft, only
-  `goal_question`, `goal_questionnaire`, and `propose_goal_draft` are
-  advertised until confirm or cancellation;
-- the profile is installed once at session start and after a settings change
-  that toggles `disableTasks`; focus, status, budget, completion, audit, and
-  compaction transitions never add/remove/restore goal tools;
+- exactly five execution tools — `create_goal`, `get_goal`, `update_goal`,
+  `set_goal_tasks`, `update_goal_task` (the task tools enforce `disableTasks`
+  and a `goalDraftActive` draft via their own guards);
+- two drafting-only tools — `goal_questionnaire` and `propose_goal_draft` —
+  which reject calls when no user-started draft is active;
 - ordinary pi work tools (`read`, `write`, `edit`, `bash`, ...) are never
   touched by the extension;
 - invalid lifecycle calls are rejected by the executor with a concise

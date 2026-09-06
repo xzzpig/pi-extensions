@@ -1,14 +1,14 @@
 /**
- * Integration tests for the fixed three/five goal-tool profile (Stage 2 of
- * specs/2026-08-04-goal-simplification-hardening).
+ * Integration tests for the CONSTANT goal-tool surface (0.4.0).
  *
  * Invariance contract:
- *  - the advertised goal-tool set is exactly three (tasks disabled) or exactly
- *    five (tasks enabled) and never changes with focus, status, budget,
- *    completion, audit, or compaction transitions;
- *  - profile installation never enables or disables ordinary Pi work tools;
- *  - invalid lifecycle calls are rejected by the executor with a concise
- *    state-aware result, not by removing tools;
+ *  - every registered goal tool (five execution + two drafting) is advertised
+ *    once at session start and never changes with focus, status, budget,
+ *    completion, audit, compaction, drafting, or disableTasks transitions;
+ *  - no lifecycle event ever calls setActiveTools again (each call rebuilds the
+ *    base system prompt and invalidates the provider prompt-cache prefix);
+ *  - drafting isolation and disableTasks are enforced by guards inside tool
+ *    execute(), not by removing tools;
  *  - removed tools are never registered and never advertised.
  *
  * Uses the same mock pattern as goal-core-tools.test.ts.
@@ -80,26 +80,33 @@ function testFixture() {
 	return { cwd, goal: written, mockCtx, cleanup };
 }
 
-// Fixed profiles (Stage 2). Lifecycle state never changes these.
-const FIVE_GOAL_TOOLS = ["create_goal", "get_goal", "update_goal", "set_goal_tasks", "update_goal_task"];
-const CORE_GOAL_TOOLS = ["create_goal", "get_goal", "update_goal"];
+// All seven registered goal tools: five execution + two drafting. The
+// surface is installed once at session start and never changes.
+const ALL_GOAL_TOOLS = [
+	"create_goal", "get_goal", "update_goal", "set_goal_tasks", "update_goal_task",
+	"goal_questionnaire", "propose_goal_draft",
+];
+const EXECUTION_TOOLS = ["create_goal", "get_goal", "update_goal", "set_goal_tasks", "update_goal_task"];
+const DRAFTING_TOOLS = ["goal_questionnaire", "propose_goal_draft"];
 
-// Arbitrary host tool seeds: profile installation must never touch these.
+// Arbitrary host tool seeds: profile installation must never remove these.
 const HOST_SEED_A = ["read", "bash", "edit", "write"];
 const HOST_SEED_B = ["read", "grep", "find", "ls", "fetch", "custom-ext-tool"];
 
 const REMOVED_TOOLS = [
+	"goal_question",
 	"complete_goal", "pause_goal", "abort_goal", "propose_goal_tweak",
 	"step_complete", "propose_task_list", "complete_task", "skip_task",
 ];
 
 // ── Test Suite ───────────────────────────────────────────────────────────────
 
-describe("Tool profile invariance", () => {
+describe("Constant tool surface", () => {
 	const registeredTools: ToolDefinition[] = [];
 	const lifecycleHandlers = new Map<string, Function>();
 	let apiCalls: Array<{ type: string; data?: unknown }> = [];
 	let activeToolNames: string[] = [...HOST_SEED_A];
+	let setActiveToolsCalls = 0;
 
 	const mockPi = {
 		registerTool: (def: ToolDefinition) => { registeredTools.push(def); },
@@ -111,7 +118,10 @@ describe("Tool profile invariance", () => {
 		registerMessageRenderer: () => {},
 		sendMessage: () => {},
 		getActiveTools: () => [...activeToolNames],
-		setActiveTools: (names: string[]) => { activeToolNames = [...names]; },
+		setActiveTools: (names: string[]) => {
+			setActiveToolsCalls += 1;
+			activeToolNames = [...names];
+		},
 		hasUI: false,
 	};
 
@@ -119,8 +129,8 @@ describe("Tool profile invariance", () => {
 		piGoalExtension(mockPi as any);
 	});
 
-	function expectGoalProfile(expected: readonly string[]): void {
-		for (const tool of expected) {
+	function expectConstantSurface(): void {
+		for (const tool of ALL_GOAL_TOOLS) {
 			assert.ok(activeToolNames.includes(tool),
 				`goal tool "${tool}" must be advertised. Active: ${JSON.stringify(activeToolNames)}`);
 		}
@@ -128,14 +138,13 @@ describe("Tool profile invariance", () => {
 			assert.equal(activeToolNames.includes(removed), false,
 				`removed tool "${removed}" must never be advertised. Active: ${JSON.stringify(activeToolNames)}`);
 		}
-		// Exactly the expected goal tools: no extras, no missing.
-		const goalTools = activeToolNames.filter((t) => [...expected, ...REMOVED_TOOLS].includes(t));
-		assert.equal(goalTools.length, expected.length,
-			`goal profile must be exactly [${expected.join(", ")}], got: ${JSON.stringify(goalTools)}`);
+		const goalTools = activeToolNames.filter((t) => ALL_GOAL_TOOLS.includes(t));
+		assert.equal(goalTools.length, ALL_GOAL_TOOLS.length,
+			`all seven goal tools must stay active, got: ${JSON.stringify(goalTools)}`);
 	}
 
 	function expectHostUntouched(seed: readonly string[]): void {
-		const host = activeToolNames.filter((t) => !FIVE_GOAL_TOOLS.includes(t));
+		const host = activeToolNames.filter((t) => !ALL_GOAL_TOOLS.includes(t));
 		assert.deepEqual(host.sort(), [...seed].sort(),
 			`host tool selection must be untouched. Active: ${JSON.stringify(activeToolNames)}`);
 	}
@@ -146,36 +155,38 @@ describe("Tool profile invariance", () => {
 		await ss({ reason: "start" }, createMockCtx(cwd, entries));
 	}
 
-	// ── Fixed profile across every lifecycle state ─────────────────────────
-	it("active goal: profile is exactly five and host tools are untouched", async () => {
+	// ── Surface installed once, before any event ───────────────────────────
+	it("active goal: all seven tools active after session start, host tools untouched", async () => {
 		const f = testFixture();
 		try {
 			activeToolNames = [...HOST_SEED_A];
 			apiCalls = [];
+			setActiveToolsCalls = 0;
 			await runSession(f.cwd, f.mockCtx.sessionManager.getBranch() as unknown[]);
-			expectGoalProfile(FIVE_GOAL_TOOLS);
+			expectConstantSurface();
 			expectHostUntouched(HOST_SEED_A);
+			assert.equal(setActiveToolsCalls, 1, "exactly one surface install at session start");
 		} finally {
 			f.cleanup();
 		}
 	});
 
-	it("no-focus session keeps the full five-tool profile (no dynamic allowlist)", async () => {
+	it("no-focus session installs the same constant surface", async () => {
 		const cwd = mkdtempSync(path.join(tmpdir(), "goal-tool-vis-nogoal-"));
 		try {
 			mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
 			activeToolNames = [...HOST_SEED_A];
 			apiCalls = [];
+			setActiveToolsCalls = 0;
 			await runSession(cwd, []);
-			// No goal at all — the fixed profile still advertises all five tools.
-			expectGoalProfile(FIVE_GOAL_TOOLS);
+			expectConstantSurface();
 			expectHostUntouched(HOST_SEED_A);
 		} finally {
 			try { rmSync(cwd, { recursive: true, force: true }); } catch {}
 		}
 	});
 
-	it("every non-active status keeps the full five-tool profile", async () => {
+	it("every non-active status keeps the constant surface", async () => {
 		for (const status of ["paused", "blocked", "budget_limited", "complete"] as const) {
 			const f = testFixture();
 			try {
@@ -196,8 +207,9 @@ describe("Tool profile invariance", () => {
 				];
 				activeToolNames = [...HOST_SEED_A];
 				apiCalls = [];
+				setActiveToolsCalls = 0;
 				await runSession(f.cwd, entries);
-				expectGoalProfile(FIVE_GOAL_TOOLS);
+				expectConstantSurface();
 				expectHostUntouched(HOST_SEED_A);
 			} finally {
 				f.cleanup();
@@ -205,43 +217,48 @@ describe("Tool profile invariance", () => {
 		}
 	});
 
-	it("tasks disabled: profile is exactly three across states", async () => {
-		for (const status of ["active", "paused", "complete"] as const) {
-			const cwd = mkdtempSync(path.join(tmpdir(), "goal-tool-vis-notasks-"));
-			try {
-				mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
-				writeFileSync(path.join(cwd, ".pi", "pi-goal-x-settings.json"), JSON.stringify({ disableTasks: true }));
-				const goal = createGoal({
-					objective: `No tasks ${status}`,
-					autoContinue: true,
-					sisyphus: false,
-				}, Date.UTC(2026, 5, 26, 11, 0, 0));
-				if (status !== "active") goal.status = status;
-				const written = writeActiveGoalFile({ cwd } as any, goal);
-				const entries = [
-					{ type: "custom", customType: "pi-goal-focus", data: goalFocusDetails(goal.id, "created") },
-					{ type: "custom", customType: "pi-goal-state", data: { version: 3, goal: { ...goal, activePath: written.activePath } } },
-				];
-				activeToolNames = [...HOST_SEED_B];
-				apiCalls = [];
-				await runSession(cwd, entries);
-				expectGoalProfile(CORE_GOAL_TOOLS);
-				expectHostUntouched(HOST_SEED_B);
-			} finally {
-				try { rmSync(cwd, { recursive: true, force: true }); } catch {}
-			}
+	it("disableTasks: tools stay advertised; the task tools enforce the setting in execute()", async () => {
+		const cwd = mkdtempSync(path.join(tmpdir(), "goal-tool-vis-notasks-"));
+		try {
+			mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+			writeFileSync(path.join(cwd, ".pi", "pi-goal-x-settings.json"), JSON.stringify({ disableTasks: true }));
+			const goal = createGoal({
+				objective: "Tasks disabled but tools stay",
+				autoContinue: true,
+				sisyphus: false,
+			}, Date.UTC(2026, 5, 26, 11, 0, 0));
+			const written = writeActiveGoalFile({ cwd } as any, goal);
+			const entries = [
+				{ type: "custom", customType: "pi-goal-focus", data: goalFocusDetails(goal.id, "created") },
+				{ type: "custom", customType: "pi-goal-state", data: { version: 3, goal: { ...goal, activePath: written.activePath } } },
+			];
+			activeToolNames = [...HOST_SEED_B];
+			apiCalls = [];
+			setActiveToolsCalls = 0;
+			await runSession(cwd, entries);
+			expectConstantSurface();
+			expectHostUntouched(HOST_SEED_B);
+
+			const setTasks = registeredTools.find((t) => t.name === "set_goal_tasks");
+			const result = await (setTasks!.execute as Function)("st-1", { tasks: [] }, new AbortController().signal, undefined, createMockCtx(cwd, entries));
+			const text = result.content?.[0]?.text ?? "";
+			assert.match(text, /disabled by settings/, "set_goal_tasks must enforce disableTasks itself");
+			expectConstantSurface();
+		} finally {
+			try { rmSync(cwd, { recursive: true, force: true }); } catch {}
 		}
 	});
 
-	// ── Transitions never change the profile ───────────────────────────────
-	it("turn_start / before_agent_start / turn_end cycles leave profile and host unchanged", async () => {
+	// ── Transitions never churn the surface ────────────────────────────────
+	it("turn_start / before_agent_start / turn_end cycles never call setActiveTools again", async () => {
 		const f = testFixture();
 		try {
 			activeToolNames = [...HOST_SEED_B];
 			apiCalls = [];
+			setActiveToolsCalls = 0;
 			await runSession(f.cwd, f.mockCtx.sessionManager.getBranch() as unknown[]);
-			expectGoalProfile(FIVE_GOAL_TOOLS);
-			expectHostUntouched(HOST_SEED_B);
+			expectConstantSurface();
+			const installsAfterSessionStart = setActiveToolsCalls;
 
 			const ts = lifecycleHandlers.get("turn_start")!;
 			const bas = lifecycleHandlers.get("before_agent_start")!;
@@ -252,29 +269,71 @@ describe("Tool profile invariance", () => {
 				await ts({}, ctx);
 				await bas({ systemPrompt: "", prompt: `turn-${i}`, systemPromptOptions: {} }, ctx);
 				await te({ message: { role: "assistant", stopReason: "stop", usage: { input: 0, output: 0 } } }, ctx);
-				expectGoalProfile(FIVE_GOAL_TOOLS);
+				expectConstantSurface();
 				expectHostUntouched(HOST_SEED_B);
 			}
+			assert.equal(setActiveToolsCalls, installsAfterSessionStart,
+				"turn cycles must never touch the tool surface");
 		} finally {
 			f.cleanup();
 		}
 	});
 
-	it("status transitions via tool calls keep the profile fixed", async () => {
+	it("status transitions via tool calls keep the surface fixed", async () => {
 		const f = testFixture();
 		try {
 			activeToolNames = [...HOST_SEED_A];
 			apiCalls = [];
+			setActiveToolsCalls = 0;
 			await runSession(f.cwd, f.mockCtx.sessionManager.getBranch() as unknown[]);
+			const installsAfterSessionStart = setActiveToolsCalls;
 			const bas = lifecycleHandlers.get("before_agent_start")!;
 			await bas({ systemPrompt: "", prompt: "start", systemPromptOptions: {} }, f.mockCtx);
 
-			// update_goal(blocked) transitions active -> blocked; profile stays five.
+			// update_goal(blocked) transitions active -> blocked; surface stays.
 			const update = registeredTools.find((t) => t.name === "update_goal");
 			assert.ok(update);
 			const result = await (update.execute as Function)("update-b", { status: "blocked", reason: "test blocker" }, new AbortController().signal, undefined, f.mockCtx);
 			assert.ok(result.terminate === true, "blocked terminates the turn");
-			expectGoalProfile(FIVE_GOAL_TOOLS);
+			expectConstantSurface();
+			expectHostUntouched(HOST_SEED_A);
+			assert.equal(setActiveToolsCalls, installsAfterSessionStart,
+				"status transitions must never touch the tool surface");
+		} finally {
+			f.cleanup();
+		}
+	});
+
+	// ── Draft isolation via guard, not tool removal ─────────────────────────
+	it("with a draft active, execution tools return the guard message while drafting tools stay callable-shaped", async () => {
+		const f = testFixture();
+		try {
+			activeToolNames = [...HOST_SEED_A];
+			await runSession(f.cwd, f.mockCtx.sessionManager.getBranch() as unknown[]);
+			const core = (mockPi as any)._goalCore;
+			assert.ok(core, "goal core must be reachable for the guard test");
+
+			const bas = lifecycleHandlers.get("before_agent_start")!;
+			await bas({ systemPrompt: "", prompt: "start", systemPromptOptions: {} }, f.mockCtx);
+
+			core.goalDraftActive = true;
+			try {
+				for (const name of ["create_goal", "update_goal", "set_goal_tasks", "update_goal_task"]) {
+					const tool = registeredTools.find((t) => t.name === name);
+					assert.ok(tool, `${name} must be registered`);
+					const result = await (tool!.execute as Function)("guard-1", name === "update_goal" ? { status: "blocked", reason: "x" } : {}, new AbortController().signal, undefined, f.mockCtx);
+					const text = result.content?.[0]?.text ?? "";
+					assert.match(text, /guided goal draft is active/, `${name} must be guard-rejected during a draft`);
+				}
+				// get_goal stays available for read-only checks during a draft.
+				const get = registeredTools.find((t) => t.name === "get_goal");
+				const getResult = await (get!.execute as Function)("guard-get", {}, new AbortController().signal, undefined, f.mockCtx);
+				assert.ok(getResult, "get_goal must stay callable during a draft");
+			} finally {
+				core.goalDraftActive = false;
+			}
+			// Surface unchanged by any of the above.
+			expectConstantSurface();
 			expectHostUntouched(HOST_SEED_A);
 		} finally {
 			f.cleanup();
@@ -309,8 +368,8 @@ describe("Tool profile invariance", () => {
 			const text = result.content?.[0]?.text ?? "";
 			assert.ok(text.includes("applies only to an active goal"),
 				`blocked from paused must be a state-aware failure, got: ${text.slice(0, 100)}`);
-			// The full five-tool profile remains advertised after the rejection.
-			expectGoalProfile(FIVE_GOAL_TOOLS);
+			// The constant surface remains advertised after the rejection.
+			expectConstantSurface();
 			expectHostUntouched(HOST_SEED_A);
 		} finally {
 			f.cleanup();
@@ -319,12 +378,12 @@ describe("Tool profile invariance", () => {
 
 	// ── Registration invariants ────────────────────────────────────────────
 	it("execution and transient drafting tools are registered with execute handlers", () => {
-		for (const name of FIVE_GOAL_TOOLS) {
+		for (const name of EXECUTION_TOOLS) {
 			const tool = registeredTools.find((t) => t.name === name);
 			assert.ok(tool, `Tool "${name}" must be registered`);
 			assert.ok(typeof tool!.execute === "function", `Tool "${name}" must have an execute handler`);
 		}
-		for (const name of ["goal_question", "goal_questionnaire", "propose_goal_draft"]) {
+		for (const name of DRAFTING_TOOLS) {
 			const tool = registeredTools.find((t) => t.name === name);
 			assert.ok(tool, `Drafting tool "${name}" must be registered`);
 			assert.ok(typeof tool!.execute === "function", `Drafting tool "${name}" must have an execute handler`);
@@ -346,8 +405,8 @@ describe("Tool profile invariance", () => {
 		assert.ok(tool, "update_goal tool must be registered");
 	});
 
-	// ── update_goal_task execution keeps the profile fixed ────────────────
-	it("update_goal_task executes and the five-tool profile stays fixed", async () => {
+	// ── update_goal_task execution keeps the surface fixed ────────────────
+	it("update_goal_task executes and the surface stays fixed", async () => {
 		const f = testFixture();
 		try {
 			const now = new Date().toISOString();
@@ -375,7 +434,9 @@ describe("Tool profile invariance", () => {
 			];
 			activeToolNames = [...HOST_SEED_A];
 			apiCalls = [];
+			setActiveToolsCalls = 0;
 			await runSession(f.cwd, entries);
+			const installsAfterSessionStart = setActiveToolsCalls;
 			const bas = lifecycleHandlers.get("before_agent_start")!;
 			await bas({ systemPrompt: "", prompt: "start", systemPromptOptions: {} }, f.mockCtx);
 
@@ -393,9 +454,11 @@ describe("Tool profile invariance", () => {
 			assert.ok(text1.includes("t1 complete") || text1.includes("1/2"),
 				`update_goal_task should report t1 complete. Got: ${text1}`);
 
-			// After executing update_goal_task, the profile and host set are unchanged.
-			expectGoalProfile(FIVE_GOAL_TOOLS);
+			// After executing update_goal_task, the surface and host set are unchanged.
+			expectConstantSurface();
 			expectHostUntouched(HOST_SEED_A);
+			assert.equal(setActiveToolsCalls, installsAfterSessionStart,
+				"tool execution must never touch the tool surface");
 		} finally {
 			f.cleanup();
 		}
@@ -414,7 +477,7 @@ describe("Tool profile invariance", () => {
 			await bas({ systemPrompt: "", prompt: "seed", systemPromptOptions: {} }, f.mockCtx);
 			const get = registeredTools.find((t) => t.name === "get_goal");
 			await (get!.execute as Function)("get-1", {}, new AbortController().signal, undefined, f.mockCtx);
-			expectGoalProfile(FIVE_GOAL_TOOLS);
+			expectConstantSurface();
 			expectHostUntouched(HOST_SEED_B);
 		} finally {
 			f.cleanup();

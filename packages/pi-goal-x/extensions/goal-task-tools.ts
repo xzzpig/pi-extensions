@@ -19,6 +19,7 @@ import { showTaskConfirmation, type TaskConfirmationResult } from "./goal-task-c
 import {
 	SET_GOAL_TASKS_TOOL_NAME,
 	UPDATE_GOAL_TASK_TOOL_NAME,
+	executionToolDraftGuardMessage,
 } from "./goal-tool-names.ts";
 import { nowIso, currentTaskIdIsPending, type GoalTask, type GoalTaskList } from "./goal-record.ts";
 
@@ -233,6 +234,11 @@ pi.registerTool(defineTool({
 	}, { additionalProperties: false }),
 	executionMode: "sequential",
 	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		// Constant tool surface: during a guided draft this guard, not the tool
+		// list, keeps goal state from being mutated outside propose_goal_draft.
+		if (core.goalDraftActive) {
+			return { content: [{ type: "text", text: executionToolDraftGuardMessage() }], details: goalDetails(core.state.goal) };
+		}
 		core.reconcileFocusedGoalFromDisk(ctx);
 		if (!core.state.goal) {
 			return {
@@ -372,6 +378,11 @@ pi.registerTool(defineTool({
 	}, { additionalProperties: false }),
 	executionMode: "sequential",
 	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		// Constant tool surface: during a guided draft this guard, not the tool
+		// list, keeps goal state from being mutated outside propose_goal_draft.
+		if (core.goalDraftActive) {
+			return { content: [{ type: "text", text: executionToolDraftGuardMessage() }], details: goalDetails(core.state.goal) };
+		}
 		core.reconcileFocusedGoalFromDisk(ctx);
 		if (loadGoalSettings(ctx.cwd).disableTasks) {
 			return {

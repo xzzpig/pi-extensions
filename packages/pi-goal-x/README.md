@@ -378,11 +378,39 @@ Completed and cleared goals are stored in:
 
 Each session can focus on one goal while the project keeps other goals open.
 
+## Goal context, tool surface, and prompt-cache stability
+
+The extension is designed so that the provider prompt-cache prefix never
+breaks. The system prompt carries no goal content, and the goal-tool surface
+(all seven tools) is installed once at session start and never changes — no
+lifecycle event, draft transition, or settings change calls `setActiveTools`
+again. Drafting isolation and `disableTasks` are enforced by guards inside
+the tool handlers.
+
+Goal context rides append-only, write-once messages instead:
+
+- `pi-goal-context-event` — the full context (objective, verification
+  contract, lifecycle policy, sisyphus discipline, task tree), persisted when
+  the goal is created, re-sent after every compaction, and re-sent on session
+  load when the branch has no copy after its last compaction.
+- `pi-goal-state-event` — a bounded per-turn snapshot (status, budget line,
+  objective excerpt, task focus, compact rules) dispatched before every
+  auto-continue checkpoint marker and on every user turn; one-shot steering
+  notes (stalled, budget wrap-up, unresolved auditor rejection) fold into it.
+- `pi-goal-steering-event` — one-shot notices such as the unfocused reminder.
+
+Because every message is written once and never rewritten, and no event
+modifies history or the request prefix, provider caches (Claude breakpoints,
+GPT/DeepSeek-style automatic prefix matching) keep hitting across turns.
+
 ## Session checkpoint recovery
 
-Auto-continue checkpoints are tiny structured markers (≤160 chars) that
-trigger the next turn; the full goal state is injected once per turn by the
-extension and is never persisted into checkpoints. Sessions created by older
+Auto-continue dispatches persist two hidden entries: a bounded state snapshot
+(`pi-goal-state-event`) carrying the objective excerpt, status, budget, task
+focus, and rules the model needs on the next turn, followed by a tiny
+structured checkpoint marker (≤160 chars) that triggers the turn. Snapshot
+content is written once and never rewritten, so the request context stays
+append-only and provider prompt caches keep hitting. Sessions created by older
 versions may still contain large "legacy" full-prompt checkpoints.
 
 Check `/goal-recovery` or `/goal-status health` for a read-only report:

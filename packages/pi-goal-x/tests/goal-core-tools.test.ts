@@ -128,7 +128,7 @@ async function start(h: ReturnType<typeof createHarness>): Promise<void> {
 
 // ── Tool surface ─────────────────────────────────────────────────────────────
 
-test("exactly three goal tools are advertised when tasks are disabled", async () => {
+test("disableTasks keeps the tool surface constant; task tools enforce the setting in execute()", async () => {
 	const cwd = mkdtempSync(path.join(tmpdir(), "goal-core-notasks-"));
 	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
 	writeFileSync(path.join(cwd, ".pi", "pi-goal-x-settings.json"), JSON.stringify({ disableTasks: true }));
@@ -140,16 +140,21 @@ test("exactly three goal tools are advertised when tasks are disabled", async ()
 			sessionEntries: [{ type: "custom", customType: "pi-goal-focus", data: goalFocusDetails(goal.id, "created") }],
 		});
 		await start(h);
-		for (const present of ["create_goal", "get_goal", "update_goal"]) {
-			assert.ok(h.activeTools.includes(present), `${present} must be advertised`);
+		for (const present of ["create_goal", "get_goal", "update_goal", "set_goal_tasks", "update_goal_task"]) {
+			assert.ok(h.activeTools.includes(present), `${present} must be advertised (constant surface)`);
 		}
 		for (const absent of [
 			"propose_task_list", "complete_task", "skip_task",
 			"complete_goal", "pause_goal", "abort_goal",
-			"propose_goal_draft", "propose_goal_tweak", "step_complete",
+			"propose_goal_tweak", "step_complete",
 		]) {
 			assert.equal(h.activeTools.includes(absent), false, `${absent} must NOT be advertised`);
 		}
+		// disableTasks is enforced by the task tools themselves, not by removing
+		// them from the active set.
+		const setTasks = h.tools.get("set_goal_tasks")!;
+		const result = await (setTasks.execute as any)("set-1", { tasks: [] }, undefined, undefined, h.ctx);
+		assert.match(result.content?.[0]?.text ?? "", /disabled by settings/, "set_goal_tasks must enforce disableTasks");
 	} finally {
 		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
 	}

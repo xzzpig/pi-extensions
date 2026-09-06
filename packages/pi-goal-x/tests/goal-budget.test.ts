@@ -117,15 +117,17 @@ test("budget reached marks the goal budget_limited exactly once with ledger + on
 		assert.equal(budgetEvents[0]!.budget, 100);
 		assert.ok(Number(budgetEvents[0]!.tokensUsed) >= 100);
 
-		// One-time wrap-up steering is injected on the next agent start.
+		// One-time wrap-up steering is folded into the per-turn snapshot.
 		const result = await handlers.get("before_agent_start")?.({
 			systemPrompt: "base",
 			prompt: "",
 			systemPromptOptions: {},
 		}, ctx);
-		const promptText = result?.systemPrompt ?? "";
-		assert.ok(promptText.includes("BUDGET LIMITED"), "budget-limited block injected");
-		assert.ok(promptText.includes("TOKEN BUDGET REACHED"), "one-time wrap-up steering injected");
+		const snapshotContent = result?.message?.content ?? "";
+		assert.ok(!("systemPrompt" in (result ?? {})), "no system prompt override is returned");
+		assert.equal(result?.message?.customType, "pi-goal-state-event");
+		assert.ok(snapshotContent.includes("BUDGET LIMITED"), "budget-limited gate carried by the snapshot");
+		assert.ok(snapshotContent.includes("TOKEN BUDGET REACHED"), "one-time wrap-up steering folded into the snapshot");
 
 		// A second agent start must NOT re-inject the one-time steering.
 		const second = await handlers.get("before_agent_start")?.({
@@ -133,7 +135,7 @@ test("budget reached marks the goal budget_limited exactly once with ledger + on
 			prompt: "",
 			systemPromptOptions: {},
 		}, ctx);
-		assert.ok(!(second?.systemPrompt ?? "").includes("TOKEN BUDGET REACHED"), "steering fires exactly once");
+		assert.ok(!(second?.message?.content ?? "").includes("TOKEN BUDGET REACHED"), "steering fires exactly once");
 
 		// A further turn_end cannot re-fire the transition (status not active).
 		await handlers.get("turn_end")?.({ message: turnEndMessage(50) }, ctx);

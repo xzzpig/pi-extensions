@@ -98,8 +98,8 @@ importers:
   packages/pi-goal-x:
     dependencies:
       '@xzzpig/pi-subagents':
-        specifier: 0.6.0
-        version: 0.6.0(@earendil-works/pi-agent-core@0.84.4(ws@8.21.2)(zod@4.4.3))(@earendil-works/pi-ai@0.84.2(ws@8.21.2)(zod@4.4.3))(@earendil-works/pi-coding-agent@0.84.2(ws@8.21.2)(zod@4.4.3))(@earendil-works/pi-tui@0.84.2)
+        specifier: 0.9.0
+        version: link:../pi-subagents
     devDependencies:
       '@earendil-works/pi-ai':
         specifier: ^0.84.1
@@ -1999,24 +1999,6 @@ packages:
 
   '@xterm/headless@6.0.0':
     resolution: {integrity: sha512-5Yj1QINYCyzrZtf8OFIHi47iQtI+0qYFPHmouEfG8dHNxbZ9Tb9YGSuLcsEwj9Z+OL75GJqPyJbyoFer80a2Hw==}
-
-  '@xzzpig/pi-subagents@0.6.0':
-    resolution: {integrity: sha512-JPEJrKZw5jGSTmorbkqMgB96L4qIaWpCmwv45nm8USR4KKt0k26ZsRwvsaQ3O1qOObN5+D4y35OeRlgL+vVFaw==}
-    hasBin: true
-    peerDependencies:
-      '@earendil-works/pi-agent-core': '*'
-      '@earendil-works/pi-ai': '>=0.80.0'
-      '@earendil-works/pi-coding-agent': '*'
-      '@earendil-works/pi-tui': '*'
-    peerDependenciesMeta:
-      '@earendil-works/pi-agent-core':
-        optional: true
-      '@earendil-works/pi-ai':
-        optional: true
-      '@earendil-works/pi-coding-agent':
-        optional: true
-      '@earendil-works/pi-tui':
-        optional: true
 
   acorn-jsx@5.3.2:
     resolution: {integrity: sha512-rq9s+JNhf0IChjtDXxllJ7g41oZk5SlXtp0LHwyA5cejwn7vKmKp4pPri6YEePv2PU65sAsegbXtIinmDFDXgQ==}
@@ -5342,18 +5324,6 @@ snapshots:
       tinyrainbow: 3.1.1
 
   '@xterm/headless@6.0.0': {}
-
-  '@xzzpig/pi-subagents@0.6.0(@earendil-works/pi-agent-core@0.84.4(ws@8.21.2)(zod@4.4.3))(@earendil-works/pi-ai@0.84.2(ws@8.21.2)(zod@4.4.3))(@earendil-works/pi-coding-agent@0.84.2(ws@8.21.2)(zod@4.4.3))(@earendil-works/pi-tui@0.84.2)':
-    dependencies:
-      acorn: 8.18.0
-      jiti: 2.7.0
-      typebox: 1.1.38
-      yaml: 2.8.3
-    optionalDependencies:
-      '@earendil-works/pi-agent-core': 0.84.4(ws@8.21.2)(zod@4.4.3)
-      '@earendil-works/pi-ai': 0.84.2(ws@8.21.2)(zod@4.4.3)
-      '@earendil-works/pi-coding-agent': 0.84.2(ws@8.21.2)(zod@4.4.3)
-      '@earendil-works/pi-tui': 0.84.2
 
   acorn-jsx@5.3.2(acorn@8.18.0):
     dependencies:

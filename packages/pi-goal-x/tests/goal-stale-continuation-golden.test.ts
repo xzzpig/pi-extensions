@@ -153,9 +153,9 @@ test("golden: stale checkpoint for a non-focused goal aborts the turn and inject
 		}, h.ctx);
 
 		assert.equal(h.aborts, 1, "stale checkpoint must abort the turn");
-		const systemPrompt = (result as { systemPrompt?: string } | undefined)?.systemPrompt ?? "";
-		assert.match(systemPrompt, /\[GOAL STALE goalId=ghost-goal\]/);
-		assert.match(systemPrompt, /Do not perform task work for this stale checkpoint/);
+		const steering = (result as { message?: { content?: string } } | undefined)?.message?.content ?? "";
+		assert.match(steering, /\[GOAL STALE goalId=ghost-goal\]/);
+		assert.match(steering, /Do not perform task work for this stale checkpoint/);
 	} finally {
 		// temp dir cleanup is best-effort.
 	}
@@ -177,8 +177,8 @@ test("golden: matching checkpoint proceeds without stale handling", async () => 
 		}, h.ctx);
 
 		assert.equal(h.aborts, 0, "matching checkpoint must not abort");
-		const systemPrompt = (result as { systemPrompt?: string } | undefined)?.systemPrompt ?? "";
-		assert.doesNotMatch(systemPrompt, /GOAL STALE/);
+		const steering = (result as { message?: { content?: string } } | undefined)?.message?.content ?? "";
+		assert.doesNotMatch(steering, /GOAL STALE/);
 	} finally {
 		// temp dir cleanup is best-effort.
 	}

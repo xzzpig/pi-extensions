@@ -14,6 +14,7 @@ import { sisyphusStepProgress } from "./goal-policy.ts";
 import { deriveTasksFromObjective } from "./goal-task-derive.ts";
 import { nowIso, type GoalRecord, type GoalTask, validateTokenBudgetInput } from "./goal-record.ts";
 import type { GoalCore } from "./goal-state.ts";
+import { executionToolDraftGuardMessage } from "./goal-tool-names.ts";
 import { promptProfile } from "./prompts/goal-prompts.ts";
 import {
 	armOracleAdvice,
@@ -179,6 +180,11 @@ pi.registerTool(defineTool({
 	}, { additionalProperties: false }),
 	executionMode: "sequential",
 	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		// Constant tool surface: during a guided draft this guard, not the tool
+		// list, keeps goal state from being mutated outside propose_goal_draft.
+		if (core.goalDraftActive) {
+			return { content: [{ type: "text", text: executionToolDraftGuardMessage() }], details: goalDetails(core.state.goal) };
+		}
 		core.reconcileFocusedGoalFromDisk(ctx);
 		const objective = params.objective.trim();
 		if (!objective) throw new Error("create_goal requires a non-empty objective.");
@@ -513,8 +519,8 @@ pi.registerTool(defineTool({
 	promptGuidelines: [
 		// PR E §54: capability + hard boundary here; the WHEN rules (evidence,
 		// third-identical-blocker, objective immutability) live once in the
-		// canonical active-goal policy block — do not restate them in all four
-		// schema surfaces.
+		// persisted goal-context message (pi-goal-context-event) — do not
+		// restate them in all four schema surfaces.
 		"An optional completion_summary is passed to the auditor as an UNTRUSTED claim — it is never evidence and can never substitute for real artifacts.",
 	],
 	parameters: Type.Object({
@@ -526,6 +532,11 @@ pi.registerTool(defineTool({
 	}, { additionalProperties: false }),
 	executionMode: "sequential",
 	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+		// Constant tool surface: during a guided draft this guard, not the tool
+		// list, keeps goal state from being mutated outside propose_goal_draft.
+		if (core.goalDraftActive) {
+			return { content: [{ type: "text", text: executionToolDraftGuardMessage() }], details: goalDetails(core.state.goal) };
+		}
 		// P1-3: persist any buffered in-turn mutations now so the auditor and
 		// status transitions observe the current task/state, not the stale disk.
 		core.flushGoalTransaction(ctx);

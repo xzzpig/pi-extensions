@@ -3,6 +3,127 @@
 All notable changes to pi-goal-x are documented here.
 
 ## [Unreleased]
+
+## [0.4.0] — 2026-09-06 (fork release)
+
+### Fixed
+
+- **The goal extension no longer invalidates the provider prompt cache.**
+  Two mechanisms rebuilt the front of the request prefix, where every change
+  invalidates the entire cached history (tools → system → messages; in long
+  contexts each rebuild re-processes the whole conversation at full input
+  price):
+  1. *Per-turn system-prompt injection.* `before_agent_start` prepended a goal
+     block to the system prompt on every user turn — and the block contained
+     volatile fields (`Usage:` line, task counters) that changed on
+     essentially every turn of an active goal, so every user turn paid a
+     full-cache miss. One-shot steering notes ([GOAL STALLED], [TOKEN BUDGET
+     REACHED], the post-compaction resync, the stale-checkpoint note,
+     [PI GOAL UNFOCUSED]) each added an appear+disappear pair of misses on
+     top, and never reached auto-continue turns at all (`before_agent_start`
+     does not fire on `sendCustomMessage`-triggered turns).
+  2. *Drafting↔execution tool-profile switches.* Entering or leaving a guided
+     draft called `setActiveTools`, which both swaps the tools block (the very
+     first element of the cache prefix) and unconditionally rebuilds the base
+     system prompt (`setActiveToolsByName` → `_rebuildSystemPrompt`). Every
+     draft cycle cost two full-cache resets — zero prefix hit, not even the
+     tools block.
+
+### Changed
+
+- **Goal context now lives entirely in append-only messages; the system
+  prompt carries no goal content.**
+  - A full goal-context message (`pi-goal-context-event`, display:false) is
+    persisted when the goal is created, re-sent after every compaction (the
+    summary eats the earlier copy), and re-sent on session load when the
+    branch has no copy after its last compaction entry (restart edge,
+    cross-branch focus, legacy sessions). It carries the complete objective,
+    verification contract, the lifecycle policy ([OUTCOMES]) that previously
+    rode the system prompt, sisyphus discipline, and the task tree.
+  - The per-turn state snapshot (`pi-goal-state-event`) is dispatched on
+    user-driven turns too: `before_agent_start` returns it as the event
+    `message` (a supported result field — it lands in the first LLM request
+    of the turn and is persisted). Continuation turns keep the 0.3.2
+    snapshot-before-marker mechanism; the snapshot's closing line adapts to
+    the dispatch mode. Paused and budget_limited goals get the same snapshot
+    with their standing gate text; one-shot notes (stall, budget wrap-up,
+    unresolved auditor rejection) fold into the snapshot and are consumed.
+  - The unfocused-with-open-goals notice became a one-shot edge-triggered
+    steering message (`pi-goal-steering-event`) on focus transitions instead
+    of a per-turn system block. The stale-checkpoint note rides the
+    `before_agent_start` message return instead of a system prompt override.
+  - Post-compaction handling now re-sends the full context message directly
+    from `session_compact` (mid-run auto-compaction queues it into the live
+    run's next request); `buildPostCompactionGoalDelta`,
+    `shouldInjectPostCompactReminder`, and the
+    `armPostCompactReminder`/`consumePostCompactReminder` runtime pair are
+    removed. `armPostBudgetReminder` remains, consumed by the snapshot
+    builders.
+- **The tool surface is constant for the whole session.** `installGoalTools()`
+  activates all seven registered goal tools once at session start on top of
+  the host's selection, and no lifecycle event, command, draft transition, or
+  settings change ever calls `setActiveTools` again. Drafting isolation is
+  guard-based: `create_goal`/`update_goal`/`set_goal_tasks`/`update_goal_task`
+  return a redirect message while `core.goalDraftActive` is set (get_goal
+  stays callable for reads); `disableTasks` stays enforced inside the task
+  tools' own guards. The three/five/drafting profile constants remain for
+  tests but no longer drive `setActiveTools`.
+- Removed the redundant `goal_question` tool: a single-question
+  `goal_questionnaire` call renders the identical dialog and submits on the
+  first answer, and an empty options list is a free-text prompt. The drafting
+  guidance now directs every structured question to `goal_questionnaire`
+  (registered surface: seven tools — five execution + two drafting).
+- The `@xzzpig/pi-subagents` dependency is pinned to the tested 0.9.0 fork
+  release (the version the typecheck, unit suite, and real-pi end-to-end run
+  all exercise); 0.6.0 was a stale pre-sync pin.
+- Removed dead code: `goalPrompt`/`buildGoalPrompt`,
+  `objectiveEditedPrompt`, the deprecated `continuationPrompt` wrapper, and
+  the prompt-fragment cache. Known limitations unchanged and recorded: a
+  steer-delivered user message (`prompt()` while streaming) does not fire
+  `before_agent_start` and gets no snapshot for that turn; stall detection
+  still runs at user turns only, so a silently dead auto-continue chain is
+  noticed only when the user returns. Snapshot/context-message growth stays
+  bounded by pi auto-compaction (~0.5–1 KB per turn, no volatile counters).
+
+## [0.3.2] — 2026-09-06 (fork release)
+
+### Fixed
+
+- **Goal state now reaches the model on auto-continue turns.** Verified
+  against the real pi runtime (0.83–0.84.4): `before_agent_start` never fires
+  on `sendCustomMessage`-triggered turns, so the v2 design's assumption that
+  "before_agent_start injects the authoritative state once per turn" silently
+  failed for exactly the turns auto-continue produces — a continuation-turn
+  request carried only the 70-byte checkpoint marker (or, after a user turn,
+  a stale leftover system block). Every continuation dispatch now persists a
+  bounded state snapshot message (`pi-goal-state-event`, v3 details) right
+  before the checkpoint marker, carrying the objective excerpt, status, budget
+  line, current task with its contract, the task gate, and a compact rules
+  digest; the one-time post-compaction delta folds into the snapshot that
+  follows a compaction (it previously stayed armed until a user turn arrived).
+
+### Changed
+
+- **Provider-context checkpoint handling is now a pure per-message filter.**
+  The `context` handler replaces `compactGoalCheckpointContext`
+  (drop-all-but-last + rewrite) with `filterGoalCheckpointContext`, which
+  drops every `pi-goal-event` checkpoint marker from the request. Dropping
+  historical markers shifted the message sequence mid-history and invalidated
+  the provider prompt cache after the first continuation of every session;
+  the surviving-marker rewrite bought nothing (the persisted v2 content
+  already equals `checkpointTriggerPrompt` output). Because each marker's
+  filter decision is immutable and every marker is paired with the snapshot
+  that precedes it, the request context is append-only and prefix-stable
+  across requests, so prompt caches keep hitting. Audit events
+  (`pi-goal-audit-event`) and state snapshots pass through untouched.
+  Snapshot content grows the session by roughly 0.5–1 KB per continuation
+  turn; pi's auto-compaction remains the bound, and snapshot content carries
+  no volatile usage counters so it stays byte-identical between state
+  changes.
+- `GoalRuntime` gained the required `sendStateSnapshot(ctx, goal,
+  checkpointSeq)` hook; `GoalCheckpointDetailsV2` markers themselves are
+  unchanged (content still ≤ `CHECKPOINT_TRIGGER_MAX_CHARS`).
+
 ## [0.3.1] — 2026-09-05 (fork release)
 
 ### Changed

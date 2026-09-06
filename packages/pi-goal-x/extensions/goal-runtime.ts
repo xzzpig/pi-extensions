@@ -1,6 +1,6 @@
 /**
  * GoalRuntime — continuation scheduling, stale-checkpoint state, the turn-stop
- * guard, and one-time steering reminders (post-compaction, budget reached).
+ * guard, and one-time steering reminders (budget reached).
  *
  * The extension (`extensions/goal.ts`) instantiates one GoalRuntime with hooks
  * bound to its closure state and the pi API; every runtime decision is
@@ -21,6 +21,13 @@ const POST_STOP_ALLOWED = new Set<string>(POST_STOP_ALLOWED_TOOLS);
 export interface GoalRuntimeHooks {
 	/** Dispatch a hidden follow-up checkpoint message (pi.sendMessage + triggerTurn). */
 	sendFollowUp(content: string, details: Record<string, unknown>): void;
+	/**
+	 * Persist the per-turn state snapshot (pi.sendMessage, no triggerTurn)
+	 * immediately before the checkpoint marker. before_agent_start does not
+	 * fire on sendCustomMessage-triggered turns, so this snapshot is the only
+	 * goal context the model receives on an auto-continue turn.
+	 */
+	sendStateSnapshot(ctx: ExtensionContext, goal: GoalRecord, checkpointSeq: number): void;
 	/** Current focused goal (state.goal). */
 	getGoal(): GoalRecord | null;
 	/** Whether a checkpointed goal id is still actionable (active + autoContinue). */
@@ -47,7 +54,6 @@ export class GoalRuntime {
 	private checkpointSeq = 0;
 
 	// ── one-time steering reminders ──────────────────────────────────────
-	private postCompactReminderPending = false;
 	private postBudgetReminderPending = false;
 
 	private readonly hooks: GoalRuntimeHooks;
@@ -140,10 +146,11 @@ export class GoalRuntime {
 	}
 
 	/**
-	 * Issue #30: the delivered follow-up must trigger the turn, but it no longer
-	 * carries goal state. The persisted content is a tiny v2 marker and the
-	 * details are a bounded structured record; before_agent_start injects the
-	 * authoritative full prompt once per turn.
+	 * Issue #30: the delivered follow-up must trigger the turn, and it no longer
+	 * carries goal state itself — the state rides the paired snapshot message
+	 * sent first via hooks.sendStateSnapshot (before_agent_start does not fire
+	 * on sendCustomMessage-triggered turns). The persisted marker stays a tiny
+	 * bounded record; before_agent_start keeps enriching user-driven turns.
 	 */
 	private sendQueuedContinuation(ctx: ExtensionContext, scheduledGoalId: string): void {
 		this.continuationTimer = null;
@@ -174,6 +181,7 @@ export class GoalRuntime {
 		}
 		this.checkpointSeq += 1;
 		this.continuationQueuedFor = goal.id;
+		this.hooks.sendStateSnapshot(ctx, goal, this.checkpointSeq);
 		const details: GoalCheckpointDetailsV2 = {
 			version: 2,
 			kind: "checkpoint",
@@ -224,26 +232,6 @@ export class GoalRuntime {
 	}
 
 	// ── one-time steering reminders ──────────────────────────────────────
-
-	armPostCompactReminder(): void {
-		this.postCompactReminderPending = true;
-	}
-
-	/** Whether a post-compaction reminder is pending (read-only). */
-	isPostCompactReminderPending(): boolean {
-		return this.postCompactReminderPending;
-	}
-
-	clearPostCompactReminder(): void {
-		this.postCompactReminderPending = false;
-	}
-
-	/** True once if a post-compaction reminder is pending; clears it. */
-	consumePostCompactReminder(): boolean {
-		if (!this.postCompactReminderPending) return false;
-		this.postCompactReminderPending = false;
-		return true;
-	}
 
 	armPostBudgetReminder(): void {
 		this.postBudgetReminderPending = true;

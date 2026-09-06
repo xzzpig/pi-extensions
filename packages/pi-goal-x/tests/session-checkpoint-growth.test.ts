@@ -43,6 +43,7 @@ async function fireContinuation(goal: GoalRecord): Promise<SentMessage> {
 		sendFollowUp: (content, details) => {
 			sent.push({ content, details });
 		},
+		sendStateSnapshot: () => {},
 		getGoal: () => goal,
 		isActionable: () => true,
 	});
@@ -87,6 +88,7 @@ describe("issue #30: bounded continuation checkpoints", () => {
 			sendFollowUp: (_content, details) => {
 				seqs.push(details.checkpointSeq);
 			},
+			sendStateSnapshot: () => {},
 			getGoal: () => goal,
 			isActionable: () => true,
 		});
@@ -97,5 +99,34 @@ describe("issue #30: bounded continuation checkpoints", () => {
 		runtime.queueContinuation(ctx, goal, true);
 		await new Promise((resolve) => setTimeout(resolve, 30));
 		assert.deepEqual(seqs, [1, 2]);
+	});
+
+	it("dispatch pairs a state snapshot before the checkpoint marker", async () => {
+		const goal = activeGoal();
+		const sent: Array<{ channel: "state" | "marker"; content: string; details: Record<string, unknown> }> = [];
+		const runtime = new GoalRuntime({
+			sendFollowUp: (content, details) => {
+				sent.push({ channel: "marker", content, details });
+			},
+			sendStateSnapshot: (_ctx, snapshotGoal, checkpointSeq) => {
+				assert.equal(snapshotGoal.id, goal.id);
+				sent.push({
+					channel: "state",
+					content: `snapshot for ${snapshotGoal.id}`,
+					details: { checkpointSeq },
+				});
+			},
+			getGoal: () => goal,
+			isActionable: () => true,
+		});
+		const ctx = idleCtx();
+		runtime.queueContinuation(ctx, goal, true);
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		assert.deepEqual(
+			sent.map((entry) => entry.channel),
+			["state", "marker"],
+			"the state snapshot must be persisted before the marker that triggers the turn",
+		);
+		assert.equal(sent[0]!.details.checkpointSeq, sent[1]!.details.checkpointSeq);
 	});
 });

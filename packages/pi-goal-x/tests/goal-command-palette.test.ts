@@ -183,7 +183,7 @@ test("/goal <objective> starts guided drafting without creating a goal", async (
 		const files = activeGoalFiles(cwd);
 		assert.equal(files.length, 0, "drafting does not create before confirmation");
 		assert.ok(h.messages.some((message) => message.includes("GOAL CONFIRMATION")), "drafting prompt sent to agent");
-		assert.deepEqual(h.getActiveTools().filter((name) => name.startsWith("goal_") || name === "propose_goal_draft"), ["goal_question", "goal_questionnaire", "propose_goal_draft"]);
+		assert.equal(h.core.goalDraftActive, true, "draft flag active during drafting");
 	} finally {
 		rmSync(cwd, { recursive: true, force: true });
 	}
@@ -222,7 +222,7 @@ test("confirmed draft creates the proposed goal and agent-selected task plan tog
 		const goal = parseGoalFile(path.join(cwd, ".pi", "goals", files[0]!));
 		assert.deepEqual(goal?.taskList?.tasks.map((task) => task.id), ["implement", "verify"]);
 		assert.equal(goal?.taskList?.blockCompletion, true);
-		assert.ok(h.getActiveTools().includes("update_goal"), "execution profile restored after confirmation");
+		assert.equal(h.core.goalDraftActive, false, "draft cleared after confirmation");
 	} finally {
 		rmSync(cwd, { recursive: true, force: true });
 	}

@@ -57,10 +57,10 @@ function createRecordingPi() {
 // ── The pinned baseline ──────────────────────────────────────────────────────
 
 /**
- * The five goal tools registered today (registration order, which is also the
- * order pi exposes them in the model tool list). All five are registered from
- * the split tool modules (goal-core-tools.ts + goal-task-tools.ts) via the
- * goal-tools.ts composition installer.
+ * The goal tools registered today (registration order, which is also the
+ * order pi exposes them in the model tool list): the five execution tools
+ * from the split tool modules (goal-core-tools.ts + goal-task-tools.ts) plus
+ * the two drafting tools via the goal-tools.ts composition installer.
  */
 const EXPECTED_REGISTERED_TOOLS = [
 	"get_goal",
@@ -68,7 +68,6 @@ const EXPECTED_REGISTERED_TOOLS = [
 	"update_goal",
 	"set_goal_tasks",
 	"update_goal_task",
-	"goal_question",
 	"goal_questionnaire",
 	"propose_goal_draft",
 ] as const;
@@ -131,7 +130,7 @@ test("baseline: execution profiles remain three/five tools and drafting is separ
 		"create_goal", "get_goal", "update_goal",
 	]);
 	assert.deepEqual(DRAFTING_GOAL_TOOLS, [
-		"goal_question", "goal_questionnaire", "propose_goal_draft",
+		"goal_questionnaire", "propose_goal_draft",
 	]);
 });
 

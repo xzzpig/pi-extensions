@@ -379,8 +379,8 @@ test("saveGoalSettingsFileConfig: auditor agent round-trips and deprecated resou
 
 
 import {
-	goalPrompt,
-	continuationPrompt,
+	goalContextMessagePrompt,
+	goalStateSnapshotPrompt,
 	taskListBlock,
 	verificationContractBlock,
 } from "../extensions/prompts/goal-prompts.ts";
@@ -433,36 +433,36 @@ test("verificationContractBlock: not suppressed when settings is undefined (back
 	assert.ok(block.includes("Must verify X"), "should contain contract when no settings");
 });
 
-test("goalPrompt: contract block suppressed when disableContracts is true", () => {
+test("goalContextMessagePrompt: contract block suppressed when disableContracts is true", () => {
 	const g = goalWithTaskList({ verificationContract: "Must verify X" });
-	const prompt = goalPrompt(g, { disableContracts: true });
-	assert.ok(!prompt.includes("VERIFICATION CONTRACT"), "contract section suppressed from goalPrompt");
+	const prompt = goalContextMessagePrompt(g, { disableContracts: true });
+	assert.ok(!prompt.includes("VERIFICATION CONTRACT"), "contract section suppressed from goalContextMessagePrompt");
 });
 
-test("goalPrompt: task list suppressed when disableTasks is true", () => {
+test("goalContextMessagePrompt: task list suppressed when disableTasks is true", () => {
 	const g = goalWithTaskList();
 	g.taskList = { tasks: [{ id: "t1", title: "Task 1", status: "pending" }], blockCompletion: false, proposedAt: new Date().toISOString() };
-	const prompt = goalPrompt(g, { disableTasks: true });
-	assert.ok(!prompt.includes("TASK LIST"), "task list suppressed from goalPrompt");
+	const prompt = goalContextMessagePrompt(g, { disableTasks: true });
+	assert.ok(!prompt.includes("TASK LIST"), "task list suppressed from goalContextMessagePrompt");
 });
 
-test("goalPrompt: contract block shown when settings undefined (backward compat)", () => {
+test("goalContextMessagePrompt: contract block shown when settings undefined (backward compat)", () => {
 	const g = goalWithTaskList({ verificationContract: "Must verify X" });
-	const prompt = goalPrompt(g);
+	const prompt = goalContextMessagePrompt(g);
 	assert.ok(prompt.includes("VERIFICATION CONTRACT"), "contract shown when no settings");
 });
 
-test("continuationPrompt: contract block suppressed when disableContracts is true", () => {
+test("stateSnapshotPrompt: contract block suppressed when disableContracts is true", () => {
 	const g = goalWithTaskList({ verificationContract: "Must verify X" });
-	const prompt = continuationPrompt(g, { disableContracts: true });
-	assert.ok(!prompt.includes("VERIFICATION CONTRACT"), "contract section suppressed from continuationPrompt");
+	const prompt = goalStateSnapshotPrompt(g, { disableContracts: true });
+	assert.ok(!prompt.includes("VERIFICATION CONTRACT"), "contract section suppressed from goalStateSnapshotPrompt");
 });
 
-test("continuationPrompt: task list suppressed when disableTasks is true", () => {
+test("stateSnapshotPrompt: task list suppressed when disableTasks is true", () => {
 	const g = goalWithTaskList();
 	g.taskList = { tasks: [{ id: "t1", title: "Task 1", status: "pending" }], blockCompletion: false, proposedAt: new Date().toISOString() };
-	const prompt = continuationPrompt(g, { disableTasks: true });
-	assert.ok(!prompt.includes("TASK LIST"), "task list suppressed from continuationPrompt");
+	const prompt = goalStateSnapshotPrompt(g, { disableTasks: true });
+	assert.ok(!prompt.includes("TASK LIST"), "task list suppressed from goalStateSnapshotPrompt");
 });
 
 // ── subtaskDepth ────────────────────────────────────────────────────────

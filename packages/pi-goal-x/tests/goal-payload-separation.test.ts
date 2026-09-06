@@ -3,7 +3,7 @@
  *   - audit-start events are display-only (no turn trigger);
  *   - no report_auditor_progress tool exists anywhere;
  *   - auditor prompt carries objective + task tree exactly once;
- *   - post-compaction injection is a delta, not a duplicate summary.
+ *   - the full goal-context message is the post-compaction re-supply.
  */
 
 import { describe, it } from "node:test";
@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import { buildGoalAuditorPrompt } from "../extensions/goal-auditor.ts";
-import { buildPostCompactionGoalDelta } from "../extensions/goal-compaction.ts";
+import { goalContextMessagePrompt } from "../extensions/prompts/goal-prompts.ts";
 import { createGoal } from "../extensions/goal-record.ts";
 import type { GoalRecord } from "../extensions/goal-record.ts";
 
@@ -65,22 +65,20 @@ describe("PR F §61: single-source auditor prompt", () => {
 	});
 });
 
-describe("PR F §62: post-compaction delta", () => {
-	it("carries focus/events/findings without repeating objective or policy", () => {
+describe("0.4.0: full goal-context message replaces the post-compaction delta", () => {
+	it("carries objective, contract, policy, and the task gate (nothing needs a separate delta)", () => {
 		const g = goal({ currentTaskId: "t2" });
 		g.taskList!.tasks[1]!.verificationContract = "Prove t2.";
-		const ledger = [
-			{ type: "goal_resumed", goalId: g.id, reason: "user", at: "2026-08-23T10:00:00.000Z" },
-			{ type: "audit_result", goalId: g.id, verdict: "disapproved", report: "Missing evidence for t2.", at: "2026-08-23T11:00:00.000Z" },
-		];
-		const delta = buildPostCompactionGoalDelta({ goal: g, ledgerEvents: ledger as never, otherOpenCount: 3 });
-		assert.match(delta, /\[POST-COMPACTION RESYNC goalId=/);
-		assert.match(delta, /Current task: t2 — Second task \(contract: Prove t2\.\)/);
-		assert.match(delta, /goal_resumed/);
-		assert.match(delta, /Latest unresolved auditor finding: Missing evidence for t2\./);
-		assert.match(delta, /Other open goals: 3/);
-		// The active system block already has these — the delta must not repeat them.
-		assert.ok(!delta.includes(g.objective), "delta must not repeat the objective");
-		assert.ok(!delta.includes("update_goal"), "delta must not restate lifecycle policy");
+		const message = goalContextMessagePrompt(g);
+		assert.match(message, /^\[PI GOAL CONTEXT goalId=/);
+		assert.match(message, /re-sent after every compaction/);
+		assert.match(message, /Deliver the audited thing\./);
+		assert.match(message, /VERIFICATION CONTRACT/);
+		assert.match(message, /\[OUTCOMES\]/);
+		assert.match(message, /TASK GATE/);
+		// The system prompt must carry none of this: the source of truth for the
+		// goal block builders is the message channel, asserted structurally.
+		const goalEventsSource = readFileSync(new URL("../extensions/goal-events.ts", import.meta.url), "utf8");
+		assert.doesNotMatch(goalEventsSource, /systemPrompt:\s*`/, "before_agent_start must not return system prompt overrides");
 	});
 });

@@ -12,7 +12,7 @@ import { formatQuestionnaireAnswers, runGoalQuestionnaire, shouldAutoConfirmProp
 import { currentTaskIdIsPending, nowIso, type GoalRecord, type GoalTaskList } from "./goal-record.ts";
 import type { GoalCore } from "./goal-state.ts";
 import { convertFlatTasks, countTasks, mergeTasksWithExisting, type FlatTaskInput } from "./goal-task-tools.ts";
-import { PROPOSE_DRAFT_TOOL_NAME, QUESTIONNAIRE_TOOL_NAME, QUESTION_TOOL_NAME } from "./goal-tool-names.ts";
+import { PROPOSE_DRAFT_TOOL_NAME, QUESTIONNAIRE_TOOL_NAME } from "./goal-tool-names.ts";
 
 export type GoalDraftMode = GoalDraftingFocus | "tweak";
 
@@ -61,9 +61,9 @@ export function clearGoalDrafting(core: GoalCore, ctx: ExtensionContext): void {
 	if (!activeDrafts.has(core)) return;
 	const existing = activeDrafts.get(core)!;
 	activeDrafts.delete(core);
+	core.goalDraftActive = false;
 	// Tombstone the durable entry: the last entry wins on rehydration.
 	draftSessionEntry(core, { version: 1, mode: existing.mode, seed: existing.originalTopic, targetGoalId: existing.targetGoalId, startedAt: existing.startedAt, auditorEnabled: existing.auditorEnabled, clearedAt: nowIso() });
-	core.installGoalToolProfile(core.tasksEnabled);
 	void ctx;
 }
 
@@ -100,9 +100,10 @@ export function rehydrateDraft(core: GoalCore, ctx: ExtensionContext): void {
 		session = null;
 	}
 	if (!session || session.version !== DRAFT_ENTRY_VERSION || session.clearedAt) {
-		// No durable draft: make sure a previous drafting profile is not left
-		// installed (e.g. after a stale entry or an interrupted session).
-		core.installGoalToolProfile(core.tasksEnabled);
+		// No durable draft: make sure a previous drafting state is not left
+		// active (e.g. after a stale entry or an interrupted session). The tool
+		// surface is constant now — no profile restore needed.
+		core.goalDraftActive = false;
 		return;
 	}
 	if (session.mode === "tweak") {
@@ -111,12 +112,12 @@ export function rehydrateDraft(core: GoalCore, ctx: ExtensionContext): void {
 			// The tweak target is gone or no longer focused — the draft is stale.
 			draftSessionEntry(core, { ...session, clearedAt: nowIso() });
 			ctx.ui.notify("The goal tweak draft is stale (its target goal changed); it was discarded.", "warning");
-			core.installGoalToolProfile(core.tasksEnabled);
+			core.goalDraftActive = false;
 			return;
 		}
 	}
 	activeDrafts.set(core, { mode: session.mode, originalTopic: session.seed, targetGoalId: session.targetGoalId, startedAt: session.startedAt, auditorEnabled: session.auditorEnabled });
-	core.installDraftingToolProfile();
+	core.goalDraftActive = true;
 }
 
 async function awaitDraftChoice(core: GoalCore, ctx: ExtensionContext, label: string): Promise<"resume" | "replace" | "cancel"> {
@@ -162,10 +163,10 @@ export async function startGoalDrafting(core: GoalCore, ctx: ExtensionContext, m
 		? !(targetGoal?.skipAuditor ?? loadGoalSettings(ctx.cwd).disabled)
 		: !loadGoalSettings(ctx.cwd).disabled;
 	activeDrafts.set(core, { mode, originalTopic: trimmed, targetGoalId: targetGoal?.id, startedAt, auditorEnabled });
+	core.goalDraftActive = true;
 	draftSessionEntry(core, { version: 1, mode, seed: trimmed, targetGoalId: targetGoal?.id, startedAt, auditorEnabled });
 	core.clearContinuationState();
 	core.clearActiveAccounting();
-	core.installDraftingToolProfile();
 	ctx.ui.notify(label + " started" + (trimmed ? ": " + trimmed.slice(0, 60) : "") + ". The agent will clarify, propose a goal and tasks where useful, then ask you to confirm.", "info");
 	const prompt = mode === "tweak" ? [
 		"[GOAL TWEAK DRAFT]",
@@ -234,31 +235,6 @@ function flatTaskSchema() {
 
 export function registerDraftingTools(core: GoalCore): void {
 	const { pi } = core;
-	pi.registerTool(defineTool({
-		name: QUESTION_TOOL_NAME,
-		label: "Ask Drafting Question",
-		description: "Ask one structured question during a user-started goal draft.",
-		promptSnippet: "Ask the user one focused drafting question.",
-		parameters: Type.Object({
-			question: Type.String({ description: "The question to ask." }),
-			options: Type.Optional(Type.Array(Type.String({ description: "A concise answer option." }))),
-			recommended: Type.Optional(Type.Integer({ minimum: 0, description: "Zero-based recommended option." })),
-			allow_custom: Type.Optional(Type.Boolean({ description: "Allow a custom answer; defaults to true." })),
-		}, { additionalProperties: false }),
-		async execute(_id, params, _signal, _update, ctx) {
-			if (!activeDraft(core)) return { content: [{ type: "text", text: "No guided goal draft is active. Ask the user to run /goal or /sisyphus." }], details: goalDetails(core.state.goal) };
-			core.enterGoalModal();
-			try {
-				const result = await runGoalQuestionnaire(ctx, [{ id: "question", question: params.question, options: params.options ?? [], recommended: params.recommended, allowCustom: params.allow_custom }]);
-				return { content: [{ type: "text", text: result.cancelled ? "The user cancelled the question. Continue drafting conversationally." : formatQuestionnaireAnswers(result) }], details: goalDetails(core.state.goal) };
-			} finally {
-				core.exitGoalModal();
-			}
-		},
-		renderCall() { return new Text("goal_question", 0, 0); },
-		renderResult(result, _opts, theme) { return renderGoalResult(result, _opts, theme); },
-	}));
-
 	pi.registerTool(defineTool({
 		name: QUESTIONNAIRE_TOOL_NAME,
 		label: "Run Drafting Questionnaire",
@@ -447,6 +423,9 @@ export function registerDraftingTools(core: GoalCore): void {
 				}
 			}
 			core.clearContinuationState();
+			// The objective changed: re-supply the authoritative goal-context
+			// message so the policy message in history matches the live goal.
+			core.sendGoalContextMessage(ctx, "tweaked");
 			core.updateUI(ctx);
 			if (resumed) {
 				// Resume glue mirrors replaceGoal: restart accounting and queue

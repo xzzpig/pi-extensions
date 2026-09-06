@@ -25,6 +25,11 @@ import {
 export const STATE_ENTRY = "pi-goal-state";
 export const FOCUS_ENTRY = "pi-goal-focus";
 export const GOAL_EVENT_ENTRY = "pi-goal-event";
+export const GOAL_STATE_EVENT_ENTRY = "pi-goal-state-event";
+/** Full goal-context message: objective + contract + lifecycle policy + task tree. */
+export const GOAL_CONTEXT_EVENT_ENTRY = "pi-goal-context-event";
+/** One-shot steering notes that are not per-turn state (e.g. unfocused notice). */
+export const GOAL_STEERING_EVENT_ENTRY = "pi-goal-steering-event";
 export const GOAL_AUDIT_ENTRY = "pi-goal-audit-event";
 export const COMPLETE_STATUS = "complete";
 /**

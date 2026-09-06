@@ -6,7 +6,6 @@ import {
 	buildGoalCreatedReport,
 	clearGoalCommandMessage,
 	shouldArmPostCompactReminder,
-	shouldInjectPostCompactReminder,
 	shouldQueueContinuation,
 	validateGoalBlock,
 	validateGoalCompletion,
@@ -135,7 +134,4 @@ test("continuation and compaction policies are deterministic", () => {
 
 	assert.equal(shouldArmPostCompactReminder(sisyphus({ status: "active" })), true);
 	assert.equal(shouldArmPostCompactReminder(sisyphus({ status: "paused", autoContinue: false })), false);
-	assert.equal(shouldInjectPostCompactReminder({ pending: true, goal: sisyphus() }), true);
-	assert.equal(shouldInjectPostCompactReminder({ pending: true, goal: goal({ sisyphus: false }) }), true);
-	assert.equal(shouldInjectPostCompactReminder({ pending: false, goal: sisyphus() }), false);
 });

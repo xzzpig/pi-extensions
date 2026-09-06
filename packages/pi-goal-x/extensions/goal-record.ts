@@ -97,6 +97,39 @@ export interface GoalCheckpointDetailsV2 {
 	timestamp: number;
 }
 
+/**
+ * Details of the per-turn state snapshot message (pi-goal-state-event). It is
+ * dispatched once per turn — before each v2 checkpoint marker on auto-continue
+ * dispatches, and as the before_agent_start message return on user-driven
+ * turns — and never rewritten afterwards, so the request context stays
+ * append-only and prompt-cache friendly. `checkpointSeq` is only meaningful on
+ * the continuation path (it pairs the snapshot with its marker).
+ */
+export interface GoalStateSnapshotDetails {
+	version: 3;
+	kind: "state";
+	goalId: string;
+	revision: number;
+	checkpointSeq?: number;
+	timestamp: number;
+}
+
+/**
+ * Details of the full goal-context message (pi-goal-context-event): complete
+ * objective, verification contract, lifecycle policy, and task tree. Sent when
+ * the goal is created, re-sent after compaction (the summary eats the earlier
+ * copy), and re-sent on session load when the branch has no copy after the
+ * last compaction. Persisted append-only, never rewritten.
+ */
+export interface GoalContextMessageDetails {
+	version: 1;
+	kind: "context";
+	goalId: string;
+	revision: number;
+	reason: "created" | "compacted" | "rehydrated" | "tweaked";
+	timestamp: number;
+}
+
 /** Pre-v2 event details (full objective persisted). Read-only legacy shape. */
 export interface LegacyGoalEventDetails {
 	kind: GoalEventKind;

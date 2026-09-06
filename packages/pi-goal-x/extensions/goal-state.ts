@@ -1,13 +1,9 @@
 import { type AgentToolResult, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
-import { FOCUS_ENTRY, STATE_ENTRY, GOAL_EVENT_ENTRY, goalDetails } from "./goal-format.ts";
+import { FOCUS_ENTRY, STATE_ENTRY, GOAL_CONTEXT_EVENT_ENTRY, GOAL_EVENT_ENTRY, GOAL_STATE_EVENT_ENTRY, GOAL_STEERING_EVENT_ENTRY, goalDetails } from "./goal-format.ts";
+import { goalContextMessagePrompt, goalStateSnapshotPrompt, budgetReachedReminderNote, unfocusedOpenGoalsPrompt } from "./prompts/goal-prompts.ts";
 import { loadGoalSettings, loadGoalSettingsFileConfig } from "./goal-settings.ts";
-import {
-	ALL_REGISTERED_GOAL_TOOLS,
-	CORE_GOAL_TOOLS,
-	DRAFTING_GOAL_TOOLS,
-	FIVE_GOAL_TOOLS,
-} from "./goal-tool-names.ts";
+import { ALL_REGISTERED_GOAL_TOOLS } from "./goal-tool-names.ts";
 import { budgetReached } from "./goal-accounting.ts";
 import {
 	asRecord,
@@ -17,11 +13,13 @@ import {
 	normalizeGoalFocusEntry,
 	normalizeGoalRecord,
 	nowIso,
+	type GoalContextMessageDetails,
 	type GoalCreationConfig,
 	type GoalEventDetails,
 	type GoalFocusEntry,
 	type GoalFocusReason,
 	type GoalRecord,
+	type GoalStateSnapshotDetails,
 	type GoalStatus,
 	type StopReason,
 } from "./goal-record.ts";
@@ -31,7 +29,7 @@ import {
 	sanitizeGoalPaths,
 } from "./storage/goal-files.ts";
 import { GoalService } from "./goal-service.ts";
-import { readGoalLedger } from "./goal-ledger.ts";
+import { latestAuditorResultForGoal, readGoalLedger } from "./goal-ledger.ts";
 import { GoalAccounting } from "./goal-accounting.ts";
 import { GoalRuntime } from "./goal-runtime.ts";
 import {
@@ -88,8 +86,24 @@ export interface GoalCore {
 	focusedOperationToken(goalId: string): { goalId: string; revision: number };
 	isFocusedOperationCurrent(token: { goalId: string; revision: number }): boolean;
 	focusedOperationCancelledResult(action: string, token: { goalId: string; revision: number }): AgentToolResult<unknown>;
-	installGoalToolProfile(tasksEnabled: boolean): void;
-	installDraftingToolProfile(): void;
+	installGoalTools(): void;
+	/**
+	 * Send the full goal-context message (objective + contract + lifecycle
+	 * policy + task tree) for the focused goal as an append-only custom
+	 * message. Used at creation, after compaction, and on rehydration.
+	 */
+	sendGoalContextMessage(ctx: ExtensionContext, reason: GoalContextMessageDetails["reason"]): void;
+	/**
+	 * Build the per-turn state snapshot for a user-driven turn (mode "turn"),
+	 * with one-shot steering notes folded in. Null when no snapshot applies
+	 * (no focused goal, or a complete one).
+	 */
+	buildTurnSnapshot(ctx: ExtensionContext): { customType: typeof GOAL_STATE_EVENT_ENTRY; content: string; display: false; details: GoalStateSnapshotDetails } | null;
+	/**
+	 * True while a guided goal draft is active. Execution tools guard on this
+	 * instead of relying on the (removed) drafting tool-profile switch.
+	 */
+	goalDraftActive: boolean;
 	stopAuditAnimation(): void;
 	abortAudit(ctx: ExtensionContext): void;
 	clearContinuationTimer(): void;
@@ -254,6 +268,9 @@ export function createGoalCore(
 	// §10: unified dashboard expansion state (compact vs expanded task view),
 	// owned by the core so it survives host-side widget re-instantiation.
 	let dashboardExpanded = false;
+	// Edge-triggered flag for the one-shot unfocused-with-open-goals steering
+	// message; reset whenever a goal becomes focused.
+	let unfocusedNotified = false;
 
 	// Per-turn flags reset in turn_start (#4, C9 fix).
 	// goalWorkToolCalledThisTurn: tracks whether a real goal-work tool was called.
@@ -275,6 +292,29 @@ export function createGoalCore(
 				{ triggerTurn: true, deliverAs: "followUp" },
 			);
 		},
+		sendStateSnapshot: (ctx, goal, checkpointSeq) => {
+			const current = state.goal;
+			if (!current || current.id !== goal.id || current.status !== "active") return;
+			pi.sendMessage<GoalStateSnapshotDetails>(
+				{
+					customType: GOAL_STATE_EVENT_ENTRY,
+					content: goalStateSnapshotPrompt(current, loadGoalSettings(ctx.cwd), {
+						mode: "continuation",
+						foldedNotes: snapshotFoldedNotes(ctx, current, false),
+					}),
+					display: false,
+					details: {
+						version: 3,
+						kind: "state",
+						goalId: current.id,
+						revision: current.revision ?? 0,
+						checkpointSeq,
+						timestamp: Date.now(),
+					},
+				},
+				{ deliverAs: "followUp" },
+			);
+		},
 		getGoal: () => state.goal,
 		isActionable: (goalId) => isActionableContinuationGoal(goalId),
 	});
@@ -284,57 +324,164 @@ export function createGoalCore(
 	// settings (disableTasks). Stage 4 replaces them with the two task tools.
 	let tasksEnabled = true;
 
+	// Whether a guided goal draft is active. Maintained by goal-drafting (which
+	// owns the draft lifecycle) and read by the execution-tool guards — with
+	// the tool surface constant, drafting isolation is guard-based.
+	let goalDraftActive = false;
+
 	// Transient runtime state: set when the user aborts a running audit via
 	// Escape. No ledger event is appended from the low-level abort callback;
 	// the completion flow appends exactly one canonical event after the
 	// user's dialog choice (follow-up Stage 2).
 
 	/**
-	 * Install the fixed three/five goal-tool profile. Called only after session
-	 * initialization and after a settings change that toggles disableTasks.
-	 * Lifecycle transitions, focus changes, status changes, and compaction never
-	 * add/remove/restore goal tools, and this never mutates the host's ordinary
-	 * work-tool selection. On success the module-level tasksEnabled tracker is
-	 * updated to the installed value, so callers can compare the effective
-	 * setting against the last profile actually installed (used by the settings
-	 * menu to detect repeated disableTasks toggles across one menu session).
+	 * Activate every registered goal tool, once, on top of the host's ordinary
+	 * work-tool selection. The tool surface is deliberately CONSTANT for the
+	 * whole session: every `setActiveTools` call rebuilds the base system
+	 * prompt AND changes the tools block, which sits at the very front of the
+	 * provider cache prefix — a switch invalidates the entire cached history.
+	 * Drafting isolation is enforced by guards inside tool execute() instead
+	 * (core.goalDraftActive), and disableTasks by the settings guards already
+	 * present in the task tools.
 	 */
-	function installGoalToolProfile(tasksEnabledArg: boolean): void {
+	function installGoalTools(): void {
 		try {
 			const current = new Set(pi.getActiveTools());
-			for (const knownGoalTool of ALL_REGISTERED_GOAL_TOOLS) current.delete(knownGoalTool);
-			for (const goalTool of tasksEnabledArg ? FIVE_GOAL_TOOLS : CORE_GOAL_TOOLS) current.add(goalTool);
+			for (const knownGoalTool of ALL_REGISTERED_GOAL_TOOLS) current.add(knownGoalTool);
 			const next = [...current].sort();
 			const before = [...pi.getActiveTools()].sort();
-			// Idempotent: never rebuild (or re-report) a profile that is already
-			// installed. Lifecycle transitions must not churn the tool surface.
+			// Idempotent: never rebuild (or re-report) a surface that is already
+			// in place.
 			if (next.length !== before.length || next.some((name, index) => name !== before[index])) {
 				pi.setActiveTools([...current]);
 			}
-			tasksEnabled = tasksEnabledArg;
 		} catch (err) {
-			console.error("[pi-goal] installGoalToolProfile error:", err instanceof Error ? err.message : String(err));
+			console.error("[pi-goal] installGoalTools error:", err instanceof Error ? err.message : String(err));
 		}
 	}
 
 	/**
-	 * Install the transient drafting profile. This is the sole permitted
-	 * exception to the fixed execution three/five profile: it is entered only
-	 * by an explicit user drafting command and is removed on confirm/cancel.
+	 * Send the full goal-context message (objective + verification contract +
+	 * lifecycle policy + task tree) for the focused goal. Persisted append-only
+	 * and never rewritten: this is where the lifecycle policy lives now that
+	 * the system prompt carries no goal content. `triggerTurn: false` appends
+	 * immediately when idle and defers to the next turn boundary mid-run,
+	 * without forcing a continuation turn.
 	 */
-	function installDraftingToolProfile(): void {
+	function sendGoalContextMessage(ctx: ExtensionContext, reason: GoalContextMessageDetails["reason"]): void {
+		const goal = state.goal;
+		if (!goal || goal.status === "complete") return;
 		try {
-			const current = new Set(pi.getActiveTools());
-			for (const knownGoalTool of ALL_REGISTERED_GOAL_TOOLS) current.delete(knownGoalTool);
-			for (const goalTool of DRAFTING_GOAL_TOOLS) current.add(goalTool);
-			const next = [...current].sort();
-			const before = [...pi.getActiveTools()].sort();
-			if (next.length !== before.length || next.some((name, index) => name !== before[index])) {
-				pi.setActiveTools([...current]);
-			}
+			pi.sendMessage<GoalContextMessageDetails>(
+				{
+					customType: GOAL_CONTEXT_EVENT_ENTRY,
+					content: goalContextMessagePrompt(goal, loadGoalSettings(ctx.cwd)),
+					display: false,
+					details: {
+						version: 1,
+						kind: "context",
+						goalId: goal.id,
+						revision: goal.revision ?? 0,
+						reason,
+						timestamp: Date.now(),
+					},
+				},
+				{ triggerTurn: false },
+			);
 		} catch (err) {
-			console.error("[pi-goal] installDraftingToolProfile error:", err instanceof Error ? err.message : String(err));
+			console.error("[pi-goal] sendGoalContextMessage error:", err instanceof Error ? err.message : String(err));
 		}
+	}
+
+	/**
+	 * Steering notes folded into a state snapshot (consumed once by the
+	 * caller): the [GOAL STALLED] note (user-turn path only — the detector runs
+	 * at before_agent_start), the one-time budget wrap-up reminder armed at the
+	 * budget_limited transition, and an unresolved auditor disapproval
+	 * (persistent while unresolved, as the old system-prompt block was).
+	 */
+	function snapshotFoldedNotes(ctx: ExtensionContext, goal: GoalRecord, includeStall: boolean): string[] {
+		const foldedNotes: string[] = [];
+		if (includeStall) {
+			const stalledNote = checkStall(ctx);
+			if (stalledNote) foldedNotes.push(stalledNote);
+		}
+		if (runtime.consumePostBudgetReminder()) foldedNotes.push(budgetReachedReminderNote(goal));
+		const rejection = auditorRejectionNote(ctx, goal);
+		if (rejection) foldedNotes.push(rejection);
+		return foldedNotes;
+	}
+
+	/**
+	 * Build the per-turn state snapshot for a user-driven turn. The system
+	 * prompt carries no goal content, so the snapshot rides as an append-only
+	 * custom message right after the user's prompt (the before_agent_start
+	 * message return). Null when no snapshot applies.
+	 */
+	function buildTurnSnapshot(ctx: ExtensionContext): { customType: typeof GOAL_STATE_EVENT_ENTRY; content: string; display: false; details: GoalStateSnapshotDetails } | null {
+		const goal = state.goal;
+		if (!goal || goal.status === "complete") return null;
+		return {
+			customType: GOAL_STATE_EVENT_ENTRY,
+			content: goalStateSnapshotPrompt(goal, loadGoalSettings(ctx.cwd), {
+				mode: "turn",
+				foldedNotes: snapshotFoldedNotes(ctx, goal, true),
+			}),
+			display: false,
+			details: {
+				version: 3,
+				kind: "state",
+				goalId: goal.id,
+				revision: goal.revision ?? 0,
+				timestamp: Date.now(),
+			},
+		};
+	}
+
+	/**
+	 * Send the full goal-context message only when the current branch has no
+	 * copy after its last compaction entry. Covers sessions that restart after
+	 * a compaction, branches focused onto a goal created elsewhere, and legacy
+	 * sessions upgrading to the message channel.
+	 */
+	function ensureGoalContextMessage(ctx: ExtensionContext): void {
+		const goal = state.goal;
+		if (!goal || goal.status === "complete") return;
+		try {
+			const entries = ctx.sessionManager.getBranch() as Array<{ type?: string; customType?: string }>;
+			let lastCompaction = -1;
+			for (let i = entries.length - 1; i >= 0; i--) {
+				if (entries[i]?.type === "compaction") {
+					lastCompaction = i;
+					break;
+				}
+			}
+			for (let i = lastCompaction + 1; i < entries.length; i++) {
+				const entry = entries[i];
+				if (entry?.type === "custom_message" && entry.customType === GOAL_CONTEXT_EVENT_ENTRY) return;
+			}
+		} catch {
+			// Scan failure degrades to a safe duplicate send.
+		}
+		sendGoalContextMessage(ctx, "rehydrated");
+	}
+
+	/**
+	 * Steering note for an unresolved auditor disapproval (bounded). Empty
+	 * unless the latest audit verdict is a disapproval following a completion
+	 * request — mirrors the condition the old system-prompt block used.
+	 */
+	function auditorRejectionNote(ctx: ExtensionContext, goal: GoalRecord): string {
+		try {
+			const ledger = readGoalLedger(ctx);
+			const result = latestAuditorResultForGoal(ledger.events, goal.id);
+			if (result && result.verdict === "disapproved" && ledger.events.some((e) => e.type === "completion_requested" && e.goalId === goal.id)) {
+				return `[AUDITOR REJECTION goalId=${goal.id}]\nAn independent auditor previously rejected a completion request for this goal. Reason: ${result.report.slice(0, 300)}\nAddress the auditor's objections before requesting completion again.`;
+			}
+		} catch {
+			// Ledger read failure should not break the snapshot.
+		}
+		return "";
 	}
 
 	function stopAuditAnimation(): void {
@@ -426,7 +573,35 @@ export function createGoalCore(
 		} catch {
 			// Ledger append failure should not crash focus change
 		}
+		notifyUnfocusedIfNeeded(ctx);
 		updateUI(ctx);
+	}
+
+	/**
+	 * Unfocused-with-open-goals is a one-shot steering message now (the old
+	 * per-turn system-prompt block is gone). Edge-triggered: once per
+	 * unfocused spell, reset the moment a goal is focused again.
+	 */
+	function notifyUnfocusedIfNeeded(ctx: ExtensionContext): void {
+		if (focusedGoalId) {
+			unfocusedNotified = false;
+			return;
+		}
+		if (unfocusedNotified || openGoals().length === 0) return;
+		unfocusedNotified = true;
+		try {
+			pi.sendMessage(
+				{
+					customType: GOAL_STEERING_EVENT_ENTRY,
+					content: unfocusedOpenGoalsPrompt(openGoals().length),
+					display: false,
+					details: { reason: "unfocused", timestamp: Date.now() },
+				},
+				{ triggerTurn: false },
+			);
+		} catch {
+			// Steering must never crash session load or focus changes.
+		}
 	}
 
 	function updateFocusedGoal(next: GoalRecord, ctx: ExtensionContext, shouldPersist = true): void {
@@ -774,6 +949,12 @@ export function createGoalCore(
 		clearStoppedRuntimeState();
 		runningGoalId = null;
 		updateUI(ctx);
+		// Re-supply the full goal context when this branch has no copy after its
+		// last compaction (restart after compaction, cross-branch focus, legacy
+		// sessions upgrading to the message channel). Also fires the one-shot
+		// unfocused notice on the transition edge.
+		notifyUnfocusedIfNeeded(ctx);
+		ensureGoalContextMessage(ctx);
 	}
 
 	function setGoal(next: GoalRecord | null, ctx: ExtensionContext, shouldPersist = true, focusReason?: GoalFocusReason): void {
@@ -923,6 +1104,10 @@ export function createGoalCore(
 		if (result.focusChanged) appendFocusEntry(result.goalId, "created");
 		beginAccounting();
 		ctx.ui.notify(buildGoalRunningNotification(config), "info");
+		// The lifecycle policy rides this persisted append-only message now that
+		// the system prompt carries no goal content. It must exist in the branch
+		// before the first snapshot/turn.
+		sendGoalContextMessage(ctx, "created");
 		if (startNow && state.goal?.autoContinue) queueContinuation(ctx, true);
 	}
 
@@ -1001,6 +1186,12 @@ export function createGoalCore(
 		set tasksEnabled(value: boolean) {
 			tasksEnabled = value;
 		},
+		get goalDraftActive() {
+			return goalDraftActive;
+		},
+		set goalDraftActive(value: boolean) {
+			goalDraftActive = value;
+		},
 		get debugMode() {
 			return debugMode;
 		},
@@ -1031,8 +1222,9 @@ export function createGoalCore(
 		focusedOperationToken,
 		isFocusedOperationCurrent,
 		focusedOperationCancelledResult,
-		installGoalToolProfile,
-		installDraftingToolProfile,
+		installGoalTools,
+		sendGoalContextMessage,
+		buildTurnSnapshot,
 		stopAuditAnimation,
 		abortAudit,
 		clearContinuationTimer,
