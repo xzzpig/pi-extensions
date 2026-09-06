@@ -6,7 +6,8 @@
  * the core behaviour: registration, the budget threshold, mid-loop compaction
  * with auto-resume, run-end compaction without resume, session-start
  * compaction for over-budget resumes, the refire growth guard, the failure
- * disable, and command/flag configuration.
+ * disable, the benign classification of failures that land after pi's own
+ * auto-compaction, and command/flag configuration.
  *
  * Runs anywhere — no pi binary, models, or API keys required.
  *
@@ -53,6 +54,9 @@ function makeHarness() {
   };
 
   const usage = { tokens: 0, contextWindow: 1_048_576, percent: 0 };
+  // Fake session branch: tests push entries (e.g. compaction) to simulate
+  // pi's own activity between the trigger and the compaction callback.
+  const branch = [];
   const ctx = {
     hasUI: true,
     cwd: process.env.CC_TEST_PROJECT_DIR,
@@ -64,6 +68,7 @@ function makeHarness() {
       percent: (usage.tokens / usage.contextWindow) * 100,
     }),
     isProjectTrusted: () => true,
+    sessionManager: { getBranch: () => branch },
     compact: (options) => compactCalls.push(options),
     ui: {
       notify: (msg, level) => notices.push({ msg, level }),
@@ -88,6 +93,7 @@ function makeHarness() {
     notices,
     statuses,
     compactCalls,
+    branch,
     pi,
     ctx,
     setTokens,
@@ -295,6 +301,59 @@ check("second consecutive failure disables the watcher for the session", () => {
   assert.equal(f.compactCalls.length, 2);
   assert.ok(f.notices.some((n) => n.msg.includes("disabled for this session")));
 });
+
+// --- Native-compaction race: a failure after pi already compacted is benign --
+//
+// ctx.compact() aborts the run before compacting, and that run-end moment lets
+// pi's native auto-compaction check fire; with a window-derived budget the two
+// thresholds are identical, so pi can compact first and leave the manual pass
+// nothing to do ("Nothing to compact (session too small)"). That failure must
+// be classified benign (info notice, no failure counted, retry guard reset).
+
+const nc = makeHarness();
+factory(nc.pi);
+await nc.events.get("session_start")({}, nc.ctx);
+const ncTurn = (i) =>
+  nc.events.get("turn_end")(
+    {
+      turnIndex: i,
+      message: { role: "assistant" },
+      toolResults: [{ toolName: "bash", isError: false }],
+    },
+    nc.ctx,
+  );
+
+nc.setTokens(190_000);
+await ncTurn(0);
+check("race scenario: compaction fires over threshold", () => {
+  assert.equal(nc.compactCalls.length, 1);
+});
+
+// pi's native auto-compaction wins the race during the abort teardown: a
+// compaction entry lands on the branch and the context shrinks.
+nc.branch.push({ type: "compaction" });
+nc.compactCalls[0].onError(new Error("Nothing to compact (session too small)"));
+check("failure after another compaction is benign: info, not error", () => {
+  assert.ok(
+    nc.notices.some(
+      (n) => n.level === "info" && n.msg.includes("already compacted"),
+    ),
+    `got: ${nc.notices.map((n) => `${n.level}: ${n.msg}`).join(" | ")}`,
+  );
+  assert.ok(
+    !nc.notices.some((n) => n.level === "error"),
+    `got: ${nc.notices.map((n) => n.msg).join(" | ")}`,
+  );
+});
+
+// The retry guard is disarmed: the next over-threshold turn fires again
+// immediately, without the 20k growth requirement.
+nc.setTokens(190_000);
+await ncTurn(1);
+check("benign failure re-arms the watcher (immediate refire allowed)", () => {
+  assert.equal(nc.compactCalls.length, 2);
+});
+nc.compactCalls[1].onComplete();
 
 // --- session_start compacts an over-budget resumed session -------------------
 

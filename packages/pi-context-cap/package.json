@@ -1,6 +1,6 @@
 {
   "name": "@xzzpig/pi-context-cap",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Extension for the pi coding agent: enforce a context token budget (defaulting to the model's configured context window; 200k when unknown) by forcing compaction, including mid-turn during long tool loops, instead of riding long-context models up to their full window.",
   "license": "MIT",
   "author": "xzzpig (fork of lukeramsden/pi-context-cap)",

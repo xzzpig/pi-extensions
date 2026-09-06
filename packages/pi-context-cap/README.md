@@ -28,7 +28,7 @@ The budget lives only in the extension. It triggers compaction from three hooks:
 
 Compaction fires when estimated tokens exceed `budget − reserve`. Without an explicit budget, `budget` is the model's configured context window (e.g. a 365k-window model with the default reserve compacts at ~349k); the 200,000 default applies only when the model does not expose a window (200,000 − 16,384 ≈ 184k). A footer status line shows usage against the budget (`cap 132k/200k (66%)`), since pi's own percentage is relative to the model's real window.
 
-Guards: no overlapping compactions, a 20k token growth requirement between retries after a failure, and the watcher disables itself for the session after two consecutive compaction failures.
+Guards: no overlapping compactions, a 20k token growth requirement between retries after a failure, and the watcher disables itself for the session after two consecutive compaction failures. A failure that lands after pi's own auto-compaction already shrank the context (with a window-derived budget the two thresholds coincide, so pi's run-end check can compact first) is treated as benign: an info notice instead of an error, no failure counted.
 
 ## Known limit
 

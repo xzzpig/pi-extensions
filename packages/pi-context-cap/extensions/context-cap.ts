@@ -36,6 +36,12 @@ import { invalidPatterns, isModelAllowed } from "./whitelist.js";
  *   compact quietly so the next prompt starts under budget.
  * - session_start: a resumed session may already be over budget; compact.
  *
+ * The abort above opens pi's run-end auto-compaction check mid-loop: with a
+ * window-derived budget both thresholds are identical, so the native pass can
+ * compact first and our manual pass fails with "nothing to compact". That
+ * outcome is detected by comparing branch compaction entries (never by error
+ * text) and treated as success — pi already continued the run.
+ *
  * Fork additions (see README fork notice):
  * - Model whitelist config (`context-cap.json` in the pi agent dir and the
  *   project dir), matching `provider/modelId` or bare `modelId` globs.
@@ -90,6 +96,10 @@ export default function (pi: ExtensionAPI) {
   let consecutiveFailures = 0;
   let failureDisabled = false;
   let lastFireTokens: number | null = null;
+  // Compaction-entry count on the branch captured when a compaction was
+  // triggered; used to detect "a compaction already completed since we
+  // fired" without matching on error message text.
+  let compactionsAtFire: number | null = null;
   // Config-load warnings (bad JSON/types, bad flag values) — reported once at
   // session_start, unrelated to the whitelist state.
   let configWarnings: string[] = [];
@@ -129,6 +139,20 @@ export default function (pi: ExtensionAPI) {
     if (w === null) return raw;
     return Math.min(raw, w - WINDOW_SAFETY_TOKENS);
   };
+
+  // Whether pi compacted the session since we triggered our own compaction.
+  // ctx.compact() aborts the run before compacting, and that run-end moment
+  // lets pi's native auto-compaction check fire: when the budget is
+  // window-derived our threshold equals pi's native one, so the native pass
+  // can compact first and leave our manual pass nothing to do. Comparing
+  // branch compaction entries classifies this by outcome, without matching
+  // on error message text.
+  const countCompactions = (ctx: ExtensionContext): number =>
+    ctx.sessionManager
+      ?.getBranch()
+      .filter((entry) => entry.type === "compaction").length ?? 0;
+  const compactedSinceFire = (ctx: ExtensionContext): boolean =>
+    compactionsAtFire !== null && countCompactions(ctx) > compactionsAtFire;
 
   // Why the guard is off for the active model, or null when it can run.
   const disabledReason = (ctx: ExtensionContext): string | null => {
@@ -225,6 +249,7 @@ export default function (pi: ExtensionAPI) {
       return false;
 
     lastFireTokens = usage.tokens;
+    compactionsAtFire = countCompactions(ctx);
     compactionInFlight = true;
     if (ctx.hasUI) {
       ctx.ui.notify(
@@ -237,6 +262,7 @@ export default function (pi: ExtensionAPI) {
         compactionInFlight = false;
         consecutiveFailures = 0;
         lastFireTokens = null;
+        compactionsAtFire = null;
         if (ctx.hasUI)
           ctx.ui.notify("context-cap: compaction completed", "info");
         updateStatus(ctx);
@@ -246,6 +272,23 @@ export default function (pi: ExtensionAPI) {
       },
       onError: (error) => {
         compactionInFlight = false;
+        if (compactedSinceFire(ctx)) {
+          // The goal (staying under budget) was already achieved by the other
+          // compaction, and pi continued the run itself, so no resume prompt
+          // is needed. Not a failure: don't count it towards disabling.
+          consecutiveFailures = 0;
+          lastFireTokens = null;
+          compactionsAtFire = null;
+          if (ctx.hasUI) {
+            ctx.ui.notify(
+              "context-cap: context was already compacted; nothing to do",
+              "info",
+            );
+            updateStatus(ctx);
+          }
+          return;
+        }
+        compactionsAtFire = null;
         consecutiveFailures += 1;
         if (consecutiveFailures >= 2) {
           failureDisabled = true;
@@ -267,6 +310,7 @@ export default function (pi: ExtensionAPI) {
     consecutiveFailures = 0;
     failureDisabled = false;
     lastFireTokens = null;
+    compactionsAtFire = null;
     override = "default";
     autoResume = true;
 

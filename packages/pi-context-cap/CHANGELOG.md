@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2
+
+- Fixed a spurious `compaction failed` error when pi's native auto-compaction won a race with the guard. `ctx.compact()` aborts the running agent before compacting, and that run-end moment lets pi's own auto-compaction check fire; with the default window-derived budget the two thresholds are identical (`contextWindow - 16384`), so pi could compact first and leave the manual pass nothing to do (`Nothing to compact (session too small)` / `Already compacted`).
+- Compaction failures are now classified by outcome instead of error text: if a compaction entry appeared on the session branch since the trigger, the failure is reported as info (`context was already compacted; nothing to do`) rather than an error, is not counted towards the two-failure disable, and the 20k retry guard is reset so the guard keeps working as the context regrows. pi continues the run itself in this case, so no follow-up resume prompt is sent.
+
 ## 0.1.1
 
 - Window-derived budget now follows the model's `contextWindow` directly: with no explicit budget the guard acts as pi's native compaction threshold (`contextWindow - reserve`) enforced mid-loop, and the 200000 default only applies when the model does not expose a window. Previously the derived budget was capped at 200000 (`min(200000, window - 4096)`). `status` annotates the budget source (`(model window)` / `(default)`).
