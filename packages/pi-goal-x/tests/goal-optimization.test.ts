@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createGoal, type GoalTask } from "../extensions/goal-record.ts";
 import { goalDetailPage } from "../extensions/goal-detail.ts";
-import { goalContextMessagePrompt, taskListBlock, MAX_PROMPT_FRAGMENT_CHARS } from "../extensions/prompts/goal-prompts.ts";
+import { goalContextMessagePrompt, goalStateSnapshotPrompt, taskListBlock, MAX_STATE_SNAPSHOT_CHARS } from "../extensions/prompts/goal-prompts.ts";
 import { taskIndex } from "../extensions/goal-task-index.ts";
 import { deriveGoalDashboardModel } from "../extensions/widgets/goal-dashboard-model.ts";
 import { deriveGoalActivity } from "../extensions/goal-activity.ts";
@@ -142,14 +142,18 @@ test("Unicode ledger offsets and first warm append are counted exactly once", ()
  } finally {f.cleanup();}
 });
 
-test("compact context preserves critical rules and exposes omitted task descendants", () => {
+test("context message preserves critical rules; per-turn snapshot stays bounded and exposes omitted task descendants", () => {
  const goal=createGoal({objective:"Objective "+"x".repeat(20000),autoContinue:true,sisyphus:true});
  goal.taskList={tasks:structuredClone(tasks),blockCompletion:true,proposedAt:"2026-09-01"};
  goal.currentTaskId="parent"; goal.verificationContract="contract "+"y".repeat(20000);
  const prompt=goalContextMessagePrompt(goal);
- assert.ok(prompt.length<MAX_PROMPT_FRAGMENT_CHARS);
- for(const rule of [/three consecutive goal turns/,/status: "paused"/,/independent completion auditor/,/TASK GATE/,/get_goal\(section="objective"\)/,/Follow the user's ordered plan faithfully/])assert.match(prompt,rule);
- assert.match(taskListBlock(goal),/child/); assert.equal((taskListBlock(goal).match(/Current: parent/g)??[]).length,1);
+ for(const rule of [/three consecutive goal turns/,/A user pause is a distinct state/,/independent auditor/,/TASK GATE/,/objective truncated/,/Follow the user's ordered plan faithfully/])assert.match(prompt,rule);
+ // The per-turn message is the bounded one (3k cap by construction); the
+ // context message is sent once per goal lifecycle and truncates at its own cap.
+ const snapshot=goalStateSnapshotPrompt(goal);
+ assert.ok(snapshot.length<MAX_STATE_SNAPSHOT_CHARS);
+ // The fork's bounded task block collapses deep subtasks to counts; lossless retrieval lives in get_goal detail pages.
+ assert.match(taskListBlock(goal),/omitted from this bounded prompt/); assert.equal((taskListBlock(goal).match(/Current: parent/g)??[]).length,1);
  goal.objective="Updated objective with same id/revision/time";
  assert.match(goalContextMessagePrompt(goal),/Updated objective/);
 });

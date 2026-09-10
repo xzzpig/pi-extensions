@@ -6,7 +6,7 @@
  * guided refinement under focus races, and headless auto-confirm semantics.
  */
 
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -425,7 +425,7 @@ test("tasks-disabled settings reject task proposals and confirm without a task l
 		await h.commands.get("goal")!.handler("Write a guide", h.ctx);
 		const withTasks = await runProposal(h, proposalParams("Write a guide.", { tasks: [{ id: "a", title: "A" }] }));
 		assert.match(withTasks.content[0].text, /disabled by settings/);
-		const ok = await runProposal(h, proposalParams("Write a guide."));
+		await runProposal(h, proposalParams("Write a guide."));
 		assert.equal(activeGoalFiles(cwd).length, 1, "task-free proposal confirms");
 		const goal = firstGoal(cwd);
 		assert.equal(goal.taskList, undefined, "no task list created when tasks disabled");
@@ -1346,7 +1346,6 @@ for (const unavailable of [false, true]) {
 			h.ctx.ui.custom = (async () => { if (!unavailable) throw new Error("Host disconnected"); return undefined; }) as typeof h.ctx.ui.custom;
 			delete (h.ctx.ui as Partial<ExtensionContext["ui"]>).select;
 			for (const [name, params] of [
-				["goal_question", { question: "Scope?", options: ["A"] }],
 				["goal_questionnaire", { questions: [{ id: "scope", question: "Scope?", options: ["A"] }] }],
 				["propose_goal_draft", proposalParams("Ship a tested feature. Success criteria: tests pass.")],
 			] as const) {

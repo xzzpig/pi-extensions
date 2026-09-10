@@ -4,6 +4,40 @@ All notable changes to pi-goal-x are documented here.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-09-10 (fork release)
+
+### Changed
+
+- **Synced upstream v0.30.5 → v0.31.2.** Adopted upstream 0.31.0's
+  non-conflicting features: ordered atomic `update_goal_task` batches (1–100
+  updates with full rollback on invalid transitions and per-item ledger
+  events), per-goal ledger indexes (`goal-ledger-index.ts`) with version-3
+  checkpoint rebuilds and UTF-8 byte offsets, content-keyed task snapshots
+  (`goal-task-index.ts`), lossless `get_goal` detail pages (`goal-detail.ts`),
+  warm settings caching, text-layout caches, bounded auditor-stream previews
+  (`recentNonEmptyLines`/`labelForReadOnlyTool`/`estimateAuditProgress`),
+  auditor session model-runtime sharing for the Oracle
+  (`makeAuditorResourceLoader`/`resolveAuditorSessionModelOptions`), the
+  session-context filter chained ahead of checkpoint filtering, and upstream's
+  deterministic-id fix for the flaky checkpoint-marker test. Upstream
+  README/logo and upstream-changelog edits are absorbed; this fork changelog
+  keeps its own release history.
+- **The constant seven-tool surface is preserved (user decision).** Upstream
+  0.31.0 replaced the fork's constant-surface `installGoalTools` with dynamic
+  applicable-tool profiles (`installGoalToolProfile`/`installDraftingToolProfile`
+  + `applicableGoalTools`), advertising fewer tools per goal state in exchange
+  for `setActiveTools` churn on every state/draft transition — which
+  invalidates the provider prompt-cache prefix. The conflict was escalated to
+  the user, who chose to keep the fork's constant surface: `installGoalTools`
+  and the `executionToolDraftGuardMessage` execute() guards remain, upstream's
+  dynamic profile machinery and per-turn system-prompt steering blocks were
+  dropped, and the checkpoint context filter remains the cache-stable
+  per-message `filterGoalCheckpointContext`. The upstream `goal_question` tool
+  (removed in 0.4.0 as redundant) was not re-adopted.
+- Fork release 0.5.0 (upstream minor release 0.30.5 → 0.31.2 per the fork
+  versioning rules); `@xzzpig/pi-subagents` dependency re-verified at the
+  tested 0.10.0 fork release.
+
 ## [0.4.1] — 2026-09-10
 
 ### Fixed
