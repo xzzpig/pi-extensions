@@ -10,6 +10,7 @@ import {
 	parseGoalAuditorStructuredResult,
 	resolveAuditorAgent,
 	resolveAuditorDelegationOverrides,
+	resolveAuditorTerminalTimeoutMs,
 	runGoalCompletionAuditor,
 	type GoalAuditorEvents,
 } from "../extensions/goal-auditor.ts";
@@ -358,6 +359,108 @@ test("D-01/D-05/I-12: subscribes before request and projects progress from the d
 	assert.ok(reportedProgress);
 	assert.deepEqual(reportedProgress.recentOutput, ["Inspecting evidence", "Progress reported: Verifying contracts... (40%)"]);
 	assert.equal(events.listenerCount(SUBAGENT_DELEGATION_RESPONSE_EVENT), 0, "terminal listener must be cleaned up");
+});
+
+test("auditorTimeoutMs: unset settings fall back to the built-in 30-minute cap", async () => {
+	const events = new FakeEvents();
+	let capturedRequest: Record<string, unknown> | undefined;
+	events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (value) => {
+		capturedRequest = value as Record<string, unknown>;
+		const request = value as { requestId: string; ownerRunId: string; nodeId: string };
+		events.emit(SUBAGENT_DELEGATION_STARTED_EVENT, identity(request));
+		events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+			...identity(request),
+			status: "completed",
+			result: { kind: "structured", value: { verdict: "approved", report: "Verified.", findings: [] } },
+		});
+	});
+	const result = await runGoalCompletionAuditor({
+		...baseArgs(events),
+		settings: { auditorAgent: "goal-auditor" },
+	});
+	assert.equal(result.approved, true);
+	assert.equal(capturedRequest?.timeoutMs, 30 * 60_000, "default cap matches TERMINAL_TIMEOUT_MS");
+});
+
+test("auditorTimeoutMs: configured value feeds the delegation request cap", async () => {
+	const events = new FakeEvents();
+	let capturedRequest: Record<string, unknown> | undefined;
+	events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (value) => {
+		capturedRequest = value as Record<string, unknown>;
+		const request = value as { requestId: string; ownerRunId: string; nodeId: string };
+		events.emit(SUBAGENT_DELEGATION_STARTED_EVENT, identity(request));
+		events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+			...identity(request),
+			status: "completed",
+			result: { kind: "structured", value: { verdict: "disapproved", report: "Needs evidence.", findings: [] } },
+		});
+	});
+	const result = await runGoalCompletionAuditor({
+		...baseArgs(events),
+		settings: { auditorAgent: "goal-auditor", auditorTimeoutMs: 7_200_000 },
+	});
+	assert.equal(result.disapproved, true);
+	assert.equal(capturedRequest?.timeoutMs, 7_200_000, "settings value reaches the delegation request unchanged");
+});
+
+test("auditorTimeoutMs: explicit args.timeouts still win over settings", async () => {
+	const events = new FakeEvents();
+	let capturedRequest: Record<string, unknown> | undefined;
+	events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (value) => {
+		capturedRequest = value as Record<string, unknown>;
+		const request = value as { requestId: string; ownerRunId: string; nodeId: string };
+		events.emit(SUBAGENT_DELEGATION_STARTED_EVENT, identity(request));
+		events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+			...identity(request),
+			status: "completed",
+			result: { kind: "structured", value: { verdict: "approved", report: "Verified.", findings: [] } },
+		});
+	});
+	await runGoalCompletionAuditor({
+		...baseArgs(events),
+		settings: { auditorTimeoutMs: 7_200_000 },
+		timeouts: { startedMs: 1, terminalMs: 10, cancellationMs: 1 },
+	});
+	assert.equal(capturedRequest?.timeoutMs, 10, "explicit injection beats settings (test-harness priority)");
+});
+
+test("resolveAuditorTerminalTimeoutMs: settings value wins, built-in default otherwise", () => {
+	assert.equal(resolveAuditorTerminalTimeoutMs(undefined), 30 * 60_000);
+	assert.equal(resolveAuditorTerminalTimeoutMs({}), 30 * 60_000);
+	assert.equal(resolveAuditorTerminalTimeoutMs({ auditorAgent: "goal-auditor" }), 30 * 60_000);
+	assert.equal(resolveAuditorTerminalTimeoutMs({ auditorTimeoutMs: 3_600_000 }), 3_600_000);
+	assert.equal(resolveAuditorTerminalTimeoutMs({ auditorTimeoutMs: 2_147_483_647 }), 2_147_483_647);
+});
+
+test("D-11/I-16: auditorTimeoutMs drives the local terminal timer without an explicit injection", async (t) => {
+	t.mock.timers.enable({ apis: ["setTimeout"] });
+	const events = new FakeEvents();
+	let cancellation: Record<string, unknown> | undefined;
+	events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (value) => {
+		events.emit(SUBAGENT_DELEGATION_STARTED_EVENT, identity(value as { requestId: string; ownerRunId: string; nodeId: string }));
+	});
+	events.on(SUBAGENT_DELEGATION_CANCEL_EVENT, (value) => {
+		cancellation = value as Record<string, unknown>;
+		events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+			...(value as object),
+			status: "cancelled",
+		});
+	});
+	let settled = false;
+	const pending = runGoalCompletionAuditor({
+		...baseArgs(events),
+		settings: { auditorTimeoutMs: 1_000 },
+	}).then((result) => (settled = true, result));
+	// Fire only the configured cap: if the setting reached the local timer,
+	// the run settles here; the built-in 30-minute default stays far away.
+	t.mock.timers.tick(2_000);
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.ok(settled, "auditorTimeoutMs must drive the local terminal timer (settled within the configured cap)");
+	const result = await pending;
+	assert.deepEqual(cancellation, { requestId: result.requestId, ownerRunId: "g1", nodeId: "goal-completion:g1:0" });
+	assert.equal(result.approved, false);
+	assert.notEqual(result.cancelled, true, "a settings-driven timeout is not a user cancellation");
+	assert.match(result.error ?? "", /timeout and was cancelled/);
 });
 
 test("I-12: display-only tool arguments cannot advance audit progress", async () => {

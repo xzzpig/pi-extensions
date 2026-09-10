@@ -480,7 +480,7 @@ project: <cwd>/.pi/pi-goal-x-settings.json   (or $PI_GOAL_SETTINGS_FILE)
 
 Define shared configuration once in the global file and override per project. Explicit `false`/`0` values in a lower layer override inherited values; nested `keybindings` inherit per key. `/goal-settings` shows each row's effective value and source, can switch the edited scope, and can remove a local override to return to inheritance.
 
-Use `/goal-settings` to configure task lists, verification contracts, subtask depth, automatic goal selection, the `auditorAgent` name (default `goal-auditor`), and model/thinking overrides (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; `max` requires auditor-model support via pi-subagents' model registry). Goal objectives have no hard length limit by default; set `objectiveMaxChars` (or `PI_GOAL_OBJECTIVE_MAX_CHARS`, `0` = no limit) to cap objective length across `create_goal`, `propose_goal_draft`, and `/goal-tweak`.
+Use `/goal-settings` to configure task lists, verification contracts, subtask depth, automatic goal selection, the `auditorAgent` name (default `goal-auditor`), the `auditorTimeoutMs` audit wall-clock cap (default `1800000`, 30 minutes), and model/thinking overrides (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; `max` requires auditor-model support via pi-subagents' model registry). Goal objectives have no hard length limit by default; set `objectiveMaxChars` (or `PI_GOAL_OBJECTIVE_MAX_CHARS`, `0` = no limit) to cap objective length across `create_goal`, `propose_goal_draft`, and `/goal-tweak`.
 
 The selected auditor is a normal pi-subagents agent. Eject the bundled default
 before editing it:
@@ -510,6 +510,16 @@ authentication or load the provider extension in the auditor agent. The legacy
 `auditorProjectResources` field is accepted for compatibility but ignored;
 move resource choices to the auditor agent's `extensions`,
 `subagentOnlyExtensions`, `skills`, and `tools`.
+
+The completion audit runs under a wall-clock cap configured by
+`auditorTimeoutMs`: a positive integer of milliseconds, at most `2147483647`
+(the Node.js timer ceiling). Project settings override global; unset or
+invalid values fall back to the built-in 30-minute default, so existing
+configurations keep their behavior. The resolved value feeds both the
+delegation deadline and the local terminal timer, so the two never drift.
+The 5-second launch-handshake and cancellation-acknowledgement guards are
+internal fail-safe timers and deliberately not configurable. A timed-out
+audit fails closed and keeps the goal active.
 
 Configure the task shortcuts in the same file when the terminal captures the defaults:
 

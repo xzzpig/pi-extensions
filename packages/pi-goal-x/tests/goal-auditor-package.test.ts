@@ -79,7 +79,13 @@ test("D-05/D-12: package goal-auditor is discoverable with its child-only progre
 	assert.equal(preflight.contract.inheritSkills, false);
 	assert.deepEqual(preflight.contract.tools.declaredBuiltin, ["read", "grep", "find", "ls", "bash", REPORT_AUDITOR_PROGRESS_TOOL_NAME]);
 	assert.ok(preflight.contract.tools.effectiveAllowlist.includes("structured_output"));
-	assert.ok(preflight.contract.tools.extensionArgs.includes("../extensions/goal-auditor-progress.ts"));
+	// pi-subagents normalizes child-only extension paths to absolute form when
+	// building the launch args, so match on the file name rather than the
+	// frontmatter-relative string.
+	assert.ok(
+		preflight.contract.tools.extensionArgs.some((entry) => entry.endsWith(path.join("extensions", "goal-auditor-progress.ts"))),
+		"the child-only progress provider must reach the child launch args",
+	);
 });
 
 test("D-05/D-12: package default is materialized with an absolute progress provider before delegation", async () => {

@@ -23,7 +23,15 @@ import {
 import { clearGoalCommandMessage, validateResumeGoal } from "./goal-policy.ts";
 import { invalidateGoalLedgerCache, readGoalLedger } from "./goal-ledger.ts";
 import { buildGoalStatusText } from "./goal-status.ts";
-import { AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE, DEFAULT_AUDITOR_AGENT, effectiveSettingsReport, invalidateGoalSettingsCache, loadGoalSettingsFileConfig } from "./goal-settings.ts";
+import {
+	AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE,
+	DEFAULT_AUDITOR_AGENT,
+	DEFAULT_AUDITOR_TIMEOUT_MS,
+	MAX_AUDITOR_TIMEOUT_MS,
+	effectiveSettingsReport,
+	invalidateGoalSettingsCache,
+	loadGoalSettingsFileConfig,
+} from "./goal-settings.ts";
 import { invalidateGoalPoolCache, mergeGoalPromptFromDisk, readActiveGoalPool } from "./storage/goal-files.ts";
 import { nowIso, type GoalMode, type GoalRecord } from "./goal-record.ts";
 import { clearGoalDrafting, hasActiveDraft, startGoalDrafting } from "./goal-drafting.ts";
@@ -459,6 +467,7 @@ export function registerGoalCommands(core: GoalCore): void {
 		{ key: "subtaskDepth", label: "subtaskDepth", section: "Task tracking", kind: "positiveInteger" },
 		{ key: "disabled", label: "auditor disabled", section: "Completion auditor", kind: "boolean" },
 		{ key: "auditorAgent", label: "auditor agent", section: "Completion auditor", kind: "agentName" },
+		{ key: "auditorTimeoutMs", label: "auditor timeout (ms)", section: "Completion auditor", kind: "positiveInteger" },
 		{ key: "provider", label: "provider", section: "Completion auditor", kind: "modelSelector" },
 		{ key: "model", label: "model", section: "Completion auditor", kind: "modelSelector" },
 		{ key: "thinkingLevel", label: "thinking_level", section: "Completion auditor", kind: "thinking" },
@@ -476,6 +485,7 @@ export function registerGoalCommands(core: GoalCore): void {
 			return config[key] === true ? "true" : "false";
 		}
 		if (key === "auditorAgent") return config.auditorAgent ?? DEFAULT_AUDITOR_AGENT;
+		if (key === "auditorTimeoutMs") return config.auditorTimeoutMs !== undefined ? String(config.auditorTimeoutMs) : String(DEFAULT_AUDITOR_TIMEOUT_MS);
 		if (key === "subtaskDepth") return config.subtaskDepth !== undefined ? String(config.subtaskDepth) : "1";
 		if (key === "stallTimeoutMinutes") return config.stallTimeoutMinutes !== undefined ? String(config.stallTimeoutMinutes) : "0";
 		if (key === "objectiveMaxChars") return config.objectiveMaxChars !== undefined ? String(config.objectiveMaxChars) : "0";
@@ -646,6 +656,12 @@ export function registerGoalCommands(core: GoalCore): void {
 					// Oracle attempt cap is bounded at 3 by the settings parser.
 					if (row.path?.[0] === "oracle" && Number(value) > 3) {
 						ctx.ui.notify(`${row.label} must be an integer between 1 and 3`, "warning");
+						continue;
+					}
+					// auditorTimeoutMs is bounded at the Node.js timer ceiling by the
+					// settings parser; reject here so the dialog feedback is immediate.
+					if (row.key === "auditorTimeoutMs" && Number(value) > MAX_AUDITOR_TIMEOUT_MS) {
+						ctx.ui.notify(`${row.label} must be an integer between 1 and ${MAX_AUDITOR_TIMEOUT_MS}`, "warning");
 						continue;
 					}
 					applyMutation(scope, { op: "set", path: rowPath, value: Number(value) });

@@ -22,6 +22,8 @@ import {
 	effectiveSettingsReport,
 	formatGoalKeybinding,
 	DEFAULT_AUDITOR_AGENT,
+	DEFAULT_AUDITOR_TIMEOUT_MS,
+	MAX_AUDITOR_TIMEOUT_MS,
 	AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE,
 } from "../extensions/goal-settings.ts";
 
@@ -77,6 +79,59 @@ test("parseGoalSettings: auditorAgent accepts a non-empty agent name", () => {
 	assert.deepEqual(parseGoalSettings({ auditorAgent: "project-auditor" }), { auditorAgent: "project-auditor" });
 	assert.deepEqual(parseGoalSettings({ auditorAgent: "  " }), {});
 	assert.deepEqual(parseGoalSettings({ auditorAgent: 42 }), {});
+});
+
+test("parseGoalSettings: auditorTimeoutMs accepts positive integer milliseconds", () => {
+	assert.deepEqual(parseGoalSettings({ auditorTimeoutMs: 3_600_000 }), { auditorTimeoutMs: 3_600_000 });
+	assert.deepEqual(parseGoalSettings({ auditorTimeoutMs: "7200000" }), { auditorTimeoutMs: 7200000 });
+	assert.deepEqual(parseGoalSettings({ auditorTimeoutMs: MAX_AUDITOR_TIMEOUT_MS }), { auditorTimeoutMs: MAX_AUDITOR_TIMEOUT_MS }, "the Node timer ceiling itself is valid");
+});
+
+test("parseGoalSettings: auditorTimeoutMs rejects zero, negatives, non-integers, and above the timer ceiling", () => {
+	for (const invalid of [0, -1, 1.5, "abc", null, MAX_AUDITOR_TIMEOUT_MS + 1, 10 ** 12]) {
+		assert.deepEqual(parseGoalSettings({ auditorTimeoutMs: invalid }), {}, `must reject ${String(invalid)}`);
+	}
+});
+
+test("parseGoalSettings: auditorTimeoutMs diagnostics name the valid range", () => {
+	const { layer, diagnostics } = parseSettingsLayer({ auditorTimeoutMs: 0 }, "project", "(inline)");
+	assert.deepEqual(layer, {});
+	assert.ok(
+		diagnostics.some((d) => d.code === "invalid_value" && d.settingPath === "auditorTimeoutMs" && d.message.includes(String(MAX_AUDITOR_TIMEOUT_MS))),
+		"diagnostic names the timer-safe ceiling",
+	);
+});
+
+test("saveGoalSettingsFileConfig: auditorTimeoutMs persists and clears", () => {
+	withTempDir((dir) => {
+		saveGoalSettingsFileConfig(dir, { auditorTimeoutMs: 7_200_000 });
+		const loaded = loadGoalSettingsFileConfig(dir);
+		assert.equal(loaded.auditorTimeoutMs, 7_200_000, "persisted value round-trips");
+		saveGoalSettingsFileConfig(dir, {});
+		assert.equal(loadGoalSettingsFileConfig(dir).auditorTimeoutMs, undefined, "cleared when omitted");
+		assert.equal(loadGoalSettings(dir, {}).auditorTimeoutMs, undefined, "unset resolves to the phantom default (auditor applies 30 minutes)");
+	});
+});
+
+test("effectiveSettingsReport: auditor timeout row shows the configured default when unset", () => {
+	withTempDir((dir) => {
+		const lines = effectiveSettingsReport(dir, {});
+		const row = lines.find((l) => l.startsWith("  auditor timeout (ms)"));
+		assert.ok(row, "report includes the auditor timeout row");
+		assert.ok(row!.includes(`${DEFAULT_AUDITOR_TIMEOUT_MS} (default)`), `row shows the default: ${row}`);
+	});
+});
+
+test("effectiveSettingsReport: auditor timeout row shows the project override and provenance", () => {
+	withTempDir((dir) => {
+		const configPath = goalSettingsPath(dir);
+		fs.mkdirSync(path.dirname(configPath), { recursive: true });
+		fs.writeFileSync(configPath, JSON.stringify({ auditorTimeoutMs: 7_200_000 }), "utf8");
+		const lines = effectiveSettingsReport(dir, {});
+		const row = lines.find((l) => l.startsWith("  auditor timeout (ms)"));
+		assert.ok(row, "report includes the auditor timeout row");
+		assert.ok(row!.includes("7200000 (project)"), `row shows the project override: ${row}`);
+	});
 });
 
 test("parseGoalSettings: unknown keys rejected", () => {

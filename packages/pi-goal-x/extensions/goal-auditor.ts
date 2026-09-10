@@ -19,6 +19,7 @@ import type { GoalRecord, GoalTask, GoalTaskList } from "./goal-record.ts";
 import { countTaskSubtree } from "./goal-task-count.ts";
 import {
 	DEFAULT_AUDITOR_AGENT,
+	DEFAULT_AUDITOR_TIMEOUT_MS,
 	loadGoalSettings,
 	type GoalSettings,
 	type ThinkingLevel,
@@ -78,7 +79,9 @@ export const GOAL_AUDITOR_RESULT_SCHEMA = {
 } as const;
 
 const START_HANDSHAKE_TIMEOUT_MS = 5_000;
-const TERMINAL_TIMEOUT_MS = 30 * 60_000;
+// Built-in 30-minute audit wall-clock cap; the auditorTimeoutMs setting
+// (resolved via resolveAuditorTerminalTimeoutMs) overrides this default.
+const TERMINAL_TIMEOUT_MS = DEFAULT_AUDITOR_TIMEOUT_MS;
 const CANCELLATION_TIMEOUT_MS = 5_000;
 const EXTRA_AGENT_DIRS_ENV = "PI_SUBAGENT_EXTRA_AGENT_DIRS";
 const GOAL_X_PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -322,6 +325,17 @@ export function resolveAuditorAgent(settings: GoalSettings | undefined): string 
 	return settings?.auditorAgent?.trim() || DEFAULT_AUDITOR_AGENT;
 }
 
+/**
+ * Resolve the effective completion-audit wall-clock cap. The layered
+ * `auditorTimeoutMs` setting wins (the settings parser guarantees a
+ * timer-safe positive integer); anything else falls back to the built-in
+ * 30-minute default. Handshake/cancellation guards are intentionally not
+ * reachable from settings.
+ */
+export function resolveAuditorTerminalTimeoutMs(settings: GoalSettings | undefined): number {
+	return settings?.auditorTimeoutMs ?? TERMINAL_TIMEOUT_MS;
+}
+
 	export function resolveAuditorDelegationOverrides(settings: GoalSettings): {
 	model?: string;
 	thinking?: SubagentDelegationThinking;
@@ -538,6 +552,9 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 	if (overrides.error) {
 		return { approved: false, disapproved: true, output: "", error: overrides.error };
 	}
+	// One resolved value feeds BOTH the delegation request timeoutMs (runner-side
+	// kill deadline) and the local terminal timer, so the two can never drift.
+	const terminalTimeoutMs = args.timeouts?.terminalMs ?? resolveAuditorTerminalTimeoutMs(settings);
 	if (!args.events) {
 		return {
 			approved: false,
@@ -622,7 +639,7 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 		cwd: args.ctx.cwd,
 		...(overrides.model ? { model: overrides.model } : {}),
 		...(overrides.thinking ? { thinking: overrides.thinking } : {}),
-		timeoutMs: args.timeouts?.terminalMs ?? TERMINAL_TIMEOUT_MS,
+		timeoutMs: terminalTimeoutMs,
 		artifacts: true,
 		result: { kind: "structured" as const, schema: GOAL_AUDITOR_RESULT_SCHEMA },
 	};
@@ -702,7 +719,7 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 			if (terminalTimer) return;
 			terminalTimer = setTimeout(() => {
 				cancelAttempt("terminal_timeout");
-			}, args.timeouts?.terminalMs ?? TERMINAL_TIMEOUT_MS);
+			}, terminalTimeoutMs);
 			terminalTimer.unref?.();
 		};
 

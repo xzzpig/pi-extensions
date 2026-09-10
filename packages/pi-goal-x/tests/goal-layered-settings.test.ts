@@ -96,6 +96,46 @@ describe("layering matrix", () => {
 		});
 	});
 
+	it("auditorTimeoutMs: global-only setting applies when project absent", () => {
+		withTempDir((dir) => {
+			const env = { PI_GOAL_GLOBAL_SETTINGS_FILE: path.join(dir, "g.json") };
+			writeJson(path.join(dir, "g.json"), { auditorTimeoutMs: 3_600_000 });
+			invalidateGoalSettingsCache();
+			assert.equal(loadGoalSettings(dir, env).auditorTimeoutMs, 3_600_000);
+		});
+	});
+
+	it("auditorTimeoutMs: project layer overrides global layer", () => {
+		withTempDir((dir) => {
+			const env = { PI_GOAL_GLOBAL_SETTINGS_FILE: path.join(dir, "g.json") };
+			writeJson(path.join(dir, "g.json"), { auditorTimeoutMs: 3_600_000 });
+			writeJson(path.join(dir, ".pi", "pi-goal-x-settings.json"), { auditorTimeoutMs: 7_200_000 });
+			invalidateGoalSettingsCache();
+			assert.equal(loadGoalSettings(dir, env).auditorTimeoutMs, 7_200_000, "project value wins inside the project");
+		});
+	});
+
+	it("auditorTimeoutMs: unset resolves to the phantom default and default provenance", () => {
+		withTempDir((dir) => {
+			const env = { PI_GOAL_GLOBAL_SETTINGS_FILE: path.join(dir, "g.json") };
+			invalidateGoalSettingsCache();
+			const snap = loadSettingsSnapshot(dir, env);
+			assert.equal(snap.value.auditorTimeoutMs, undefined, "auditor applies its built-in 30-minute default");
+			assert.equal(snap.provenance.get("auditorTimeoutMs")?.source, "default");
+		});
+	});
+
+	it("auditorTimeoutMs: out-of-range values produce diagnostics and fall back", () => {
+		withTempDir((dir) => {
+			const env = { PI_GOAL_GLOBAL_SETTINGS_FILE: path.join(dir, "g.json") };
+			writeJson(path.join(dir, "g.json"), { auditorTimeoutMs: 2_147_483_648 });
+			invalidateGoalSettingsCache();
+			const snap = loadSettingsSnapshot(dir, env);
+			assert.equal(snap.value.auditorTimeoutMs, undefined, "invalid value is dropped, default cap applies");
+			assert.ok(snap.diagnostics.some((d) => d.code === "invalid_value" && d.scope === "global" && d.settingPath === "auditorTimeoutMs"));
+		});
+	});
+
 	it("environment overrides both layers", () => {
 		withTempDir((dir) => {
 			const env = {

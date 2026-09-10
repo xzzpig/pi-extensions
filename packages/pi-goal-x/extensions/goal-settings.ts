@@ -36,6 +36,18 @@ import type { KeyId } from "@earendil-works/pi-tui";
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 export const DEFAULT_AUDITOR_AGENT = "goal-auditor";
+/**
+ * Built-in completion-audit wall-clock cap: 30 minutes. Single source of
+ * truth shared by the settings introspection display and the auditor's
+ * TERMINAL_TIMEOUT_MS fallback so the displayed default can never drift
+ * from the enforced one.
+ */
+export const DEFAULT_AUDITOR_TIMEOUT_MS = 30 * 60_000;
+/**
+ * Node.js setTimeout ceiling (2^31 - 1): values above it overflow the timer
+ * and fire almost immediately, so auditorTimeoutMs rejects them outright.
+ */
+export const MAX_AUDITOR_TIMEOUT_MS = 2_147_483_647;
 export const AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE = "auditorProjectResources is deprecated and ignored. Configure the selected auditor agent's extensions, subagentOnlyExtensions, skills, and tools instead.";
 
 // ── sparse keybinding layers ────────────────────────────────────────────────
@@ -105,6 +117,13 @@ export interface GoalSettingsResolvedShape {
 	thinkingLevel?: ThinkingLevel;
 	/** Configured pi-subagents agent name; defaults to goal-auditor. */
 	auditorAgent?: string;
+	/**
+	 * Completion-audit wall-clock cap in milliseconds (positive integer,
+	 * at most 2_147_483_647 — the Node.js timer ceiling). Unset or invalid
+	 * values fall back to DEFAULT_AUDITOR_TIMEOUT_MS (30 minutes). The 5s
+	 * handshake and 5s cancellation guards are internal and unaffected.
+	 */
+	auditorTimeoutMs?: number;
 	disabled?: boolean;
 	autoSelectSingleGoal?: boolean;
 	/** @deprecated Retained for compatibility only; auditor resources now come from the selected agent definition. */
@@ -314,6 +333,13 @@ function asNonNegativeInt(value: unknown): number | undefined {
 	return undefined;
 }
 
+/** Positive-integer parser capped at the Node.js timer ceiling. */
+function asTimerSafePositiveInt(value: unknown): number | undefined {
+	const parsed = asPositiveInt(value);
+	if (parsed === undefined || parsed > MAX_AUDITOR_TIMEOUT_MS) return undefined;
+	return parsed;
+}
+
 function asKeybinding(value: unknown): KeyId | undefined {
 	const key = asNonEmptyString(value);
 	if (!key) return undefined;
@@ -336,6 +362,7 @@ const ALLOWED_SETTINGS_KEYS = new Set([
 	"disabled",
 	"autoSelectSingleGoal",
 	"auditorProjectResources",
+	"auditorTimeoutMs",
 	"stallTimeoutMinutes",
 	"objectiveMaxChars",
 	"keybindings",
@@ -410,6 +437,15 @@ export function parseSettingsLayer(
 				const parsed = asNonNegativeInt(value);
 				if (parsed === undefined) diagnostics.push(diagnostic("invalid_value", `${key} must be an integer >= 0`, key));
 				else layer[key] = parsed;
+				break;
+			}
+			case "auditorTimeoutMs": {
+				const parsed = asTimerSafePositiveInt(value);
+				if (parsed === undefined) {
+					diagnostics.push(diagnostic("invalid_value", `${key} must be an integer between 1 and ${MAX_AUDITOR_TIMEOUT_MS} (milliseconds)`, key));
+				} else {
+					layer[key] = parsed;
+				}
 				break;
 			}
 			case "provider":
@@ -757,6 +793,12 @@ function resolvedSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv): Settings
 		globalValue: global.layer.auditorAgent,
 		defaultValue: DEFAULT_AUDITOR_AGENT,
 	}));
+	// SAFETY: phantom default — resolveLeaf only checks === undefined (see its doc).
+	const auditorTimeoutMs = track("auditorTimeoutMs", resolveLeaf<number>({
+		projectValue: project.layer.auditorTimeoutMs,
+		globalValue: global.layer.auditorTimeoutMs,
+		defaultValue: undefined as unknown as number,
+	}));
 	const disabled = track("disabled", resolveLeaf<boolean>({
 		projectValue: project.layer.disabled,
 		globalValue: global.layer.disabled,
@@ -866,6 +908,7 @@ function resolvedSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv): Settings
 		...(model ? { model } : {}),
 		...(thinkingLevel ? { thinkingLevel } : {}),
 		auditorAgent,
+		auditorTimeoutMs,
 		disabled,
 		autoSelectSingleGoal,
 		auditorProjectResources,
@@ -1205,6 +1248,7 @@ function buildPersistedLayer(settings: GoalSettings): Record<string, unknown> {
 	if (settings.auditorAgent && settings.auditorAgent !== DEFAULT_AUDITOR_AGENT) {
 		persisted.auditorAgent = settings.auditorAgent;
 	}
+	if (settings.auditorTimeoutMs !== undefined) persisted.auditorTimeoutMs = settings.auditorTimeoutMs;
 	if (settings.disabled !== undefined) persisted.disabled = settings.disabled;
 	if (settings.disableTasks !== undefined) persisted.disableTasks = settings.disableTasks;
 	if (settings.disableContracts !== undefined) persisted.disableContracts = settings.disableContracts;
@@ -1271,6 +1315,7 @@ export function effectiveSettingsReport(cwd: string, env: NodeJS.ProcessEnv = pr
 		{ key: "provider", label: "provider", format: () => snapshot.value.provider ?? "(default)" },
 		{ key: "model", label: "model", format: () => snapshot.value.model ?? "(default)" },
 		{ key: "auditorAgent", label: "auditor agent", format: () => snapshot.value.auditorAgent ?? DEFAULT_AUDITOR_AGENT },
+		{ key: "auditorTimeoutMs", label: "auditor timeout (ms)", format: () => String(snapshot.value.auditorTimeoutMs ?? DEFAULT_AUDITOR_TIMEOUT_MS) },
 		{ key: "thinkingLevel", label: "thinking_level", format: () => snapshot.value.thinkingLevel ?? "(default)" },
 		{ key: "auditorProjectResources", label: "auditor project resources", format: () => String(snapshot.value.auditorProjectResources) },
 		{ key: "hideUnfocusedBanner", label: "hide unfocused banner", format: () => String(snapshot.value.hideUnfocusedBanner) },

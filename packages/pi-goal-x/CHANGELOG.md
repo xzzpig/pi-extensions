@@ -2,7 +2,34 @@
 
 All notable changes to pi-goal-x are documented here.
 
-## [Unreleased]
+## [0.5.1] — 2026-09-10 (fork release)
+
+### Added
+
+- **Configurable completion-audit wall-clock cap (`auditorTimeoutMs`).** The
+  layered settings (global/project) now accept `auditorTimeoutMs`: a positive
+  integer of milliseconds, at most `2147483647` (the Node.js timer ceiling).
+  The resolved value feeds both the delegation request `timeoutMs` and the
+  local terminal timer so the two can never drift; unset or invalid values
+  fall back to the built-in 30-minute default, keeping existing behavior
+  unchanged. The 5-second launch-handshake and cancellation-acknowledgement
+  guards stay internal and are deliberately not configurable. `/goal-settings`
+  gains a Completion-auditor row for it with the same validation and
+  provenance display as other leaves.
+
+### Fixed
+
+- **Updated a stale package-discovery test expectation.**
+  `tests/goal-auditor-package.test.ts` asserted that the child-only progress
+  provider appears in the preflight `extensionArgs` under its
+  frontmatter-relative path; the current `pi-subagents` fork normalizes
+  child-only extension paths to absolute form (as the sibling
+  materialization test already expects), so the assertion now matches on the
+  provider file name instead of the relative string. Pre-existing failure on
+  the workspace symlink layout; unrelated to the timeout setting itself.
+- Fork release 0.5.1 (fork feature release; no upstream sync);
+  `@xzzpig/pi-subagents` dependency re-verified at the tested 0.10.0 fork
+  release.
 
 ## [0.5.0] — 2026-09-10 (fork release)
 
