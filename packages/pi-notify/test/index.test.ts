@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { PI_NOTIFY_PUBLISH_EVENT } from "../api.js";
+import {
+  PI_NOTIFY_PUBLISH_EVENT,
+  PI_NOTIFY_UI_SPAN_SILENT_EVENT,
+} from "../api.js";
 import piNotify from "../extensions/index.js";
 
 type LifecycleHandler = (event: unknown, context?: unknown) => unknown;
@@ -156,11 +159,16 @@ describe("pi-notify extension", () => {
     const runtime = createRuntime();
     await runtime.start({ mode: "tui", cwd: "/home/dev/awesome-project" });
 
-    runtime.dispatch("@eko24ive/pi-ask:started", {
-      flowId: "ask-1",
-      title: "Choose deployment",
-    });
     runtime.dispatch("agent_start", {});
+    runtime.dispatch("ui_prompt_start", {
+      type: "ui_prompt_start",
+      reason: "ui_prompt",
+      kind: "custom",
+    });
+    runtime.dispatch("ui_prompt_end", {
+      type: "ui_prompt_end",
+      kind: "custom",
+    });
     runtime.dispatch("agent_end", {
       messages: [{ role: "assistant", stopReason: "stop" }],
     });
@@ -216,11 +224,13 @@ describe("pi-notify extension", () => {
     await runtime.shutdown();
   });
 
-  it("preserves the Herdr blocked-state lifecycle", async () => {
+  it("preserves the Herdr blocked-state lifecycle for dialog spans", async () => {
     vi.stubEnv("PI_CODING_AGENT_DIR", tempDir());
     const runtime = createRuntime();
     await runtime.start();
 
+    // Labeled events alone never block Herdr: the ask registers context but
+    // no dialog has opened yet.
     runtime.dispatch("@eko24ive/pi-ask:started", {
       flowId: "ask-1",
       title: "Choose deployment",
@@ -229,8 +239,24 @@ describe("pi-notify extension", () => {
       flowId: "ask-1",
       title: "Choose deployment",
     });
-    runtime.dispatch("@eko24ive/pi-ask:completed", { flowId: "ask-1" });
+    expect(blockedEvents(runtime)).toEqual([]);
 
+    // The dialog span blocks with the sanitized ask title; a defensive
+    // duplicate start while a span is open is ignored.
+    runtime.dispatch("agent_start", {});
+    runtime.dispatch("ui_prompt_start", { kind: "custom" });
+    runtime.dispatch("ui_prompt_start", { kind: "custom" });
+    expect(blockedEvents(runtime)).toEqual([
+      { active: true, label: "Choose deployment" },
+    ]);
+    runtime.dispatch("ui_prompt_end", { kind: "custom" });
+    runtime.dispatch("@eko24ive/pi-ask:completed", { flowId: "ask-1" });
+    expect(blockedEvents(runtime)).toEqual([
+      { active: true, label: "Choose deployment" },
+      { active: false },
+    ]);
+
+    // A forwarded permission prompt classifies with the requester label.
     runtime.dispatch("permissions:ui_prompt", {
       agentName: "Worker",
       forwarding: {
@@ -242,6 +268,13 @@ describe("pi-notify extension", () => {
       surface: "bash",
       value: "git push",
     });
+    runtime.dispatch("ui_prompt_start", { kind: "custom" });
+    expect(blockedEvents(runtime)).toEqual([
+      { active: true, label: "Choose deployment" },
+      { active: false },
+      { active: true, label: "Permission required by Worker" },
+    ]);
+    runtime.dispatch("ui_prompt_end", { kind: "custom" });
     runtime.dispatch("permissions:forwarded_decision", {
       forwarding: {
         requesterAgentName: "Worker",
@@ -273,14 +306,12 @@ describe("pi-notify extension", () => {
     const runtime = createRuntime();
     await runtime.start();
 
-    runtime.dispatch("@eko24ive/pi-ask:started", {
-      flowId: "ask-1",
-      title: "Question",
-    });
-    runtime.dispatch("@eko24ive/pi-ask:completed", { flowId: "ask-1" });
+    runtime.dispatch("agent_start", {});
+    runtime.dispatch("ui_prompt_start", { kind: "custom" });
+    runtime.dispatch("ui_prompt_end", { kind: "custom" });
 
     expect(blockedEvents(runtime)).toEqual([
-      { active: true, label: "Question" },
+      { active: true, label: "Waiting for input" },
       { active: false },
     ]);
     await runtime.shutdown();
@@ -293,10 +324,9 @@ describe("pi-notify extension", () => {
     const runtime = createRuntime();
     await runtime.start();
 
-    runtime.dispatch("@eko24ive/pi-ask:started", {
-      flowId: "ask-1",
-      title: "Question",
-    });
+    runtime.dispatch("agent_start", {});
+    runtime.dispatch("ui_prompt_start", { kind: "custom" });
+    runtime.dispatch("ui_prompt_end", { kind: "custom" });
     expect(blockedEvents(runtime)).toEqual([]);
     await runtime.shutdown();
   });
@@ -378,9 +408,12 @@ describe("pi-notify extension", () => {
       surface: "bash",
       value: "git status",
     });
+    runtime.dispatch("agent_start", {});
+    runtime.dispatch("ui_prompt_start", { kind: "custom" });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const [url] = fetchImpl.mock.calls[0] as unknown as [string];
     expect(url).toBe("https://ntfy.sh/perm-topic");
+    runtime.dispatch("ui_prompt_end", { kind: "custom" });
     await runtime.shutdown();
   });
 
@@ -585,14 +618,345 @@ describe("pi-notify extension", () => {
     await runtime.shutdown();
   });
 
+  it("gates generic dialogs on agent activity", async () => {
+    vi.stubEnv("PI_CODING_AGENT_DIR", tempDir());
+    vi.stubEnv("TERM_PROGRAM", "WarpTerminal");
+    mockStdout();
+    const runtime = createRuntime();
+    await runtime.start({ mode: "tui" });
+
+    // User-initiated dialog while the agent is idle: silent.
+    runtime.dispatch("ui_prompt_start", {
+      type: "ui_prompt_start",
+      reason: "ui_prompt",
+      kind: "select",
+      title: "Open settings",
+    });
+    runtime.dispatch("ui_prompt_end", {
+      type: "ui_prompt_end",
+      kind: "select",
+    });
+    expect(writtenSequences()).toEqual([]);
+    expect(blockedEvents(runtime)).toEqual([]);
+
+    // The same dialog during an agent run notifies and blocks Herdr.
+    runtime.dispatch("agent_start", {});
+    runtime.dispatch("ui_prompt_start", {
+      type: "ui_prompt_start",
+      reason: "ui_prompt",
+      kind: "select",
+      title: "Pick a branch",
+    });
+    expect(writtenSequences()).toEqual([
+      "\x1b]777;notify;Pi needs your input;pi-notify-project\x1b\\",
+    ]);
+    expect(blockedEvents(runtime)).toEqual([
+      { active: true, label: "Pick a branch" },
+    ]);
+    runtime.dispatch("ui_prompt_end", {
+      type: "ui_prompt_end",
+      kind: "select",
+    });
+    expect(blockedEvents(runtime)).toEqual([
+      { active: true, label: "Pick a branch" },
+      { active: false },
+    ]);
+    await runtime.shutdown();
+  });
+
+  it("merges nested dialog spans into one notification", async () => {
+    vi.stubEnv("PI_CODING_AGENT_DIR", tempDir());
+    vi.stubEnv("TERM_PROGRAM", "WarpTerminal");
+    mockStdout();
+    const runtime = createRuntime();
+    await runtime.start({ mode: "tui" });
+
+    runtime.dispatch("agent_start", {});
+    runtime.dispatch("ui_prompt_start", { kind: "custom" });
+    // A defensive duplicate start while a span is open: ignored.
+    runtime.dispatch("ui_prompt_start", { kind: "custom" });
+    runtime.dispatch("ui_prompt_end", { kind: "custom" });
+
+    expect(writtenSequences()).toHaveLength(1);
+    expect(blockedEvents(runtime)).toEqual([
+      { active: true, label: "Waiting for input" },
+      { active: false },
+    ]);
+    await runtime.shutdown();
+  });
+
+  it("silences a marked dialog during an agent run and never leaks", async () => {
+    vi.stubEnv("PI_CODING_AGENT_DIR", tempDir());
+    vi.stubEnv("TERM_PROGRAM", "WarpTerminal");
+    mockStdout();
+    const runtime = createRuntime();
+    await runtime.start({ mode: "tui" });
+
+    runtime.dispatch("agent_start", {});
+    // A monitoring dialog (e.g. the subagents fleet view) claims silence.
+    runtime.dispatch(PI_NOTIFY_UI_SPAN_SILENT_EVENT, { reason: "fleet" });
+    runtime.dispatch("ui_prompt_start", { kind: "custom" });
+    runtime.dispatch("ui_prompt_end", { kind: "custom" });
+    expect(writtenSequences()).toEqual([]);
+    expect(blockedEvents(runtime)).toEqual([]);
+
+    // A real dialog after the silent span still notifies and blocks.
+    runtime.dispatch("ui_prompt_start", { kind: "custom" });
+    expect(writtenSequences()).toEqual([
+      "\x1b]777;notify;Pi needs your input;pi-notify-project\x1b\\",
+    ]);
+    expect(blockedEvents(runtime)).toEqual([
+      { active: true, label: "Waiting for input" },
+    ]);
+    runtime.dispatch("ui_prompt_end", { kind: "custom" });
+    expect(blockedEvents(runtime)).toEqual([
+      { active: true, label: "Waiting for input" },
+      { active: false },
+    ]);
+    await runtime.shutdown();
+  });
+
+  it("consumes the silent marker for idle spans so it cannot leak", async () => {
+    vi.stubEnv("PI_CODING_AGENT_DIR", tempDir());
+    vi.stubEnv("TERM_PROGRAM", "WarpTerminal");
+    mockStdout();
+    const runtime = createRuntime();
+    await runtime.start({ mode: "tui" });
+
+    // A marker claimed, dialog opens while the agent is idle: the span is
+    // silent anyway and still consumes the one-shot marker.
+    runtime.dispatch(PI_NOTIFY_UI_SPAN_SILENT_EVENT, {});
+    runtime.dispatch("ui_prompt_start", { kind: "custom" });
+    runtime.dispatch("ui_prompt_end", { kind: "custom" });
+    expect(writtenSequences()).toEqual([]);
+
+    // The next dialog, inside an agent run, is not affected.
+    runtime.dispatch("agent_start", {});
+    runtime.dispatch("ui_prompt_start", { kind: "custom" });
+    expect(writtenSequences()).toEqual([
+      "\x1b]777;notify;Pi needs your input;pi-notify-project\x1b\\",
+    ]);
+    runtime.dispatch("ui_prompt_end", { kind: "custom" });
+    await runtime.shutdown();
+  });
+
+  it("lets a silent marker win over pending permission classification", async () => {
+    const agentDir = tempDir();
+    vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+    writeGlobalConfig(agentDir, {
+      channels: [
+        {
+          id: "phone",
+          type: "ntfy",
+          events: ["permission-required", "input-required"],
+          ntfy: { topic: "perm-topic" },
+        },
+      ],
+    });
+    const fetchImpl = mockFetch();
+    const runtime = createRuntime();
+    await runtime.start({ mode: "json" });
+
+    runtime.dispatch("agent_start", {});
+    runtime.dispatch("permissions:ui_prompt", {
+      agentName: "Worker",
+      forwarding: null,
+      message: "Allow git status?",
+      requestId: "direct-request",
+      surface: "bash",
+      value: "git status",
+    });
+    // A marked monitoring dialog wins over the pending permission context.
+    runtime.dispatch(PI_NOTIFY_UI_SPAN_SILENT_EVENT, { reason: "admin" });
+    runtime.dispatch("ui_prompt_start", { kind: "custom" });
+    runtime.dispatch("ui_prompt_end", { kind: "custom" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(blockedEvents(runtime)).toEqual([]);
+
+    // The pending permission context is untouched: the permission dialog
+    // that follows still produces exactly one permission-required.
+    runtime.dispatch("ui_prompt_start", { kind: "custom" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const titles = fetchImpl.mock.calls.map(
+      ([, init]) => (init as { headers: Record<string, string> }).headers.Title,
+    );
+    expect(titles).toEqual(["Pi needs permission"]);
+    runtime.dispatch("ui_prompt_end", { kind: "custom" });
+    await runtime.shutdown();
+  });
+
+  it("ignores invalid silent marker payloads", async () => {
+    vi.stubEnv("PI_CODING_AGENT_DIR", tempDir());
+    vi.stubEnv("TERM_PROGRAM", "WarpTerminal");
+    mockStdout();
+    const runtime = createRuntime();
+    await runtime.start({ mode: "tui" });
+
+    runtime.dispatch("agent_start", {});
+    runtime.dispatch(PI_NOTIFY_UI_SPAN_SILENT_EVENT, { reason: 42 });
+    runtime.dispatch(PI_NOTIFY_UI_SPAN_SILENT_EVENT, "nope");
+    runtime.dispatch("ui_prompt_start", { kind: "custom" });
+    expect(writtenSequences()).toEqual([
+      "\x1b]777;notify;Pi needs your input;pi-notify-project\x1b\\",
+    ]);
+    runtime.dispatch("ui_prompt_end", { kind: "custom" });
+    await runtime.shutdown();
+  });
+
+  it("clears an unconsumed silent marker on session reset", async () => {
+    vi.stubEnv("PI_CODING_AGENT_DIR", tempDir());
+    vi.stubEnv("TERM_PROGRAM", "WarpTerminal");
+    mockStdout();
+    const runtime = createRuntime();
+    await runtime.start({ mode: "tui" });
+
+    // A marker is claimed but no dialog ever opens before the session resets.
+    runtime.dispatch(PI_NOTIFY_UI_SPAN_SILENT_EVENT, { reason: "fleet" });
+    await runtime.shutdown();
+    await runtime.start({ mode: "tui" });
+
+    runtime.dispatch("agent_start", {});
+    runtime.dispatch("ui_prompt_start", { kind: "custom" });
+    expect(writtenSequences()).toEqual([
+      "\x1b]777;notify;Pi needs your input;pi-notify-project\x1b\\",
+    ]);
+    runtime.dispatch("ui_prompt_end", { kind: "custom" });
+    await runtime.shutdown();
+  });
+
+  it("classifies permission dialogs and keeps a single notification", async () => {
+    const agentDir = tempDir();
+    vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+    writeGlobalConfig(agentDir, {
+      channels: [
+        {
+          id: "phone",
+          type: "ntfy",
+          events: ["permission-required", "input-required"],
+          ntfy: { topic: "perm-topic" },
+        },
+      ],
+    });
+    const fetchImpl = mockFetch();
+    const runtime = createRuntime();
+    await runtime.start({ mode: "json" });
+
+    runtime.dispatch("agent_start", {});
+    runtime.dispatch("permissions:ui_prompt", {
+      agentName: "Worker",
+      forwarding: null,
+      message: "Allow git status?",
+      requestId: "direct-request",
+      surface: "bash",
+      value: "git status",
+    });
+    // The dialog span fires exactly once, classified permission-required.
+    runtime.dispatch("ui_prompt_start", { kind: "custom" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const titles = fetchImpl.mock.calls.map(
+      ([, init]) => (init as { headers: Record<string, string> }).headers.Title,
+    );
+    expect(titles).toEqual(["Pi needs permission"]);
+
+    runtime.dispatch("ui_prompt_end", { kind: "custom" });
+
+    // The interactive decision clears the pending context: the next dialog
+    // falls back to input-required.
+    runtime.dispatch("permissions:decision", {
+      resolution: "user_approved",
+      surface: "bash",
+      value: "git status",
+    });
+    runtime.dispatch("ui_prompt_start", { kind: "custom" });
+    runtime.dispatch("ui_prompt_end", { kind: "custom" });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const allTitles = fetchImpl.mock.calls.map(
+      ([, init]) => (init as { headers: Record<string, string> }).headers.Title,
+    );
+    expect(allTitles).toEqual(["Pi needs permission", "Pi needs your input"]);
+    await runtime.shutdown();
+  });
+
+  it("stays silent for headless ask flows and labeled events without dialogs", async () => {
+    vi.stubEnv("PI_CODING_AGENT_DIR", tempDir());
+    vi.stubEnv("TERM_PROGRAM", "WarpTerminal");
+    const write = mockStdout();
+    const runtime = createRuntime();
+    await runtime.start({ mode: "tui" });
+
+    runtime.dispatch("agent_start", {});
+    // A headless pi-ask flow (no dialog ever opens): started/completed only.
+    runtime.dispatch("@eko24ive/pi-ask:started", {
+      flowId: "ask-1",
+      title: "Choose deployment",
+    });
+    runtime.dispatch("@eko24ive/pi-ask:completed", { flowId: "ask-1" });
+    // A permission ui_prompt without its dialog: context only, no output.
+    runtime.dispatch("permissions:ui_prompt", {
+      agentName: "Worker",
+      forwarding: null,
+      message: "Allow git push?",
+      requestId: "headless-request",
+      surface: "bash",
+      value: "git push",
+    });
+    runtime.dispatch("permissions:decision", {
+      resolution: "user_approved",
+      surface: "bash",
+      value: "git push",
+    });
+
+    expect(write).not.toHaveBeenCalled();
+    expect(blockedEvents(runtime)).toEqual([]);
+    await runtime.shutdown();
+  });
+
+  it("uses a sanitized ask title for Herdr and never leaks it into the body", async () => {
+    const agentDir = tempDir();
+    vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+    writeGlobalConfig(agentDir, {
+      channels: [
+        {
+          id: "phone",
+          type: "ntfy",
+          events: ["input-required"],
+          ntfy: { topic: "ask-topic" },
+        },
+      ],
+    });
+    const fetchImpl = mockFetch();
+    const runtime = createRuntime();
+    await runtime.start({ mode: "json" });
+
+    runtime.dispatch("agent_start", {});
+    runtime.dispatch("@eko24ive/pi-ask:started", {
+      flowId: "ask-1",
+      title: "Choose deployment\ntarget",
+    });
+    runtime.dispatch("ui_prompt_start", { kind: "custom" });
+    runtime.dispatch("ui_prompt_end", { kind: "custom" });
+    runtime.dispatch("@eko24ive/pi-ask:completed", { flowId: "ask-1" });
+
+    expect(blockedEvents(runtime)).toEqual([
+      { active: true, label: "Choose deployment target" },
+      { active: false },
+    ]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(init.body).toBe("pi-notify-project");
+    expect(String(init.body)).not.toContain("Choose deployment");
+    await runtime.shutdown();
+  });
+
   it("clears state on shutdown", async () => {
     vi.stubEnv("PI_CODING_AGENT_DIR", tempDir());
     const runtime = createRuntime();
     await runtime.start();
-    runtime.dispatch("@eko24ive/pi-ask:started", {
-      flowId: "ask-1",
-      title: "Question",
-    });
+    runtime.dispatch("agent_start", {});
+    runtime.dispatch("ui_prompt_start", { kind: "custom" });
     await runtime.shutdown();
     runtime.dispatch("agent_start", {});
     runtime.dispatch("agent_end", {
@@ -600,7 +964,7 @@ describe("pi-notify extension", () => {
     });
     runtime.dispatch("agent_settled", {});
     expect(blockedEvents(runtime)).toEqual([
-      { active: true, label: "Question" },
+      { active: true, label: "Waiting for input" },
       { active: false },
     ]);
   });
@@ -628,27 +992,40 @@ describe("pi-notify extension", () => {
     settle();
     expect(fetchImpl).toHaveBeenCalledTimes(1);
 
-    // Simulate a /reload: second session_start after shutdown (no dupe state).
-    await runtime.shutdown();
-    await runtime.start({ mode: "json" });
-    settle();
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-
-    // State from the first run must not survive reload: a completed ask in
-    // run 1 must not suppress a fresh ask's notification in run 2. The
-    // channel uses the default subscription (includes input-required), so
-    // each ask-start POSTs once: 2 settles + 2 asks = 4 total.
+    // Run 1: an ask dialog, then a completed flow.
     runtime.dispatch("@eko24ive/pi-ask:started", {
       flowId: "ask-1",
       title: "First run question",
     });
+    runtime.dispatch("agent_start", {});
+    runtime.dispatch("ui_prompt_start", { kind: "custom" });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    runtime.dispatch("ui_prompt_end", { kind: "custom" });
     runtime.dispatch("@eko24ive/pi-ask:completed", { flowId: "ask-1" });
+
+    // Simulate a /reload: second session_start after shutdown (no dupe state).
+    await runtime.shutdown();
+    await runtime.start({ mode: "json" });
+    settle();
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+
+    // A different flow id in run 2: if run 1's ask context leaked, the herdr
+    // label would still be the run-1 title. The channel uses the default
+    // subscription (includes input-required), so each dialog span POSTs once.
     runtime.dispatch("@eko24ive/pi-ask:started", {
-      flowId: "ask-1",
+      flowId: "ask-2",
       title: "Second run question",
     });
-    // A leaked dedupe state from run 1 would drop the second ask's POST.
+    runtime.dispatch("agent_start", {});
+    runtime.dispatch("ui_prompt_start", { kind: "custom" });
+    runtime.dispatch("ui_prompt_end", { kind: "custom" });
     expect(fetchImpl).toHaveBeenCalledTimes(4);
+    const blocked = blockedEvents(runtime);
+    expect(blocked.at(-2)).toEqual({
+      active: true,
+      label: "Second run question",
+    });
+    expect(blocked.at(-1)).toEqual({ active: false });
     await runtime.shutdown();
   });
 });

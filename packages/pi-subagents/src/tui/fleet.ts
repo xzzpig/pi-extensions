@@ -1,9 +1,14 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import { getMarkdownTheme, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+	getMarkdownTheme,
+	type ExtensionAPI,
+	type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { matchesKey, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component, type MarkdownTheme } from "@earendil-works/pi-tui";
 import { snapshotExternalRuns, type ExternalRun } from "../api/external-runs.ts";
+import { emitUiSpanSilent, type UiSpanSilentEvents } from "../ui-silent-marker.ts";
 import { getArtifactPaths, getArtifactsDir } from "../shared/artifacts.ts";
 import { formatDuration, formatModelThinking, formatTokens, formatTokenUsage, shortenPath } from "../shared/formatters.ts";
 import { DIRS, type AsyncJobState, type AsyncJobStep, type Details, type FleetKeybindingAction, type FleetKeybindingsConfig, type ForegroundChildControl, type ForegroundResumeChild, type ForegroundResumeRun, type ForegroundRunControl, type SubagentState } from "../shared/types.ts";
@@ -115,6 +120,8 @@ export interface FleetViewOptions {
 	actions?: FleetActionHandlers;
 	copyText?: (text: string) => Promise<void> | void;
 	herdrClient?: HerdrClient;
+	/** Event bus used to claim the fleet dialog as a silent span. */
+	events?: UiSpanSilentEvents;
 }
 
 function belongsToCurrentSession(sessionId: string | undefined, currentSessionId: string | null): boolean {
@@ -1518,6 +1525,9 @@ export async function openSubagentFleet(ctx: ExtensionContext, state: SubagentSt
 			return control.promptAuditRedo(input.index, input.guidance);
 		},
 	} satisfies FleetActionHandlers;
+	// The fleet inspector is a user-initiated monitoring panel, not an
+	// agent-waiting prompt: claim the dialog span as silent.
+	emitUiSpanSilent(options.events, "fleet");
 	try {
 		await ctx.ui.custom<undefined>(
 			(tui, theme, _keybindings, done) => new SubagentFleetComponent(tui, theme, state, done, { ...options, actions, copyText }),
@@ -1529,4 +1539,31 @@ export async function openSubagentFleet(ctx: ExtensionContext, state: SubagentSt
 	} finally {
 		state.fleetInspectorOpen = wasOpen;
 	}
+}
+
+export interface OpenFleetFromStatusOptions {
+	itemKey?: string;
+	asyncDirRoot: string;
+	resultsDir: string;
+	fleetKeybindings?: FleetKeybindingsConfig;
+}
+
+/**
+ * Opens the fleet inspector from the idle status widget, claiming the
+ * dialog as a silent span (pi-notify protocol). Shared by the status-widget
+ * path so the marker wiring is testable in one place.
+ */
+export function openSubagentFleetFromStatus(
+	ctx: ExtensionContext,
+	state: SubagentState,
+	pi: ExtensionAPI,
+	options: OpenFleetFromStatusOptions,
+): Promise<void> {
+	return openSubagentFleet(ctx, state, {
+		initialKey: options.itemKey,
+		asyncDirRoot: options.asyncDirRoot,
+		resultsDir: options.resultsDir,
+		fleetKeybindings: options.fleetKeybindings,
+		events: pi.events,
+	});
 }

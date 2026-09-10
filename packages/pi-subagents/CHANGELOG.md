@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.11.0] - 2026-09-11
+
+### Added
+
+- **Silent span marker for user-initiated dialogs (pi-notify protocol).**
+  The fleet inspector and the `/subagents admin` management dialogs emit the
+  literal `pi-notify:ui_span_silent` bus event (payload `{ reason: "fleet" |
+  "admin" }`) synchronously before opening their `ctx.ui.*` dialog, so the
+  pi-notify generic UI-prompt adapter produces no notification and no Herdr
+  wait entry for them. Emission is observational (bare try/catch) and uses the
+  literal event name with no dependency on the `@xzzpig/pi-notify` package, so
+  installs without pi-notify are unaffected. Both fleet open paths are wired
+  — the `/subagents-fleet` command and the fleet status widget — via the new
+  optional `FleetViewOptions.events` field; the subagent-executor agent-waiting
+  confirmations (worktree cleanup, authority confirmation) deliberately do not
+  emit the marker.
+
+
 ## [0.10.0] - 2026-09-10 (fork release)
 
 ### Added

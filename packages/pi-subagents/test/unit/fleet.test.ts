@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { describe, it } from "node:test";
 import { visibleWidth, type MarkdownTheme } from "@earendil-works/pi-tui";
 import { EXTERNAL_RUN_REGISTRY_KEY, EXTERNAL_RUN_REGISTRY_VERSION, registerExternalRun } from "../../src/api/external-runs.ts";
-import { collectFleetSnapshot, openSubagentFleet, SubagentFleetComponent } from "../../src/tui/fleet.ts";
+import { collectFleetSnapshot, openSubagentFleet, openSubagentFleetFromStatus, SubagentFleetComponent } from "../../src/tui/fleet.ts";
 import { persistForegroundRunHistory, restoreForegroundRunHistory } from "../../src/runs/foreground/foreground-history.ts";
 import { FLEET_STATUS_WIDGET_KEY } from "../../src/tui/fleet-status.ts";
 import { registerLivePromptAudit, rewritePromptWithGuidance } from "../../src/runs/foreground/prompt-audit.ts";
@@ -1402,6 +1402,77 @@ describe("native subagent fleet", () => {
 
 			await openSubagentFleet(ctx as never, state, { asyncDirRoot: root, resultsDir: path.join(root, "results") });
 			assert.match(rendered, /worker/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("claims the fleet dialog as a silent span before opening it", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-fleet-silent-marker-"));
+		try {
+			writeAsyncRun(root, { id: "marked", agents: ["worker"] });
+			const state = stateForTest();
+			const emitted: Array<{ channel: string; data: unknown }> = [];
+			const events = {
+				emit(channel: string, data: unknown) {
+					emitted.push({ channel, data });
+				},
+			};
+			const ctx = {
+				hasUI: true,
+				ui: {
+					setWidget() {},
+					async custom(factory: (tui: unknown, theme: unknown, keybindings: unknown, done: (result: undefined) => void) => SubagentFleetComponent) {
+						const component = factory({ terminal: { rows: 32 }, requestRender() {} }, theme, undefined, () => {});
+						component.dispose();
+					},
+				},
+			};
+
+			await openSubagentFleet(ctx as never, state, {
+				asyncDirRoot: root,
+				resultsDir: path.join(root, "results"),
+				events,
+			});
+			assert.deepEqual(emitted, [
+				{ channel: "pi-notify:ui_span_silent", data: { reason: "fleet" } },
+			]);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("claims a silent span on the status-widget fleet open path", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-fleet-widget-marker-"));
+		try {
+			writeAsyncRun(root, { id: "widget-path", agents: ["worker"] });
+			const state = stateForTest();
+			const emitted: Array<{ channel: string; data: unknown }> = [];
+			const pi = {
+				events: {
+					emit(channel: string, data: unknown) {
+						emitted.push({ channel, data });
+					},
+				},
+			} as never;
+			const ctx = {
+				hasUI: true,
+				ui: {
+					setWidget() {},
+					async custom(factory: (tui: unknown, theme: unknown, keybindings: unknown, done: (result: undefined) => void) => SubagentFleetComponent) {
+						const component = factory({ terminal: { rows: 32 }, requestRender() {} }, theme, undefined, () => {});
+						component.dispose();
+					},
+				},
+			};
+
+			await openSubagentFleetFromStatus(ctx as never, state, pi, {
+				asyncDirRoot: root,
+				resultsDir: path.join(root, "results"),
+			});
+			assert.deepEqual(emitted, [
+				{ channel: "pi-notify:ui_span_silent", data: { reason: "fleet" } },
+			]);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}

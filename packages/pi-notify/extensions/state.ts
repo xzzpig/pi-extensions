@@ -1,25 +1,28 @@
+/**
+ * Herdr blocked-state machine for UI wait spans.
+ *
+ * The generic UI-prompt adapter is the ONLY source of wait items: each
+ * accepted `ui_prompt_start` opens one span, and its `ui_prompt_end` closes
+ * it. The first active span emits `herdr:blocked`; the state releases only
+ * when every span completes or the session shuts down. Emissions are
+ * observational and must never interrupt Pi.
+ */
 const HERDR_BLOCKED_EVENT = "herdr:blocked";
 
 export interface EventBus {
-  emit(channel: string, data: unknown): unknown;
+  emit(channel: string, data: unknown): void;
 }
 
 export interface InteractionState {
   activeCount(): number;
-  completeAsk(flowId: string): boolean;
-  resolvePermission(requestId: string): boolean;
+  completeUiPrompt(spanId: string): boolean;
   shutdown(): void;
-  startAsk(flowId: string, label: string): boolean;
-  startPermission(requestId: string, label: string): boolean;
+  startUiPrompt(spanId: string, label: string): boolean;
 }
 
 export function createInteractionState(events: EventBus): InteractionState {
-  const activeAskFlows = new Set<string>();
-  const activePermissionRequests = new Set<string>();
+  const activeSpans = new Set<string>();
   let blocked = false;
-
-  const activeCount = (): number =>
-    activeAskFlows.size + activePermissionRequests.size;
 
   const emit = (channel: string, data: unknown): void => {
     try {
@@ -39,7 +42,7 @@ export function createInteractionState(events: EventBus): InteractionState {
   };
 
   const emitUnblockedWhenIdle = (): void => {
-    if (activeCount() !== 0 || !blocked) {
+    if (activeSpans.size !== 0 || !blocked) {
       return;
     }
 
@@ -48,17 +51,9 @@ export function createInteractionState(events: EventBus): InteractionState {
   };
 
   return {
-    activeCount,
-    completeAsk(flowId) {
-      if (!activeAskFlows.delete(flowId)) {
-        return false;
-      }
-
-      emitUnblockedWhenIdle();
-      return true;
-    },
-    resolvePermission(requestId) {
-      if (!activePermissionRequests.delete(requestId)) {
+    activeCount: () => activeSpans.size,
+    completeUiPrompt(spanId) {
+      if (!activeSpans.delete(spanId)) {
         return false;
       }
 
@@ -66,25 +61,15 @@ export function createInteractionState(events: EventBus): InteractionState {
       return true;
     },
     shutdown() {
-      activeAskFlows.clear();
-      activePermissionRequests.clear();
+      activeSpans.clear();
       emitUnblockedWhenIdle();
     },
-    startAsk(flowId, label) {
-      if (activeAskFlows.has(flowId)) {
+    startUiPrompt(spanId, label) {
+      if (activeSpans.has(spanId)) {
         return false;
       }
 
-      activeAskFlows.add(flowId);
-      emitBlocked(label);
-      return true;
-    },
-    startPermission(requestId, label) {
-      if (activePermissionRequests.has(requestId)) {
-        return false;
-      }
-
-      activePermissionRequests.add(requestId);
+      activeSpans.add(spanId);
       emitBlocked(label);
       return true;
     },

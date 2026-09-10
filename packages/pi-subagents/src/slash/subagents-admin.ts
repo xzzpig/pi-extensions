@@ -11,6 +11,16 @@ import {
 	type BuiltinAgentOverrideBase,
 } from "../agents/agents.ts";
 import { serializeAgent } from "../agents/agent-serializer.ts";
+import { emitUiSpanSilent, type UiSpanSilentEvents } from "../ui-silent-marker.ts";
+
+/** Event bus captured for the duration of one admin flow. */
+let adminDialogEvents: UiSpanSilentEvents | undefined;
+
+/** Claims the next dialog span as silent (pi-notify protocol). */
+function markAdminDialogSilent(): void {
+	emitUiSpanSilent(adminDialogEvents, "admin");
+}
+
 import { editableAgentConfig, preservedAgentFrontmatterFields } from "../agents/agent-management.ts";
 import { findModelInfo, getSupportedThinkingLevels, toModelInfo } from "../shared/model-info.ts";
 import { SelectorComponent, type SelectorItem, type SelectorResult } from "./selector.ts";
@@ -203,6 +213,7 @@ function metadataFor(agent: AgentConfig): string {
 }
 
 async function selectFromList(ctx: ExtensionContext, title: string, subtitle: string | undefined, items: SelectorItem[]): Promise<string | undefined> {
+	markAdminDialogSilent();
 	if (typeof ctx.ui.custom === "function") {
 		const result = await ctx.ui.custom<SelectorResult>(
 			(tui, theme, kb, done) => new SelectorComponent(tui, theme, kb, { title, subtitle, items, done }),
@@ -257,6 +268,7 @@ async function chooseOverrideScope(ctx: ExtensionContext, agent: AgentConfig): P
 		return agent.source === "project" && agent.override.scope === "user" && d.projectSettingsPath ? "project" : agent.override.scope;
 	}
 	if (!d.projectSettingsPath || !ctx.hasUI) return "user";
+	markAdminDialogSilent();
 	const choice = await ctx.ui.select(`Save subagent override for ${agent.name}`, ["user", "project"]);
 	return choice === "user" || choice === "project" ? choice : undefined;
 }
@@ -373,6 +385,7 @@ async function editSystemPrompt(ctx: ExtensionContext, agent: AgentConfig): Prom
 		const readOnlyMessage = readOnlyAgentMessage(agent, "systemPrompt");
 		if (readOnlyMessage) return readOnlyMessage;
 	}
+	markAdminDialogSilent();
 	const edited = await ctx.ui.editor(`Edit '${agent.name}' system prompt`, agent.systemPrompt ?? "");
 	if (edited === undefined) return null;
 	const projectOwnsLowerScopeOverride = agent.source === "project" && agent.override?.scope === "user" && discoverAgentsAll(ctx.cwd).projectSettingsPath;
@@ -383,6 +396,15 @@ async function editSystemPrompt(ctx: ExtensionContext, agent: AgentConfig): Prom
 }
 
 export async function openSubagentsAdmin(pi: ExtensionAPI, ctx: ExtensionContext, args = ""): Promise<void> {
+	adminDialogEvents = pi.events;
+	try {
+		return await runAdminFlow(pi, ctx, args);
+	} finally {
+		adminDialogEvents = undefined;
+	}
+}
+
+async function runAdminFlow(pi: ExtensionAPI, ctx: ExtensionContext, args = ""): Promise<void> {
 	const selection = await selectAgent(ctx, args);
 	if (selection.kind === "cancelled") return;
 	if (selection.kind === "ambiguous") {
@@ -411,6 +433,7 @@ export async function openSubagentsAdmin(pi: ExtensionAPI, ctx: ExtensionContext
 	else if (requestedAction === "prompt" || requestedAction === "system-prompt" || requestedAction === "edit") action = "Edit system prompt";
 	else if (requestedAction === "details" || requestedAction === "info") action = "Show details";
 	if (!action) {
+		markAdminDialogSilent();
 		action = await ctx.ui.select(
 			`Administer ${agent.name}\n${metadataSummary(agent)}`,
 			["Change model", "Change thinking level", "Edit system prompt", "Show details", "Done"],

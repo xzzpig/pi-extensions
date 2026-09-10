@@ -1,6 +1,6 @@
 # @xzzpig/pi-notify
 
-Cross-device notifications for Pi. Supports **OSC terminal notifications** (OSC 9 / 99 / 777) and **ntfy push channels** with configurable priority, icons, and per-instance event subscriptions. Integrates with `pi-ask`, `pi-permission-system`, `pi-subagents`, and exposes a public `publishNotification` API for third-party plugins.
+Cross-device notifications for Pi. Supports **OSC terminal notifications** (OSC 9 / 99 / 777) and **ntfy push channels** with configurable priority, icons, and per-instance event subscriptions. A generic adapter observes Pi's `ui_prompt_start`/`ui_prompt_end` lifecycle events, so every blocking dialog during an agent run (pi-goal-x questionnaires and proposal confirmations, pi-sandbox permission confirmations, `pi-ask` questions, `pi-permission-system` prompts, and any other `ctx.ui` dialog) produces a notification and flips the Herdr blocked state. Also integrates `pi-subagents` completions and exposes a public `publishNotification` API for third-party plugins.
 
 ## Install
 
@@ -150,12 +150,63 @@ OSC sequences are only written in TUI mode. Each OSC 99 notification gets a uniq
 - **Fire-and-forget**: failures are never retried; no integration-error is produced
 - Delivery errors are sanitized (status code only, no token/URL leak)
 
+## Dialog waits (generic UI-prompt adapter)
+
+Pi core >= **0.84.4** wraps every blocking `ctx.ui.select/confirm/input/editor/custom` dialog and emits `ui_prompt_start`/`ui_prompt_end` around the outermost span. pi-notify listens to those lifecycle events and treats each span as a single wait item:
+
+- The dialog is only notified **while an agent run is active** (`agent_start` to `agent_settled`). Dialogs you open yourself via commands (settings, config) stay silent.
+- The span is the **only** source of the notification and the Herdr blocked state — labeled plugin events never notify on their own, so there is no double delivery.
+- A dialog is classified as `permission-required` while a `pi-permission-system` prompt is awaiting confirmation (forwarded prompts are labeled with the requester agent), and as `input-required` otherwise.
+- The Herdr overlay label uses the sanitized dialog title when the core provides one, or the sanitized question title of an active `pi-ask` flow; notification bodies always use the fixed titles and never include dialog text.
+- Nested dialogs are coalesced by Pi core into one outer span; closing a span only clears its state (no "resolved" notification).
+- A dialog that is **not** an agent-waiting prompt (monitoring panels, admin dialogs) can be claimed as silent via the [silent-span marker protocol](#silent-span-marker-protocol): no notification and no Herdr wait entry, while the span is still tracked for `ui_prompt_end` pairing.
+- `ui_prompt_end` releases the Herdr blocked state; session shutdown clears everything.
+
+**Behavior notes** (accepted narrowings):
+
+- This requires Pi >= 0.84.4 (`peerDependencies`). On older cores the adapter stays inert, and ask/permission dialogs produce no notification or Herdr state.
+- A headless session (`--print`/no UI) never opens a dialog, so a pure remote `pi-ask` flow with no dialog produces no notification.
+
+## Silent Span Marker Protocol
+
+Some blocking dialogs are **not** agent-waiting prompts: the user opened them
+voluntarily (a live monitoring panel, an admin management dialog). Since the
+core `ui_prompt_start` payload cannot express who opened the dialog, the
+opening extension declares it by emitting a silent-span marker on the shared
+event bus:
+
+```typescript
+// Claim the NEXT blocking dialog as silent. Emit synchronously, immediately
+// before ctx.ui.custom/select/confirm/input/editor — no await in between —
+// and never throw: pi-notify may not be installed (the emit is a no-op then).
+function openMonitoringPanel(pi: ExtensionAPI, ctx: ExtensionContext): void {
+  try {
+    pi.events.emit("pi-notify:ui_span_silent", { reason: "fleet" });
+  } catch {
+    // observational
+  }
+  void (ctx.ui.custom(/* ... */));
+}
+```
+
+Contract:
+
+- **Channel**: `pi-notify:ui_span_silent` (constant `PI_NOTIFY_UI_SPAN_SILENT_EVENT` exported from `@xzzpig/pi-notify/api`).
+- **Payload**: `{ reason?: string }` — optional free-form diagnostic reason. Invalid raw payloads (non-object, blank/non-string `reason`) are ignored without error.
+- **One-shot**: the marker is consumed by the next `ui_prompt_start` span; a silent span produces no notification and no Herdr wait entry but is still tracked so its `ui_prompt_end` pairs correctly. Unconsumed markers are cleared on session reset.
+- **Priority**: a silent span wins over every classification (pending permission, active ask flow, default input-required).
+- **No hard dependency**: emitters must use the literal channel name via their own observational `emit`; pi-notify may be absent.
+
+Adopted by `@xzzpig/pi-subagents` for the fleet inspector (`/subagents-fleet`)
+and the `/subagents` admin dialogs; agent-waiting confirmations (worktree
+cleanup, authority confirmation) deliberately do **not** emit the marker.
+
 ## Herdr Blocked State
 
 The `herdr:blocked` contract is maintained independently of the notification
 `enabled` flag. `herdr.enabled` (default `true`) controls whether blocked-state
-events are published. The state machine tracks the first active ask/permission
-item and clears only when all items resolve.
+events are published. The state machine tracks the first active UI wait span
+and clears only when all spans close or the session shuts down.
 
 ## Public API
 
@@ -170,10 +221,12 @@ import {
 ```
 
 - `PI_NOTIFY_PUBLISH_EVENT` — channel name
+- `PI_NOTIFY_UI_SPAN_SILENT_EVENT` — silent-span marker channel name
 - `NOTIFICATION_EVENT_IDS` — closed array of event IDs
 - `NotificationEventId` — union type
 - `PiNotifyPublishPayload` — interface (`eventId`, `source`, `label?`)
-- `PiNotifyEventBus` — `{ emit(channel, data): unknown }`
+- `UiSpanSilentPayload` — interface (`reason?`)
+- `PiNotifyEventBus` — `{ emit(channel, data): void }`
 - `isPiNotifyPublishPayload(value)` — type guard
 - `assertPiNotifyPublishPayload(value)` — throws `TypeError` on invalid payload
 - `publishNotification({ events, eventId, source, label })` — emits a validated payload on the event bus

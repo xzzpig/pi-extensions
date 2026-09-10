@@ -860,7 +860,7 @@ export function registerSlashCommands(
 		}
 		fleetOpen = true;
 		try {
-			await openSubagentFleet(ctx, state, { asyncDirRoot: DIRS.async, resultsDir: DIRS.results, fleetKeybindings: options.fleetKeybindings });
+			await openSubagentFleet(ctx, state, { asyncDirRoot: DIRS.async, resultsDir: DIRS.results, fleetKeybindings: options.fleetKeybindings, events: pi.events });
 		} finally {
 			fleetOpen = false;
 		}

@@ -8,6 +8,8 @@ import { asRecord, stringField } from "./events.js";
 export type AgentRunResult = "completed" | "error" | "silent";
 
 export interface AgentRunTracker {
+  /** True between the first `agent_start` and the final `agent_settled`. */
+  isActive(): boolean;
   onAgentStart(): void;
   onAgentEnd(event: unknown): void;
   onSettled(): AgentRunResult | undefined;
@@ -19,6 +21,7 @@ export function createAgentRunTracker(): AgentRunTracker {
   let candidate: AgentRunResult | undefined;
 
   return {
+    isActive: () => active,
     onAgentStart() {
       active = true;
       candidate = undefined;

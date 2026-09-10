@@ -93,6 +93,30 @@ describe("agent run tracker", () => {
     expect(tracker.onSettled()).toBe("completed");
   });
 
+  it("reports isActive between start and settled only", () => {
+    const tracker = createAgentRunTracker();
+    expect(tracker.isActive()).toBe(false);
+
+    tracker.onAgentStart();
+    expect(tracker.isActive()).toBe(true);
+
+    // agent_end alone does not end the visible run.
+    tracker.onAgentEnd({
+      messages: [{ role: "assistant", stopReason: "stop" }],
+    });
+    expect(tracker.isActive()).toBe(true);
+
+    tracker.onSettled();
+    expect(tracker.isActive()).toBe(false);
+  });
+
+  it("isActive is false after shutdown of an active run", () => {
+    const tracker = createAgentRunTracker();
+    tracker.onAgentStart();
+    tracker.shutdown();
+    expect(tracker.isActive()).toBe(false);
+  });
+
   it("shutdown clears state", () => {
     const tracker = createAgentRunTracker();
     tracker.onAgentStart();

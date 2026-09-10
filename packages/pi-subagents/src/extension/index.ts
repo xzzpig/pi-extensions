@@ -31,7 +31,7 @@ import { isStaleExtensionContextError, withCachedUiContext } from "../shared/ext
 import { currentCompletionOwnerId } from "../shared/completion-owner.ts";
 import { cleanupOldChainDirs } from "../shared/settings.ts";
 import { clearLegacyResultAnimationTimer, renderSubagentResult, renderSubagentSummary } from "../tui/render.ts";
-import { openSubagentFleet } from "../tui/fleet.ts";
+import { openSubagentFleetFromStatus } from "../tui/fleet.ts";
 import { SubagentFleetStatus, resolveFleetViewPlacement } from "../tui/fleet-status.ts";
 import { createSubagentParamsSchema } from "./schemas.ts";
 import { createSubagentExecutor, type SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
@@ -69,7 +69,7 @@ import { disposeChildSessions } from "../runs/shared/child-session.ts";
 import { resolveCurrentSubagentCapabilityCeiling } from "../runs/shared/capability-ceiling.ts";
 import { formatDuration, shortenPath } from "../shared/formatters.ts";
 import { applyModelExclusionsConfig, loadConfig, resolveAsyncByDefault, resolveScheduledStoreRoot } from "./config.ts";
-import { applyInjectionBlock, renderInjectionBlock, resolveInjectableAgents, SUBAGENT_INJECTION_MARKER } from "./context-injection.ts";
+import { applyInjectionBlock, renderInjectionBlock, resolveInjectableAgents } from "./context-injection.ts";
 import { buildSubagentToolDescription, buildSubagentToolPromptMetadata } from "./tool-description.ts";
 import { formatWorkflowPreflightSummary, normalizeWorkflowPreflight } from "../workflows/workflow-preflight.ts";
 import { finalizeToolResult } from "./tool-result.ts";
@@ -499,7 +499,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			const ctx = withLastUiContext((current) => current);
 			if (!ctx) return;
 			try {
-				await openSubagentFleet(ctx, state, { initialKey: itemKey, asyncDirRoot: DIRS.async, resultsDir: DIRS.results, fleetKeybindings: config.fleetKeybindings });
+				await openSubagentFleetFromStatus(ctx, state, pi, { itemKey, asyncDirRoot: DIRS.async, resultsDir: DIRS.results, fleetKeybindings: config.fleetKeybindings });
 			} catch (error) {
 				if (isStaleExtensionContextError(error)) {
 					if (state.lastUiContext === ctx) state.lastUiContext = null;
@@ -613,6 +613,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	executorScheduled = executor.executeScheduled;
 
 	pi.registerMessageRenderer<SupervisorRequestMessageDetails>(SUPERVISOR_REQUEST_MESSAGE_TYPE, renderSupervisorRequest);
+	// SAFETY: `registerEntryRenderer` is not part of the typed ExtensionAPI in the
+	// pinned dependency version; this cast pins the runtime shape of the entry
+	// renderer registration surface, guarded below by a typeof check.
 	const registerEntryRenderer = (pi as unknown as {
 		registerEntryRenderer?: (customType: string, renderer: (entry: { data?: unknown }, options: { expanded: boolean }, theme: ExtensionContext["ui"]["theme"]) => Component | undefined) => void;
 	}).registerEntryRenderer;

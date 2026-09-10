@@ -6,6 +6,12 @@
  * `herdr:blocked` contract independently of notification routing. Every
  * failure path is observational: notifications never block Pi, answers,
  * permissions, or other channels.
+ *
+ * Dialog waits: Pi core (>= 0.84.4) emits `ui_prompt_start`/`ui_prompt_end`
+ * around the outermost blocking `ctx.ui` dialog. That generic adapter is the
+ * single notification and Herdr source for dialog waits; labeled plugin
+ * events (pi-ask flows, permission-system prompts) only provide
+ * classification context and never notify or block on their own.
  */
 import { createRequire } from "node:module";
 import { basename } from "node:path";
@@ -14,7 +20,11 @@ import {
   getAgentDir,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
-import { PI_NOTIFY_PUBLISH_EVENT, type NotificationEventId } from "../api.js";
+import {
+  PI_NOTIFY_PUBLISH_EVENT,
+  PI_NOTIFY_UI_SPAN_SILENT_EVENT,
+  type NotificationEventId,
+} from "../api.js";
 import { createAgentRunTracker } from "./agent-events.js";
 import { createOscSender } from "./channels/osc.js";
 import { createNtfySender, ntfyHttpWarning } from "./channels/ntfy.js";
@@ -31,7 +41,6 @@ import {
   type InternalNotificationEvent,
 } from "./events.js";
 import { createHealthTracker } from "./health.js";
-import { createInteractionRoutingTracker } from "./interaction-events.js";
 import { type RoutableChannel, createRouter } from "./router.js";
 import { createInteractionState } from "./state.js";
 import {
@@ -39,6 +48,15 @@ import {
   SUBAGENT_FOREGROUND_COMPLETE_EVENT,
   parseSubagentCompletion,
 } from "./subagent-events.js";
+import {
+  UI_PROMPT_END_EVENT,
+  UI_PROMPT_SOURCE,
+  UI_PROMPT_START_EVENT,
+  createUiPromptContexts,
+  createUiPromptSpanTracker,
+  parseUiPromptEvent,
+  parseUiSpanSilentPayload,
+} from "./ui-prompts.js";
 import {
   createPermissionPromptTracker,
   parseForwardedPermissionDecision,
@@ -51,7 +69,6 @@ import {
 
 const PI_ASK_STARTED_EVENT = "@eko24ive/pi-ask:started";
 const PI_ASK_COMPLETED_EVENT = "@eko24ive/pi-ask:completed";
-const DEFAULT_ASK_LABEL = "Waiting for input";
 
 const require = createRequire(import.meta.url);
 const PACKAGE_VERSION = (require("../package.json") as { version: string })
@@ -60,7 +77,8 @@ export const DEFAULT_ICON_URL = `https://cdn.jsdelivr.net/npm/@xzzpig/pi-notify@
 
 export default function piNotify(pi: ExtensionAPI): void {
   const agentTracker = createAgentRunTracker();
-  const routing = createInteractionRoutingTracker();
+  const uiContexts = createUiPromptContexts();
+  const spans = createUiPromptSpanTracker();
   const state = createInteractionState(pi.events);
   const health = createHealthTracker({
     onFailure: (channelId, detail) =>
@@ -86,6 +104,7 @@ export default function piNotify(pi: ExtensionAPI): void {
   let permissionPrompts:
     | ReturnType<typeof createPermissionPromptTracker>
     | undefined;
+  let openSpanId: string | undefined;
   const seenWarnings = new Set<string>();
 
   const notify = (message: string, kind: "warning" | "info"): void => {
@@ -125,7 +144,8 @@ export default function piNotify(pi: ExtensionAPI): void {
     latestContext = ctx;
     projectName = basename(ctx.cwd ?? "");
 
-    routing.reset();
+    uiContexts.reset();
+    openSpanId = undefined;
     agentTracker.shutdown();
     state.shutdown();
 
@@ -146,10 +166,7 @@ export default function piNotify(pi: ExtensionAPI): void {
     permissionPrompts?.shutdown();
     permissionPrompts = createPermissionPromptTracker({
       onResolved: (requestId) => {
-        routing.completePermission(requestId);
-        if (herdrEnabled) {
-          state.resolvePermission(requestId);
-        }
+        uiContexts.resolvePermission(requestId);
       },
     });
 
@@ -163,7 +180,8 @@ export default function piNotify(pi: ExtensionAPI): void {
     currentMode = "";
     latestContext = undefined;
     projectName = "";
-    routing.reset();
+    uiContexts.reset();
+    openSpanId = undefined;
     agentTracker.shutdown();
     state.shutdown();
     permissionPrompts?.shutdown();
@@ -191,20 +209,69 @@ export default function piNotify(pi: ExtensionAPI): void {
     route("context-compacted", "pi");
   });
 
+  // Generic UI-wait adapter: the only dialog-wait notification and Herdr
+  // source. Pi core coalesces nested dialogs into one outermost span, so at
+  // most one span is open at a time; a defensive duplicate start is ignored.
+  pi.on(UI_PROMPT_START_EVENT, (event) => {
+    const prompt = parseUiPromptEvent(event);
+    if (!prompt || openSpanId !== undefined) {
+      return;
+    }
+    // Consume a pending silent marker before the agent gate: an idle span
+    // still consumes the one-shot marker, so it can never leak into a later
+    // agent-active span.
+    const silent = uiContexts.consumeSilent();
+    if (!agentTracker.isActive()) {
+      // User-initiated dialogs (commands, settings) never notify or block.
+      return;
+    }
+
+    const spanId = spans.nextSpanId();
+    openSpanId = spanId;
+    if (silent) {
+      // Silent span: tracked for `ui_prompt_end` pairing, but produces no
+      // notification and no Herdr wait entry.
+      return;
+    }
+
+    const classification = uiContexts.classify(prompt.title);
+    if (herdrEnabled) {
+      state.startUiPrompt(spanId, classification.label);
+    }
+    route(classification.eventId, UI_PROMPT_SOURCE);
+  });
+
+  pi.on(UI_PROMPT_END_EVENT, (event) => {
+    if (!parseUiPromptEvent(event)) {
+      return;
+    }
+    const spanId = openSpanId;
+    openSpanId = undefined;
+    if (spanId === undefined) {
+      return;
+    }
+    state.completeUiPrompt(spanId);
+  });
+
+  // Silent-span markers: a plugin that opens a dialog which is NOT an
+  // agent-waiting prompt (monitoring panels, admin dialogs) claims the next
+  // span before opening it. Observational: invalid payloads are ignored.
+  pi.events.on(PI_NOTIFY_UI_SPAN_SILENT_EVENT, (event: unknown) => {
+    if (!parseUiSpanSilentPayload(event)) {
+      return;
+    }
+    uiContexts.markSilent();
+  });
+
+  // pi-ask flows: classification context only. The ask dialog itself opens
+  // the core span that actually notifies and blocks Herdr.
   pi.events.on(PI_ASK_STARTED_EVENT, (event: unknown) => {
     const flowId = stringField(event, "flowId");
     if (!flowId) {
       return;
     }
 
-    const label = stringField(event, "title") ?? DEFAULT_ASK_LABEL;
-    if (!routing.startAsk(flowId)) {
-      return;
-    }
-    if (herdrEnabled) {
-      state.startAsk(flowId, label);
-    }
-    route("input-required", "pi-ask");
+    uiContexts.registerAskFlow(flowId, stringField(event, "title"));
   });
 
   pi.events.on(PI_ASK_COMPLETED_EVENT, (event: unknown) => {
@@ -212,27 +279,22 @@ export default function piNotify(pi: ExtensionAPI): void {
     if (!flowId) {
       return;
     }
-    routing.completeAsk(flowId);
-    if (herdrEnabled) {
-      state.completeAsk(flowId);
-    }
+    uiContexts.completeAskFlow(flowId);
   });
 
+  // permission-system prompts: classification context only; decision events
+  // resolve the tracker, which clears the pending context.
   pi.events.on(PERMISSIONS_UI_PROMPT_EVENT, (event: unknown) => {
     const prompt = parsePermissionPrompt(event);
     if (!prompt) {
       return;
     }
 
-    const label = permissionLabel(prompt);
-    if (!routing.startPermission(prompt.requestId)) {
-      return;
-    }
-    if (herdrEnabled) {
-      state.startPermission(prompt.requestId, label);
-    }
+    uiContexts.trackPermission(
+      prompt.requestId,
+      prompt.forwarding?.requesterAgentName,
+    );
     permissionPrompts?.track(prompt);
-    route("permission-required", "pi-permission");
   });
 
   pi.events.on(PERMISSIONS_DECISION_EVENT, (event: unknown) => {
@@ -323,14 +385,4 @@ function safeSessionName(pi: ExtensionAPI): string | undefined {
   } catch {
     return undefined;
   }
-}
-
-function permissionLabel(
-  prompt: NonNullable<ReturnType<typeof parsePermissionPrompt>>,
-): string {
-  if (prompt.forwarding?.requesterAgentName) {
-    return `Permission required by ${prompt.forwarding.requesterAgentName}`;
-  }
-
-  return "Permission required";
 }

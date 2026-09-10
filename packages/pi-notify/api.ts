@@ -9,6 +9,22 @@
 
 export const PI_NOTIFY_PUBLISH_EVENT = "pi-notify:publish";
 
+/**
+ * Silent-span marker channel. Extensions that open a blocking `ctx.ui.*`
+ * dialog which is NOT an agent-waiting prompt (monitoring panels, admin
+ * dialogs) emit `{ reason? }` on this channel synchronously right before
+ * opening the dialog; pi-notify then registers that span silently (no
+ * notification, no Herdr wait entry). Emission must not require this
+ * package: the literal event name works when pi-notify is absent.
+ */
+export const PI_NOTIFY_UI_SPAN_SILENT_EVENT = "pi-notify:ui_span_silent";
+
+/** Payload emitted on the `pi-notify:ui_span_silent` channel. */
+export interface UiSpanSilentPayload {
+  /** Optional free-form reason; purely diagnostic, never surfaced. */
+  reason?: string;
+}
+
 export const NOTIFICATION_EVENT_IDS = [
   "agent-completed",
   "agent-error",
@@ -31,7 +47,7 @@ export interface PiNotifyPublishPayload {
 
 /** Minimal event bus required by `publishNotification`. */
 export interface PiNotifyEventBus {
-  emit(channel: string, data: unknown): unknown;
+  emit(channel: string, data: unknown): void;
 }
 
 export interface PublishNotificationOptions {
