@@ -1,4 +1,11 @@
-import { type AgentToolResult, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+
+import {
+  type AgentToolResult,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import {
   createBashToolDefinition,
   isToolCallEventType,
@@ -13,6 +20,8 @@ import {
   addWritePathToConfig,
   getConfigPaths,
   loadConfig,
+  SANDBOX_PROFILE_ENV,
+  type SandboxConfig,
 } from "./config.ts";
 import {
   canonicalizePath,
@@ -32,6 +41,13 @@ import {
   supportsNodeEnvProxy,
 } from "./sandbox-runtime.ts";
 import { maybeDecorateBashForToolDisplay } from "./tool-display-decoration.ts";
+
+const SANDBOX_STARTUP_ACK_PATH_ENV = "PI_SUBAGENT_SANDBOX_STARTUP_ACK_PATH";
+const SANDBOX_STARTUP_ACK_TOKEN_ENV = "PI_SUBAGENT_SANDBOX_STARTUP_ACK_TOKEN";
+const PROJECT_TRUST_ENV = "PI_SUBAGENT_SANDBOX_PROJECT_TRUSTED";
+const IN_PROCESS_CHILD_ENV = "PI_SUBAGENT_SANDBOX_IN_PROCESS_CHILD";
+const SANDBOX_DIAGNOSTICS_PATH_ENV = "PI_SUBAGENT_SANDBOX_DIAGNOSTICS_PATH";
+
 import {
   formatSandboxConfiguration,
   formatSandboxStatus,
@@ -56,9 +72,122 @@ export default function (pi: ExtensionAPI) {
 
   let sandboxEnabled = false;
   let sandboxInitialized = false;
+  const selectedSandboxProfile = process.env[SANDBOX_PROFILE_ENV];
+  // The launcher applies the sandbox launch keys for the child-session creation
+  // window only and restores them right after, so every launch value must be
+  // captured here at registration instead of being read later from session_start.
+  const startupAcknowledgementPath = process.env[SANDBOX_STARTUP_ACK_PATH_ENV];
+  const startupAcknowledgementToken = process.env[SANDBOX_STARTUP_ACK_TOKEN_ENV];
+  const inheritedProjectTrust = process.env[PROJECT_TRUST_ENV];
+  const startupDiagnosticsPath = process.env[SANDBOX_DIAGNOSTICS_PATH_ENV];
+  // An in-process child shares the host process, so it must never mutate host
+  // state that only a standalone child process may own.
+  const inProcessChild = process.env[IN_PROCESS_CHILD_ENV] === "1";
+  let profileProjectTrusted = false;
+  let profileStartupError: string | undefined;
   const allowances: SessionAllowances = { domains: [], readPaths: [], writePaths: [] };
 
-  const effectiveAllowances = (cwd: string) => resolveAllowances(loadConfig(cwd), allowances);
+  const profileLabel = () =>
+    selectedSandboxProfile ? `Sandbox profile '${selectedSandboxProfile}'` : "Sandbox";
+
+  const writeProfileStartupAcknowledgement = (): void => {
+    if (!selectedSandboxProfile) return;
+    const acknowledgementPath = startupAcknowledgementPath;
+    const token = startupAcknowledgementToken;
+    if (acknowledgementPath === undefined && token === undefined) return;
+    if (!acknowledgementPath || !token) {
+      throw new Error("sandbox profile startup acknowledgement channel is incomplete.");
+    }
+    writeFileSync(
+      acknowledgementPath,
+      JSON.stringify({ version: 1, profile: selectedSandboxProfile, token }),
+      { mode: 0o600 },
+    );
+  };
+
+  const profileBlockReason = () =>
+    profileStartupError ??
+    (selectedSandboxProfile && !sandboxInitialized
+      ? `${profileLabel()} is required but was not initialized.`
+      : undefined);
+
+  const profileScopedReason = (reason: string) =>
+    selectedSandboxProfile ? `${profileLabel()}: ${reason}` : reason;
+
+  const writeSandboxDiagnostic = (message: string): void => {
+    process.stderr.write(`pi-sandbox: ${message}\n`);
+  };
+
+  // Notifications are cosmetic. A headless child session (print/json mode) has no
+  // UI, and a failing notification must never change sandbox behavior.
+  const notifySafely = (
+    ctx: ExtensionContext,
+    message: string,
+    type: "info" | "warning" | "error",
+  ): void => {
+    if (!ctx.hasUI) return;
+    try {
+      ctx.ui.notify(message, type);
+    } catch {
+      // Ignore cosmetic notification failures.
+    }
+  };
+
+  const blockedSandboxResult = (reason: string): AgentToolResult<Record<string, never>> => ({
+    content: [{ type: "text", text: `Error: ${reason}` }],
+    details: {},
+  });
+
+  const resolvedProfileTrust = (ctx?: ExtensionContext): boolean => {
+    if (!selectedSandboxProfile) return true;
+    // Trust is resolved once at session_start from the launch env window (or
+    // the host context) and then fixed for the session; the launcher restores
+    // the transient trust env after the child session is created.
+    const inherited = inheritedProjectTrust;
+    if (inherited !== undefined) return inherited === "1";
+    return ctx ? ctx.isProjectTrusted() : profileProjectTrusted;
+  };
+
+  const resolveSandboxConfig = (cwd: string): SandboxConfig => {
+    if (!selectedSandboxProfile) return loadConfig(cwd);
+    return loadConfig(cwd, {
+      profileName: selectedSandboxProfile,
+      projectTrusted: profileProjectTrusted,
+    });
+  };
+
+  /**
+   * Publish the failure for the launcher: a blocked child ends before its first
+   * model turn, so the parent otherwise only sees an empty session and cannot
+   * report why the profile was refused.
+   */
+  const writeStartupFailureDiagnostic = (reason: string): void => {
+    if (!startupDiagnosticsPath || !selectedSandboxProfile) return;
+    try {
+      mkdirSync(dirname(startupDiagnosticsPath), { recursive: true, mode: 0o700 });
+      writeFileSync(
+        startupDiagnosticsPath,
+        JSON.stringify({ version: 1, profile: selectedSandboxProfile, reason }),
+        { mode: 0o600 },
+      );
+    } catch {
+      // The stderr diagnostic above remains the fallback channel.
+    }
+  };
+
+  const recordProfileStartupFailure = (error: unknown, ctx?: ExtensionContext): void => {
+    if (!selectedSandboxProfile) return;
+    const detail = error instanceof Error ? error.message : String(error);
+    profileStartupError = `${profileLabel()} could not initialize: ${detail}`;
+    sandboxEnabled = false;
+    sandboxInitialized = false;
+    writeSandboxDiagnostic(profileStartupError);
+    writeStartupFailureDiagnostic(profileStartupError);
+    if (ctx) notifySafely(ctx, profileStartupError, "error");
+  };
+
+  const effectiveAllowances = (cwd: string) =>
+    resolveAllowances(resolveSandboxConfig(cwd), allowances);
   const effectiveDomains = (cwd: string) => effectiveAllowances(cwd).domains;
   const effectiveReadPaths = (cwd: string) => effectiveAllowances(cwd).readPaths;
   const effectiveWritePaths = (cwd: string) => effectiveAllowances(cwd).writePaths;
@@ -66,9 +195,15 @@ export default function (pi: ExtensionAPI) {
   async function refreshSandbox(cwd: string): Promise<void> {
     if (!sandboxInitialized) return;
     try {
-      await reinitializeSandbox(loadConfig(cwd), allowances);
+      await reinitializeSandbox(resolveSandboxConfig(cwd), allowances);
     } catch (error) {
-      console.error(`Warning: Failed to reinitialize sandbox: ${error}`);
+      recordProfileStartupFailure(error);
+      if (selectedSandboxProfile) {
+        throw new Error(
+          profileBlockReason() ?? profileScopedReason("sandbox reinitialization failed."),
+        );
+      }
+      writeSandboxDiagnostic(`Warning: Failed to reinitialize sandbox: ${error}`);
     }
   }
 
@@ -98,7 +233,17 @@ export default function (pi: ExtensionAPI) {
     ctx: Parameters<typeof warnIfAllDomainsAllowed>[0],
     config: ReturnType<typeof loadConfig>,
   ) {
-    ctx.ui.setStatus("sandbox", ctx.ui.theme.fg("accent", formatSandboxStatus(config)));
+    // Status rendering needs the TUI theme; headless child sessions (print/json)
+    // have no initialized theme, and a cosmetic failure must never fail a launch.
+    if (ctx.mode !== "tui") return;
+    const status = selectedSandboxProfile
+      ? `${formatSandboxStatus(config)} (${selectedSandboxProfile})`
+      : formatSandboxStatus(config);
+    try {
+      ctx.ui.setStatus("sandbox", ctx.ui.theme.fg("accent", status));
+    } catch {
+      // Ignore cosmetic status failures.
+    }
   }
 
   async function enableSandbox(
@@ -106,19 +251,28 @@ export default function (pi: ExtensionAPI) {
     setProxyEnvironment: boolean,
   ): Promise<boolean> {
     if (sandboxEnabled) {
-      ctx.ui.notify("Sandbox is already enabled", "info");
+      notifySafely(ctx, "Sandbox is already enabled", "info");
       return false;
     }
 
-    const config = loadConfig(ctx.cwd);
+    let config: SandboxConfig;
+    try {
+      config = resolveSandboxConfig(ctx.cwd);
+    } catch (error) {
+      recordProfileStartupFailure(error, ctx);
+      return false;
+    }
     const platform = process.platform;
     if (platform !== "darwin" && platform !== "linux") {
-      ctx.ui.notify(`Sandbox not supported on ${platform}`, "warning");
+      const message = `Sandbox not supported on ${platform}`;
+      if (selectedSandboxProfile) recordProfileStartupFailure(message, ctx);
+      else ctx.ui.notify(message, "warning");
       return false;
     }
 
     try {
       await initializeSandbox(config, allowances);
+      writeProfileStartupAcknowledgement();
       if (
         setProxyEnvironment &&
         !isNetworkUnrestricted(config) &&
@@ -128,24 +282,37 @@ export default function (pi: ExtensionAPI) {
       }
       sandboxEnabled = true;
       sandboxInitialized = true;
-      warnIfAllDomainsAllowed(ctx, config);
-      updateStatus(ctx, config);
-      return true;
     } catch (error) {
       sandboxEnabled = false;
-      ctx.ui.notify(
-        `Sandbox initialization failed: ${error instanceof Error ? error.message : error}`,
-        "error",
-      );
+      if (selectedSandboxProfile) {
+        recordProfileStartupFailure(error, ctx);
+      } else {
+        const message = `Sandbox initialization failed: ${error instanceof Error ? error.message : error}`;
+        writeSandboxDiagnostic(message);
+        notifySafely(ctx, message, "error");
+      }
       return false;
     }
+    // Cosmetic UI runs only after the sandbox state is committed, so a missing
+    // theme or a failing notification can never invalidate a working sandbox.
+    warnIfAllDomainsAllowed(ctx, config);
+    updateStatus(ctx, config);
+    return true;
   }
 
   async function disableSandbox(
     ctx: Parameters<typeof warnIfAllDomainsAllowed>[0],
   ): Promise<boolean> {
+    if (selectedSandboxProfile) {
+      notifySafely(
+        ctx,
+        `${profileLabel()} is required for this child and cannot be disabled.`,
+        "error",
+      );
+      return false;
+    }
     if (!sandboxEnabled) {
-      ctx.ui.notify("Sandbox is already disabled", "info");
+      notifySafely(ctx, "Sandbox is already disabled", "info");
       return false;
     }
 
@@ -158,16 +325,22 @@ export default function (pi: ExtensionAPI) {
     }
     sandboxEnabled = false;
     sandboxInitialized = false;
-    ctx.ui.setStatus("sandbox", "");
+    if (ctx.mode === "tui") {
+      try {
+        ctx.ui.setStatus("sandbox", "");
+      } catch {
+        // Ignore cosmetic status failures.
+      }
+    }
     return true;
   }
 
   async function toggleSandbox(ctx: Parameters<typeof warnIfAllDomainsAllowed>[0]): Promise<void> {
     if (sandboxEnabled) {
-      if (await disableSandbox(ctx)) ctx.ui.notify("Sandbox disabled", "info");
+      if (await disableSandbox(ctx)) notifySafely(ctx, "Sandbox disabled", "info");
       return;
     }
-    if (await enableSandbox(ctx, false)) ctx.ui.notify("Sandbox enabled", "info");
+    if (await enableSandbox(ctx, false)) notifySafely(ctx, "Sandbox enabled", "info");
   }
 
   const bashTool = {
@@ -181,19 +354,30 @@ export default function (pi: ExtensionAPI) {
       ctx: Parameters<typeof localBash.execute>[4],
     ) {
       const runBash = () => {
+        const profileFailure = profileBlockReason();
+        if (profileFailure) return Promise.resolve(blockedSandboxResult(profileFailure));
         if (!sandboxEnabled || !sandboxInitialized) {
           return localBash.execute(id, params, signal, onUpdate, ctx);
         }
+        let config: SandboxConfig;
+        try {
+          config = resolveSandboxConfig(ctx.cwd);
+        } catch (error) {
+          recordProfileStartupFailure(error, ctx);
+          return Promise.resolve(
+            blockedSandboxResult(
+              profileBlockReason() ??
+                profileScopedReason("sandbox configuration could not be loaded."),
+            ),
+          );
+        }
         return createBashToolDefinition(localCwd, {
-          operations: createSandboxedBashOps(
-            userShellPath,
-            loadConfig(ctx.cwd).network?.sshProxy !== false,
-          ),
+          operations: createSandboxedBashOps(userShellPath, config.network?.sshProxy !== false),
           shellPath: userShellPath,
         }).execute(id, params, signal, onUpdate, ctx);
       };
 
-      let result: AgentToolResult<any>;
+      let result: Awaited<ReturnType<typeof localBash.execute>>;
       try {
         result = await runBash();
       } catch (error) {
@@ -213,14 +397,23 @@ export default function (pi: ExtensionAPI) {
 
       if (sandboxEnabled && sandboxInitialized && ctx?.hasUI) {
         const output = result.content
-          .filter((content: any) => content.type === "text")
-          .map((content: any) => content.text)
+          .filter((content) => content.type === "text")
+          .map((content) => content.text)
           .join("\n");
         const blockedPath = extractBlockedWritePath(output);
 
         if (blockedPath) {
           const path = canonicalizePath(blockedPath);
-          const config = loadConfig(ctx.cwd);
+          let config: SandboxConfig;
+          try {
+            config = resolveSandboxConfig(ctx.cwd);
+          } catch (error) {
+            recordProfileStartupFailure(error, ctx);
+            return blockedSandboxResult(
+              profileBlockReason() ??
+                profileScopedReason("sandbox configuration could not be loaded."),
+            );
+          }
           const writePermission = await resolveWritePermission({
             path,
             allowWrite: effectiveWritePaths(ctx.cwd),
@@ -257,9 +450,35 @@ export default function (pi: ExtensionAPI) {
   void maybeDecorateBashForToolDisplay(bashTool);
 
   pi.on("user_bash", async (event, ctx) => {
+    const startupFailure = profileBlockReason();
+    if (startupFailure) {
+      return {
+        result: {
+          output: startupFailure,
+          exitCode: 1,
+          cancelled: false,
+          truncated: false,
+        },
+      };
+    }
     if (!sandboxEnabled || !sandboxInitialized) return;
 
-    const config = loadConfig(ctx.cwd);
+    let config: SandboxConfig;
+    try {
+      config = resolveSandboxConfig(ctx.cwd);
+    } catch (error) {
+      recordProfileStartupFailure(error, ctx);
+      return {
+        result: {
+          output:
+            profileBlockReason() ??
+            profileScopedReason("sandbox configuration could not be loaded."),
+          exitCode: 1,
+          cancelled: false,
+          truncated: false,
+        },
+      };
+    }
     if (config.sandboxUserShell === false) return;
     if (!isNetworkUnrestricted(config)) {
       for (const domain of extractDomainsFromCommand(event.command)) {
@@ -273,7 +492,7 @@ export default function (pi: ExtensionAPI) {
           if (choice.action === "abort") {
             return {
               result: {
-                output: `Blocked: "${domain}" is not in allowedDomains. Use /sandbox to review your config.`,
+                output: `Blocked: ${profileScopedReason(`network access to "${domain}" is not in allowedDomains.`)}`,
                 exitCode: 1,
                 cancelled: false,
                 truncated: false,
@@ -285,16 +504,25 @@ export default function (pi: ExtensionAPI) {
       }
     }
     return {
-      operations: createSandboxedBashOps(
-        userShellPath,
-        loadConfig(ctx.cwd).network?.sshProxy !== false,
-      ),
+      operations: createSandboxedBashOps(userShellPath, config.network?.sshProxy !== false),
     };
   });
 
   pi.on("tool_call", async (event, ctx) => {
+    const startupFailure = profileBlockReason();
+    if (startupFailure) return { block: true, reason: startupFailure };
     if (!sandboxEnabled) return;
-    const config = loadConfig(ctx.cwd);
+    let config: SandboxConfig;
+    try {
+      config = resolveSandboxConfig(ctx.cwd);
+    } catch (error) {
+      recordProfileStartupFailure(error, ctx);
+      return {
+        block: true,
+        reason:
+          profileBlockReason() ?? profileScopedReason("sandbox configuration could not be loaded."),
+      };
+    }
     if (!config.enabled) return;
     const { projectPath, globalPath } = getConfigPaths(ctx.cwd);
 
@@ -314,7 +542,9 @@ export default function (pi: ExtensionAPI) {
           if (choice.action === "abort") {
             return {
               block: true,
-              reason: `Network access to "${domain}" is blocked (not in allowedDomains).`,
+              reason: profileScopedReason(
+                `Network access to "${domain}" is blocked (not in allowedDomains).`,
+              ),
             };
           }
           await applyChoice(choice.action, "domain", choice.value, ctx.cwd);
@@ -324,10 +554,19 @@ export default function (pi: ExtensionAPI) {
 
     if (isToolCallEventType("read", event)) {
       const path = canonicalizePath(event.input.path);
+      if (selectedSandboxProfile && matchesPattern(path, config.filesystem?.denyRead ?? [])) {
+        return {
+          block: true,
+          reason: profileScopedReason(`Sandbox: read access denied for "${path}" (in denyRead).`),
+        };
+      }
       if (!matchesPattern(path, effectiveReadPaths(ctx.cwd))) {
         const choice = await promptReadBlock(pi, ctx, path, config.permissionPromptTimeoutSeconds);
         if (choice.action === "abort") {
-          return { block: true, reason: `Sandbox: read access denied for "${path}"` };
+          return {
+            block: true,
+            reason: profileScopedReason(`Sandbox: read access denied for "${path}"`),
+          };
         }
         await applyChoice(choice.action, "read", choice.value, ctx.cwd);
         return;
@@ -346,15 +585,18 @@ export default function (pi: ExtensionAPI) {
       if (writePermission.action === "deny") {
         return {
           block: true,
-          reason:
+          reason: profileScopedReason(
             `Sandbox: write access denied for "${path}" (in denyWrite). ` +
-            `To change this, edit denyWrite in:\n  ${projectPath}\n  ${globalPath}`,
+              `To change this, edit denyWrite in:\n  ${projectPath}\n  ${globalPath}`,
+          ),
         };
       }
       if (writePermission.action === "abort") {
         return {
           block: true,
-          reason: `Sandbox: write access denied for "${path}" (not in allowWrite)`,
+          reason: profileScopedReason(
+            `Sandbox: write access denied for "${path}" (not in allowWrite)`,
+          ),
         };
       }
       if (writePermission.action === "granted") {
@@ -363,13 +605,37 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
+  pi.on("input", (_event, ctx) => {
+    const startupFailure = profileBlockReason();
+    if (!startupFailure) return;
+    writeSandboxDiagnostic(startupFailure);
+    // Print/json children otherwise treat a handled input as a successful empty
+    // turn. Mark the process failed while still preventing the first model call.
+    // An in-process child shares the host process, where a non-zero exit code
+    // would misreport the parent's own successful session as failed.
+    if (!ctx.hasUI && !inProcessChild) process.exitCode = 1;
+    return { action: "handled" as const };
+  });
+
   pi.on("session_start", async (_event, ctx) => {
+    if (selectedSandboxProfile) profileProjectTrusted = resolvedProfileTrust(ctx);
     if (pi.getFlag("no-sandbox") as boolean) {
       sandboxEnabled = false;
-      ctx.ui.notify("Sandbox disabled via --no-sandbox", "warning");
+      if (selectedSandboxProfile) {
+        recordProfileStartupFailure("--no-sandbox cannot disable a required sandbox profile.", ctx);
+      } else {
+        ctx.ui.notify("Sandbox disabled via --no-sandbox", "warning");
+      }
       return;
     }
-    if (!loadConfig(ctx.cwd).enabled) {
+    let config: SandboxConfig;
+    try {
+      config = resolveSandboxConfig(ctx.cwd);
+    } catch (error) {
+      recordProfileStartupFailure(error, ctx);
+      return;
+    }
+    if (!config.enabled) {
       sandboxEnabled = false;
       ctx.ui.notify("Sandbox disabled via config", "info");
       return;
@@ -417,7 +683,17 @@ export default function (pi: ExtensionAPI) {
       }
 
       const target = kind === "domain" ? targetArg : canonicalizePath(targetArg);
-      const config = loadConfig(ctx.cwd);
+      let config: SandboxConfig;
+      try {
+        config = resolveSandboxConfig(ctx.cwd);
+      } catch (error) {
+        recordProfileStartupFailure(error, ctx);
+        ctx.ui.notify(
+          profileBlockReason() ?? profileScopedReason("sandbox configuration could not be loaded."),
+          "error",
+        );
+        return;
+      }
       const configKey =
         kind === "domain" ? "allowedDomains" : kind === "read" ? "allowRead" : "allowWrite";
       const choice = await showPermissionPrompt(
@@ -450,8 +726,19 @@ export default function (pi: ExtensionAPI) {
         ctx.ui.notify("Sandbox is disabled", "info");
         return;
       }
+      let config: SandboxConfig;
+      try {
+        config = resolveSandboxConfig(ctx.cwd);
+      } catch (error) {
+        recordProfileStartupFailure(error, ctx);
+        ctx.ui.notify(
+          profileBlockReason() ?? profileScopedReason("sandbox configuration could not be loaded."),
+          "error",
+        );
+        return;
+      }
       ctx.ui.notify(
-        formatSandboxConfiguration(loadConfig(ctx.cwd), getConfigPaths(ctx.cwd), allowances),
+        `${selectedSandboxProfile ? `${profileLabel()}\n` : ""}${formatSandboxConfiguration(config, getConfigPaths(ctx.cwd), allowances)}`,
         "info",
       );
     },

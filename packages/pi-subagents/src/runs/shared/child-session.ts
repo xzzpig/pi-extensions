@@ -71,6 +71,13 @@ export interface ChildSessionLaunch {
 	 * window one at a time. An undefined value removes the variable.
 	 */
 	processEnv?: Record<string, string | undefined>;
+	/**
+	 * `processEnv` keys restored to their pre-launch values once the session
+	 * exists and its extensions have captured them. Sandbox profile selections
+	 * use this so an in-process child cannot leak its profile into the host
+	 * process or sibling launches.
+	 */
+	transientProcessEnv?: string[];
 	/** The typed runtime config the hooks were built from; informational for factories. */
 	runtime: ChildRuntimeConfig;
 	onExtensionError?: (error: ChildSessionExtensionError) => void;
@@ -151,6 +158,18 @@ function applyProcessEnv(values: Record<string, string | undefined> | undefined)
 	}
 }
 
+function captureProcessEnv(keys: readonly string[] | undefined): Array<[string, string | undefined]> {
+	if (!keys?.length) return [];
+	return keys.map((key) => [key, process.env[key]]);
+}
+
+function restoreProcessEnv(saved: Array<[string, string | undefined]>): void {
+	for (const [key, value] of saved) {
+		if (value === undefined) delete process.env[key];
+		else process.env[key] = value;
+	}
+}
+
 function flushQueuedProviderRegistrations(loader: object, modelRuntime: ModelRuntimeInstance, onError: ((error: ChildSessionExtensionError) => void) | undefined): void {
 	if (!("getExtensions" in loader) || typeof loader.getExtensions !== "function") return;
 	const { runtime } = (loader as LoaderWithExtensions).getExtensions();
@@ -211,6 +230,7 @@ export function createDefaultChildSessionFactory(options: DefaultChildSessionFac
 				...(launch.appendSystemPrompt !== undefined ? { appendSystemPrompt: [launch.appendSystemPrompt] } : {}),
 			});
 			const open = async () => {
+				const savedTransientEnv = captureProcessEnv(launch.transientProcessEnv);
 				applyProcessEnv(launch.processEnv);
 				if (!resetExtensionCacheOnReload(loader) && (launch.ambientExtensions || launch.extensionPaths.length)) launch.onExtensionError?.({ extensionPath: "<loader>", event: "load", error: new Error("pi's extension cache reset is unavailable; extensions loaded into this child share module state with other sessions in this process.") });
 				await loader.reload();
@@ -239,6 +259,10 @@ export function createDefaultChildSessionFactory(options: DefaultChildSessionFac
 					settingsManager,
 					sessionStartEvent: { type: "session_start", reason: "startup" },
 				});
+				// Extensions captured module state from the launch env window
+				// (registration and session_start); restore transient keys so an
+				// in-process child cannot leak them into the host process.
+				restoreProcessEnv(savedTransientEnv);
 				try {
 					await session.bindExtensions({
 						mode: "print",

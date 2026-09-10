@@ -210,7 +210,7 @@ You can override selected agent fields without copying the whole agent. Override
 }
 ```
 
-Supported override fields: `description`, `output`, `outputMode`, `defaultReads`, `model`, `defaultProvider`, `fallbackModels`, `thinking`, `systemPromptMode`, `inheritProjectContext`, `inheritGlobalContext`, `inheritSkills`, `defaultContext`, `acceptanceRole`, `disabled`, `skills`, `tools`, and `systemPrompt`.
+Supported override fields: `description`, `output`, `outputMode`, `defaultReads`, `model`, `defaultProvider`, `fallbackModels`, `thinking`, `systemPromptMode`, `inheritProjectContext`, `inheritGlobalContext`, `inheritSkills`, `defaultContext`, `acceptanceRole`, `disabled`, `skills`, `tools`, `sandbox`, and `systemPrompt`.
 
 - `description` replaces the discovered description for builtin and custom agents, which lets list output show deployment-specific routing or model metadata.
 - Use `output: false`, `defaultReads: false`, `defaultContext: false`, or `acceptanceRole: false` to clear an inherited value.
@@ -259,6 +259,7 @@ tools: read, grep, find, ls, bash, mcp:chrome-devtools
 excludeTools: bash
 extensions:
 subagentOnlyExtensions: ./tools/child-only-search.ts
+sandbox: reviewer-strict
 model: claude-haiku-4-5
 fallbackModels: openai-codex/gpt-5.6-luna:low, anthropic/claude-sonnet-4
 thinking: high
@@ -308,6 +309,7 @@ Field notes:
 | `allowNestedSubagents` | Set `true` to authorize the child-safe nested `subagent` runtime without making omitted `tools` an allowlist. Inherited depth and capability ceilings remain authoritative. |
 | `extensions` | Omitted means a background child loads the parent's ambient extensions; empty means no ambient extensions; list values load exactly those extensions. Foreground children never load ambient extensions, so for them only listed values apply. |
 | `subagentOnlyExtensions` | Extension paths loaded only in this agent's child sessions. Tools registered there are unavailable to the main agent unless also installed through normal Pi extension configuration. |
+| `sandbox` | Optional named `pi-sandbox` profile for a native Pi child. It must be a non-empty safe name defined in the user's global `<agentDir>/sandbox.json`; it is a selector only, never an inline network or filesystem policy. |
 | `model` | Default model. Bare ids prefer the current provider when possible, then unique registry matches. |
 | `fallbackModels` | Ordered backup models for provider/model failures such as quota, auth, provider-reported timeout, or unavailable model. Expiration of the run-level `timeoutMs` / `maxRuntimeMs` deadline is terminal and does not trigger fallback. Ordinary task failures do not trigger fallback. |
 | `thinking` | Appended as a `:level` suffix at runtime unless a suffix is already present. |
@@ -332,6 +334,48 @@ Field notes:
 | `maxSubagentDepth` | Tightens nested delegation for this agent's children. |
 | `injectToContext` | Advertise this agent in the parent system prompt at session start so the main agent can select it without calling `{ action: "list" }` first. See [Context injection](#context-injection). |
 | `memory` | Opt-in role-specific persistent memory. See below. |
+
+### Sandbox profiles
+
+Use `sandbox: <profile-name>` only for a native Pi child. The profile is resolved
+from the global `pi-sandbox` configuration, never from an agent file or a project
+profile registry:
+
+```yaml
+---
+name: security-reviewer
+description: Review changes with a constrained filesystem and no network
+sandbox: reviewer-strict
+extensions: ./review-tools.ts
+---
+
+Review the requested change.
+```
+
+`pi-subagents` validates the scalar name and passes only that name to the child.
+It automatically resolves and injects the installed `pi-sandbox` extension and a
+startup guard even when `extensions` is an explicit allowlist; an explicit empty
+allowlist does not remove these required runtime extensions. The guard requires
+`pi-sandbox` to acknowledge successful profile initialization before the child
+can enter its first model turn. The launch fails before the model's first turn when the package or manifest is missing, a capability ceiling denies child
+extensions, the profile cannot be loaded, or sandbox initialization fails. A
+blocked child publishes that reason through its startup diagnostics, so the
+caller sees the profile error (and the available profile names) instead of a
+generic empty-output message; a startup block is never recorded as a model
+failure and never excludes the model from later runs.
+
+The field is rejected for `external-cli` and `external-job` runners because they
+do not host a Pi child extension. It also cannot be an object, `false`, an empty
+value, or an inline allow/deny policy. Define the actual network and filesystem
+rules in global `pi-sandbox` `profiles` instead.
+
+A profile chosen by a project-scoped agent or project override is used only when
+the host marks that project trusted. Otherwise the launch reports an actionable
+trust error. In a headless child, accesses outside the profile's preconfigured
+network/read/write rules are blocked; pi-sandbox does not use Permission System
+or supervisor forwarding to ask the parent for an approval. See
+[`pi-sandbox`'s README](https://github.com/xzzpig/pi-extensions/tree/main/packages/pi-sandbox#named-profiles-for-subagents)
+for profile inheritance and merge rules.
 
 ## Context injection
 

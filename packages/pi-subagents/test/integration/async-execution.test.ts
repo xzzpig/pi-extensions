@@ -25,6 +25,7 @@ import { SUBAGENT_ASYNC_STARTED_EVENT, SUBAGENT_LIFECYCLE_ARTIFACT_VERSION, TEMP
 import { registerSubagentCapabilityCeiling } from "../../src/api/capability-ceiling.ts";
 import { resolveSubagentLaunchContract } from "../../src/api/preflight.ts";
 import { discoverAgents } from "../../src/agents/agents.ts";
+import { SUBAGENT_SANDBOX_PROFILE_ENV, SUBAGENT_SANDBOX_PROJECT_TRUST_ENV } from "../../src/shared/sandbox-profile.ts";
 import { runSync } from "../../src/runs/foreground/execution.ts";
 import { ACTIVE_ASYNC_CAPACITY_DIR, acquireActiveAsyncCapacity, activeAsyncCapacitySessionKey, getActiveAsyncCapacitySnapshot } from "../../src/runs/background/active-async-capacity.ts";
 import { deriveForkPromptCacheKey } from "../../src/runs/shared/child-tool-plan.ts";
@@ -83,7 +84,7 @@ interface AsyncResultPayload {
 	totalTokens?: { input: number; output: number; total: number };
 	totalCost?: { inputTokens: number; outputTokens: number; costUsd: number };
 	usageBudget?: UsageBudgetState;
-	results: Array<{ agent?: string; sessionName?: string; launchContractDigest?: string; launchResolvedExtensions?: LaunchResolvedExtensions; runtimeAcknowledgedExtensions?: RuntimeAcknowledgedExtensions; output?: string; outputState?: "present" | "absent" | "unknown"; success?: boolean; error?: string; timedOut?: boolean; timeoutRecovery?: { changedFiles?: string[]; message?: string; warning?: string; recoveryNeeded?: boolean; reason?: string; reportStatus?: string }; stopped?: boolean; turnBudget?: { maxTurns: number; graceTurns: number; outcome: string; turnCount: number; wrapUpRequestedAtTurn?: number; terminationDeferredAtTurn?: number; exceededAtTurn?: number }; turnBudgetExceeded?: boolean; wrapUpRequested?: boolean; model?: string; thinking?: string; attemptedModels?: string[]; modelAttempts?: Array<{ success?: boolean; error?: string }>; totalCost?: { inputTokens: number; outputTokens: number; costUsd: number }; usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; turns: number }; structuredOutput?: unknown; agentContract?: { version: 1 }; execution?: { status?: string; success?: boolean; exitCode?: number }; effects?: { fileMutation?: { status?: string; expected?: boolean; attempted?: boolean; message?: string }; settlementDiagnostic?: { finalTextPresent?: boolean; mutation?: { expected?: boolean; attempted?: boolean; observed?: boolean }; requiredOutput?: { kind?: string; path?: string; missing?: boolean }; afterCompactionSettlement?: boolean } }; intercomTarget?: string; acceptance?: { status?: string; effectiveAcceptance?: { level?: string }; childReport?: unknown; runtimeChecks?: Array<{ id?: string; status?: string; message?: string }> }; artifactPaths?: { outputPath?: string; inputPath?: string; metadataPath?: string; transcriptPath?: string }; outputSaveError?: string; metadataSaveError?: string; capabilityCeiling?: { version?: number; allowedTools?: string[]; denyExtensions?: boolean; sources?: string[] }; capabilityAudit?: { effectiveTools?: string[]; removedTools?: string[]; extensionsDenied?: boolean } }>;
+	results: Array<{ agent?: string; sessionName?: string; sandbox?: string; launchContractDigest?: string; launchResolvedExtensions?: LaunchResolvedExtensions; runtimeAcknowledgedExtensions?: RuntimeAcknowledgedExtensions; output?: string; outputState?: "present" | "absent" | "unknown"; success?: boolean; error?: string; timedOut?: boolean; timeoutRecovery?: { changedFiles?: string[]; message?: string; warning?: string; recoveryNeeded?: boolean; reason?: string; reportStatus?: string }; stopped?: boolean; turnBudget?: { maxTurns: number; graceTurns: number; outcome: string; turnCount: number; wrapUpRequestedAtTurn?: number; terminationDeferredAtTurn?: number; exceededAtTurn?: number }; turnBudgetExceeded?: boolean; wrapUpRequested?: boolean; model?: string; thinking?: string; attemptedModels?: string[]; modelAttempts?: Array<{ success?: boolean; error?: string }>; totalCost?: { inputTokens: number; outputTokens: number; costUsd: number }; usage?: { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number; turns: number }; structuredOutput?: unknown; agentContract?: { version: 1 }; execution?: { status?: string; success?: boolean; exitCode?: number }; effects?: { fileMutation?: { status?: string; expected?: boolean; attempted?: boolean; message?: string }; settlementDiagnostic?: { finalTextPresent?: boolean; mutation?: { expected?: boolean; attempted?: boolean; observed?: boolean }; requiredOutput?: { kind?: string; path?: string; missing?: boolean }; afterCompactionSettlement?: boolean } }; intercomTarget?: string; acceptance?: { status?: string; effectiveAcceptance?: { level?: string }; childReport?: unknown; runtimeChecks?: Array<{ id?: string; status?: string; message?: string }> }; artifactPaths?: { outputPath?: string; inputPath?: string; metadataPath?: string; transcriptPath?: string }; outputSaveError?: string; metadataSaveError?: string; capabilityCeiling?: { version?: number; allowedTools?: string[]; denyExtensions?: boolean; sources?: string[] }; capabilityAudit?: { effectiveTools?: string[]; removedTools?: string[]; extensionsDenied?: boolean } }>;
 	outputs?: Record<string, { text?: string; structured?: unknown }>;
 	workflowGraph?: { nodes?: Array<{ kind?: string; label?: string; phase?: string; status?: string; acceptanceStatus?: string; error?: string; outputName?: string; structured?: boolean; children?: Array<{ label?: string; outputName?: string; itemKey?: string; status?: string; acceptanceStatus?: string; error?: string }> }> };
 	parallelHandoff?: { version?: number; path?: string; groupCount?: number; childCount?: number; changedPatches?: number; cleanupState?: string };
@@ -139,6 +140,7 @@ interface AsyncStatusPayload {
 		totalCost?: { inputTokens: number; outputTokens: number; costUsd: number };
 		agentContract?: { version: 1 };
 		launchContractDigest?: string;
+		sandbox?: string;
 		launchResolvedExtensions?: LaunchResolvedExtensions;
 		runtimeAcknowledgedExtensions?: RuntimeAcknowledgedExtensions;
 		execution?: { status?: string; success?: boolean; exitCode?: number };
@@ -160,6 +162,26 @@ interface MockPiCallRecord {
 	requiredChildTools?: string[];
 	/** The `ChildRuntimeConfig` the scripted child session was launched with. */
 	runtime?: Record<string, unknown>;
+	/** The launch the scripted child session was created from, including its process env. */
+	launch?: { processEnv?: Record<string, string | undefined> };
+}
+
+/** Recorded child launch env of the mock call at `index`, once it exists. */
+async function waitForMockPiLaunchEnv(mockPi: MockPi, index: number, timeoutMs = 30_000): Promise<Record<string, string | undefined>> {
+	const deadline = Date.now() + timeoutMs;
+	for (;;) {
+		const callFile = fs.readdirSync(mockPi.dir)
+			.filter((name) => name.startsWith("call-") && name.endsWith(".json"))
+			.sort()
+			.at(index);
+		if (callFile) {
+			const payload = JSON.parse(fs.readFileSync(path.join(mockPi.dir, callFile), "utf-8")) as MockPiCallRecord;
+			assert.ok(payload.launch?.processEnv, "expected a recorded child launch env");
+			return payload.launch.processEnv;
+		}
+		if (Date.now() > deadline) assert.fail(`Timed out waiting for recorded mock pi call ${index}`);
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
 }
 
 /** Recorded child runtime config of the mock call at `index`, once it exists. */
@@ -678,22 +700,42 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		const agentDir = path.join(tempDir, "agent-home");
 		process.env.PI_CODING_AGENT_DIR = agentDir;
 		const permissionExtDir = path.join(agentDir, "extensions", "pi-permission-system");
+		const sandboxExtDir = path.join(agentDir, "extensions", "pi-sandbox");
 		fs.mkdirSync(path.join(permissionExtDir, "src"), { recursive: true });
 		fs.writeFileSync(path.join(permissionExtDir, "src", "index.ts"), "export default () => {};", "utf-8");
 		fs.writeFileSync(path.join(permissionExtDir, "package.json"), JSON.stringify({ name: "test", pi: { extensions: ["./src/index.ts"] } }), "utf-8");
+		fs.mkdirSync(sandboxExtDir, { recursive: true });
+		fs.writeFileSync(path.join(sandboxExtDir, "package.json"), JSON.stringify({ name: "@xzzpig/pi-sandbox", pi: { extensions: ["./index.ts"] } }), "utf-8");
+		fs.writeFileSync(path.join(sandboxExtDir, "index.ts"), "export default () => {};", "utf-8");
 		const agentPath = path.join(tempDir, ".pi", "agents", `${agentName}.md`);
 		fs.mkdirSync(path.dirname(agentPath), { recursive: true });
-		fs.writeFileSync(agentPath, `---\nname: ${agentName}\ndescription: Contract comparison worker\npermissions:\n  write: ask\n---\n`, "utf-8");
+		fs.writeFileSync(agentPath, `---\nname: ${agentName}\ndescription: Contract comparison worker\nsandbox: reviewer-strict\npermissions:\n  write: ask\n---\n`, "utf-8");
 		try {
 			const discovered = discoverAgents(tempDir).agents.find((agent) => agent.name === agentName);
 			assert.ok(discovered, "expected temporary agent definition to be discovered");
-			const preflight = await resolveSubagentLaunchContract({ agent: agentName, cwd: tempDir, task, runId: "contract-preflight" });
+			const preflight = await resolveSubagentLaunchContract({ agent: agentName, cwd: tempDir, task, runId: "contract-preflight", projectTrusted: true });
 			assert.equal(preflight.ok, true);
+			assert.equal(preflight.contract.sandbox, "reviewer-strict");
 			assert.ok(preflight.contract.tools.extensionArgs.some((entry) => entry.endsWith(path.join("pi-permission-system", "src", "index.ts"))));
 
 			mockPi.onCall({ output: "foreground contract comparison" });
-			const foreground = await runSync(tempDir, [discovered], agentName, task, { runId: "contract-foreground", acceptance: false });
+			const foreground = await runSync(tempDir, [discovered], agentName, task, {
+				runId: "contract-foreground",
+				acceptance: false,
+				projectTrusted: true,
+				trustedProjectCwd: tempDir,
+				artifactsDir: path.join(tempDir, "contract-foreground-artifacts"),
+				artifactConfig: { enabled: true, includeInput: false, includeOutput: false, includeMetadata: true },
+			});
 			assert.equal(foreground.exitCode, 0);
+			assert.equal(foreground.sandbox, "reviewer-strict");
+			assert.ok(foreground.artifactPaths?.metadataPath, "expected foreground profile metadata");
+			const foregroundMetadata = JSON.parse(fs.readFileSync(foreground.artifactPaths.metadataPath, "utf-8")) as { sandbox?: string };
+			assert.equal(foregroundMetadata.sandbox, "reviewer-strict");
+			const foregroundSession = mockPi.sessions.at(-1);
+			assert.ok(foregroundSession, "expected a recorded foreground child session");
+			assert.equal(foregroundSession.launch.processEnv?.[SUBAGENT_SANDBOX_PROFILE_ENV], "reviewer-strict");
+			assert.equal(foregroundSession.launch.processEnv?.[SUBAGENT_SANDBOX_PROJECT_TRUST_ENV], "1");
 			assert.equal(foreground.launchContractDigest, preflight.contract.launchContractDigest);
 
 			mockPi.onCall({ output: "async contract comparison" });
@@ -702,7 +744,13 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 				agent: agentName,
 				task,
 				agentConfig: discovered,
-				ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1" },
+				ctx: {
+					pi: { events: { emit() {} } },
+					cwd: tempDir,
+					currentSessionId: "session-1",
+					projectTrusted: true,
+					trustedProjectCwd: tempDir,
+				},
 				artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
 				shareEnabled: false,
 				sessionRoot: path.join(tempDir, "sessions"),
@@ -712,6 +760,10 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 			const payload = await readAsyncPayload(asyncId);
 			assert.equal(launch.details.launchContractDigest, preflight.contract.launchContractDigest);
 			assert.equal(payload.launchContractDigest, preflight.contract.launchContractDigest);
+			assert.equal(payload.results[0]?.sandbox, "reviewer-strict");
+			const asyncLaunchEnv = await waitForMockPiLaunchEnv(mockPi, 0);
+			assert.equal(asyncLaunchEnv[SUBAGENT_SANDBOX_PROFILE_ENV], "reviewer-strict");
+			assert.equal(asyncLaunchEnv[SUBAGENT_SANDBOX_PROJECT_TRUST_ENV], "1");
 			assert.equal(payload.results[0]?.launchContractDigest, preflight.contract.launchContractDigest);
 		} finally {
 			if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -891,11 +943,11 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 				{ provider: "mock", id: "blocked", fullId: "mock/blocked" },
 				{ provider: "mock", id: "fallback", fullId: "mock/fallback" },
 			],
-			ctx: {
+				ctx: {
 				pi: { events: { emit() {} } },
 				cwd: tempDir,
 				currentSessionId: "session-1",
-				modelScope: { enforce: true, allow: ["mock/fallback"] },
+			modelScope: { enforce: true, allow: ["mock/fallback"] },
 			},
 			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
 			shareEnabled: false,
@@ -927,6 +979,43 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(payload.success, true);
 		assert.equal(payload.results[0]?.model, "mock/fallback");
 		assert.equal(mockPi.callCount(), 1);
+	});
+
+
+	it("rejects a project-scoped sandbox selector when the launching host is untrusted", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, () => {
+		const launch = executeAsyncSingle(`async-sandbox-untrusted-${Date.now().toString(36)}`, {
+			agent: "worker",
+			task: "Review the repository.",
+			agentConfig: makeAgent("worker", { source: "project", sandbox: "reviewer-strict" }),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-1", projectTrusted: false },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+		});
+		assert.equal(launch.isError, true);
+		assert.match(launch.content[0]?.text ?? "", /project is not trusted/);
+		assert.equal(mockPi.callCount(), 0);
+	});
+
+	it("rejects a project-scoped sandbox selector when the child cwd differs from the trusted project", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, () => {
+		const childCwd = path.join(tempDir, "untrusted-child-cwd");
+		const launch = executeAsyncSingle(`async-sandbox-cross-cwd-${Date.now().toString(36)}`, {
+			agent: "worker",
+			task: "Review the repository.",
+			agentConfig: makeAgent("worker", { source: "project", sandbox: "reviewer-strict" }),
+			ctx: {
+				pi: { events: { emit() {} } },
+				cwd: tempDir,
+				currentSessionId: "session-1",
+				projectTrusted: true,
+				trustedProjectCwd: tempDir,
+			},
+			cwd: childCwd,
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+		});
+		assert.equal(launch.isError, true);
+		assert.match(launch.content[0]?.text ?? "", /not an exact trusted project root/);
+		assert.equal(mockPi.callCount(), 0);
 	});
 
 	it("rejects async thinking above maxThinking before child startup", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, () => {
@@ -1801,7 +1890,7 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 				timeoutMs: 1_500,
 			});
 
-			await waitForMockPiCall(mockPi, 1, 10_000);
+			await waitForMockPiCall(mockPi, 1);
 			fs.writeFileSync(path.join(repo, "input.md"), "parallel partial child change\n", "utf-8");
 			const resultPath = await waitForAsyncResultFile(id, 8_000);
 			const payload = JSON.parse(fs.readFileSync(resultPath, "utf-8")) as AsyncResultPayload;

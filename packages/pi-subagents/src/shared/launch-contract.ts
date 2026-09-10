@@ -71,6 +71,7 @@ export function projectAgentDefinition(agent: AgentConfig): Record<string, unkno
 		maxSubagentDepth: agent.maxSubagentDepth,
 		completionGuard: agent.completionGuard,
 		toolBudget: agent.toolBudget,
+		sandbox: agent.sandbox,
 		memory: agent.memory,
 	};
 }
@@ -100,6 +101,7 @@ export interface LaunchBindingInput {
 	mcpDirectTools?: string[];
 	outputPath?: string;
 	outputMode?: string;
+	sandbox?: string;
 	structuredOutputSchema?: unknown;
 	extensionBindings?: ExtensionBindings;
 }
@@ -128,6 +130,7 @@ export function projectLaunchBinding(input: LaunchBindingInput): Record<string, 
 		mcpDirectTools: input.mcpDirectTools,
 		outputPath: input.outputPath,
 		outputMode: input.outputMode,
+		sandbox: input.sandbox,
 		structuredOutputSchema: input.structuredOutputSchema,
 		extensionBindings: input.extensionBindings,
 	};

@@ -6,15 +6,18 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { randomUUID } from "node:crypto";
 import type { ChildWatchdogConfig, ChildWatchdogStatusEvent } from "../../watchdog/child-status.ts";
 import type { ThinkingLevel } from "../../shared/model-info.ts";
 import { intersectThinkingCeilings } from "../../shared/thinking-ceiling.ts";
 import {
+	TEMP_ROOT_DIR,
 	resolveChildDepth,
 	type LaunchResolvedChildExtensionsV1,
 	type ResolvedToolBudget,
 	type RunFanoutBudgetDescriptor,
 } from "../../shared/types.ts";
+import { SUBAGENT_SANDBOX_PROFILE_ENV, SUBAGENT_SANDBOX_PROJECT_TRUST_ENV } from "../../shared/sandbox-profile.ts";
 import type { NestedPathEntry } from "./nested-path.ts";
 import type { McpRuntimeSnapshotHost } from "./mcp-direct-tool-allowlist.ts";
 import type { PermissionRules } from "./permissions.ts";
@@ -23,6 +26,7 @@ import type { ChildToolDiagnostic } from "./tool-availability.ts";
 import type { RuntimeAcknowledgedChildExtensionsV1 } from "../../shared/types.ts";
 import { projectRuntimeAcknowledgedExtensions } from "./runtime-acknowledged-extensions.ts";
 import { encodeExtensionBindings, PI_SUBAGENT_EXTENSION_BINDINGS_ENV, type ExtensionBindings } from "./extension-bindings.ts";
+import { SANDBOX_DIAGNOSTICS_PATH_ENV } from "./sandbox-startup-diagnostics.ts";
 import type { ResolvedSubagentCapabilityCeiling, SubagentCapabilityAudit } from "./capability-ceiling.ts";
 import {
 	isSubagentRuntimeExtensionPath,
@@ -37,6 +41,18 @@ import type { ChildSessionLaunch, ChildSessionStorage } from "./child-session.ts
 
 /** Environment variable pi-mcp-adapter reads for the tools a child may expose. */
 export const MCP_DIRECT_TOOLS_ENV = "MCP_DIRECT_TOOLS";
+
+const SANDBOX_STARTUP_ACK_PATH_ENV = "PI_SUBAGENT_SANDBOX_STARTUP_ACK_PATH";
+const SANDBOX_STARTUP_ACK_TOKEN_ENV = "PI_SUBAGENT_SANDBOX_STARTUP_ACK_TOKEN";
+// Marks an in-process child so child extensions never mutate the host process
+// state (for example a profile-failure exit code) that a separate child process
+// would legitimately own.
+const IN_PROCESS_CHILD_ENV = "PI_SUBAGENT_SANDBOX_IN_PROCESS_CHILD";
+
+function hasTrustedProfileProjectCwd(input: Pick<BuildInProcessChildLaunchInput, "cwd" | "projectTrusted" | "trustedProjectCwd">): boolean {
+	if (input.projectTrusted !== true || !input.cwd || !input.trustedProjectCwd) return false;
+	return path.resolve(input.cwd) === path.resolve(input.trustedProjectCwd);
+}
 
 /**
  * The parts of the launching executor's own child runtime that a child it
@@ -102,6 +118,12 @@ export interface BuildInProcessChildLaunchInput {
 	thinkingCeiling?: ThinkingLevel;
 	maxSubagentDepth?: number;
 	runtimeSnapshotHost?: McpRuntimeSnapshotHost;
+	/** A validated global pi-sandbox profile selected by the agent definition. */
+	sandbox?: string;
+	/** Parent-authoritative trust state for profile-aware project config merging. */
+	projectTrusted?: boolean;
+	/** Exact trusted parent cwd; profile project config applies only when the child cwd matches it. */
+	trustedProjectCwd?: string;
 	/** The launching executor's own child runtime when it is itself an in-process child. */
 	inherited?: InheritedChildRuntime;
 	/**
@@ -127,6 +149,9 @@ export interface InProcessChildLaunch {
 	launchResolvedExtensions: LaunchResolvedChildExtensionsV1;
 	warnings: string[];
 	capabilityAudit?: SubagentCapabilityAudit;
+	/** Path a blocked child extension writes its startup failure to; see
+	 * `readSandboxStartupDiagnostic`. Present only for sandbox-profile children. */
+	sandboxDiagnosticsPath?: string;
 }
 
 /** Escape XML-significant characters in a string for safe attribute interpolation. */
@@ -143,14 +168,14 @@ function inheritedCapabilityCeiling(inherited: InheritedChildRuntime | undefined
 }
 
 /** Environment values external child extensions read; only the runner applies them. */
-function childProcessEnv(input: BuildInProcessChildLaunchInput, toolPlan: PiLaunchToolPlan): Record<string, string | undefined> {
+function childProcessEnv(input: BuildInProcessChildLaunchInput, toolPlan: PiLaunchToolPlan, sandboxEnv?: Record<string, string | undefined>): Record<string, string | undefined> {
 	const env: Record<string, string | undefined> = {};
 	env[PI_SUBAGENT_EXTENSION_BINDINGS_ENV] = encodeExtensionBindings(input.extensionBindings);
 	if (!toolPlan.capabilityCeiling && input.mcpDirectTools?.length) env[MCP_DIRECT_TOOLS_ENV] = input.mcpDirectTools.join(",");
 	else if (toolPlan.capabilityCeiling && toolPlan.effectiveMcpSelections.length && !toolPlan.capabilityCeiling.denyExtensions) {
 		env[MCP_DIRECT_TOOLS_ENV] = toolPlan.effectiveMcpSelections.map((selection) => selection.selector).join(",");
 	} else env[MCP_DIRECT_TOOLS_ENV] = "__none__";
-	return env;
+	return sandboxEnv ? { ...env, ...sandboxEnv } : env;
 }
 
 function childStorage(input: BuildInProcessChildLaunchInput): ChildSessionStorage {
@@ -185,7 +210,30 @@ export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput)
 		agentName: input.childAgentName,
 		permissionRules: input.permissionRules,
 		runtimeSnapshotHost: input.runtimeSnapshotHost,
+		sandbox: input.sandbox,
 	});
+
+	// A selected profile is validated by resolvePiLaunchToolPlan; the child
+	// receives only the profile identity, trust snapshot, and startup ack
+	// channel through its environment. Transient keys are restored after the
+	// session is created so the host process never keeps them.
+	const sandboxAckPath = toolPlan.sandboxExtension && input.sandbox !== undefined
+		? path.join(TEMP_ROOT_DIR, "sandbox-profile-acks", `${randomUUID()}.json`)
+		: undefined;
+	const sandboxDiagnosticsPath = sandboxAckPath
+		? path.join(TEMP_ROOT_DIR, "sandbox-profile-diagnostics", `${randomUUID()}.json`)
+		: undefined;
+	const sandboxEnv: Record<string, string | undefined> | undefined = sandboxAckPath
+		? {
+			[SUBAGENT_SANDBOX_PROFILE_ENV]: input.sandbox,
+			[SUBAGENT_SANDBOX_PROJECT_TRUST_ENV]: hasTrustedProfileProjectCwd(input) ? "1" : "0",
+			[SANDBOX_STARTUP_ACK_PATH_ENV]: sandboxAckPath,
+			[SANDBOX_STARTUP_ACK_TOKEN_ENV]: randomUUID(),
+			[SANDBOX_DIAGNOSTICS_PATH_ENV]: sandboxDiagnosticsPath,
+			...(input.host === "parent" ? { [IN_PROCESS_CHILD_ENV]: "1" } : {}),
+		}
+		: undefined;
+	if (sandboxAckPath) fs.mkdirSync(path.dirname(sandboxAckPath), { recursive: true, mode: 0o700 });
 
 	const inherited = input.inherited;
 	const fanout = toolPlan.fanoutAuthorized;
@@ -289,7 +337,8 @@ export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput)
 		extensionPaths,
 		ambientExtensions,
 		hooks: createChildHooks(config),
-		...(input.host === "runner" ? { processEnv: childProcessEnv(input, toolPlan) } : {}),
+		...(input.host === "runner" || sandboxEnv ? { processEnv: childProcessEnv(input, toolPlan, sandboxEnv) } : {}),
+		...(sandboxEnv ? { transientProcessEnv: Object.keys(sandboxEnv) } : {}),
 		runtime: config,
 		noSkills: !input.inheritSkills,
 		noContextFiles: !input.inheritProjectContext,
@@ -310,5 +359,6 @@ export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput)
 		launchResolvedExtensions,
 		warnings: toolPlan.warnings,
 		...(toolPlan.capabilityAudit ? { capabilityAudit: toolPlan.capabilityAudit } : {}),
+		...(sandboxDiagnosticsPath ? { sandboxDiagnosticsPath } : {}),
 	};
 }

@@ -25,6 +25,7 @@ import { formatWorkflowPreflightPlanSummary, formatWorkflowPreflightWarningSumma
 import { workflowGraphStageNodes } from "../shared/workflow-graph.ts";
 import { formatTimeoutRecoveryLines, projectTimeoutRecovery } from "../shared/mutation-evidence.ts";
 import { formatWorkflowChecklistText, projectWorkflowChecklist } from "../../workflows/workflow-checklist.ts";
+import { validateSandboxProfileName } from "../../shared/sandbox-profile.ts";
 
 interface AsyncRunStepSummary {
 	index: number;
@@ -65,6 +66,7 @@ interface AsyncRunStepSummary {
 	model?: string;
 	contextLimit?: number;
 	thinking?: string;
+	sandbox?: string;
 	attemptedModels?: string[];
 	sessionFile?: string;
 	transcriptPath?: string;
@@ -106,6 +108,7 @@ export interface AsyncRunSummary {
 	steering?: SteeringStatus;
 	mode: SubagentRunMode;
 	context?: ContextSummary;
+	sandbox?: string;
 	cwd?: string;
 	sessionRoot?: string;
 	startedAt: number;
@@ -201,6 +204,14 @@ function isolateCorruptActiveRun(asyncDir: string, runId: string, error: unknown
 		}
 	}
 	console.error(`[pi-subagents] Skipping corrupt active async run '${runId}' at '${statusPath}': ${getErrorMessage(error)}; ${markerAction}.`);
+}
+
+function sandboxProfileValue(value: unknown): string | undefined {
+	try {
+		return validateSandboxProfileName(value);
+	} catch {
+		return undefined;
+	}
 }
 
 function isNotFoundError(error: unknown): boolean {
@@ -327,6 +338,7 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string 
 		const stepActivityState = step.activityState;
 		const stepLastActivityAt = step.lastActivityAt;
 		const timeoutRecovery = projectTimeoutRecovery(step.timeoutRecovery);
+		const sandbox = sandboxProfileValue(step.sandbox);
 		return {
 			index,
 			childId: asyncStatusChildIdentity(step, index),
@@ -365,6 +377,7 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string 
 			...(step.model ? { model: step.model } : {}),
 			...(step.contextLimit !== undefined ? { contextLimit: step.contextLimit } : {}),
 			...(step.thinking ? { thinking: step.thinking } : {}),
+			...(sandbox ? { sandbox } : {}),
 			...(step.thinkingCeiling ? { thinkingCeiling: step.thinkingCeiling } : {}),
 			...(step.attemptedModels ? { attemptedModels: step.attemptedModels } : {}),
 			...(step.sessionFile ? { sessionFile: step.sessionFile } : {}),
@@ -395,6 +408,7 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string 
 		};
 	});
 	attachRootChildrenToSteps(status.runId || path.basename(asyncDir), summarizedSteps, nestedChildren);
+	const sandbox = sandboxProfileValue(status.sandbox);
 	return {
 		id: status.runId || path.basename(asyncDir),
 		asyncDir,
@@ -412,6 +426,7 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string 
 		steering: status.steering,
 		mode: status.mode,
 		...(summarizeContextModes(summarizedSteps.map((step) => step.context)) ? { context: summarizeContextModes(summarizedSteps.map((step) => step.context)) } : {}),
+		...(sandbox ? { sandbox } : {}),
 		cwd: status.cwd,
 		...(status.sessionRoot ? { sessionRoot: status.sessionRoot } : {}),
 		startedAt: status.startedAt,

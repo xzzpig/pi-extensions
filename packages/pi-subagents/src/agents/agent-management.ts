@@ -41,6 +41,7 @@ import { previewDisplayText } from "../shared/display-text.ts";
 import { capabilityCeilingAgentRestrictionSources, isAgentAllowedByCapabilityCeiling, resolveCurrentSubagentCapabilityCeiling } from "../runs/shared/capability-ceiling.ts";
 import { mergeRuntimeAgents, type RuntimeAgentOwner } from "./runtime-agent-registry.ts";
 import { listExternalJobProviders } from "../api/external-job-provider.ts";
+import { validateSandboxProfileName } from "../shared/sandbox-profile.ts";
 
 export const AGENT_MANAGEMENT_API_VERSION = 1 as const;
 
@@ -98,7 +99,7 @@ export type EjectAgentDefinitionResult =
 
 type ManagementAction = "list" | "get" | "models" | "create" | "update" | "delete" | "eject" | "disable" | "enable" | "reset";
 type ManagementScope = "user" | "project";
-type ManagementContext = Pick<ExtensionContext, "cwd" | "modelRegistry"> & { model?: ExtensionContext["model"]; config?: ExtensionConfig; currentSessionId?: string; runtimeAgentOwner?: RuntimeAgentOwner };
+type ManagementContext = Pick<ExtensionContext, "cwd" | "modelRegistry"> & { isProjectTrusted?: ExtensionContext["isProjectTrusted"]; model?: ExtensionContext["model"]; config?: ExtensionConfig; currentSessionId?: string; runtimeAgentOwner?: RuntimeAgentOwner };
 
 interface ManagementParams {
 	action?: string;
@@ -451,6 +452,7 @@ export function preservedAgentFrontmatterFields(agent: AgentConfig, cfg: Record<
 		if (cfg.completionGuard === true) fields.add("completionGuard");
 	}
 	if (hasKey(cfg, "toolBudget")) changed("toolBudget");
+	if (hasKey(cfg, "sandbox")) changed("sandbox");
 
 	return fields;
 }
@@ -682,6 +684,14 @@ function applyAgentConfig(target: AgentConfig, cfg: Record<string, unknown>): st
 			target.toolBudget = cfg.toolBudget as ToolBudgetConfig;
 		}
 	}
+	if (hasKey(cfg, "sandbox")) {
+		if (typeof cfg.sandbox !== "string") return "config.sandbox must be a non-empty sandbox profile name when provided.";
+		try {
+			target.sandbox = validateSandboxProfileName(cfg.sandbox, "config.sandbox");
+		} catch (error) {
+			return error instanceof Error ? error.message : String(error);
+		}
+	}
 	if (target.runner?.type === "external-cli" || target.runner?.type === "external-job") {
 		const unsupported = [
 			target.tools?.length || target.mcpDirectTools?.length ? "tools" : undefined,
@@ -696,6 +706,7 @@ function applyAgentConfig(target: AgentConfig, cfg: Record<string, unknown>): st
 			target.maxSubagentDepth !== undefined ? "maxSubagentDepth" : undefined,
 			target.completionGuard !== undefined ? "completionGuard" : undefined,
 			target.toolBudget ? "toolBudget" : undefined,
+			target.sandbox ? "sandbox" : undefined,
 		].filter((field): field is string => Boolean(field));
 		if (unsupported.length > 0) return `config.runner type '${target.runner.type}' does not support Pi-only fields: ${unsupported.join(", ")}.`;
 	}
@@ -996,6 +1007,7 @@ function formatAgentDetail(agent: AgentConfig): string {
 	if (agent.maxSubagentDepth !== undefined) lines.push(`Max subagent depth: ${agent.maxSubagentDepth}`);
 	if (agent.completionGuard === false) lines.push("Completion guard: false");
 	if (agent.toolBudget) lines.push(`Tool budget: ${JSON.stringify(agent.toolBudget)}`);
+	if (agent.sandbox) lines.push(`Sandbox profile: ${agent.sandbox}`);
 	if (agent.memory) lines.push(`Memory: ${agent.memory.scope} scope, path: ${agent.memory.path}`);
 	if (agent.systemPrompt.trim()) lines.push("", "System Prompt:", agent.systemPrompt);
 	return lines.join("\n");
@@ -1423,6 +1435,7 @@ function validateEjectedAgentLaunchPreflight(agent: AgentConfig, cwd: string): s
 			cwd,
 			requireReadTool: resolvedSkills.resolved.length > 0,
 			agentName: agent.name,
+			sandbox: agent.sandbox,
 		});
 	} catch (error) {
 		return error instanceof Error ? error.message : String(error);

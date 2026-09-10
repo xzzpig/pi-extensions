@@ -20,6 +20,7 @@ import { isSafeNestedPathId, sanitizeNestedPath, type NestedPathEntry } from "./
 import { writeAtomicJson } from "../../shared/atomic-json.ts";
 import { sanitizeProcessTerminal } from "../background/process-terminal.ts";
 import { THINKING_LEVELS } from "../../shared/model-info.ts";
+import { validateSandboxProfileName } from "../../shared/sandbox-profile.ts";
 
 export const NESTED_EVENTS_DIR = path.join(TEMP_ROOT_DIR, "nested-subagent-events");
 const ROUTE_FILE = "route.json";
@@ -136,7 +137,17 @@ export function resolveNestedRoute(route: NestedRoute): NestedRoute {
 	const { rootRunId, capabilityToken } = route;
 	validateRouteShape(route);
 	const routeFile = path.join(commonRouteRoot(route), ROUTE_FILE);
-	const metadata = JSON.parse(fs.readFileSync(routeFile, "utf-8")) as { rootRunId?: unknown; capabilityToken?: unknown };
+	let metadata: { rootRunId?: unknown; capabilityToken?: unknown };
+	try {
+		const parsed: unknown = JSON.parse(fs.readFileSync(routeFile, "utf-8"));
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+			throw new Error("route metadata must be an object");
+		}
+		metadata = parsed as { rootRunId?: unknown; capabilityToken?: unknown };
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		throw new Error(`Nested event route metadata is unreadable: ${message}`);
+	}
 	if (metadata.rootRunId !== rootRunId || metadata.capabilityToken !== capabilityToken) {
 		throw new Error("Nested event route metadata does not match the provided root id and capability token.");
 	}
@@ -291,6 +302,14 @@ function sanitizeState(value: unknown, fallback: NestedRunState): NestedRunState
 		: fallback;
 }
 
+function sandboxProfileValue(value: unknown): string | undefined {
+	try {
+		return validateSandboxProfileName(value);
+	} catch {
+		return undefined;
+	}
+}
+
 function sanitizeStep(input: unknown, depth: number): NestedStepSummary | undefined {
 	if (!input || typeof input !== "object") return undefined;
 	const raw = input as Record<string, unknown>;
@@ -301,12 +320,14 @@ function sanitizeStep(input: unknown, depth: number): NestedStepSummary | undefi
 		: "pending";
 	const model = stringValue(raw.model);
 	const thinking = THINKING_LEVELS.find((level) => level === raw.thinking);
+	const sandbox = sandboxProfileValue(raw.sandbox);
 	return {
 		agent,
 		status,
 		...(model ? { model } : {}),
 		...(thinking ? { thinking } : {}),
 		...(stringValue(raw.sessionName, 256) ? { sessionName: stringValue(raw.sessionName, 256) } : {}),
+		...(sandbox ? { sandbox } : {}),
 		...(stringValue(raw.sessionFile, 2048) ? { sessionFile: stringValue(raw.sessionFile, 2048) } : {}),
 		...(raw.activityState === "active_long_running" || raw.activityState === "needs_attention" ? { activityState: raw.activityState } : {}),
 		...(clampNumber(raw.lastActivityAt) !== undefined ? { lastActivityAt: clampNumber(raw.lastActivityAt) } : {}),
@@ -339,6 +360,7 @@ export function sanitizeSummary(input: unknown, depth = 0): NestedRunSummary | u
 		: undefined;
 	const totalTokens = sanitizeTokenUsage(raw.totalTokens);
 	const totalCost = sanitizeCost(raw.totalCost);
+	const sandbox = sandboxProfileValue(raw.sandbox);
 	return {
 		id: raw.id,
 		parentRunId: raw.parentRunId,
@@ -362,7 +384,9 @@ export function sanitizeSummary(input: unknown, depth = 0): NestedRunSummary | u
 		...(stringValue(raw.capabilityToken, 128) ? { capabilityToken: stringValue(raw.capabilityToken, 128) } : {}),
 		...(raw.mode === "single" || raw.mode === "parallel" || raw.mode === "chain" ? { mode: raw.mode } : {}),
 		...(stringValue(raw.agent, 128) ? { agent: stringValue(raw.agent, 128) } : {}),
+		...(sandbox ? { sandbox } : {}),
 		...(Array.isArray(raw.agents) ? { agents: raw.agents.map((agent) => stringValue(agent, 128)).filter((agent): agent is string => Boolean(agent)).slice(0, MAX_STEPS) } : {}),
+
 		...(clampNumber(raw.currentStep) !== undefined ? { currentStep: clampNumber(raw.currentStep) } : {}),
 		...(clampNumber(raw.chainStepCount) !== undefined ? { chainStepCount: clampNumber(raw.chainStepCount) } : {}),
 		...(raw.activityState === "active_long_running" || raw.activityState === "needs_attention" ? { activityState: raw.activityState } : {}),
@@ -768,7 +792,7 @@ export function projectNestedEvents(route: NestedRoute): NestedRegistry {
 	return registry;
 }
 
-function writeRouteRecord(dir: string, ts: number, payload: object): string {
+function writeRouteRecord<T extends object>(dir: string, ts: number, payload: T): string {
 	const content = `${JSON.stringify(payload)}\n`;
 	if (Buffer.byteLength(content, "utf-8") > MAX_EVENT_BYTES) throw new Error("Nested route record exceeds the maximum size.");
 	fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -986,6 +1010,7 @@ export function hasLiveNestedDescendants(children: NestedRunSummary[] | undefine
 }
 
 export function nestedSummaryFromAsyncStatus(status: AsyncStatus, asyncDir: string, fallback: { id: string; parentRunId: string; parentStepIndex?: number; depth: number; path?: Array<{ runId: string; stepIndex?: number; agent?: string }>; mode?: SubagentRunMode; ts: number }): NestedRunSummary {
+	const sandbox = sandboxProfileValue(status.sandbox);
 	return {
 		id: status.runId || fallback.id,
 		parentRunId: fallback.parentRunId,
@@ -996,6 +1021,7 @@ export function nestedSummaryFromAsyncStatus(status: AsyncStatus, asyncDir: stri
 		...(status.pid ? { pid: status.pid } : {}),
 		...(status.sessionId ? { sessionId: status.sessionId } : {}),
 		mode: status.mode ?? fallback.mode,
+		...(sandbox ? { sandbox } : {}),
 		...(status.steps?.length === 1 && status.steps[0]?.model ? { model: status.steps[0].model } : {}),
 		...(status.steps?.length === 1 && status.steps[0]?.thinking ? { thinking: status.steps[0].thinking } : {}),
 		...(status.steps?.length === 1 && status.steps[0]?.sessionName ? { sessionName: status.steps[0].sessionName } : {}),
@@ -1027,34 +1053,40 @@ export function nestedSummaryFromAsyncStatus(status: AsyncStatus, asyncDir: stri
 		...(status.endedAt !== undefined ? { endedAt: status.endedAt } : {}),
 		lastUpdate: status.lastUpdate ?? fallback.ts,
 		...(status.sessionFile ? { sessionFile: status.sessionFile } : {}),
-		...(status.steps?.length ? { steps: status.steps.map((step, index) => ({
-			agent: step.agent,
-			...(step.sessionName ? { sessionName: step.sessionName } : {}),
-			status: step.status,
-			...(step.model ? { model: step.model } : {}),
-			...(step.thinking ? { thinking: step.thinking } : {}),
-			...(step.sessionFile ? { sessionFile: step.sessionFile } : {}),
-			...(step.activityState ? { activityState: step.activityState } : {}),
-			...(step.lastActivityAt !== undefined ? { lastActivityAt: step.lastActivityAt } : {}),
-			...(step.currentTool ? { currentTool: step.currentTool } : {}),
-			...(step.currentToolStartedAt !== undefined ? { currentToolStartedAt: step.currentToolStartedAt } : {}),
-			...(step.currentPath ? { currentPath: step.currentPath } : {}),
-			...(step.turnCount !== undefined ? { turnCount: step.turnCount } : {}),
-			...(step.toolCount !== undefined ? { toolCount: step.toolCount } : {}),
-			...(step.startedAt !== undefined ? { startedAt: step.startedAt } : {}),
-			...(step.endedAt !== undefined ? { endedAt: step.endedAt } : {}),
-			...(step.error ? { error: step.error } : {}),
-			...(step.launchResolvedExtensions ? { launchResolvedExtensions: step.launchResolvedExtensions } : {}),
-			...runtimeAcknowledgedEntry(step.runtimeAcknowledgedExtensions),
-			...(step.timedOut !== undefined ? { timedOut: step.timedOut } : {}),
-			...(step.stopped !== undefined ? { stopped: step.stopped } : {}),
-			...(step.turnBudget ? { turnBudget: step.turnBudget } : {}),
-			...(step.turnBudgetExceeded !== undefined ? { turnBudgetExceeded: step.turnBudgetExceeded } : {}),
-			...(step.wrapUpRequested !== undefined ? { wrapUpRequested: step.wrapUpRequested } : {}),
-			...(step.processTerminal ? { processTerminal: sanitizeProcessTerminal(step.processTerminal, { runId: status.runId || fallback.id, runnerProcessInstanceId: step.processTerminal.runnerProcessInstanceId }, `${asyncDir}/status.json step ${index}`) } : {}),
-			...(step.capabilityCeiling ? { capabilityCeiling: step.capabilityCeiling } : {}),
-			...(step.capabilityAudit ? { capabilityAudit: step.capabilityAudit } : {}),
-		})).slice(0, MAX_STEPS) } : {}),
+		...(status.steps?.length ? {
+			steps: status.steps.map((step, index) => {
+				const stepSandbox = sandboxProfileValue(step.sandbox);
+				return {
+					agent: step.agent,
+					...(step.sessionName ? { sessionName: step.sessionName } : {}),
+					status: step.status,
+					...(step.model ? { model: step.model } : {}),
+					...(step.thinking ? { thinking: step.thinking } : {}),
+					...(stepSandbox ? { sandbox: stepSandbox } : {}),
+					...(step.sessionFile ? { sessionFile: step.sessionFile } : {}),
+					...(step.activityState ? { activityState: step.activityState } : {}),
+					...(step.lastActivityAt !== undefined ? { lastActivityAt: step.lastActivityAt } : {}),
+					...(step.currentTool ? { currentTool: step.currentTool } : {}),
+					...(step.currentToolStartedAt !== undefined ? { currentToolStartedAt: step.currentToolStartedAt } : {}),
+					...(step.currentPath ? { currentPath: step.currentPath } : {}),
+					...(step.turnCount !== undefined ? { turnCount: step.turnCount } : {}),
+					...(step.toolCount !== undefined ? { toolCount: step.toolCount } : {}),
+					...(step.startedAt !== undefined ? { startedAt: step.startedAt } : {}),
+					...(step.endedAt !== undefined ? { endedAt: step.endedAt } : {}),
+					...(step.error ? { error: step.error } : {}),
+					...(step.launchResolvedExtensions ? { launchResolvedExtensions: step.launchResolvedExtensions } : {}),
+					...runtimeAcknowledgedEntry(step.runtimeAcknowledgedExtensions),
+					...(step.timedOut !== undefined ? { timedOut: step.timedOut } : {}),
+					...(step.stopped !== undefined ? { stopped: step.stopped } : {}),
+					...(step.turnBudget ? { turnBudget: step.turnBudget } : {}),
+					...(step.turnBudgetExceeded !== undefined ? { turnBudgetExceeded: step.turnBudgetExceeded } : {}),
+					...(step.wrapUpRequested !== undefined ? { wrapUpRequested: step.wrapUpRequested } : {}),
+					...(step.processTerminal ? { processTerminal: sanitizeProcessTerminal(step.processTerminal, { runId: status.runId || fallback.id, runnerProcessInstanceId: step.processTerminal.runnerProcessInstanceId }, `${asyncDir}/status.json step ${index}`) } : {}),
+					...(step.capabilityCeiling ? { capabilityCeiling: step.capabilityCeiling } : {}),
+					...(step.capabilityAudit ? { capabilityAudit: step.capabilityAudit } : {}),
+				};
+			}).slice(0, MAX_STEPS),
+		} : {}),
 	};
 }
 

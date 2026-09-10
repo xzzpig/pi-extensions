@@ -5,6 +5,10 @@ export interface RunnerSubagentStep {
 	parentSessionId?: string;
 	/** Resolved opt-in rules for native Pi child tool calls. */
 	permissionRules?: import("./permissions.ts").PermissionRules;
+	/** Parent-authoritative trust state for profile-aware project config merging. */
+	projectTrusted?: boolean;
+	/** Exact trusted parent cwd; project config applies only when it matches this child cwd. */
+	trustedProjectCwd?: string;
 	agent: string;
 	/** Human-readable display name for the child session, derived internally at launch. */
 	sessionName?: string;
@@ -49,6 +53,7 @@ export interface RunnerSubagentStep {
 	mcpDirectTools?: string[];
 	mutationTools?: string[];
 	completionGuard?: boolean;
+	sandbox?: string;
 	systemPrompt?: string | null;
 	systemPromptMode?: "append" | "replace";
 	inheritProjectContext: boolean;

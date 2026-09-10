@@ -62,6 +62,7 @@ import { arbitrateCompletionGuardRescue } from "../shared/llm-intent-arbiter.ts"
 import { preflightLaunchCwd } from "../shared/launch-cwd.ts";
 import { createJsonlWriter } from "../../shared/jsonl-writer.ts";
 import { createOrcaProgressTab, type OrcaProgressTab } from "../shared/orca-progress-tabs.ts";
+import { clearSandboxStartupDiagnostic, readSandboxStartupDiagnostic } from "../shared/sandbox-startup-diagnostics.ts";
 import { resolvePermissionRules } from "../shared/permissions.ts";
 import { applyThinkingSuffix, deriveForkPromptCacheKey } from "../shared/child-tool-plan.ts";
 import { deriveChildSessionName } from "../../shared/child-session-name.ts";
@@ -164,6 +165,7 @@ function persistSingleResultMetadata(input: {
 		toolCount: target.progressSummary?.toolCount,
 		error: target.error,
 		agentContract: target.agentContract,
+		sandbox: target.sandbox,
 		launchContractDigest: target.launchContractDigest,
 		launchResolvedExtensions: target.launchResolvedExtensions,
 		runtimeAcknowledgedExtensions: target.runtimeAcknowledgedExtensions,
@@ -386,6 +388,7 @@ async function runSingleAttempt(
 		})
 		: undefined;
 	const permissionRules = resolvePermissionRules(options.permissions, agent.permissions);
+	const sandbox = options.sandbox ?? agent.sandbox;
 	const permissionAuditPath = permissionRules && options.artifactsDir
 		? path.join(options.artifactsDir, "permission-audit", `${options.runId}-${options.index ?? 0}.jsonl`)
 		: undefined;
@@ -424,6 +427,9 @@ async function runSingleAttempt(
 		toolBudget: options.toolBudget,
 		permissionRules,
 		permissionAuditPath,
+		sandbox,
+		projectTrusted: options.projectTrusted,
+		trustedProjectCwd: options.trustedProjectCwd,
 		childWatchdog,
 		watchdogStatus: (event) => onWatchdogStatus?.(event),
 		waitToolEnabled: options.waitToolEnabled,
@@ -485,6 +491,7 @@ async function runSingleAttempt(
 		inheritProjectContext: agent.inheritProjectContext,
 		inheritGlobalContext: agent.inheritGlobalContext,
 		inheritSkills: agent.inheritSkills,
+		sandbox,
 		skills: shared.resolvedSkillNames ?? [],
 		tools: toolPlan.effectiveToolAllowlist,
 		...(toolPlan.excludeTools.length > 0 ? { excludeTools: toolPlan.excludeTools } : {}),
@@ -501,6 +508,7 @@ async function runSingleAttempt(
 		task: shared.originalTask ?? task,
 		...(childSessionName ? { sessionName: childSessionName } : {}),
 		...(options.agentContract ? { agentContract: options.agentContract } : {}),
+		...(sandbox ? { sandbox } : {}),
 		launchContractDigest,
 		launchResolvedExtensions,
 		exitCode: 0,
@@ -1187,6 +1195,10 @@ async function runSingleAttempt(
 				handleToolResult(evt.message, evt, now);
 			}
 		};
+		// SAFETY: this callback is only ever invoked with child-watchdog status events
+		// (declared as ChildWatchdogStatusEvent above); those carry the session-event
+		// fields `processEvent` needs, and `processEvent` re-validates the shape with
+		// `isChildWatchdogStatusEvent` before touching watchdog-specific fields.
 		onWatchdogStatus = (event) => processEvent(event as unknown as Parameters<typeof processEvent>[0]);
 
 		fireUpdate();
@@ -1460,8 +1472,17 @@ async function runSingleAttempt(
 			&& hasEmptyTerminalAssistantResponse(messages)
 			&& (progress.toolCount > 0 || Boolean(finalText?.trim()));
 		if ((missingOutput || terminalEmptyAfterUsefulWork) && (!errInfo.hasError || hasEmptyTerminalAssistantResponse(messages))) {
+			// A startup guard can block the first turn, which leaves no message to
+			// inspect. Prefer the reason the blocked child published.
+			const sandboxDiagnostic = readSandboxStartupDiagnostic(launch.sandboxDiagnosticsPath);
 			result.exitCode = 1;
-			result.error = formatEmptyTerminalAssistantResponseError(messages);
+			if (sandboxDiagnostic) {
+				result.error = sandboxDiagnostic.reason;
+				result.startupBlocked = true;
+				clearSandboxStartupDiagnostic(launch.sandboxDiagnosticsPath);
+			} else {
+				result.error = formatEmptyTerminalAssistantResponseError(messages);
+			}
 		} else if (errInfo.hasError) {
 			result.exitCode = errInfo.exitCode ?? 1;
 			result.error = errInfo.details
@@ -1985,7 +2006,7 @@ async function runSyncCompletionInner(
 			if (intercomDetached || result.timedOut) break modelAttemptsLoop;
 			if (attemptSucceeded) break modelAttemptsLoop;
 
-			const retryableModelFailure = isRetryableModelFailureAttempt({ error: result.error, messages: result.messages, toolCount: result.progressSummary?.toolCount });
+			const retryableModelFailure = isRetryableModelFailureAttempt({ error: result.error, messages: result.messages, toolCount: result.progressSummary?.toolCount, ...(result.startupBlocked ? { startupBlocked: true } : {}) });
 			if (retryableModelFailure) recordRetryableModelFailure(result.model ?? candidate, result.error);
 			if (isContextOverflow(result.error)) {
 				result.contextOverflow = true;

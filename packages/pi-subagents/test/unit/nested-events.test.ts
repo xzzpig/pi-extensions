@@ -58,7 +58,8 @@ function child(id: string, state: "queued" | "running" | "complete" | "failed" |
 		agents: ["reviewer"],
 		startedAt: 10,
 		lastUpdate: ts,
-		steps: [{ agent: "leaf", status: state === "running" ? "running" as const : "complete" as const }],
+		steps: [{ agent: "leaf", status: state === "running" ? "running" as const : "complete" as const, sandbox: "reviewer-strict" }],
+		sandbox: "reviewer-strict",
 	};
 }
 
@@ -185,6 +186,8 @@ describe("nested event parsing and projection", () => {
 		assert.equal(registry.children[0]?.steps?.[0]?.agent, "leaf");
 		assert.equal(registry.children[0]?.model, "provider/gpt-5.6-luna:medium");
 		assert.equal(registry.children[0]?.thinking, "medium");
+		assert.equal(registry.children[0]?.sandbox, "reviewer-strict");
+		assert.equal(registry.children[0]?.steps?.[0]?.sandbox, "reviewer-strict");
 		assert.equal(registry.children[0]?.steps?.[0]?.model, "provider/leaf");
 		assert.equal(registry.children[0]?.steps?.[0]?.thinking, "low");
 		assert.equal(registry.children[0]?.children?.[0]?.id, "nested-grandchild");

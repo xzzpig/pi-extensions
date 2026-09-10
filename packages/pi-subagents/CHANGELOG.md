@@ -1,5 +1,39 @@
 # Changelog
 
+## [0.10.0] - 2026-09-10 (fork release)
+
+### Added
+
+- **`sandbox: <profile-name>` for native agents.** Agent frontmatter (or a
+  builtin override) may select one named `pi-sandbox` profile from the user's
+  global `<agentDir>/sandbox.json`. The selector is a scalar name only: objects,
+  empty values, path-like names, and the literal `false` are rejected, and the
+  field is refused for `external-cli` and `external-job` runners. The launcher
+  resolves and injects the installed `pi-sandbox` extension plus a startup guard
+  even when `extensions` is an explicit allowlist; a missing package, unreadable
+  manifest, capability-ceiling denial, unknown profile, or failed sandbox
+  initialization fails the launch before the child's first model turn.
+- **Startup acknowledgement is verified before the first turn.** The guard
+  blocks the child when the profile never acknowledged successful startup, and
+  only the validated profile identity is persisted in async status, nested-event,
+  and intercom projections. The project trust decision travels with the child as
+  a boolean; a project-scoped selector is rejected unless the project is trusted
+  and the child cwd matches the trusted project root exactly.
+- **A blocked child reports its real reason.** A startup block publishes its
+  failure through the child startup diagnostics channel (including the available
+  profile names), so callers see the profile error instead of "Subagent produced
+  no output (possible model cold-start or empty response)", and the failure is
+  classified as `startupBlocked` rather than a retryable model failure — it no
+  longer records a 24-hour model exclusion or triggers pointless model fallback.
+
+### Changed
+
+- **Sandbox configuration is never injected into the child.** Only the selected
+  profile name, the trust snapshot, the startup acknowledgement channel, and the
+  diagnostics path cross the launch boundary, and those keys are restored on the
+  host immediately after the child session is created. Launches without a
+  `sandbox` selector keep the previous behavior unchanged.
+
 ## [0.9.0] - 2026-09-05 (fork release)
 
 ### Changed

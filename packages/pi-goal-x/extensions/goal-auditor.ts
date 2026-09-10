@@ -154,6 +154,8 @@ function auditorLaunchContractInput(args: GoalCompletionAuditorArgs, settings: G
 		...(overrides.thinking ? { thinking: overrides.thinking } : {}),
 		...(args.ctx.model ? { parentModel: { provider: args.ctx.model.provider, id: args.ctx.model.id } } : {}),
 		...(typeof args.ctx.modelRegistry?.getAvailable === "function" ? { availableModels: args.ctx.modelRegistry.getAvailable() } : {}),
+		projectTrusted: args.ctx.isProjectTrusted?.() === true,
+		...(args.ctx.isProjectTrusted?.() === true ? { trustedProjectCwd: args.ctx.cwd } : {}),
 		outputSchema: GOAL_AUDITOR_RESULT_SCHEMA,
 		artifacts: true,
 	};

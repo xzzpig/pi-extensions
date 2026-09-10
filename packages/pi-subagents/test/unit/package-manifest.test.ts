@@ -7,6 +7,13 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+// pnpm uses the hoisted node linker here, so runtime dependencies may live in
+// the repository-root node_modules instead of the package's own.
+function hoistedDependencyPath(...segments: string[]): string {
+	const packageLocal = path.join(projectRoot, "node_modules", ...segments);
+	if (fs.existsSync(packageLocal)) return packageLocal;
+	return path.join(projectRoot, "..", "..", "node_modules", ...segments);
+}
 
 const sourceImportPattern = /from\s+["'](@earendil-works\/[^"']+)["']|import\s+["'](@earendil-works\/[^"']+)["']/g;
 const oldPiScopePattern = /@mariozechner\/pi-/;
@@ -54,13 +61,13 @@ void result.isError;
 				strict: true,
 				noEmit: true,
 				types: ["node"],
-				typeRoots: [path.join(projectRoot, "node_modules", "@types")],
+				typeRoots: [hoistedDependencyPath("@types")],
 				skipLibCheck: true,
 				allowImportingTsExtensions: true,
 				baseUrl: consumerRoot,
 				paths: {
 					"pi-subagents": [path.join(projectRoot, "index.ts")],
-				"@earendil-works/pi-agent-core": [path.join(projectRoot, "node_modules", "@earendil-works", "pi-agent-core", "dist", "index.d.ts")],
+				"@earendil-works/pi-agent-core": [hoistedDependencyPath("@earendil-works", "pi-agent-core", "dist", "index.d.ts")],
 				},
 			},
 			files: [path.join(consumerRoot, "consumer.ts")],

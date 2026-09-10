@@ -356,11 +356,15 @@ export function warnIfAllDomainsAllowed(ctx: ExtensionContext, config: SandboxCo
   // would only confuse.
   if (isNetworkUnrestricted(config)) return;
   if (!allowsAllDomains(config.network?.allowedDomains)) return;
-  ctx.ui.notify(
-    '⚠️ Network sandbox allows all domains because network.allowedDomains contains "*". ' +
-      'Only use this intentionally; remove "*" to restore per-domain prompts.',
-    "warning",
-  );
+  try {
+    ctx.ui.notify(
+      '⚠️ Network sandbox allows all domains because network.allowedDomains contains "*". ' +
+        'Only use this intentionally; remove "*" to restore per-domain prompts.',
+      "warning",
+    );
+  } catch {
+    // Notification is cosmetic: a headless session may not be able to render it.
+  }
 }
 
 export function formatSandboxStatus(config: SandboxConfig): string {

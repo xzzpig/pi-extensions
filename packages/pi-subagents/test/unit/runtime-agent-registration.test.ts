@@ -307,6 +307,8 @@ describe("runtime agent registration", () => {
 			["defaultAcceptance", { defaultAcceptance: { level: "verified" } }, /defaultAcceptance\.verify must contain at least one runtime command/],
 			["runner", { runner: { type: "external-cli" } }, /external-cli runner requires a non-empty command string/],
 			["toolBudget", { toolBudget: { hard: 0 } }, /toolBudget\.hard must be an integer >= 1/],
+			["sandbox", { sandbox: "../escape" }, /sandbox.*letters, digits, underscores, or hyphens/],
+			["sandbox-external-runner", { sandbox: "reviewer-strict", runner: { type: "external-cli", command: "node" } }, /cannot use sandbox profiles/],
 			["permissions", { permissions: { bash: "deny" } }, /permissions\.bash is unsupported/],
 		];
 

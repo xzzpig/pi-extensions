@@ -4,6 +4,25 @@ All notable changes to pi-goal-x are documented here.
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-09-10
+
+### Fixed
+
+- **Completion auditor launches declare project trust.** The auditor's launch
+  contract now carries `projectTrusted` and, when the project is trusted,
+  `trustedProjectCwd` from the host context, so the `pi-subagents`
+  sandbox-profile trust check resolves a project-scoped sandbox policy for the
+  auditor child instead of treating the launch as untrusted. Without the flag an
+  auditor whose agent file selects a `sandbox:` profile would be refused when its
+  policy comes from a trusted project layer.
+
+### Changed
+
+- **Typecheck gate restored.** `tsconfig.json` now targets ES2023 instead of
+  ES2022, which resolves the `findLast`/`findLastIndex` errors reported for the
+  `pi-subagents` sources this project includes. Typecheck-only change
+  (`noEmit: true`); the published files and runtime behavior are unaffected.
+
 ## [0.4.0] — 2026-09-06 (fork release)
 
 ### Fixed

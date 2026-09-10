@@ -338,8 +338,146 @@ describe("resolvePiLaunchToolPlan with permission system", () => {
 	});
 });
 
-describe("child launch <active_agent> tag injection", () => {
-	it("prepends <active_agent> tag when childAgentName is set", () => {
+describe("resolvePiLaunchToolPlan with sandbox profiles", () => {
+	function installSandboxExtension(agentDir: string): string {
+		const extDir = path.join(agentDir, "extensions", "pi-sandbox");
+		const entryPath = path.join(extDir, "src", "index.ts");
+		fs.mkdirSync(path.dirname(entryPath), { recursive: true });
+		fs.writeFileSync(path.join(extDir, "package.json"), JSON.stringify({
+			name: "@xzzpig/pi-sandbox",
+			pi: { extensions: ["./src/index.ts"] },
+		}));
+		fs.writeFileSync(entryPath, "export default () => {};", "utf-8");
+		return entryPath;
+	}
+
+	it("injects pi-sandbox and passes only the profile name for an explicit extension allowlist", () => {
+		const { agentDir, projectDir } = createFixture();
+		const sandboxEntry = installSandboxExtension(agentDir);
+		const { session } = buildInProcessChildLaunch(childLaunch({
+			host: "runner",
+			extensions: [sandboxEntry],
+			cwd: projectDir,
+			sandbox: "reviewer-strict",
+			projectTrusted: true,
+			trustedProjectCwd: projectDir,
+		}));
+
+		assert.equal(session.ambientExtensions, false);
+		assert.deepEqual(session.extensionPaths.filter((entry) => entry === sandboxEntry), [sandboxEntry]);
+		assert.ok(session.extensionPaths.some((entry) => entry.endsWith("sandbox-profile-guard.ts")));
+		const env = session.processEnv ?? {};
+		assert.equal(env.PI_SUBAGENT_SANDBOX_PROFILE, "reviewer-strict");
+		assert.equal(env.PI_SUBAGENT_SANDBOX_PROJECT_TRUSTED, "1");
+		assert.match(env.PI_SUBAGENT_SANDBOX_STARTUP_ACK_PATH ?? "", /sandbox-profile-acks\/[0-9a-f-]{36}\.json$/);
+		assert.match(env.PI_SUBAGENT_SANDBOX_STARTUP_ACK_TOKEN ?? "", /^[0-9a-f-]{36}$/);
+		assert.equal(Object.keys(env).some((key) => key.includes("SANDBOX_CONFIG")), false);
+	});
+
+	it("does not extend trusted project configuration to a child with a different cwd", () => {
+		const { agentDir, projectDir } = createFixture();
+		const sandboxEntry = installSandboxExtension(agentDir);
+		const childCwd = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-profile-child-"));
+		tempRoots.push(childCwd);
+		const { session } = buildInProcessChildLaunch(childLaunch({
+			host: "runner",
+			extensions: [sandboxEntry],
+			cwd: childCwd,
+			sandbox: "reviewer-strict",
+			projectTrusted: true,
+			trustedProjectCwd: projectDir,
+		}));
+
+		assert.equal(session.processEnv?.PI_SUBAGENT_SANDBOX_PROJECT_TRUSTED, "0");
+	});
+
+	it("fails closed when a profile needs pi-sandbox but no package is installed", () => {
+		const { agentDir } = createFixture();
+		process.env.PI_CODING_AGENT_DIR = agentDir;
+		assert.throws(
+			() => resolvePiLaunchToolPlan({ sandbox: "reviewer-strict" }),
+			/pi-sandbox is not installed/,
+		);
+	});
+
+	it("fails closed when the installed pi-sandbox manifest is malformed", () => {
+		const { agentDir } = createFixture();
+		const extDir = path.join(agentDir, "extensions", "pi-sandbox");
+		fs.mkdirSync(extDir, { recursive: true });
+		fs.writeFileSync(path.join(extDir, "package.json"), "{ malformed", "utf-8");
+		assert.throws(
+			() => resolvePiLaunchToolPlan({ sandbox: "reviewer-strict" }),
+			/Cannot read sandbox package manifest/,
+		);
+	});
+
+	it("fails closed when the sandbox manifest names a different package", () => {
+		const { agentDir } = createFixture();
+		const extDir = path.join(agentDir, "extensions", "pi-sandbox");
+		fs.mkdirSync(extDir, { recursive: true });
+		fs.writeFileSync(path.join(extDir, "package.json"), JSON.stringify({
+			name: "unrelated-extension",
+			pi: { extensions: ["./index.ts"] },
+		}), "utf-8");
+		fs.writeFileSync(path.join(extDir, "index.ts"), "export default () => {};", "utf-8");
+
+		assert.throws(
+			() => resolvePiLaunchToolPlan({ sandbox: "reviewer-strict" }),
+			/must declare name '@xzzpig\/pi-sandbox' or 'pi-sandbox'/,
+		);
+	});
+
+	it("fails closed when the sandbox manifest entry escapes its package directory", () => {
+		const { agentDir } = createFixture();
+		const extDir = path.join(agentDir, "extensions", "pi-sandbox");
+		fs.mkdirSync(extDir, { recursive: true });
+		fs.writeFileSync(path.join(agentDir, "extensions", "escaped.ts"), "export default () => {};", "utf-8");
+		fs.writeFileSync(path.join(extDir, "package.json"), JSON.stringify({
+			name: "@xzzpig/pi-sandbox",
+			pi: { extensions: ["../escaped.ts"] },
+		}), "utf-8");
+
+		assert.throws(
+			() => resolvePiLaunchToolPlan({ sandbox: "reviewer-strict" }),
+			/must remain inside/,
+		);
+	});
+
+	it("fails closed when a sandbox entry symlink resolves outside its package directory", { skip: process.platform === "win32" ? "symlink permission varies on Windows" : undefined }, () => {
+		const { agentDir } = createFixture();
+		const extDir = path.join(agentDir, "extensions", "pi-sandbox");
+		const escapedEntry = path.join(agentDir, "extensions", "escaped-symlink-target.ts");
+		fs.mkdirSync(extDir, { recursive: true });
+		fs.writeFileSync(escapedEntry, "export default () => {};", "utf-8");
+		fs.symlinkSync(escapedEntry, path.join(extDir, "entry.ts"));
+		fs.writeFileSync(path.join(extDir, "package.json"), JSON.stringify({
+			name: "@xzzpig/pi-sandbox",
+			pi: { extensions: ["./entry.ts"] },
+		}), "utf-8");
+
+		assert.throws(
+			() => resolvePiLaunchToolPlan({ sandbox: "reviewer-strict" }),
+			/resolves outside/,
+		);
+	});
+
+	it("fails closed when an extension ceiling denies a requested profile", () => {
+		createFixture();
+		assert.throws(
+			() => resolvePiLaunchToolPlan({
+				sandbox: "reviewer-strict",
+				capabilityCeiling: {
+					version: 1,
+					denyExtensions: true,
+					sources: ["test"],
+				},
+			}),
+			/requires the pi-sandbox child extension, but this launch denies child extensions/,
+		);
+	});
+});
+
+describe("child launch <active_agent> tag injection", () => {	it("prepends <active_agent> tag when childAgentName is set", () => {
 		const { agentDir } = createFixture();
 		process.env.PI_CODING_AGENT_DIR = agentDir;
 

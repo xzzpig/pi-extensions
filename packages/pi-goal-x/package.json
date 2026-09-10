@@ -1,6 +1,6 @@
 {
   "name": "@xzzpig/pi-goal-x",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Goal mode extension for pi: durable long-running objectives, a constant seven-tool surface, structured tasks, independent completion audit, Sisyphus mode, auto-continue, and a status overlay.",
   "license": "MIT",
   "author": "pi-goal-x contributors",
@@ -9,7 +9,7 @@
     "pi-goal-x-recover": "scripts/recover-session-checkpoints.mjs"
   },
   "dependencies": {
-    "@xzzpig/pi-subagents": "0.9.0"
+    "@xzzpig/pi-subagents": "0.10.0"
   },
   "keywords": [
     "pi-package",

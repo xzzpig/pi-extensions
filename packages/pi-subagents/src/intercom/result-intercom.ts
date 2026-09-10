@@ -116,6 +116,7 @@ function compactNestedRun(run: NestedRunSummary | PublicNestedRunSummary, depth 
 		...(run.agents?.length ? { agents: run.agents.slice(0, 12) } : {}),
 		...(run.model ? { model: run.model } : {}),
 		...(run.thinking ? { thinking: run.thinking } : {}),
+		...(run.sandbox ? { sandbox: run.sandbox } : {}),
 		...(run.currentStep !== undefined ? { currentStep: run.currentStep } : {}),
 		...(run.chainStepCount !== undefined ? { chainStepCount: run.chainStepCount } : {}),
 		...(run.parallelGroups?.length ? { parallelGroups: run.parallelGroups.slice(0, 8) } : {}),
@@ -137,7 +138,9 @@ function compactNestedRun(run: NestedRunSummary | PublicNestedRunSummary, depth 
 			status: step.status,
 			...(step.model ? { model: step.model } : {}),
 			...(step.thinking ? { thinking: step.thinking } : {}),
+			...(step.sandbox ? { sandbox: step.sandbox } : {}),
 			...(step.sessionFile ? { sessionFile: step.sessionFile } : {}),
+
 			...(step.activityState ? { activityState: step.activityState } : {}),
 			...(step.lastActivityAt !== undefined ? { lastActivityAt: step.lastActivityAt } : {}),
 			...(step.currentTool ? { currentTool: step.currentTool } : {}),
@@ -321,6 +324,8 @@ export async function deliverSubagentResultIntercomEvent(
 	payload: SubagentResultIntercomPayload,
 	timeoutMs = 500,
 ): Promise<boolean> {
+	// SAFETY: SubagentResultIntercomPayload is a plain object assembled above from
+	// bounded public result fields; the event transport accepts generic JSON-like metadata.
 	return deliverSubagentIntercomMessageEvent(events, payload.to, payload.message, timeoutMs, payload as unknown as Record<string, unknown>);
 }
 

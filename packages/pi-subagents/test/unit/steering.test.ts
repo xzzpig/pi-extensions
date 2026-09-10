@@ -156,6 +156,7 @@ describe("steering lifecycle ledger", () => {
 			agent: "worker",
 			cwd: "/original",
 			model: "original/model",
+			sandbox: "reviewer-strict",
 			tools: ["read"],
 			allowNestedSubagents: false,
 			systemPrompt: "original prompt",
@@ -168,6 +169,7 @@ describe("steering lifecycle ledger", () => {
 			share: false,
 		});
 		assert.equal(recovered.model, "original/model");
+		assert.equal(recovered.sandbox, "reviewer-strict");
 		assert.deepEqual(recovered.tools, ["read"]);
 		assert.equal(recovered.allowNestedSubagents, false);
 		assert.equal(recovered.systemPrompt, "original prompt");

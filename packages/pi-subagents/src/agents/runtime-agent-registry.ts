@@ -6,6 +6,7 @@ import { validatePermissionRules, type PermissionRules } from "../runs/shared/pe
 import { validateToolBudgetConfig } from "../runs/shared/tool-budget.ts";
 import { BUILTIN_AGENT_NAMES } from "./builtin-names.ts";
 import type { AgentConfig, AgentDefaultContext, AgentDiscoveryDiagnostic } from "./agents.ts";
+import { validateSandboxProfileName } from "../shared/sandbox-profile.ts";
 
 export const RUNTIME_AGENT_REGISTRY_KEY = "pi-subagents.runtime-agents.v1";
 
@@ -51,6 +52,7 @@ export interface RuntimeAgentDefinition {
 	maxSubagentDepth?: number;
 	completionGuard?: boolean;
 	toolBudget?: ToolBudgetConfig;
+	sandbox?: string;
 	permissions?: PermissionRules;
 }
 
@@ -204,7 +206,7 @@ function validateDefinition(value: unknown): RuntimeAgentDefinition {
 		"systemPromptMode", "inheritProjectContext", "inheritGlobalContext", "inheritSkills", "defaultContext", "defaultAsync", "defaultTimeoutMs",
 		"defaultToolTimeoutMs", "defaultAcceptance", "acceptanceRole", "runner", "skills", "skillPath",
 		"extensions", "subagentOnlyExtensions", "mutationTools", "output", "outputMode", "defaultReads", "defaultProgress", "injectToContext", "interactive",
-		"maxSubagentDepth", "completionGuard", "toolBudget", "permissions",
+		"maxSubagentDepth", "completionGuard", "toolBudget", "sandbox", "permissions",
 	]);
 	const unknown = Object.keys(definition).filter((key) => !supported.has(key));
 	if (unknown.length > 0) throw new Error(`Runtime agent definition has unknown fields: ${unknown.join(", ")}.`);
@@ -246,6 +248,12 @@ function validateDefinition(value: unknown): RuntimeAgentDefinition {
 	const maxSubagentDepth = validatePositiveInteger(definition.maxSubagentDepth, "Runtime agent definition maxSubagentDepth");
 	const completionGuard = validateBoolean(definition.completionGuard, "Runtime agent definition completionGuard");
 	const toolBudget = validateToolBudget(definition.toolBudget);
+	const sandbox = definition.sandbox === undefined
+		? undefined
+		: validateSandboxProfileName(definition.sandbox, "Runtime agent definition sandbox");
+	if (sandbox && (runner?.type === "external-cli" || runner?.type === "external-job")) {
+		throw new Error(`Runtime agent definition runner.type='${runner.type}' cannot use sandbox profiles because it does not run a native Pi child.`);
+	}
 	const permissions = validatePermissionRules(definition.permissions, "Runtime agent definition permissions");
 	return {
 		description: validateString(definition.description, "Runtime agent definition description", MAX_DESCRIPTION_LENGTH),
@@ -283,6 +291,7 @@ function validateDefinition(value: unknown): RuntimeAgentDefinition {
 		...(maxSubagentDepth !== undefined ? { maxSubagentDepth } : {}),
 		...(completionGuard !== undefined ? { completionGuard } : {}),
 		...(toolBudget !== undefined ? { toolBudget } : {}),
+		...(sandbox !== undefined ? { sandbox } : {}),
 		...(permissions !== undefined ? { permissions } : {}),
 	};
 }
@@ -366,6 +375,7 @@ function toAgentConfig(name: string, definition: RuntimeAgentDefinition): AgentC
 		...(definition.maxSubagentDepth !== undefined ? { maxSubagentDepth: definition.maxSubagentDepth } : {}),
 		...(definition.completionGuard !== undefined ? { completionGuard: definition.completionGuard } : {}),
 		...(definition.toolBudget !== undefined ? { toolBudget: definition.toolBudget } : {}),
+		...(definition.sandbox !== undefined ? { sandbox: definition.sandbox } : {}),
 		...(definition.permissions !== undefined ? { permissions: definition.permissions } : {}),
 	};
 	assertNoIdentityCollisions([agent], `Runtime agent '${name}'`);

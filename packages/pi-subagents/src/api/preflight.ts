@@ -38,7 +38,9 @@ export type SubagentLaunchContractReasonCode =
 	| "unsupported_mode"
 	| "restricted_agent"
 	| "thinking_ceiling"
-	| "invalid_extension_bindings";
+	| "invalid_extension_bindings"
+	| "untrusted_project"
+	| "sandbox_unavailable";
 
 export type SubagentLaunchContractDiagnosticCode = SubagentLaunchContractReasonCode | "host_required" | "snapshot_warning" | "workspace_scope_authority";
 
@@ -79,6 +81,10 @@ export interface SubagentLaunchContractInput {
 	nestedRootRunId?: string;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	inheritedCapabilityCeiling?: ResolvedSubagentCapabilityCeiling;
+	/** Host-affirmed trust state for a project-scoped profile selection. */
+	projectTrusted?: boolean;
+	/** Exact trusted project cwd. When omitted, an affirmative trust assertion applies only to `cwd`. */
+	trustedProjectCwd?: string;
 }
 
 export interface SubagentLaunchContractAgentCandidate {
@@ -155,6 +161,7 @@ export interface SubagentLaunchContract {
 	modelCandidates: string[];
 	thinking?: string;
 	thinkingCeiling?: ThinkingLevel;
+	sandbox?: string;
 	systemPromptMode: AgentConfig["systemPromptMode"];
 	inheritProjectContext: boolean;
 	inheritGlobalContext: boolean;
@@ -280,6 +287,21 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 		return { ok: false, code: "missing_agent", message: formatUnknownAgentError(input.agent, unknownAgentDiagnosticContext(discovered)), diagnostics };
 	}
 	const agent = resolvedAgent.agent;
+	const trustedProjectCwd = input.projectTrusted === true
+		? path.resolve(input.trustedProjectCwd ?? effectiveCwd)
+		: undefined;
+	if (agent.sandbox && (agent.source === "project" || agent.override?.scope === "project") && input.projectTrusted !== true) {
+		const message = `Agent '${agent.name}' selects sandbox profile '${agent.sandbox}' from project scope, but the project is not trusted. Trust the project and retry.`;
+		return { ok: false, code: "untrusted_project", message, diagnostics: [{ code: "untrusted_project", severity: "error", message }] };
+	}
+	if (agent.sandbox && (agent.source === "project" || agent.override?.scope === "project") && trustedProjectCwd !== effectiveCwd) {
+		const message = `Agent '${agent.name}' selects sandbox profile '${agent.sandbox}' from project scope, but cwd '${effectiveCwd}' does not match trusted project cwd '${trustedProjectCwd}'. Launch from the trusted project cwd and retry.`;
+		return { ok: false, code: "untrusted_project", message, diagnostics: [{ code: "untrusted_project", severity: "error", message }] };
+	}
+	if (agent.sandbox && (agent.runner?.type === "external-cli" || agent.runner?.type === "external-job")) {
+		const message = `Agent '${agent.name}' requests sandbox profile '${agent.sandbox}', but runner.type='${agent.runner.type}' cannot load the native pi-sandbox extension.`;
+		return { ok: false, code: "unsupported_mode", message, diagnostics: [{ code: "unsupported_mode", severity: "error", message }] };
+	}
 	let extensionBindings: ExtensionBindings | undefined;
 	try {
 		extensionBindings = normalizeExtensionBindings(input.extensionBindings)?.value;
@@ -374,11 +396,13 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 			capabilityCeiling: effectiveCapabilityCeiling,
 			agentName: agent.name,
 			permissionRules,
+			sandbox: agent.sandbox,
 		});
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		diagnostics.push({ code: "denied_required_tool", severity: "error", message });
-		return { ok: false, code: "denied_required_tool", message, diagnostics };
+		const code: SubagentLaunchContractReasonCode = agent.sandbox ? "sandbox_unavailable" : "denied_required_tool";
+		diagnostics.push({ code, severity: "error", message });
+		return { ok: false, code, message, diagnostics };
 	}
 	const artifactsEnabled = input.artifacts !== false;
 	const artifactsDir = artifactsEnabled ? getArtifactsDir(input.parentSessionFile ?? null, effectiveCwd, input.artifactDir) : undefined;
@@ -428,6 +452,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 		modelCandidates,
 		...(resolveEffectiveThinking(model, effectiveThinkingConfig) ? { thinking: resolveEffectiveThinking(model, effectiveThinkingConfig) } : {}),
 		...(thinkingCeiling ? { thinkingCeiling } : {}),
+		...(agent.sandbox ? { sandbox: agent.sandbox } : {}),
 		systemPromptMode: agent.systemPromptMode,
 		inheritProjectContext: agent.inheritProjectContext,
 		inheritGlobalContext: agent.inheritGlobalContext,
@@ -489,6 +514,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 			inheritProjectContext: agent.inheritProjectContext,
 			inheritGlobalContext: agent.inheritGlobalContext,
 			inheritSkills: agent.inheritSkills,
+			sandbox: agent.sandbox,
 			skills: requestedSkills,
 			tools: toolPlan.effectiveToolAllowlist,
 			...(toolPlan.excludeTools.length > 0 ? { excludeTools: toolPlan.excludeTools } : {}),

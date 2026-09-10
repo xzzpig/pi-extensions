@@ -15,6 +15,7 @@ import { parallelHandoffPath, resolveRetainedWorktreeCwd } from "../shared/paral
 import { normalizeWorktreeBaseRef } from "../shared/worktree.ts";
 import { intersectThinkingCeilings, parseThinkingLevel, type ThinkingLevel } from "../../shared/thinking-ceiling.ts";
 import { assertWorkflowGraphHostSteps } from "../shared/host-step-status.ts";
+import { validateSandboxProfileName } from "../../shared/sandbox-profile.ts";
 
 export interface AsyncResumeParams {
 	id?: string;
@@ -55,6 +56,7 @@ export type AsyncResumeTarget = {
 	recoveryDescriptor?: SteeringRecoveryDescriptor;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	launchContractDigest?: string;
+	sandbox?: string;
 	runner?: NonNullable<AsyncStatus["steps"]>[number]["runner"];
 	externalJob?: NonNullable<AsyncStatus["steps"]>[number]["externalJob"];
 };
@@ -73,8 +75,9 @@ interface AsyncResultFile {
 	model?: string;
 	thinking?: string;
 	launchContractDigest?: string;
+	sandbox?: string;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
-	results?: Array<{ agent?: string; sessionName?: string; success?: boolean; sessionFile?: string; intercomTarget?: string; model?: string; thinking?: string; launchContractDigest?: string; capabilityCeiling?: ResolvedSubagentCapabilityCeiling }>;
+	results?: Array<{ agent?: string; sessionName?: string; success?: boolean; sessionFile?: string; intercomTarget?: string; model?: string; thinking?: string; launchContractDigest?: string; sandbox?: string; capabilityCeiling?: ResolvedSubagentCapabilityCeiling }>;
 }
 
 export interface AsyncRunLocation {
@@ -116,10 +119,13 @@ function validateResultFile(value: unknown, resultPath: string): AsyncResultFile
 			const model = validateOptionalString(child, "model", resultPath, `results[${index}].model`);
 			const thinking = validateOptionalString(child, "thinking", resultPath, `results[${index}].thinking`);
 			const launchContractDigest = validateOptionalString(child, "launchContractDigest", resultPath, `results[${index}].launchContractDigest`);
+			const sandbox = child.sandbox === undefined
+				? undefined
+				: validateSandboxProfileName(child.sandbox, `async result file '${resultPath}' results[${index}].sandbox`);
 			const capabilityCeiling = child.capabilityCeiling === undefined ? undefined : parseSubagentCapabilityCeiling(child.capabilityCeiling, `async result file '${resultPath}' results[${index}].capabilityCeiling`);
 			const success = child.success;
 			if (success !== undefined && typeof success !== "boolean") throw new Error(`Invalid async result file '${resultPath}': results[${index}].success must be a boolean.`);
-			return { agent, sessionName, sessionFile, intercomTarget, model, thinking, launchContractDigest, ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(typeof success === "boolean" ? { success } : {}) };
+			return { agent, sessionName, sessionFile, intercomTarget, model, thinking, launchContractDigest, ...(sandbox ? { sandbox } : {}), ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(typeof success === "boolean" ? { success } : {}) };
 		});
 	}
 	const success = data.success;
@@ -136,6 +142,7 @@ function validateResultFile(value: unknown, resultPath: string): AsyncResultFile
 		model: validateOptionalString(data, "model", resultPath),
 		thinking: validateOptionalString(data, "thinking", resultPath),
 		launchContractDigest: validateOptionalString(data, "launchContractDigest", resultPath),
+		...(data.sandbox === undefined ? {} : { sandbox: validateSandboxProfileName(data.sandbox, `async result file '${resultPath}' sandbox`) }),
 		...(data.capabilityCeiling === undefined ? {} : { capabilityCeiling: parseSubagentCapabilityCeiling(data.capabilityCeiling, `async result file '${resultPath}' capabilityCeiling`) }),
 		...(typeof success === "boolean" ? { success } : {}),
 		...(results ? { results } : {}),
@@ -282,6 +289,7 @@ function validateStatusForResume(status: AsyncStatus | null, source: string): vo
 			if (stepRecord.thinking !== undefined && typeof stepRecord.thinking !== "string") throw new Error(`Invalid async status '${source}': steps[${index}].thinking must be a string.`);
 			if (stepRecord.thinkingCeiling !== undefined) stepRecord.thinkingCeiling = parseThinkingLevel(stepRecord.thinkingCeiling, `async status '${source}' steps[${index}].thinkingCeiling`);
 			if (stepRecord.launchContractDigest !== undefined && typeof stepRecord.launchContractDigest !== "string") throw new Error(`Invalid async status '${source}': steps[${index}].launchContractDigest must be a string.`);
+			if (stepRecord.sandbox !== undefined) stepRecord.sandbox = validateSandboxProfileName(stepRecord.sandbox, `async status '${source}' steps[${index}].sandbox`);
 			if (stepRecord.capabilityCeiling !== undefined) stepRecord.capabilityCeiling = parseSubagentCapabilityCeiling(stepRecord.capabilityCeiling, `async status '${source}' steps[${index}].capabilityCeiling`);
 		});
 	}
@@ -317,7 +325,7 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': expected an object.`);
 	const parsed = value as Record<string, unknown>;
 	const allowedFields = new Set([
-		"version", "launchContractDigest", "sourceRunId", "agentContract", "agent", "sessionFile", "cwd", "model", "modelProvider", "modelOverrideFromParent", "modelOrigin", "fallbackModels", "thinking", "thinkingCeiling", "tools", "allowNestedSubagents", "extensions",
+		"version", "launchContractDigest", "sourceRunId", "agentContract", "agent", "sandbox", "sessionFile", "cwd", "model", "modelProvider", "modelOverrideFromParent", "modelOrigin", "fallbackModels", "thinking", "thinkingCeiling", "tools", "allowNestedSubagents", "extensions",
 		"subagentOnlyExtensions", "mcpDirectTools", "excludeTools", "mutationTools", "systemPrompt", "systemPromptMode", "inheritProjectContext", "inheritGlobalContext", "inheritSkills", "skills",
 		"skillPath", "agentFilePath", "completionGuard", "memory", "outputPath", "outputMode", "structuredOutputSchema", "acceptance", "sessionDir", "artifactConfig",
 		"artifactsDir", "maxOutput", "controlConfig", "context", "intercomBridge", "absoluteDeadlineAt", "initialTurnBudget", "initialToolBudget", "maxSubagentDepth", "share", "capabilityCeiling",
@@ -375,6 +383,7 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 			throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
+	if (parsed.sandbox !== undefined) parsed.sandbox = validateSandboxProfileName(parsed.sandbox, `async recovery descriptor '${descriptorPath}' sandbox`);
 	if (parsed.completionGuard !== undefined && typeof parsed.completionGuard !== "boolean") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': completionGuard must be a boolean.`);
 	if (parsed.structuredOutputSchema !== undefined && (!parsed.structuredOutputSchema || typeof parsed.structuredOutputSchema !== "object" || Array.isArray(parsed.structuredOutputSchema))) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': structuredOutputSchema must be an object.`);
 	if (parsed.memory !== undefined) {
@@ -432,6 +441,8 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 		if (!Array.isArray(control.notifyChannels) || control.notifyChannels.some((item) => item !== "event" && item !== "async" && item !== "intercom")) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': controlConfig.notifyChannels is invalid.`);
 	}
 	if (parsed.acceptance !== undefined) parsed.acceptance = normalizeRecoveryAcceptance(parsed.acceptance, descriptorPath);
+	// SAFETY: every supported field above is validated and normalized before this
+	// object crosses the persisted JSON boundary into the recovery descriptor type.
 	return parsed as unknown as SteeringRecoveryDescriptor;
 }
 
@@ -505,6 +516,7 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 					sessionFile: selectedStep.sessionFile ?? status?.sessionFile ?? result?.sessionFile,
 					model: selectedStep.model,
 					thinking: selectedStep.thinking,
+					sandbox: selectedStep.sandbox ?? result?.results?.[requestedIndex]?.sandbox ?? result?.sandbox ?? recoveryDescriptor?.sandbox,
 					launchContractDigest: selectedStep.launchContractDigest ?? result?.results?.[requestedIndex]?.launchContractDigest ?? result?.launchContractDigest ?? recoveryDescriptor?.launchContractDigest,
 					...(selectedStep.runner ? { runner: selectedStep.runner } : {}),
 					...(selectedStep.externalJob ? { externalJob: selectedStep.externalJob } : {}),
@@ -537,6 +549,7 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 				sessionFile: selected.step.sessionFile ?? status?.sessionFile ?? result?.sessionFile,
 				model: selected.step.model,
 				thinking: selected.step.thinking,
+				sandbox: selected.step.sandbox ?? result?.results?.[selected.index]?.sandbox ?? result?.sandbox ?? recoveryDescriptor?.sandbox,
 				launchContractDigest: selected.step.launchContractDigest ?? result?.results?.[selected.index]?.launchContractDigest ?? result?.launchContractDigest ?? recoveryDescriptor?.launchContractDigest,
 				...(selected.step.runner ? { runner: selected.step.runner } : {}),
 				...(selected.step.externalJob ? { externalJob: selected.step.externalJob } : {}),
@@ -584,6 +597,7 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 		...(resolvedSessionFile ? { sessionFile: resolvedSessionFile } : {}),
 		...(stepModel ? { model: stepModel } : {}),
 		...(stepThinking ? { thinking: stepThinking } : {}),
+		sandbox: statusSteps[index]?.sandbox ?? resultSteps[index]?.sandbox ?? result?.sandbox ?? recoveryDescriptor?.sandbox,
 		launchContractDigest: statusSteps[index]?.launchContractDigest ?? resultSteps[index]?.launchContractDigest ?? result?.launchContractDigest ?? recoveryDescriptor?.launchContractDigest,
 		...(statusSteps[index]?.runner ? { runner: statusSteps[index]!.runner } : {}),
 		...(statusSteps[index]?.externalJob ? { externalJob: statusSteps[index]!.externalJob } : {}),
@@ -608,6 +622,7 @@ export function applySteeringRecoveryAgentConfig(agentConfig: AgentConfig, descr
 		subagentOnlyExtensions: descriptor.subagentOnlyExtensions ? [...descriptor.subagentOnlyExtensions] : undefined,
 		mcpDirectTools: descriptor.mcpDirectTools ? [...descriptor.mcpDirectTools] : undefined,
 		mutationTools: descriptor.mutationTools ? [...descriptor.mutationTools] : undefined,
+		sandbox: descriptor.sandbox ?? agentConfig.sandbox,
 		systemPrompt: descriptor.systemPrompt ?? agentConfig.systemPrompt,
 		systemPromptMode: descriptor.systemPromptMode,
 		inheritProjectContext: descriptor.inheritProjectContext,

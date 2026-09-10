@@ -413,6 +413,30 @@ describe("model fallback helpers", () => {
 		assert.equal(isRetryableModelFailureAttempt({ error: "APIConnectionError: Connection closed.", messages: [], toolCount: 0 }), true);
 		assert.equal(isRetryableModelFailureAttempt({ error: "APIConnectionError: Connection closed.", messages: [{ role: "assistant", errorMessage: "APIConnectionError: Connection closed." }], toolCount: 1 }), false);
 	});
+
+	it("never retries a child blocked by a startup guard", () => {
+		// A required sandbox profile that cannot initialize blocks the first turn and
+		// leaves no messages behind, which used to be reported (and cached) as a model
+		// cold-start. A policy decision must not exclude the model for a day.
+		assert.equal(isRetryableModelFailureAttempt({
+			error: "Sandbox profile 'e2e-deny' could not initialize: not defined in the global sandbox configuration.",
+			messages: [],
+			toolCount: 0,
+			startupBlocked: true,
+		}), false);
+		assert.equal(isRetryableModelFailureAttempt({
+			error: "Subagent produced no output (possible model cold-start or empty response).",
+			messages: [],
+			toolCount: 0,
+			startupBlocked: true,
+		}), false);
+		// Without the flag the same empty-output failure keeps its retry semantics.
+		assert.equal(isRetryableModelFailureAttempt({
+			error: "Subagent produced no output (possible model cold-start or empty response).",
+			messages: [],
+			toolCount: 0,
+		}), true);
+	});
 });
 
 describe("resolveSubagentModelOverride (cross-session inherit, issue #266)", () => {

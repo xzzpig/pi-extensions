@@ -129,6 +129,7 @@ import { waitForImportedAsyncRoot } from "./chain-root-attachment.ts";
 import { normalizeExtensionBindings } from "../shared/extension-bindings.ts";
 import { appendRunnerStepsToStatus, consumeChainAppendRequests, countPendingChainAppendRequests, statusStepDescription } from "./chain-append.ts";
 import { asyncStatusChildIdentity } from "../shared/child-identity.ts";
+import { validateSandboxProfileName } from "../../shared/sandbox-profile.ts";
 import { initialToolBudgetState, toolBudgetState } from "../shared/tool-budget.ts";
 import { effectiveToolTimeoutMs, formatToolTimeoutMessage, toolTimeoutCallKey } from "../shared/tool-timeout.ts";
 import { usageBudgetExceededMessage, usageBudgetState } from "../shared/usage-budget.ts";
@@ -142,6 +143,7 @@ import { resolveCursorAgentLaunch } from "../shared/cursor-agent-adapter.ts";
 import { resolveExternalCliRunnerStatus } from "../shared/external-cli-contract.ts";
 import { runExternalJob } from "../shared/external-job-runner.ts";
 import { createOrcaProgressTab, type OrcaProgressTab } from "../shared/orca-progress-tabs.ts";
+import { clearSandboxStartupDiagnostic, readSandboxStartupDiagnostic } from "../shared/sandbox-startup-diagnostics.ts";
 import type { ResolvedSubagentCapabilityCeiling } from "../shared/capability-ceiling.ts";
 import {
 	acceptChildWatchdogEvent,
@@ -221,6 +223,7 @@ interface StepResult {
 	/** Human-readable display name for the child session, when derived at launch. */
 	sessionName?: string;
 	context?: "fresh" | "fork";
+	sandbox?: string;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	capabilityAudit?: import("../shared/capability-ceiling.ts").SubagentCapabilityAudit;
 	launchResolvedExtensions?: LaunchResolvedChildExtensionsV1;
@@ -269,6 +272,16 @@ interface StepResult {
 	runner?: ExternalCliRunnerStatus | ExternalJobRunnerStatus;
 	externalProcess?: ExternalProcessStatus;
 	externalJob?: ExternalJobStatus;
+}
+
+function commonSandboxProfile(steps: readonly RunnerStatusStep[]): string | undefined {
+	const profile = steps[0]?.sandbox;
+	if (!profile || !steps.every((step) => step.sandbox === profile)) return undefined;
+	try {
+		return validateSandboxProfileName(profile);
+	} catch {
+		return undefined;
+	}
 }
 
 function persistStepArtifacts(input: {
@@ -782,6 +795,7 @@ async function runSingleStepInner(
 			capabilityCeiling: step.capabilityCeiling ?? ctx.capabilityCeiling,
 			inheritedCapabilityCeiling: ctx.inheritedChildRuntime?.capabilityCeiling,
 			permissionRules: step.permissionRules,
+			sandbox: step.sandbox,
 		}));
 		const contractTools = resolvedTaskToolPlan.explicitToolAllowlist ? resolvedTaskToolPlan.effectiveToolAllowlist : undefined;
 		const contractError = validateImplementationToolContract({
@@ -1092,6 +1106,9 @@ async function runSingleStepInner(
 			structuredOutput: effectiveStructuredOutput,
 			toolBudget: step.toolBudget,
 			permissionRules: step.permissionRules,
+			projectTrusted: step.projectTrusted,
+			trustedProjectCwd: step.trustedProjectCwd,
+			sandbox: step.sandbox,
 			permissionAuditPath: step.permissionRules && ctx.artifactsDir
 				? path.join(ctx.artifactsDir, "permission-audit", `${ctx.id}-${ctx.flatIndex}.jsonl`)
 				: undefined,
@@ -1130,6 +1147,7 @@ async function runSingleStepInner(
 				capabilityCeiling: step.capabilityCeiling ?? ctx.capabilityCeiling,
 				inheritedCapabilityCeiling: ctx.inheritedChildRuntime?.capabilityCeiling,
 				permissionRules: step.permissionRules,
+				sandbox: step.sandbox,
 			}));
 			launchResolvedExtensions = projectLaunchResolvedChildExtensions(toolPlan);
 			actualLaunchContractDigest = launchBindingDigest(omitUndefinedProperties({
@@ -1145,6 +1163,7 @@ async function runSingleStepInner(
 				inheritProjectContext: step.inheritProjectContext,
 				inheritGlobalContext: step.inheritGlobalContext,
 				inheritSkills: step.inheritSkills,
+				sandbox: step.sandbox,
 				skills: step.skills,
 				tools: toolPlan.effectiveToolAllowlist,
 				...(toolPlan.excludeTools.length > 0 ? { excludeTools: toolPlan.excludeTools } : {}),
@@ -1233,6 +1252,9 @@ async function runSingleStepInner(
 		const terminalEmptyAfterUsefulWork = !validatedStructuredOutput
 			&& hasEmptyTerminalAssistantResponse(run.messages)
 			&& (run.toolCount > 0 || Boolean(run.finalOutput.trim()));
+		// A startup guard can block the child's first turn, which leaves no message to
+		// inspect; prefer the reason the blocked child published for the launcher.
+		const sandboxStartupDiagnostic = readSandboxStartupDiagnostic(launch.sandboxDiagnosticsPath);
 		const emptyOutputError = run.exitCode === 0
 			&& !run.error
 			&& !toolAvailabilityError
@@ -1240,8 +1262,10 @@ async function runSingleStepInner(
 			&& !validatedStructuredOutput
 			&& (!run.finalOutput.trim() || terminalEmptyAfterUsefulWork)
 			&& (!hiddenError?.hasError || hasEmptyTerminalAssistantResponse(run.messages))
-			? formatEmptyTerminalAssistantResponseError(run.messages)
+			? sandboxStartupDiagnostic?.reason ?? formatEmptyTerminalAssistantResponseError(run.messages)
 			: undefined;
+		const startupBlocked = sandboxStartupDiagnostic !== undefined && emptyOutputError === sandboxStartupDiagnostic.reason;
+		if (startupBlocked) clearSandboxStartupDiagnostic(launch.sandboxDiagnosticsPath);
 		const completionGuardEnabled = isAgentContractV1(step.agentContract) ? step.completionGuard === true : step.completionGuard !== false;
 		const completionToolPlan = resolvedTaskToolPlan;
 		const completionTools = completionToolPlan ? (completionToolPlan.explicitToolAllowlist ? completionToolPlan.effectiveToolAllowlist : undefined) : step.tools;
@@ -1357,7 +1381,7 @@ async function runSingleStepInner(
 		}
 		if (completionEvidence.guardTriggered) break modelAttemptsLoop;
 
-		const retryableModelFailure = isRetryableModelFailureAttempt({ error, messages: run.messages, toolCount: run.toolCount });
+		const retryableModelFailure = isRetryableModelFailureAttempt({ error, messages: run.messages, toolCount: run.toolCount, ...(startupBlocked ? { startupBlocked: true } : {}) });
 		if (retryableModelFailure) recordRetryableModelFailure(candidate ?? run.model ?? step.model, error);
 		if (isContextOverflow(error)) {
 			contextOverflow = true;
@@ -1494,6 +1518,7 @@ async function runSingleStepInner(
 				error: effectiveFinalError,
 				acceptance: effectiveAcceptance,
 				...(capabilityAudit ? { capabilityCeiling: capabilityAudit.ceiling, capabilityAudit } : {}),
+				sandbox: step.sandbox,
 				launchContractDigest: actualLaunchContractDigest,
 				launchResolvedExtensions,
 				...((finalResult as (RunChildSessionResult & { runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1 }) | undefined)?.runtimeAcknowledgedExtensions ? { runtimeAcknowledgedExtensions: (finalResult as RunChildSessionResult & { runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1 }).runtimeAcknowledgedExtensions } : {}),
@@ -1509,6 +1534,7 @@ async function runSingleStepInner(
 		agent: step.agent,
 		...(childSessionName ? { sessionName: childSessionName } : {}),
 		context: step.context,
+		...(step.sandbox ? { sandbox: step.sandbox } : {}),
 		...(step.agentContract ? { agentContract: step.agentContract } : {}),
 		launchContractDigest: actualLaunchContractDigest,
 		output: outputForSummary,
@@ -1546,6 +1572,9 @@ async function runSingleStepInner(
 		launchResolvedExtensions,
 		...((finalResult as (RunChildSessionResult & { runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1 }) | undefined)?.runtimeAcknowledgedExtensions ? { runtimeAcknowledgedExtensions: (finalResult as RunChildSessionResult & { runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1 }).runtimeAcknowledgedExtensions } : {}),
 	});
+	// SAFETY: `result` is the step result assembled above for this same run; agent-contract
+	// projections are attached to that object and re-narrowed to its own type, so the
+	// assertion only re-states the shape the builders already produced here.
 	return isAgentContractV1(step.agentContract) ? attachContractProjections(result as unknown as import("../../shared/types.ts").SingleResult) as unknown as typeof result : result;
 }
 
@@ -1902,6 +1931,7 @@ async function runSubagent(
 					outputName: task.outputName,
 					structured: task.structured,
 					...(task.agentContract ? { agentContract: task.agentContract } : {}),
+					...(task.sandbox ? { sandbox: task.sandbox } : {}),
 					...(task.launchContractDigest ? { launchContractDigest: task.launchContractDigest } : {}),
 					...(task.launchResolvedExtensions ? { launchResolvedExtensions: task.launchResolvedExtensions } : {}),
 					...(task.capabilityCeiling ? { capabilityCeiling: task.capabilityCeiling } : {}),
@@ -1932,6 +1962,7 @@ async function runSubagent(
 				structured: Boolean(step.collect.outputSchema),
 				...(step.parallel.contextLimit !== undefined ? { contextLimit: step.parallel.contextLimit } : {}),
 				...(step.agentContract ? { agentContract: step.agentContract } : {}),
+				...(step.parallel.sandbox ? { sandbox: step.parallel.sandbox } : {}),
 				...(step.capabilityCeiling ? { capabilityCeiling: step.capabilityCeiling } : {}),
 				...(step.thinkingCeiling ? { thinkingCeiling: step.thinkingCeiling } : {}),
 				status: "pending",
@@ -1956,6 +1987,7 @@ async function runSubagent(
 				outputName: step.outputName,
 				structured: step.structured,
 				...(step.agentContract ? { agentContract: step.agentContract } : {}),
+				...(step.sandbox ? { sandbox: step.sandbox } : {}),
 				...(step.launchContractDigest ? { launchContractDigest: step.launchContractDigest } : {}),
 				...(step.launchResolvedExtensions ? { launchResolvedExtensions: step.launchResolvedExtensions } : {}),
 				...(step.capabilityCeiling ? { capabilityCeiling: step.capabilityCeiling } : {}),
@@ -1983,6 +2015,7 @@ async function runSubagent(
 			step.processTerminal = { version: 1, state: "pending", runId: id, runnerProcessInstanceId: config.runnerProcessInstanceId };
 		}
 	}
+	const initialSandbox = commonSandboxProfile(initialStatusSteps);
 	const initialAgentLabel = initialStatusSteps.length === 1
 		? initialStatusSteps[0]!.agent
 		: (config.resultMode ?? (flatSteps.length > 1 ? "chain" : "single")) === "parallel"
@@ -2018,6 +2051,7 @@ async function runSubagent(
 		chainStepCount: steps.length,
 		parallelGroups,
 		workflowGraph: config.workflowGraph,
+		...(initialSandbox ? { sandbox: initialSandbox } : {}),
 		...(config.launchContractDigest ? { launchContractDigest: config.launchContractDigest } : {}),
 		...(config.launchResolvedExtensions ? { launchResolvedExtensions: config.launchResolvedExtensions } : {}),
 		...(config.capabilityCeiling ? { capabilityCeiling: config.capabilityCeiling } : {}),
@@ -2169,6 +2203,7 @@ async function runSubagent(
 			success: state === "complete",
 			state,
 			summary,
+			...(statusPayload.sandbox ? { sandbox: statusPayload.sandbox } : {}),
 			error: state === "failed" || state === "partial" || state === "stopped" || state === "rejected" ? summary : undefined,
 			stopped: state === "stopped" ? true : undefined,
 			results: statusPayload.steps.map((step) => omitUndefinedProperties({
@@ -2180,6 +2215,7 @@ async function runSubagent(
 				sessionFile: step.sessionFile,
 				model: step.model,
 				thinking: step.thinking,
+				sandbox: step.sandbox,
 				attemptedModels: step.attemptedModels,
 				modelAttempts: step.modelAttempts,
 				usage: usageFromAttempts(step.modelAttempts),
@@ -3580,6 +3616,7 @@ async function runSubagent(
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "transcriptPath", singleResult.transcriptPath ?? requiredStatusStep(statusPayload, fi).transcriptPath);
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "transcriptError", singleResult.transcriptError);
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "agentContract", singleResult.agentContract);
+				setOptionalProperty(requiredStatusStep(statusPayload, fi), "sandbox", singleResult.sandbox);
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "launchContractDigest", singleResult.launchContractDigest);
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "launchResolvedExtensions", singleResult.launchResolvedExtensions);
 				setOptionalProperty(requiredStatusStep(statusPayload, fi), "runtimeAcknowledgedExtensions", singleResult.runtimeAcknowledgedExtensions);
@@ -3616,6 +3653,7 @@ async function runSubagent(
 					...(pr.sessionName ? { sessionName: pr.sessionName } : {}),
 					context: pr.context,
 					agentContract: pr.agentContract,
+					sandbox: pr.sandbox,
 					launchContractDigest: pr.launchContractDigest,
 					launchResolvedExtensions: pr.launchResolvedExtensions,
 					runtimeAcknowledgedExtensions: pr.runtimeAcknowledgedExtensions,
@@ -3983,6 +4021,7 @@ async function runSubagent(
 						setOptionalProperty(requiredStatusStep(statusPayload, fi), "transcriptPath", singleResult.transcriptPath ?? requiredStatusStep(statusPayload, fi).transcriptPath);
 						setOptionalProperty(requiredStatusStep(statusPayload, fi), "transcriptError", singleResult.transcriptError);
 						setOptionalProperty(requiredStatusStep(statusPayload, fi), "agentContract", singleResult.agentContract);
+						setOptionalProperty(requiredStatusStep(statusPayload, fi), "sandbox", singleResult.sandbox);
 						setOptionalProperty(requiredStatusStep(statusPayload, fi), "launchResolvedExtensions", singleResult.launchResolvedExtensions);
 						setOptionalProperty(requiredStatusStep(statusPayload, fi), "runtimeAcknowledgedExtensions", singleResult.runtimeAcknowledgedExtensions);
 						setOptionalProperty(requiredStatusStep(statusPayload, fi), "effects", singleResult.effects);
@@ -4061,6 +4100,7 @@ async function runSubagent(
 						agent: pr.agent,
 						context: pr.context,
 						agentContract: pr.agentContract,
+						sandbox: pr.sandbox,
 						launchContractDigest: pr.launchContractDigest,
 						launchResolvedExtensions: pr.launchResolvedExtensions,
 						output: pr.output,
@@ -4324,6 +4364,7 @@ async function runSubagent(
 				...(singleResult.sessionName ? { sessionName: singleResult.sessionName } : {}),
 				context: singleResult.context,
 				agentContract: singleResult.agentContract,
+				sandbox: singleResult.sandbox,
 				launchContractDigest: singleResult.launchContractDigest,
 				launchResolvedExtensions: singleResult.launchResolvedExtensions,
 				runtimeAcknowledgedExtensions: singleResult.runtimeAcknowledgedExtensions,
@@ -4711,6 +4752,7 @@ async function runSubagent(
 				transcriptPath: r.transcriptPath,
 				transcriptError: r.transcriptError,
 				agentContract: r.agentContract,
+				sandbox: r.sandbox,
 				launchContractDigest: r.launchContractDigest,
 				launchResolvedExtensions: r.launchResolvedExtensions,
 				runtimeAcknowledgedExtensions: r.runtimeAcknowledgedExtensions,

@@ -294,11 +294,14 @@ describe("async resume lookup", () => {
 				...descriptor,
 				launchContractDigest: "launch-contract-digest",
 				allowNestedSubagents: true,
+				sandbox: "reviewer-strict",
 				intercomBridge: { mode: "off" },
 				extensionBindings: { "shepherd.dispatch/1": { role: "coder" } },
 			});
 			const valid = resolveAsyncResumeTarget({ id: "run-descriptor" }, { asyncDirRoot: asyncRoot, resultsDir });
 			assert.equal(valid.launchContractDigest, "launch-contract-digest");
+			assert.equal(valid.sandbox, "reviewer-strict");
+			assert.equal(valid.recoveryDescriptor?.sandbox, "reviewer-strict");
 			assert.equal(valid.recoveryDescriptor?.launchContractDigest, "launch-contract-digest");
 			assert.equal(valid.recoveryDescriptor?.allowNestedSubagents, true);
 			assert.deepEqual(valid.recoveryDescriptor?.intercomBridge, { mode: "off" });
@@ -306,6 +309,9 @@ describe("async resume lookup", () => {
 
 			writeJson(path.join(asyncDir, "recovery-descriptor.json"), { ...descriptor, allowNestedSubagents: "true" });
 			assert.throws(() => resolveAsyncResumeTarget({ id: "run-descriptor" }, { asyncDirRoot: asyncRoot, resultsDir }), /allowNestedSubagents/);
+
+			writeJson(path.join(asyncDir, "recovery-descriptor.json"), { ...descriptor, sandbox: "../escape" });
+			assert.throws(() => resolveAsyncResumeTarget({ id: "run-descriptor" }, { asyncDirRoot: asyncRoot, resultsDir }), /sandbox.*letters, digits, underscores, or hyphens/);
 
 			writeJson(path.join(asyncDir, "recovery-descriptor.json"), { ...descriptor, extensionBindings: { invalid: true } });
 			assert.throws(() => resolveAsyncResumeTarget({ id: "run-descriptor" }, { asyncDirRoot: asyncRoot, resultsDir }), /namespace/);

@@ -570,7 +570,11 @@ function messageError(message: unknown): string | undefined {
 	return typeof value === "string" ? value : undefined;
 }
 
-export function isRetryableModelFailureAttempt(input: { error: string | undefined; messages?: readonly unknown[]; toolCount?: number }): boolean {
+export function isRetryableModelFailureAttempt(input: { error: string | undefined; messages?: readonly unknown[]; toolCount?: number; startupBlocked?: boolean }): boolean {
+	// A startup guard blocked the child before its first model turn: no model
+	// change can fix it, and recording it as a model failure would poison the
+	// model registry with a long-lived exclusion for a policy decision.
+	if (input.startupBlocked === true) return false;
 	if (!isRetryableModelFailure(input.error)) return false;
 	if ((input.toolCount ?? 0) > 0) return false;
 	if (input.error === "Subagent produced no output (possible model cold-start or empty response)." || /^Subagent produced no output after terminal assistant stopReason "[^"]+"\.$/.test(input.error ?? "")) return true;

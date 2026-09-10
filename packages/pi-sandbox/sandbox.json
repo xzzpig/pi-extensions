@@ -50,5 +50,17 @@
       "*.key"
     ],
     "protectNonexistentFiles": false
+  },
+  "profiles": {
+    "reviewer-strict": {
+      "inheritGlobalConfig": false,
+      "network": {
+        "allowedDomains": []
+      },
+      "filesystem": {
+        "allowRead": ["."],
+        "allowWrite": []
+      }
+    }
   }
 }

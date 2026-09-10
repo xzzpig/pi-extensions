@@ -31,6 +31,18 @@ function writeJson(filePath: string, value: unknown): void {
 	fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf-8");
 }
 
+function installSandboxExtension(agentDir: string): string {
+	const extensionRoot = path.join(agentDir, "extensions", "pi-sandbox");
+	const entryPath = path.join(extensionRoot, "index.ts");
+	fs.mkdirSync(extensionRoot, { recursive: true });
+	fs.writeFileSync(path.join(extensionRoot, "package.json"), JSON.stringify({
+		name: "@xzzpig/pi-sandbox",
+		pi: { extensions: ["./index.ts"] },
+	}));
+	fs.writeFileSync(entryPath, "export default () => {};", "utf-8");
+	return entryPath;
+}
+
 function writeMcpFixture(): void {
 	const agentDir = process.env.PI_CODING_AGENT_DIR;
 	assert.equal(typeof agentDir, "string");
@@ -239,6 +251,73 @@ Worker.
 			assert.ok(enabled.contract.tools.runtimeExtensions.some((entry) => entry.endsWith("fast-mode-extension.ts")));
 			assert.equal(disabled.contract.tools.runtimeExtensions.some((entry) => entry.endsWith("fast-mode-extension.ts")), false);
 			assert.notEqual(enabled.contract.launchContractDigest, disabled.contract.launchContractDigest);
+		}
+	});
+
+	it("binds a sandbox profile and force-injected extension into preflight provenance", async () => {
+		const cwd = path.join(tempDir, "sandbox-profile-repo");
+		fs.mkdirSync(cwd, { recursive: true });
+		const sandboxEntry = installSandboxExtension(process.env.PI_CODING_AGENT_DIR!);
+		writeAgent(path.join(cwd, ".pi", "agents", "reviewer.md"), `---
+name: reviewer
+description: Sandboxed reviewer
+sandbox: reviewer-strict
+extensions: ./other-extension.ts
+---
+Review carefully.
+`);
+
+		const result = await resolveSubagentLaunchContract({
+			agent: "reviewer",
+			cwd,
+			task: "Review the change",
+			projectTrusted: true,
+		});
+		assert.equal(result.ok, true);
+		if (!result.ok) return;
+		assert.equal(result.contract.sandbox, "reviewer-strict");
+		assert.ok(result.contract.tools.runtimeExtensions.includes(sandboxEntry));
+		assert.ok(result.contract.tools.runtimeExtensions.some((entry) => entry.endsWith("sandbox-profile-guard.ts")));
+		assert.ok(result.contract.tools.extensionArgs.includes(sandboxEntry));
+		assert.equal(result.contract.tools.disableAmbientExtensions, true);
+	});
+
+	it("fails preflight for an untrusted project-scoped sandbox selector", async () => {
+		const cwd = path.join(tempDir, "sandbox-untrusted-repo");
+		fs.mkdirSync(cwd, { recursive: true });
+		writeAgent(path.join(cwd, ".pi", "agents", "reviewer.md"), `---
+name: reviewer
+description: Sandboxed reviewer
+sandbox: reviewer-strict
+---
+Review carefully.
+`);
+
+		const result = await resolveSubagentLaunchContract({ agent: "reviewer", cwd, task: "Review" });
+		assert.equal(result.ok, false);
+		if (!result.ok) {
+			assert.equal(result.code, "untrusted_project");
+			assert.match(result.message, /project is not trusted/);
+		}
+	});
+
+	it("rejects a project-scoped profile when preflight cwd differs from trusted project cwd", async () => {
+		const cwd = path.join(tempDir, "sandbox-cross-cwd-repo");
+		const trustedCwd = path.join(tempDir, "trusted-root");
+		fs.mkdirSync(cwd, { recursive: true });
+		fs.mkdirSync(trustedCwd, { recursive: true });
+		writeAgent(path.join(cwd, ".pi", "agents", "reviewer.md"), `---\nname: reviewer\ndescription: Sandboxed reviewer\nsandbox: reviewer-strict\n---\nReview carefully.\n`);
+
+		const result = await resolveSubagentLaunchContract({
+			agent: "reviewer",
+			cwd,
+			projectTrusted: true,
+			trustedProjectCwd: trustedCwd,
+		});
+		assert.equal(result.ok, false);
+		if (!result.ok) {
+			assert.equal(result.code, "untrusted_project");
+			assert.match(result.message, /does not match trusted project cwd/);
 		}
 	});
 

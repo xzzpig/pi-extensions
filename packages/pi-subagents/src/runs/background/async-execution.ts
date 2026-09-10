@@ -28,7 +28,7 @@ import { backgroundProcessOptions } from "../shared/background-process-options.t
 import { buildSkillInjection, normalizeSkillInput, resolveSkillsWithFallback } from "../../agents/skills.ts";
 import { buildAgentMemoryInjection } from "../../agents/agent-memory.ts";
 import { PI_CODING_AGENT_PACKAGE_ROOT_ENV, PROMPT_REDACTED, resolveChildCwd } from "../../shared/utils.ts";
-import { buildModelCandidates, resolveEffectiveSubagentModel, resolveModelOrigin, resolveSubagentModelOverride, type AvailableModelInfo, type ModelOrigin, type ParentModel } from "../shared/model-fallback.ts";
+import { buildModelCandidates, inheritsParentModel, resolveEffectiveSubagentModel, resolveModelOrigin, resolveSubagentModelOverride, type AvailableModelInfo, type ModelOrigin, type ParentModel } from "../shared/model-fallback.ts";
 import { resolveToolTimeoutMs, toolTimeoutFromEnv } from "../shared/tool-timeout.ts";
 import { resolveModelScopesForAgent, type ModelScopeConfig } from "../shared/model-scope.ts";
 import { findModelInfo, resolveEffectiveThinking } from "../../shared/model-info.ts";
@@ -91,9 +91,14 @@ const piPackageRoot = resolvePiPackageRoot() ?? resolveInstalledPiPackageRoot();
 function resolveJitiCliFromPackageJson(packageJsonPath: string): string | undefined {
 	if (!fs.existsSync(packageJsonPath)) return undefined;
 	const packageRoot = path.dirname(packageJsonPath);
-	const pkg = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8")) as {
-		bin?: string | Record<string, string>;
-	};
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(fs.readFileSync(packageJsonPath, "utf-8"));
+	} catch {
+		return undefined;
+	}
+	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+	const pkg = parsed as { bin?: string | Record<string, string> };
 	const binField = pkg.bin;
 	const binPath = typeof binField === "string"
 		? binField
@@ -146,6 +151,10 @@ interface AsyncExecutionContext {
 	currentModel?: ParentModel;
 	/** Optional model-scope enforcement resolved from subagent settings. */
 	modelScope?: ModelScopeConfig;
+	/** Parent-authoritative trust state for profile-aware project config merging. */
+	projectTrusted?: boolean;
+	/** Exact trusted parent cwd; project config applies only when it matches the child cwd. */
+	trustedProjectCwd?: string;
 	/** Whether the parent session has an interactive UI. */
 	interactive?: boolean;
 	/** The executor's own child runtime when the launch comes from an in-process child. */
@@ -223,6 +232,8 @@ interface AsyncSingleParams {
 	agentConfig: AgentConfig;
 	/** Agent contract before per-run bridge injection, used only for recovery persistence. */
 	recoveryAgentConfig?: AgentConfig;
+	/** Selected global sandbox profile carried across revival. */
+	sandbox?: string;
 	ctx: AsyncExecutionContext;
 	cwd?: string;
 	requestedCwd?: string;
@@ -375,9 +386,9 @@ export function isAsyncAvailable(): boolean {
 	return jitiCliPath !== undefined;
 }
 
-export function resolveAsyncRunnerLogPaths(cfg: object): { stdoutPath: string; stderrPath: string } | undefined {
-	const asyncDir = typeof (cfg as { asyncDir?: unknown }).asyncDir === "string"
-		? (cfg as { asyncDir: string }).asyncDir
+export function resolveAsyncRunnerLogPaths(cfg: Record<string, unknown>): { stdoutPath: string; stderrPath: string } | undefined {
+	const asyncDir = typeof cfg.asyncDir === "string"
+		? cfg.asyncDir
 		: undefined;
 	if (!asyncDir) return undefined;
 	return {
@@ -537,7 +548,7 @@ export function emitProcessTerminalEvent(ctx: AsyncExecutionContext, proof: unkn
 	}
 }
 
-function spawnRunner(cfg: object, suffix: string, cwd: string, initialStatus: Omit<AsyncStatus, "pid" | "processTerminal">, initialStatusPath: string, onProcessTerminal?: (proof: unknown) => void, onBeforeProceed?: (runnerProcessInstanceId: string) => void, requestedCwd = cwd): SpawnRunnerResult {
+function spawnRunner(cfg: Record<string, unknown>, suffix: string, cwd: string, initialStatus: Omit<AsyncStatus, "pid" | "processTerminal">, initialStatusPath: string, onProcessTerminal?: (proof: unknown) => void, onBeforeProceed?: (runnerProcessInstanceId: string) => void, requestedCwd = cwd): SpawnRunnerResult {
 	const cwdError = preflightLaunchCwd(requestedCwd, cwd);
 	if (cwdError) return { error: cwdError };
 
@@ -753,6 +764,19 @@ const UNAVAILABLE_SUBAGENT_SKILL_ERROR = "Skills not found: pi-subagents";
 class UnavailableSubagentSkillError extends Error {}
 class AsyncStartValidationError extends Error {}
 
+function profileProjectTrustedForCwd(ctx: AsyncExecutionContext, cwd: string): boolean {
+	return ctx.projectTrusted === true
+		&& ctx.trustedProjectCwd !== undefined
+		&& path.resolve(ctx.trustedProjectCwd) === path.resolve(cwd);
+}
+
+function profileProjectTrustError(agent: AgentConfig, ctx: AsyncExecutionContext, cwd: string): string {
+	if (ctx.projectTrusted !== true) {
+		return `Agent '${agent.name}' selects sandbox profile '${agent.sandbox}' from project scope, but the project is not trusted. Trust the project and retry.`;
+	}
+	return `Agent '${agent.name}' selects sandbox profile '${agent.sandbox}' from project scope, but the child cwd is not an exact trusted project root. Launch from that trusted cwd and retry.`;
+}
+
 export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildParams): AsyncRunnerStepBuildResult {
 	const {
 		chain,
@@ -844,6 +868,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			if (s.outputSchema !== undefined) unsupported.push("structured output");
 			if (s.acceptance !== undefined || params.agentContract !== undefined || s.agentContract !== undefined) unsupported.push("acceptance/agent contract");
 			if (s.toolBudget !== undefined || params.toolBudget !== undefined || a.toolBudget !== undefined || params.configToolBudget !== undefined) unsupported.push("tool budget");
+			if (a.sandbox !== undefined) unsupported.push("sandbox profile");
 			if ((s.fast ?? params.fast ?? a.fast) === true) unsupported.push("fast mode");
 			if (params.contextForAgent?.(s.agent) === "fork") unsupported.push("fork context");
 			if (unsupported.length > 0) throw new AsyncStartValidationError(`Agent '${a.name}' uses runner.type='${externalRunnerType}' and does not support: ${unsupported.join(", ")}.`);
@@ -878,6 +903,10 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			resolvedBehavior,
 		});
 		const { stepCwd, instructionCwd, readExistenceCwd, behavior, namespaceOutputPath, outputPath, skillNames } = launchPlan;
+		const profileChildCwd = behaviorCwd ?? stepCwd;
+		if (a.sandbox && (a.source === "project" || a.override?.scope === "project") && !profileProjectTrustedForCwd(ctx, profileChildCwd)) {
+			throw new AsyncStartValidationError(profileProjectTrustError(a, ctx, profileChildCwd));
+		}
 		const { resolved: resolvedSkills, missing: missingSkills } = resolveSkillsWithFallback(
 			skillNames,
 			stepCwd,
@@ -977,6 +1006,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			agentName: a.name,
 			permissionRules,
 			runtimeSnapshotHost: ctx.pi,
+			sandbox: a.sandbox,
 		});
 		const launchResolvedExtensions = externalRunner ? undefined : projectLaunchResolvedChildExtensions(toolPlan);
 		if (externalRunner && permissionRules) {
@@ -999,6 +1029,8 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		return {
 			parentSessionId: ctx.parentSessionId ?? ctx.currentSessionId,
 			permissionRules,
+			...(ctx.projectTrusted !== undefined ? { projectTrusted: ctx.projectTrusted } : {}),
+			...(ctx.trustedProjectCwd ? { trustedProjectCwd: ctx.trustedProjectCwd } : {}),
 			...(params.capabilityCeiling ? { capabilityCeiling: params.capabilityCeiling } : {}),
 			...(runFanoutPath ? { runFanoutPath } : {}),
 			agent: s.agent,
@@ -1029,6 +1061,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			mcpDirectTools: a.mcpDirectTools,
 			mutationTools: a.mutationTools,
 			completionGuard: a.completionGuard,
+			...(a.sandbox ? { sandbox: a.sandbox } : {}),
 			systemPrompt,
 			systemPromptMode: a.systemPromptMode,
 			inheritProjectContext: a.inheritProjectContext,
@@ -1585,6 +1618,7 @@ export function executeAsyncSingle(
 	const externalRunner = agentConfig.runner?.type === "external-cli" || agentConfig.runner?.type === "external-job";
 	const externalRunnerType = agentConfig.runner?.type;
 	const permissionRules = resolvePermissionRules(ctx.permissions, agentConfig.permissions);
+	const sandbox = params.sandbox ?? agentConfig.sandbox;
 	if (externalRunner) {
 		const unsupported: string[] = [];
 		if (params.modelOverride !== undefined) unsupported.push("model override");
@@ -1593,6 +1627,7 @@ export function executeAsyncSingle(
 		if (params.structuredOutputSchema !== undefined) unsupported.push("structured output");
 		if (params.acceptance !== undefined || params.agentContract !== undefined) unsupported.push("acceptance/agent contract");
 		if (params.toolBudget !== undefined || agentConfig.toolBudget !== undefined || params.configToolBudget !== undefined) unsupported.push("tool budget");
+		if (sandbox !== undefined) unsupported.push("sandbox profile");
 		if (params.context === "fork") unsupported.push("fork context");
 		if ((params.skills?.length ?? 0) > 0) unsupported.push("skills");
 		if (permissionRules) unsupported.push("native Pi child permissions");
@@ -1620,6 +1655,9 @@ export function executeAsyncSingle(
 		: params.worktree === true && managedWorktreeProvider === "native"
 		? resolveExpectedWorktreeAgentCwd(runnerCwd, `${id}-s0`, 0, worktreeBaseDir)
 		: runnerCwd;
+	if (sandbox && (agentConfig.source === "project" || agentConfig.override?.scope === "project") && !profileProjectTrustedForCwd(ctx, instructionCwd)) {
+		return formatAsyncStartError("single", profileProjectTrustError(agentConfig, ctx, instructionCwd));
+	}
 	const readExistenceCwd = params.worktree === true ? runnerCwd : instructionCwd;
 	const skillNames = params.skills ?? agentConfig.skills ?? [];
 	const availableModels = params.availableModels;
@@ -1772,6 +1810,7 @@ export function executeAsyncSingle(
 		agentName: agentConfig.name,
 		permissionRules: resolvePermissionRules(ctx.permissions, agentConfig.permissions),
 		runtimeSnapshotHost: ctx.pi,
+		sandbox,
 	});
 	const launchResolvedExtensions = externalRunner ? undefined : projectLaunchResolvedChildExtensions(toolPlan);
 	if (!externalRunner) {
@@ -1801,6 +1840,7 @@ export function executeAsyncSingle(
 		inheritProjectContext: agentConfig.inheritProjectContext,
 		inheritGlobalContext: agentConfig.inheritGlobalContext,
 		inheritSkills: agentConfig.inheritSkills,
+		sandbox,
 		skills: resolvedSkills.map((skill) => skill.name),
 		tools: toolPlan.effectiveToolAllowlist,
 		...(toolPlan.excludeTools.length > 0 ? { excludeTools: toolPlan.excludeTools } : {}),
@@ -1830,6 +1870,7 @@ export function executeAsyncSingle(
 		sourceRunId: id,
 		...(params.agentContract ? { agentContract: params.agentContract } : {}),
 		agent,
+		...(sandbox ? { sandbox } : {}),
 		launchResolvedExtensions,
 		...(sessionFile ? { sessionFile } : {}),
 		cwd: runnerCwd,
@@ -1894,6 +1935,8 @@ export function executeAsyncSingle(
 					{
 						parentSessionId: ctx.parentSessionId ?? ctx.currentSessionId,
 						permissionRules,
+						...(ctx.projectTrusted !== undefined ? { projectTrusted: ctx.projectTrusted } : {}),
+						...(ctx.trustedProjectCwd ? { trustedProjectCwd: ctx.trustedProjectCwd } : {}),
 						...(capabilityCeiling ? { capabilityCeiling } : {}),
 						agent,
 						task: taskText,
@@ -1918,6 +1961,7 @@ export function executeAsyncSingle(
 						mcpDirectTools: agentConfig.mcpDirectTools,
 						mutationTools: agentConfig.mutationTools,
 						completionGuard: agentConfig.completionGuard,
+						...(sandbox ? { sandbox } : {}),
 						systemPrompt,
 						systemPromptMode: agentConfig.systemPromptMode,
 						inheritProjectContext: agentConfig.inheritProjectContext,
@@ -2056,6 +2100,7 @@ export function executeAsyncSingle(
 						mode: "single",
 						state: "running",
 						agent,
+						...(sandbox ? { sandbox } : {}),
 						agents: [agent],
 						chainStepCount: 1,
 						...(timeoutMs !== undefined ? { timeoutMs, deadlineAt } : {}),
@@ -2076,6 +2121,7 @@ export function executeAsyncSingle(
 			completionOwnerId: ctx.completionOwnerId ?? currentCompletionOwnerId(),
 			mode: "single",
 			agent,
+			...(sandbox ? { sandbox } : {}),
 			task: task?.trim() ? PROMPT_REDACTED : undefined,
 			goal: (params.goal ?? task).trim() ? PROMPT_REDACTED : undefined,
 			cwd: runnerCwd,

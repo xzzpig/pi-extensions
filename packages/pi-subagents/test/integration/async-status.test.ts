@@ -68,11 +68,12 @@ describe("async status helpers", () => {
 				startedAt: 100,
 				lastUpdate: 200,
 				cwd: "/repo-a",
+				sandbox: "reviewer-strict",
 				currentStep: 1,
 				runFanoutBudget: { used: 2, limit: 64, remaining: 62 },
 				outputFile,
 				steps: [
-					{ agent: "scout", status: "complete", durationMs: 10, description: "Inspect auth only" },
+					{ agent: "scout", status: "complete", durationMs: 10, description: "Inspect auth only", sandbox: "reviewer-strict" },
 					{ agent: "worker", status: "running", durationMs: 20, description: "Patch billing only", contextLimit: 128_000, toolBudgetBlocked: true, watchdog: { phase: "stale", seq: 2, lastUpdate: 200 } },
 				],
 			});
@@ -93,10 +94,12 @@ describe("async status helpers", () => {
 			assert.equal(runs.length, 1);
 			assert.equal(runs[0]?.id, "run-a");
 			assert.equal(runs[0]?.cwd, "/repo-a");
+			assert.equal(runs[0]?.sandbox, "reviewer-strict");
 			assert.equal(runs[0]?.steps.length, 2);
 			assert.equal(runs[0]?.steps[1]?.agent, "worker");
 			assert.equal(runs[0]?.steps[1]?.status, "running");
 			assert.equal(runs[0]?.steps[0]?.description, "Inspect auth only");
+			assert.equal(runs[0]?.steps[0]?.sandbox, "reviewer-strict");
 			assert.equal(runs[0]?.steps[1]?.description, "Patch billing only");
 			assert.equal(runs[0]?.steps[1]?.contextLimit, 128_000);
 			assert.equal(runs[0]?.steps[1]?.toolBudgetBlocked, true);
@@ -323,8 +326,29 @@ describe("async status helpers", () => {
 			assert.doesNotMatch(text, /key \| mode \| decision \| claims \| expected output \| independence/);
 			assert.doesNotMatch(text, /Preflight warnings:/);
 			assert.doesNotMatch(text, /workflow key 'review' launched without a declared lane/);
-			assert.deepEqual(runs[0]?.preflight, { version: 1, coverage: "complete", lanes: [{ key: "writer", mode: "mutation" }] });
-			assert.deepEqual(runs[0]?.workflow?.preflightWarnings, ["Preflight advisory: workflow key 'review' launched without a declared lane."]);
+		assert.deepEqual(runs[0]?.preflight, { version: 1, coverage: "complete", lanes: [{ key: "writer", mode: "mutation" }] });
+		assert.deepEqual(runs[0]?.workflow?.preflightWarnings, ["Preflight advisory: workflow key 'review' launched without a declared lane."]);
+	} finally {
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+	});
+
+	it("drops malformed sandbox identities from persisted status projections", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-status-sandbox-identity-"));
+		try {
+			createAsyncDir(root, "run-sandbox", {
+				runId: "run-sandbox",
+				mode: "single",
+				state: "complete",
+				startedAt: 100,
+				lastUpdate: 200,
+				sandbox: "../escape",
+				steps: [{ agent: "reviewer", status: "complete", sandbox: "false" }],
+			});
+
+			const summary = listAsyncRuns(root, { states: ["complete"] })[0];
+			assert.equal(summary?.sandbox, undefined);
+			assert.equal(summary?.steps[0]?.sandbox, undefined);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}

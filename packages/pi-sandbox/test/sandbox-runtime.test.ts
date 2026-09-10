@@ -7,7 +7,9 @@ import { fileURLToPath } from "node:url";
 import { SandboxManager } from "@xzzpig/sandbox-runtime";
 import assert from "node:assert/strict";
 
-import { DEFAULT_CONFIG, mergeConfigLayers, type SandboxConfig } from "../src/config.ts";
+import type { SandboxConfig } from "../src/config.ts";
+
+import { DEFAULT_CONFIG, mergeConfigLayers, mergeProfileLayers } from "../src/config.ts";
 import { canonicalizePath } from "../src/policy.ts";
 import {
   buildRuntimeConfig,
@@ -284,6 +286,59 @@ test("user-configured denyWrite literals are filtered when non-existent (false)"
     process.chdir(originalCwd);
     rmSync(tmp, { recursive: true, force: true });
   }
+});
+
+test("profile hard denyWrite rules retain nonexistent literal paths in runtime sandbox config", () => {
+  const profileConfig = mergeProfileLayers(
+    DEFAULT_CONFIG,
+    {
+      profiles: {
+        strict: {
+          filesystem: { denyWrite: ["future-secret.env"] },
+        },
+      },
+    },
+    {},
+    "strict",
+  );
+
+  assert.equal(profileConfig.filesystem?.protectNonexistentFiles, true);
+  const runtime = buildRuntimeConfig(profileConfig);
+  assert.ok(runtime.filesystem?.denyWrite?.includes(canonicalizePath("future-secret.env")));
+});
+
+test("resolveAllowances makes configured and session write paths readable", () => {
+  const config = {
+    ...DEFAULT_CONFIG,
+    filesystem: {
+      ...DEFAULT_CONFIG.filesystem!,
+      allowRead: [],
+      allowWrite: ["/configured-write"],
+    },
+  };
+  const effective = resolveAllowances(config, {
+    domains: [],
+    readPaths: [],
+    writePaths: ["/session-write"],
+  });
+
+  assert.deepEqual(effective.readPaths, ["/configured-write", "/session-write"]);
+  assert.deepEqual(effective.writePaths, ["/configured-write", "/session-write"]);
+});
+
+test("extractBlockedWritePath recognizes shell sandbox errors", () => {
+  assert.equal(
+    extractBlockedWritePath("bash: line 1: /private/file: Operation not permitted"),
+    "/private/file",
+  );
+  assert.equal(extractBlockedWritePath("permission denied"), null);
+});
+
+test("supportsNodeEnvProxy observes Node release boundaries", () => {
+  assert.equal(supportsNodeEnvProxy("22.20.0"), false);
+  assert.equal(supportsNodeEnvProxy("22.21.0"), true);
+  assert.equal(supportsNodeEnvProxy("23.9.0"), false);
+  assert.equal(supportsNodeEnvProxy("24.0.0"), true);
 });
 
 test("DEFAULT_CONFIG disables placeholder protection for non-existent dangerous files", () => {

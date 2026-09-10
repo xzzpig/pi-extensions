@@ -1425,7 +1425,10 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			tracker.resetJobs(ui.ctx as never);
 			tracker.handleStarted({ id: "run-bad-status", asyncDir: runDir, agent: "worker" });
 
-			await new Promise((resolve) => setTimeout(resolve, 80));
+			await waitForCondition(
+				() => state.asyncJobs.size === 0,
+				"malformed status cleanup",
+			);
 
 			assert.equal(state.asyncJobs.size, 0);
 			assert.ok(ui.renderRequests > 0, "expected malformed status cleanup to request a rerender");

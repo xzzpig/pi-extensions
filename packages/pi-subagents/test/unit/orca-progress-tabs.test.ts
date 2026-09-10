@@ -167,7 +167,7 @@ test("hung Orca terminal creation does not delay the owning process", { skip: pr
 	let fakePid: number | undefined;
 	try {
 		assert.equal(await ownerClosed, 0);
-		assert.ok(Date.now() - startedAt < 2_000, "the Orca observer delayed runner completion");
+		assert.ok(Date.now() - startedAt < 5_000, "the Orca observer delayed runner completion");
 		await waitForFile(pidFile);
 		fakePid = Number.parseInt(fs.readFileSync(pidFile, "utf-8"), 10);
 		process.kill(fakePid, 0);

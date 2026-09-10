@@ -786,6 +786,7 @@ export interface SteeringRecoveryDescriptor {
 	sourceRunId: string;
 	agentContract?: AgentContract;
 	agent: string;
+	sandbox?: string;
 	sessionFile?: string;
 	/** Git ref used to allocate managed worktrees for this run. */
 	baseRef?: string;
@@ -839,7 +840,7 @@ export interface SteeringRecoveryDescriptor {
 
 export type PublicNestedStepSummary = Pick<
 	NestedStepSummary,
-	"agent" | "sessionName" | "status" | "model" | "thinking" | "sessionFile" | "transcriptPath" | "transcriptError" | "activityState" | "lastActivityAt" | "currentTool" | "currentToolStartedAt" | "currentPath" | "turnCount" | "toolCount" | "toolBudget" | "toolBudgetBlocked" | "startedAt" | "endedAt" | "error" | "timedOut" | "stopped"
+	"agent" | "sessionName" | "status" | "model" | "thinking" | "sandbox" | "sessionFile" | "transcriptPath" | "transcriptError" | "activityState" | "lastActivityAt" | "currentTool" | "currentToolStartedAt" | "currentPath" | "turnCount" | "toolCount" | "toolBudget" | "toolBudgetBlocked" | "startedAt" | "endedAt" | "error" | "timedOut" | "stopped"
 > & {
 	children?: PublicNestedRunSummary[];
 };
@@ -852,7 +853,7 @@ export type CostSummary = {
 
 export type PublicNestedRunSummary = Pick<
 	NestedRunSummary,
-	"id" | "parentRunId" | "parentStepIndex" | "parentAgent" | "depth" | "path" | "asyncDir" | "sessionId" | "sessionFile" | "intercomTarget" | "ownerIntercomTarget" | "leafIntercomTarget" | "ownerState" | "mode" | "state" | "agent" | "sessionName" | "agents" | "model" | "thinking" | "currentStep" | "chainStepCount" | "parallelGroups" | "activityState" | "lastActivityAt" | "currentTool" | "currentToolStartedAt" | "currentPath" | "turnCount" | "toolCount" | "toolBudget" | "toolBudgetBlocked" | "totalTokens" | "totalCost" | "startedAt" | "endedAt" | "lastUpdate" | "error" | "timeoutMs" | "deadlineAt" | "timedOut" | "stopped" | "turnBudget" | "turnBudgetExceeded" | "wrapUpRequested"
+	"id" | "parentRunId" | "parentStepIndex" | "parentAgent" | "depth" | "path" | "asyncDir" | "sessionId" | "sessionFile" | "intercomTarget" | "ownerIntercomTarget" | "leafIntercomTarget" | "ownerState" | "mode" | "state" | "agent" | "sessionName" | "agents" | "model" | "thinking" | "sandbox" | "currentStep" | "chainStepCount" | "parallelGroups" | "activityState" | "lastActivityAt" | "currentTool" | "currentToolStartedAt" | "currentPath" | "turnCount" | "toolCount" | "toolBudget" | "toolBudgetBlocked" | "totalTokens" | "totalCost" | "startedAt" | "endedAt" | "lastUpdate" | "error" | "timeoutMs" | "deadlineAt" | "timedOut" | "stopped" | "turnBudget" | "turnBudgetExceeded" | "wrapUpRequested"
 > & {
 	steps?: PublicNestedStepSummary[];
 	children?: PublicNestedRunSummary[];
@@ -1240,6 +1241,7 @@ export interface SingleResult {
 	wrapUpRequested?: boolean;
 	toolBudget?: ToolBudgetState;
 	toolBudgetBlocked?: boolean;
+	sandbox?: string;
 	messages?: Message[];
 	usage: Usage;
 	model?: string;
@@ -1256,6 +1258,13 @@ export interface SingleResult {
 	 * a signal to reduce input size or re-decompose the task.
 	 */
 	contextOverflow?: boolean;
+	/**
+	 * True when the child never reached its first model turn because a startup
+	 * guard blocked it (for example a required sandbox profile that failed to
+	 * initialize). Retrying another model cannot succeed, and the failure must
+	 * not be recorded as a model exclusion.
+	 */
+	startupBlocked?: boolean;
 	sessionFile?: string;
 	skills?: string[];
 	skillsWarning?: string;
@@ -1565,6 +1574,7 @@ export interface NestedStepSummary {
 	wrapUpRequested?: boolean;
 	toolBudget?: ToolBudgetState;
 	toolBudgetBlocked?: boolean;
+	sandbox?: string;
 	processTerminal?: ProcessTerminalV1;
 	launchResolvedExtensions?: LaunchResolvedChildExtensionsV1;
 	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1;
@@ -1594,6 +1604,7 @@ export interface NestedRunSummary extends NestedRunAddress {
 	agent?: string;
 	/** Human-readable display name for the child session, when derived at launch. */
 	sessionName?: string;
+	sandbox?: string;
 	agents?: string[];
 	model?: string;
 	thinking?: string;
@@ -1657,6 +1668,7 @@ export interface AsyncStartedEvent {
 	workflowGraph?: WorkflowGraphSnapshot;
 	preflight?: WorkflowPreflightV1;
 	launchContractDigest?: string;
+	sandbox?: string;
 	launchResolvedExtensions?: LaunchResolvedChildExtensionsV1;
 	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1;
 	usageBudget?: UsageBudgetState;
@@ -1828,6 +1840,7 @@ export interface AsyncStatus {
 	runFanoutBudget?: RunFanoutBudgetSnapshot;
 	runFanoutBudgetDescriptor?: RunFanoutBudgetDescriptor;
 	launchContractDigest?: string;
+	sandbox?: string;
 	launchResolvedExtensions?: LaunchResolvedChildExtensionsV1;
 	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
@@ -1919,6 +1932,7 @@ export interface AsyncStatus {
 		acceptance?: AcceptanceLedger;
 		agentContract?: AgentContract;
 		launchContractDigest?: string;
+		sandbox?: string;
 		launchResolvedExtensions?: LaunchResolvedChildExtensionsV1;
 		runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1;
 		execution?: ExecutionProjection;
@@ -2054,6 +2068,7 @@ export interface ForegroundResumeChild {
 		outputMode?: OutputMode;
 	};
 	launchContractDigest?: string;
+	sandbox?: string;
 	/** Private retained launch authority. Never project into status or result output. */
 	extensionBindings?: ExtensionBindings;
 	launchResolvedExtensions?: LaunchResolvedChildExtensionsV1;
@@ -2360,6 +2375,8 @@ export interface RunSyncOptions {
 	configToolTimeoutMs?: number;
 	usageBudget?: UsageBudgetConfig;
 	toolBudget?: ResolvedToolBudget;
+	/** Selected global sandbox profile, when this child requested one. */
+	sandbox?: string;
 	allowZeroToolBudget?: boolean;
 	allowIntercomDetach?: boolean;
 	intercomEvents?: IntercomEventBus;
@@ -2393,6 +2410,10 @@ export interface RunSyncOptions {
 	/** Effective parent default wait window propagated to the child runtime. */
 	waitToolDefaultTimeoutMs?: number;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
+	/** Whether project-scoped agent/config inputs were trusted by the host. */
+	projectTrusted?: boolean;
+	/** Exact trusted parent cwd; project config applies only when it matches this child cwd. */
+	trustedProjectCwd?: string;
 	runFanoutBudget?: RunFanoutBudgetDescriptor;
 	nestedRoute?: NestedRouteInfo;
 	/** Override the agent's default model (format: "provider/id" or just "id") */

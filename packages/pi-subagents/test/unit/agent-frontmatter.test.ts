@@ -576,6 +576,43 @@ Do work
 	});
 });
 
+describe("agent sandbox profile frontmatter", () => {
+	it("parses and serializes a scalar sandbox profile selector", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-sandbox-profile-"));
+		tempDirs.push(dir);
+		const filePath = path.join(dir, ".pi", "agents", "reviewer.md");
+		writeAgent(filePath, `---
+name: reviewer
+description: Review safely
+sandbox: reviewer-strict
+---
+
+Review the change.
+`);
+
+		const agent = discoverAgents(dir, "project").agents.find((candidate) => candidate.name === "reviewer");
+		assert.equal(agent?.sandbox, "reviewer-strict");
+		assert.match(serializeAgent(agent!), /^sandbox: reviewer-strict$/m);
+	});
+
+	it("rejects empty, traversal, object, and external-runner sandbox declarations", () => {
+		const cases = [
+			"sandbox:",
+			"sandbox: false",
+			"sandbox: ../escape",
+			"sandbox:\n  network:\n    allowedDomains: [example.com]",
+			"runner:\n  type: external-cli\n  command: node\nsandbox: reviewer-strict",
+		];
+		for (const [index, declaration] of cases.entries()) {
+			const dir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-subagents-agent-sandbox-invalid-${index}-`));
+			tempDirs.push(dir);
+			writeAgent(path.join(dir, ".pi", "agents", "worker.md"), `---\nname: worker\ndescription: Worker\n${declaration}\n---\nWork.`);
+			const discovered = discoverAgents(dir, "project");
+			assert.match(discovered.agentDiagnostics?.find((diagnostic) => diagnostic.name === "worker")?.error ?? "", /sandbox|unsupported Pi-only fields/);
+		}
+	});
+});
+
 describe("agent frontmatter defaultContext", () => {
 	it("serializes defaultContext into agent frontmatter", () => {
 		const agent: AgentConfig = {

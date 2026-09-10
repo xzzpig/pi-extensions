@@ -112,6 +112,60 @@ Note below that the order of precedence for filesystem read and write are opposi
 }
 ```
 
+#### Named profiles for subagents
+
+A native `pi-subagents` child can select one named policy from its agent frontmatter:
+
+```yaml
+sandbox: reviewer-strict
+```
+
+Define that name only in the global agent configuration, `<agentDir>/sandbox.json`
+(`~/.pi/agent/sandbox.json` by default). Project `.pi/sandbox.json` files may
+supply ordinary sandbox settings, but must not add, replace, or remove entries
+from `profiles`.
+
+```json
+{
+  "profiles": {
+    "reviewer-strict": {
+      "inheritGlobalConfig": false,
+      "network": { "allowedDomains": [] },
+      "filesystem": { "allowRead": ["."], "allowWrite": [] }
+    }
+  }
+}
+```
+
+`inheritGlobalConfig` defaults to `true`. With the default, the profile starts
+from the ordinary global configuration; with `false`, it starts from the built-in
+safe defaults instead. For a selected profile, the effective order is built-in
+defaults, optional global settings, trusted project settings, the profile, and
+in-memory session allowances. A profile explicitly replaces `allowedDomains`,
+`allowRead`, or `allowWrite` so it can narrow a role. `deniedDomains`,
+`denyRead`, and `denyWrite` are unioned, so neither a profile nor an allow list
+can remove an inherited hard denial. For a named profile, `denyRead` is checked
+before the native `read` tool can prompt; ordinary sandbox configuration keeps
+its existing prompt behavior. Named profiles also force
+`protectNonexistentFiles` when their effective `denyWrite` list contains a
+literal path, so Bash cannot create a hard-denied target before it exists.
+This profile-only safeguard does not change the ordinary placeholder-free
+default. Profiles cannot disable the sandbox, network isolation, or filesystem
+isolation.
+
+A project layer participates only after Pi has marked the project trusted. An
+untrusted project cannot supply a profile selector or change the effective
+profile policy. `pi-subagents` passes that trust decision to its child; a direct
+headless child without it uses global-only profile resolution.
+
+Profile children are preauthorized, not interactive: an unlisted domain, read,
+or write is blocked when the child has no UI. Permission prompts are not
+forwarded to the parent session and session allowances are never persisted from
+headless requests. The sandbox status and `/sandbox` output identify the active
+profile. A missing profile, invalid profile, unavailable platform, missing
+`pi-sandbox` package, or initialization failure blocks the child before its
+first model turn instead of falling back to unsandboxed execution.
+
 #### Usage
 
 ```
@@ -177,7 +231,7 @@ extension reloads or pi restarts.
 | Rule | Behaviour |
 |------|-----------|
 | Domain not in `allowedDomains` | Prompted (bash and `!cmd`, unless `sandboxUserShell` is disabled) |
-| Path not in `allowRead` or `allowWrite` | Prompted (read tool); granting adds to `allowRead` |
+| Path not in `allowRead` or `allowWrite` | Prompted (read tool); granting adds to `allowRead` outside named profiles |
 | Path not in `allowWrite` | Prompted (write/edit tools and bash write failures) |
 | Path in `denyWrite` | Hard-blocked, no prompt |
 | Domain in `deniedDomains` | Hard-blocked at OS level, no prompt |
@@ -218,8 +272,8 @@ The footer status shows `network unrestricted` while this mode is active.
 >
 > **⚠️ Read and write have different precedence rules:**
 >
-> - **Read:** Every read is prompted unless the path is in `allowRead` or `allowWrite`.
->   `denyRead` is not a hard-block — it marks regions as denied by default, but
+> - **Read outside named profiles:** Every read is prompted unless the path is in `allowRead` or `allowWrite`.
+>   `denyRead` is not a hard-block outside named profiles — it marks regions as denied by default, but
 >   granting a prompt adds the path to `allowRead`, overriding `denyRead`.
 > - **Write:** `denyWrite` takes precedence over `allowWrite` and is never
 >   prompted. A path in `denyWrite` is always blocked, even if it matches

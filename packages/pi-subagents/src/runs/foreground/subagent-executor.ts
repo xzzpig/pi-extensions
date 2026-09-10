@@ -526,6 +526,24 @@ function loadWorkflowScriptPath(params: SubagentParamsLike, runtimeCwd: string):
 	return { params: { ...rest, workflowScript } };
 }
 
+function currentProjectTrusted(ctx: Pick<ExtensionContext, "isProjectTrusted">): boolean {
+	return ctx.isProjectTrusted?.() === true;
+}
+
+function trustedProjectCwd(ctx: ExtensionContext): string | undefined {
+	return currentProjectTrusted(ctx) ? path.resolve(ctx.cwd) : undefined;
+}
+
+function sandboxProfileTrustError(agent: AgentConfig, ctx: ExtensionContext, childCwd: string): string | undefined {
+	if (!agent.sandbox || (agent.source !== "project" && agent.override?.scope !== "project")) return undefined;
+	const trustedCwd = trustedProjectCwd(ctx);
+	if (trustedCwd && trustedCwd === path.resolve(childCwd)) return undefined;
+	if (!trustedCwd) {
+		return `Agent '${agent.name}' selects sandbox profile '${agent.sandbox}' from project scope, but the project is not trusted. Trust the project and retry.`;
+	}
+	return `Agent '${agent.name}' selects sandbox profile '${agent.sandbox}' from project scope, but child cwd '${path.resolve(childCwd)}' does not match the trusted project cwd '${trustedCwd}'. Launch from the trusted project cwd and retry.`;
+}
+
 function removeForegroundControlIfIdle(state: SubagentState, runId: string): boolean {
 	const control = state.foregroundControls.get(runId);
 	if (control && (!foregroundSchedulingSettled(control) || (control.activeChildren?.size ?? 0) > 0)) return false;
@@ -773,6 +791,7 @@ function rememberForegroundRun(state: SubagentState, input: { runId: string; mod
 				...(result.detachedReason ? { detachedReason: result.detachedReason } : {}),
 				...(result.acceptance ? { acceptance: result.acceptance } : {}),
 				...(Object.keys(resumeContract).length ? { resumeContract } : {}),
+				...(result.sandbox ? { sandbox: result.sandbox } : {}),
 				...(result.launchContractDigest ? { launchContractDigest: result.launchContractDigest } : {}),
 				...(input.extensionBindings ? { extensionBindings: input.extensionBindings } : {}),
 				...(result.launchResolvedExtensions ? { launchResolvedExtensions: result.launchResolvedExtensions } : {}),
@@ -854,6 +873,7 @@ function updateRememberedForegroundChild(state: SubagentState, input: { runId: s
 		...(input.result.transcriptError ? { transcriptError: input.result.transcriptError } : {}),
 		...(input.result.detachedReason ? { detachedReason: input.result.detachedReason } : {}),
 		...(input.result.acceptance ? { acceptance: input.result.acceptance } : {}),
+		...(input.result.sandbox ? { sandbox: input.result.sandbox } : {}),
 		...(input.result.launchContractDigest ? { launchContractDigest: input.result.launchContractDigest } : {}),
 		...(input.result.launchResolvedExtensions ? { launchResolvedExtensions: input.result.launchResolvedExtensions } : {}),
 		...(input.result.runtimeAcknowledgedExtensions ? { runtimeAcknowledgedExtensions: input.result.runtimeAcknowledgedExtensions } : {}),
@@ -893,7 +913,7 @@ function updateRememberedForegroundChild(state: SubagentState, input: { runId: s
 	});
 }
 
-function resolveForegroundResumeTarget(params: SubagentParamsLike, state: SubagentState, options: { exactOnly?: boolean } = {}): { runId: string; mode: SubagentRunMode; state: "complete"; agent: string; index: number; cwd: string; sessionFile: string; model?: string; thinking?: string; launchContractDigest?: string; resumeContract?: ForegroundResumeChild["resumeContract"]; extensionBindings?: ExtensionBindings; capabilityCeiling?: ResolvedSubagentCapabilityCeiling } | undefined {
+function resolveForegroundResumeTarget(params: SubagentParamsLike, state: SubagentState, options: { exactOnly?: boolean } = {}): { runId: string; mode: SubagentRunMode; state: "complete"; agent: string; index: number; cwd: string; sessionFile: string; model?: string; thinking?: string; sandbox?: string; launchContractDigest?: string; resumeContract?: ForegroundResumeChild["resumeContract"]; extensionBindings?: ExtensionBindings; capabilityCeiling?: ResolvedSubagentCapabilityCeiling } | undefined {
 	const requested = (params.id ?? params.runId)?.trim();
 	if (!requested || !state.foregroundRuns?.size || !state.currentSessionId) return undefined;
 	const direct = state.foregroundRuns.get(requested);
@@ -923,6 +943,7 @@ function resolveForegroundResumeTarget(params: SubagentParamsLike, state: Subage
 		sessionFile,
 		...(child.model ? { model: child.model } : {}),
 		...(child.thinking ? { thinking: child.thinking } : {}),
+		...(child.sandbox ? { sandbox: child.sandbox } : {}),
 		...(child.launchContractDigest ? { launchContractDigest: child.launchContractDigest } : {}),
 		...(child.resumeContract ? { resumeContract: child.resumeContract } : {}),
 		...(child.extensionBindings ? { extensionBindings: normalizeExtensionBindings(child.extensionBindings)!.value } : {}),
@@ -943,6 +964,7 @@ type NestedResumeSourceTarget = {
 	sessionFile: string;
 	model?: string;
 	thinking?: AgentConfig["thinking"];
+	sandbox?: string;
 	launchContractDigest?: string;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	recoveryDescriptor?: SteeringRecoveryDescriptor;
@@ -1313,6 +1335,8 @@ function appendStepToAsyncChain(input: {
 		currentModelProvider: parentModel?.provider,
 		currentModel: parentModel,
 		modelScope: discoveredForAppend.modelScope,
+		projectTrusted: currentProjectTrusted(input.ctx),
+		...(trustedProjectCwd(input.ctx) ? { trustedProjectCwd: trustedProjectCwd(input.ctx) } : {}),
 		interactive: input.ctx.hasUI,
 		permissions: input.deps.config.permissions,
 		childRuntime: input.deps.childRuntime,
@@ -1463,6 +1487,7 @@ function resolveNestedResumeTarget(match: ResolvedSubagentRunId & { kind: "neste
 		index: 0,
 		cwd: asyncDir ? path.dirname(asyncDir) : undefined,
 		sessionFile: validateNestedSessionFile(run, trustedSessionRoots),
+		...(recoveryDescriptor?.sandbox ?? run.sandbox ? { sandbox: recoveryDescriptor?.sandbox ?? run.sandbox } : {}),
 		...(run.capabilityCeiling ? { capabilityCeiling: run.capabilityCeiling } : {}),
 		...(recoveryDescriptor ? { recoveryDescriptor } : {}),
 	});
@@ -1947,10 +1972,12 @@ async function resumeAsyncRun(input: {
 				currentModelProvider: parentModel?.provider,
 				currentModel: parentModel,
 				modelScope,
-				interactive: input.ctx.hasUI,
+				projectTrusted: currentProjectTrusted(input.ctx),
+				...(trustedProjectCwd(input.ctx) ? { trustedProjectCwd: trustedProjectCwd(input.ctx) } : {}),
+					interactive: input.ctx.hasUI,
 		permissions: input.deps.config.permissions,
 		childRuntime: input.deps.childRuntime,
-			}),
+				}),
 			availableModels,
 			cwd: effectiveCwd,
 			maxOutput: input.params.maxOutput,
@@ -2047,6 +2074,7 @@ async function resumeAsyncRun(input: {
 		goal: effectiveFollowUp,
 		agentConfig,
 		recoveryAgentConfig,
+		...(recoveryDescriptor?.sandbox ?? ("sandbox" in target ? target.sandbox : undefined) ? { sandbox: recoveryDescriptor?.sandbox ?? ("sandbox" in target ? target.sandbox : undefined) } : {}),
 		ctx: compactOptional<Parameters<typeof executeAsyncSingle>[1]["ctx"]>({
 			pi: input.deps.pi,
 			cwd: input.requestCwd,
@@ -2055,6 +2083,8 @@ async function resumeAsyncRun(input: {
 			currentModelProvider: parentModel?.provider,
 			currentModel: parentModel,
 			modelScope,
+			projectTrusted: currentProjectTrusted(input.ctx),
+			...(trustedProjectCwd(input.ctx) ? { trustedProjectCwd: trustedProjectCwd(input.ctx) } : {}),
 			interactive: input.ctx.hasUI,
 		permissions: input.deps.config.permissions,
 		childRuntime: input.deps.childRuntime,
@@ -2913,7 +2943,7 @@ function toExecutionErrorResult(params: SubagentParamsLike, error: unknown, cont
 	);
 }
 
-type StaticLaunchSummary = { agent: string; model?: string; thinking?: string };
+type StaticLaunchSummary = { agent: string; model?: string; thinking?: string; sandbox?: string };
 
 function resolveStaticLaunchSummary(input: {
 	agent: string;
@@ -2945,6 +2975,7 @@ function resolveStaticLaunchSummary(input: {
 		agent: input.agent,
 		...(model ? { model } : {}),
 		...(thinking ? { thinking } : {}),
+		...(agentConfig?.sandbox ? { sandbox: agentConfig.sandbox } : {}),
 	};
 }
 
@@ -3210,6 +3241,8 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		currentModelProvider: parentModel?.provider,
 		currentModel: parentModel,
 		modelScope: data.modelScope,
+		projectTrusted: currentProjectTrusted(ctx),
+		...(trustedProjectCwd(ctx) ? { trustedProjectCwd: trustedProjectCwd(ctx) } : {}),
 		interactive: ctx.hasUI,
 		permissions: deps.config.permissions,
 		childRuntime: deps.childRuntime,
@@ -3229,6 +3262,12 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 				isError: true,
 				details: { mode: "single" as const, results: [] },
 			};
+		}
+		const sandboxTrustError = params.worktree === true
+			? sandboxProfileTrustError(a, ctx, path.join(effectiveCwd, ".pi-subagents-worktree"))
+			: sandboxProfileTrustError(a, ctx, effectiveCwd);
+		if (sandboxTrustError) {
+			return { content: [{ type: "text", text: sandboxTrustError }], isError: true, details: { mode: "single" as const, results: [] } };
 		}
 		const rawOutput = params.output !== undefined ? params.output : a.output;
 		const effectiveOutput = normalizeSingleOutputOverride(rawOutput, a.output);
@@ -3738,6 +3777,11 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	);
 	if (worktreeSetupError) return worktreeSetupError;
 	const singleCwd = worktreeSetup?.worktrees[0]?.agentCwd ?? sourceCwd;
+	const sandboxTrustError = sandboxProfileTrustError(agentConfig, ctx, singleCwd);
+	if (sandboxTrustError) {
+		if (worktreeSetup) cleanupWorktrees(worktreeSetup);
+		return { content: [{ type: "text", text: sandboxTrustError }], isError: true, details: { mode: "single", results: [] } };
+	}
 
 	const authoredTask = task;
 	if (shouldForkAgent(contextPolicy, params.agent!)) {
@@ -3826,6 +3870,8 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 			permissions: deps.config.permissions,
 			runtimeSnapshotHost: deps.pi,
 			parentSessionId: ctx.sessionManager.getSessionId() ?? undefined,
+			projectTrusted: currentProjectTrusted(ctx),
+			...(trustedProjectCwd(ctx) ? { trustedProjectCwd: trustedProjectCwd(ctx) } : {}),
 			llmIntentArbiter: createTaskMutationArbiter(ctx),
 			childRuntime: deps.childRuntime,
 			onChildSession: (controls) => { childSessionControls = controls; },
@@ -6823,6 +6869,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						agents: agentsForSummary,
 						...(agentsForSummary.length === 1 && (type === "subagent.nested.started" ? startedLaunches[0]?.model : details?.results[0]?.model) ? { model: type === "subagent.nested.started" ? startedLaunches[0]?.model : details?.results[0]?.model } : {}),
 						...(agentsForSummary.length === 1 && (type === "subagent.nested.started" ? startedLaunches[0]?.thinking : details?.results[0]?.thinking) ? { thinking: type === "subagent.nested.started" ? startedLaunches[0]?.thinking : details?.results[0]?.thinking } : {}),
+						...(agentsForSummary.length === 1 && (type === "subagent.nested.started" ? startedLaunches[0]?.sandbox : details?.results[0]?.sandbox) ? { sandbox: type === "subagent.nested.started" ? startedLaunches[0]?.sandbox : details?.results[0]?.sandbox } : {}),
 						startedAt: foregroundControl?.startedAt ?? now,
 						...(state !== "running" ? { endedAt: now } : {}),
 						lastUpdate: now,
@@ -6834,6 +6881,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 								status: "running" as const,
 								...(launch.model ? { model: launch.model } : {}),
 								...(launch.thinking ? { thinking: launch.thinking } : {}),
+								...(launch.sandbox ? { sandbox: launch.sandbox } : {}),
 							})) }
 							: details?.results.length
 								? { steps: details.results.map((child) => ({
@@ -6842,6 +6890,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 									status: child.interrupted || child.detached ? "paused" as const : child.exitCode === 0 ? "complete" as const : "failed" as const,
 									...(child.model ? { model: child.model } : {}),
 									...(child.thinking ? { thinking: child.thinking } : {}),
+									...(child.sandbox ? { sandbox: child.sandbox } : {}),
 									...(child.sessionFile ? { sessionFile: child.sessionFile } : {}),
 									...(child.error ? { error: child.error } : {}),
 								})) }
