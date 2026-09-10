@@ -3,9 +3,8 @@ import { FOCUS_ENTRY, STATE_ENTRY, GOAL_EVENT_ENTRY, goalDetails } from "./goal-
 import { loadGoalSettings, loadGoalSettingsFileConfig } from "./goal-settings.ts";
 import {
 	ALL_REGISTERED_GOAL_TOOLS,
-	CORE_GOAL_TOOLS,
 	DRAFTING_GOAL_TOOLS,
-	FIVE_GOAL_TOOLS,
+	applicableGoalTools,
 } from "./goal-tool-names.ts";
 import { budgetReached } from "./goal-accounting.ts";
 import {
@@ -30,9 +29,10 @@ import {
 	sanitizeGoalPaths,
 } from "./storage/goal-files.ts";
 import { GoalService } from "./goal-service.ts";
-import { readGoalLedger } from "./goal-ledger.ts";
+import { goalActivityEvents } from "./goal-ledger.ts";
 import { GoalAccounting } from "./goal-accounting.ts";
 import { GoalRuntime } from "./goal-runtime.ts";
+import { GoalAuditMessages } from "./goal-session-safety.ts";
 import {
 	focusedGoalFromPool,
 	openGoalsFromPool,
@@ -79,6 +79,7 @@ export interface GoalCore {
 	goalWidgetComponentRef: { current: GoalWidgetComponent | null };
 	goalService: GoalService;
 	runtime: GoalRuntime;
+	auditMessages: GoalAuditMessages;
 	accounting: GoalAccounting;
 
 	assignFocusedGoalId(goalId: string | null): void;
@@ -144,6 +145,7 @@ export function createGoalCore(
 	function assignFocusedGoalId(next: string | null): void {
 		if (focusedGoalId !== next) focusRevision += 1;
 		focusedGoalId = next;
+  if (profileInitialized && !draftingProfile) installGoalToolProfile(tasksEnabled);
 	}
 
 	function focusedOperationToken(goalId: string): { goalId: string; revision: number } {
@@ -280,6 +282,8 @@ export function createGoalCore(
 	// Whether the task tools are advertised, decided once at session start from
 	// settings (disableTasks). Stage 4 replaces them with the two task tools.
 	let tasksEnabled = true;
+ let profileInitialized = false;
+ let draftingProfile = false;
 
 	// Transient runtime state: set when the user aborts a running audit via
 	// Escape. No ledger event is appended from the low-level abort callback;
@@ -297,10 +301,12 @@ export function createGoalCore(
 	 * menu to detect repeated disableTasks toggles across one menu session).
 	 */
 	function installGoalToolProfile(tasksEnabledArg: boolean): void {
+  profileInitialized = true;
+  draftingProfile = false;
 		try {
 			const current = new Set(pi.getActiveTools());
 			for (const knownGoalTool of ALL_REGISTERED_GOAL_TOOLS) current.delete(knownGoalTool);
-			for (const goalTool of tasksEnabledArg ? FIVE_GOAL_TOOLS : CORE_GOAL_TOOLS) current.add(goalTool);
+			for (const goalTool of applicableGoalTools(state.goal, tasksEnabledArg)) current.add(goalTool);
 			const next = [...current].sort();
 			const before = [...pi.getActiveTools()].sort();
 			// Idempotent: never rebuild (or re-report) a profile that is already
@@ -320,6 +326,7 @@ export function createGoalCore(
 	 * by an explicit user drafting command and is removed on confirm/cancel.
 	 */
 	function installDraftingToolProfile(): void {
+  draftingProfile = true;
 		try {
 			const current = new Set(pi.getActiveTools());
 			for (const knownGoalTool of ALL_REGISTERED_GOAL_TOOLS) current.delete(knownGoalTool);
@@ -639,7 +646,7 @@ export function createGoalCore(
 	}
 
 	function renderUI(ctx: ExtensionContext): void {
-		const totalOpen = openGoals().length;
+		const totalOpen = otherOpenGoalCount(goalsById, null);
 		if (!state.goal && totalOpen === 0) {
 			clearGoalWidget(ctx);
 			return;
@@ -658,13 +665,13 @@ export function createGoalCore(
 					GOAL_WIDGET_KEY,
 					makeGoalWidgetFactory({
 						getGoal: () => goalForDisplay() ?? state.goal,
-						getOpenGoalCount: () => openGoals().length,
+						getOpenGoalCount: () => otherOpenGoalCount(goalsById, null),
 						getAuditorProgress: () => auditProgress,
 						getSettings: () => loadGoalSettings(ctx.cwd),
 						getDebugMode: () => debugMode,
 						getStalled: () => stallNotified,
 						getExpanded: () => dashboardExpanded,
-						getLedgerEvents: () => readGoalLedger(ctx).events,
+						getLedgerEvents: () => state.goal ? goalActivityEvents(ctx, state.goal.id) : [],
 						getAuditResult: () => auditResult,
 					}),
 					{ placement: "aboveEditor" },
@@ -688,13 +695,13 @@ export function createGoalCore(
 				GOAL_WIDGET_KEY,
 				makeGoalWidgetFactory({
 					getGoal: () => goalForDisplay() ?? state.goal,
-					getOpenGoalCount: () => openGoals().length,
+					getOpenGoalCount: () => otherOpenGoalCount(goalsById, null),
 					getAuditorProgress: () => auditProgress,
 					getSettings: () => loadGoalSettings(ctx.cwd),
 					getDebugMode: () => debugMode,
 					getStalled: () => stallNotified,
 					getExpanded: () => dashboardExpanded,
-					getLedgerEvents: () => readGoalLedger(ctx).events,
+					getLedgerEvents: () => state.goal ? goalActivityEvents(ctx, state.goal.id) : [],
 					getAuditResult: () => auditResult,
 				}),
 				{ placement: "aboveEditor" },
@@ -995,6 +1002,7 @@ export function createGoalCore(
 		goalWidgetComponentRef,
 		goalService,
 		runtime,
+		auditMessages: new GoalAuditMessages(),
 		accounting,
 		assignFocusedGoalId,
 		focusedOperationToken,

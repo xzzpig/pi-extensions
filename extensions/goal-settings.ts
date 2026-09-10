@@ -270,10 +270,12 @@ const settingsFileCache = new Map<string, SettingsFileCacheEntry>();
  */
 export function invalidateGoalSettingsCache(): void {
 	settingsFileCache.clear();
+	resolvedSettingsCache.length = 0;
 }
 
 function invalidateSettingsCachePath(target: string): void {
 	settingsFileCache.delete(target);
+	resolvedSettingsCache.length = 0;
 }
 
 // ── leaf parsers (diagnostic-producing, never throwing) ─────────────────────
@@ -671,11 +673,17 @@ function pathKey(...parts: Array<string | undefined>): string {
  * Resolve both layers + env into one snapshot with per-leaf provenance.
  * Nested keybindings resolve leaf-by-leaf from the SPARSE layers.
  */
-export function loadSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv = process.env): SettingsSnapshot {
+const resolutionEnvKeys = ["PI_GOAL_DISABLE_TASKS", "PI_GOAL_DISABLE_CONTRACTS", "PI_GOAL_OBJECTIVE_MAX_CHARS", "PI_GOAL_NETWORK_RECOVERY_MAX_ATTEMPTS", "PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS"] as const;
+const resolvedSettingsCache: Array<{global: SettingsLayerRead; project: SettingsLayerRead; environment: Array<string | undefined>; snapshot: SettingsSnapshot}> = [];
+
+function resolvedSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv): SettingsSnapshot {
 	const globalPath = goalGlobalSettingsPath(env);
 	const projectPath = goalSettingsPath(cwd, env);
 	const global = readSettingsLayer(globalPath, "global");
 	const project = readSettingsLayer(projectPath, "project");
+	for (const cached of resolvedSettingsCache) {
+		if (cached.global === global && cached.project === project && resolutionEnvKeys.every((key, i) => env[key] === cached.environment[i])) return cached.snapshot;
+	}
 
 	const provenance = new Map<string, ResolvedSetting<unknown>>();
 	const track = <T>(key: string, resolved: ResolvedSetting<T>): T => {
@@ -848,13 +856,30 @@ export function loadSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv = proce
 		},
 	};
 
-	return {
+	const snapshot = {
 		global,
 		project,
 		value,
 		provenance,
 		diagnostics: [...global.diagnostics, ...project.diagnostics],
 	};
+	if (resolvedSettingsCache.length >= 16) resolvedSettingsCache.shift();
+	resolvedSettingsCache.push({global, project, environment: resolutionEnvKeys.map(key => env[key]), snapshot});
+	return snapshot;
+}
+
+function copyResolvedSettings(value: ResolvedGoalSettings): ResolvedGoalSettings {
+	return {...value,
+		...(value.keybindings ? {keybindings: {dashboard: {...value.keybindings.dashboard}}} : {}),
+		...(value.networkRecovery ? {networkRecovery: {...value.networkRecovery}} : {}),
+		...(value.oracle ? {oracle: {...value.oracle}} : {}),
+	};
+}
+
+/** Return caller-owned resolved values and provenance; cached layer reads keep their existing contract. */
+export function loadSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv = process.env): SettingsSnapshot {
+	const snapshot = resolvedSettingsSnapshot(cwd, env);
+	return {...snapshot, value: copyResolvedSettings(snapshot.value), provenance: new Map(Array.from(snapshot.provenance, ([key, value]) => [key, {...value}])), diagnostics: [...snapshot.diagnostics]};
 }
 
 /**
@@ -862,7 +887,7 @@ export function loadSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv = proce
  * environment > project > global > defaults.
  */
 export function loadGoalSettings(cwd: string, env: NodeJS.ProcessEnv = process.env): GoalSettings {
-	return loadSettingsSnapshot(cwd, env).value as GoalSettings;
+	return copyResolvedSettings(resolvedSettingsSnapshot(cwd, env).value);
 }
 
 // ── conflict-safe scoped mutation ───────────────────────────────────────────

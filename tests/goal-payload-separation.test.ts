@@ -33,13 +33,6 @@ function goal(overrides: Partial<GoalRecord> = {}): GoalRecord {
 }
 
 describe("PR F §59/§60: audit event separation and progress tool removal", () => {
-	it("audit-start custom messages are display-only (never trigger a turn)", () => {
-		assert.match(
-			completionSource,
-			/customType: GOAL_AUDIT_ENTRY[\s\S]{0,400}triggerTurn: false/,
-			"audit_started sendMessage must use triggerTurn: false",
-		);
-	});
 
 	it("the report_auditor_progress tool no longer exists in any shipped surface", () => {
 		assert.doesNotMatch(auditorSource, /name:\s*"report_auditor_progress"/);

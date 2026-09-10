@@ -35,10 +35,13 @@ const baseline = {
 	totals: {
 		totalSerializedChars: rows.reduce((sum, r) => sum + r.breakdown.totalSerializedChars, 0),
 		estimatedTokens: rows.reduce((sum, r) => sum + r.breakdown.estimatedTokens, 0),
+		childRequestChars: rows.reduce((sum, r) => sum + r.breakdown.childRequestChars, 0),
+		combinedSerializedChars: rows.reduce((sum, r) => sum + r.breakdown.totalSerializedChars + r.breakdown.childRequestChars, 0),
+		extensionAttributableChars: rows.reduce((sum, r) => sum + r.breakdown.extensionAttributableChars, 0),
 	},
 };
 
-const outPath = path.join(here, "baseline-main.json");
+const outPath = process.env.CONTEXT_OUTPUT ?? path.join(here, "baseline-main.json");
 writeFileSync(outPath, `${JSON.stringify(baseline, null, 2)}\n`, "utf8");
 
 console.log(`[context:measure] ${rows.length} fixtures measured -> ${outPath}`);

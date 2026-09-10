@@ -11,7 +11,8 @@ import {
   type GoalLedgerEvent,
   type LedgerStateReadResult,
 } from "./goal-ledger.ts";
-import { type GoalRecord, type GoalTask } from "./goal-record.ts";
+import { type GoalRecord } from "./goal-record.ts";
+import { taskIndex } from "./goal-task-index.ts";
 
 export function buildGoalCompactSummary(
   goal: GoalRecord,
@@ -169,17 +170,10 @@ export function buildPostCompactionGoalDelta(args: {
   lines.push(`[POST-COMPACTION RESYNC goalId=${goal.id}]`);
   // Execution focus (with contract) — the one thing memory must not lose.
   if (goal.currentTaskId && goal.taskList) {
-    const find = (tasks: GoalTask[]): GoalTask | undefined => {
-      for (const t of tasks) {
-        if (t.id === goal.currentTaskId) return t;
-        const nested = t.subtasks ? find(t.subtasks) : undefined;
-        if (nested) return nested;
-      }
-      return undefined;
-    };
-    const current = find(goal.taskList.tasks);
+    const current = taskIndex(goal.taskList.tasks).byId.get(goal.currentTaskId);
     if (current) {
-      lines.push(`Current task: ${current.id} — ${current.title}${current.verificationContract ? ` (contract: ${current.verificationContract})` : ""}`);
+      lines.push(`Current task: ${truncateText(current.id, 80)} — ${truncateText(current.title, 180)}${current.verificationContract ? ` (contract: ${truncateText(current.verificationContract, 600)})` : ""}`);
+      if (current.id.length > 80 || current.title.length > 180 || (current.verificationContract?.length ?? 0) > 600) lines.push('Retrieve omitted task requirements with get_goal(section="tasks") before continuing.');
     }
   }
   // Bounded recent-event tail.

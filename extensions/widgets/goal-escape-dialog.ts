@@ -1,4 +1,5 @@
-import { matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
+import { matchesKey } from "@earendil-works/pi-tui";
+import { truncateToWidth } from "./text-cache.ts";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { borderedLine, dialogInnerWidth, horizontalRule } from "./dialog-scaffold.ts";

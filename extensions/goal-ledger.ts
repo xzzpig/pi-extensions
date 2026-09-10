@@ -1,3 +1,5 @@
+import { indexedActivityEvents } from "./goal-activity.ts";
+import { buildLedgerIndex, indexLedgerEvent, type GoalLedgerIndex } from "./goal-ledger-index.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { normalizeRelPath, nowIso, safeIdPart, type GoalRecord } from "./goal-record.ts";
@@ -41,6 +43,8 @@ export interface GoalLedgerContext {
 export interface GoalLedgerReadResult {
   events: GoalLedgerEvent[];
   malformed: number;
+  /** Opaque generation for borrowed, read-only history views; replaced on append/refresh. */
+  revision?: object;
 }
 
 export interface ReconstructedGoalState {
@@ -146,6 +150,7 @@ interface LedgerCacheEntry {
   chars: number;
   events: GoalLedgerEvent[];
   malformed: number;
+  revision: object;
 }
 
 const ledgerCache = new Map<string, LedgerCacheEntry>();
@@ -156,6 +161,7 @@ const ledgerCache = new Map<string, LedgerCacheEntry>();
  */
 export function invalidateGoalLedgerCache(): void {
 	ledgerCache.clear();
+ runtimeReady.clear();
 	checkpointCache.clear();
 	lastCheckpointDiskWrite.clear();
 }
@@ -164,14 +170,14 @@ export function invalidateGoalLedgerCache(): void {
 function extendLedgerCache(filePath: string, lines: string, events: GoalLedgerEvent[]): void {
   const cached = ledgerCache.get(filePath);
   if (!cached) return;
-  const sanitized: GoalLedgerEvent[] = [];
-  for (const event of events) sanitized.push(sanitizeEvent(event));
+  for (const event of events) cached.events.push(sanitizeEvent(event));
   ledgerCache.set(filePath, {
-    size: cached.size + lines.length,
+    size: cached.size + Buffer.byteLength(lines, "utf8"),
     mtimeMs: cached.mtimeMs,
     chars: cached.chars + lines.length,
-    events: [...cached.events, ...sanitized],
+    events: cached.events,
     malformed: cached.malformed,
+    revision: {},
   });
 }
 
@@ -182,7 +188,7 @@ export function readGoalLedger(ctx: GoalLedgerContext): GoalLedgerReadResult {
     // NAF zero-op steady state: no stat, no read, no parse. The cache is kept
     // current by extendLedgerCache on every in-process append; external
     // (non-extension) edits to the ledger go stale mid-session (documented).
-    return { events: cached.events, malformed: cached.malformed };
+    return { events: cached.events, malformed: cached.malformed, revision: cached.revision };
   }
   return readGoalLedgerCold(ctx, filePath);
 }
@@ -194,17 +200,21 @@ function readGoalLedgerCold(ctx: GoalLedgerContext, filePath: string): GoalLedge
     content = fs.readFileSync(filePath, "utf8");
   } catch {
     // Missing or unreadable: cache the empty result so repeated reads are zero-op.
-    ledgerCache.set(filePath, { size: 0, mtimeMs: 0, chars: 0, events: [], malformed: 0 });
-    return { events: [], malformed: 0 };
+    const empty = {events: [], malformed: 0, revision: {}};
+    ledgerCache.set(filePath, {size: 0, mtimeMs: 0, chars: 0, ...empty});
+    return empty;
   }
   const parsed = parseLedgerLines(content);
-  ledgerCache.set(filePath, { size: content.length, mtimeMs: 0, chars: content.length, events: parsed.events, malformed: parsed.malformed });
-  return parsed;
+  const result = {...parsed, revision: {}};
+  ledgerCache.set(filePath, { size: Buffer.byteLength(content, "utf8"), mtimeMs: 0, chars: content.length, ...result });
+  return result;
 }
 
 /** Parse a JSONL ledger body into sanitized events + a malformed-line count. */
 function parseLedgerLines(content: string): GoalLedgerReadResult {
   const events: GoalLedgerEvent[] = [];
+  // Goal IDs repeat across most rows. A bounded per-read map avoids repeated sanitation.
+  const goalIds = new Map<string, string>();
   let malformed = 0;
   for (const line of content.split("\n")) {
     const trimmed = line.trim();
@@ -212,7 +222,12 @@ function parseLedgerLines(content: string): GoalLedgerReadResult {
     try {
       const parsed = JSON.parse(trimmed) as unknown;
       if (isValidLedgerEvent(parsed)) {
-        events.push(sanitizeEvent(parsed));
+        if ("goalId" in parsed) {
+          let id = goalIds.get(parsed.goalId);
+          if (id === undefined) { id = safeGoalId(parsed.goalId); if (goalIds.size < 1024) goalIds.set(parsed.goalId, id); }
+          parsed.goalId = id;
+        }
+        events.push(parsed);
       } else {
         malformed++;
       }
@@ -239,7 +254,7 @@ function parseLedgerLines(content: string): GoalLedgerReadResult {
 // ---------------------------------------------------------------------------
 
 export const LEDGER_CHECKPOINT_FILE = ".goal-ledger-checkpoint.json";
-export const LEDGER_CHECKPOINT_VERSION = 1;
+export const LEDGER_CHECKPOINT_VERSION = 3;
 const CHECKPOINT_RECENT_CAP = 12;
 
 /** In-memory ledger checkpoint (maps in native form). */
@@ -255,6 +270,7 @@ export interface LedgerCheckpoint {
   acc: ReconstructAccumulator;
   /** Per-goal recent-event tails (capped), already sanitized. */
   recentEventsByGoal: Map<string, GoalLedgerEvent[]>;
+  runtimeIndex: Map<string, GoalLedgerIndex>;
 }
 
 export interface LedgerStateReadResult {
@@ -298,6 +314,7 @@ function checkpointToJson(cp: LedgerCheckpoint): unknown {
     latestPauseReason: s.latestPauseReason,
     latestPauseSuggestedAction: s.latestPauseSuggestedAction,
     latestAuditorResult: s.latestAuditorResult,
+    latestOracleResult: s.latestOracleResult,
     createdAt: s.createdAt,
     completedAt: s.completedAt,
     abortedAt: s.abortedAt,
@@ -319,6 +336,7 @@ function checkpointToJson(cp: LedgerCheckpoint): unknown {
       focusGenByGoal: Array.from(cp.acc.focusGenByGoal.entries()),
     },
     recentEventsByGoal: Array.from(cp.recentEventsByGoal.entries()),
+    runtimeIndex: Array.from(cp.runtimeIndex, ([id, entry]) => [id, { ...entry, oracle: Array.from(entry.oracle) }]),
   };
 }
 
@@ -333,10 +351,14 @@ function parseGoalState(value: unknown): ReconstructedGoalState | null {
     if (auditor.verdict !== "approved" && auditor.verdict !== "disapproved" && auditor.verdict !== "error") return null;
     if (typeof auditor.report !== "string" || typeof auditor.at !== "string") return null;
   }
+  const oracle = o.latestOracleResult as Record<string, unknown> | undefined;
+  if (oracle !== undefined && (!oracle || typeof oracle.fingerprint !== "string" || typeof oracle.adviceId !== "string" || typeof oracle.summary !== "string" || typeof oracle.at !== "string"
+   || !["actionable", "needs_human", "insufficient_context"].includes(oracle.disposition as string))) return null;
   return {
     goalId: o.goalId,
     latestStatus,
     latestFocus: o.latestFocus === true,
+    latestOracleResult: oracle as ReconstructedGoalState["latestOracleResult"],
     latestPauseReason: typeof o.latestPauseReason === "string" ? o.latestPauseReason : undefined,
     latestPauseSuggestedAction: typeof o.latestPauseSuggestedAction === "string" ? o.latestPauseSuggestedAction : undefined,
     latestAuditorResult: auditor
@@ -356,19 +378,21 @@ function checkpointFromJson(value: unknown): LedgerCheckpoint | null {
   const o = value as Record<string, unknown>;
   if (o.version !== LEDGER_CHECKPOINT_VERSION) return null;
   if (o.format !== "goal-ledger-checkpoint") return null;
-  if (typeof o.coveredBytes !== "number" || o.coveredBytes < 0) return null;
-  if (typeof o.coveredEvents !== "number" || o.coveredEvents < 0) return null;
+  if (typeof o.coveredBytes !== "number" || !Number.isSafeInteger(o.coveredBytes) || o.coveredBytes < 0) return null;
+  if (typeof o.coveredEvents !== "number" || !Number.isSafeInteger(o.coveredEvents) || o.coveredEvents < 0) return null;
   const accRaw = o.acc as Record<string, unknown> | undefined;
-  if (!accRaw || typeof accRaw.focusGeneration !== "number") return null;
+  if (!accRaw || typeof accRaw.focusGeneration !== "number" || !Number.isSafeInteger(accRaw.focusGeneration) || !Array.isArray(accRaw.goals) || !Array.isArray(accRaw.terminalGoals) || !Array.isArray(accRaw.focusGenByGoal) || !Array.isArray(o.recentEventsByGoal)) return null;
   const goals = new Map<string, ReconstructedGoalState>();
   for (const raw of Array.isArray(accRaw.goals) ? accRaw.goals : []) {
     const s = parseGoalState(raw);
-    if (s) goals.set(s.goalId, s);
+    if (!s) return null;
+    goals.set(s.goalId, s);
   }
   const terminalGoals = new Map<string, ReconstructedGoalState>();
   for (const raw of Array.isArray(accRaw.terminalGoals) ? accRaw.terminalGoals : []) {
     const s = parseGoalState(raw);
-    if (s) terminalGoals.set(s.goalId, s);
+    if (!s) return null;
+    terminalGoals.set(s.goalId, s);
   }
   const focusGenByGoal = new Map<string, number>();
   for (const [gid, gen] of Array.isArray(accRaw.focusGenByGoal) ? accRaw.focusGenByGoal : []) {
@@ -383,7 +407,28 @@ function checkpointFromJson(value: unknown): LedgerCheckpoint | null {
     }
     if (clean.length > 0) recentEventsByGoal.set(gid, clean);
   }
+  if (!Array.isArray(o.runtimeIndex)) return null;
+  const runtimeIndex = new Map<string, GoalLedgerIndex>();
+  for (const pair of o.runtimeIndex) {
+    if (!Array.isArray(pair) || pair.length !== 2 || typeof pair[0] !== "string") return null;
+    const entry = pair[1];
+    if (!entry || !Array.isArray(entry.recent) || !Array.isArray(entry.activity) || !Array.isArray(entry.oracle)) return null;
+    if (entry.recent.length > 12 || entry.activity.length > 64) return null;
+    if (entry.activity.length > 0 && !entry.lastActivityEvent) return null;
+    if (![...entry.recent, ...entry.activity, ...[entry.audit, entry.completion, entry.lifecycle, entry.lastActivityEvent].filter(Boolean)].every(isValidLedgerEvent)) return null;
+    if (!entry.oracle.every((p: unknown[]) => {
+     if (!Array.isArray(p) || p.length !== 2 || typeof p[0] !== "string" || !p[1] || typeof p[1] !== "object") return false;
+     const state = p[1] as Record<string, unknown>;
+     if (!Number.isSafeInteger(state.failedAttempts) || (state.failedAttempts as number) < 0 || typeof state.followupAttempted !== "boolean") return false;
+     const result = state.result as Record<string, unknown> | undefined;
+     if (result !== undefined && (!result || typeof result.adviceId !== "string" || typeof result.summary !== "string" || !["actionable", "needs_human", "insufficient_context"].includes(result.disposition as string))) return false;
+     const failure = state.lastFailure as Record<string, unknown> | undefined;
+     return failure === undefined || Boolean(failure && typeof failure.errorCode === "string" && typeof failure.message === "string");
+    })) return null;
+    runtimeIndex.set(pair[0], { ...entry, oracle: new Map(entry.oracle) });
+  }
   return {
+    runtimeIndex,
     version: LEDGER_CHECKPOINT_VERSION,
     format: "goal-ledger-checkpoint",
     createdAt: typeof o.createdAt === "string" ? o.createdAt : "",
@@ -437,18 +482,9 @@ function appendRecent(recent: Map<string, GoalLedgerEvent[]>, goalId: string, ev
   recent.set(goalId, tail);
 }
 
-/** Build per-goal recent tails from a full event list. */
-function buildRecentByGoal(events: GoalLedgerEvent[]): Map<string, GoalLedgerEvent[]> {
-  const recent = new Map<string, GoalLedgerEvent[]>();
-  for (const event of events) {
-    const goalId = goalIdOf(event);
-    if (goalId) appendRecent(recent, goalId, event);
-  }
-  return recent;
-}
-
 /** Build a checkpoint from full events (used to bootstrap / refresh). */
 function buildCheckpointFromEvents(events: GoalLedgerEvent[], coveredBytes: number): LedgerCheckpoint {
+  const runtimeIndex = buildLedgerIndex(events);
   return {
     version: LEDGER_CHECKPOINT_VERSION,
     format: "goal-ledger-checkpoint",
@@ -456,7 +492,8 @@ function buildCheckpointFromEvents(events: GoalLedgerEvent[], coveredBytes: numb
     coveredBytes,
     coveredEvents: events.length,
     acc: applyLedgerEvents(freshAccumulator(), events),
-    recentEventsByGoal: buildRecentByGoal(events),
+    recentEventsByGoal: new Map(Array.from(runtimeIndex, ([id, entry]) => [id, [...entry.recent]])),
+    runtimeIndex,
   };
 }
 
@@ -494,10 +531,12 @@ function updateLedgerCheckpointAfterAppend(filePath: string, lines: string, even
       const cached = ledgerCache.get(filePath);
       if (!cached) return;
       cp = buildCheckpointFromEvents(cached.events, cached.size);
-    } else {
-      cp = { ...cp, acc: cloneAccumulator(cp.acc), recentEventsByGoal: new Map(cp.recentEventsByGoal) };
+      checkpointCache.set(filePath, cp);
+      writeLedgerCheckpointAtomic(filePath, cp);
+      lastCheckpointDiskWrite.set(filePath, { appendsSinceWrite: cp.coveredEvents, at: Date.now() });
+      return;
     }
-    for (const event of events) applyLedgerEvent(cp.acc, event);
+    for (const event of events) { applyLedgerEvent(cp.acc, event); indexLedgerEvent(cp.runtimeIndex, event); }
     cp.coveredBytes += Buffer.byteLength(lines, "utf8");
     cp.coveredEvents += events.length;
     for (const event of events) {
@@ -527,13 +566,49 @@ function updateLedgerCheckpointAfterAppend(filePath: string, lines: string, even
  *  - no/valid-but-stale-beyond-use checkpoint: full parse + reconstruct, then
  *    writes a fresh checkpoint so the next session is bounded.
  */
+/** Current bounded runtime projections, initialized once from checkpoint + tail. */
+function runtimeIndex(ctx: GoalLedgerContext): Map<string, GoalLedgerIndex> {
+ const filePath = goalLedgerPath(ctx);
+ if (!runtimeReady.has(filePath)) {
+  loadLedgerState(ctx);
+  const cp = checkpointCache.get(filePath);
+  if (!cp) {
+   const full = readGoalLedger(ctx);
+   checkpointCache.set(filePath, buildCheckpointFromEvents(full.events, ledgerCache.get(filePath)?.size ?? 0));
+  }
+  // Hot consumers do not retain a second full-history representation.
+  ledgerCache.delete(filePath);
+  runtimeReady.add(filePath);
+ }
+ return checkpointCache.get(filePath)!.runtimeIndex;
+}
+const runtimeReady = new Set<string>();
+export function goalActivityEvents(ctx: GoalLedgerContext, goalId: string): GoalLedgerEvent[] {
+ return indexedActivityEvents(runtimeIndex(ctx).get(goalId)?.activity ?? []);
+}
+export function goalRuntimeEvents(ctx: GoalLedgerContext, goalId: string): GoalLedgerEvent[] {
+ const entry = runtimeIndex(ctx).get(goalId);
+ if (!entry) return [];
+ const recent = entry.recent;
+ return [...[entry.audit, entry.completion].filter((e): e is GoalLedgerEvent => !!e && !recent.includes(e)), ...recent];
+}
+export function goalOracleState(ctx: GoalLedgerContext, goalId: string, fingerprint: string) {
+ const state = runtimeIndex(ctx).get(goalId)?.oracle.get(fingerprint);
+ return state ? { ...state } : { failedAttempts: 0, followupAttempted: false };
+}
+
 export function loadLedgerState(ctx: GoalLedgerContext): LedgerStateReadResult {
   const filePath = goalLedgerPath(ctx);
   const cached = ledgerCache.get(filePath);
   if (cached) {
+    let cp = checkpointCache.get(filePath);
+    if (!cp || cp.coveredBytes !== cached.size || cp.coveredEvents !== cached.events.length) {
+      cp = buildCheckpointFromEvents(cached.events, cached.size);
+      checkpointCache.set(filePath, cp);
+    }
     return {
-      state: reconstructGoalLedger(cached.events),
-      recentEventsByGoal: buildRecentByGoal(cached.events),
+      state: finalizeLedgerState(cloneAccumulator(cp.acc)),
+      recentEventsByGoal: new Map(cp.recentEventsByGoal),
       malformed: cached.malformed,
       coveredBytes: cached.size,
       coveredEvents: cached.events.length,
@@ -563,6 +638,7 @@ export function loadLedgerState(ctx: GoalLedgerContext): LedgerStateReadResult {
     const recent = new Map(cp.recentEventsByGoal);
     for (const event of tail.events) {
       applyLedgerEvent(acc, event);
+      indexLedgerEvent(cp.runtimeIndex, event);
       const goalId = goalIdOf(event);
       if (goalId) appendRecent(recent, goalId, event);
     }
@@ -588,8 +664,8 @@ export function loadLedgerState(ctx: GoalLedgerContext): LedgerStateReadResult {
   writeLedgerCheckpointAtomic(filePath, fresh);
   lastCheckpointDiskWrite.set(filePath, { appendsSinceWrite: fresh.coveredEvents, at: Date.now() });
   return {
-    state: reconstructGoalLedger(full.events),
-    recentEventsByGoal: buildRecentByGoal(full.events),
+    state: finalizeLedgerState(cloneAccumulator(fresh.acc)),
+    recentEventsByGoal: new Map(fresh.recentEventsByGoal),
     malformed: full.malformed,
     coveredBytes: size,
     coveredEvents: full.events.length,
@@ -666,62 +742,13 @@ function isValidLedgerEvent(value: unknown): value is GoalLedgerEvent {
   }
 }
 
-function sanitizeEvent(event: GoalLedgerEvent): GoalLedgerEvent {
-  switch (event.type) {
-    case "goal_created":
-      return { ...event, goalId: safeGoalId(event.goalId) };
-    case "goal_focused":
-      return { ...event, goalId: safeGoalId(event.goalId) };
-    case "goal_paused":
-      return { ...event, goalId: safeGoalId(event.goalId) };
-    case "goal_resumed":
-      return { ...event, goalId: safeGoalId(event.goalId) };
-    case "goal_tweaked":
-      return { ...event, goalId: safeGoalId(event.goalId) };
-    case "auditor_toggled":
-      return { ...event, goalId: safeGoalId(event.goalId) };
-    case "completion_requested":
-      return { ...event, goalId: safeGoalId(event.goalId) };
-    case "audit_started":
-      return { ...event, goalId: safeGoalId(event.goalId) };
-    case "audit_result":
-      return { ...event, goalId: safeGoalId(event.goalId) };
-    case "audit_skipped":
-      return { ...event, goalId: safeGoalId(event.goalId) };
-    case "goal_completed":
-      return { ...event, goalId: safeGoalId(event.goalId) };
-    case "goal_archived":
-      return { ...event, goalId: safeGoalId(event.goalId) };
-    case "goal_archive_failed":
-      return { ...event, goalId: safeGoalId(event.goalId) };
-    case "goal_aborted":
-      return { ...event, goalId: safeGoalId(event.goalId) };
-    case "task_list_set":
-      return { ...event, goalId: safeGoalId(event.goalId) };
-    case "task_complete":
-      return { ...event, goalId: safeGoalId(event.goalId) };
-    case "task_skipped":
-      return { ...event, goalId: safeGoalId(event.goalId) };
-    case "task_reopened":
-      return { ...event, goalId: safeGoalId(event.goalId) };
-    case "task_started":
-      return { ...event, goalId: safeGoalId(event.goalId) };
-    case "goal_budget_limited":
-      return { ...event, goalId: safeGoalId(event.goalId) };
-    case "goal_budget_warning":
-      return { ...event, goalId: safeGoalId(event.goalId) };
-    case "goal_stalled":
-      return { ...event, goalId: safeGoalId(event.goalId) };
-    case "goal_blocked":
-      return { ...event, goalId: safeGoalId(event.goalId) };
-    case "oracle_started":
-    case "oracle_result":
-    case "oracle_failed":
-    case "oracle_followup_attempted":
-      return { ...event, goalId: safeGoalId(event.goalId) };
-    case "goal_unfocused":
-      return event;
-  }
+function sanitizeEvent(event: GoalLedgerEvent, owned = false): GoalLedgerEvent {
+  if (!("goalId" in event)) return event;
+  const goalId = safeGoalId(event.goalId);
+  // Parsed JSON is privately owned; avoid allocating a second object per line.
+  // Caller-supplied append events still get a defensive copy.
+  if (owned) { event.goalId = goalId; return event; }
+  return { ...event, goalId };
 }
 
 export function reconstructGoalLedger(events: GoalLedgerEvent[]): ReconstructedLedgerState {

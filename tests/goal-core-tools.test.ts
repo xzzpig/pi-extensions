@@ -606,21 +606,16 @@ test("aborted audit: Escape complete_without_audit commits with audit_skipped(us
 	}
 });
 
-test("focus changed while audit is dispatched cancels completion without modifying the goal", async () => {
+test("focus changed while audit runs cancels completion without modifying the goal", async () => {
 	const f = makeFixture();
-	let focusChanged = false;
 	try {
 		const h = createHarness({
 			cwd: f.cwd,
 			sessionEntries: f.sessionEntries,
-			runCompletionAuditor: async () => ({ approved: true, disapproved: false, output: "All good\n<approved/>" }),
-			onSendMessage: async (message: any) => {
-				// When the audit-start message is dispatched, the user switches
-				// focus away — invalidating the pending completion operation.
-				if (message?.details?.phase === "started" && !focusChanged) {
-					focusChanged = true;
-					await h.commands.get("goal-unfocus").handler("", h.ctx);
-				}
+			runCompletionAuditor: async () => {
+				// The user changes focus during the independent audit, before its result.
+				await h.commands.get("goal-unfocus").handler("", h.ctx);
+				return { approved: true, disapproved: false, output: "All good\n<approved/>" };
 			},
 		});
 		await start(h);
@@ -630,7 +625,7 @@ test("focus changed while audit is dispatched cancels completion without modifyi
 		assert.ok(text.includes("no longer focused"), `completion must be cancelled, got: ${text.slice(0, 120)}`);
 		assert.equal(activeGoalFiles(f.cwd).length, 1, "goal must remain open and unmodified");
 		const events = ledgerEvents(f.cwd);
-		assert.equal(events.some((e) => e.type === "audit_result"), false, "no audit result when focus changed mid-dispatch");
+		assert.equal(events.some((e) => e.type === "audit_result"), false, "no audit result when focus changed during audit");
 	} finally {
 		f.cleanup();
 	}

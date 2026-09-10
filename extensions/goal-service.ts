@@ -9,6 +9,7 @@ import {
 	mergeGoalPromptFromDisk,
 	parseGoalFile,
 	readActiveGoalPool,
+ readActiveGoalPoolView,
 	resolveGoalPath,
 	safeUnlinkGoalFile,
 	sanitizeGoalPaths,
@@ -27,7 +28,7 @@ import { mergeFocusedGoalWithDisk } from "./goal-pool.ts";
  */
 export interface GoalDiagnostic {
 	severity: "warning";
-	source: "ledger";
+	source: "ledger" | "storage";
 	goalId?: string;
 	eventType?: string;
 	message: string;
@@ -165,6 +166,9 @@ export class GoalService {
 	 * in-turn mutations are always visible; the optimistic revision check runs
 	 * at flush time.
 	 */
+	private flushError: string | null = null;
+	private turnBase: GoalRecord | null = null;
+
 	private turn: { active: boolean; goalId: string | null; goal: GoalRecord | null; archive: boolean; ledger: GoalLedgerEvent[] } = {
 		active: false,
 		goalId: null,
@@ -182,6 +186,9 @@ export class GoalService {
 			if (this.turn.active) return;
 		}
 		this.turn = { active: true, goalId, goal: null, archive: false, ledger: [] };
+		const focused = this.ref.getFocused();
+		this.turnBase = focused ? {...focused, usage: {...focused.usage}} : null;
+		this.flushError = null;
 	}
 
 	/**
@@ -191,6 +198,7 @@ export class GoalService {
 	 */
 	flushTurn(ctx: GoalServiceContext): GoalRecord | null {
 		if (!this.turn.active) return null;
+		this.flushError = null;
 		const goal = this.turn.goal;
 		if (!goal) {
 			this.turn.active = false;
@@ -200,26 +208,56 @@ export class GoalService {
 		try {
 			lock = acquireGoalLock(ctx, goal.id);
 		} catch {
+			this.flushError = "Goal storage is locked; pending changes have not been persisted.";
 			// Another writer holds the lock; preserve the buffer so a later turn
 			// boundary can retry it instead of silently losing the mutation.
 			return null;
 		}
-		this.turn.active = false;
 		try {
-			const freshDisk = this.readFreshDiskGoal(ctx, goal);
-			const base = freshDisk ?? goal;
-			const next = sanitizeGoalPaths(ctx, { ...goal, revision: (base.revision ?? 0) + 1 });
+   const freshDisk = this.readFreshDiskGoal(ctx, goal);
+   const expected = this.turnBase ?? goal;
+   if (!freshDisk || (freshDisk.revision ?? 0) !== (expected.revision ?? 0)) {
+    this.flushError = `Goal ${goal.id} changed in another process; buffered changes were rejected. Refresh and retry.`;
+    // Reject the speculative transaction, never overwrite another writer.
+    this.turn.active = false;
+    this.turn.goal = null;
+    this.turn.ledger = [];
+    if (freshDisk && this.ref.getFocusedGoalId() === goal.id) {
+     const tokens = Math.max(0, goal.usage.tokensUsed - expected.usage.tokensUsed);
+     const seconds = Math.max(0, goal.usage.activeSeconds - expected.usage.activeSeconds);
+     this.ref.setFocused({ ...freshDisk, usage: {tokensUsed: freshDisk.usage.tokensUsed + tokens, activeSeconds: freshDisk.usage.activeSeconds + seconds} });
+     this.trackBaseline(freshDisk.id, freshDisk.usage);
+    } else if (!freshDisk) {
+     this.ref.getPool().delete(goal.id);
+     if (this.ref.getFocusedGoalId() === goal.id) {
+      this.ref.assignFocusedGoalId(null);
+      this.ref.onFocusedGoalLost(goal.id, ctx);
+     }
+    }
+    this.ref.onDiagnostic({ severity: "warning", source: "storage", goalId: goal.id, message: this.flushError });
+    return null;
+   }
+   const base = freshDisk;
+			const next = { ...goal, revision: (base.revision ?? 0) + 1 };
 			const written = this.turn.archive || next.status === "complete"
 				? archiveGoalFile(ctx, next)
 				: writeActiveGoalFile(ctx, next);
+			this.turn.active = false;
 			this.appendLedgerEventsBestEffort(ctx, this.turn.ledger);
 			this.trackBaseline(written.id, written.usage);
-			this.ref.setFocused(written);
+			if (this.ref.getFocusedGoalId() === written.id) this.ref.setFocused(written);
+			else this.ref.getPool().set(written.id, written);
 			return written;
 		} finally {
 			lock.release();
 		}
 	}
+
+	/** Completion must never audit state that failed to flush. */
+ flushForAudit(ctx: GoalServiceContext): string | null {
+  this.flushTurn(ctx);
+  return this.flushError;
+ }
 
 	/** End the turn: flush any pending transaction (safe to call always). */
 	endTurn(ctx: GoalServiceContext): void {
@@ -280,7 +318,20 @@ export class GoalService {
 	/** Safe focused record reconciliation from disk. */
 	reconcileFocused(ctx: GoalServiceContext, opts: { preserveMemoryUsage?: boolean } = {}): boolean {
 		const current = this.ref.getFocused();
-		const fresh = readActiveGoalPool(ctx);
+  const source = readActiveGoalPoolView(ctx);
+  const focused = this.ref.getFocusedGoalId();
+  const view = this.ref.getPool();
+  const buffered = this.turn.active ? this.turn.goal : null;
+  let unchanged = source.size === view.size && (!focused || source.has(focused));
+  if (unchanged) for (const [id, goal] of source) {
+   if (view.get(id) !== (buffered?.id === id ? buffered : goal)) { unchanged = false; break; }
+  }
+  if (unchanged) {
+   const same = focused ? view.get(focused) : undefined;
+   if (same) this.ref.onReconciled(same);
+   return true;
+  }
+  const fresh = new Map(source);
 		// P1-3: overlay the buffered goal so in-turn mutations are visible to
 		// every read (reconcile, get_goal, prompts) without a disk round trip.
 		if (this.turn.active && this.turn.goal) fresh.set(this.turn.goal.id, this.turn.goal);
@@ -370,15 +421,18 @@ export class GoalService {
 			if (this.turn.goalId !== null && current.id !== this.turn.goalId) {
 				// Focus changed mid-turn: persist the previous buffer first.
 				this.flushTurn(ctx);
+				if (this.turn.active) return {ok: false, message: this.flushError ?? "Previous goal changes are still awaiting persistence."};
 				this.turn.active = true;
 				this.turn.goalId = current.id;
 				this.turn.goal = current;
+				this.turnBase = current;
 				this.turn.archive = false;
 				this.turn.ledger = [];
 			}
 			if (!this.turn.goal) {
 				this.turn.goal = current;
 				this.turn.goalId = current.id;
+				if (this.turnBase?.id !== current.id) this.turnBase = {...current, usage: {...current.usage}};
 			}
 			const base = current;
 			const mutated = sanitizeGoalPaths(ctx, {
@@ -422,10 +476,10 @@ export class GoalService {
 
 			// 3. mutation on a clone (after an optional authoritative objective merge).
 			const base = spec.refreshFromDisk ? mergeGoalPromptFromDisk(ctx, current) : current;
-			const mutated = sanitizeGoalPaths(ctx, {
+			const mutated = {
 				...spec.mutate(cloneGoal(base)),
 				revision: capturedRevision + 1,
-			});
+			};
 
 			// 4. authoritative file write (active or archive). A failure here throws
 			//    and prevents any memory/ledger/focus/archive commit.
@@ -528,6 +582,60 @@ export class GoalService {
 		return this.updateTaskAttempt(ctx, spec, 1);
 	}
 
+ /** Ordered all-or-nothing batch. Each validator sees earlier changes in the clone. */
+ updateTasks(ctx: GoalServiceContext, specs: GoalTaskUpdateSpec[]): GoalMutationOutcome {
+  if (!this.reconcileFocused(ctx)) return {ok: false, message: "No focused goal to mutate."};
+ const current = this.ref.getFocused();
+  if (!current?.taskList) return {ok: false, message: "The goal has no task list."};
+  let lock: GoalLock | undefined;
+  try {
+  let base = current;
+  if (!this.turn.active) {
+   lock = acquireGoalLock(ctx, current.id);
+   const fresh = this.readFreshDiskGoal(ctx, current);
+   if (!fresh || (fresh.revision ?? 0) !== (current.revision ?? 0)) return {ok: false, message: "The goal changed in another process; no updates applied. Refresh and retry."};
+   if (fresh.status !== "active" || !fresh.taskList) return {ok: false, message: "The persisted goal is no longer active with tasks; no updates applied."};
+   base = {...fresh, usage: current.usage};
+  }
+  const next = cloneGoal(base);
+  const locations = new Map<string, {tasks: GoalTask[]; index: number}>();
+  const indexTasks = (tasks: GoalTask[]): void => {
+   for (let i = 0; i < tasks.length; i++) { const task = tasks[i]!; locations.set(task.id, {tasks, index: i}); if (task.subtasks) indexTasks(task.subtasks); }
+  };
+  const removeTasks = (tasks: GoalTask[]): void => {
+   for (const task of tasks) { locations.delete(task.id); if (task.subtasks) removeTasks(task.subtasks); }
+  };
+  indexTasks(next.taskList!.tasks);
+  const events: GoalLedgerEvent[] = [];
+  for (const spec of specs) {
+   if (spec.focusToken && !this.ref.isTokenCurrent(spec.focusToken)) return {ok: false, message: "The focused goal changed; no updates applied."};
+   const location = locations.get(spec.taskId);
+   const task = location?.tasks[location.index];
+   if (!task) return {ok: false, message: `Task "${spec.taskId}" not found.`};
+   const valid = spec.validate?.(task);
+   if (valid && !valid.ok) return valid;
+   const updated = spec.update(task);
+   if ("ok" in updated && !updated.ok) return updated;
+   const updatedTask = updated as GoalTask;
+   location!.tasks[location!.index] = updatedTask;
+   if (updatedTask.id !== task.id) { locations.delete(task.id); locations.set(updatedTask.id, location!); }
+   if (updatedTask.subtasks !== task.subtasks) {
+    if (task.subtasks) removeTasks(task.subtasks);
+    if (updatedTask.subtasks) indexTasks(updatedTask.subtasks);
+   }
+   next.currentTaskId = resolveUpdatedCurrentTaskId(spec, next.currentTaskId, updatedTask);
+   next.updatedAt = nowIso();
+   if (spec.ledger) events.push(...spec.ledger(next, updatedTask));
+  }
+  if (this.turn.active) return this.apply(ctx, {reconcile: false, expectedGoalId: current.id, focusToken: specs[0]?.focusToken, mutate: () => next, ledger: events});
+  const written = writeActiveGoalFile(ctx, {...next, revision: (base.revision ?? 0) + 1});
+  this.appendLedgerEventsBestEffort(ctx, events);
+  this.trackBaseline(written.id, written.usage);
+  this.ref.setFocused(written);
+  return {ok: true, goal: written, previousGoalId: current.id, goalId: written.id, focusChanged: false};
+  } finally { lock?.release(); }
+ }
+
 	/**
 	 * Disk-fresh single-task transaction (follow-up Stage 4 adds the per-goal
 	 * lock + optimistic revision check). Pipeline:
@@ -584,13 +692,13 @@ export class GoalService {
 			if (typeof updated === "object" && "ok" in updated && !updated.ok) return updated;
 			const updatedTask = updated as GoalTask;
 			const updatedTasks = updateTaskInTree(base.taskList.tasks, spec.taskId, () => updatedTask);
-			const mutated = sanitizeGoalPaths(ctx, {
+			const mutated = {
 				...base,
 				taskList: { ...base.taskList, tasks: updatedTasks },
 				currentTaskId: resolveUpdatedCurrentTaskId(spec, base.currentTaskId, updatedTask),
 				updatedAt: nowIso(),
 				revision: capturedRevision + 1,
-			});
+			};
 			const written = writeActiveGoalFile(ctx, mutated);
 			if (spec.ledger) {
 				try {
@@ -676,7 +784,7 @@ export class GoalService {
 	/** Create a goal: write active file → ledger → memory/focus commit. */
 	create(ctx: GoalServiceContext, spec: { goal: GoalRecord; ledger?: GoalLedgerEvent[] }): GoalMutationResult {
 		const previousGoalId = this.ref.getFocused()?.id ?? null;
-		const written = writeActiveGoalFile(ctx, sanitizeGoalPaths(ctx, spec.goal));
+		const written = writeActiveGoalFile(ctx, spec.goal);
 		if (spec.ledger && spec.ledger.length > 0) {
 			this.appendLedgerEventsBestEffort(ctx, spec.ledger);
 		}

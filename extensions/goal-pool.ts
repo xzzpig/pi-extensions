@@ -31,7 +31,9 @@ export function focusedGoalFromPool(pool: Map<string, GoalRecord>, focusedGoalId
 }
 
 export function otherOpenGoalCount(pool: Map<string, GoalRecord>, focusedGoalId: string | null): number {
-	return openGoalsFromPool(pool).filter((goal) => goal.id !== focusedGoalId).length;
+	let count = 0;
+	for (const goal of pool.values()) if (goal.status !== "complete" && goal.id !== focusedGoalId) count++;
+	return count;
 }
 
 export function resolveSessionFocus(args: {

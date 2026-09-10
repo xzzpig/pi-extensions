@@ -2,6 +2,45 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.31.2] — 2026-09-08
+
+### Changed
+
+- Simplified the README and package description to explain goal creation, regular and Sisyphus goals, tasks, completion auditing, commands, and core settings.
+- Update the Pi extension ranking before each release, including both badge themes and README accessibility text. Release retries reuse the recorded ranking; dry runs do not update it. No daily schedule is used.
+- Include badge images in the npm package.
+
+## [0.31.1] — 2026-09-08
+
+### Fixed
+
+- **Guided drafting on RPC and browser hosts (#45, #47, PR #46)** — native select/input dialogs retain question and proposal context, recommendations, custom answers, and auditor selection. Missing or incompatible terminal UI no longer crashes drafting or flashes a spurious web-host error. Cancelled, unavailable, and failed dialogs never confirm unseen proposals; errors preserve the draft and explain the next step.
+- **Audit tool-result pairing (#48)** — audit transcript messages wait until the agent settles and never trigger a model turn. Display-only audit events are excluded from provider context, including events already stored in affected histories, preventing duplicate or unpaired tool results without editing session files. Live audit progress and ledger evidence remain available.
+- **Forked subagent prompt collisions (#49)** — delegated children no longer initialize goal tools, state, accounting, or continuation loops. Fresh, forked, resumed, and nested children retain ordinary conversation while leaving parent goal ownership untouched.
+
+## [0.31.0] — 2026-09-07
+
+### Performance and token overhead since 0.30.5
+
+- **38% smaller extension-added model context** across 14 active workflows: 145,134 → 89,993 serialized characters. This estimates input-token overhead; it is not a claim of 38% fewer total billed tokens.
+- **6× faster expanded dashboard rendering** with 50 long tasks: 1.71 → 0.28 ms.
+- **Over 99.9% less time to display recent activity** with 100,000 history events: 11.9 → 0.003 ms. This measures indexed warm reads, not initial history loading.
+- Direct comparisons use identical fixtures and SDK 0.84.1. Raw measurements, limitations and reproduction are in `specs/2026-09-07-release-0-31-0/`.
+
+### Changed
+
+- Reduced model context through applicable tool profiles, shared guidance, bounded objective/task excerpts, and lossless `get_goal` detail pages. Existing tool names and single-task forms remain supported.
+- Added ordered atomic `update_goal_task` batches, with full rollback on invalid transitions and individual ledger events.
+- Indexed ledger activity, audit and Oracle state; reused task presentation across usage updates; removed full-history copies on append. Version 3 checkpoints rebuild older/corrupt derived data, retain Oracle results and use correct Unicode byte offsets.
+- Buffered writes now reject competing revisions before overwriting state; completion audits require successful persistence. Isolated auditor/Oracle sessions release resources, and Oracle requests share the parent runtime and cancellation path.
+- Corrected SDK context measurement and added isolated before/after runtime, allocation, context, provider-payload, and capped live evaluation evidence under `specs/2026-09-07-runtime-token-optimization/`.
+- Added bounded caches for settings, task content, detail pages and text layout; streamlined task updates, storage reads, session diagnostics and auditor previews. Consolidated auditor instructions and bounded oversized post-compaction task context while retaining lossless retrieval.
+
+### Verified
+
+- 923 tests, TypeScript, lint, context and performance gates pass. SDK 0.83.0 and 0.84.1 each pass 888 serial compatibility tests and six provider-payload cross-checks.
+- Regular/Sisyphus goals, drafting, tasks, verification, independent auditing, Oracle, budgets, controls, saved data and recovery remain supported.
+
 ## [0.30.5] — 2026-08-25
 
 ### Fixed

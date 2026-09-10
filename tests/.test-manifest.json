@@ -11,6 +11,7 @@
     ".tests/goal-budget.test.ts",
     ".tests/goal-command-palette.test.ts",
     ".tests/goal-compaction.test.ts",
+    ".tests/goal-comprehensive-optimization.test.ts",
     ".tests/goal-core-tools.test.ts",
     ".tests/goal-core.test.ts",
     ".tests/goal-dashboard-golden.test.ts",
@@ -21,6 +22,7 @@
     ".tests/goal-e2e.test.ts",
     ".tests/goal-enhancements.test.ts",
     ".tests/goal-escape-dialog.test.ts",
+    ".tests/goal-evaluation-budget.test.ts",
     ".tests/goal-features.test.ts",
     ".tests/goal-files.test.ts",
     ".tests/goal-golden.test.ts",
@@ -32,6 +34,7 @@
     ".tests/goal-mutation-boundary.test.ts",
     ".tests/goal-network-recovery.test.ts",
     ".tests/goal-notifications.test.ts",
+    ".tests/goal-optimization.test.ts",
     ".tests/goal-oracle.test.ts",
     ".tests/goal-payload-separation.test.ts",
     ".tests/goal-policy.test.ts",
@@ -42,8 +45,10 @@
     ".tests/goal-record.test.ts",
     ".tests/goal-recovery.test.ts",
     ".tests/goal-refresh.test.ts",
+    ".tests/goal-rpc-dialogs.test.ts",
     ".tests/goal-service.test.ts",
     ".tests/goal-session-health.test.ts",
+    ".tests/goal-session-safety.test.ts",
     ".tests/goal-settings-race.test.ts",
     ".tests/goal-settings.test.ts",
     ".tests/goal-stale-continuation-golden.test.ts",
@@ -74,6 +79,7 @@
   ],
   "e2eFiles": [
     ".tests/e2e/goal-lifecycle-dashboard.test.ts",
+    ".tests/e2e/goal-session-safety.test.ts",
     ".tests/e2e/network-recovery-rpc.test.ts"
   ]
 }

@@ -19,8 +19,9 @@
 import { Type } from "@earendil-works/pi-ai";
 import { createHash } from "node:crypto";
 
-import { defineTool, type AgentToolResult, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { defineTool, SessionManager, SettingsManager, type AgentToolResult, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 
+import { makeAuditorResourceLoader, resolveAuditorSessionModelOptions } from "./goal-auditor.ts";
 import type { GoalLedgerEvent } from "./goal-ledger.ts";
 import type { ResolvedGoalOracleSettings } from "./goal-settings.ts";
 import { safeIdPart, type GoalRecord } from "./goal-record.ts";
@@ -246,18 +247,30 @@ export async function runBlockerOracle(args: {
 			cwd: args.ctx.cwd,
 			model: model.model,
 			thinkingLevel: args.settings.thinkingLevel,
-			sessionManager: { inMemory: true },
-			settingsManager: { inMemory: { compaction: { enabled: false } } },
+			...resolveAuditorSessionModelOptions(args.ctx),
+			sessionManager: SessionManager.inMemory(args.ctx.cwd),
+			settingsManager: SettingsManager.inMemory({ compaction: { enabled: false } }),
+			...(!args.settings.projectResources ? { resourceLoader: makeAuditorResourceLoader(
+				"You are a read-only blocker adviser. Inspect evidence and suggest concrete alternative paths. Never modify files or decide goal outcomes. Return advice through submit_goal_oracle_advice.",
+			) } : {}),
 			tools: ["read", "grep", "find", "ls", "submit_goal_oracle_advice"],
 			customTools: [submitTool],
 		});
 
-		await session.prompt(buildBlockerOraclePrompt({
-			goal: args.goal,
-			reason: args.reason,
-			attemptedActions: args.attemptedActions.slice(0, 8),
-			recentEvidence: args.recentEvidence,
-		}));
+		const abort = () => session.abort();
+		args.signal?.addEventListener("abort", abort, { once: true });
+		try {
+			if (args.signal?.aborted) return { ok: false, errorCode: "aborted", message: "Oracle consultation aborted." };
+			await session.prompt(buildBlockerOraclePrompt({
+				goal: args.goal,
+				reason: args.reason,
+				attemptedActions: args.attemptedActions.slice(0, 8),
+				recentEvidence: args.recentEvidence,
+			}));
+		} finally {
+			args.signal?.removeEventListener("abort", abort);
+			session.dispose?.();
+		}
 
 		if (args.signal?.aborted) return { ok: false, errorCode: "aborted", message: "Oracle consultation aborted." };
 		if (!submitted.settled || !submitted.advice) {
@@ -273,6 +286,7 @@ export async function runBlockerOracle(args: {
 type OracleSessionFactory = {
 	prompt: (promptText: string) => Promise<void>;
 	abort: () => void;
+	dispose?: () => void;
 	subscribe?: (listener: (event: unknown) => void) => () => void;
 };
 

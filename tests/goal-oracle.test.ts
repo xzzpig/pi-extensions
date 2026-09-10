@@ -78,6 +78,31 @@ describe("oracle model resolution", () => {
 });
 
 describe("isolated oracle session", () => {
+	it("shares the parent runtime, isolates resources, and aborts/disposes the child", async () => {
+		const runtime = { id: "metered-parent" };
+		const controller = new AbortController();
+		let disposed = 0;
+		let aborted = 0;
+		let captured: any;
+		const result = await runBlockerOracle({
+			ctx: { cwd: "/tmp/goal-oracle", modelRegistry: { runtime, find: () => ({ provider: "fixture", id: "fixture" }) } } as any,
+			goal: goal(), reason: "stuck", attemptedActions: [], recentEvidence: "", signal: controller.signal,
+			settings: { enabled: true, provider: "fixture", model: "fixture", projectResources: false, maxFailedAttemptsPerBlocker: 2 },
+			createSession: async (options: any) => {
+				captured = options;
+				return { session: { prompt: async () => { controller.abort(); }, abort: () => { aborted++; }, dispose: () => { disposed++; } } };
+			},
+		});
+		assert.equal(captured.modelRuntime, runtime);
+		assert.ok(captured.sessionManager);
+		assert.ok(captured.settingsManager);
+		assert.match(captured.resourceLoader.getSystemPrompt(), /blocker adviser/);
+		assert.deepEqual(captured.resourceLoader.getExtensions().extensions, []);
+		assert.deepEqual(result, { ok: false, errorCode: "aborted", message: "Oracle consultation aborted." });
+		assert.equal(aborted, 1);
+		assert.equal(disposed, 1);
+	});
+
 	it("exposes ONLY read-only tools plus the submit tool; no bash/write/edit", async () => {
 		let capturedTools: unknown;
 		let capturedCustomTools: Array<{ name?: string }> | undefined;

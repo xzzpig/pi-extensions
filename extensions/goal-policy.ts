@@ -221,13 +221,18 @@ export function findTaskInTree(tasks: GoalTask[], taskId: string): GoalTask | un
  * Recursively update a task by ID in a task tree using an updater function.
  */
 export function updateTaskInTree(tasks: GoalTask[], taskId: string, updater: (task: GoalTask) => GoalTask): GoalTask[] {
-	return tasks.map((t) => {
-		if (t.id === taskId) return updater(t);
-		if (t.subtasks) {
-			return { ...t, subtasks: updateTaskInTree(t.subtasks, taskId, updater) };
+	let next: GoalTask[] | undefined;
+	for (let i = 0; i < tasks.length; i++) {
+		const task = tasks[i]!;
+		let updated = task;
+		if (task.id === taskId) updated = updater(task);
+		else if (task.subtasks) {
+			const subtasks = updateTaskInTree(task.subtasks, taskId, updater);
+			if (subtasks !== task.subtasks) updated = {...task, subtasks};
 		}
-		return t;
-	});
+		if (updated !== task) { next ??= tasks.slice(); next[i] = updated; }
+	}
+	return next ?? tasks;
 }
 
 /**

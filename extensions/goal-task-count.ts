@@ -29,14 +29,14 @@ export function countTaskSubtree(
 	let total = 0;
 	let rawComplete = 0;
 	let rawSkipped = 0;
-	const pendingTasks: GoalTask[] = [];
+	const pendingTasks: GoalTask[] | undefined = opts.collectPending ? [] : undefined;
 
 	function walk(list: readonly GoalTask[]): void {
 		for (const t of list) {
 			total++;
 			if (t.status === "complete") rawComplete++;
 			else if (t.status === "skipped") rawSkipped++;
-			else if (opts.collectPending) pendingTasks.push(t);
+			else if (pendingTasks) pendingTasks.push(t);
 			if (t.subtasks && t.subtasks.length > 0) walk(t.subtasks);
 		}
 	}

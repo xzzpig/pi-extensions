@@ -56,23 +56,25 @@ function isCheckpointEntry(entry: unknown): { content: string; version: number |
  */
 export function inspectCheckpointHealth(entries: readonly unknown[]): CheckpointHealth {
 	const health = emptyHealth();
-	for (const entry of entries) {
-		const checkpoint = isCheckpointEntry(entry);
-		if (!checkpoint) continue;
-		health.total += 1;
-		health.totalContentChars += checkpoint.content.length;
-		if (checkpoint.content.length > health.largestCheckpointChars) {
-			health.largestCheckpointChars = checkpoint.content.length;
-		}
-		const isV2 = checkpoint.version === 2 && V2_MARKER_PATTERN.test(checkpoint.content);
-		if (isV2) {
-			health.v2Minimal += 1;
-		} else {
-			health.legacyFull += 1;
-			health.recoverableChars += checkpoint.content.length;
-		}
-	}
+	for (const entry of entries) accumulateCheckpointHealth(health, entry);
 	return health;
+}
+
+function accumulateCheckpointHealth(health: CheckpointHealth, entry: unknown): void {
+	const checkpoint = isCheckpointEntry(entry);
+	if (!checkpoint) return;
+	health.total += 1;
+	health.totalContentChars += checkpoint.content.length;
+	if (checkpoint.content.length > health.largestCheckpointChars) {
+		health.largestCheckpointChars = checkpoint.content.length;
+	}
+	const isV2 = checkpoint.version === 2 && V2_MARKER_PATTERN.test(checkpoint.content);
+	if (isV2) {
+		health.v2Minimal += 1;
+	} else {
+		health.legacyFull += 1;
+		health.recoverableChars += checkpoint.content.length;
+	}
 }
 
 /**
@@ -88,17 +90,13 @@ export function readSessionCheckpointHealth(sessionFile: string): CheckpointHeal
 	} catch {
 		return null;
 	}
-	const entries: unknown[] = [];
-	for (const line of raw.split("\n")) {
-		const trimmed = line.trim();
-		if (!trimmed) continue;
-		try {
-			entries.push(JSON.parse(trimmed));
-		} catch {
-			// Malformed lines are reported by the recovery tooling, not here.
-		}
-	}
-	return inspectCheckpointHealth(entries);
+ const health = emptyHealth();
+ // Parse and discard one entry at a time; do not retain the whole session object graph.
+ for (const rawLine of raw.split("\n")) {
+  const line = rawLine.trim();
+  if (line) try { accumulateCheckpointHealth(health, JSON.parse(line)); } catch { /* tolerate malformed lines */ }
+ }
+ return health;
 }
 
 /** Human-readable projection of post-recovery checkpoint content size. */

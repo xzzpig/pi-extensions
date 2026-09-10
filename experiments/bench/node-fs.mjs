@@ -36,6 +36,7 @@ const SYNC_OPS = [
 	"mkdirSync",
 	"renameSync",
 	"unlinkSync",
+	"openSync", "closeSync", "readSync", "writeSync", "fsyncSync",
 	// used by harness fixture setup only:
 	"mkdtempSync",
 	"rmSync",
@@ -76,10 +77,11 @@ export const constants = real.constants;
 export const watch = real.watch;
 export const watchFile = real.watchFile;
 export const unwatchFile = real.unwatchFile;
-export const openSync = real.openSync;
-export const closeSync = real.closeSync;
-export const readSync = real.readSync;
-export const writeSync = real.writeSync;
+export const openSync = wrapSync("openSync");
+export const closeSync = wrapSync("closeSync");
+export const readSync = wrapSync("readSync");
+export const writeSync = wrapSync("writeSync");
+export const fsyncSync = wrapSync("fsyncSync");
 export const readFile = real.readFile;
 export const writeFile = real.writeFile;
 export const appendFile = real.appendFile;

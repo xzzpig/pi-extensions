@@ -1,5 +1,5 @@
 import { type AgentToolResult, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { GOAL_AUDIT_ENTRY, detailedSummary, goalDetails, type GoalAuditEventDetails } from "./goal-format.ts";
+import { GOAL_AUDIT_ENTRY, detailedSummary, goalDetails } from "./goal-format.ts";
 import {
 	buildCompletionReport,
 	buildTaskSummary,
@@ -9,7 +9,7 @@ import {
 import { loadGoalSettings, loadGoalSettingsFileConfig } from "./goal-settings.ts";
 import { runGoalCompletionAuditor } from "./goal-auditor.ts";
 import { nowIso, type GoalRecord } from "./goal-record.ts";
-import { latestEventsForGoal, readGoalLedger } from "./goal-ledger.ts";
+import { latestEventsForGoal, goalRuntimeEvents } from "./goal-ledger.ts";
 import { mergeGoalPromptFromDisk } from "./storage/goal-files.ts";
 import { showEscapeDialog, type EscapeDialogResult } from "./widgets/goal-escape-dialog.ts";
 import type { GoalCore } from "./goal-state.ts";
@@ -22,7 +22,8 @@ import type { GoalMutationOutcome } from "./goal-service.ts";
 // actual workspace evidence. An optional completion_summary is forwarded as an
 // UNTRUSTED executor claim — never evidence and never an approval bypass.
 export async function runGoalCompletionFlow(core: GoalCore, ctx: ExtensionContext, completionSummary?: string): Promise<AgentToolResult<unknown>> {
-	const { pi } = core;
+ const flushError = core.goalService.flushForAudit(ctx);
+ if (flushError) return {content: [{type: "text", text: flushError}], details: goalDetails(core.state.goal)};
 	core.reconcileFocusedGoalFromDisk(ctx);
 
 	// -- Completion --
@@ -129,7 +130,7 @@ function commitGoalCompletion(core: GoalCore, ctx: ExtensionContext, opts: {
 // records remain readable and honored for compatibility; no model tool or
 // task dialog creates new per-goal bypass state).
 if (auditTarget.skipAuditor) {
-	pi.sendMessage<GoalAuditEventDetails>({
+	core.auditMessages.enqueue(ctx, {
 		customType: GOAL_AUDIT_ENTRY,
 		content: `Goal completed — per-goal auditor disabled.`,
 		display: true,
@@ -159,7 +160,7 @@ if (auditTarget.skipAuditor) {
 // the auditor, records audit_skipped, and proceeds through the normal
 // deferred-completion path. No model-side bypass flag is required.
 if (settings.disabled === true) {
-	pi.sendMessage<GoalAuditEventDetails>({
+	core.auditMessages.enqueue(ctx, {
 		customType: GOAL_AUDIT_ENTRY,
 		content: `Goal completed — auditor disabled in settings.`,
 		display: true,
@@ -186,7 +187,7 @@ if (settings.disabled === true) {
 }
 
 	// Auditor is enabled — run the normal audit flow
-	await pi.sendMessage<GoalAuditEventDetails>({
+	core.auditMessages.enqueue(ctx, {
 		customType: GOAL_AUDIT_ENTRY,
 		content: [
 			"Auditor: I am starting the independent completion audit.",
@@ -195,7 +196,7 @@ if (settings.disabled === true) {
 		].filter((line): line is string => line !== undefined).join("\n"),
 		display: true,
 		details: { phase: "started", goalId: auditTarget.id, auditor: auditorLabel },
-	}, { triggerTurn: false });
+	});
 	if (!core.isFocusedOperationCurrent(completionFocus)) {
 		return core.focusedOperationCancelledResult("Goal completion", completionFocus);
 	}
@@ -239,7 +240,7 @@ if (settings.disabled === true) {
 
 	// P1-6: warm start — seed the auditor with the parent-rendered ledger tail
 	// (recent lifecycle + task evidence) so it does not re-derive session facts.
-	const ledger = readGoalLedger(ctx).events;
+	const ledger = goalRuntimeEvents(ctx, auditTarget.id);
 	const warmTail = latestEventsForGoal(ledger, auditTarget.id, 8);
 	const warmContext = warmTail.length > 0
 		? `Recent goal events (from the shared ledger):\n${warmTail.map((e) => `- ${e.at} ${e.type}${"taskId" in e ? ` (task ${e.taskId})` : ""}${"evidence" in e && e.evidence ? ` evidence: ${e.evidence}` : ""}`).join("\n")}`
@@ -296,7 +297,7 @@ if (settings.disabled === true) {
 
 		if (userChoice === "complete_without_audit") {
 			// ── Mark complete without audit ────────────────────────────
-			pi.sendMessage<GoalAuditEventDetails>({
+			core.auditMessages.enqueue(ctx, {
 				customType: GOAL_AUDIT_ENTRY,
 				content: `Goal completed — user bypassed audit via Escape.`,
 				display: true,
@@ -377,7 +378,7 @@ if (settings.disabled === true) {
 			"",
 			auditor.output || "Auditor produced no approval marker.",
 		].filter((line): line is string => line !== undefined).join("\n");
-		pi.sendMessage<GoalAuditEventDetails>({
+		core.auditMessages.enqueue(ctx, {
 			customType: GOAL_AUDIT_ENTRY,
 			content: rejectionText,
 			display: true,
@@ -394,7 +395,7 @@ if (settings.disabled === true) {
 		"",
 		auditor.output || "Auditor approved completion.",
 	].filter((line): line is string => line !== undefined).join("\n");
-	pi.sendMessage<GoalAuditEventDetails>({
+	core.auditMessages.enqueue(ctx, {
 		customType: GOAL_AUDIT_ENTRY,
 		content: approvalText,
 		display: true,

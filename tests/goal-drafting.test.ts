@@ -158,7 +158,7 @@ test("dialog cancel is a durable no-op and clears the draft", async () => {
 		assert.deepEqual(ledgerEvents(cwd).filter((e) => e.type === "goal_created"), [], "cancel must not write a goal_created event");
 		// Drafting tools removed; execution profile restored.
 		const tools = h.activeTools();
-		assert.ok(tools.includes("update_goal"), "execution profile restored");
+		assert.ok(tools.includes("create_goal") && tools.includes("get_goal") && !tools.includes("update_goal"), "unfocused execution profile restored");
 		assert.equal(tools.includes("goal_questionnaire"), false, "drafting tools removed");
 	} finally {
 		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
@@ -618,7 +618,7 @@ test("/goal-cancel clears the draft as a durable no-op", async () => {
 		assert.equal(activeGoalFiles(cwd).length, 0, "cancel writes no goal file");
 		assert.deepEqual(ledgerEvents(cwd).filter((e) => e.type === "goal_created"), [], "cancel writes no ledger event");
 		const tools = h.activeTools();
-		assert.ok(tools.includes("update_goal"), "execution profile restored");
+		assert.ok(tools.includes("create_goal") && tools.includes("get_goal") && !tools.includes("update_goal"), "unfocused execution profile restored");
 		assert.equal(tools.includes("goal_questionnaire"), false, "drafting tools removed");
 		assert.ok(h.notifications.some((n) => n.includes("Draft cancelled")), "cancel notification");
 		// The durable entry is tombstoned, not removed.
@@ -714,7 +714,7 @@ test("a stale tweak draft is invalidated on rehydration when its target is unfoc
 		await h.commands.get("goal-unfocus")!.handler("", h.ctx);
 		await h.sessionTree();
 		const tools = h.activeTools();
-		assert.ok(tools.includes("update_goal"), "execution profile after stale tweak invalidation");
+		assert.ok(tools.includes("create_goal") && tools.includes("get_goal") && !tools.includes("update_goal"), "unfocused execution profile after stale tweak invalidation");
 		assert.equal(tools.includes("goal_questionnaire"), false, "stale tweak draft not restored");
 		assert.ok(h.notifications.some((n) => n.includes("stale")), "stale draft warning");
 		// The stale tweak draft cannot confirm anything.
@@ -737,7 +737,7 @@ test("direct goal creation interrupts and clears an active draft", async () => {
 		const files = activeGoalFiles(cwd);
 		assert.equal(files.length, 1, "direct creation proceeds");
 		const tools = h.activeTools();
-		assert.ok(tools.includes("update_goal"), "execution profile restored");
+		assert.ok(tools.includes("update_goal"), "active execution profile restored after direct creation");
 		assert.equal(tools.includes("goal_questionnaire"), false, "draft cleared by direct creation");
 		// The tombstoned draft must not resurrect across rehydration.
 		await h.sessionTree();
@@ -1344,3 +1344,27 @@ test("a tweak with no task list retains the current list and keeps its statuses"
 		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
 	}
 });
+
+for (const unavailable of [false, true]) {
+	test(`all drafting tools preserve the draft when dialogs are ${unavailable ? "unavailable" : "failing"}`, async () => {
+		const cwd = mkdtempSync(path.join(tmpdir(), "goal-draft-dialog-failure-"));
+		try {
+			const h = createHarness(cwd, { hasUI: true });
+			await h.sessionStart();
+			await h.commands.get("goal")!.handler("Ship a tested feature", h.ctx);
+			h.ctx.ui.custom = (async () => { if (!unavailable) throw new Error("Host disconnected"); return undefined; }) as typeof h.ctx.ui.custom;
+			delete (h.ctx.ui as Partial<ExtensionContext["ui"]>).select;
+			for (const [name, params] of [
+				["goal_question", { question: "Scope?", options: ["A"] }],
+				["goal_questionnaire", { questions: [{ id: "scope", question: "Scope?", options: ["A"] }] }],
+				["propose_goal_draft", proposalParams("Ship a tested feature. Success criteria: tests pass.")],
+			] as const) {
+				const result = await h.tools.get(name).execute("test", params, new AbortController().signal, undefined, h.ctx);
+				assert.match(result.content[0].text, unavailable ? /cannot display/ : /Host disconnected/);
+				assert.doesNotMatch(result.content[0].text, /user cancelled|refinement requested/);
+				assert.equal(activeGoalFiles(cwd).length, 0);
+				assert.ok(h.activeTools().includes("propose_goal_draft"));
+			}
+		} finally { rmSync(cwd, { recursive: true, force: true }); }
+	});
+}
