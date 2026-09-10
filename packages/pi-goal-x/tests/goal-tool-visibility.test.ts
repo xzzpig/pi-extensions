@@ -75,7 +75,7 @@ function testFixture() {
 	];
 
 	const mockCtx = createMockCtx(cwd, sessionEntries);
-	const cleanup = () => { try { rmSync(cwd, { recursive: true, force: true }); } catch {} };
+	const cleanup = () => { try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ } };
 
 	return { cwd, goal: written, mockCtx, cleanup };
 }
@@ -182,7 +182,7 @@ describe("Constant tool surface", () => {
 			expectConstantSurface();
 			expectHostUntouched(HOST_SEED_A);
 		} finally {
-			try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+			try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 		}
 	});
 
@@ -245,7 +245,7 @@ describe("Constant tool surface", () => {
 			assert.match(text, /disabled by settings/, "set_goal_tasks must enforce disableTasks itself");
 			expectConstantSurface();
 		} finally {
-			try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+			try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 		}
 	});
 

@@ -136,6 +136,33 @@ function mapEvent(event: GoalLedgerEvent, taskTitles: ReadonlyMap<string, string
 	}
 }
 
+const indexedActivity = new WeakSet<readonly GoalLedgerEvent[]>();
+export function indexedActivityEvents(events: GoalLedgerEvent[]): GoalLedgerEvent[] {
+ indexedActivity.add(events);
+ return events;
+}
+
+/** Stable event identity for append-order deduplication, independent of title edits. */
+export function activityEventKey(event: GoalLedgerEvent): string | undefined {
+ const item = mapEvent(event, undefined);
+ return item ? `${item.kind}:${item.text}` : undefined;
+}
+
+const activityTypes = new Set([
+ "goal_created", "goal_tweaked", "auditor_toggled", "goal_paused", "goal_resumed", "goal_blocked",
+ "goal_budget_limited", "goal_completed", "goal_aborted", "task_started", "task_complete", "task_skipped",
+ "task_reopened", "completion_requested", "audit_started", "audit_result", "audit_skipped", "goal_archived",
+]);
+export function isActivityEvent(event: GoalLedgerEvent): boolean { return activityTypes.has(event.type); }
+
+/** Avoid formatting distinct task events during a cold ledger rebuild. */
+export function sameActivityEvent(left: GoalLedgerEvent, right: GoalLedgerEvent): boolean {
+ if (left.type !== right.type) return false;
+ if ("taskId" in left && "taskId" in right && left.taskId !== right.taskId) return false;
+ // Reasons/evidence use the exact display normalization for true duplicates.
+ return activityEventKey(left) === activityEventKey(right);
+}
+
 /**
  * Derive the readable activity feed for one goal from its durable ledger
  * events. Returns items in chronological order (oldest first), capped to the
@@ -148,6 +175,17 @@ export function deriveGoalActivity(
 ): GoalActivityItem[] {
 	const { taskTitles, limit = 5 } = options;
 	const items: GoalActivityItem[] = [];
+	if (indexedActivity.has(events)) {
+		// Runtime indexes already deduplicate and sort. Format only the requested tail.
+		for (let i = events.length - 1; i >= 0; i--) {
+			const event = events[i]!;
+			if (!("goalId" in event) || event.goalId !== goalId) continue;
+			const item = mapEvent(event, taskTitles);
+			if (item) items.push(item);
+			if (limit > 0 && items.length >= limit) break;
+		}
+		return items.reverse().slice(-limit);
+	}
 	for (const event of events) {
 		if (!("goalId" in event) || event.goalId !== goalId) continue;
 		const item = mapEvent(event, taskTitles);

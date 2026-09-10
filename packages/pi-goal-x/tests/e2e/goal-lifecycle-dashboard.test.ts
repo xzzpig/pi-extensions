@@ -301,7 +301,7 @@ test("full guided lifecycle: create → focus → tasks → audit → archive (�
 		const archivedRecord = parseGoalFile(path.join(cwd, ".pi", "goals", "archived", archived[0]!));
 		assert.equal(archivedRecord?.status, "complete", "archived record is complete and durable");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -344,6 +344,6 @@ test("archive failure never reports success; the complete record stays recoverab
 		assert.equal(remaining.status, "complete");
 	} finally {
 				await import("node:fs/promises").then(async (fs) => { await fs.chmod(path.join(cwd, ".pi", "goals", "archived"), 0o755).catch(() => {}); });
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });

@@ -94,7 +94,7 @@ async function runOutageScenario(t: import("node:test").TestContext, scenario: O
 	t.after(() => {
 		try {
 			rmSync(work, { recursive: true, force: true });
-		} catch {}
+		} catch { /* best-effort; failure must not fail the test */ }
 	});
 	const agentDir = path.join(work, "agent");
 	const projectDir = path.join(work, "project");

@@ -1,5 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Editor, type EditorTheme, Key, matchesKey, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { Editor, type EditorTheme, Key, matchesKey, Text, visibleWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, wrapTextWithAnsi } from "./widgets/text-cache.ts";
 
 
 export type GoalDraftingFocus = "goal" | "sisyphus";
@@ -25,6 +26,13 @@ export interface GoalQuestionnaireResult {
 	answers: GoalQuestionnaireAnswer[];
 	cancelled: boolean;
 	auditorEnabled?: boolean;
+	/**
+	 * The host could not present the dialog at all, so `cancelled` reflects an
+	 * absent UI rather than a decision the user made. Hosts that expose a
+	 * non-terminal UI keep `ctx.hasUI` true while `ctx.ui.custom` stays the
+	 * SDK's headless default, which resolves to `undefined`.
+	 */
+	unavailable?: boolean;
 }
 
 export type ProposalDecision = "confirm" | "continue" | "cancel";
@@ -297,6 +305,60 @@ export function isHeadlessQuestionSufficientForDraft(args: { topic: string; ques
 	return !vagueTopic;
 }
 
+const CUSTOM_ANSWER_LABEL = "Write your own answer...";
+
+/** Sequential native dialogs for hosts that cannot render terminal components. */
+async function runQuestionnaireWithBasicDialogs(
+	ctx: ExtensionContext,
+	questions: GoalQuestionnaireQuestion[],
+	auditorToggleInit?: { defaultEnabled: boolean },
+): Promise<GoalQuestionnaireResult> {
+	const unavailable = (): GoalQuestionnaireResult => ({ questions: [], answers: [], cancelled: true, unavailable: true, ...(auditorToggleInit ? { auditorEnabled: auditorToggleInit.defaultEnabled } : {}) });
+	// Require only the primitives this questionnaire can actually use.
+	if ((auditorToggleInit || questions.some(q => q.options.length > 0)) && typeof ctx.ui.select !== "function") return unavailable();
+	if (questions.some(q => q.options.length === 0 || q.allowCustom !== false) && typeof ctx.ui.input !== "function") return unavailable();
+	let auditorEnabled = auditorToggleInit?.defaultEnabled;
+	const cancelled = (): GoalQuestionnaireResult => ({ questions, answers: [], cancelled: true, auditorEnabled });
+	if (auditorToggleInit) {
+		const enabled = "Enabled — require independent approval";
+		const disabled = "Disabled — skip the completion audit";
+		const choices = auditorEnabled ? [enabled, disabled] : [disabled, enabled];
+		const picked = await ctx.ui.select(`Completion auditor (currently ${auditorEnabled ? "enabled" : "disabled"})`, choices);
+		if (picked === undefined) return cancelled();
+		if (!choices.includes(picked)) throw new Error("The host returned an unknown auditor choice");
+		auditorEnabled = picked === enabled;
+	}
+	const answers: GoalQuestionnaireAnswer[] = [];
+	for (const question of questions) {
+		let prompt = question.context ? `${question.question}\n\n${question.context}` : question.question;
+		if (auditorToggleInit) prompt += `\n\nAuditor for this goal: ${auditorEnabled ? "enabled (independent approval required)" : "disabled (completion skips the audit)"}.`;
+		let answer: string | undefined;
+		let wasCustom = question.options.length === 0;
+		if (!wasCustom) {
+			// Numbered labels keep duplicate/reserved option text unambiguous.
+			const labels = question.options.map((option, i) => `${i + 1}. ${option}${question.recommended === i ? " (Recommended)" : ""}`);
+			const customLabel = `${labels.length + 1}. ${CUSTOM_ANSWER_LABEL}`;
+			const options = question.allowCustom === false ? labels : [...labels, customLabel];
+			const picked = await ctx.ui.select(prompt, options);
+			if (picked === undefined) return cancelled();
+			if (!options.includes(picked)) throw new Error("The host returned an unknown questionnaire choice");
+			wasCustom = picked === customLabel && question.allowCustom !== false;
+			if (!wasCustom) answer = question.options[labels.indexOf(picked)];
+		}
+		if (wasCustom) {
+			// Match the terminal editor: whitespace alone is not a submitted answer.
+			do {
+				answer = (await ctx.ui.input(prompt, "Write your answer"))?.trim();
+			} while (answer === "");
+		}
+		if (answer === undefined) return cancelled();
+		answers.push({ id: question.id, question: question.question, answer, wasCustom });
+	}
+	return { questions, answers, cancelled: false, auditorEnabled };
+}
+
+export const DIALOG_UNAVAILABLE_HINT = "This host cannot display the required goal-drafting dialogs. Use a host with select/input support or the pi TUI, or explicitly restart with PI_GOAL_AUTO_CONFIRM=1 to confirm proposals without a dialog.";
+
 export function proposalDialogFailureMessage(error: unknown): string {
 	const detail = error instanceof Error ? error.message : String(error);
 	return `Goal draft confirmation failed: ${detail}. The goal was NOT created; drafting remains active.`;
@@ -313,10 +375,18 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 	}
 
 	const questions = normalizeQuestionnaireQuestions(rawQuestions);
+	if (ctx.mode === "rpc" || typeof ctx.ui.custom !== "function") {
+		return runQuestionnaireWithBasicDialogs(ctx, questions, auditorToggleInit);
+	}
 	const isMulti = questions.length > 1;
 	const totalTabs = questions.length + 1;
 
-	return await ctx.ui.custom<GoalQuestionnaireResult>((tui, theme, _kb, done) => {
+	const result = await ctx.ui.custom<GoalQuestionnaireResult | undefined>((tui, theme, _kb, done) => {
+		// Some web hosts invoke the factory with a render callback in place of a TUI.
+		if (!tui || typeof tui.getShowHardwareCursor !== "function" || typeof tui.setShowHardwareCursor !== "function" || typeof tui.requestRender !== "function") {
+			done(undefined);
+			return { render: () => [], invalidate: () => {} };
+		}
 		// Suppress hardware cursor during dialog to reduce TUI auto-scroll
 		// (the TUI render loop runs at ~60fps and writes ANSI cursor positioning
 		// sequences every cycle, which can cause terminal viewport snapping).
@@ -946,6 +1016,8 @@ function advanceAfterAnswer() {
 			},
 		};
 	});
+	if (result !== undefined) return result;
+	return runQuestionnaireWithBasicDialogs(ctx, questions, auditorToggleInit);
 }
 
 /**
@@ -957,7 +1029,7 @@ export async function showProposalDialog(
 	confirmationText: string,
 	focus: GoalDraftingFocus,
 	defaultAuditorEnabled?: boolean,
-): Promise<{ decision: ProposalDecision; auditorEnabled: boolean }> {
+): Promise<{ decision: ProposalDecision; auditorEnabled: boolean; unavailable: boolean }> {
 	const headerTitle = focus === "sisyphus" ? "Confirm Sisyphus Goal Draft" : "Confirm Goal Draft";
 	const result = await runGoalQuestionnaire(ctx, [{
 		id: "confirm",
@@ -971,5 +1043,5 @@ export async function showProposalDialog(
 		cancelled: result.cancelled,
 		answer: result.answers[0]?.answer,
 	});
-	return { decision, auditorEnabled: result.auditorEnabled ?? true };
+	return { decision, auditorEnabled: result.auditorEnabled ?? true, unavailable: result.unavailable === true };
 }

@@ -191,7 +191,7 @@ export function registerGoalCommands(core: GoalCore): void {
 			}
 		}
 		if (!current) {
-			const openCount = core.openGoals().length;
+			const openCount = otherOpenGoalCount(core.goalsById, null);
 			ctx.ui.notify(openCount > 0 ? buildUnfocusedOpenGoalsSummary(openCount) : detailedSummary(null), "info");
 			return;
 		}
@@ -369,7 +369,7 @@ export function registerGoalCommands(core: GoalCore): void {
 	async function handleGoalPause(ctx: ExtensionContext): Promise<void> {
 		core.reconcileFocusedGoalFromDisk(ctx);
 		if (!core.state.goal) {
-			if (core.openGoals().length > 0) {
+			if (otherOpenGoalCount(core.goalsById, null) > 0) {
 				const selected = await chooseOpenGoal(ctx, "Pause which open goal?");
 				if (!selected) return;
 			} else {
@@ -392,7 +392,7 @@ export function registerGoalCommands(core: GoalCore): void {
 
 	async function handleGoalResume(ctx: ExtensionContext): Promise<void> {
 		core.reconcileFocusedGoalFromDisk(ctx);
-		if (!core.state.goal && core.openGoals().length > 0) {
+		if (!core.state.goal && otherOpenGoalCount(core.goalsById, null) > 0) {
 			const selected = await chooseOpenGoal(ctx, "Resume or focus open goal");
 			if (!selected) return;
 			if (selected.status === "active") {
@@ -732,7 +732,7 @@ export function registerGoalCommands(core: GoalCore): void {
 	}
 	async function handleGoalClear(ctx: ExtensionContext): Promise<void> {
 		core.reconcileFocusedGoalFromDisk(ctx);
-		if (!core.state.goal && core.openGoals().length > 0) {
+		if (!core.state.goal && otherOpenGoalCount(core.goalsById, null) > 0) {
 			const selected = await chooseOpenGoal(ctx, "Clear which open goal?");
 			if (!selected) return;
 		}
@@ -772,7 +772,7 @@ export function registerGoalCommands(core: GoalCore): void {
 	async function runGoalTweak(replacement: string, ctx: ExtensionContext): Promise<void> {
 		core.reconcileFocusedGoalFromDisk(ctx);
 		if (!core.state.goal) {
-			if (core.openGoals().length > 0) {
+			if (otherOpenGoalCount(core.goalsById, null) > 0) {
 				const selected = await chooseOpenGoal(ctx, "Tweak which open goal?");
 				if (!selected) return;
 			} else {

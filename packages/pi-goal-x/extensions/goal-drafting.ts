@@ -8,7 +8,7 @@ import { deriveTasksFromObjective } from "./goal-task-derive.ts";
 import { goalDetails, renderGoalResult } from "./goal-format.ts";
 import { buildGoalCreatedReport } from "./goal-policy.ts";
 import { loadGoalSettings } from "./goal-settings.ts";
-import { formatQuestionnaireAnswers, runGoalQuestionnaire, shouldAutoConfirmProposal, showProposalDialog, type GoalQuestionnaireQuestion, type ProposalDecision } from "./goal-questionnaire.ts";
+import { DIALOG_UNAVAILABLE_HINT, proposalDialogFailureMessage, formatQuestionnaireAnswers, runGoalQuestionnaire, shouldAutoConfirmProposal, showProposalDialog, type GoalQuestionnaireQuestion, type ProposalDecision } from "./goal-questionnaire.ts";
 import { currentTaskIdIsPending, nowIso, type GoalRecord, type GoalTaskList } from "./goal-record.ts";
 import type { GoalCore } from "./goal-state.ts";
 import { convertFlatTasks, countTasks, mergeTasksWithExisting, type FlatTaskInput } from "./goal-task-tools.ts";
@@ -54,7 +54,9 @@ export function hasActiveDraft(core: GoalCore): boolean { return activeDraft(cor
 function draftSessionEntry(core: GoalCore, session: GoalDraftSession): void {
 	try {
 		core.pi.appendEntry(DRAFT_ENTRY, session);
-	} catch {}
+	} catch {
+		// Draft-session entry append is best-effort; a failed append must not break drafting.
+	}
 }
 
 export function clearGoalDrafting(core: GoalCore, ctx: ExtensionContext): void {
@@ -260,7 +262,10 @@ export function registerDraftingTools(core: GoalCore): void {
 					const active = activeDraft(core);
 					if (active) active.questionnaireEcho = formatQuestionnaireAnswers(result); // E5
 				}
+				if (result.unavailable === true) return { content: [{ type: "text", text: `${DIALOG_UNAVAILABLE_HINT} Ask the questions in chat instead.` }], details: goalDetails(core.state.goal) };
 				return { content: [{ type: "text", text: result.cancelled ? "The user cancelled the questionnaire. Continue drafting conversationally." : formatQuestionnaireAnswers(result) }], details: goalDetails(core.state.goal) };
+			} catch (error) {
+				return { content: [{ type: "text", text: `Goal drafting dialog failed: ${error instanceof Error ? error.message : String(error)}. Drafting remains active; ask in chat instead of retrying the dialog.` }], details: goalDetails(core.state.goal) };
 			} finally {
 				core.exitGoalModal();
 			}
@@ -302,16 +307,15 @@ export function registerDraftingTools(core: GoalCore): void {
 			const target = draft.mode === "tweak" ? core.state.goal : undefined;
 			if (draft.mode === "tweak" && (!target || target.id !== draft.targetGoalId)) return { content: [{ type: "text", text: "The goal changed while drafting; review it and start /goal-tweak again." }], details: goalDetails(core.state.goal) };
 			if (draft.mode === "sisyphus" && !sisyphusObjectiveSufficient(objective)) return { content: [{ type: "text", text: "A Sisyphus goal needs ordered steps with explicit per-step done criteria. Refine the objective with numbered steps (1) ..., 2) ...) or Step N: blocks before proposing again." }], details: goalDetails(core.state.goal) };
-			const auditorLine = draft.auditorEnabled
-				? "\n\nAuditor for this goal: enabled (independent approval required before completion)."
-				: "\n\nAuditor for this goal: disabled (completion skips the audit).";
-			let confirmation: { decision: ProposalDecision; auditorEnabled: boolean };
+			let confirmation: { decision: ProposalDecision; auditorEnabled: boolean; unavailable: boolean };
 			if (shouldAutoConfirmProposal({ hasUI: ctx.hasUI, autoConfirmEnv: process.env.PI_GOAL_AUTO_CONFIRM })) {
-				confirmation = { decision: "confirm" as const, auditorEnabled: draft.auditorEnabled };
+				confirmation = { decision: "confirm" as const, auditorEnabled: draft.auditorEnabled, unavailable: false };
 			} else {
 				core.enterGoalModal();
 				try {
-					confirmation = await showProposalDialog(ctx, proposalText(draft, objective, params.auto_continue !== false, taskResult.value, target ?? undefined) + auditorLine, draft.mode === "sisyphus" ? "sisyphus" : "goal", draft.auditorEnabled);
+					confirmation = await showProposalDialog(ctx, proposalText(draft, objective, params.auto_continue !== false, taskResult.value, target ?? undefined), draft.mode === "sisyphus" ? "sisyphus" : "goal", draft.auditorEnabled);
+				} catch (error) {
+					return { content: [{ type: "text", text: `${proposalDialogFailureMessage(error)} Do not retry the dialog until the host issue is resolved.` }], details: goalDetails(core.state.goal) };
 				} finally {
 					core.exitGoalModal();
 				}
@@ -326,11 +330,14 @@ export function registerDraftingTools(core: GoalCore): void {
 				taskList: taskResult.value,
 				verificationContract: extracted.verificationContract,
 				autoContinue: params.auto_continue !== false,
-				auditorEnabled: draft.auditorEnabled,
+				auditorEnabled: confirmation.auditorEnabled,
 			});
 			if (confirmation.decision === "cancel") {
 				clearGoalDrafting(core, ctx);
 				return { content: [{ type: "text", text: `${summary}\n\nDraft cancelled; no goal was created. Run /goal or /sisyphus to start a new draft.` }], details: goalDetails(core.state.goal) };
+			}
+			if (confirmation.unavailable) {
+				return { content: [{ type: "text", text: `${summary}\n\n${DIALOG_UNAVAILABLE_HINT} The goal was NOT created and drafting remains active; do not retry the dialog until the host supports it or the user explicitly restarts with PI_GOAL_AUTO_CONFIRM=1.` }], details: goalDetails(core.state.goal) };
 			}
 			if (confirmation.decision !== "confirm") {
 				// Continue refining: preserve the user's auditor choice for the

@@ -72,7 +72,7 @@ function fixture() {
 	const sessionEntries = [
 		{ type: "custom", customType: "pi-goal-focus", data: goalFocusDetails(goal.id, "created") },
 	];
-	const cleanup = () => { try { rmSync(cwd, { recursive: true, force: true }); } catch {} };
+	const cleanup = () => { try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ } };
 	return { cwd, goal: written, sessionEntries, cleanup };
 }
 
@@ -163,6 +163,6 @@ test("goal without a budget never transitions", async () => {
 		assert.equal(disk.status, "active", "no budget → no transition");
 		assert.equal(ledgerEvents(cwd).filter((e) => e.type === "goal_budget_limited").length, 0);
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });

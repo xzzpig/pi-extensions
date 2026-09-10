@@ -85,7 +85,7 @@ function fixture() {
 	const { ref, log } = makeRef(written);
 	const service = new GoalService(ref);
 	const cleanup = () => {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	};
 	return { cwd, written, ref, log, service, cleanup };
 }
@@ -97,6 +97,26 @@ function activeFiles(cwd: string): string[] {
 		return [];
 	}
 }
+
+it("keeps an old locked buffer when focus changes, then flushes without stealing focus", () => {
+	const f = fixture();
+	try {
+		f.service.beginTurn(f, f.written.id);
+		assert.equal(f.service.apply(f, {mutate: goal => ({...goal, objective: "Buffered old-goal work"})}).ok, true);
+		const other = writeActiveGoalFile(f, createGoal({objective: "Other goal", autoContinue: false, sisyphus: false}));
+		f.ref.setFocused(other);
+		const lock = acquireGoalLock(f, f.written.id);
+		try {
+			const result = f.service.apply(f, {reconcile: false, mutate: goal => ({...goal, objective: "Should wait"})});
+			assert.equal(result.ok, false);
+			assert.equal(f.service.isTurnBuffered(), true);
+		} finally {lock.release();}
+		f.service.flushTurn(f);
+		assert.equal(f.ref.getFocusedGoalId(), other.id);
+		assert.equal(parseGoalFile(path.join(f.cwd, f.written.activePath!))!.objective, "Buffered old-goal work");
+		assert.equal(parseGoalFile(path.join(f.cwd, other.activePath!))!.objective, "Other goal");
+	} finally {f.cleanup();}
+});
 
 function readdirNames(dir: string): string[] {
 	try {

@@ -163,7 +163,7 @@ test("dialog cancel is a durable no-op and clears the draft", async () => {
 		// Draft cleared; the tool surface itself never changed.
 		assert.equal(h.draftActive(), false, "draft cleared on cancel");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -236,7 +236,7 @@ test("regression: the proposal emits the complete goal presentation to the trans
 		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: CANCEL_ANSWER, wasCustom: false }], cancelled: false });
 		await pending2;
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -279,7 +279,7 @@ test("renderCall for a tweak without explicit tasks shows the retained current l
 		const goal = firstGoal(cwd);
 		assert.deepEqual(goal.taskList?.tasks.map((t) => t.id), ["keep-1", "keep-2"], "retained list persisted unchanged");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -313,7 +313,7 @@ test("renderCall for a new draft derives from the same objective text the apply 
 		}
 		assert.equal(persistedIds.length, 3, "no phantom task from the contract line");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -338,7 +338,7 @@ test("continue refining keeps the draft alive and a second proposal confirms", a
 		const goal = firstGoal(cwd);
 		assert.deepEqual(goal.taskList?.tasks.map((t) => t.id), ["setup", "verify"], "answers and proposed tasks survive refining");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -369,7 +369,7 @@ test("confirmed proposal persists verification contract and nested tasks, then r
 		// Draft cleared; the tool surface itself never changed.
 		assert.equal(h.draftActive(), false, "draft cleared after confirmation");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -392,7 +392,7 @@ test("sisyphus mode mismatch and structural sufficiency are validated before con
 		const goal = firstGoal(cwd);
 		assert.equal(goal.sisyphus, true, "sisyphus mode preserved");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -409,7 +409,7 @@ test("/sisyphus-direct rejects structurally insufficient objectives", async () =
 		const goal = firstGoal(cwd);
 		assert.equal(goal.sisyphus, true);
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -430,7 +430,7 @@ test("tasks-disabled settings reject task proposals and confirm without a task l
 		const goal = firstGoal(cwd);
 		assert.equal(goal.taskList, undefined, "no task list created when tasks disabled");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -449,7 +449,7 @@ test("contracts-disabled settings strip the verification contract from a confirm
 		// the structured contract field.
 		assert.ok(goal.objective.includes("Verification contract: Run npm test"), "contract line retained as prose");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -474,7 +474,7 @@ test("/goal-tweak confirms a revision under focus validation", async () => {
 		assert.ok(ledgerEvents(cwd).some((e) => e.type === "goal_tweaked"), "goal_tweaked event recorded");
 		assert.equal(h.draftActive(), false, "tweak draft cleared after confirmation");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -493,7 +493,7 @@ test("tweak against a changed focus is rejected without mutation", async () => {
 		const goalAfter = parseGoalFile(path.join(cwd, ".pi", "goals", activeGoalFiles(cwd)[0]!))!;
 		assert.equal(goalAfter.objective, goalBefore.objective, "no mutation on stale tweak target");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -536,7 +536,7 @@ test("headless proposal auto-confirm semantics are explicit", async () => {
 			delete process.env.PI_GOAL_AUTO_CONFIRM;
 		}
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -576,7 +576,7 @@ test("questionnaire tools require an active draft and return structured answers"
 		assert.match(result.content[0].text, /\*\*A:\*\* A/);
 		assert.match(result.content[0].text, /\*\*A:\*\* Next week/);
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -600,7 +600,7 @@ test("single-question goal_questionnaire returns a structured answer", async () 
 		assert.match(result.content[0].text, /\*\*Q:\*\* Which environment first\?/);
 		assert.match(result.content[0].text, /\*\*A:\*\* staging/);
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -627,7 +627,7 @@ test("/goal-cancel clears the draft as a durable no-op", async () => {
 		await h.commands.get("goal-cancel")!.handler("", h.ctx);
 		assert.ok(h.notifications.some((n) => n.includes("No active draft")), "second cancel guidance");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -649,7 +649,7 @@ test("an unconfirmed draft survives session_tree rehydration", async () => {
 		await h.sessionTree();
 		assert.equal(h.draftActive(), false, "no draft restored after confirm");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -694,7 +694,7 @@ test("a second draft offers resume, replace, or cancel and never silently discar
 		assert.ok(h2.messages.length > before, "headless second draft proceeds");
 		assert.ok(h2.notifications.some((n) => n.includes("Replacing the active draft")), "headless replacement is not silent");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -714,7 +714,7 @@ test("a stale tweak draft is invalidated on rehydration when its target is unfoc
 		const result = await runProposal(h, proposalParams("Changed objective", { sisyphus: false }));
 		assert.match(result.content[0].text, /No guided goal draft is active/);
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -734,7 +734,7 @@ test("direct goal creation interrupts and clears an active draft", async () => {
 		await h.sessionTree();
 		assert.equal(h.draftActive(), false, "draft stays cleared after rehydration");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -757,7 +757,7 @@ test("/goal-status reports state without initiating drafting", async () => {
 		await h.commands.get("goal-status")!.handler("", h.ctx);
 		assert.ok(h.notifications.some((n) => n.includes("open goal") && n.includes("/goal-focus")), "unfocused panel reported");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -795,7 +795,7 @@ test("the auditor choice persists on create and through continue refining", asyn
 		const enabled = goals.find((g) => g.objective.includes("Enabled work"))!;
 		assert.equal(enabled.skipAuditor, undefined, "auditor enabled means no skipAuditor");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -821,7 +821,7 @@ test("headless confirmation uses effective settings for the auditor", async () =
 		const g2 = goals.find((g) => g.objective.includes("Headless unaudited"))!;
 		assert.equal(g2.skipAuditor, true, "disabled settings default the auditor off");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -844,7 +844,7 @@ test("a tweak confirmation persists the auditor choice in the same transaction",
 		assert.equal(after.skipAuditor, true, "skipAuditor mutated in the tweak transaction");
 		assert.ok(ledgerEvents(cwd).some((e) => e.type === "goal_tweaked"), "tweak recorded");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -881,7 +881,7 @@ test("a tweak confirmation resumes a paused goal (active, pause metadata cleared
 		assert.equal((resumed[0] as any).reason, "tweak", "resume reason is the tweak");
 		assert.equal(h.draftActive(), false, "tweak draft cleared after confirmation");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -908,7 +908,7 @@ test("a tweak confirmation resumes a blocked goal", async () => {
 		assert.equal(resumed.length, 1, "exactly one goal_resumed event");
 		assert.equal((resumed[0] as any).reason, "tweak", "resume reason is the tweak");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -930,7 +930,7 @@ test("a tweak confirmation leaves a budget_limited goal behind its hard budget g
 		assert.ok(after.objective.includes("Revised while budget-limited"), "objective still revised");
 		assert.equal(ledgerEvents(cwd).filter((e) => e.type === "goal_resumed").length, 0, "no resume event for a budget_limited goal");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -949,7 +949,7 @@ test("a tweak confirmation on an active goal stays active without a resume event
 		assert.equal(after.status, "active", "active goal stays active");
 		assert.equal(ledgerEvents(cwd).filter((e) => e.type === "goal_resumed").length, 0, "no resume event when the goal was already active");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -969,7 +969,7 @@ test("tweak drafting defaults the auditor toggle to the goal's persisted skipAud
 		const last = drafts[drafts.length - 1] as any;
 		assert.equal(last?.data?.auditorEnabled, false, "tweak draft defaults to the goal's persisted auditor-off setting");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -985,7 +985,7 @@ test("tweak drafting defaults the auditor toggle on when the goal has no per-goa
 		const last = drafts[drafts.length - 1] as any;
 		assert.equal(last?.data?.auditorEnabled, true, "tweak draft defaults the auditor on without a per-goal or global disable");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -1002,7 +1002,7 @@ test("tweak drafting falls back to global settings when the goal has no per-goal
 		const last = drafts[drafts.length - 1] as any;
 		assert.equal(last?.data?.auditorEnabled, false, "tweak draft falls back to the global auditor-disabled setting");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -1023,7 +1023,7 @@ test("propose_goal_draft accepts long objectives by default (no hard 4000 limit)
 		assert.match(result.content[0].text, /tweak confirmed/);
 		assert.equal(firstGoal(cwd).objective.length, long.length, "long objective survives without a configured limit");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -1047,7 +1047,7 @@ test("propose_goal_draft enforces the configured max objective length setting", 
 		assert.match(ok.content[0].text, /tweak confirmed/);
 		assert.equal(firstGoal(cwd).objective.length, 20, "at-limit objective is accepted");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -1063,7 +1063,7 @@ test("/goal-tweak command rejects an oversized replacement per the configured li
 		assert.equal(h.draftActive(), false, "no draft starts for an oversized replacement");
 		assert.equal(firstGoal(cwd).objective, "Initial objective", "goal unchanged");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -1105,7 +1105,7 @@ test("confirmed proposal writes the durable summary and the richer confirmation 
 		assert.match(text, /Verification: Run npm test \(0 failures\)/);
 		assert.match(text, /Auditor: enabled/);
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -1134,7 +1134,7 @@ test("questionnaire answers are captured in the confirmed-goal report (E5 §14)"
 		assert.match(result.content[0].text, /Which systems\?/);
 		assert.match(result.content[0].text, /A/);
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -1162,7 +1162,7 @@ test("cancel and refine outcomes still carry the durable proposal summary", asyn
 		assert.match(refined.content[0].text, /refinement requested/);
 		assert.equal(activeGoalFiles(cwd).length, 0, "refining must not create a goal");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -1296,7 +1296,7 @@ test("a tweak merges the proposed task list by id, preserving statuses of surviv
 		const setEvent = ledgerEvents(cwd).find((e) => e.type === "task_list_set");
 		assert.equal(setEvent?.taskCount, 2, "ledger records the merged task count");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -1332,6 +1332,30 @@ test("a tweak with no task list retains the current list and keeps its statuses"
 		assert.equal(after.currentTaskId, "do", "currentTaskId retained when its task is still pending");
 		assert.equal(ledgerEvents(cwd).some((e) => e.type === "task_list_set"), false, "no task_list_set event when the list is retained");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
+
+for (const unavailable of [false, true]) {
+	test(`all drafting tools preserve the draft when dialogs are ${unavailable ? "unavailable" : "failing"}`, async () => {
+		const cwd = mkdtempSync(path.join(tmpdir(), "goal-draft-dialog-failure-"));
+		try {
+			const h = createHarness(cwd, { hasUI: true });
+			await h.sessionStart();
+			await h.commands.get("goal")!.handler("Ship a tested feature", h.ctx);
+			h.ctx.ui.custom = (async () => { if (!unavailable) throw new Error("Host disconnected"); return undefined; }) as typeof h.ctx.ui.custom;
+			delete (h.ctx.ui as Partial<ExtensionContext["ui"]>).select;
+			for (const [name, params] of [
+				["goal_question", { question: "Scope?", options: ["A"] }],
+				["goal_questionnaire", { questions: [{ id: "scope", question: "Scope?", options: ["A"] }] }],
+				["propose_goal_draft", proposalParams("Ship a tested feature. Success criteria: tests pass.")],
+			] as const) {
+				const result = await h.tools.get(name).execute("test", params, new AbortController().signal, undefined, h.ctx);
+				assert.match(result.content[0].text, unavailable ? /cannot display/ : /Host disconnected/);
+				assert.doesNotMatch(result.content[0].text, /user cancelled|refinement requested/);
+				assert.equal(activeGoalFiles(cwd).length, 0);
+				assert.ok(h.activeTools().includes("propose_goal_draft"));
+			}
+		} finally { rmSync(cwd, { recursive: true, force: true }); }
+	});
+}

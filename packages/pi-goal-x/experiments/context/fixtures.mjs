@@ -114,7 +114,9 @@ export const FIXTURES = {
 	"guided-proposal": () => draftingFixture("drafting-proposal", "proposal"),
 	"completion-audit": () => auditFixture("completion-audit", "running"),
 	"audit-rejection-and-rework": () => auditFixture("audit-rework", "rejected"),
-	"get-goal-default-and-verbose": () => getGoalFixture(),
+	"oracle-consultation": () => ({goal: goalWith("oracle", {objective: "Resolve the missing dependency."}), trigger: "continue"}),
+ "tasks-disabled": () => ({goal: goalWith("disabled", {objective: "Work without tracked tasks."}), settings: {disableTasks: true}, trigger: "continue"}),
+ "get-goal-default-and-verbose": () => getGoalFixture(),
 };
 
 // ── scenario helpers ───────────────────────────────────────────────────────
@@ -164,7 +166,7 @@ function postCompactionFixture() {
 		messages: [
 			userMessage("start work"),
 			assistantMessage("working"),
-			{ type: "compaction", id: "c1", parentId: null, timestamp: iso(90), summary: "Earlier turns summarized.", firstKeptEntryId: "m2", tokensBefore: 9000 },
+			{ role: "compactionSummary", timestamp: Date.parse(iso(90)), summary: "Earlier turns summarized.", tokensBefore: 9000 },
 		],
 		trigger: `<pi_goal_continuation goal_id="${goal.id}" kind="checkpoint" v="2"/>`,
 	};

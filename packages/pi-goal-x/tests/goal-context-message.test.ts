@@ -83,7 +83,7 @@ function fixture(settings: Record<string, unknown> = { autoSelectSingleGoal: fal
 		sisyphus: false,
 	}, Date.UTC(2026, 8, 6, 9, 0, 0));
 	const written = writeActiveGoalFile({ cwd }, goal);
-	const cleanup = () => { try { rmSync(cwd, { recursive: true, force: true }); } catch {} };
+	const cleanup = () => { try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ } };
 	return { cwd, goal: written, cleanup };
 }
 

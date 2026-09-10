@@ -29,9 +29,10 @@ import {
 	sanitizeGoalPaths,
 } from "./storage/goal-files.ts";
 import { GoalService } from "./goal-service.ts";
-import { latestAuditorResultForGoal, readGoalLedger } from "./goal-ledger.ts";
+import { goalActivityEvents, latestAuditorResultForGoal, readGoalLedger } from "./goal-ledger.ts";
 import { GoalAccounting } from "./goal-accounting.ts";
 import { GoalRuntime } from "./goal-runtime.ts";
+import { GoalAuditMessages } from "./goal-session-safety.ts";
 import {
 	focusedGoalFromPool,
 	openGoalsFromPool,
@@ -80,6 +81,7 @@ export interface GoalCore {
 	goalTui: TUI | null;
 	goalService: GoalService;
 	runtime: GoalRuntime;
+	auditMessages: GoalAuditMessages;
 	accounting: GoalAccounting;
 
 	assignFocusedGoalId(goalId: string | null): void;
@@ -819,7 +821,7 @@ export function createGoalCore(
 	}
 
 	function renderUI(ctx: ExtensionContext): void {
-		const totalOpen = openGoals().length;
+		const totalOpen = otherOpenGoalCount(goalsById, null);
 		if (!state.goal && totalOpen === 0) {
 			clearGoalWidget(ctx);
 			return;
@@ -838,13 +840,13 @@ export function createGoalCore(
 					GOAL_WIDGET_KEY,
 					makeGoalWidgetFactory({
 						getGoal: () => goalForDisplay() ?? state.goal,
-						getOpenGoalCount: () => openGoals().length,
+						getOpenGoalCount: () => otherOpenGoalCount(goalsById, null),
 						getAuditorProgress: () => auditProgress,
 						getSettings: () => loadGoalSettings(ctx.cwd),
 						getDebugMode: () => debugMode,
 						getStalled: () => stallNotified,
 						getExpanded: () => dashboardExpanded,
-						getLedgerEvents: () => readGoalLedger(ctx).events,
+						getLedgerEvents: () => state.goal ? goalActivityEvents(ctx, state.goal.id) : [],
 						getAuditResult: () => auditResult,
 						onTui: (tui) => {
 							goalTuiRef.current = tui;
@@ -871,13 +873,13 @@ export function createGoalCore(
 				GOAL_WIDGET_KEY,
 				makeGoalWidgetFactory({
 					getGoal: () => goalForDisplay() ?? state.goal,
-					getOpenGoalCount: () => openGoals().length,
+					getOpenGoalCount: () => otherOpenGoalCount(goalsById, null),
 					getAuditorProgress: () => auditProgress,
 					getSettings: () => loadGoalSettings(ctx.cwd),
 					getDebugMode: () => debugMode,
 					getStalled: () => stallNotified,
 					getExpanded: () => dashboardExpanded,
-					getLedgerEvents: () => readGoalLedger(ctx).events,
+					getLedgerEvents: () => state.goal ? goalActivityEvents(ctx, state.goal.id) : [],
 					getAuditResult: () => auditResult,
 					onTui: (tui) => {
 						goalTuiRef.current = tui;
@@ -1217,6 +1219,7 @@ export function createGoalCore(
 		},
 		goalService,
 		runtime,
+		auditMessages: new GoalAuditMessages(),
 		accounting,
 		assignFocusedGoalId,
 		focusedOperationToken,

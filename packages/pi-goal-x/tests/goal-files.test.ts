@@ -92,7 +92,7 @@ test("readActiveGoalFiles scans deterministic safe active goal files only", () =
 		writeFileSync(path.join(ctx.cwd, ".pi/goals", "note.md"), serializeGoalFile(first), "utf8");
 		try {
 			symlinkSync(path.join(ctx.cwd, first.activePath ?? "missing"), path.join(ctx.cwd, ".pi/goals", "active_goal_symlink.md"));
-		} catch {}
+		} catch { /* best-effort; failure must not fail the test */ }
 
 		const goals = readActiveGoalFiles(ctx);
 		assert.deepEqual(goals.map((goal) => goal.id), ["a-goal", "b-goal"]);

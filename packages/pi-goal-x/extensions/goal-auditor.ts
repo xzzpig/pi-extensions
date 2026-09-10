@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { createExtensionRuntime, type ExtensionContext, type ResourceLoader } from "@earendil-works/pi-coding-agent";
 import { resolveSubagentLaunchContract } from "@xzzpig/pi-subagents/preflight";
 import {
 	SUBAGENT_DELEGATION_CANCEL_EVENT,
@@ -194,6 +194,48 @@ function escapePromptPayload(value: string): string {
 	return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+/** Stream previews need only the tail, not a split/copy of the full growing report. */
+export function recentNonEmptyLines(text: string, limit: number): string[] {
+	const lines: string[] = [];
+	let end = text.length;
+	while (end >= 0 && lines.length < limit) {
+		const newline = end > 0 ? text.lastIndexOf("\n", end - 1) : -1;
+		const line = text.slice(newline + 1, end);
+		if (line.trim()) lines.push(line);
+		if (newline < 0) break;
+		end = newline;
+	}
+	return lines.reverse();
+}
+
+/** §60: human-readable labels for the auditor's read-only tool set. */
+export function labelForReadOnlyTool(toolName: string): string {
+	switch (toolName) {
+		case "read": return "Inspecting files...";
+		case "grep": return "Searching content...";
+		case "find": return "Locating files...";
+		case "ls": return "Listing directory...";
+		case "bash": return "Running verification commands...";
+		default: return `Inspecting (${toolName})...`;
+	}
+}
+
+/** §60: rough phase estimate by tool kind (display only). */
+export function estimateAuditProgress(toolName: string): number {
+	switch (toolName) {
+		case "read":
+		case "ls":
+		case "find":
+			return 25;
+		case "grep":
+			return 50;
+		case "bash":
+			return 75;
+		default:
+			return 25;
+	}
+}
+
 /**
  * §61: goal metadata WITHOUT the objective or task tree — those appear exactly
  * once each in their own blocks. Replaces detailedSummary in the auditor prompt.
@@ -280,7 +322,7 @@ export function resolveAuditorAgent(settings: GoalSettings | undefined): string 
 	return settings?.auditorAgent?.trim() || DEFAULT_AUDITOR_AGENT;
 }
 
-export function resolveAuditorDelegationOverrides(settings: GoalSettings): {
+	export function resolveAuditorDelegationOverrides(settings: GoalSettings): {
 	model?: string;
 	thinking?: SubagentDelegationThinking;
 	error?: string;
@@ -299,6 +341,54 @@ export function resolveAuditorDelegationOverrides(settings: GoalSettings): {
 		...(thinking ? { thinking } : {}),
 	};
 }
+
+export function makeAuditorResourceLoader(systemPrompt = [
+	"You are a read-only completion auditor running in an isolated pi agent session.",
+	"Inspect the repository and decide whether the claimed goal completion is genuinely satisfied.",
+	"Never modify files. Never approve unless the actual user objective is complete.",
+].join("\n")): ResourceLoader {
+	return {
+		getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
+		getSkills: () => ({ skills: [], diagnostics: [] }),
+		getPrompts: () => ({ prompts: [], diagnostics: [] }),
+		getThemes: () => ({ themes: [], diagnostics: [] }),
+		getAgentsFiles: () => ({ agentsFiles: [] }),
+		getSystemPrompt: () => systemPrompt,
+		getSystemPromptSource: () => undefined,
+		getAppendSystemPrompt: () => [],
+		getAppendSystemPromptSources: () => [],
+		extendResources: () => {},
+		reload: async () => {},
+	};
+}
+
+/**
+ * Options that reuse the parent session's auth + registered providers for the nested auditor.
+ *
+ * Pi 0.81+ `createAgentSession` accepts `modelRuntime` (and ignores `modelRegistry`).
+ * ExtensionContext still exposes `modelRegistry`, which wraps the live ModelRuntime.
+ * Sharing that runtime keeps extension providers such as `pi-cursor-sdk`'s `cursor`
+ * provider (and its auth) available. Without this, the auditor builds a fresh runtime
+ * with an empty resource loader, so Cursor models fail with "No API key found for cursor"
+ * even when `~/.pi/agent/auth.json` has a Cursor key.
+ *
+ * Older SDKs still accept `modelRegistry`; pass both for compatibility.
+ */
+export function resolveAuditorSessionModelOptions(ctx: ExtensionContext): {
+	modelRegistry: ExtensionContext["modelRegistry"];
+	modelRuntime?: unknown;
+} {
+	// SAFETY: ExtensionContext.modelRegistry wraps the live ModelRuntime; the runtime
+	// is exposed via an undocumented property on the wrapper, so reach through the
+	// cast only to read it and fall back to modelRegistry alone when absent.
+	const registry = ctx.modelRegistry as unknown as { runtime?: unknown } | undefined;
+	const runtime = registry?.runtime;
+	if (runtime) {
+		return { modelRegistry: ctx.modelRegistry, modelRuntime: runtime };
+	}
+	return { modelRegistry: ctx.modelRegistry };
+}
+
 
 export function parseGoalAuditorStructuredResult(value: unknown): { value?: GoalAuditorStructuredResult; error?: string } {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return { error: "Delegated auditor did not return a JSON object." };

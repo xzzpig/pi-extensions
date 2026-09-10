@@ -56,7 +56,7 @@ function fixture(): { cwd: string; goal: { activePath?: string; id: string }; se
 		autoContinue: true,
 		sisyphus: false,
 	}, Date.UTC(2026, 8, 4, 9, 0, 0)));
-	return { cwd, goal, sessionEntries: [{ type: "custom", customType: "pi-goal-focus", data: goalFocusDetails(goal.id, "created") }], cleanup: () => { try { rmSync(cwd, { recursive: true, force: true }); } catch {} } };
+	return { cwd, goal, sessionEntries: [{ type: "custom", customType: "pi-goal-focus", data: goalFocusDetails(goal.id, "created") }], cleanup: () => { try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ } } };
 }
 
 function goalFileText(cwd: string, goal: { activePath?: string }) {

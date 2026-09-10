@@ -23,7 +23,7 @@ function tempCtx(): GoalFileContext {
 }
 
 function cleanup(ctx: GoalFileContext): void {
-	try { fs.rmSync(ctx.cwd, { recursive: true, force: true }); } catch {}
+	try { fs.rmSync(ctx.cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 }
 
 function writeGoal(ctx: GoalFileContext, objective = "healthy goal"): void {

@@ -234,7 +234,7 @@ describe("Subagent E2E", () => {
 			const activeFile = path.join(f.cwd, f.activePath);
 			const archivedDir = path.join(f.cwd, ".pi", "goals", "archived");
 			let fileFound = false;
-			try { fileFound = readFileSync(activeFile, "utf8").length > 0; } catch {}
+			try { fileFound = readFileSync(activeFile, "utf8").length > 0; } catch { /* best-effort; failure must not fail the test */ }
 			if (!fileFound) {
 				const archives = readdirSync(archivedDir).filter((n) => n.includes(f.goalId));
 				fileFound = archives.length > 0;

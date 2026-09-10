@@ -100,7 +100,7 @@ function makeFixture(opts: { objective?: string; tokenBudget?: number; pauseReas
 	if (opts.status === "complete") goal.status = "complete" as const;
 	const written = writeActiveGoalFile({ cwd }, goal);
 	const sessionEntries = [{ type: "custom", customType: "pi-goal-focus", data: goalFocusDetails(goal.id, "created") }];
-	const cleanup = () => { try { rmSync(cwd, { recursive: true, force: true }); } catch {} };
+	const cleanup = () => { try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ } };
 	return { cwd, goal: written, sessionEntries, cleanup };
 }
 
@@ -156,7 +156,7 @@ test("disableTasks keeps the tool surface constant; task tools enforce the setti
 		const result = await (setTasks.execute as any)("set-1", { tasks: [] }, undefined, undefined, h.ctx);
 		assert.match(result.content?.[0]?.text ?? "", /disabled by settings/, "set_goal_tasks must enforce disableTasks");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -202,7 +202,7 @@ test("create_goal accepts token_budget and sisyphus mode", async () => {
 		assert.equal(parsed.tokenBudget, 5000, "token_budget must be persisted");
 		assert.equal(parsed.sisyphus, true, "sisyphus mode must be persisted");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -279,7 +279,7 @@ test("get_goal returns the complete stable snapshot", async () => {
 		assert.ok(text.includes("Verification contract:"), "contract present");
 		assert.ok(text.includes(`Path: ${written.activePath}`), "path present");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -322,7 +322,7 @@ test("get_goal default is concise; verbose retains full diagnostics", async () =
 		assert.ok(vtext.includes("Lifecycle:"), "verbose keeps lifecycle guidance");
 		assert.ok(vtext.includes("Path:"), "verbose keeps paths");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -515,7 +515,7 @@ test("legacy paused record with autoContinue:true stays paused after session res
 		assert.equal(parsed?.status, "paused", "disk record must stay paused after restore");
 		assert.equal(parsed?.autoContinue, true, "autoContinue flag survives as data");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -611,21 +611,16 @@ test("aborted audit: Escape complete_without_audit commits with audit_skipped(us
 	}
 });
 
-test("focus changed while audit is dispatched cancels completion without modifying the goal", async () => {
+test("focus changed while audit runs cancels completion without modifying the goal", async () => {
 	const f = makeFixture();
-	let focusChanged = false;
 	try {
 		const h = createHarness({
 			cwd: f.cwd,
 			sessionEntries: f.sessionEntries,
-			runCompletionAuditor: async () => ({ approved: true, disapproved: false, output: "All good\n<approved/>" }),
-			onSendMessage: async (message: any) => {
-				// When the audit-start message is dispatched, the user switches
-				// focus away — invalidating the pending completion operation.
-				if (message?.details?.phase === "started" && !focusChanged) {
-					focusChanged = true;
-					await h.commands.get("goal-unfocus").handler("", h.ctx);
-				}
+			runCompletionAuditor: async () => {
+				// The user changes focus during the independent audit, before its result.
+				await h.commands.get("goal-unfocus").handler("", h.ctx);
+				return { approved: true, disapproved: false, output: "All good\n<approved/>" };
 			},
 		});
 		await start(h);
@@ -635,7 +630,7 @@ test("focus changed while audit is dispatched cancels completion without modifyi
 		assert.ok(text.includes("no longer focused"), `completion must be cancelled, got: ${text.slice(0, 120)}`);
 		assert.equal(activeGoalFiles(f.cwd).length, 1, "goal must remain open and unmodified");
 		const events = ledgerEvents(f.cwd);
-		assert.equal(events.some((e) => e.type === "audit_result"), false, "no audit result when focus changed mid-dispatch");
+		assert.equal(events.some((e) => e.type === "audit_result"), false, "no audit result when focus changed during audit");
 	} finally {
 		f.cleanup();
 	}

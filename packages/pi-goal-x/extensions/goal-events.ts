@@ -17,13 +17,14 @@ import { invalidateGoalLedgerCache } from "./goal-ledger.ts";
 import { shouldArmPostCompactReminder } from "./goal-policy.ts";
 import { loadGoalSettings, invalidateGoalSettingsCache } from "./goal-settings.ts";
 import { asRecord, nowIso, type AssistantMessageLike } from "./goal-record.ts";
-import { goalSelectorLabel } from "./goal-pool.ts";
+import { goalSelectorLabel, otherOpenGoalCount } from "./goal-pool.ts";
 import { invalidateGoalPoolCache } from "./storage/goal-files.ts";
 import { consumeOracleFollowupMarker, hasPendingOracleAdviceForFocusedGoal } from "./goal-oracle.ts";
 import { staleContinuationPrompt } from "./prompts/goal-prompts.ts";
 import { rehydrateDraft } from "./goal-drafting.ts";
 import { syncTerminalInputPause } from "./goal-widget.ts";
 import type { GoalCore } from "./goal-state.ts";
+import { filterGoalSessionContext } from "./goal-session-safety.ts";
 import type { GoalMutationOutcome } from "./goal-service.ts";
 
 /**
@@ -69,7 +70,8 @@ export function registerGoalEvents(core: GoalCore): void {
 	let networkErrorRecoveryAfterSettleFor: string | null = null;
 
 	pi.on("context", async (event) => {
-		const messages = filterGoalCheckpointContext(event.messages);
+		const filtered = filterGoalSessionContext(event.messages);
+		const messages = filterGoalCheckpointContext(filtered ?? event.messages) ?? filtered;
 		// Reference equality means no goal-event messages existed at all.
 		return messages === null ? undefined : { messages: messages as typeof event.messages };
 	});
@@ -252,6 +254,7 @@ export function registerGoalEvents(core: GoalCore): void {
 	});
 
 	pi.on("session_start", async (event, ctx) => {
+		core.auditMessages.clear();
 		// NAF: the zero-op read caches are session-scoped — a new session always
 		// re-reads settings/pool/ledger fresh from disk (cross-process and
 		// hand-edited changes are picked up at the session boundary).
@@ -263,7 +266,7 @@ export function registerGoalEvents(core: GoalCore): void {
 		core.installGoalTools();
 		rehydrateDraft(core, ctx);
 		syncTerminalInputPause(core, ctx);
-		if (event.reason === "resume" && !core.state.goal && !core.hasExplicitSessionFocus && core.openGoals().length > 1 && ctx.hasUI) {
+		if (event.reason === "resume" && !core.state.goal && !core.hasExplicitSessionFocus && otherOpenGoalCount(core.goalsById, null) > 1 && ctx.hasUI) {
 			// Prompt the user to pick which open goal to focus (mirrors /goal-focus).
 			const open = core.openGoals();
 			const labels = open.map((item) => goalSelectorLabel(item, core.focusedGoalId));
@@ -311,6 +314,7 @@ export function registerGoalEvents(core: GoalCore): void {
 	});
 
 	pi.on("session_tree", async (_event, ctx) => {
+		core.auditMessages.clear();
 		core.goalService.flushTurn(ctx); // P1-3: persist any buffered transaction before reload
 		await core.loadState(ctx);
 		rehydrateDraft(core, ctx);
@@ -338,7 +342,9 @@ export function registerGoalEvents(core: GoalCore): void {
 			if (!core.isActionableContinuationGoal(incomingGoalId)) {
 				try {
 					ctx.abort?.();
-				} catch {}
+				} catch {
+					// Abort is best-effort; a failed abort must not break the stale-checkpoint steering path.
+				}
 				core.updateUI(ctx);
 				// The system prompt carries no goal content: the stale-checkpoint
 				// note rides as an append-only steering message instead.
@@ -438,6 +444,7 @@ export function registerGoalEvents(core: GoalCore): void {
 	});
 
 	pi.on("agent_settled", async (_event, ctx) => {
+		core.auditMessages.flush(ctx, pi);
 		const goalId = continuationAfterSettleFor;
 		continuationAfterSettleFor = null;
 		const networkErrorGoalId = networkErrorRecoveryAfterSettleFor;
@@ -468,6 +475,7 @@ export function registerGoalEvents(core: GoalCore): void {
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		core.auditMessages.clear();
 		continuationAfterSettleFor = null;
 		networkErrorRecoveryAfterSettleFor = null;
 		core.accountProgress(ctx);

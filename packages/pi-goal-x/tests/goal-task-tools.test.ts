@@ -139,7 +139,7 @@ function fixtureWithTasks(tasks: Array<Record<string, unknown>>) {
 	goal.taskList = { tasks: tasks as any, blockCompletion: false, proposedAt: new Date().toISOString() };
 	const written = writeActiveGoalFile({ cwd }, goal);
 	const sessionEntries = [{ type: "custom", customType: "pi-goal-focus", data: goalFocusDetails(goal.id, "created") }];
-	const cleanup = () => { try { rmSync(cwd, { recursive: true, force: true }); } catch {} };
+	const cleanup = () => { try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ } };
 	return { cwd, goal: written, sessionEntries, cleanup };
 }
 
@@ -252,7 +252,7 @@ test("update_goal_task(skipped) requires a reason and cascades to subtasks", asy
 		assert.equal(parsed?.taskList?.tasks[0]?.subtasks?.[0]?.status, "skipped", "subtask cascaded");
 		assert.ok(ledgerEvents(cwd).some((e) => e.type === "task_skipped"));
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -284,7 +284,7 @@ test("update_goal_task(pending) reopens a skipped task; completed tasks are immu
 		assert.equal(byId.get("sk")?.status, "pending", "skipped task reopened");
 		assert.equal(byId.get("done")?.status, "complete", "completed task immutable");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
@@ -501,6 +501,6 @@ test("update_goal_task(pending) writes a task_reopened ledger event", async () =
 		assert.ok(reopened, "task_reopened ledger event must be written");
 		assert.equal(reopened!.taskId, "sk");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });

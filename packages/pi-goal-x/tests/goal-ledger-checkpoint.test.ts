@@ -24,7 +24,7 @@ function tempCtx(): GoalLedgerContext {
 function cleanup(ctx: GoalLedgerContext): void {
   try {
     fs.rmSync(ctx.cwd, { recursive: true, force: true });
-  } catch {}
+  } catch { /* best-effort; failure must not fail the test */ }
 }
 
 function checkpointPath(ctx: GoalLedgerContext): string {

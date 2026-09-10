@@ -11,6 +11,7 @@ import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { defineTool, type AgentToolResult, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 
+import type { GoalTaskUpdateSpec } from "./goal-service.ts";
 import { goalDetails, renderGoalResult } from "./goal-format.ts";
 import { statusLabel, truncateText } from "./goal-core.ts";
 import { loadGoalSettings } from "./goal-settings.ts";
@@ -102,7 +103,6 @@ export function convertFlatTasks(flat: FlatTaskInput[], opts: { maxSubtaskDepth?
 			roots.push(item);
 		}
 	}
-	const order = new Map<string, number>(flat.map((item, index) => [item.id.trim(), index]));
 
 	function buildNode(item: FlatTaskInput): GoalTask {
 		const node: GoalTask = {
@@ -116,15 +116,12 @@ export function convertFlatTasks(flat: FlatTaskInput[], opts: { maxSubtaskDepth?
 		};
 		const children = childrenOf.get(node.id) ?? [];
 		if (children.length > 0) {
-			node.subtasks = children
-				.sort((a, b) => (order.get(a.id.trim()) ?? 0) - (order.get(b.id.trim()) ?? 0))
-				.map(buildNode);
+			node.subtasks = children.map(buildNode);
 		}
 		return node;
 	}
-	const tasks = roots
-		.sort((a, b) => (order.get(a.id.trim()) ?? 0) - (order.get(b.id.trim()) ?? 0))
-		.map(buildNode);
+	// Both buckets were populated in input order, so sorting would repeat that work.
+	const tasks = roots.map(buildNode);
 
 	// Lightweight placement: lightweight_subtasks must be on a task with children.
 	for (const item of flat) {
@@ -203,6 +200,53 @@ export function countTasks(tasks: readonly GoalTask[] | undefined): number {
 	return total;
 }
 
+export interface TaskProgressInput {
+ task_id: string;
+ status: "start" | "complete" | "skipped" | "pending";
+ evidence?: string;
+ reason?: string;
+}
+function progressSpec(input: TaskProgressInput, core: import("./goal-state.ts").GoalCore, ctx: ExtensionContext): GoalTaskUpdateSpec {
+ const settings = loadGoalSettings(ctx.cwd);
+ const now = nowIso();
+ const evidence = input.evidence?.trim().slice(0, 200) || undefined;
+ const reason = input.reason?.trim();
+ return {
+  taskId: input.task_id, focusToken: core.focusedOperationToken(core.state.goal!.id),
+  ...(input.status === "start" ? {setCurrentTaskId: input.task_id} : {}),
+  validate: task => {
+   if (input.status === "start" && task.status !== "pending") return {ok: false, message: `Task "${task.id}" is ${task.status}; only pending tasks can be started.`};
+   if (input.status !== "start" && task.status === "complete") return {ok: false, message: `Task "${task.id}" is already complete and cannot be reopened.`};
+   if (input.status === "complete") {
+    if (task.status === "skipped") return {ok: false, message: `Task "${task.id}" was already skipped.`};
+    if (!settings.disableContracts && task.verificationContract && !evidence) return {ok: false, message: `Task "${task.id}" has a verification contract; provide evidence to complete it.`};
+    const gate = checkSubtasksComplete(task);
+    if (gate) return {ok: false, message: gate};
+   }
+   if (input.status === "skipped" && !reason) return {ok: false, message: "status=skipped requires a non-empty reason."};
+   if (input.status === "pending" && task.status !== "skipped") return {ok: false, message: "Only skipped tasks can be reopened with status=pending."};
+   return {ok: true};
+  },
+  update: task => {
+   if (input.status === "start") return task;
+   if (input.status === "complete") return {...task, status: "complete", completedAt: now, evidence};
+   if (input.status === "skipped") {
+    const next: GoalTask = {...task, status: "skipped", skippedAt: now, skipReason: reason};
+    return task.subtasks?.length && !task.lightweightSubtasks ? skipAllSubtasks(next, now, reason!) : next;
+   }
+   const {skippedAt, skipReason, ...rest} = task;
+   return {...rest, status: "pending"};
+  },
+  ledger: written => {
+   const base = {goalId: written.id, taskId: input.task_id, at: written.updatedAt};
+   if (input.status === "start") return [{...base, type: "task_started"}];
+   if (input.status === "complete") return [{...base, type: "task_complete", evidence}];
+   if (input.status === "skipped") return [{...base, type: "task_skipped", reason: reason!}];
+   return [{...base, type: "task_reopened"}];
+  },
+ };
+}
+
 // ── Tool registration (moved from goal-tools.ts in the Stage 5 module split) ─
 
 export function registerTaskTools(core: import("./goal-state.ts").GoalCore): void {
@@ -212,24 +256,18 @@ export function registerTaskTools(core: import("./goal-state.ts").GoalCore): voi
 pi.registerTool(defineTool({
 	name: SET_GOAL_TASKS_TOOL_NAME,
 	label: "Set Goal Tasks",
-	description: "Create or structurally replace the task tree for the focused active or paused goal. Takes a flat parent-linked task list (id, title, optional parent_id, optional verification_contract, optional lightweight_subtasks) plus block_completion. Matching ids retain status and evidence. Structural changes use the existing confirmation dialog.",
-	promptSnippet: "Set the goal task tree with confirmation. Stops the turn after confirmation.",
-	promptGuidelines: [
-		"Use set_goal_tasks after a goal is confirmed, on the first continuation turn, if the objective naturally decomposes into trackable milestones. Do not add a task list for simple single-step goals.",
-		"If a task list already exists, only call set_goal_tasks to restructure it when (a) the user explicitly asks, or (b) the goal objective or requirements have structurally changed. Do not restructure autonomously.",
-		"Existing tasks with matching ids preserve their status/evidence/timestamps; new ids start as pending; removed ids are gone.",
-		"After confirmation the turn stops; the next continuation will arrive automatically.",
-		"Validation is enforced at runtime: unique non-empty ids/titles, existing parents, acyclic relationships, at most 50 tasks, configured depth, and lightweight_subtasks only on tasks that have children.",
-	],
+	description: "Set or restructure the task tree with user confirmation. Matching IDs retain progress; removed IDs are deleted. Confirmation stops the turn; continuation follows.",
+	promptSnippet: "Set the goal task tree with confirmation.",
+	promptGuidelines: ["Use tasks only for useful milestones. Restructure an existing tree only when the user asks or requirements structurally change. Input is a flat parent-linked tree, at most 50 tasks, within configured depth. lightweight_subtasks is valid only on parents."],
 	parameters: Type.Object({
 		tasks: Type.Array(Type.Object({
 			id: Type.String({ description: "Short stable slug e.g. 'task-1'" }),
 			title: Type.String({ description: "Human-readable task title" }),
-			parent_id: Type.Optional(Type.String({ description: "Optional id of the parent task in this same input; roots omit it." })),
-			verification_contract: Type.Optional(Type.String({ description: "Optional evidence requirement for completing this task." })),
-			lightweight_subtasks: Type.Optional(Type.Boolean({ description: "If true, this task's subtasks are lightweight (no completion enforcement). Only valid when the task has children." })),
+			parent_id: Type.Optional(Type.String({ description: "Parent id; omit for roots." })),
+			verification_contract: Type.Optional(Type.String({ description: "Required completion evidence." })),
+			lightweight_subtasks: Type.Optional(Type.Boolean({ description: "Children do not gate parent completion." })),
 		}), { description: "Flat parent-linked task list" }),
-		block_completion: Type.Optional(Type.Boolean({ description: "If true, warns when pending tasks remain during completion. Default false." })),
+		block_completion: Type.Optional(Type.Boolean({ description: "Require all tasks resolved; default false." })),
 		change_summary: Type.Optional(Type.String({ description: "Optional summary of the task list change" })),
 	}, { additionalProperties: false }),
 	executionMode: "sequential",
@@ -361,28 +399,39 @@ pi.registerTool(defineTool({
 pi.registerTool(defineTool({
 	name: UPDATE_GOAL_TASK_TOOL_NAME,
 	label: "Update Goal Task",
-	description: "Update one task in the focused goal's task tree without stopping the turn: status \"start\" sets explicit execution focus (persisted currentTaskId; requires a pending task), \"complete\" (with optional evidence; requires evidence when the task has a verification contract and enforces completed children), \"skipped\" (requires a reason; restricted to explicit user direction or a hard contradiction), or \"pending\" (reopens a skipped task). Completed tasks are immutable through this tool. Starting another task replaces focus; completing or skipping the current task clears focus.",
-	promptSnippet: "Mark one task started, complete, skipped, or reopened. Does not stop the turn.",
-	promptGuidelines: [
-		"Use update_goal_task to update exactly one task; the turn does NOT stop so you may continue with other work.",
-		"status=start sets the persisted current task (execution focus); use it when you begin working on a task. Only pending tasks can be started.",
-		"status=complete requires evidence when the task has a verification contract, and requires all non-lightweight children to be complete first.",
-		"status=skipped requires a concrete reason and is restricted to explicit user direction or a hard contradiction (e.g. an impossible requirement). Do not skip to avoid work.",
-		"status=pending reopens a skipped task (clears its skip state). Completed tasks cannot be reopened through this tool.",
-	],
+	description: "Update task progress without stopping the turn. Use ordered updates for an atomic batch, or task_id/status for one task. An invalid update rejects the whole batch.",
+	promptSnippet: "Start, complete, skip, or reopen tasks; batch related progress.",
+	promptGuidelines: ["start requires pending and sets current task. complete requires evidence for contracted tasks and completed/skipped non-lightweight children. skipped requires a reason and explicit user direction or a hard contradiction; never skip to avoid work. pending reopens skipped tasks only; completed tasks are immutable. Completing/skipping the current task clears focus."],
 	parameters: Type.Object({
-		task_id: Type.String({ description: "Task id to update" }),
-		status: StringEnum(["start", "complete", "skipped", "pending"] as const, { description: "start (sets execution focus; requires pending), complete (with optional evidence), skipped (requires reason), or pending (reopens a skipped task)." }),
-		evidence: Type.Optional(Type.String({ description: "Evidence note for complete (max 200 characters). Required when the task has a verification contract." })),
-		reason: Type.Optional(Type.String({ description: "Reason for skipped. Required when status=skipped." })),
+		task_id: Type.Optional(Type.String({ description: "Single-task form; omit with updates." })),
+		status: Type.Optional(StringEnum(["start", "complete", "skipped", "pending"] as const)),
+ updates: Type.Optional(Type.Array(Type.Object({task_id: Type.String(), status: StringEnum(["start", "complete", "skipped", "pending"] as const), evidence: Type.Optional(Type.String()), reason: Type.Optional(Type.String())}, {additionalProperties: false}), {minItems: 1, maxItems: 100, description: "Ordered atomic batch; omit all single-task fields."})),
+		evidence: Type.Optional(Type.String({ description: "Completion evidence; max 200 chars." })),
+		reason: Type.Optional(Type.String({ description: "Required for skipped." })),
 	}, { additionalProperties: false }),
 	executionMode: "sequential",
-	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+	async execute(_toolCallId, rawParams, _signal, _onUpdate, ctx) {
 		// Constant tool surface: during a guided draft this guard, not the tool
 		// list, keeps goal state from being mutated outside propose_goal_draft.
 		if (core.goalDraftActive) {
 			return { content: [{ type: "text", text: executionToolDraftGuardMessage() }], details: goalDetails(core.state.goal) };
 		}
+  if (rawParams.updates !== undefined) {
+   const fail = (text: string) => ({content: [{type: "text" as const, text}], details: goalDetails(core.state.goal)});
+   if ([rawParams.task_id, rawParams.status, rawParams.evidence, rawParams.reason].some(v => v !== undefined)) return fail("Use either updates or single-task fields, never both.");
+   const updates = rawParams.updates;
+   if (!Array.isArray(updates) || updates.length < 1 || updates.length > 100 || updates.some(u => !u || typeof u.task_id !== "string" || !u.task_id.trim() || !["start", "complete", "skipped", "pending"].includes(u.status) || (u.evidence !== undefined && typeof u.evidence !== "string") || (u.reason !== undefined && typeof u.reason !== "string"))) return fail("updates must contain 1–100 valid task updates.");
+   core.reconcileFocusedGoalFromDisk(ctx);
+   if (loadGoalSettings(ctx.cwd).disableTasks) return fail("update_goal_task is disabled by settings (disableTasks: true).");
+   if (!core.state.goal) return fail("No goal is focused.");
+   if (core.state.goal.status !== "active") return fail(`update_goal_task applies only to an active goal (current status: ${core.state.goal.status}).`);
+   const result = core.goalService.updateTasks(ctx, updates.map(u => progressSpec(u, core, ctx)));
+   if (!result.ok) return fail(result.message);
+   core.updateUI(ctx);
+   return fail(`${updates.map(u => `${u.task_id} ${u.status}`).join("; ")}. ${buildTaskSummary(result.goal.taskList!)}.`);
+  }
+  if (!rawParams.task_id || !rawParams.status) return {content: [{type: "text", text: "Provide task_id and status, or an updates batch."}], details: goalDetails(core.state.goal)};
+  const params = rawParams as TaskProgressInput;
 		core.reconcileFocusedGoalFromDisk(ctx);
 		if (loadGoalSettings(ctx.cwd).disableTasks) {
 			return {

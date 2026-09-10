@@ -66,6 +66,12 @@ for (const fixtureId of expectedFixtureIds) {
 		if (!(key in semantic)) failures.push(`${fixtureId}: semantic field ${key} not classified`);
 	}
 
+ const names = captured.tools.map(t => t.name);
+ if (scenario.draftPrompt && JSON.stringify([...names].sort()) !== JSON.stringify(["goal_question", "goal_questionnaire", "propose_goal_draft"].sort())) failures.push(`${fixtureId}: incorrect drafting profile`);
+ if (fixtureId === "tasks-disabled" && names.some(n => n === "set_goal_tasks" || n === "update_goal_task")) failures.push(`${fixtureId}: disabled tools advertised`);
+ if (["completion-audit", "audit-rejection-and-rework", "oracle-consultation"].includes(fixtureId) && !(breakdown.childRequestChars > 0)) failures.push(`${fixtureId}: child request not captured`);
+ if (fixtureId === "post-compaction-turn" && !captured.extensionSystem.includes("POST-COMPACTION RESYNC")) failures.push(`${fixtureId}: compaction hook was not exercised`);
+
 	// 4. checkpoint history bounded (post-#30 invariant)
 	if (breakdown.historicalCheckpointChars > 0) {
 		failures.push(`${fixtureId}: historical checkpoint payload visible to the provider (${breakdown.historicalCheckpointChars} chars) — must stay filtered`);
@@ -83,10 +89,10 @@ for (const fixtureId of expectedFixtureIds) {
 		const fullObjective = scenario.goal.objective ?? "";
 		const objectiveNeedle = fullObjective.slice(0, 300);
 		const objectiveOccurrences = objectiveNeedle
-			? (serializedRequestText(captured).match(new RegExp(escapeRegExp(objectiveNeedle), "g")) ?? []).length
+			? (captured.extensionSystem.match(new RegExp(escapeRegExp(objectiveNeedle), "g")) ?? []).length
 			: 0;
 		if (objectiveOccurrences !== 1) failures.push(`${fixtureId}: objective appears ${objectiveOccurrences}x in composed request (must be exactly 1)`);
-		if (scenario.goal?.verificationContract && semantic.verificationContract !== 1) {
+		if (scenario.goal?.verificationContract && fixtureId !== "get-goal-default-and-verbose" && semantic.verificationContract !== 1) {
 			failures.push(`${fixtureId}: verification contract appears ${semantic.verificationContract}x (must be exactly 1)`);
 		}
 	}

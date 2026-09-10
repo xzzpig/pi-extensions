@@ -260,8 +260,8 @@ describe("five-tool handler integration", () => {
 				return { approved: true, disapproved: false, output: "All good\n<approved/>", model: "fixture" };
 			} });
 			await start(h);
-			assert.ok(installedProfileContains(h.activeToolsHistory, [...HOST_TOOLS, ...FIVE]),
-				"session_start installs the fixed five-tool profile (captured setActiveTools calls)");
+			assert.ok(installedProfileContains(h.activeToolsHistory, [...HOST_TOOLS, "create_goal", "get_goal", "update_goal", "set_goal_tasks"]),
+				"session_start advertises active goal operations before a task tree exists");
 			const update = h.tools.get("update_goal")!;
 			const result = await (update.execute as any)("u-1", { status: "complete" }, new AbortController().signal, undefined, h.ctx);
 			const text = result.content?.[0]?.text ?? "";
@@ -1043,8 +1043,9 @@ describe("capability parity (follow-up Stage 5.1-C)", () => {
 
 	it("prompt guidance directs abandonment to /goal-clear and requirement changes to /goal-tweak", () => {
 		const source = readFileSync("extensions/goal-core-tools.ts", "utf8");
-		assert.ok(source.includes("/goal-clear"), "abandonment guidance directs the user command");
-		assert.ok(source.includes("/goal-tweak"), "requirement changes stay user-started");
+		const policy = readFileSync("extensions/prompts/goal-prompts.ts", "utf8");
+		assert.ok(policy.includes("/goal-clear"), "abandonment guidance directs the user command");
+		assert.ok(policy.includes("/goal-tweak"), "requirement changes stay user-started");
 		assert.ok(!source.includes('name: "propose_goal_tweak"'), "no steady-state propose_goal_tweak tool");
 		assert.ok(!source.includes('name: "abort_goal"'), "no abort_goal tool");
 	});

@@ -73,7 +73,7 @@ function fixtureWithTasks(tasks: Array<Record<string, unknown>>, opts: { pauseRe
 	}
 	const written = writeActiveGoalFile({ cwd }, goal);
 	const sessionEntries = [{ type: "custom", customType: "pi-goal-focus", data: goalFocusDetails(goal.id, "created") }];
-	const cleanup = () => { try { rmSync(cwd, { recursive: true, force: true }); } catch {} };
+	const cleanup = () => { try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ } };
 	return { cwd, goal: written, sessionEntries, cleanup };
 }
 

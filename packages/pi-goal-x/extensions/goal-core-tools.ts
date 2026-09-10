@@ -1,3 +1,5 @@
+import { goalDetailPage, type GoalDetailSection } from "./goal-detail.ts";
+import { taskIndex } from "./goal-task-index.ts";
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { defineTool, type AgentToolResult, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -7,7 +9,7 @@ import { detailedSummary, goalDetails, renderGoalResult } from "./goal-format.ts
 import { budgetLine } from "./goal-accounting.ts";
 import { buildGoalCreatedReport, buildTaskSummary, findTaskInTree, validateGoalAgentPause, validateGoalBlock } from "./goal-policy.ts";
 import { buildUnfocusedOpenGoalsSummary, otherOpenGoalCount } from "./goal-pool.ts";
-import { readGoalLedger } from "./goal-ledger.ts";
+import { readGoalLedger, goalOracleState } from "./goal-ledger.ts";
 import { loadGoalSettings } from "./goal-settings.ts";
 import { buildGoalHistoryBlock, buildGoalTaskDetailBlock } from "./goal-format.ts";
 import { sisyphusStepProgress } from "./goal-policy.ts";
@@ -21,7 +23,6 @@ import {
 	buildBlockerFingerprint,
 	consumeOracleFollowupMarker,
 	hasPendingOracleAdviceForFocusedGoal,
-	oracleStateForFingerprint,
 	renderActionableOracleAdvice,
 	renderOracleAdviceReminder,
 	runBlockerOracle,
@@ -31,15 +32,9 @@ import { loadSettingsSnapshot, type ResolvedGoalOracleSettings } from "./goal-se
 /** Current + first-pending (excluding current) task pointers for concise get_goal. */
 function conciseTaskPointers(goal: GoalRecord): { findCurrentTask?: GoalTask; firstPendingTask?: GoalTask } {
 	if (!goal.taskList) return {};
-	let firstPendingTask: GoalTask | undefined;
-	const walk = (tasks: GoalTask[]): void => {
-		for (const t of tasks) {
-			if (!firstPendingTask && t.status === "pending" && t.id !== goal.currentTaskId) firstPendingTask = t;
-			if (t.subtasks) walk(t.subtasks);
-		}
-	};
-	walk(goal.taskList.tasks);
-	const findCurrentTask = goal.currentTaskId ? findTaskInTree(goal.taskList.tasks, goal.currentTaskId) : undefined;
+	const index = taskIndex(goal.taskList.tasks);
+	const firstPendingTask = index.pending.find(task => task.id !== goal.currentTaskId);
+	const findCurrentTask = goal.currentTaskId ? index.byId.get(goal.currentTaskId) : undefined;
 	return { findCurrentTask, firstPendingTask };
 }
 
@@ -54,12 +49,13 @@ export function registerCoreTools(
 pi.registerTool(defineTool({
 	name: "get_goal",
 	label: "Get Goal",
-	description: "Get the current pi goal for this session: objective, status, auto-continue, usage, and local file paths.",
-	promptSnippet: "Read the active pi goal state for the current session.",
-	promptGuidelines: [
-		"Use get_goal when you need the current goal before deciding whether to continue or mark it complete.",
-	],
+	description: "Read focused goal state. Default: compact summary. Retrieve full objective/contracts, tasks, or history in 4000-character pages with section and cursor. verbose preserves full legacy output.",
+	promptSnippet: "Inspect goal state or retrieve omitted requirements.",
+	promptGuidelines: [],
 	parameters: Type.Object({
+  section: Type.Optional(StringEnum(["summary", "objective", "tasks", "history"] as const)),
+  task_id: Type.Optional(Type.String({description: "With section=tasks, retrieve one task."})),
+  cursor: Type.Optional(Type.String({maxLength: 256, description: "Next page; repeat section/task."})),
 		verbose: Type.Optional(Type.Boolean({ description: "Full detail mode." })),
 		include_history: Type.Optional(Type.Boolean()),
 	}, { additionalProperties: false }),
@@ -67,7 +63,7 @@ pi.registerTool(defineTool({
 		core.reconcileFocusedGoalFromDisk(ctx);
 		if (core.state.goal) core.syncGoalPromptFromDisk(ctx);
 		const view = core.goalForDisplay() ?? core.state.goal;
-		const params = (_params ?? {}) as { verbose?: boolean; include_history?: boolean };
+		const params = (_params ?? {}) as { verbose?: boolean; include_history?: boolean; section?: "summary" | GoalDetailSection; task_id?: string; cursor?: string };
 		// PR E profile: legacy-v1 keeps pre-optimization verbose-by-default output;
 		// compact-v2 (default) returns a concise state line set because the full
 		// policy already lives in the injected active-goal system block.
@@ -75,15 +71,22 @@ pi.registerTool(defineTool({
 		const includeHistory = params.include_history === true || verbose;
 		const otherCount = otherOpenGoalCount(core.goalsById, core.focusedGoalId);
 		if (!view) {
-			const text = core.openGoals().length > 0
-				? `${buildUnfocusedOpenGoalsSummary(core.openGoals().length)}\n\nCall create_goal with the objective to create and focus a new goal, or ask the user to run /goal-focus to choose an open goal.`
+			const text = otherOpenGoalCount(core.goalsById, null) > 0
+				? `${buildUnfocusedOpenGoalsSummary(otherOpenGoalCount(core.goalsById, null))}\n\nCall create_goal with the objective to create and focus a new goal, or ask the user to run /goal-focus to choose an open goal.`
 				: "No goal is set in this session. Call create_goal with the objective when the user explicitly asks to start a persistent goal.";
 			return {
 				content: [{ type: "text", text }],
 				details: goalDetails(view),
 			};
 		}
-		if (verbose) {
+  if (params.section && params.section !== "summary") {
+   if (!["objective", "tasks", "history"].includes(params.section)) return {content: [{type: "text", text: "Unknown goal section."}], details: goalDetails(view)};
+   const history = params.section === "history" ? readGoalLedger(ctx) : undefined;
+   const page = goalDetailPage(view, {section: params.section, task_id: params.task_id, cursor: params.cursor}, history?.events, history?.revision);
+   return {content: [{type: "text", text: page.text}], details: {...goalDetails(view), ...(page.ok ? {page: {content: page.content, nextCursor: page.nextCursor, totalChars: page.totalChars}} : {})}};
+  }
+  if (params.cursor || params.task_id) return {content: [{type: "text", text: "Use section=objective, tasks, or history for detail retrieval; task_id requires tasks."}], details: goalDetails(view)};
+		if (verbose && !params.section) {
 			const lines: string[] = [`Goal ${view.id}: ${statusLabel(view)}, ${view.sisyphus ? "sisyphus" : "regular"}`];
 			lines.push(`Objective: ${view.objective}`, "");
 			lines.push(`Status: ${statusLabel(view)}`);
@@ -126,20 +129,17 @@ pi.registerTool(defineTool({
 			};
 		}
 
-		// compact-v2 default (PR E §53): concise state read. The full objective
-		// is kept — get_goal is an explicit state-read tool — but duplicated task
-		// headings and the lifecycle prose (already in the injected policy) are
-		// omitted.
+		// Compact state read; full requirements remain available through detail pages.
 		const lines: string[] = [`Goal ${view.id}: ${statusLabel(view)}, ${view.sisyphus ? "sisyphus" : "regular"}`];
-		lines.push(`Objective: ${view.objective}`);
+		lines.push(`Objective: ${truncateText(view.objective, 180)}${view.objective.length > 180 ? " (full: get_goal section=objective)" : ""}`);
 		if (view.taskList) {
 			const { findCurrentTask, firstPendingTask } = conciseTaskPointers(view);
 			if (findCurrentTask) {
-				const contract = findCurrentTask.verificationContract ? ` — contract: ${findCurrentTask.verificationContract}` : "";
-				lines.push(`Current task: ${findCurrentTask.id} — ${findCurrentTask.title}${contract}`);
+				const contract = findCurrentTask.verificationContract ? ` — contract: ${truncateText(findCurrentTask.verificationContract, 240)}` : "";
+				lines.push(`Current task: ${findCurrentTask.id} — ${truncateText(findCurrentTask.title, 180)}${contract}`);
 			}
 			if (firstPendingTask) {
-				lines.push(`Next pending: ${firstPendingTask.id} — ${firstPendingTask.title}`);
+				lines.push(`Next pending: ${firstPendingTask.id} — ${truncateText(firstPendingTask.title, 180)}`);
 			}
 			lines.push(`Tasks: ${buildTaskSummary(view.taskList)}`);
 		} else if (view.currentTaskId) {
@@ -150,6 +150,10 @@ pi.registerTool(defineTool({
 		if ((view.status === "paused" || view.status === "blocked") && view.pauseReason) {
 			lines.push(`Blocker: ${view.pauseReason}`);
 		}
+  if (params.include_history) {
+   const history = buildGoalHistoryBlock(view, readGoalLedger(ctx).events);
+   if (history) lines.push(history);
+  }
 		return {
 			content: [{ type: "text", text: lines.join("\n") }],
 			details: goalDetails(view),
@@ -166,17 +170,13 @@ pi.registerTool(defineTool({
 pi.registerTool(defineTool({
 	name: "create_goal",
 	label: "Create Goal",
-	description: "Create and focus a new pi goal after an explicit user request. Only call this when the user has explicitly asked to make something a persistent goal (directly, or via /goal or /sisyphus); do NOT infer a goal from an ordinary task. Creating a goal focuses it and leaves other open goals untouched.",
-	promptSnippet: "Create a persistent pi goal only when the user explicitly asks for one.",
-	promptGuidelines: [
-		"Call create_goal only when the user explicitly asks to start a long-running goal or hands you a concrete objective to pursue. Never infer a goal from an ordinary one-off task.",
-		"Creating a new goal focuses it and leaves other open goals untouched. Do not archive or replace existing goals unless the user explicitly asks through a user command.",
-		"Pass mode=\"sisyphus\" only when the user explicitly invoked Sisyphus mode.",
-	],
+	description: "Create and focus a persistent goal only on explicit user request; other open goals remain unchanged.",
+	promptSnippet: "Create a goal only when explicitly requested.",
+	promptGuidelines: ["Never infer persistent goals, Sisyphus mode, or token budgets from an ordinary task. The objective must faithfully preserve all user requirements and ordered steps."],
 	parameters: Type.Object({
-		objective: Type.String({ description: "Full goal text. For Sisyphus goals this MUST include the user's numbered steps + per-step done criteria, taken faithfully from the user's input. Length is capped by the `max objective length` goal setting (0/unset = no limit)." }),
-		mode: Type.Optional(StringEnum(["regular", "sisyphus"] as const, { description: "Goal mode. Defaults to regular. Use sisyphus only when the user explicitly invoked Sisyphus mode." })),
-		token_budget: Type.Optional(Type.Integer({ minimum: 1, description: "Optional token budget in whole tokens. Accept it only when the user explicitly supplied a budget; never invent one." })),
+		objective: Type.String({ description: "Full objective; preserve ordered steps and done criteria." }),
+		mode: Type.Optional(StringEnum(["regular", "sisyphus"] as const, { description: "Default regular; sisyphus only if requested." })),
+		token_budget: Type.Optional(Type.Integer({ minimum: 1, description: "Whole-token budget, only if supplied by the user." })),
 	}, { additionalProperties: false }),
 	executionMode: "sequential",
 	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -317,7 +317,7 @@ pi.registerTool(defineTool({
 	const goalAtBlock = core.state.goal;
 	const focusToken = core.focusedOperationToken(goalAtBlock.id);
 	const fingerprint = buildBlockerFingerprint(goalAtBlock, reason);
-	const consult = oracleStateForFingerprint(readGoalLedger(ctx).events, goalAtBlock.id, fingerprint);
+	const consult = goalOracleState(ctx, goalAtBlock.id, fingerprint);
 
 	// One actionable result already exists.
 	if (consult.result?.disposition === "actionable") {
@@ -524,11 +524,11 @@ pi.registerTool(defineTool({
 		"An optional completion_summary is passed to the auditor as an UNTRUSTED claim — it is never evidence and can never substitute for real artifacts.",
 	],
 	parameters: Type.Object({
-		status: StringEnum(["complete", "blocked", "paused"] as const, { description: "complete runs the independent auditor; blocked records a distinct agent-blocked state; paused is an immediate agent pause with a required reason." }),
+		status: StringEnum(["complete", "blocked", "paused"] as const, { description: "Run outcome." }),
 		reason: Type.Optional(Type.String({ description: "Required when status is paused or blocked: describe the concrete blocker." })),
-		attempted_actions: Type.Optional(Type.Array(Type.String({ maxLength: 240 }), { maxItems: 8, description: "Optional: up to 8 concrete actions already attempted against this blocker." })),
+		attempted_actions: Type.Optional(Type.Array(Type.String({ maxLength: 240 }), { maxItems: 8, description: "Actions attempted against the blocker." })),
 		suggested_action: Type.Optional(Type.String({ description: "Optional suggested next step when status is paused." })),
-		completion_summary: Type.Optional(Type.String({ description: "Optional untrusted executor claim shown to the auditor; never evidence." })),
+		completion_summary: Type.Optional(Type.String({ description: "Untrusted completion claim; never evidence." })),
 	}, { additionalProperties: false }),
 	executionMode: "sequential",
 	async execute(_toolCallId, params, _signal, _onUpdate, ctx) {

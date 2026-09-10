@@ -36,7 +36,11 @@ handlers from their dedicated modules:
 | `goal-drafting.ts` | Guided drafting orchestration: durable `pi-goal-draft` session entries (survive compaction/tree navigation), resume/replace/cancel protection, `core.goalDraftActive` flag consumed by execution-tool guards, `goal_question`/`goal_questionnaire`/`propose_goal_draft` tools, per-draft auditor selection |
 | `goal-questionnaire.ts` | Structured question/answer UI (`runGoalQuestionnaire`, `showProposalDialog`) used by the drafting tools and confirmations |
 | `goal-tool-names.ts` | The seven published tool-name constants (five execution + two drafting), work/progress classification, post-stop allowlist, draft-guard text |
+| `goal-detail.ts` | Lossless objective/task/history paging with content-bound cursors |
+| `goal-ledger-index.ts` | Incremental per-goal activity, audit, lifecycle, and Oracle projections |
+| `goal-task-index.ts` | Content-keyed task snapshots shared by prompts, tools, and dashboard models |
 | `prompts/goal-prompts.ts` | Bounded message builders: full goal-context message (objective/contract/policy/tree), per-turn state snapshot (turn/continuation modes, folded notes), stale-checkpoint and unfocused notices |
+
 | `storage/goal-files.ts` | Goal path safety, serialization/parsing, active-file scanning, active-file writes, archive writes, prompt-body merge from disk |
 | `widgets/goal-widget.ts` | Above-editor Goal Beacon component |
 | `widgets/goal-notifications.ts` | Widget-style notification text for goal lifecycle toasts |
@@ -227,10 +231,10 @@ The extension registers five normal-execution tools and two drafting-only tools:
 | Tool | Purpose |
 |---|---|
 | `create_goal` | Create and focus a new goal after an explicit user request (objective 1–4000 chars, optional `mode` regular/sisyphus and `token_budget`). |
-| `get_goal` | Read-only complete focused goal snapshot. |
+| `get_goal` | Compact summary by default; lossless objective/tasks/history pages (up to 4,000 content characters), optional task selection, legacy verbose/history forms. |
 | `update_goal` | Run outcomes: `complete` (audited from actual evidence; optional `completion_summary` is an untrusted claim), `blocked` (after three consecutive identical blockers), or `paused` (immediate agent pause with required `reason`). |
 | `set_goal_tasks` | Create or structurally replace the task tree (flat parent-linked input, confirmation dialog, id-stable merge). |
-| `update_goal_task` | Update one task without stopping the turn: complete (evidence for contracted tasks), skipped (reason), pending (reopens skipped). |
+| `update_goal_task` | Update one task without stopping the turn, or an ordered atomic batch: complete (evidence for contracted tasks), skipped (reason), pending (reopens skipped). |
 | `goal_questionnaire` | Drafting-only clarification UI for one or many structured questions (a single question with no options is a free-text prompt). |
 | `propose_goal_draft` | Drafting-only objective/task proposal with Confirm or Continue Chatting. |
 
@@ -245,6 +249,29 @@ of tool removal: while `core.goalDraftActive` is set, `create_goal`,
 redirect to `propose_goal_draft` (`get_goal` stays callable for reads), and
 `disableTasks` is enforced inside the task tools' own guards. Invalid
 lifecycle calls return concise state-aware tool results.
+
+Normal prompt/dashboard reads use per-goal ledger indexes: 12 recent events,
+64 activity candidates in stable timestamp order, pinned audit/lifecycle state,
+and blocker-fingerprint Oracle state. Appends extend these indexes without
+copying history. Version 3 derived checkpoints use UTF-8 byte offsets and retain
+reconstructed Oracle advice; old or
+corrupt checkpoints rebuild from the authoritative JSONL ledger. Full history
+is loaded for explicit history/diagnostic requests. Saved goal/session formats
+remain compatible. Task presentation caches use content snapshots; usage changes
+do not rebuild task trees. Stable prompt rules precede changing goal data and
+usage counters, with retrieval instructions beside bounded excerpts.
+
+Warm settings resolution is cached by layer identity and applicable environment
+values; public resolved values remain independently editable. Task caches
+compare content fields without repeatedly serializing long contracts.
+Compiled detail pages reuse their source and cursor hash; history sources are
+invalidated by an opaque ledger generation on append or refresh. Cache size
+limits bound retained data; larger requirements remain available losslessly.
+Pure ANSI text wrapping/truncation is cached by text and layout arguments across
+widgets and dialogs. Live auditor previews scan only the report tail, while the
+complete final report remains available. Measurements and the module audit are
+in `specs/2026-09-07-comprehensive-optimization/`.
+
 
 The `tool_call` interceptor blocks work tools after a stop tool has fired in
 the same turn, and blocks work tools when the checkpoint that triggered the
@@ -318,7 +345,7 @@ entries and run them in one Node process with small test-only adapters for the
 SDK values used by handlers. This avoids loading unrelated model-provider and
 TUI media modules. The fast path requires Node 22.15+; `test:serial` remains
 the slow, real-SDK, process-isolated
-compatibility path. The suites cover: surface baselines (exactly the fixed five/three tool
+compatibility path. The suites cover: surface baselines (lifecycle-dependent goal tool
 profile and fourteen commands), golden file/ledger fixtures, stale-continuation behavior,
 GoalService mutation boundary, runtime/accounting, token-budget transitions,
 task-tool consolidation, verification contracts, the independent auditor,
@@ -333,7 +360,7 @@ The 2026-08-04 hardening plan
 is implemented: paused-status normalization (status authoritative, legacy
 `autoContinue: true` records stay paused), disk-fresh task transactions with
 structural-field clearing, token-budget integer validation, `task_reopened`
-ledger semantics with observable diagnostics, the three/five fixed tool
+ledger semantics with observable diagnostics, the lifecycle-dependent tool
 profile, and the supported integration/experiment coverage described above.
 (the interim drafting-surface removal was later reversed by the product
 correction in the runtime follow-up, which restores guided drafting as a

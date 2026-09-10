@@ -26,6 +26,8 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Ranking updater tests
+        run: python3 -B scripts/test-update-ranking.py
       - name: Type check
         run: npm run check
       - name: Lint
