@@ -260,6 +260,7 @@ excludeTools: bash
 extensions:
 subagentOnlyExtensions: ./tools/child-only-search.ts
 sandbox: reviewer-strict
+permission-profile: reviewer
 model: claude-haiku-4-5
 fallbackModels: openai-codex/gpt-5.6-luna:low, anthropic/claude-sonnet-4
 thinking: high
@@ -310,6 +311,7 @@ Field notes:
 | `extensions` | Omitted means a background child loads the parent's ambient extensions; empty means no ambient extensions; list values load exactly those extensions. Foreground children never load ambient extensions, so for them only listed values apply. |
 | `subagentOnlyExtensions` | Extension paths loaded only in this agent's child sessions. Tools registered there are unavailable to the main agent unless also installed through normal Pi extension configuration. |
 | `sandbox` | Optional named `pi-sandbox` profile for a native Pi child. It must be a non-empty safe name defined in the user's global `<agentDir>/sandbox.json`; it is a selector only, never an inline network or filesystem policy. |
+| `permission-profile` | Optional named permission profile for a native Pi child. The name must be a non-empty safe identifier defined in the global `pi-permission-system` config's `profiles` registry; only the validated name is passed to the child. See below. |
 | `model` | Default model. Bare ids prefer the current provider when possible, then unique registry matches. |
 | `fallbackModels` | Ordered backup models for provider/model failures such as quota, auth, provider-reported timeout, or unavailable model. Expiration of the run-level `timeoutMs` / `maxRuntimeMs` deadline is terminal and does not trigger fallback. Ordinary task failures do not trigger fallback. |
 | `thinking` | Appended as a `:level` suffix at runtime unless a suffix is already present. |
@@ -376,6 +378,50 @@ network/read/write rules are blocked; pi-sandbox does not use Permission System
 or supervisor forwarding to ask the parent for an approval. See
 [`pi-sandbox`'s README](https://github.com/xzzpig/pi-extensions/tree/main/packages/pi-sandbox#named-profiles-for-subagents)
 for profile inheritance and merge rules.
+
+### Permission profiles
+
+Use `permission-profile: <name>` to select a named policy profile from the
+**global-only** `profiles` registry in `pi-permission-system`'s config
+(`<agentDir>/extensions/pi-permission-system/config.json`). It is a selector
+only — the actual rules (tool scalars, `bash`/`mcp`/`skill`/`external_directory`
+pattern maps, `'*'` fallback) live in that registry and always resolve from the
+child's own global config:
+
+```yaml
+---
+name: reviewer
+description: Review changes without write access
+permission-profile: reviewer
+---
+Review the requested change and report findings.
+```
+
+`pi-subagents` validates the scalar name (same grammar as sandbox profiles),
+passes only that name to the child via the transient
+`PI_SUBAGENT_PERMISSION_PROFILE` environment variable, and injects the
+installed `pi-permission-system` extension into the child launch even when
+`extensions` is an explicit allowlist, so the child's permission system applies
+the selected profile. The env channel carries a bare validated name — raw
+policy is never transmitted — and the rules are always read from the child's
+own global config, so the profile means the same policy regardless of which
+host launches the agent. Selection precedence inside the permission system is
+env > project agent file > global agent file.
+
+The launch fails closed when a profile is declared but `pi-permission-system`
+is not installed, when a capability ceiling denies child extensions, or when
+the runner is not a native Pi child (the field is rejected for `external-cli`
+and `external-job` runners). At runtime, selecting an unknown profile or an
+empty ruleset clamps that agent's `allow` rules to `ask` with an explicit
+`Permission profile '<name>' could not be resolved` diagnostic — it never
+silently degrades to the unselected baseline. An agent without the field keeps
+its pre-change behavior exactly.
+
+The profile merges between the project config and the agent's own `permission:`
+block: patterns the profile does not mention keep the lower scopes' rules
+(global denies survive), and `permission:` overrides the profile per pattern.
+A profile selected by a **project** agent file participates only when the host
+marks that project trusted.
 
 ## Context injection
 

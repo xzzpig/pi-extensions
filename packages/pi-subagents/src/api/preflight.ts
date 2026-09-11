@@ -40,7 +40,8 @@ export type SubagentLaunchContractReasonCode =
 	| "thinking_ceiling"
 	| "invalid_extension_bindings"
 	| "untrusted_project"
-	| "sandbox_unavailable";
+	| "sandbox_unavailable"
+	| "permission_profile_unavailable";
 
 export type SubagentLaunchContractDiagnosticCode = SubagentLaunchContractReasonCode | "host_required" | "snapshot_warning" | "workspace_scope_authority";
 
@@ -294,12 +295,24 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 		const message = `Agent '${agent.name}' selects sandbox profile '${agent.sandbox}' from project scope, but the project is not trusted. Trust the project and retry.`;
 		return { ok: false, code: "untrusted_project", message, diagnostics: [{ code: "untrusted_project", severity: "error", message }] };
 	}
+	if (agent.permissionProfile && (agent.source === "project" || agent.override?.scope === "project") && input.projectTrusted !== true) {
+		const message = `Agent '${agent.name}' selects permission profile '${agent.permissionProfile}' from project scope, but the project is not trusted. Trust the project and retry.`;
+		return { ok: false, code: "untrusted_project", message, diagnostics: [{ code: "untrusted_project", severity: "error", message }] };
+	}
 	if (agent.sandbox && (agent.source === "project" || agent.override?.scope === "project") && trustedProjectCwd !== effectiveCwd) {
 		const message = `Agent '${agent.name}' selects sandbox profile '${agent.sandbox}' from project scope, but cwd '${effectiveCwd}' does not match trusted project cwd '${trustedProjectCwd}'. Launch from the trusted project cwd and retry.`;
 		return { ok: false, code: "untrusted_project", message, diagnostics: [{ code: "untrusted_project", severity: "error", message }] };
 	}
+	if (agent.permissionProfile && (agent.source === "project" || agent.override?.scope === "project") && trustedProjectCwd !== effectiveCwd) {
+		const message = `Agent '${agent.name}' selects permission profile '${agent.permissionProfile}' from project scope, but cwd '${effectiveCwd}' does not match trusted project cwd '${trustedProjectCwd}'. Launch from the trusted project cwd and retry.`;
+		return { ok: false, code: "untrusted_project", message, diagnostics: [{ code: "untrusted_project", severity: "error", message }] };
+	}
 	if (agent.sandbox && (agent.runner?.type === "external-cli" || agent.runner?.type === "external-job")) {
 		const message = `Agent '${agent.name}' requests sandbox profile '${agent.sandbox}', but runner.type='${agent.runner.type}' cannot load the native pi-sandbox extension.`;
+		return { ok: false, code: "unsupported_mode", message, diagnostics: [{ code: "unsupported_mode", severity: "error", message }] };
+	}
+	if (agent.permissionProfile && (agent.runner?.type === "external-cli" || agent.runner?.type === "external-job")) {
+		const message = `Agent '${agent.name}' requests permission profile '${agent.permissionProfile}', but runner.type='${agent.runner.type}' cannot load the native pi-permission-system extension.`;
 		return { ok: false, code: "unsupported_mode", message, diagnostics: [{ code: "unsupported_mode", severity: "error", message }] };
 	}
 	let extensionBindings: ExtensionBindings | undefined;
@@ -397,10 +410,11 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 			agentName: agent.name,
 			permissionRules,
 			sandbox: agent.sandbox,
+			permissionProfile: agent.permissionProfile,
 		});
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		const code: SubagentLaunchContractReasonCode = agent.sandbox ? "sandbox_unavailable" : "denied_required_tool";
+		const code: SubagentLaunchContractReasonCode = agent.sandbox ? "sandbox_unavailable" : agent.permissionProfile ? "permission_profile_unavailable" : "denied_required_tool";
 		diagnostics.push({ code, severity: "error", message });
 		return { ok: false, code, message, diagnostics };
 	}
@@ -453,6 +467,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 		...(resolveEffectiveThinking(model, effectiveThinkingConfig) ? { thinking: resolveEffectiveThinking(model, effectiveThinkingConfig) } : {}),
 		...(thinkingCeiling ? { thinkingCeiling } : {}),
 		...(agent.sandbox ? { sandbox: agent.sandbox } : {}),
+		...(agent.permissionProfile ? { permissionProfile: agent.permissionProfile } : {}),
 		systemPromptMode: agent.systemPromptMode,
 		inheritProjectContext: agent.inheritProjectContext,
 		inheritGlobalContext: agent.inheritGlobalContext,
@@ -515,6 +530,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 			inheritGlobalContext: agent.inheritGlobalContext,
 			inheritSkills: agent.inheritSkills,
 			sandbox: agent.sandbox,
+			permissionProfile: agent.permissionProfile,
 			skills: requestedSkills,
 			tools: toolPlan.effectiveToolAllowlist,
 			...(toolPlan.excludeTools.length > 0 ? { excludeTools: toolPlan.excludeTools } : {}),

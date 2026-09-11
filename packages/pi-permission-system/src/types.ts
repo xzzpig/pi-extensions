@@ -3,6 +3,7 @@ import type {
 	FlatPermissionConfig,
 	PatternValue,
 	PermissionState,
+	ProfilePermissionConfig,
 } from "./config-schema";
 import type { RuleOrigin } from "./rule";
 
@@ -14,15 +15,25 @@ export type {
 	FlatPermissionConfig,
 	PatternValue,
 	PermissionState,
+	ProfilePermissionConfig,
 	RuleOrigin,
 };
 
 /**
  * Per-scope permission config shape after loading and validation.
- * Holds only the flat permission map — all policy is expressed there.
+ * Holds the flat permission map — all policy is expressed there — plus the
+ * profile data a scope can carry:
+ * - `profiles`: the named ruleset registry, populated by the *global* scope
+ *   only (project configs with a `profiles` key are rejected at load).
+ * - `profileName`: the `permission-profile:` selection read from an agent
+ *   frontmatter file (global agent scope or project agent scope).
  */
 export interface ScopeConfig {
 	permission?: FlatPermissionConfig;
+	/** Named permission rulesets; global scope only. */
+	profiles?: Record<string, ProfilePermissionConfig>;
+	/** Agent frontmatter selection of one named profile. */
+	profileName?: string;
 	/**
 	 * True when the scope's config file was present but failed to load or
 	 * validate (JSON parse error or schema rejection). Absent and valid files

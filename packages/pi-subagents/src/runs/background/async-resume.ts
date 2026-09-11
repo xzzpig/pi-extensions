@@ -16,6 +16,7 @@ import { normalizeWorktreeBaseRef } from "../shared/worktree.ts";
 import { intersectThinkingCeilings, parseThinkingLevel, type ThinkingLevel } from "../../shared/thinking-ceiling.ts";
 import { assertWorkflowGraphHostSteps } from "../shared/host-step-status.ts";
 import { validateSandboxProfileName } from "../../shared/sandbox-profile.ts";
+import { validatePermissionProfileName } from "../../shared/permission-profile.ts";
 
 export interface AsyncResumeParams {
 	id?: string;
@@ -57,6 +58,7 @@ export type AsyncResumeTarget = {
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	launchContractDigest?: string;
 	sandbox?: string;
+	permissionProfile?: string;
 	runner?: NonNullable<AsyncStatus["steps"]>[number]["runner"];
 	externalJob?: NonNullable<AsyncStatus["steps"]>[number]["externalJob"];
 };
@@ -76,8 +78,9 @@ interface AsyncResultFile {
 	thinking?: string;
 	launchContractDigest?: string;
 	sandbox?: string;
+	permissionProfile?: string;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
-	results?: Array<{ agent?: string; sessionName?: string; success?: boolean; sessionFile?: string; intercomTarget?: string; model?: string; thinking?: string; launchContractDigest?: string; sandbox?: string; capabilityCeiling?: ResolvedSubagentCapabilityCeiling }>;
+	results?: Array<{ agent?: string; sessionName?: string; success?: boolean; sessionFile?: string; intercomTarget?: string; model?: string; thinking?: string; launchContractDigest?: string; sandbox?: string; permissionProfile?: string; capabilityCeiling?: ResolvedSubagentCapabilityCeiling }>;
 }
 
 export interface AsyncRunLocation {
@@ -122,10 +125,13 @@ function validateResultFile(value: unknown, resultPath: string): AsyncResultFile
 			const sandbox = child.sandbox === undefined
 				? undefined
 				: validateSandboxProfileName(child.sandbox, `async result file '${resultPath}' results[${index}].sandbox`);
+			const permissionProfile = child.permissionProfile === undefined
+				? undefined
+				: validatePermissionProfileName(child.permissionProfile, `async result file '${resultPath}' results[${index}].permissionProfile`);
 			const capabilityCeiling = child.capabilityCeiling === undefined ? undefined : parseSubagentCapabilityCeiling(child.capabilityCeiling, `async result file '${resultPath}' results[${index}].capabilityCeiling`);
 			const success = child.success;
 			if (success !== undefined && typeof success !== "boolean") throw new Error(`Invalid async result file '${resultPath}': results[${index}].success must be a boolean.`);
-			return { agent, sessionName, sessionFile, intercomTarget, model, thinking, launchContractDigest, ...(sandbox ? { sandbox } : {}), ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(typeof success === "boolean" ? { success } : {}) };
+			return { agent, sessionName, sessionFile, intercomTarget, model, thinking, launchContractDigest, ...(sandbox ? { sandbox } : {}), ...(permissionProfile ? { permissionProfile } : {}), ...(capabilityCeiling ? { capabilityCeiling } : {}), ...(typeof success === "boolean" ? { success } : {}) };
 		});
 	}
 	const success = data.success;
@@ -143,6 +149,7 @@ function validateResultFile(value: unknown, resultPath: string): AsyncResultFile
 		thinking: validateOptionalString(data, "thinking", resultPath),
 		launchContractDigest: validateOptionalString(data, "launchContractDigest", resultPath),
 		...(data.sandbox === undefined ? {} : { sandbox: validateSandboxProfileName(data.sandbox, `async result file '${resultPath}' sandbox`) }),
+		...(data.permissionProfile === undefined ? {} : { permissionProfile: validatePermissionProfileName(data.permissionProfile, `async result file '${resultPath}' permissionProfile`) }),
 		...(data.capabilityCeiling === undefined ? {} : { capabilityCeiling: parseSubagentCapabilityCeiling(data.capabilityCeiling, `async result file '${resultPath}' capabilityCeiling`) }),
 		...(typeof success === "boolean" ? { success } : {}),
 		...(results ? { results } : {}),
@@ -290,6 +297,7 @@ function validateStatusForResume(status: AsyncStatus | null, source: string): vo
 			if (stepRecord.thinkingCeiling !== undefined) stepRecord.thinkingCeiling = parseThinkingLevel(stepRecord.thinkingCeiling, `async status '${source}' steps[${index}].thinkingCeiling`);
 			if (stepRecord.launchContractDigest !== undefined && typeof stepRecord.launchContractDigest !== "string") throw new Error(`Invalid async status '${source}': steps[${index}].launchContractDigest must be a string.`);
 			if (stepRecord.sandbox !== undefined) stepRecord.sandbox = validateSandboxProfileName(stepRecord.sandbox, `async status '${source}' steps[${index}].sandbox`);
+			if (stepRecord.permissionProfile !== undefined) stepRecord.permissionProfile = validatePermissionProfileName(stepRecord.permissionProfile, `async status '${source}' steps[${index}].permissionProfile`);
 			if (stepRecord.capabilityCeiling !== undefined) stepRecord.capabilityCeiling = parseSubagentCapabilityCeiling(stepRecord.capabilityCeiling, `async status '${source}' steps[${index}].capabilityCeiling`);
 		});
 	}
@@ -325,7 +333,7 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': expected an object.`);
 	const parsed = value as Record<string, unknown>;
 	const allowedFields = new Set([
-		"version", "launchContractDigest", "sourceRunId", "agentContract", "agent", "sandbox", "sessionFile", "cwd", "model", "modelProvider", "modelOverrideFromParent", "modelOrigin", "fallbackModels", "thinking", "thinkingCeiling", "tools", "allowNestedSubagents", "extensions",
+		"version", "launchContractDigest", "sourceRunId", "agentContract", "agent", "sandbox", "permissionProfile", "sessionFile", "cwd", "model", "modelProvider", "modelOverrideFromParent", "modelOrigin", "fallbackModels", "thinking", "thinkingCeiling", "tools", "allowNestedSubagents", "extensions",
 		"subagentOnlyExtensions", "mcpDirectTools", "excludeTools", "mutationTools", "systemPrompt", "systemPromptMode", "inheritProjectContext", "inheritGlobalContext", "inheritSkills", "skills",
 		"skillPath", "agentFilePath", "completionGuard", "memory", "outputPath", "outputMode", "structuredOutputSchema", "acceptance", "sessionDir", "artifactConfig",
 		"artifactsDir", "maxOutput", "controlConfig", "context", "intercomBridge", "absoluteDeadlineAt", "initialTurnBudget", "initialToolBudget", "maxSubagentDepth", "share", "capabilityCeiling",
@@ -384,6 +392,7 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 		}
 	}
 	if (parsed.sandbox !== undefined) parsed.sandbox = validateSandboxProfileName(parsed.sandbox, `async recovery descriptor '${descriptorPath}' sandbox`);
+	if (parsed.permissionProfile !== undefined) parsed.permissionProfile = validatePermissionProfileName(parsed.permissionProfile, `async recovery descriptor '${descriptorPath}' permissionProfile`);
 	if (parsed.completionGuard !== undefined && typeof parsed.completionGuard !== "boolean") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': completionGuard must be a boolean.`);
 	if (parsed.structuredOutputSchema !== undefined && (!parsed.structuredOutputSchema || typeof parsed.structuredOutputSchema !== "object" || Array.isArray(parsed.structuredOutputSchema))) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': structuredOutputSchema must be an object.`);
 	if (parsed.memory !== undefined) {
@@ -517,6 +526,7 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 					model: selectedStep.model,
 					thinking: selectedStep.thinking,
 					sandbox: selectedStep.sandbox ?? result?.results?.[requestedIndex]?.sandbox ?? result?.sandbox ?? recoveryDescriptor?.sandbox,
+					permissionProfile: selectedStep.permissionProfile ?? result?.results?.[requestedIndex]?.permissionProfile ?? result?.permissionProfile ?? recoveryDescriptor?.permissionProfile,
 					launchContractDigest: selectedStep.launchContractDigest ?? result?.results?.[requestedIndex]?.launchContractDigest ?? result?.launchContractDigest ?? recoveryDescriptor?.launchContractDigest,
 					...(selectedStep.runner ? { runner: selectedStep.runner } : {}),
 					...(selectedStep.externalJob ? { externalJob: selectedStep.externalJob } : {}),
@@ -550,6 +560,7 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 				model: selected.step.model,
 				thinking: selected.step.thinking,
 				sandbox: selected.step.sandbox ?? result?.results?.[selected.index]?.sandbox ?? result?.sandbox ?? recoveryDescriptor?.sandbox,
+				permissionProfile: selected.step.permissionProfile ?? result?.results?.[selected.index]?.permissionProfile ?? result?.permissionProfile ?? recoveryDescriptor?.permissionProfile,
 				launchContractDigest: selected.step.launchContractDigest ?? result?.results?.[selected.index]?.launchContractDigest ?? result?.launchContractDigest ?? recoveryDescriptor?.launchContractDigest,
 				...(selected.step.runner ? { runner: selected.step.runner } : {}),
 				...(selected.step.externalJob ? { externalJob: selected.step.externalJob } : {}),
@@ -598,6 +609,7 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 		...(stepModel ? { model: stepModel } : {}),
 		...(stepThinking ? { thinking: stepThinking } : {}),
 		sandbox: statusSteps[index]?.sandbox ?? resultSteps[index]?.sandbox ?? result?.sandbox ?? recoveryDescriptor?.sandbox,
+		permissionProfile: statusSteps[index]?.permissionProfile ?? resultSteps[index]?.permissionProfile ?? result?.permissionProfile ?? recoveryDescriptor?.permissionProfile,
 		launchContractDigest: statusSteps[index]?.launchContractDigest ?? resultSteps[index]?.launchContractDigest ?? result?.launchContractDigest ?? recoveryDescriptor?.launchContractDigest,
 		...(statusSteps[index]?.runner ? { runner: statusSteps[index]!.runner } : {}),
 		...(statusSteps[index]?.externalJob ? { externalJob: statusSteps[index]!.externalJob } : {}),
@@ -623,6 +635,7 @@ export function applySteeringRecoveryAgentConfig(agentConfig: AgentConfig, descr
 		mcpDirectTools: descriptor.mcpDirectTools ? [...descriptor.mcpDirectTools] : undefined,
 		mutationTools: descriptor.mutationTools ? [...descriptor.mutationTools] : undefined,
 		sandbox: descriptor.sandbox ?? agentConfig.sandbox,
+		permissionProfile: descriptor.permissionProfile ?? agentConfig.permissionProfile,
 		systemPrompt: descriptor.systemPrompt ?? agentConfig.systemPrompt,
 		systemPromptMode: descriptor.systemPromptMode,
 		inheritProjectContext: descriptor.inheritProjectContext,

@@ -21,6 +21,7 @@ import { writeAtomicJson } from "../../shared/atomic-json.ts";
 import { sanitizeProcessTerminal } from "../background/process-terminal.ts";
 import { THINKING_LEVELS } from "../../shared/model-info.ts";
 import { validateSandboxProfileName } from "../../shared/sandbox-profile.ts";
+import { validatePermissionProfileName } from "../../shared/permission-profile.ts";
 
 export const NESTED_EVENTS_DIR = path.join(TEMP_ROOT_DIR, "nested-subagent-events");
 const ROUTE_FILE = "route.json";
@@ -310,6 +311,14 @@ function sandboxProfileValue(value: unknown): string | undefined {
 	}
 }
 
+function permissionProfileValue(value: unknown): string | undefined {
+	try {
+		return validatePermissionProfileName(value);
+	} catch {
+		return undefined;
+	}
+}
+
 function sanitizeStep(input: unknown, depth: number): NestedStepSummary | undefined {
 	if (!input || typeof input !== "object") return undefined;
 	const raw = input as Record<string, unknown>;
@@ -321,6 +330,7 @@ function sanitizeStep(input: unknown, depth: number): NestedStepSummary | undefi
 	const model = stringValue(raw.model);
 	const thinking = THINKING_LEVELS.find((level) => level === raw.thinking);
 	const sandbox = sandboxProfileValue(raw.sandbox);
+	const permissionProfile = permissionProfileValue(raw.permissionProfile);
 	return {
 		agent,
 		status,
@@ -328,6 +338,7 @@ function sanitizeStep(input: unknown, depth: number): NestedStepSummary | undefi
 		...(thinking ? { thinking } : {}),
 		...(stringValue(raw.sessionName, 256) ? { sessionName: stringValue(raw.sessionName, 256) } : {}),
 		...(sandbox ? { sandbox } : {}),
+		...(permissionProfile ? { permissionProfile } : {}),
 		...(stringValue(raw.sessionFile, 2048) ? { sessionFile: stringValue(raw.sessionFile, 2048) } : {}),
 		...(raw.activityState === "active_long_running" || raw.activityState === "needs_attention" ? { activityState: raw.activityState } : {}),
 		...(clampNumber(raw.lastActivityAt) !== undefined ? { lastActivityAt: clampNumber(raw.lastActivityAt) } : {}),
@@ -361,6 +372,7 @@ export function sanitizeSummary(input: unknown, depth = 0): NestedRunSummary | u
 	const totalTokens = sanitizeTokenUsage(raw.totalTokens);
 	const totalCost = sanitizeCost(raw.totalCost);
 	const sandbox = sandboxProfileValue(raw.sandbox);
+	const permissionProfile = permissionProfileValue(raw.permissionProfile);
 	return {
 		id: raw.id,
 		parentRunId: raw.parentRunId,
@@ -385,6 +397,7 @@ export function sanitizeSummary(input: unknown, depth = 0): NestedRunSummary | u
 		...(raw.mode === "single" || raw.mode === "parallel" || raw.mode === "chain" ? { mode: raw.mode } : {}),
 		...(stringValue(raw.agent, 128) ? { agent: stringValue(raw.agent, 128) } : {}),
 		...(sandbox ? { sandbox } : {}),
+		...(permissionProfile ? { permissionProfile } : {}),
 		...(Array.isArray(raw.agents) ? { agents: raw.agents.map((agent) => stringValue(agent, 128)).filter((agent): agent is string => Boolean(agent)).slice(0, MAX_STEPS) } : {}),
 
 		...(clampNumber(raw.currentStep) !== undefined ? { currentStep: clampNumber(raw.currentStep) } : {}),

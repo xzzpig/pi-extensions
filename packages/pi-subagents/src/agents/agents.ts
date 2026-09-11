@@ -25,6 +25,7 @@ import { validateAcceptanceInput } from "../runs/shared/acceptance.ts";
 import { validatePermissionRules, type PermissionRules } from "../runs/shared/permissions.ts";
 import { parseThinkingLevel, type ThinkingLevel } from "../shared/thinking-ceiling.ts";
 import { validateSandboxProfileName } from "../shared/sandbox-profile.ts";
+import { validatePermissionProfileName } from "../shared/permission-profile.ts";
 
 export type AgentScope = "user" | "project" | "both";
 
@@ -81,6 +82,7 @@ export interface BuiltinAgentOverrideBase {
 	completionGuard?: boolean;
 	toolBudget?: ToolBudgetConfig;
 	sandbox?: string;
+	permissionProfile?: string;
 }
 
 interface BuiltinAgentOverrideConfig {
@@ -111,6 +113,7 @@ interface BuiltinAgentOverrideConfig {
 	completionGuard?: boolean;
 	toolBudget?: ToolBudgetConfig | false;
 	sandbox?: string;
+	permissionProfile?: string;
 }
 
 interface BuiltinAgentOverrideInfo {
@@ -178,6 +181,7 @@ export interface AgentConfig {
 	completionGuard?: boolean;
 	toolBudget?: ToolBudgetConfig;
 	sandbox?: string;
+	permissionProfile?: string;
 	permissions?: PermissionRules;
 	memory?: AgentMemoryConfig;
 	disabled?: boolean;
@@ -793,6 +797,7 @@ function cloneOverrideBase(agent: AgentConfig): BuiltinAgentOverrideBase {
 		...(agent.completionGuard !== undefined ? { completionGuard: agent.completionGuard } : {}),
 		...(agent.toolBudget !== undefined ? { toolBudget: agent.toolBudget } : {}),
 		...(agent.sandbox !== undefined ? { sandbox: agent.sandbox } : {}),
+		...(agent.permissionProfile !== undefined ? { permissionProfile: agent.permissionProfile } : {}),
 	};
 }
 
@@ -827,6 +832,7 @@ function cloneOverrideValue(override: BuiltinAgentOverrideConfig): BuiltinAgentO
 		...(override.completionGuard !== undefined ? { completionGuard: override.completionGuard } : {}),
 		...(override.toolBudget !== undefined ? { toolBudget: override.toolBudget === false ? false : { ...override.toolBudget, ...(Array.isArray(override.toolBudget.block) ? { block: [...override.toolBudget.block] } : {}) } } : {}),
 		...(override.sandbox !== undefined ? { sandbox: override.sandbox } : {}),
+		...(override.permissionProfile !== undefined ? { permissionProfile: override.permissionProfile } : {}),
 	};
 }
 
@@ -1093,6 +1099,10 @@ function parseBuiltinOverrideEntry(
 
 	if ("sandbox" in input) {
 		override.sandbox = validateSandboxProfileName(input.sandbox, `Builtin override '${name}' in '${filePath}' sandbox`);
+	}
+
+	if ("permissionProfile" in input) {
+		override.permissionProfile = validatePermissionProfileName(input.permissionProfile, `Builtin override '${name}' in '${filePath}' permission-profile`);
 	}
 
 	if ("systemPrompt" in input) {
@@ -1442,6 +1452,7 @@ function applyBuiltinOverride(
 	if (override.completionGuard !== undefined) next.completionGuard = override.completionGuard;
 	if (override.toolBudget !== undefined) { if (override.toolBudget === false) delete next.toolBudget; else next.toolBudget = override.toolBudget; }
 	if (override.sandbox !== undefined) next.sandbox = override.sandbox;
+	if (override.permissionProfile !== undefined) next.permissionProfile = override.permissionProfile;
 
 	return next;
 }
@@ -1543,7 +1554,7 @@ function applyCustomAgentOverrides(
 
 export function buildBuiltinOverrideConfig(
 	base: BuiltinAgentOverrideBase,
-	draft: Pick<AgentConfig, "model" | "modelProvider" | "fallbackModels" | "fast" | "thinking" | "systemPromptMode" | "inheritProjectContext" | "inheritGlobalContext" | "inheritSkills" | "defaultContext" | "acceptanceRole" | "disabled" | "systemPrompt" | "skills" | "tools" | "allowNestedSubagents" | "mcpDirectTools" | "extensions" | "subagentOnlyExtensions" | "mutationTools" | "completionGuard" | "toolBudget" | "sandbox"> & Partial<Pick<AgentConfig, "description" | "output" | "outputMode" | "defaultReads" | "excludeTools">>,
+	draft: Pick<AgentConfig, "model" | "modelProvider" | "fallbackModels" | "fast" | "thinking" | "systemPromptMode" | "inheritProjectContext" | "inheritGlobalContext" | "inheritSkills" | "defaultContext" | "acceptanceRole" | "disabled" | "systemPrompt" | "skills" | "tools" | "allowNestedSubagents" | "mcpDirectTools" | "extensions" | "subagentOnlyExtensions" | "mutationTools" | "completionGuard" | "toolBudget" | "sandbox" | "permissionProfile"> & Partial<Pick<AgentConfig, "description" | "output" | "outputMode" | "defaultReads" | "excludeTools">>,
 ): BuiltinAgentOverrideConfig | undefined {
 	const override: BuiltinAgentOverrideConfig = {};
 
@@ -1584,6 +1595,7 @@ export function buildBuiltinOverrideConfig(
 	}
 	if (JSON.stringify(draft.toolBudget) !== JSON.stringify(base.toolBudget)) override.toolBudget = draft.toolBudget ?? false;
 	if (draft.sandbox !== undefined && draft.sandbox !== base.sandbox) override.sandbox = draft.sandbox;
+	if (draft.permissionProfile !== undefined && draft.permissionProfile !== base.permissionProfile) override.permissionProfile = draft.permissionProfile;
 
 	return Object.keys(override).length > 0 ? override : undefined;
 }
@@ -1938,7 +1950,7 @@ function parseAgentRunnerFrontmatter(raw: string | undefined, agentName: string)
 
 function validateExternalRunnerProfile(frontmatter: Record<string, string>, agentName: string, runner: AgentRunnerConfig | undefined): void {
 	if (runner?.type !== "external-cli" && runner?.type !== "external-job") return;
-	const unsupported = ["tools", "excludeTools", "allowNestedSubagents", "model", "fallbackModels", "thinking", "extensions", "subagentOnlyExtensions", "mutationTools", "maxSubagentDepth", "completionGuard", "skills", "skill", "skillPath", "toolBudget", "sandbox", "permission", "permissions"]
+	const unsupported = ["tools", "excludeTools", "allowNestedSubagents", "model", "fallbackModels", "thinking", "extensions", "subagentOnlyExtensions", "mutationTools", "maxSubagentDepth", "completionGuard", "skills", "skill", "skillPath", "toolBudget", "sandbox", "permission-profile", "permission", "permissions"]
 		.filter((field) => frontmatter[field] !== undefined);
 	if (unsupported.length > 0) {
 		throw new Error(`Agent '${agentName}' uses runner.type='${runner.type}' and declares unsupported Pi-only fields: ${unsupported.join(", ")}.`);
@@ -2109,6 +2121,9 @@ function loadAgentsFromDefinitionFiles(files: AgentDefinitionFile[], source: Age
 		const sandbox = frontmatter.sandbox !== undefined
 			? validateSandboxProfileName(frontmatter.sandbox, `Agent '${localName}' sandbox`)
 			: undefined;
+		const permissionProfile = frontmatter["permission-profile"] !== undefined
+			? validatePermissionProfileName(frontmatter["permission-profile"], `Agent '${localName}' permission-profile`)
+			: undefined;
 		if (frontmatter.permission !== undefined && frontmatter.permissions !== undefined) {
 			throw new Error(`Agent '${localName}' cannot declare both permission and permissions frontmatter.`);
 		}
@@ -2181,6 +2196,7 @@ function loadAgentsFromDefinitionFiles(files: AgentDefinitionFile[], source: Age
 			...(completionGuard !== undefined ? { completionGuard } : {}),
 			...(toolBudget !== undefined ? { toolBudget } : {}),
 			...(sandbox !== undefined ? { sandbox } : {}),
+			...(permissionProfile !== undefined ? { permissionProfile } : {}),
 			...(permissions !== undefined ? { permissions } : {}),
 			...(memory !== undefined ? { memory } : {}),
 			...(Object.keys(extraFields).length > 0 ? { extraFields } : {}),

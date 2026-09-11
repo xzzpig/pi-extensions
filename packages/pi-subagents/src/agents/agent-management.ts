@@ -42,6 +42,7 @@ import { capabilityCeilingAgentRestrictionSources, isAgentAllowedByCapabilityCei
 import { mergeRuntimeAgents, type RuntimeAgentOwner } from "./runtime-agent-registry.ts";
 import { listExternalJobProviders } from "../api/external-job-provider.ts";
 import { validateSandboxProfileName } from "../shared/sandbox-profile.ts";
+import { validatePermissionProfileName } from "../shared/permission-profile.ts";
 
 export const AGENT_MANAGEMENT_API_VERSION = 1 as const;
 
@@ -114,7 +115,11 @@ function result(text: string, isError = false, details?: Partial<Details>): Agen
 }
 
 function jsonDetails<T>(value: T): T {
-	return JSON.parse(JSON.stringify(value)) as T;
+	try {
+		return JSON.parse(JSON.stringify(value)) as T;
+	} catch (error) {
+		throw new Error(`Failed to serialize agent management details: ${error instanceof Error ? error.message : String(error)}`);
+	}
 }
 
 function presentDetails<T extends Record<string, unknown>>(value: T): T | undefined {
@@ -453,6 +458,7 @@ export function preservedAgentFrontmatterFields(agent: AgentConfig, cfg: Record<
 	}
 	if (hasKey(cfg, "toolBudget")) changed("toolBudget");
 	if (hasKey(cfg, "sandbox")) changed("sandbox");
+	if (hasKey(cfg, "permissionProfile")) changed("permission-profile");
 
 	return fields;
 }
@@ -692,6 +698,14 @@ function applyAgentConfig(target: AgentConfig, cfg: Record<string, unknown>): st
 			return error instanceof Error ? error.message : String(error);
 		}
 	}
+	if (hasKey(cfg, "permissionProfile")) {
+		if (typeof cfg.permissionProfile !== "string") return "config.permissionProfile must be a non-empty permission profile name when provided.";
+		try {
+			target.permissionProfile = validatePermissionProfileName(cfg.permissionProfile, "config.permissionProfile");
+		} catch (error) {
+			return error instanceof Error ? error.message : String(error);
+		}
+	}
 	if (target.runner?.type === "external-cli" || target.runner?.type === "external-job") {
 		const unsupported = [
 			target.tools?.length || target.mcpDirectTools?.length ? "tools" : undefined,
@@ -707,6 +721,7 @@ function applyAgentConfig(target: AgentConfig, cfg: Record<string, unknown>): st
 			target.completionGuard !== undefined ? "completionGuard" : undefined,
 			target.toolBudget ? "toolBudget" : undefined,
 			target.sandbox ? "sandbox" : undefined,
+			target.permissionProfile ? "permissionProfile" : undefined,
 		].filter((field): field is string => Boolean(field));
 		if (unsupported.length > 0) return `config.runner type '${target.runner.type}' does not support Pi-only fields: ${unsupported.join(", ")}.`;
 	}
@@ -1008,6 +1023,7 @@ function formatAgentDetail(agent: AgentConfig): string {
 	if (agent.completionGuard === false) lines.push("Completion guard: false");
 	if (agent.toolBudget) lines.push(`Tool budget: ${JSON.stringify(agent.toolBudget)}`);
 	if (agent.sandbox) lines.push(`Sandbox profile: ${agent.sandbox}`);
+	if (agent.permissionProfile) lines.push(`Permission profile: ${agent.permissionProfile}`);
 	if (agent.memory) lines.push(`Memory: ${agent.memory.scope} scope, path: ${agent.memory.path}`);
 	if (agent.systemPrompt.trim()) lines.push("", "System Prompt:", agent.systemPrompt);
 	return lines.join("\n");
@@ -1436,6 +1452,7 @@ function validateEjectedAgentLaunchPreflight(agent: AgentConfig, cwd: string): s
 			requireReadTool: resolvedSkills.resolved.length > 0,
 			agentName: agent.name,
 			sandbox: agent.sandbox,
+			permissionProfile: agent.permissionProfile,
 		});
 	} catch (error) {
 		return error instanceof Error ? error.message : String(error);

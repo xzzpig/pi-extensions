@@ -544,6 +544,16 @@ function sandboxProfileTrustError(agent: AgentConfig, ctx: ExtensionContext, chi
 	return `Agent '${agent.name}' selects sandbox profile '${agent.sandbox}' from project scope, but child cwd '${path.resolve(childCwd)}' does not match the trusted project cwd '${trustedCwd}'. Launch from the trusted project cwd and retry.`;
 }
 
+function permissionProfileTrustError(agent: AgentConfig, ctx: ExtensionContext, childCwd: string): string | undefined {
+	if (!agent.permissionProfile || (agent.source !== "project" && agent.override?.scope !== "project")) return undefined;
+	const trustedCwd = trustedProjectCwd(ctx);
+	if (trustedCwd && trustedCwd === path.resolve(childCwd)) return undefined;
+	if (!trustedCwd) {
+		return `Agent '${agent.name}' selects permission profile '${agent.permissionProfile}' from project scope, but the project is not trusted. Trust the project and retry.`;
+	}
+	return `Agent '${agent.name}' selects permission profile '${agent.permissionProfile}' from project scope, but child cwd '${path.resolve(childCwd)}' does not match the trusted project cwd '${trustedCwd}'. Launch from the trusted project cwd and retry.`;
+}
+
 function removeForegroundControlIfIdle(state: SubagentState, runId: string): boolean {
 	const control = state.foregroundControls.get(runId);
 	if (control && (!foregroundSchedulingSettled(control) || (control.activeChildren?.size ?? 0) > 0)) return false;
@@ -792,6 +802,7 @@ function rememberForegroundRun(state: SubagentState, input: { runId: string; mod
 				...(result.acceptance ? { acceptance: result.acceptance } : {}),
 				...(Object.keys(resumeContract).length ? { resumeContract } : {}),
 				...(result.sandbox ? { sandbox: result.sandbox } : {}),
+				...(result.permissionProfile ? { permissionProfile: result.permissionProfile } : {}),
 				...(result.launchContractDigest ? { launchContractDigest: result.launchContractDigest } : {}),
 				...(input.extensionBindings ? { extensionBindings: input.extensionBindings } : {}),
 				...(result.launchResolvedExtensions ? { launchResolvedExtensions: result.launchResolvedExtensions } : {}),
@@ -874,6 +885,7 @@ function updateRememberedForegroundChild(state: SubagentState, input: { runId: s
 		...(input.result.detachedReason ? { detachedReason: input.result.detachedReason } : {}),
 		...(input.result.acceptance ? { acceptance: input.result.acceptance } : {}),
 		...(input.result.sandbox ? { sandbox: input.result.sandbox } : {}),
+		...(input.result.permissionProfile ? { permissionProfile: input.result.permissionProfile } : {}),
 		...(input.result.launchContractDigest ? { launchContractDigest: input.result.launchContractDigest } : {}),
 		...(input.result.launchResolvedExtensions ? { launchResolvedExtensions: input.result.launchResolvedExtensions } : {}),
 		...(input.result.runtimeAcknowledgedExtensions ? { runtimeAcknowledgedExtensions: input.result.runtimeAcknowledgedExtensions } : {}),
@@ -913,7 +925,7 @@ function updateRememberedForegroundChild(state: SubagentState, input: { runId: s
 	});
 }
 
-function resolveForegroundResumeTarget(params: SubagentParamsLike, state: SubagentState, options: { exactOnly?: boolean } = {}): { runId: string; mode: SubagentRunMode; state: "complete"; agent: string; index: number; cwd: string; sessionFile: string; model?: string; thinking?: string; sandbox?: string; launchContractDigest?: string; resumeContract?: ForegroundResumeChild["resumeContract"]; extensionBindings?: ExtensionBindings; capabilityCeiling?: ResolvedSubagentCapabilityCeiling } | undefined {
+function resolveForegroundResumeTarget(params: SubagentParamsLike, state: SubagentState, options: { exactOnly?: boolean } = {}): { runId: string; mode: SubagentRunMode; state: "complete"; agent: string; index: number; cwd: string; sessionFile: string; model?: string; thinking?: string; sandbox?: string; permissionProfile?: string; launchContractDigest?: string; resumeContract?: ForegroundResumeChild["resumeContract"]; extensionBindings?: ExtensionBindings; capabilityCeiling?: ResolvedSubagentCapabilityCeiling } | undefined {
 	const requested = (params.id ?? params.runId)?.trim();
 	if (!requested || !state.foregroundRuns?.size || !state.currentSessionId) return undefined;
 	const direct = state.foregroundRuns.get(requested);
@@ -944,6 +956,7 @@ function resolveForegroundResumeTarget(params: SubagentParamsLike, state: Subage
 		...(child.model ? { model: child.model } : {}),
 		...(child.thinking ? { thinking: child.thinking } : {}),
 		...(child.sandbox ? { sandbox: child.sandbox } : {}),
+		...(child.permissionProfile ? { permissionProfile: child.permissionProfile } : {}),
 		...(child.launchContractDigest ? { launchContractDigest: child.launchContractDigest } : {}),
 		...(child.resumeContract ? { resumeContract: child.resumeContract } : {}),
 		...(child.extensionBindings ? { extensionBindings: normalizeExtensionBindings(child.extensionBindings)!.value } : {}),
@@ -965,6 +978,7 @@ type NestedResumeSourceTarget = {
 	model?: string;
 	thinking?: AgentConfig["thinking"];
 	sandbox?: string;
+	permissionProfile?: string;
 	launchContractDigest?: string;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	recoveryDescriptor?: SteeringRecoveryDescriptor;
@@ -3269,6 +3283,12 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		if (sandboxTrustError) {
 			return { content: [{ type: "text", text: sandboxTrustError }], isError: true, details: { mode: "single" as const, results: [] } };
 		}
+		const permissionProfileTrustErrorForAgent = params.worktree === true
+			? permissionProfileTrustError(a, ctx, path.join(effectiveCwd, ".pi-subagents-worktree"))
+			: permissionProfileTrustError(a, ctx, effectiveCwd);
+		if (permissionProfileTrustErrorForAgent) {
+			return { content: [{ type: "text", text: permissionProfileTrustErrorForAgent }], isError: true, details: { mode: "single" as const, results: [] } };
+		}
 		const rawOutput = params.output !== undefined ? params.output : a.output;
 		const effectiveOutput = normalizeSingleOutputOverride(rawOutput, a.output);
 		const effectiveOutputMode = params.outputMode ?? a.outputMode ?? "inline";
@@ -3781,6 +3801,11 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	if (sandboxTrustError) {
 		if (worktreeSetup) cleanupWorktrees(worktreeSetup);
 		return { content: [{ type: "text", text: sandboxTrustError }], isError: true, details: { mode: "single", results: [] } };
+	}
+	const permissionProfileTrustErrorForLaunch = permissionProfileTrustError(agentConfig, ctx, singleCwd);
+	if (permissionProfileTrustErrorForLaunch) {
+		if (worktreeSetup) cleanupWorktrees(worktreeSetup);
+		return { content: [{ type: "text", text: permissionProfileTrustErrorForLaunch }], isError: true, details: { mode: "single", results: [] } };
 	}
 
 	const authoredTask = task;

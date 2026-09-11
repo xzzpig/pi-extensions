@@ -309,6 +309,9 @@ describe("runtime agent registration", () => {
 			["toolBudget", { toolBudget: { hard: 0 } }, /toolBudget\.hard must be an integer >= 1/],
 			["sandbox", { sandbox: "../escape" }, /sandbox.*letters, digits, underscores, or hyphens/],
 			["sandbox-external-runner", { sandbox: "reviewer-strict", runner: { type: "external-cli", command: "node" } }, /cannot use sandbox profiles/],
+			["permissionProfile", { permissionProfile: "../escape" }, /permissionProfile.*letters, digits, underscores, or hyphens/],
+			["permissionProfile-false", { permissionProfile: false }, /non-empty profile name/],
+			["permissionProfile-external-runner", { permissionProfile: "reviewer-strict", runner: { type: "external-cli", command: "node" } }, /cannot use permission profiles/],
 			["permissions", { permissions: { bash: "deny" } }, /permissions\.bash is unsupported/],
 		];
 

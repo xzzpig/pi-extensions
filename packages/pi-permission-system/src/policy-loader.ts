@@ -7,6 +7,7 @@ import {
   stripJsonComments,
 } from "./config-loader";
 import { getGlobalConfigPath } from "./config-paths";
+import { validatePermissionProfileName } from "./permission-profile";
 import type { ScopeConfig } from "./types";
 import { toRecord } from "./value-guards";
 import { extractFrontmatter, parseSimpleYamlMap } from "./yaml-frontmatter";
@@ -213,6 +214,10 @@ export class FilePolicyLoader implements PolicyLoader {
 
     const value: ScopeConfig = {
       permission: config.permission,
+      // The profiles registry rides the global scope: the global file's stamp
+      // already covers it in the cache key, and project scopes can never
+      // carry one (they are rejected at load).
+      ...(config.profiles !== undefined ? { profiles: config.profiles } : {}),
     };
 
     this.globalConfigCache = { stamp, value };
@@ -229,7 +234,11 @@ export class FilePolicyLoader implements PolicyLoader {
       return this.projectGlobalConfigCache.value;
     }
 
-    const { config, issues } = loadUnifiedConfig(this.projectGlobalConfigPath);
+    const { config, issues } = loadUnifiedConfig(this.projectGlobalConfigPath, {
+      // A project file that defines `profiles` is rejected whole, marking the
+      // project scope invalid so its allows are clamped to ask (fail closed).
+      allowProfiles: false,
+    });
     this.accumulateConfigIssues(issues);
 
     // A present-but-rejected file yields issues (parse error or schema
@@ -277,10 +286,26 @@ export class FilePolicyLoader implements PolicyLoader {
         // Agent frontmatter carries non-config keys (name, description, model,
         // …) alongside `permission`, so it is not validated by the strict
         // config-file schema; only the `permission` block is extracted, and its
-        // malformed entries are dropped tolerantly as before.
+        // malformed entries are dropped tolerantly as before. The
+        // `permission-profile` selection is stricter: a present-but-invalid
+        // name (path-like, whitespace, the literal `false`, …) fails this
+        // scope closed rather than silently running without the intended
+        // profile.
         const parsed = parseSimpleYamlMap(frontmatter);
+        let profileName: string | undefined;
+        let selectionInvalid = false;
+        const rawProfile = parsed["permission-profile"];
+        if (rawProfile !== undefined && rawProfile !== null) {
+          try {
+            profileName = validatePermissionProfileName(rawProfile);
+          } catch {
+            selectionInvalid = true;
+          }
+        }
         value = {
           permission: normalizeFlatPermissionValue(parsed.permission),
+          ...(profileName ? { profileName } : {}),
+          ...(selectionInvalid ? { invalid: true } : {}),
         };
       }
     } catch {

@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-09-11
+
+### Added
+
+- **Named permission profiles.** The global config file gains a `profiles` registry (`profiles: { "<name>": { "permission": ... } }`) whose entries reuse the full `permission` grammar (tool scalars, `bash`/`mcp`/`skill`/`external_directory`/`special` pattern maps, `'*'` fallback). The registry is global-only: a project config that defines `profiles` is schema-rejected, marking the project scope invalid and failing closed.
+- **`permission-profile` agent frontmatter + env channel.** A global or project agent file can select a profile with the `permission-profile: <name>` frontmatter key (name grammar `^[A-Za-z0-9][A-Za-z0-9_-]*$`, ≤128 chars, no empty/path/`false` values). `pi-subagents` child launches pass the validated name via the `PI_SUBAGENT_PERMISSION_PROFILE` environment variable; selection precedence is env > project agent file > global agent file. The rules always resolve from the child's own global config — a bare name crosses the boundary, never raw policy.
+- **Profile scope in resolution.** The selected profile merges between the project config and the agent frontmatter (`[global, project, profile, agent, project-agent]`) with per-pattern origins tagged `'profile'`; patterns the profile does not mention keep the lower scopes' rules (global denies survive), and the agent's own `permission:` overrides the profile per pattern.
+- **Fail-closed selection.** Selecting an unknown profile name or an empty ruleset clamps the agent's `allow` rules to `ask` with a specific `Permission profile '<name>' could not be resolved (unknown name or empty ruleset)` diagnostic — it never silently degrades to the unselected baseline.
+
 ## [0.6.0] - 2026-09-05
 
 ### Changed

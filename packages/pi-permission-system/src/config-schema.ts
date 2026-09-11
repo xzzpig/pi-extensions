@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  MAX_PERMISSION_PROFILE_NAME_LENGTH,
+  PERMISSION_PROFILE_NAME_PATTERN,
+} from "./permission-profile.ts";
 
 /**
  * Single source of truth for the permission-system config file shape.
@@ -281,6 +285,49 @@ const shellToolsSchema = z
   });
 
 /**
+ * A named permission ruleset under the global config's `profiles` key.
+ *
+ * Only a `permission` block — the same grammar as agent frontmatter — is
+ * allowed, so a profile can never carry runtime knobs or loosen the baseline
+ * through non-rule fields. `strictObject` rejects any other key, which makes
+ * a malformed profile fail the whole global config (fail-closed to ask).
+ */
+export const profileEntrySchema = z
+  .strictObject({
+    permission: permissionSchema.optional().meta({
+      description:
+        "The profile's ruleset — the same flat permission grammar as the top-level `permission` key and agent frontmatter. Omitted or empty means an empty profile, which fails closed at resolution.",
+    }),
+  })
+  .meta({
+    description: "One named permission profile (global config only).",
+  });
+
+/**
+ * The named-profile registry: global config only, keyed by safe profile names.
+ * A project config containing `profiles` is rejected by the loader
+ * (`allowProfiles: false`) and fails the project scope closed.
+ */
+export const profilesSchema = z
+  .record(
+    z
+      .string()
+      .max(
+        MAX_PERMISSION_PROFILE_NAME_LENGTH,
+        `profile names must be at most ${MAX_PERMISSION_PROFILE_NAME_LENGTH} characters`,
+      )
+      .regex(
+        PERMISSION_PROFILE_NAME_PATTERN,
+        "profile names must contain only letters, digits, underscores, or hyphens and start with a letter or digit",
+      ),
+    profileEntrySchema,
+  )
+  .meta({
+    description:
+      "Named permission profiles. Only defined in the global configuration; a project config that defines profiles is rejected.",
+  });
+
+/**
  * The on-disk config file shape.
  *
  * Every field is optional so partial global/project configs merge before the
@@ -387,6 +434,7 @@ export const unifiedConfigSchema = z
     }),
     permission: permissionSchema.optional(),
     shellTools: shellToolsSchema.optional(),
+    profiles: profilesSchema.optional(),
   })
   .meta({
     title: "PI Permission System Configuration",
@@ -410,6 +458,9 @@ export type FlatPermissionConfig = z.infer<typeof permissionSchema>;
 
 /** The `shellTools` map: tool name → shell-alias argument mapping. */
 export type ShellToolsConfig = z.infer<typeof shellToolsSchema>;
+
+/** One named permission profile (global config only). */
+export type ProfilePermissionConfig = z.infer<typeof profileEntrySchema>;
 
 /** The raw config file shape after validation (all fields optional). */
 export type UnifiedPermissionConfig = z.infer<typeof unifiedConfigSchema>;

@@ -18,6 +18,7 @@ import {
 	type RunFanoutBudgetDescriptor,
 } from "../../shared/types.ts";
 import { SUBAGENT_SANDBOX_PROFILE_ENV, SUBAGENT_SANDBOX_PROJECT_TRUST_ENV } from "../../shared/sandbox-profile.ts";
+import { SUBAGENT_PERMISSION_PROFILE_ENV } from "../../shared/permission-profile.ts";
 import type { NestedPathEntry } from "./nested-path.ts";
 import type { McpRuntimeSnapshotHost } from "./mcp-direct-tool-allowlist.ts";
 import type { PermissionRules } from "./permissions.ts";
@@ -120,6 +121,8 @@ export interface BuildInProcessChildLaunchInput {
 	runtimeSnapshotHost?: McpRuntimeSnapshotHost;
 	/** A validated global pi-sandbox profile selected by the agent definition. */
 	sandbox?: string;
+	/** A validated global pi-permission-system profile selected by the agent definition. */
+	permissionProfile?: string;
 	/** Parent-authoritative trust state for profile-aware project config merging. */
 	projectTrusted?: boolean;
 	/** Exact trusted parent cwd; profile project config applies only when the child cwd matches it. */
@@ -211,6 +214,7 @@ export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput)
 		permissionRules: input.permissionRules,
 		runtimeSnapshotHost: input.runtimeSnapshotHost,
 		sandbox: input.sandbox,
+		permissionProfile: input.permissionProfile,
 	});
 
 	// A selected profile is validated by resolvePiLaunchToolPlan; the child
@@ -234,6 +238,20 @@ export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput)
 		}
 		: undefined;
 	if (sandboxAckPath) fs.mkdirSync(path.dirname(sandboxAckPath), { recursive: true, mode: 0o700 });
+
+	// A selected permission profile travels as a bare validated name (the rules
+	// live in the child's global pi-permission-system config). The key is
+	// transient like the sandbox keys: restored on the host once the child
+	// session exists.
+	const permissionProfileEnv: Record<string, string | undefined> | undefined =
+		input.permissionProfile !== undefined
+			? { [SUBAGENT_PERMISSION_PROFILE_ENV]: input.permissionProfile }
+			: undefined;
+	const childEnv: Record<string, string | undefined> | undefined =
+		sandboxEnv !== undefined || permissionProfileEnv !== undefined
+			? { ...(sandboxEnv ?? {}), ...(permissionProfileEnv ?? {}) }
+			: undefined;
+	const transientProcessEnv = childEnv ? Object.keys(childEnv) : undefined;
 
 	const inherited = input.inherited;
 	const fanout = toolPlan.fanoutAuthorized;
@@ -337,8 +355,8 @@ export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput)
 		extensionPaths,
 		ambientExtensions,
 		hooks: createChildHooks(config),
-		...(input.host === "runner" || sandboxEnv ? { processEnv: childProcessEnv(input, toolPlan, sandboxEnv) } : {}),
-		...(sandboxEnv ? { transientProcessEnv: Object.keys(sandboxEnv) } : {}),
+		...(input.host === "runner" || childEnv ? { processEnv: childProcessEnv(input, toolPlan, childEnv) } : {}),
+		...(transientProcessEnv ? { transientProcessEnv } : {}),
 		runtime: config,
 		noSkills: !input.inheritSkills,
 		noContextFiles: !input.inheritProjectContext,

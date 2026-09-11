@@ -787,6 +787,7 @@ export interface SteeringRecoveryDescriptor {
 	agentContract?: AgentContract;
 	agent: string;
 	sandbox?: string;
+	permissionProfile?: string;
 	sessionFile?: string;
 	/** Git ref used to allocate managed worktrees for this run. */
 	baseRef?: string;
@@ -1242,6 +1243,7 @@ export interface SingleResult {
 	toolBudget?: ToolBudgetState;
 	toolBudgetBlocked?: boolean;
 	sandbox?: string;
+	permissionProfile?: string;
 	messages?: Message[];
 	usage: Usage;
 	model?: string;
@@ -1575,6 +1577,7 @@ export interface NestedStepSummary {
 	toolBudget?: ToolBudgetState;
 	toolBudgetBlocked?: boolean;
 	sandbox?: string;
+	permissionProfile?: string;
 	processTerminal?: ProcessTerminalV1;
 	launchResolvedExtensions?: LaunchResolvedChildExtensionsV1;
 	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1;
@@ -1605,6 +1608,7 @@ export interface NestedRunSummary extends NestedRunAddress {
 	/** Human-readable display name for the child session, when derived at launch. */
 	sessionName?: string;
 	sandbox?: string;
+	permissionProfile?: string;
 	agents?: string[];
 	model?: string;
 	thinking?: string;
@@ -1669,6 +1673,7 @@ export interface AsyncStartedEvent {
 	preflight?: WorkflowPreflightV1;
 	launchContractDigest?: string;
 	sandbox?: string;
+	permissionProfile?: string;
 	launchResolvedExtensions?: LaunchResolvedChildExtensionsV1;
 	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1;
 	usageBudget?: UsageBudgetState;
@@ -1841,6 +1846,7 @@ export interface AsyncStatus {
 	runFanoutBudgetDescriptor?: RunFanoutBudgetDescriptor;
 	launchContractDigest?: string;
 	sandbox?: string;
+	permissionProfile?: string;
 	launchResolvedExtensions?: LaunchResolvedChildExtensionsV1;
 	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
@@ -1933,6 +1939,7 @@ export interface AsyncStatus {
 		agentContract?: AgentContract;
 		launchContractDigest?: string;
 		sandbox?: string;
+		permissionProfile?: string;
 		launchResolvedExtensions?: LaunchResolvedChildExtensionsV1;
 		runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensionsV1;
 		execution?: ExecutionProjection;
@@ -2069,6 +2076,7 @@ export interface ForegroundResumeChild {
 	};
 	launchContractDigest?: string;
 	sandbox?: string;
+	permissionProfile?: string;
 	/** Private retained launch authority. Never project into status or result output. */
 	extensionBindings?: ExtensionBindings;
 	launchResolvedExtensions?: LaunchResolvedChildExtensionsV1;
@@ -2377,6 +2385,8 @@ export interface RunSyncOptions {
 	toolBudget?: ResolvedToolBudget;
 	/** Selected global sandbox profile, when this child requested one. */
 	sandbox?: string;
+	/** Selected global pi-permission-system profile, when this child requested one. */
+	permissionProfile?: string;
 	allowZeroToolBudget?: boolean;
 	allowIntercomDetach?: boolean;
 	intercomEvents?: IntercomEventBus;

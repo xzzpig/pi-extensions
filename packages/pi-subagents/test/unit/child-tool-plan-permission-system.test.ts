@@ -19,6 +19,7 @@ const originalEnv = {
 	HOME: process.env.HOME,
 	USERPROFILE: process.env.USERPROFILE,
 	PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
+	PI_SUBAGENT_PERMISSION_PROFILE: process.env.PI_SUBAGENT_PERMISSION_PROFILE,
 };
 const tempRoots: string[] = [];
 
@@ -547,6 +548,71 @@ describe("child launch <active_agent> tag injection", () => {	it("prepends <acti
 		assert.ok(
 			hasPromptRuntime,
 			"prompt runtime extension should always be included",
+		);
+	});
+});
+
+describe("resolvePiLaunchToolPlan with permission profiles", () => {
+	function installPermissionSystemExtension(agentDir: string): string {
+		const extDir = path.join(agentDir, "extensions", "pi-permission-system");
+		const entryPath = path.join(extDir, "src", "index.ts");
+		fs.mkdirSync(path.dirname(entryPath), { recursive: true });
+		fs.writeFileSync(path.join(extDir, "package.json"), JSON.stringify({
+			name: "@xzzpig/pi-permission-system",
+			pi: { extensions: ["./src/index.ts"] },
+		}));
+		fs.writeFileSync(entryPath, "export default () => {};", "utf-8");
+		return entryPath;
+	}
+
+	it("injects pi-permission-system and passes only the profile name for an explicit extension allowlist", () => {
+		const { agentDir, projectDir } = createFixture();
+		const permEntry = installPermissionSystemExtension(agentDir);
+		const { session } = buildInProcessChildLaunch(childLaunch({
+			host: "runner",
+			extensions: [permEntry],
+			cwd: projectDir,
+			permissionProfile: "reviewer-strict",
+			projectTrusted: true,
+			trustedProjectCwd: projectDir,
+		}));
+
+		assert.equal(session.ambientExtensions, false);
+		assert.deepEqual(session.extensionPaths.filter((entry) => entry === permEntry), [permEntry]);
+		const env = session.processEnv ?? {};
+		assert.equal(env.PI_SUBAGENT_PERMISSION_PROFILE, "reviewer-strict");
+		// Only the validated name crosses the boundary — never the rules.
+		assert.equal(Object.keys(env).some((key) => key.includes("PERMISSION_RULES") || key.includes("PERMISSION_CONFIG")), false);
+		assert.ok(session.transientProcessEnv?.includes("PI_SUBAGENT_PERMISSION_PROFILE"));
+	});
+
+	it("fails closed when a permission profile needs pi-permission-system but no package is installed", () => {
+		const { agentDir } = createFixture();
+		process.env.PI_CODING_AGENT_DIR = agentDir;
+		assert.throws(
+			() => resolvePiLaunchToolPlan({ permissionProfile: "reviewer-strict" }),
+			/pi-permission-system is not installed/,
+		);
+	});
+
+	it("fails closed when the launch denies child extensions", () => {
+		const { agentDir } = createFixture();
+		installPermissionSystemExtension(agentDir);
+		assert.throws(
+			() => resolvePiLaunchToolPlan({
+				permissionProfile: "reviewer-strict",
+				capabilityCeiling: { version: 1, denyExtensions: true },
+			}),
+			/denies child extensions/,
+		);
+	});
+
+	it("rejects invalid permission-profile names at the tool plan", () => {
+		const { agentDir } = createFixture();
+		installPermissionSystemExtension(agentDir);
+		assert.throws(
+			() => resolvePiLaunchToolPlan({ permissionProfile: "../escape" }),
+			/letters, digits, underscores, or hyphens/,
 		);
 	});
 });

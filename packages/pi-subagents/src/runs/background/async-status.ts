@@ -26,6 +26,7 @@ import { workflowGraphStageNodes } from "../shared/workflow-graph.ts";
 import { formatTimeoutRecoveryLines, projectTimeoutRecovery } from "../shared/mutation-evidence.ts";
 import { formatWorkflowChecklistText, projectWorkflowChecklist } from "../../workflows/workflow-checklist.ts";
 import { validateSandboxProfileName } from "../../shared/sandbox-profile.ts";
+import { validatePermissionProfileName } from "../../shared/permission-profile.ts";
 
 interface AsyncRunStepSummary {
 	index: number;
@@ -67,6 +68,7 @@ interface AsyncRunStepSummary {
 	contextLimit?: number;
 	thinking?: string;
 	sandbox?: string;
+	permissionProfile?: string;
 	attemptedModels?: string[];
 	sessionFile?: string;
 	transcriptPath?: string;
@@ -109,6 +111,7 @@ export interface AsyncRunSummary {
 	mode: SubagentRunMode;
 	context?: ContextSummary;
 	sandbox?: string;
+	permissionProfile?: string;
 	cwd?: string;
 	sessionRoot?: string;
 	startedAt: number;
@@ -209,6 +212,14 @@ function isolateCorruptActiveRun(asyncDir: string, runId: string, error: unknown
 function sandboxProfileValue(value: unknown): string | undefined {
 	try {
 		return validateSandboxProfileName(value);
+	} catch {
+		return undefined;
+	}
+}
+
+function permissionProfileValue(value: unknown): string | undefined {
+	try {
+		return validatePermissionProfileName(value);
 	} catch {
 		return undefined;
 	}
@@ -339,6 +350,7 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string 
 		const stepLastActivityAt = step.lastActivityAt;
 		const timeoutRecovery = projectTimeoutRecovery(step.timeoutRecovery);
 		const sandbox = sandboxProfileValue(step.sandbox);
+		const permissionProfile = permissionProfileValue(step.permissionProfile);
 		return {
 			index,
 			childId: asyncStatusChildIdentity(step, index),
@@ -378,6 +390,7 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string 
 			...(step.contextLimit !== undefined ? { contextLimit: step.contextLimit } : {}),
 			...(step.thinking ? { thinking: step.thinking } : {}),
 			...(sandbox ? { sandbox } : {}),
+			...(permissionProfile ? { permissionProfile } : {}),
 			...(step.thinkingCeiling ? { thinkingCeiling: step.thinkingCeiling } : {}),
 			...(step.attemptedModels ? { attemptedModels: step.attemptedModels } : {}),
 			...(step.sessionFile ? { sessionFile: step.sessionFile } : {}),
@@ -409,6 +422,7 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string 
 	});
 	attachRootChildrenToSteps(status.runId || path.basename(asyncDir), summarizedSteps, nestedChildren);
 	const sandbox = sandboxProfileValue(status.sandbox);
+	const permissionProfile = permissionProfileValue(status.permissionProfile);
 	return {
 		id: status.runId || path.basename(asyncDir),
 		asyncDir,
@@ -427,6 +441,7 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string 
 		mode: status.mode,
 		...(summarizeContextModes(summarizedSteps.map((step) => step.context)) ? { context: summarizeContextModes(summarizedSteps.map((step) => step.context)) } : {}),
 		...(sandbox ? { sandbox } : {}),
+		...(permissionProfile ? { permissionProfile } : {}),
 		cwd: status.cwd,
 		...(status.sessionRoot ? { sessionRoot: status.sessionRoot } : {}),
 		startedAt: status.startedAt,

@@ -32,11 +32,68 @@ See [migration/0644-project-trust-gating.md](migration/0644-project-trust-gating
 
 1. Global config file
 2. Project config file
-3. Global agent frontmatter
-4. Project agent frontmatter
+3. Profile (a named ruleset from the global config's `profiles` registry)
+4. Global agent frontmatter
+5. Project agent frontmatter
 
 The `permission` object uses deep-shallow merge: string-vs-string replaces; both-object shallow-merges pattern maps; string-vs-object the override wins entirely.
 Scalar fields (`debugLog`, `permissionReviewLog`, `yoloMode`, `doublePressToConfirm`, `forwardingTimeoutMs`, `promptMaxRows`, `promptFieldMaxWidth`) use simple replacement.
+
+## Named Permission Profiles
+
+A **named permission profile** is a reusable ruleset stored in the global config file under the `profiles` key. Agents select one by name — never by inline policy — so per-agent hardening stays a single, auditable reference.
+
+### The registry is global-only
+
+`profiles` may be defined **only** in the global config file (`<agentDir>/extensions/pi-permission-system/config.json`). A project config that defines `profiles` is rejected by the schema, which marks the project scope invalid and fails closed: the project cannot define, override, or remove profile names. This keeps profile definitions an operator-level surface.
+
+```jsonc
+// global config
+{
+  "permission": { "*": "ask", "read": "allow" },
+  "profiles": {
+    "reviewer": {
+      "permission": { "write": "deny", "edit": "deny", "bash": { "git *": "allow" } }
+    },
+    "locked-down": {
+      "permission": { "*": "deny", "read": "allow", "mcp": { "*": "ask" } }
+    }
+  }
+}
+```
+
+Each entry's ruleset uses exactly the same grammar as `permission`: tool→decision scalars (`allow` / `ask` / `deny`), named pattern-map surfaces (`bash`, `mcp`, `skill`, `external_directory`, `special`), and the `'*'` universal fallback.
+
+### Selecting a profile
+
+An agent selects a profile with the `permission-profile` frontmatter key in a global or project agent file, or via the `PI_SUBAGENT_PERMISSION_PROFILE` environment variable (set by pi-subagents' child launcher for a subagent whose agent definition declares the field):
+
+```yaml
+---
+name: reviewer
+description: Reviews changes without write access
+permission-profile: reviewer
+---
+Review the change.
+```
+
+Selection precedence, highest first: **env variable > project agent file > global agent file** — the same order the scopes themselves have. The env channel carries only a validated name; the rules always come from the child's own global config, so a profile means the same policy no matter which host launches the agent. The name must match `^[A-Za-z0-9][A-Za-z0-9_-]*$`, be at most 128 characters, and must not be empty, a path, or the literal `false`.
+
+### Merge position
+
+The selected profile's rules merge **between the project config and the agent frontmatter**: patterns it does not mention keep the lower scopes' rules (including global denies — a profile cannot silently drop an inherited denial), and the agent's own `permission:` block overrides the profile per pattern. Each rule keeps its own origin, so the review log can say whether a decision came from `profile` or from another scope.
+
+### Fail-closed on selection problems
+
+Selecting a profile that does not exist in the global registry, or one whose ruleset is empty, fails this scope closed: `allow` rules (including ones inherited from lower scopes) are clamped to `ask` until the definition or the selection is corrected. The configuration issues list reports both the generic fail-closed notice and a specific `Permission profile '<name>' could not be resolved (unknown name or empty ruleset); this agent's 'allow' rules are clamped to 'ask'.` message — an unknown profile never silently degrades to the unselected baseline.
+
+### Trust gate
+
+A profile selection made by a **project** agent file (or a project-scoped override) participates only when the host marks that project trusted. On an untrusted project the selection is ignored and recorded (the existing project-trust skip notice), so an untrusted repository cannot route a subagent into a different policy profile than the operator chose.
+
+### `yoloMode` combination
+
+`yoloMode` rewrites would-be `ask` outcomes to `allow`, including profile `ask` rules, but it is deny-preserving: a profile `deny` stays a hard deny, and display surfaces (`getComposedConfigRules`, `getToolPermission`) keep reporting the profile's un-rewritten rules.
 
 **Invalid higher-precedence scope fails closed.**
 If a non-global scope (project config, global agent frontmatter, or project agent frontmatter) is present but fails to load or validate, it no longer contributes an empty scope that silently inherits the lower scope's rules.
@@ -67,6 +124,17 @@ This clamp is deny-preserving and, like `yoloMode`, applied at composition; when
 
   // Ordered names of registered live-authority chain links (empty = none)
   "authorizerChain": [],
+
+  // Named permission profiles (global-only registry)
+  "profiles": {
+    "reviewer": {
+      "permission": {
+        "write": "deny",
+        "edit": "deny",
+        "bash": { "git *": "allow" }
+      }
+    }
+  },
 
   // Flat permission policy
   "permission": {

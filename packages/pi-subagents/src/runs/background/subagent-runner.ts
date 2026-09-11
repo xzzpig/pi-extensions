@@ -130,8 +130,9 @@ import { normalizeExtensionBindings } from "../shared/extension-bindings.ts";
 import { appendRunnerStepsToStatus, consumeChainAppendRequests, countPendingChainAppendRequests, statusStepDescription } from "./chain-append.ts";
 import { asyncStatusChildIdentity } from "../shared/child-identity.ts";
 import { validateSandboxProfileName } from "../../shared/sandbox-profile.ts";
+import { validatePermissionProfileName } from "../../shared/permission-profile.ts";
 import { initialToolBudgetState, toolBudgetState } from "../shared/tool-budget.ts";
-import { effectiveToolTimeoutMs, formatToolTimeoutMessage, toolTimeoutCallKey } from "../shared/tool-timeout.ts";
+import { toolTimeoutCallKey } from "../shared/tool-timeout.ts";
 import { usageBudgetExceededMessage, usageBudgetState } from "../shared/usage-budget.ts";
 import { formatParallelHandoffError, formatParallelHandoffReference, parallelHandoffPath, writeParallelHandoffGroup, writePendingParallelHandoff } from "../shared/parallel-handoff.ts";
 import { resolveWatchdogConfig } from "../../watchdog/settings.ts";
@@ -224,6 +225,7 @@ interface StepResult {
 	sessionName?: string;
 	context?: "fresh" | "fork";
 	sandbox?: string;
+	permissionProfile?: string;
 	capabilityCeiling?: ResolvedSubagentCapabilityCeiling;
 	capabilityAudit?: import("../shared/capability-ceiling.ts").SubagentCapabilityAudit;
 	launchResolvedExtensions?: LaunchResolvedChildExtensionsV1;
@@ -279,6 +281,16 @@ function commonSandboxProfile(steps: readonly RunnerStatusStep[]): string | unde
 	if (!profile || !steps.every((step) => step.sandbox === profile)) return undefined;
 	try {
 		return validateSandboxProfileName(profile);
+	} catch {
+		return undefined;
+	}
+}
+
+function commonPermissionProfile(steps: readonly RunnerStatusStep[]): string | undefined {
+	const profile = steps[0]?.permissionProfile;
+	if (!profile || !steps.every((step) => step.permissionProfile === profile)) return undefined;
+	try {
+		return validatePermissionProfileName(profile);
 	} catch {
 		return undefined;
 	}
@@ -796,6 +808,7 @@ async function runSingleStepInner(
 			inheritedCapabilityCeiling: ctx.inheritedChildRuntime?.capabilityCeiling,
 			permissionRules: step.permissionRules,
 			sandbox: step.sandbox,
+			permissionProfile: step.permissionProfile,
 		}));
 		const contractTools = resolvedTaskToolPlan.explicitToolAllowlist ? resolvedTaskToolPlan.effectiveToolAllowlist : undefined;
 		const contractError = validateImplementationToolContract({
@@ -1109,6 +1122,7 @@ async function runSingleStepInner(
 			projectTrusted: step.projectTrusted,
 			trustedProjectCwd: step.trustedProjectCwd,
 			sandbox: step.sandbox,
+			permissionProfile: step.permissionProfile,
 			permissionAuditPath: step.permissionRules && ctx.artifactsDir
 				? path.join(ctx.artifactsDir, "permission-audit", `${ctx.id}-${ctx.flatIndex}.jsonl`)
 				: undefined,
@@ -1148,6 +1162,7 @@ async function runSingleStepInner(
 				inheritedCapabilityCeiling: ctx.inheritedChildRuntime?.capabilityCeiling,
 				permissionRules: step.permissionRules,
 				sandbox: step.sandbox,
+				permissionProfile: step.permissionProfile,
 			}));
 			launchResolvedExtensions = projectLaunchResolvedChildExtensions(toolPlan);
 			actualLaunchContractDigest = launchBindingDigest(omitUndefinedProperties({
@@ -1164,6 +1179,7 @@ async function runSingleStepInner(
 				inheritGlobalContext: step.inheritGlobalContext,
 				inheritSkills: step.inheritSkills,
 				sandbox: step.sandbox,
+				permissionProfile: step.permissionProfile,
 				skills: step.skills,
 				tools: toolPlan.effectiveToolAllowlist,
 				...(toolPlan.excludeTools.length > 0 ? { excludeTools: toolPlan.excludeTools } : {}),
@@ -1535,6 +1551,7 @@ async function runSingleStepInner(
 		...(childSessionName ? { sessionName: childSessionName } : {}),
 		context: step.context,
 		...(step.sandbox ? { sandbox: step.sandbox } : {}),
+		...(step.permissionProfile ? { permissionProfile: step.permissionProfile } : {}),
 		...(step.agentContract ? { agentContract: step.agentContract } : {}),
 		launchContractDigest: actualLaunchContractDigest,
 		output: outputForSummary,
@@ -2016,6 +2033,7 @@ async function runSubagent(
 		}
 	}
 	const initialSandbox = commonSandboxProfile(initialStatusSteps);
+	const initialPermissionProfile = commonPermissionProfile(initialStatusSteps);
 	const initialAgentLabel = initialStatusSteps.length === 1
 		? initialStatusSteps[0]!.agent
 		: (config.resultMode ?? (flatSteps.length > 1 ? "chain" : "single")) === "parallel"
@@ -2052,6 +2070,7 @@ async function runSubagent(
 		parallelGroups,
 		workflowGraph: config.workflowGraph,
 		...(initialSandbox ? { sandbox: initialSandbox } : {}),
+		...(initialPermissionProfile ? { permissionProfile: initialPermissionProfile } : {}),
 		...(config.launchContractDigest ? { launchContractDigest: config.launchContractDigest } : {}),
 		...(config.launchResolvedExtensions ? { launchResolvedExtensions: config.launchResolvedExtensions } : {}),
 		...(config.capabilityCeiling ? { capabilityCeiling: config.capabilityCeiling } : {}),

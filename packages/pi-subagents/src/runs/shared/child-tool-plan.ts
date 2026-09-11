@@ -21,6 +21,7 @@ import {
 import { THINKING_LEVELS } from "../../shared/model-info.ts";
 import { getAgentDir } from "../../shared/utils.ts";
 import { validateSandboxProfileName } from "../../shared/sandbox-profile.ts";
+import { validatePermissionProfileName } from "../../shared/permission-profile.ts";
 import type { PermissionRules } from "./permissions.ts";
 import {
 	capabilityCeilingAgentRestrictionSources,
@@ -158,6 +159,8 @@ export interface ResolvePiLaunchToolPlanInput {
 	runtimeSnapshotHost?: McpRuntimeSnapshotHost;
 	/** A validated global pi-sandbox profile selected by the agent definition. */
 	sandbox?: string;
+	/** A validated global pi-permission-system profile selected by the agent definition. */
+	permissionProfile?: string;
 }
 
 export interface PiLaunchToolPlan {
@@ -482,6 +485,24 @@ export function resolvePiLaunchToolPlan(
 	if (sandboxProfile && capabilityCeiling?.denyExtensions) {
 		throw new Error(`Sandbox profile '${sandboxProfile}' requires the pi-sandbox child extension, but this launch denies child extensions.`);
 	}
+	const permissionProfile = input.permissionProfile === undefined
+		? undefined
+		: validatePermissionProfileName(input.permissionProfile, "permission profile");
+	if (permissionProfile && capabilityCeiling?.denyExtensions) {
+		throw new Error(`Permission profile '${permissionProfile}' requires the pi-permission-system child extension, but this launch denies child extensions.`);
+	}
+	// A permission-profile-only agent has no native `permissionRules` yet still
+	// needs the permission system in the child to resolve the profile: without
+	// it the selection would silently degrade to no policy at all. Resolve the
+	// extension eagerly for this path and fail the launch when the package is
+	// missing (the rules-only path keeps its soft resolution as before).
+	const permSystemExtForProfile = permissionProfile !== undefined && permSystemExt === undefined
+		? resolvePermissionSystemExtension()
+		: undefined;
+	if (permissionProfile !== undefined && permSystemExt === undefined && permSystemExtForProfile === undefined) {
+		throw new Error(`Permission profile '${permissionProfile}' cannot be enabled: pi-permission-system is not installed; cannot launch a child with a permission profile.`);
+	}
+	const effectivePermSystemExt = permSystemExt ?? permSystemExtForProfile;
 	let sandboxExtension: string | undefined;
 	if (sandboxProfile) {
 		try {
@@ -497,7 +518,7 @@ export function resolvePiLaunchToolPlan(
 		PROMPT_RUNTIME_EXTENSION_PATH,
 		...fastModeExtensions,
 		...(fanoutAuthorized ? [FANOUT_CHILD_EXTENSION_PATH] : []),
-		...(permSystemExt ? [permSystemExt] : []),
+		...(effectivePermSystemExt ? [effectivePermSystemExt] : []),
 		...(sandboxExtension ? [sandboxExtension, SANDBOX_PROFILE_GUARD_EXTENSION_PATH] : []),
 	];
 	const disableAmbientExtensions =

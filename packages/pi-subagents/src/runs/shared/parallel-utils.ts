@@ -54,6 +54,7 @@ export interface RunnerSubagentStep {
 	mutationTools?: string[];
 	completionGuard?: boolean;
 	sandbox?: string;
+	permissionProfile?: string;
 	systemPrompt?: string | null;
 	systemPromptMode?: "append" | "replace";
 	inheritProjectContext: boolean;

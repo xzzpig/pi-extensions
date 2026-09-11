@@ -41,6 +41,7 @@ export const KNOWN_FIELDS = new Set([
 	"completionGuard",
 	"toolBudget",
 	"sandbox",
+	"permission-profile",
 	"permission",
 	"permissions",
 	"memory",
@@ -147,6 +148,7 @@ export function serializeAgent(config: AgentConfig, options: SerializeAgentOptio
 		lines.push(`toolBudget: ${config.toolBudget ? JSON.stringify(config.toolBudget) : ""}`);
 	}
 	if (config.sandbox) lines.push(`sandbox: ${config.sandbox}`);
+	if (config.permissionProfile || preserve("permission-profile")) lines.push(`permission-profile: ${config.permissionProfile ?? ""}`);
 	if (config.permissions || preserve("permission", "permissions")) {
 		const key = preserve("permission") && !preserve("permissions") ? "permission" : "permissions";
 		lines.push(`${key}:`);

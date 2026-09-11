@@ -72,6 +72,7 @@ export function projectAgentDefinition(agent: AgentConfig): Record<string, unkno
 		completionGuard: agent.completionGuard,
 		toolBudget: agent.toolBudget,
 		sandbox: agent.sandbox,
+		permissionProfile: agent.permissionProfile,
 		memory: agent.memory,
 	};
 }
@@ -102,6 +103,7 @@ export interface LaunchBindingInput {
 	outputPath?: string;
 	outputMode?: string;
 	sandbox?: string;
+	permissionProfile?: string;
 	structuredOutputSchema?: unknown;
 	extensionBindings?: ExtensionBindings;
 }
@@ -131,6 +133,7 @@ export function projectLaunchBinding(input: LaunchBindingInput): Record<string, 
 		outputPath: input.outputPath,
 		outputMode: input.outputMode,
 		sandbox: input.sandbox,
+		permissionProfile: input.permissionProfile,
 		structuredOutputSchema: input.structuredOutputSchema,
 		extensionBindings: input.extensionBindings,
 	};

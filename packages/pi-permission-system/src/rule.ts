@@ -8,7 +8,9 @@ import { type WildcardMatchOptions, wildcardMatch } from "./wildcard-matcher";
 /**
  * Provenance of a rule — which source contributed it.
  *
- * Config scopes: "global", "project", "agent", "project-agent".
+ * Config scopes: "global", "project", "profile", "agent", "project-agent"
+ *                ("profile" is the named-ruleset scope selected by an agent's
+ *                `permission-profile` frontmatter or the launcher env).
  * Synthesized:   "builtin" (universal default / evaluate() fallback),
  *                "baseline" (conditional MCP metadata auto-allow).
  * Runtime:       "session" (session approvals).
@@ -19,6 +21,7 @@ import { type WildcardMatchOptions, wildcardMatch } from "./wildcard-matcher";
 export type RuleOrigin =
   | "global"
   | "project"
+  | "profile"
   | "agent"
   | "project-agent"
   | "builtin"

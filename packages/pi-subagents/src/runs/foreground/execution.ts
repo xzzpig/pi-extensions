@@ -389,6 +389,7 @@ async function runSingleAttempt(
 		: undefined;
 	const permissionRules = resolvePermissionRules(options.permissions, agent.permissions);
 	const sandbox = options.sandbox ?? agent.sandbox;
+	const permissionProfile = options.permissionProfile ?? agent.permissionProfile;
 	const permissionAuditPath = permissionRules && options.artifactsDir
 		? path.join(options.artifactsDir, "permission-audit", `${options.runId}-${options.index ?? 0}.jsonl`)
 		: undefined;
@@ -428,6 +429,7 @@ async function runSingleAttempt(
 		permissionRules,
 		permissionAuditPath,
 		sandbox,
+		permissionProfile,
 		projectTrusted: options.projectTrusted,
 		trustedProjectCwd: options.trustedProjectCwd,
 		childWatchdog,
@@ -492,6 +494,7 @@ async function runSingleAttempt(
 		inheritGlobalContext: agent.inheritGlobalContext,
 		inheritSkills: agent.inheritSkills,
 		sandbox,
+		permissionProfile,
 		skills: shared.resolvedSkillNames ?? [],
 		tools: toolPlan.effectiveToolAllowlist,
 		...(toolPlan.excludeTools.length > 0 ? { excludeTools: toolPlan.excludeTools } : {}),
@@ -509,6 +512,7 @@ async function runSingleAttempt(
 		...(childSessionName ? { sessionName: childSessionName } : {}),
 		...(options.agentContract ? { agentContract: options.agentContract } : {}),
 		...(sandbox ? { sandbox } : {}),
+		...(permissionProfile ? { permissionProfile } : {}),
 		launchContractDigest,
 		launchResolvedExtensions,
 		exitCode: 0,

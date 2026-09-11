@@ -6,7 +6,7 @@ import { describe, it } from "node:test";
 import { asyncReviveRequiresRecoveryDescriptor, buildRevivedAsyncTask, resolveAsyncResumeTarget } from "../../src/runs/background/async-resume.ts";
 import { createRunFanoutBudget } from "../../src/runs/shared/run-fanout-budget.ts";
 
-function writeJson(filePath: string, value: object): void {
+function writeJson(filePath: string, value: Record<string, unknown>): void {
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
 	fs.writeFileSync(filePath, JSON.stringify(value, null, 2), "utf-8");
 }
@@ -295,13 +295,16 @@ describe("async resume lookup", () => {
 				launchContractDigest: "launch-contract-digest",
 				allowNestedSubagents: true,
 				sandbox: "reviewer-strict",
+				permissionProfile: "reviewer-strict",
 				intercomBridge: { mode: "off" },
 				extensionBindings: { "shepherd.dispatch/1": { role: "coder" } },
 			});
 			const valid = resolveAsyncResumeTarget({ id: "run-descriptor" }, { asyncDirRoot: asyncRoot, resultsDir });
 			assert.equal(valid.launchContractDigest, "launch-contract-digest");
 			assert.equal(valid.sandbox, "reviewer-strict");
+			assert.equal(valid.permissionProfile, "reviewer-strict");
 			assert.equal(valid.recoveryDescriptor?.sandbox, "reviewer-strict");
+			assert.equal(valid.recoveryDescriptor?.permissionProfile, "reviewer-strict");
 			assert.equal(valid.recoveryDescriptor?.launchContractDigest, "launch-contract-digest");
 			assert.equal(valid.recoveryDescriptor?.allowNestedSubagents, true);
 			assert.deepEqual(valid.recoveryDescriptor?.intercomBridge, { mode: "off" });
@@ -312,6 +315,9 @@ describe("async resume lookup", () => {
 
 			writeJson(path.join(asyncDir, "recovery-descriptor.json"), { ...descriptor, sandbox: "../escape" });
 			assert.throws(() => resolveAsyncResumeTarget({ id: "run-descriptor" }, { asyncDirRoot: asyncRoot, resultsDir }), /sandbox.*letters, digits, underscores, or hyphens/);
+
+			writeJson(path.join(asyncDir, "recovery-descriptor.json"), { ...descriptor, permissionProfile: "../escape" });
+			assert.throws(() => resolveAsyncResumeTarget({ id: "run-descriptor" }, { asyncDirRoot: asyncRoot, resultsDir }), /permissionProfile.*letters, digits, underscores, or hyphens/);
 
 			writeJson(path.join(asyncDir, "recovery-descriptor.json"), { ...descriptor, extensionBindings: { invalid: true } });
 			assert.throws(() => resolveAsyncResumeTarget({ id: "run-descriptor" }, { asyncDirRoot: asyncRoot, resultsDir }), /namespace/);

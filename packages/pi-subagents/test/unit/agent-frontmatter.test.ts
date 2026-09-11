@@ -613,6 +613,73 @@ Review the change.
 	});
 });
 
+describe("agent permission-profile frontmatter", () => {
+	it("parses and serializes a scalar permission-profile selector", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-permission-profile-"));
+		tempDirs.push(dir);
+		const filePath = path.join(dir, ".pi", "agents", "reviewer.md");
+		writeAgent(filePath, `---
+name: reviewer
+description: Review safely
+permission-profile: reviewer-strict
+---
+
+Review the change.
+`);
+
+		const agent = discoverAgents(dir, "project").agents.find((candidate) => candidate.name === "reviewer");
+		assert.equal(agent?.permissionProfile, "reviewer-strict");
+		assert.match(serializeAgent(agent!), /^permission-profile: reviewer-strict$/m);
+	});
+
+	it("coexists with the permission frontmatter block and round-trips both", () => {
+		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-permission-profile-coexist-"));
+		tempDirs.push(dir);
+		const filePath = path.join(dir, ".pi", "agents", "reviewer.md");
+		writeAgent(filePath, `---
+name: reviewer
+description: Review safely
+permission-profile: reviewer-strict
+permission:
+  write: deny
+  edit: deny
+---
+
+Review the change.
+`);
+
+		const agent = discoverAgents(dir, "project").agents.find((candidate) => candidate.name === "reviewer");
+		assert.equal(agent?.permissionProfile, "reviewer-strict");
+		assert.ok(agent?.permissions);
+		const serialized = serializeAgent(agent!);
+		assert.match(serialized, /^permission-profile: reviewer-strict$/m);
+		assert.match(serialized, /^permissions:/m);
+		assert.match(serialized, /^  write: deny$/m);
+	});
+
+	it("rejects empty, traversal, object, false, and external-runner permission-profile declarations", () => {
+		const cases = [
+			"permission-profile:",
+			"permission-profile: false",
+			"permission-profile: ../escape",
+			"permission-profile:\n  permission:\n    read: allow",
+			"runner:\n  type: external-cli\n  command: node\npermission-profile: reviewer-strict",
+		];
+		for (const [index, declaration] of cases.entries()) {
+			const dir = fs.mkdtempSync(path.join(os.tmpdir(), `pi-subagents-agent-permission-profile-invalid-${index}-`));
+			tempDirs.push(dir);
+			writeAgent(path.join(dir, ".pi", "agents", "worker.md"), `---
+name: worker
+description: Worker
+${declaration}
+---
+Work.`);
+			const discovered = discoverAgents(dir, "project");
+			assert.match(discovered.agentDiagnostics?.find((diagnostic) => diagnostic.name === "worker")?.error ?? "", /permission-profile|unsupported Pi-only fields/);
+		}
+	});
+});
+
 describe("agent frontmatter defaultContext", () => {
 	it("serializes defaultContext into agent frontmatter", () => {
 		const agent: AgentConfig = {

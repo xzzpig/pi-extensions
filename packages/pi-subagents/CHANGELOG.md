@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0] - 2026-09-11
+
+### Added
+
+- **`permission-profile` agent frontmatter.** A custom agent can select a named `pi-permission-system` permission profile (global-only `profiles` registry) with `permission-profile: <name>` — a validated scalar selector, never an inline policy. The field is serialized, round-tripped through eject/settings overrides, and propagated through foreground/background/async/workflow launches, recovery descriptors, and status projections alongside the sandbox profile.
+- **Transient profile channel.** When the field is set, the child receives the bare validated name via the transient `PI_SUBAGENT_PERMISSION_PROFILE` env var and `pi-subagents` injects the installed `pi-permission-system` extension into the child launch even under an explicit `extensions` allowlist, so the child's permission system applies the selected profile. Launch fails closed when the package is missing, a capability ceiling denies child extensions, or the runner is not a native Pi child (`external-cli`/`external-job` reject the field).
+
 ## [0.11.0] - 2026-09-11
 
 ### Added

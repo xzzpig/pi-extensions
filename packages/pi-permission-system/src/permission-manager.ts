@@ -8,7 +8,9 @@ import {
   getProjectAgentsDir,
   getProjectConfigPath,
 } from "./config-paths";
+import { normalizeFlatPermissionValue } from "./config-loader";
 import { normalizeFlatConfig } from "./normalize";
+import { readPermissionProfileEnv } from "./permission-profile";
 import { type PathFlavor, posixPathFlavor } from "./path/path-flavor";
 import {
   FilePolicyLoader,
@@ -35,6 +37,7 @@ import type {
   FlatPermissionConfig,
   PermissionCheckResult,
   PermissionState,
+  ScopeConfig,
 } from "./types";
 import { isPermissionState } from "./types";
 
@@ -63,6 +66,12 @@ type ResolvedPermissions = {
    * names also drive the fail-closed notice in {@link getConfigIssues}.
    */
   failClosedScopes: RuleOrigin[];
+  /**
+   * The selected profile name when the profile scope itself failed closed
+   * (unknown name or empty ruleset). Naming it makes the fail-closed notice
+   * actionable: the operator sees exactly which selection is broken.
+   */
+  invalidProfileName?: string;
 };
 
 /**
@@ -153,13 +162,21 @@ export class PermissionManager implements ScopedPermissionManager {
 
   getConfigIssues(agentName?: string): string[] {
     // Trigger a load/resolve to ensure issues are collected.
-    const { failClosedScopes } = this.resolvePermissions(agentName);
+    const { failClosedScopes, invalidProfileName } =
+      this.resolvePermissions(agentName);
     const issues = [...this.loader.getConfigIssues()];
     if (failClosedScopes.length > 0) {
       issues.push(
         `Invalid ${failClosedScopes.join(", ")} configuration detected — ` +
           `failing closed: 'allow' rules are clamped to 'ask' for this session ` +
           `until the configuration is corrected.`,
+      );
+    }
+    if (invalidProfileName !== undefined) {
+      issues.push(
+        `Permission profile '${invalidProfileName}' could not be resolved ` +
+          `(unknown name or empty ruleset); this agent's 'allow' rules are ` +
+          `clamped to 'ask'. Fix the profile definition or the selection.`,
       );
     }
     return issues;
@@ -170,7 +187,11 @@ export class PermissionManager implements ScopedPermissionManager {
   }
 
   private resolvePermissions(agentName?: string): ResolvedPermissions {
-    const cacheKey = agentName ?? "__global__";
+    // The launcher-provided env selection is part of the cache identity: it is
+    // fixed for a child process but may differ across processes sharing the
+    // same loader paths.
+    const envProfileName = readPermissionProfileEnv();
+    const cacheKey = `${agentName ?? "__global__"}|${envProfileName ?? ""}`;
     const stamp = this.loader.getCacheStamp(agentName);
     const cached = this.resolvedPermissionsCache.get(cacheKey);
     if (cached?.stamp === stamp) {
@@ -182,12 +203,43 @@ export class PermissionManager implements ScopedPermissionManager {
     const agentConfig = this.loader.loadAgentConfig(agentName);
     const projectAgentConfig = this.loader.loadProjectAgentConfig(agentName);
 
+    // Resolve the selected profile. The launcher env wins — it carries the
+    // validated selection of the effective agent definition, which also
+    // covers runtime-defined agents with no frontmatter file — then the
+    // project agent file, then the global agent file (the same precedence the
+    // scopes themselves have).
+    const profileName =
+      envProfileName ??
+      projectAgentConfig.profileName ??
+      agentConfig.profileName;
+
+    let profileScope: ScopeConfig | undefined;
+    let invalidProfileName: string | undefined;
+    if (profileName) {
+      const profile = globalConfig.profiles?.[profileName];
+      const permission = normalizeFlatPermissionValue(profile?.permission);
+      // Unknown name or an empty ruleset fails this scope closed: the agent
+      // must never silently run without the intended policy (an unknown name
+      // must not degrade to the unselected baseline, and an empty profile is
+      // an operator mistake, not an intent to inherit everything).
+      profileScope =
+        permission !== undefined && Object.keys(permission).length > 0
+          ? { permission }
+          : { invalid: true };
+      if (profileScope.invalid === true) {
+        invalidProfileName = profileName;
+      }
+    }
+
     // Merge permission objects across scopes (lowest → highest precedence),
     // building a parallel origin map that tracks which scope contributed each
-    // (surface, pattern) entry.
+    // (surface, pattern) entry. The profile sits between project and agent:
+    // patterns it does not mention keep the lower scopes' rules (including
+    // global denies), and the agent frontmatter overrides it per pattern.
     const { mergedPermission, origins } = mergeScopesWithOrigins([
       ["global", globalConfig],
       ["project", projectConfig],
+      ...(profileScope ? [["profile", profileScope] as const] : []),
       ["agent", agentConfig],
       ["project-agent", projectAgentConfig],
     ]);
@@ -229,6 +281,7 @@ export class PermissionManager implements ScopedPermissionManager {
     // higher scope meant to tighten policy cannot silently fail open (#646).
     // Global is excluded — nothing more permissive is inherited when it fails.
     const failClosedScopes: RuleOrigin[] = [];
+    if (profileScope?.invalid === true) failClosedScopes.push("profile");
     if (projectConfig.invalid === true) failClosedScopes.push("project");
     if (agentConfig.invalid === true) failClosedScopes.push("agent");
     if (projectAgentConfig.invalid === true)
@@ -242,6 +295,7 @@ export class PermissionManager implements ScopedPermissionManager {
     const value: ResolvedPermissions = {
       composedRules: effectiveRules,
       failClosedScopes,
+      invalidProfileName,
     };
     this.resolvedPermissionsCache.set(cacheKey, { stamp, value });
     return value;

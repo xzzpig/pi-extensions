@@ -28,6 +28,18 @@ export interface UnifiedConfigLoadResult {
   issues: string[];
 }
 
+/** Load options controlling which surfaces a config file may use. */
+export interface UnifiedConfigLoadOptions {
+  /**
+   * Whether the file may define the named `profiles` registry. Defaults to
+   * `true` (the global config). Project configs pass `false`: a project file
+   * containing `profiles` is rejected whole — it can never define, override,
+   * or remove profile names — which marks the project scope invalid and
+   * triggers the existing fail-closed allow→ask clamp.
+   */
+  allowProfiles?: boolean;
+}
+
 export function stripJsonComments(input: string): string {
   let output = "";
   let i = 0;
@@ -164,12 +176,36 @@ export function normalizeFlatPermissionValue(
  */
 export function validateUnifiedConfig(
   parsed: unknown,
+  options: UnifiedConfigLoadOptions = {},
 ): UnifiedConfigLoadResult {
+  // The profiles registry is global-only. A project config defining profiles
+  // is rejected before schema validation so the failure is a single, explicit
+  // message instead of a path-qualified puzzle, and the whole project scope
+  // fails closed (empty config + issue).
+  if (
+    options.allowProfiles === false &&
+    isRecord(parsed) &&
+    parsed.profiles !== undefined
+  ) {
+    return {
+      config: {},
+      issues: [
+        "The 'profiles' key is only supported in the global configuration. " +
+          "Remove 'profiles' from the project config; profiles can only be " +
+          "defined in the global config file.",
+      ],
+    };
+  }
+
   const result = unifiedConfigSchema.safeParse(parsed);
   if (result.success) {
     return { config: result.data, issues: [] };
   }
   return { config: {}, issues: formatConfigIssues(result.error) };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /** Render each schema violation as a clear, path-qualified message. */
@@ -274,6 +310,17 @@ export function mergeUnifiedConfigs(
     merged.permission = overridePerm;
   }
 
+  // Profiles: global-only registry, override-replaces-base like every other
+  // field. Project overrides can never carry one — the loader rejects project
+  // files with a `profiles` key before this merge — so the surviving registry
+  // is always the operator's global definition (the newest global-scope file
+  // when legacy files are involved).
+  if (override.profiles !== undefined) {
+    merged.profiles = override.profiles;
+  } else if (base.profiles !== undefined) {
+    merged.profiles = base.profiles;
+  }
+
   return merged;
 }
 
@@ -373,8 +420,10 @@ export function loadAndMergeConfigs(
 
   // 5. New project config — skipped when the project scope is withheld, so an
   // untrusted project contributes nothing and `project` reports empty.
+  // Project files are loaded with `allowProfiles: false`: a project config
+  // that defines `profiles` is rejected whole (fail closed).
   const projectResult = includeProjectScope
-    ? loadUnifiedConfig(newProjectPath)
+    ? loadUnifiedConfig(newProjectPath, { allowProfiles: false })
     : { config: {}, issues: [] };
   allIssues.push(...projectResult.issues);
   const projectConfig = projectResult.config;
@@ -458,7 +507,10 @@ export function detectDeprecatedPreviewCaps(
  * Returns an empty config with no issues if the file does not exist.
  * Returns an empty config with an issue if the file cannot be parsed.
  */
-export function loadUnifiedConfig(path: string): UnifiedConfigLoadResult {
+export function loadUnifiedConfig(
+  path: string,
+  options: UnifiedConfigLoadOptions = {},
+): UnifiedConfigLoadResult {
   if (!existsSync(path)) {
     return { config: {}, issues: [] };
   }
@@ -466,7 +518,7 @@ export function loadUnifiedConfig(path: string): UnifiedConfigLoadResult {
   try {
     const raw = readFileSync(path, "utf-8");
     const parsed = JSON.parse(stripJsonComments(raw)) as unknown;
-    return validateUnifiedConfig(parsed);
+    return validateUnifiedConfig(parsed, options);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
