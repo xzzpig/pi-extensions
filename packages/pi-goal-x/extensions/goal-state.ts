@@ -71,6 +71,17 @@ export interface GoalCore {
 	goalModalDepth: number;
 	enterGoalModal(): void;
 	exitGoalModal(): void;
+	/**
+	 * Number of open blocking `ctx.ui.*` dialog spans reported by pi core's
+	 * `ui_prompt_start`/`ui_prompt_end` events (>= 0.84.4; the OUTERMOST span
+	 * only, shared across every extension). While it is > 0 a dialog owns the
+	 * keyboard, so goal-widget.ts must not intercept terminal input.
+	 */
+	uiPromptDepth: number;
+	enterUiPrompt(): void;
+	exitUiPrompt(): void;
+	/** Clears a leaked span at a session boundary so Escape can never stay trapped. */
+	resetUiPromptDepth(): void;
 	auditAborted: boolean;
 	goalWorkToolCalledThisTurn: boolean;
 	tasksEnabled: boolean;
@@ -220,6 +231,9 @@ export function createGoalCore(
 		appendFocusEntry: (goalId, reason) => appendFocusEntry(goalId, reason),
 		onFocusedGoalLost: (lostGoalId, ctx) => {
 			clearStoppedRuntimeState();
+			// SAFETY: GoalServiceContext is the structural subset `{ cwd: string }`,
+			// but every goal-service caller passes the live host ExtensionContext
+			// (goal-events.ts, goal-tools.ts) — no synthetic context is ever built.
 			updateUI(ctx as unknown as ExtensionContext);
 		},
 		onReconciled: (goal) => {
@@ -266,6 +280,7 @@ export function createGoalCore(
 	let auditAborted = false;
 
 	let goalModalDepth = 0;
+	let uiPromptDepth = 0;
 	let debugMode = false;
 	// §10: unified dashboard expansion state (compact vs expanded task view),
 	// owned by the core so it survives host-side widget re-instantiation.
@@ -289,6 +304,10 @@ export function createGoalCore(
 					customType: GOAL_EVENT_ENTRY,
 					content,
 					display: false,
+					// SAFETY: GoalRuntime hands back the details object it received from
+					// the goal tracker, which is always built as GoalEventDetails
+					// (goal-runtime.ts call sites); the widening only crosses a
+					// Record<string, unknown> boundary.
 					details: details as unknown as GoalEventDetails,
 				},
 				{ triggerTurn: true, deliverAs: "followUp" },
@@ -493,7 +512,9 @@ export function createGoalCore(
 		}
 	}
 
-	function abortAudit(ctx: ExtensionContext): void {
+	// ctx is part of the GoalCore API surface (callers pass it) but the abort
+	// path itself only touches the audit controller/UI state.
+	function abortAudit(_ctx: ExtensionContext): void {
 		if (!auditAbortController || !auditProgress) return;
 		auditAbortController.abort();
 		auditAbortController = null;
@@ -584,7 +605,7 @@ export function createGoalCore(
 	 * per-turn system-prompt block is gone). Edge-triggered: once per
 	 * unfocused spell, reset the moment a goal is focused again.
 	 */
-	function notifyUnfocusedIfNeeded(ctx: ExtensionContext): void {
+	function notifyUnfocusedIfNeeded(_ctx: ExtensionContext): void {
 		if (focusedGoalId) {
 			unfocusedNotified = false;
 			return;
@@ -1022,7 +1043,6 @@ export function createGoalCore(
 
 	function pauseActiveGoal(ctx: ExtensionContext): void {
 		if (!state.goal || state.goal.status !== "active") return;
-		const pausedGoalId = state.goal.id;
 		// User-initiated pause (Esc / aborted turn). Clear any stale agent pause reason.
 		state.goal = { ...state.goal, autoContinue: false, pauseReason: undefined, pauseSuggestedAction: undefined };
 		stopActiveGoal("paused", "user", ctx);
@@ -1076,6 +1096,23 @@ export function createGoalCore(
 
 	function exitGoalModal(): void {
 		goalModalDepth = Math.max(0, goalModalDepth - 1);
+	}
+
+	// pi core emits ui_prompt_start/ui_prompt_end for the OUTERMOST blocking
+	// ctx.ui.* dialog only, so a plain depth counter cannot over-count from a
+	// nested dialog. Clamp at 0 defensively: an unmatched end (host bug, or an
+	// end delivered after a session reset) must never drive the depth negative
+	// and re-enable Escape while a real dialog is still open.
+	function enterUiPrompt(): void {
+		uiPromptDepth++;
+	}
+
+	function exitUiPrompt(): void {
+		uiPromptDepth = Math.max(0, uiPromptDepth - 1);
+	}
+
+	function resetUiPromptDepth(): void {
+		uiPromptDepth = 0;
 	}
 
 	function replaceGoal(config: GoalCreationConfig, ctx: ExtensionContext, startNow = true, verificationContract?: string, tokenBudget?: number): void {
@@ -1170,6 +1207,12 @@ export function createGoalCore(
 		set goalModalDepth(value: number) {
 			goalModalDepth = value;
 		},
+		get uiPromptDepth() {
+			return uiPromptDepth;
+		},
+		set uiPromptDepth(value: number) {
+			uiPromptDepth = value;
+		},
 		get auditAborted() {
 			return auditAborted;
 		},
@@ -1240,6 +1283,9 @@ export function createGoalCore(
 		clearStoppedRuntimeState,
 		enterGoalModal,
 		exitGoalModal,
+		enterUiPrompt,
+		exitUiPrompt,
+		resetUiPromptDepth,
 		openGoals,
 		reconcileFocusedGoalFromDisk,
 		appendFocusEntry,

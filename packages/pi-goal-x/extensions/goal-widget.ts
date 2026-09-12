@@ -24,30 +24,6 @@ function isDebugEnabled(): boolean {
 	return value === "true" || value === "1";
 }
 
-/** Render task lines for the debug proposal dialog. */
-function formatModeLabelDebug(sisyphus: boolean): string {
-	return sisyphus ? "Sisyphus (prompt/criteria style)" : "Normal goal";
-}
-
-function formatPrefixedLinesDebug(content: string): string[] {
-	const lines: string[] = [];
-	for (const rawLine of content.split("\n")) {
-const trimmed = rawLine.trim();
-if (!trimmed) continue;
-if (trimmed.startsWith("│")) {
-	lines.push(rawLine);
-} else {
-	lines.push(`│   ${rawLine}`);
-}
-	}
-	return lines;
-}
-
-function formatSectionDebug(title: string, content: string): string[] {
-	const body = formatPrefixedLinesDebug(content);
-	return ["", `─── ${title} ───`, "", ...body];
-}
-
 
 /**
  * F3: toggle one task through the goal-service mutation boundary with the
@@ -127,11 +103,21 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 			// it is open: never intercept — otherwise Escape would pause the goal
 			// before the dialog could process it (bn-l pattern). Depth counter so
 			// nested goal modals remain guarded. The same applies to any other
-			// extension's TUI overlay (pi-subagents fleet inspector, pi's own
-			// selectors, ...): while an overlay is visible, Escape belongs to the
-			// focused overlay component, not to the goal — intercepting it would
-			// pause the goal while the user is merely closing the overlay.
-			if (core.goalModalDepth > 0 || core.goalTui?.hasOverlay?.()) return undefined;
+			// extension's TUI overlay (pi-subagents fleet inspector, ...): while an
+			// overlay is visible, Escape belongs to the focused overlay component,
+			// not to the goal — intercepting it would pause the goal while the user
+			// is merely closing the overlay. And it applies to every blocking
+			// `ctx.ui.*` dialog, including foreign non-overlay dialogs (select /
+			// confirm / input / editor / custom without `overlay: true`), which
+			// replace the editor and are therefore invisible to hasOverlay():
+			// pi core reports them through ui_prompt_start/ui_prompt_end and
+			// goal-events.ts tracks that as core.uiPromptDepth. Reporting an
+			// Escape here would cancel a running audit (or pause the goal and
+			// abort the current turn) when the user only meant to close that
+			// window. pi core's own editor-replacing selectors (/model, /tree,
+			// /settings, session picker) emit no ui_prompt span and remain a known
+			// residual gap, documented in specs/2026-09-12-escape-foreign-ui-prompt-guard.
+			if (core.goalModalDepth > 0 || core.uiPromptDepth > 0 || core.goalTui?.hasOverlay?.()) return undefined;
 			if (matchesKey(data, "escape") && core.auditProgress) {
 				core.abortAudit(ctx);
 				return { consume: true };
@@ -320,7 +306,9 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 		}
 
 		/** Start a mock completion audit that transitions through phases */
-		function startMockAudit(ctx: ExtensionContext): void {
+		// ctx is part of the debug keybinding call site; the mock audit only
+		// drives widget progress state.
+		function startMockAudit(_ctx: ExtensionContext): void {
 			if (!isDebugEnabled()) return;
 			stopMockAuditTimer();
 			const startedAt = Date.now();
@@ -374,20 +362,6 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 				core.goalWidgetComponentRef.current?.invalidate();
 			}, 100);
 			debugMockAuditTimer.unref?.();
-		}
-
-function renderDebugTaskLines(tasks: GoalTask[], indent = 0): string[] {
-			const prefix = "  ".repeat(indent);
-			const lines: string[] = [];
-			for (const t of tasks) {
-				const marker = t.status === "complete" ? "[x]" : t.status === "skipped" ? "[~]" : "[ ]";
-				const lw = t.lightweightSubtasks ? " (lightweight)" : "";
-				lines.push(`${prefix}${marker} ${t.id}: ${t.title}${lw}`);
-				if (t.subtasks && t.subtasks.length > 0) {
-					lines.push(...renderDebugTaskLines(t.subtasks, indent + 1));
-				}
-			}
-			return lines;
 		}
 
 		/** Show the proposal dialog using real goal state — no hardcoded text */

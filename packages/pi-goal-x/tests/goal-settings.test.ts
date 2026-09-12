@@ -109,13 +109,20 @@ test("saveGoalSettingsFileConfig: auditorTimeoutMs persists and clears", () => {
 		assert.equal(loaded.auditorTimeoutMs, 7_200_000, "persisted value round-trips");
 		saveGoalSettingsFileConfig(dir, {});
 		assert.equal(loadGoalSettingsFileConfig(dir).auditorTimeoutMs, undefined, "cleared when omitted");
-		assert.equal(loadGoalSettings(dir, {}).auditorTimeoutMs, undefined, "unset resolves to the phantom default (auditor applies 30 minutes)");
+		// Isolation: `env` picks the global settings path, so an isolated one is
+		// required for the "unset" assertions. Without it the test would read the
+		// real ~/.pi/agent/pi-goal-x-settings.json of whoever runs the suite.
+		assert.equal(
+			loadGoalSettings(dir, { PI_GOAL_GLOBAL_SETTINGS_FILE: path.join(dir, "no-global.json") }).auditorTimeoutMs,
+			undefined,
+			"unset resolves to the phantom default (auditor applies 30 minutes)",
+		);
 	});
 });
 
 test("effectiveSettingsReport: auditor timeout row shows the configured default when unset", () => {
 	withTempDir((dir) => {
-		const lines = effectiveSettingsReport(dir, {});
+		const lines = effectiveSettingsReport(dir, { PI_GOAL_GLOBAL_SETTINGS_FILE: path.join(dir, "no-global.json") });
 		const row = lines.find((l) => l.startsWith("  auditor timeout (ms)"));
 		assert.ok(row, "report includes the auditor timeout row");
 		assert.ok(row!.includes(`${DEFAULT_AUDITOR_TIMEOUT_MS} (default)`), `row shows the default: ${row}`);

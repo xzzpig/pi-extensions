@@ -2,6 +2,50 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.5.2] — 2026-09-12 (fork release)
+
+### Fixed
+
+- **Escape now belongs to the open dialog.** pi core (>= 0.84.4) reports every
+  blocking `ctx.ui.*` call through `ui_prompt_start`/`ui_prompt_end`; the goal
+  now tracks that span depth and yields to it, together with goal-owned modals
+  and TUI overlays. Before this, pressing Escape to close another extension's
+  window (a `select`/`confirm`/`input`/`editor`/`custom` dialog without
+  `overlay: true`, which replaces the editor instead of pushing an overlay)
+  aborted the completion audit that was running — or paused the active goal and
+  aborted the current turn. Escape resumes its goal meaning as soon as the
+  dialog closes. Nested dialogs are covered by core's outermost-span only
+  contract; a leaked span is cleared at session start/shutdown so Escape can
+  never stay trapped.
+
+  Known residual gap: pi core's own editor-replacing selectors (`/model`,
+  `/tree`, `/settings`, session picker) emit no `ui_prompt` span and are not TUI
+  overlays, so Escape there still reaches the goal. Closing that gap needs a pi
+  core change.
+
+### Changed
+
+- **`@earendil-works/pi-coding-agent` floor raised to `>=0.84.4`** (devDependency
+  `^0.85.1`): the `ui_prompt_start`/`ui_prompt_end` events and their types do
+  not exist before 0.84.4.
+- **`@xzzpig/pi-subagents` is now resolved through the pnpm workspace**
+  (`workspace:*`, matching `pi-agent-role`) instead of the registry `0.10.0`
+  tarball, whose raw TypeScript sources under `node_modules` made the unit test
+  suite unloadable under Node 24. The published dependency therefore moves from
+  `0.10.0` to `0.13.0` (pnpm rewrites `workspace:*` to the real version when
+  packing/publishing; verified in the packed tarball).
+
+### Tests
+
+- New `tests/goal-escape-ui-prompt.test.ts` covers the foreign-dialog guard:
+  Escape yields while a span is open and pauses again after it closes, a running
+  audit is not aborted while a dialog is open but is aborted once it closes,
+  stray `ui_prompt_end` events never underflow the depth, and `session_start`
+  clears a leaked span.
+- `tests/goal-settings.test.ts` isolates the global settings layer for the two
+  `auditorTimeoutMs` default assertions, so a machine-level
+  `~/.pi/agent/pi-goal-x-settings.json` can no longer change the result.
+
 ## [0.5.1] — 2026-09-10 (fork release)
 
 ### Added
