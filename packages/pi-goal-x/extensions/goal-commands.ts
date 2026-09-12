@@ -27,6 +27,7 @@ import {
 	AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE,
 	DEFAULT_AUDITOR_AGENT,
 	DEFAULT_AUDITOR_TIMEOUT_MS,
+	DEFAULT_CHANGE_MANIFEST_DEPTH,
 	MAX_AUDITOR_TIMEOUT_MS,
 	effectiveSettingsReport,
 	invalidateGoalSettingsCache,
@@ -35,6 +36,14 @@ import {
 import { invalidateGoalPoolCache, mergeGoalPromptFromDisk, readActiveGoalPool } from "./storage/goal-files.ts";
 import { nowIso, type GoalMode, type GoalRecord } from "./goal-record.ts";
 import { clearGoalDrafting, hasActiveDraft, startGoalDrafting } from "./goal-drafting.ts";
+import { deleteChangeBaseline, readChangeBaseline } from "./goal-change-baseline.ts";
+import { computeChangeDelta } from "./goal-change-delta.ts";
+import {
+	executeRollback,
+	formatRollbackReport,
+	planRollback,
+	writeRollbackBackup,
+} from "./goal-change-rollback.ts";
 import { formatRecoveryReport, runRecoveryReport, runRecoveryRepair } from "./goal-recovery.ts";
 import { formatCheckpointHealthReport, readSessionCheckpointHealth } from "./goal-session-health.ts";
 
@@ -452,7 +461,9 @@ export function registerGoalCommands(core: GoalCore): void {
 		key: keyof GoalSettings | string;
 		label: string;
 		section: "Goal behavior" | "Task tracking" | "Completion auditor" | "Blocker Oracle";
-		kind: "boolean" | "modelSelector" | "thinking" | "positiveInteger" | "agentName";
+		kind: "boolean" | "modelSelector" | "thinking" | "positiveInteger" | "agentName" | "enum";
+		/** Allowed values for `kind: "enum"` rows. */
+		choices?: readonly string[];
 		/** Settings path for the mutation (defaults to [key]). */
 		path?: string[];
 	};
@@ -463,6 +474,8 @@ export function registerGoalCommands(core: GoalCore): void {
 		{ key: "disableContracts", label: "disableContracts", section: "Goal behavior", kind: "boolean" },
 		{ key: "stallTimeoutMinutes", label: "stall timeout (minutes)", section: "Goal behavior", kind: "positiveInteger" },
 		{ key: "objectiveMaxChars", label: "max objective length (0 = none)", section: "Goal behavior", kind: "positiveInteger" },
+		{ key: "changeManifest", label: "change manifest", section: "Goal behavior", kind: "enum", choices: ["auto", "off"] },
+		{ key: "changeManifestDepth", label: "change manifest scan depth", section: "Goal behavior", kind: "positiveInteger" },
 		{ key: "disableTasks", label: "disableTasks", section: "Task tracking", kind: "boolean" },
 		{ key: "subtaskDepth", label: "subtaskDepth", section: "Task tracking", kind: "positiveInteger" },
 		{ key: "disabled", label: "auditor disabled", section: "Completion auditor", kind: "boolean" },
@@ -489,6 +502,8 @@ export function registerGoalCommands(core: GoalCore): void {
 		if (key === "subtaskDepth") return config.subtaskDepth !== undefined ? String(config.subtaskDepth) : "1";
 		if (key === "stallTimeoutMinutes") return config.stallTimeoutMinutes !== undefined ? String(config.stallTimeoutMinutes) : "0";
 		if (key === "objectiveMaxChars") return config.objectiveMaxChars !== undefined ? String(config.objectiveMaxChars) : "0";
+		if (key === "changeManifest") return config.changeManifest ?? "auto";
+		if (key === "changeManifestDepth") return config.changeManifestDepth !== undefined ? String(config.changeManifestDepth) : String(DEFAULT_CHANGE_MANIFEST_DEPTH);
 		if (key === "keybindings") return config.keybindings ? `${config.keybindings.dashboard.toggleExpand}, ${config.keybindings.dashboard.scrollUp}, ${config.keybindings.dashboard.scrollDown}` : "(default)";
 		const value = (config as Record<string, unknown>)[key];
 		return typeof value === "string" ? value : "(default)";
@@ -633,8 +648,29 @@ export function registerGoalCommands(core: GoalCore): void {
 					continue;
 				}
 
+				if (row.kind === "enum") {
+					const choices = row.choices ?? [];
+					const current = settingsValue(snapshot.value, row.key);
+					const actions = choices.map((choice) => (choice === current ? `✓ ${choice}` : choice));
+					if (hasLocalOverride) actions.push("(default)");
+					actions.push("Cancel");
+					const picked = await ctx.ui.select(`Set ${row.label} (${scope})`, actions);
+					if (!picked) continue;
+					const choice = picked.trim().replace(/^\u2713\s+/, "");
+					if (choice === "(default)") {
+						if (hasLocalOverride) applyMutation(scope, { op: "unset", path: rowPath });
+						continue;
+					}
+					if (!choices.includes(choice)) {
+						ctx.ui.notify(`${row.label} must be one of: ${choices.join(", ")}`, "warning");
+						continue;
+					}
+					applyMutation(scope, { op: "set", path: rowPath, value: choice });
+					continue;
+				}
+
 				if (row.kind === "positiveInteger") {
-					const min = row.path ? 1 : ((row.key === "stallTimeoutMinutes" || row.key === "objectiveMaxChars") ? 0 : 1);
+					const min = row.path ? 1 : ((row.key === "stallTimeoutMinutes" || row.key === "objectiveMaxChars" || row.key === "changeManifestDepth") ? 0 : 1);
 					const actions = [`Set ${scope} override...`];
 					if (hasLocalOverride) actions.push(inheritLabel);
 					actions.push("Cancel");
@@ -746,6 +782,52 @@ export function registerGoalCommands(core: GoalCore): void {
 			core.exitGoalModal();
 		}
 	}
+	/**
+	 * `/goal-clear` step 2: offer to roll the workspace back to this goal's
+	 * baseline, before archival (archival removes the baseline).
+	 *
+	 * Silent no-op when there is no baseline, collection is off, or nothing is
+	 * restorable — the clear path then behaves exactly as it did before. The
+	 * rollback is deliberately hard to trigger by accident: the default answer is
+	 * "no", and nothing touches the worktree until the backup is fully on disk.
+	 */
+	async function offerClearRollback(ctx: ExtensionContext, goalId: string): Promise<void> {
+		try {
+			const settings = loadGoalSettings(ctx.cwd);
+			if ((settings.changeManifest ?? "auto") === "off") return;
+			const baseline = readChangeBaseline(ctx, goalId);
+			if (!baseline) return;
+			const plan = planRollback(await computeChangeDelta(baseline));
+			if (plan.restoreCount + plan.deleteCount === 0) return;
+
+			const choice = await ctx.ui.select("Roll back this goal's workspace changes?", [
+				"No — clear and keep all workspace changes (default)",
+				`Yes — restore ${plan.restoreCount} file(s) and delete ${plan.deleteCount} new file(s)`,
+			]);
+			if (!choice || !choice.startsWith("Yes")) return;
+
+			// Fail-closed: the worktree is only touched after the whole backup exists.
+			const backup = await writeRollbackBackup(ctx, plan);
+			if (!backup.ok) {
+				ctx.ui.notify(
+					`Rollback skipped: ${backup.reason ?? "the backup could not be written"}. No file was modified; the goal is still cleared.`,
+					"warning",
+				);
+				return;
+			}
+
+			const results = await executeRollback(plan);
+			const failed = results.some((result) => result.failures.length > 0);
+			ctx.ui.notify(formatRollbackReport(plan, results, backup.dir), failed ? "warning" : "info");
+		} catch (error) {
+			// A failed rollback must never block clearing the goal.
+			ctx.ui.notify(
+				`Rollback skipped: ${error instanceof Error ? error.message : String(error)}. The goal is still cleared.`,
+				"warning",
+			);
+		}
+	}
+
 	async function handleGoalClear(ctx: ExtensionContext): Promise<void> {
 		core.reconcileFocusedGoalFromDisk(ctx);
 		if (!core.state.goal && otherOpenGoalCount(core.goalsById, null) > 0) {
@@ -778,9 +860,16 @@ export function registerGoalCommands(core: GoalCore): void {
 			ctx.ui.notify("Goal changed while confirming; nothing was cleared.", "warning");
 			return;
 		}
+		// Rollback happens before archival: archival (and clearing) removes the
+		// baseline that the rollback measures against.
+		await offerClearRollback(ctx, target.id);
 		const archived = core.archiveCurrentGoal(ctx, "user");
 		const didArchive = !!archived;
 		core.setGoal(null, ctx, true, "cleared");
+		// Baseline lifecycle: clearing is terminal. This runs after archival and
+		// after the (user-opted) rollback flow that needs the baseline still
+		// present, and is idempotent when archival already removed it.
+		deleteChangeBaseline(ctx, target.id);
 		const msg = clearGoalCommandMessage({ archived: didArchive });
 		ctx.ui.notify(msg, didArchive ? "info" : "warning");
 	}

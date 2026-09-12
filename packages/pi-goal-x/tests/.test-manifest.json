@@ -10,6 +10,12 @@
     ".tests/goal-auditor-selector.test.ts",
     ".tests/goal-auditor.test.ts",
     ".tests/goal-budget.test.ts",
+    ".tests/goal-change-baseline.test.ts",
+    ".tests/goal-change-delta.test.ts",
+    ".tests/goal-change-lifecycle.test.ts",
+    ".tests/goal-change-manifest-prompt.test.ts",
+    ".tests/goal-change-manifest.test.ts",
+    ".tests/goal-change-rollback.test.ts",
     ".tests/goal-command-palette.test.ts",
     ".tests/goal-compaction.test.ts",
     ".tests/goal-comprehensive-optimization.test.ts",
@@ -80,7 +86,8 @@
     ".tests/verification-contract.test.ts"
   ],
   "integrationFiles": [
-    ".tests/integration/extension.test.ts"
+    ".tests/integration/extension.test.ts",
+    ".tests/integration/goal-change-manifest.test.ts"
   ],
   "e2eFiles": [
     ".tests/e2e/goal-lifecycle-dashboard.test.ts",

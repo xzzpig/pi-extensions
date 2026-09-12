@@ -343,6 +343,40 @@ test("parseGoalSettings: objectiveMaxChars accepted as number or string, 0 allow
 	assert.deepEqual(parseGoalSettings({ objectiveMaxChars: 1.5 }), {}, "non-integer rejected");
 });
 
+// ── changeManifest / changeManifestDepth (change manifest settings) ──────
+
+test("parseGoalSettings: changeManifest accepts auto/off only", () => {
+	assert.deepEqual(parseGoalSettings({ changeManifest: "auto" }), { changeManifest: "auto" });
+	assert.deepEqual(parseGoalSettings({ changeManifest: "off" }), { changeManifest: "off" });
+	assert.deepEqual(parseGoalSettings({ changeManifest: "OFF" }), {}, "values are case-sensitive");
+	assert.deepEqual(parseGoalSettings({ changeManifest: true }), {}, "booleans rejected");
+	assert.deepEqual(parseGoalSettings({ changeManifest: "sometimes" }), {}, "unknown mode rejected");
+});
+
+test("parseGoalSettings: changeManifestDepth accepts integer >= 0 (0 = no downward scan)", () => {
+	assert.deepEqual(parseGoalSettings({ changeManifestDepth: 0 }), { changeManifestDepth: 0 });
+	assert.deepEqual(parseGoalSettings({ changeManifestDepth: 2 }), { changeManifestDepth: 2 });
+	assert.deepEqual(parseGoalSettings({ changeManifestDepth: "3" }), { changeManifestDepth: 3 });
+	assert.deepEqual(parseGoalSettings({ changeManifestDepth: -1 }), {}, "negative rejected");
+	assert.deepEqual(parseGoalSettings({ changeManifestDepth: 1.5 }), {}, "non-integer rejected");
+});
+
+test("parseSettingsLayer: invalid change manifest values are diagnosed without dropping siblings", () => {
+	const { layer, diagnostics } = parseSettingsLayer(
+		{ changeManifest: "sometimes", changeManifestDepth: -1, disableTasks: true },
+		"project",
+		"(inline)",
+	);
+	assert.deepEqual(layer, { disableTasks: true }, "valid sibling key survives");
+	assert.deepEqual(
+		diagnostics.map((d) => [d.settingPath, d.code]),
+		[["changeManifest", "invalid_value"], ["changeManifestDepth", "invalid_value"]],
+		"each invalid value gets its own diagnostic",
+	);
+	assert.match(diagnostics[0]!.message, /auto, off/, "enum diagnostic lists valid values");
+	assert.match(diagnostics[1]!.message, /integer >= 0/, "depth diagnostic states the accepted range");
+});
+
 test("loadGoalSettings: objectiveMaxChars defaults to no limit and honors the env override", () => {
 	withTempDir((dir) => {
 		const configPath = goalSettingsPath(dir);
@@ -420,6 +454,43 @@ test("effectiveSettingsReport: objectiveMaxChars row shows the effective value a
 		const row = lines.find((l) => l.startsWith("  max objective length"));
 		assert.ok(row, "report includes the max objective length row");
 		assert.match(row!, /3000 \(project\)/);
+	});
+});
+
+test("saveGoalSettingsFileConfig: changeManifest / changeManifestDepth persist (including 0) and clear", () => {
+	withTempDir((dir) => {
+		saveGoalSettingsFileConfig(dir, { changeManifest: "off", changeManifestDepth: 3 });
+		const loaded = loadGoalSettingsFileConfig(dir);
+		assert.equal(loaded.changeManifest, "off", "enum value round-trips");
+		assert.equal(loaded.changeManifestDepth, 3, "depth round-trips");
+		saveGoalSettingsFileConfig(dir, { changeManifest: "off", changeManifestDepth: 0 });
+		assert.equal(loadGoalSettingsFileConfig(dir).changeManifestDepth, 0, "0 (no downward scan) persists explicitly");
+		saveGoalSettingsFileConfig(dir, {});
+		const cleared = loadGoalSettingsFileConfig(dir);
+		assert.equal(cleared.changeManifest, undefined, "cleared when omitted");
+		assert.equal(cleared.changeManifestDepth, undefined, "cleared when omitted");
+	});
+});
+
+test("effectiveSettingsReport: change manifest rows show effective values with defaults when unset", () => {
+	withTempDir((dir) => {
+		const unset = effectiveSettingsReport(dir, { PI_GOAL_GLOBAL_SETTINGS_FILE: path.join(dir, "no-global.json") });
+		assert.ok(
+			unset.some((l) => l.startsWith("  change manifest: auto (default)")),
+			"unset changeManifest reports the auto default",
+		);
+		assert.ok(
+			unset.some((l) => l.startsWith("  change manifest scan depth: 1 (default)")),
+			"unset changeManifestDepth reports the depth-1 default",
+		);
+	});
+	withTempDir((dir) => {
+		const configPath = goalSettingsPath(dir);
+		fs.mkdirSync(path.dirname(configPath), { recursive: true });
+		fs.writeFileSync(configPath, JSON.stringify({ changeManifest: "off", changeManifestDepth: 0 }), "utf8");
+		const configured = effectiveSettingsReport(dir, {});
+		assert.ok(configured.some((l) => l.startsWith("  change manifest: off (project)")));
+		assert.ok(configured.some((l) => l.startsWith("  change manifest scan depth: 0 (project)")));
 	});
 });
 

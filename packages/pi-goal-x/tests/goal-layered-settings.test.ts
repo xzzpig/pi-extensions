@@ -96,6 +96,51 @@ describe("layering matrix", () => {
 		});
 	});
 
+	it("changeManifest / changeManifestDepth: defaults are auto and 1 with default provenance", () => {
+		withTempDir((dir) => {
+			const env = { PI_GOAL_GLOBAL_SETTINGS_FILE: path.join(dir, "no-global.json") };
+			invalidateGoalSettingsCache();
+			const snap = loadSettingsSnapshot(dir, env);
+			assert.equal(snap.value.changeManifest, "auto");
+			assert.equal(snap.value.changeManifestDepth, 1);
+			assert.equal(snap.provenance.get("changeManifest")?.source, "default");
+			assert.equal(snap.provenance.get("changeManifestDepth")?.source, "default");
+		});
+	});
+
+	it("changeManifest / changeManifestDepth: global applies, project overrides, invalid values fall back", () => {
+		withTempDir((dir) => {
+			const env = { PI_GOAL_GLOBAL_SETTINGS_FILE: path.join(dir, "g.json") };
+			writeJson(path.join(dir, "g.json"), { changeManifest: "off", changeManifestDepth: 3 });
+			invalidateGoalSettingsCache();
+			let snap = loadSettingsSnapshot(dir, env);
+			assert.equal(snap.value.changeManifest, "off", "global-only value applies");
+			assert.equal(snap.value.changeManifestDepth, 3, "global-only depth applies");
+			assert.equal(snap.provenance.get("changeManifest")?.source, "global");
+
+			writeJson(path.join(dir, ".pi", "pi-goal-x-settings.json"), { changeManifest: "auto", changeManifestDepth: 0 });
+			invalidateGoalSettingsCache();
+			snap = loadSettingsSnapshot(dir, env);
+			assert.equal(snap.value.changeManifest, "auto", "project overrides global enum");
+			assert.equal(snap.value.changeManifestDepth, 0, "explicit project zero overrides global positive (0 = no downward scan)");
+			assert.equal(snap.provenance.get("changeManifestDepth")?.source, "project");
+
+			writeJson(path.join(dir, ".pi", "pi-goal-x-settings.json"), { changeManifest: "sometimes", changeManifestDepth: -2 });
+			invalidateGoalSettingsCache();
+			snap = loadSettingsSnapshot(dir, env);
+			assert.equal(snap.value.changeManifest, "off", "invalid enum value falls back to the lower layer");
+			assert.equal(snap.value.changeManifestDepth, 3, "invalid depth falls back to the lower layer");
+			assert.ok(
+				snap.project.diagnostics.some((d) => d.settingPath === "changeManifest" && d.code === "invalid_value"),
+				"invalid enum value is diagnosed",
+			);
+			assert.ok(
+				snap.project.diagnostics.some((d) => d.settingPath === "changeManifestDepth" && d.code === "invalid_value"),
+				"invalid depth is diagnosed",
+			);
+		});
+	});
+
 	it("auditorTimeoutMs: global-only setting applies when project absent", () => {
 		withTempDir((dir) => {
 			const env = { PI_GOAL_GLOBAL_SETTINGS_FILE: path.join(dir, "g.json") };

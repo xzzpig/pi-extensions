@@ -6,7 +6,9 @@
  *   - malformed ledger lines (counted by the ledger reader);
  *   - stale locks (.pi/goals/.locks/*.lock whose pid is dead or whose age
  *     exceeds the TTL — left behind by crashed sessions);
- *   - orphaned snapshot data (pool-snapshot goals with no matching file).
+ *   - orphaned snapshot data (pool-snapshot goals with no matching file);
+ *   - orphaned change-manifest baselines (.pi/goals/<id>.baseline.json with no
+ *     goal record — a cleared/archived goal whose baseline cleanup did not run).
  *
  * Everything is read-only by default. Repair operations (stale-lock removal,
  * snapshot refresh) require an explicit confirmation AND copy the affected
@@ -21,6 +23,7 @@ import * as path from "node:path";
 import { readGoalLedger, type GoalLedgerContext } from "./goal-ledger.ts";
 import { GOAL_LOCK_DIR } from "./storage/goal-lock.ts";
 import { invalidateGoalPoolCache, parseGoalFile, readActiveGoalPool, type GoalFileContext } from "./storage/goal-files.ts";
+import { changeBaselinePath, deleteChangeBaseline, listBaselineGoalIds } from "./goal-change-baseline.ts";
 
 export const GOALS_DIR = ".pi/goals";
 export const RECOVERY_BACKUP_DIR = ".pi/goals/.recovery-backup";
@@ -48,6 +51,13 @@ export interface RecoveryReport {
 	malformedLedgerLines: number;
 	staleLocks: StaleLockEntry[];
 	orphanedSnapshotGoals: OrphanedSnapshotEntry[];
+	/**
+	 * Change-manifest baselines whose goal record no longer exists (an interrupted
+	 * cleanup, or a goal file removed by hand). They hold no user content beyond a
+	 * dangling stash reference, so removing them is safe and reversible via the
+	 * repair backup copy.
+	 */
+	orphanedBaselines: string[];
 	healthy: boolean;
 }
 
@@ -164,14 +174,28 @@ export function runRecoveryReport(ctx: GoalFileContext): RecoveryReport {
 	const malformedGoalFiles = scanMalformedGoalFiles(ctx.cwd);
 	const staleLocks = scanStaleLocks(ctx.cwd);
 	const orphanedSnapshotGoals = scanOrphanedSnapshotGoals(ctx.cwd);
+	const orphanedBaselines = scanOrphanBaselines(ctx);
 	return {
 		scannedAt: new Date().toISOString(),
 		malformedGoalFiles,
 		malformedLedgerLines: ledger.malformed,
 		staleLocks,
 		orphanedSnapshotGoals,
-		healthy: malformedGoalFiles.length === 0 && ledger.malformed === 0 && staleLocks.length === 0 && orphanedSnapshotGoals.length === 0,
+		orphanedBaselines,
+		healthy: malformedGoalFiles.length === 0 && ledger.malformed === 0 && staleLocks.length === 0 && orphanedSnapshotGoals.length === 0 && orphanedBaselines.length === 0,
 	};
+}
+
+/**
+ * Baselines with no goal record left. The active pool is the authoritative read
+ * (a paused goal still has its file, so it is not orphaned), which makes this
+ * "terminal, or the record was removed by hand".
+ */
+function scanOrphanBaselines(ctx: GoalFileContext): string[] {
+	const ids = listBaselineGoalIds(ctx);
+	if (ids.length === 0) return [];
+	const pool = readActiveGoalPool(ctx);
+	return ids.filter((goalId) => !pool.has(goalId)).sort();
 }
 
 /**
@@ -186,7 +210,7 @@ export async function runRecoveryRepair(
 	report: RecoveryReport,
 	confirm: () => Promise<boolean>,
 ): Promise<RecoveryRepairResult> {
-	if (report.staleLocks.length === 0 && report.orphanedSnapshotGoals.length === 0) {
+	if (report.staleLocks.length === 0 && report.orphanedSnapshotGoals.length === 0 && report.orphanedBaselines.length === 0) {
 		return { applied: [], backupDir: null, confirmed: false };
 	}
 	const confirmed = await confirm();
@@ -224,6 +248,20 @@ export async function runRecoveryRepair(
 		}
 	}
 
+	// Orphaned baselines: copy first (recoverable), then remove. The baseline
+	// holds no user content and no git objects are pruned here.
+	for (const goalId of report.orphanedBaselines) {
+		try {
+			const source = changeBaselinePath(ctx, goalId);
+			if (fs.existsSync(source)) {
+				fs.copyFileSync(source, path.join(backupDir, `baseline-${safeLockName(goalId)}.json`));
+			}
+			if (deleteChangeBaseline(ctx, goalId)) applied.push(`removed orphaned baseline ${goalId}`);
+		} catch {
+			// best-effort per item
+		}
+	}
+
 	return { applied, backupDir, confirmed: true };
 }
 
@@ -245,8 +283,12 @@ export function formatRecoveryReport(report: RecoveryReport): string {
 		lines.push(`  - ${report.orphanedSnapshotGoals.length} orphaned snapshot entr${report.orphanedSnapshotGoals.length === 1 ? "y" : "ies"}:`);
 		for (const o of report.orphanedSnapshotGoals) lines.push(`      ${o.goalId} (${o.activePath})`);
 	}
-	if (report.staleLocks.length > 0 || report.orphanedSnapshotGoals.length > 0) {
-		lines.push("Run `/goal-recovery repair` to remove stale locks and refresh the pool snapshot (confirmation + backup required).");
+	if (report.orphanedBaselines.length > 0) {
+		lines.push(`  - ${report.orphanedBaselines.length} orphaned change-manifest baseline(s):`);
+		for (const goalId of report.orphanedBaselines) lines.push(`      ${goalId}.baseline.json`);
+	}
+	if (report.staleLocks.length > 0 || report.orphanedSnapshotGoals.length > 0 || report.orphanedBaselines.length > 0) {
+		lines.push("Run `/goal-recovery repair` to remove stale locks, orphaned baselines, and refresh the pool snapshot (confirmation + backup required).");
 	}
 	return lines.join("\n");
 }

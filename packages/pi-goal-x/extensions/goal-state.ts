@@ -3,6 +3,7 @@ import type { TUI } from "@earendil-works/pi-tui";
 import { FOCUS_ENTRY, STATE_ENTRY, GOAL_CONTEXT_EVENT_ENTRY, GOAL_EVENT_ENTRY, GOAL_STATE_EVENT_ENTRY, GOAL_STEERING_EVENT_ENTRY, goalDetails } from "./goal-format.ts";
 import { goalContextMessagePrompt, goalStateSnapshotPrompt, budgetReachedReminderNote, unfocusedOpenGoalsPrompt } from "./prompts/goal-prompts.ts";
 import { loadGoalSettings, loadGoalSettingsFileConfig } from "./goal-settings.ts";
+import { deleteChangeBaseline } from "./goal-change-baseline.ts";
 import { ALL_REGISTERED_GOAL_TOOLS } from "./goal-tool-names.ts";
 import { budgetReached } from "./goal-accounting.ts";
 import {
@@ -1011,6 +1012,9 @@ export function createGoalCore(
 				return { ...g, status, stopReason: reason };
 			},
 		});
+		// Baseline lifecycle: an archived goal is terminal, so its execution-window
+		// baseline is no longer needed (and can never be reused once archived).
+		if (result.ok && result.goal) deleteChangeBaseline(ctx, result.goal.id);
 		return result.ok ? result.goal : null;
 	}
 

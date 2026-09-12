@@ -11,6 +11,8 @@ import { runGoalCompletionAuditor, type GoalAuditorResult } from "./goal-auditor
 import { nowIso, type GoalRecord } from "./goal-record.ts";
 import { latestEventsForGoal, goalRuntimeEvents } from "./goal-ledger.ts";
 import { mergeGoalPromptFromDisk } from "./storage/goal-files.ts";
+import { renderGoalChangeManifest } from "./goal-change-delta.ts";
+import { deleteChangeBaseline } from "./goal-change-baseline.ts";
 import { showEscapeDialog, type EscapeDialogResult } from "./widgets/goal-escape-dialog.ts";
 import type { GoalCore } from "./goal-state.ts";
 import type { GoalMutationOutcome } from "./goal-service.ts";
@@ -111,6 +113,10 @@ function commitGoalCompletion(core: GoalCore, ctx: ExtensionContext, opts: {
 		};
 	}
 	if (completeResult.goal) core.runtime.markTurnStopped(completeResult.goal.id);
+	// Baseline lifecycle: the approved completion transaction committed, so the
+	// execution-window baseline is done. A rejected or failed audit never reaches
+	// this point, so the baseline survives for a retry.
+	if (completeResult.goal) deleteChangeBaseline(ctx, completeResult.goal.id);
 	core.updateUI(ctx);
 	const text = buildCompletionReport({
 		detailedSummary: detailedSummary(core.state.goal),
@@ -247,6 +253,14 @@ if (settings.disabled === true) {
 		? `Recent goal events (from the shared ledger):\n${warmTail.map((e) => `- ${e.at} ${e.type}${"taskId" in e ? ` (task ${e.taskId})` : ""}${"evidence" in e && e.evidence ? ` evidence: ${e.evidence}` : ""}`).join("\n")}`
 		: null;
 
+	// Change manifest: a machine-collected index of what changed in this goal's
+	// execution window, so the fresh-context auditor can aim its inspection
+	// instead of re-deriving the change set. Best-effort by construction — with
+	// no baseline (off, non-git, capture failed) this is null and the audit input
+	// is exactly what it was before this feature. It is evidence about the
+	// workspace, never a substitute for the executor claim's untrusted marking.
+	const changeManifest = await renderGoalChangeManifest(ctx, auditTarget.id);
+
 	let auditor: GoalAuditorResult;
 	try {
 		auditor = await (core.dependencies.runCompletionAuditor ?? runGoalCompletionAuditor)({
@@ -257,6 +271,7 @@ if (settings.disabled === true) {
 			completionSummary: completionSummary?.trim() || undefined,
 			settings,
 			warmContext,
+			changeManifest,
 			signal: completionAuditController.signal,
 			onProgress: (progress) => {
 				core.auditProgress = {

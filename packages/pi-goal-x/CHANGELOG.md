@@ -2,6 +2,73 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.7.0] — 2026-09-13 (fork release)
+
+### Added
+
+- **The completion audit receives a git change manifest.** When the working
+  directory is inside a repository, the first execution turn after a goal is
+  confirmed captures a baseline — `HEAD`, a `git stash create` snapshot of the
+  tracked content, and a `status --porcelain --untracked-files=all` fingerprint —
+  in `.pi/goals/<id>.baseline.json`. The completion audit is then given the
+  resulting window as machine-collected evidence: one section per repository
+  (the primary repository, ancestors found by an upward walk, recursive
+  submodules, and nested repositories found by a bounded depth scan, innermost
+  owner winning) with per-path add/delete counts and directly executable
+  `git -C <root> diff <base>` commands, so the read-only auditor pulls the diffs
+  it wants instead of the prompt carrying them. The block is labelled as *not*
+  the executor's claim, `executor_claim` stays marked UNTRUSTED, and the
+  checklist tells the auditor that manifest entries never substitute for
+  verification. No diff body is ever inlined (`diff --git`, `@@`, `+`/`-`
+  lines), the rendering is capped at 6000 characters, and pi-goal-x's own state
+  (`.pi/goals/`, `.pi/subagents/`, the goal event ledger, the pool snapshot) is
+  excluded from the window.
+- **`/goal-clear` offers to roll the workspace back.** After the clear
+  confirmation, a second prompt reports how many files the goal window changed
+  and offers to restore them; **No** is the default, so a stray Enter still only
+  clears the goal. Rolling back restores modified and deleted tracked files to
+  their baseline content (`git restore --source=<base> --worktree`, never the
+  index) and deletes the files created inside the window. No repository HEAD is
+  ever reset, so commits inside submodules or nested repositories are reported
+  as unrolled back instead of being discarded. The current changes are copied
+  into `.pi/goals/archived/rollback_<timestamp>_<goalId>/` first — one binary
+  patch per repository plus copies of every file scheduled for deletion — and
+  the discard fails closed (abandoned with a reason, workspace untouched) when
+  that backup cannot be written completely; the rollback is also never offered
+  without a baseline, without in-window changes, or without an interactive UI.
+  The user's `git stash` list is never read or written.
+- `/goal-settings` gained `changeManifest` (`auto` by default, `off` disables
+  collection) and `changeManifestDepth` (nested-repository scan depth below the
+  repository root, default `1`, `0` disables the downward scan), both usable in
+  the project and global settings files.
+
+### Changed
+
+- Baseline capture is one-shot per goal and hangs off the existing `turn_start`
+  handler behind a single guard (a focused goal whose `status` is `active`): the
+  first execution turn opens the window and later turns never re-capture, with
+  the in-memory flag backed by create-if-absent (`wx`) sidecar semantics so a
+  second process cannot overwrite an existing baseline. There is no tool-name
+  classification, no `tool_call` trigger, and no `task_started` fallback.
+- Terminal transitions remove the baseline sidecar (completion, archival,
+  clear). A rejected or failed audit keeps it so a retry measures the same
+  window, and a paused goal keeps it because it can resume inside that window.
+  `/goal-recovery` now also reports orphaned baselines (whose goal record is
+  gone) and removes them with the usual confirmation and backup.
+- Every extension-side git call is a fixed subcommand with array arguments at a
+  2000 ms per-repository timeout and a 5000 ms scope-resolution budget, reading
+  with `GIT_OPTIONAL_LOCKS=0` so no index lock is taken, and capture, delta, and
+  rollback failures degrade silently: they never block goal creation,
+  completion, or clearing.
+
+### Unchanged (explicitly verified)
+
+- Outside a repository, with `changeManifest: "off"`, or when no baseline
+  exists, the audit prompt is byte-for-byte what it was before this release and
+  no git object is created.
+- The auditor's tool whitelist, its `structured_output` verdict contract, the
+  completion transaction, and the dashboard phase semantics are unchanged.
+
 ## [0.6.1] — 2026-09-12 (fork release)
 
 ### Changed

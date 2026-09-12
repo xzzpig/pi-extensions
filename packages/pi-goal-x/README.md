@@ -67,6 +67,8 @@ The completion auditor checks these requirements against evidence from the works
 
 When the agent reports a goal as complete, a separate pi agent reviews the objective, tasks, verification requirements, and workspace.
 
+Inside a git repository that review also receives a machine-collected change manifest: one section per repository with the paths the goal window changed, their add/delete counts, and ready-to-run `git -C <root> diff <base>` commands to expand on demand. It is evidence, not the executor's claim — the auditor still verifies it against the repository.
+
 Approved goals are archived as complete. Goals requiring additional work remain open with review feedback.
 
 The review runs as a fresh foreground `goal-auditor` child through
@@ -264,6 +266,8 @@ Archive the focused goal:
 /goal-clear
 ```
 
+Clearing a goal also offers to roll the workspace back. After the confirmation you are asked whether to restore the files the goal window modified or deleted and to remove the files it created; **No** is the default, so a stray Enter only clears. The discarded changes are copied into `.pi/goals/archived/rollback_<timestamp>_<goalId>/` first, no repository HEAD is reset, and your `git stash` list is never touched.
+
 Cancel an unconfirmed guided draft:
 
 ```text
@@ -385,6 +389,8 @@ Completed and cleared goals are stored in:
 .pi/goals/archived/
 ```
 
+While a goal is active, its change-manifest baseline lives beside it as `.pi/goals/<id>.baseline.json`, and `/goal-clear` rollback backups are written under `.pi/goals/archived/rollback_<timestamp>_<goalId>/`.
+
 Each session can focus on one goal while the project keeps other goals open.
 
 ## Goal context, tool surface, and prompt-cache stability
@@ -489,7 +495,7 @@ project: <cwd>/.pi/pi-goal-x-settings.json   (or $PI_GOAL_SETTINGS_FILE)
 
 Define shared configuration once in the global file and override per project. Explicit `false`/`0` values in a lower layer override inherited values; nested `keybindings` inherit per key. `/goal-settings` shows each row's effective value and source, can switch the edited scope, and can remove a local override to return to inheritance.
 
-Use `/goal-settings` to configure task lists, verification contracts, subtask depth, automatic goal selection, the `auditorAgent` name (default `goal-auditor`), the `auditorTimeoutMs` audit wall-clock cap (default `1800000`, 30 minutes), and model/thinking overrides (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; `max` requires auditor-model support via pi-subagents' model registry). Goal objectives have no hard length limit by default; set `objectiveMaxChars` (or `PI_GOAL_OBJECTIVE_MAX_CHARS`, `0` = no limit) to cap objective length across `create_goal`, `propose_goal_draft`, and `/goal-tweak`.
+Use `/goal-settings` to configure task lists, verification contracts, subtask depth, automatic goal selection, the `auditorAgent` name (default `goal-auditor`), the `auditorTimeoutMs` audit wall-clock cap (default `1800000`, 30 minutes), and model/thinking overrides (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; `max` requires auditor-model support via pi-subagents' model registry). `changeManifest` (default `auto`) turns the workspace change manifest collected for the audit on or off, and `changeManifestDepth` (default `1`, `0` disables the downward scan) sets how many directory levels below the repository root are searched for nested repositories. Goal objectives have no hard length limit by default; set `objectiveMaxChars` (or `PI_GOAL_OBJECTIVE_MAX_CHARS`, `0` = no limit) to cap objective length across `create_goal`, `propose_goal_draft`, and `/goal-tweak`.
 
 The selected auditor is a normal pi-subagents agent. Eject the bundled default
 before editing it:

@@ -15,7 +15,9 @@ import {
 } from "./goal-format.ts";
 import { invalidateGoalLedgerCache } from "./goal-ledger.ts";
 import { shouldArmPostCompactReminder } from "./goal-policy.ts";
-import { loadGoalSettings, invalidateGoalSettingsCache } from "./goal-settings.ts";
+import { loadGoalSettings, invalidateGoalSettingsCache, DEFAULT_CHANGE_MANIFEST_DEPTH } from "./goal-settings.ts";
+import { createBaselineCaptureState, maybeCaptureBaseline } from "./goal-change-baseline.ts";
+import { deleteChangeBaseline } from "./goal-change-baseline.ts";
 import { asRecord, nowIso, type AssistantMessageLike } from "./goal-record.ts";
 import { goalSelectorLabel, otherOpenGoalCount } from "./goal-pool.ts";
 import { invalidateGoalPoolCache } from "./storage/goal-files.ts";
@@ -68,6 +70,9 @@ export function registerGoalEvents(core: GoalCore): void {
 	const { pi } = core;
 	let continuationAfterSettleFor: string | null = null;
 	let networkErrorRecoveryAfterSettleFor: string | null = null;
+	// Change-manifest baseline bookkeeping: at most one capture attempt per goal
+	// for the lifetime of this registration (success or failure alike).
+	const baselineCapture = createBaselineCaptureState();
 
 	// Escape belongs to the open dialog. pi core (>= 0.84.4) wraps every
 	// blocking extension UI call in the OUTERMOST `ctx.ui.*` span and dispatches
@@ -97,6 +102,22 @@ export function registerGoalEvents(core: GoalCore): void {
 		// Per-turn flag resets (#4 + C9 fix).
 		core.advanceTurnSeq();
 		core.goalWorkToolCalledThisTurn = false;
+		// Change-manifest baseline: the first execution turn of a focused active
+		// goal captures the window origin, before any tool of this turn runs. One
+		// call site, one guard, one shot per goal (the in-memory set plus the
+		// sidecar's create-if-absent semantics) — deliberately not tied to tool
+		// names or tool callbacks.
+		const baselineGoal = core.state.goal;
+		if (baselineGoal?.status === "active" && !baselineCapture.attemptedGoals.has(baselineGoal.id)) {
+			const manifestSettings = loadGoalSettings(ctx.cwd);
+			await maybeCaptureBaseline(baselineCapture, {
+				ctx,
+				goalId: baselineGoal.id,
+				mode: manifestSettings.changeManifest ?? "auto",
+				depth: manifestSettings.changeManifestDepth ?? DEFAULT_CHANGE_MANIFEST_DEPTH,
+				reason: "turn_start",
+			});
+		}
 		core.beginAccounting();
 		core.goalService.beginTurn(ctx, core.focusedGoalId); // P1-3 transaction buffer
 		core.touchGoalActivity(); // F5
@@ -208,6 +229,9 @@ export function registerGoalEvents(core: GoalCore): void {
 				archiveResult = { ok: false, message: err instanceof Error ? err.message : String(err) };
 			}
 			if (archiveResult.ok) {
+				// Baseline lifecycle: the deferred archival committed; the goal is
+				// terminal, so its execution-window baseline goes with it.
+				deleteChangeBaseline(ctx, completedGoal.id);
 				core.goalsById.delete(completedGoal.id);
 				core.assignFocusedGoalId(null);
 				core.appendFocusEntry(null, "completed");

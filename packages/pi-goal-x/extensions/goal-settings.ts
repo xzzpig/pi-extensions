@@ -87,6 +87,9 @@ export const DEFAULT_GOAL_KEYBINDINGS: GoalKeybindings = {
  */
 export const DEFAULT_NETWORK_RECOVERY_MAX_DELAY_MS = 80_000;
 
+/** Default downward scan depth for unregistered nested repositories. */
+export const DEFAULT_CHANGE_MANIFEST_DEPTH = 1;
+
 export function formatGoalKeybinding(key: string): string {
 	return key.split("+").map((part) => ({
 		ctrl: "Ctrl",
@@ -140,6 +143,20 @@ export interface GoalSettingsResolvedShape {
 	keybindings?: GoalKeybindings;
 	/** PR #29: suppress the unfocused goal widget + status hint (default false). */
 	hideUnfocusedBanner?: boolean;
+	/**
+	 * Workspace change manifest for the completion audit: "auto" (default)
+	 * collects a git-snapshot manifest for the repositories the goal touched;
+	 * "off" disables collection entirely, leaving audit input byte-for-byte
+	 * identical to the pre-manifest behavior. Invalid values fall back to
+	 * "auto".
+	 */
+	changeManifest?: "auto" | "off";
+	/**
+	 * How many directory levels below each repository root are scanned for
+	 * unregistered nested repositories (0 = no downward scan, default 1).
+	 * Invalid values fall back to the default.
+	 */
+	changeManifestDepth?: number;
 	/** Issue #26: opt-in read-only blocker Oracle configuration (sparse). */
 	oracle?: GoalOracleSettingsLayer;
 	/**
@@ -214,6 +231,7 @@ export const PI_GOAL_SETTINGS_FILE_ENV = "PI_GOAL_SETTINGS_FILE";
 export const PI_GOAL_GLOBAL_SETTINGS_FILE_ENV = "PI_GOAL_GLOBAL_SETTINGS_FILE";
 
 const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const CHANGE_MANIFEST_MODES = new Set(["auto", "off"]);
 
 // ── pure path resolution ────────────────────────────────────────────────────
 
@@ -351,6 +369,11 @@ function asThinkingLevel(value: unknown): ThinkingLevel | undefined {
 	return text && THINKING_LEVELS.has(text) ? text as ThinkingLevel : undefined;
 }
 
+function asChangeManifestMode(value: unknown): "auto" | "off" | undefined {
+	const text = asNonEmptyString(value);
+	return text && CHANGE_MANIFEST_MODES.has(text) ? text as "auto" | "off" : undefined;
+}
+
 const ALLOWED_SETTINGS_KEYS = new Set([
 	"disableTasks",
 	"disableContracts",
@@ -369,6 +392,8 @@ const ALLOWED_SETTINGS_KEYS = new Set([
 	"hideUnfocusedBanner",
 	"oracle",
 	"networkRecovery",
+	"changeManifest",
+	"changeManifestDepth",
 ]);
 
 const ALLOWED_NETWORK_RECOVERY_KEYS = new Set(["maxAttempts", "maxDelayMs"]);
@@ -437,6 +462,24 @@ export function parseSettingsLayer(
 				const parsed = asNonNegativeInt(value);
 				if (parsed === undefined) diagnostics.push(diagnostic("invalid_value", `${key} must be an integer >= 0`, key));
 				else layer[key] = parsed;
+				break;
+			}
+			case "changeManifest": {
+				const parsed = asChangeManifestMode(value);
+				if (parsed === undefined) {
+					diagnostics.push(diagnostic("invalid_value", `${key} must be one of: auto, off`, key));
+				} else {
+					layer.changeManifest = parsed;
+				}
+				break;
+			}
+			case "changeManifestDepth": {
+				const parsed = asNonNegativeInt(value);
+				if (parsed === undefined) {
+					diagnostics.push(diagnostic("invalid_value", `${key} must be an integer >= 0 (0 = no downward scan)`, key));
+				} else {
+					layer.changeManifestDepth = parsed;
+				}
 				break;
 			}
 			case "auditorTimeoutMs": {
@@ -865,6 +908,16 @@ function resolvedSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv): Settings
 		defaultValue: 0,
 		envVar: "PI_GOAL_OBJECTIVE_MAX_CHARS",
 	}));
+	const changeManifest = track("changeManifest", resolveLeaf<"auto" | "off">({
+		projectValue: project.layer.changeManifest,
+		globalValue: global.layer.changeManifest,
+		defaultValue: "auto",
+	}));
+	const changeManifestDepth = track("changeManifestDepth", resolveLeaf<number>({
+		projectValue: project.layer.changeManifestDepth,
+		globalValue: global.layer.changeManifestDepth,
+		defaultValue: DEFAULT_CHANGE_MANIFEST_DEPTH,
+	}));
 	const networkRecoveryMaxAttempts = track("networkRecovery.maxAttempts", resolveLeaf<number>({
 		envValue: envInt("PI_GOAL_NETWORK_RECOVERY_MAX_ATTEMPTS"),
 		projectValue: project.layer.networkRecovery?.maxAttempts,
@@ -915,6 +968,8 @@ function resolvedSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv): Settings
 		hideUnfocusedBanner,
 		stallTimeoutMinutes,
 		objectiveMaxChars,
+		changeManifest,
+		changeManifestDepth,
 		keybindings,
 		networkRecovery: {
 			maxAttempts: networkRecoveryMaxAttempts,
@@ -1276,6 +1331,8 @@ function buildPersistedLayer(settings: GoalSettings): Record<string, unknown> {
 	}
 	if (settings.stallTimeoutMinutes !== undefined) persisted.stallTimeoutMinutes = settings.stallTimeoutMinutes;
 	if (settings.objectiveMaxChars !== undefined) persisted.objectiveMaxChars = settings.objectiveMaxChars;
+	if (settings.changeManifest !== undefined) persisted.changeManifest = settings.changeManifest;
+	if (settings.changeManifestDepth !== undefined) persisted.changeManifestDepth = settings.changeManifestDepth;
 	if (settings.keybindings?.dashboard) {
 		persisted.keybindings = { dashboard: { ...settings.keybindings.dashboard } };
 	}
@@ -1321,6 +1378,8 @@ export function effectiveSettingsReport(cwd: string, env: NodeJS.ProcessEnv = pr
 		{ key: "hideUnfocusedBanner", label: "hide unfocused banner", format: () => String(snapshot.value.hideUnfocusedBanner) },
 		{ key: "stallTimeoutMinutes", label: "stall timeout (minutes)", format: () => String(snapshot.value.stallTimeoutMinutes) },
 		{ key: "objectiveMaxChars", label: "max objective length (0 = none)", format: () => String(snapshot.value.objectiveMaxChars) },
+		{ key: "changeManifest", label: "change manifest", format: () => snapshot.value.changeManifest ?? "auto" },
+		{ key: "changeManifestDepth", label: "change manifest scan depth", format: () => String(snapshot.value.changeManifestDepth ?? DEFAULT_CHANGE_MANIFEST_DEPTH) },
 		{ key: "networkRecovery", label: "network recovery attempts (0 = unbounded)", format: () => String(snapshot.value.networkRecovery?.maxAttempts ?? 0) },
 		{ key: "networkRecovery", label: "network recovery max delay (ms)", format: () => String(snapshot.value.networkRecovery?.maxDelayMs ?? DEFAULT_NETWORK_RECOVERY_MAX_DELAY_MS) },
 		{ key: "keybindings", label: "dashboard keybindings", format: () => `${snapshot.value.keybindings!.dashboard.toggleExpand}, ${snapshot.value.keybindings!.dashboard.scrollUp}, ${snapshot.value.keybindings!.dashboard.scrollDown}` },

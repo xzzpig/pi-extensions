@@ -257,6 +257,13 @@ export function buildGoalAuditorPrompt(args: {
 	completionSummary?: string | null;
 	settings?: GoalSettings;
 	warmContext?: string | null;
+	/**
+	 * Machine-collected workspace change manifest (already rendered body text,
+	 * from `renderChangeManifestBody`). Absent when the feature is off, the
+	 * working directory is not a git repository, or capture failed — in that
+	 * case the audit input stays exactly as it was before this feature.
+	 */
+	changeManifest?: string | null;
 }): string {
 	return [
 		"You are the independent completion auditor for pi-goal-x.",
@@ -306,6 +313,13 @@ export function buildGoalAuditorPrompt(args: {
 			escapePromptPayload(args.warmContext.trim()),
 			"</warm_context>",
 		] : []),
+		...(args.changeManifest?.trim() ? [
+			"",
+			"Workspace change manifest (machine-collected git evidence for this goal's execution window; NOT the executor's claim):",
+			"<change_manifest>",
+			escapePromptPayload(args.changeManifest.trim()),
+			"</change_manifest>",
+		] : []),
 		"",
 		"Audit checklist:",
 		"1. Extract the real success criteria from the objective, including quality and reader outcomes.",
@@ -314,6 +328,11 @@ export function buildGoalAuditorPrompt(args: {
 			? ["3. Verify every item in the verification contract. If any item is missing or weakly addressed, disapprove."]
 			: []),
 		"4. Explain missing or weak evidence, especially scaffold-versus-final quality gaps.",
+		// Conditional on purpose: with no manifest this prompt must stay
+		// byte-for-byte identical to the pre-manifest behavior.
+		...(args.changeManifest?.trim()
+			? ["5. Cross-check the workspace change manifest entries against the actual repository content: machine-collected evidence is not proof and never substitutes for verification."]
+			: []),
 		"",
 		"Progress reporting:",
 		"Use report_auditor_progress at natural phase boundaries so the parent dashboard can show progress.",
@@ -536,6 +555,12 @@ export interface GoalCompletionAuditorArgs {
 	completionSummary?: string | null;
 	settings?: GoalSettings;
 	warmContext?: string | null;
+	/**
+	 * Rendered workspace change manifest body (see `renderChangeManifestBody`).
+	 * Absent when collection is off, the cwd is not a git repository, or capture
+	 * failed, in which case audit input is unchanged from before this feature.
+	 */
+	changeManifest?: string | null;
 	signal?: AbortSignal;
 	onProgress?: AuditorProgressCallback;
 	/** Test-only identity/time controls. Production callers use generated values. */
@@ -634,6 +659,7 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 			completionSummary: args.completionSummary,
 			settings,
 			warmContext: args.warmContext,
+			changeManifest: args.changeManifest,
 		}),
 		context: "fresh" as const,
 		cwd: args.ctx.cwd,
