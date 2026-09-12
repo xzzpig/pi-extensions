@@ -2,6 +2,24 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.6.1] — 2026-09-12 (fork release)
+
+### Changed
+
+- **The proposal dialog accepts the adjustment in place.** Choosing
+  `Continue chatting — keep refining` in the confirmation dialog now opens the
+  answer editor instead of deciding immediately, so the user can type what to
+  change without rejecting the draft and waiting a turn. The option label and
+  every decision semantic are unchanged (`Confirm` creates the goal, `Cancel`
+  discards it, continuing keeps drafting active and the goal untouched).
+- A non-empty entry reaches the agent verbatim in the `propose_goal_draft`
+  tool result; an empty (or dismissed) entry is exactly the previous plain
+  continue outcome, so nobody is trapped in the editor. The same behavior is
+  available on hosts that can only show `select`/`input` dialogs.
+- The confirmation text now carries one hint line that advertises the direct
+  input, and the `/goal` + `/sisyphus` drafting protocol tells the agent the
+  typed adjustment arrives in the tool result.
+
 ## [0.6.0] — 2026-09-12 (fork release)
 
 ### Removed

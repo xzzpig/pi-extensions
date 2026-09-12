@@ -317,6 +317,52 @@ test("renderCall for a new draft derives from the same objective text the apply 
 	}
 });
 
+test("continue refining carries the adjustment the user typed in the dialog", async () => {
+	// §proposal-adjust: the confirmation dialog's Continue chatting row opens an
+	// editor. The typed text must reach the agent verbatim — the whole point is
+	// that the user no longer has to reject, wait a turn, and then explain.
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-draft-typed-refine-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		const h = createHarness(cwd, { hasUI: true });
+		await h.sessionStart();
+		await h.commands.get("goal")!.handler("Build a tiny app", h.ctx);
+		const adjustment = "Split the task list into a setup milestone and a verification milestone.";
+		const pending = runProposal(h, proposalParams("Build a tiny app.\nSuccess criteria: it runs."));
+		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: adjustment, wasCustom: true }], cancelled: false });
+		const result = await pending;
+		assert.match(result.content[0].text, /refinement requested/);
+		assert.ok(result.content[0].text.includes(adjustment), "the typed adjustment is delivered verbatim");
+		assert.equal(activeGoalFiles(cwd).length, 0, "typing an adjustment must not create a goal");
+		assert.ok(h.draftActive(), "drafting stays active exactly like a plain continue");
+	} finally {
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
+	}
+});
+
+test("an empty dialog adjustment keeps the plain continue message byte-identical", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-draft-empty-refine-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		const h = createHarness(cwd, { hasUI: true });
+		await h.sessionStart();
+		const objective = "Build a tiny app.\nSuccess criteria: it runs.";
+		await h.commands.get("goal")!.handler("Build a tiny app", h.ctx);
+		const plain = runProposal(h, proposalParams(objective));
+		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: CONTINUE_ANSWER, wasCustom: false }], cancelled: false });
+		const plainText = (await plain).content[0].text.replace(/^Proposed objective:[\s\S]*?Independent auditor: [^\n]*\n\n/, "");
+		assert.equal(plainText, "Goal draft refinement requested. The goal was not changed; ask what the user wants revised before proposing again.");
+		await h.commands.get("goal")!.handler("Build a tiny app", h.ctx);
+		const empty = runProposal(h, proposalParams(objective));
+		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: "", wasCustom: true }], cancelled: false });
+		const emptyText = (await empty).content[0].text.replace(/^Proposed objective:[\s\S]*?Independent auditor: [^\n]*\n\n/, "");
+		assert.equal(emptyText, plainText, "an empty editor submission is the pre-existing continue outcome");
+		assert.equal(activeGoalFiles(cwd).length, 0, "no goal was created");
+	} finally {
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
+	}
+});
+
 test("continue refining keeps the draft alive and a second proposal confirms", async () => {
 	const cwd = mkdtempSync(path.join(tmpdir(), "goal-draft-refine-"));
 	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
@@ -473,6 +519,33 @@ test("/goal-tweak confirms a revision under focus validation", async () => {
 		assert.ok(goalAfter.objective.includes("Revised objective"), "objective updated");
 		assert.ok(ledgerEvents(cwd).some((e) => e.type === "goal_tweaked"), "goal_tweaked event recorded");
 		assert.equal(h.draftActive(), false, "tweak draft cleared after confirmation");
+	} finally {
+		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
+	}
+});
+
+test("a typed dialog adjustment on /goal-tweak revises nothing and reaches the agent", async () => {
+	// §proposal-adjust: the tweak dialog shares showProposalDialog, so the typed
+	// adjustment path must hold there too — the goal stays untouched and the
+	// text arrives verbatim.
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-draft-tweak-adjust-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		const h = createHarness(cwd, { hasUI: true });
+		await h.sessionStart();
+		await h.commands.get("goal-direct")!.handler("Initial objective", h.ctx);
+		const before = firstGoal(cwd);
+		await h.commands.get("goal-tweak")!.handler("Make the boundaries explicit", h.ctx);
+		const adjustment = "Keep the existing task list and only tighten the boundaries.";
+		const pending = runProposal(h, proposalParams("Revised objective with clarity.", { sisyphus: false }));
+		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: adjustment, wasCustom: true }], cancelled: false });
+		const result = await pending;
+		assert.match(result.content[0].text, /refinement requested/);
+		assert.ok(result.content[0].text.includes(adjustment), "the tweak adjustment reaches the agent verbatim");
+		const after = parseGoalFile(path.join(cwd, ".pi", "goals", activeGoalFiles(cwd)[0]!))!;
+		assert.equal(after.objective, before.objective, "a typed adjustment must not apply the revision");
+		assert.ok(h.draftActive(), "the tweak draft stays active");
+		assert.ok(!ledgerEvents(cwd).some((e) => e.type === "goal_tweaked"), "no tweak event");
 	} finally {
 		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}

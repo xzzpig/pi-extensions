@@ -1,6 +1,6 @@
 {
   "name": "@xzzpig/pi-goal-x",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Goal mode extension for pi: durable long-running objectives, a constant six-tool surface, structured tasks, independent completion audit, Sisyphus mode, auto-continue, and a status overlay.",
   "license": "MIT",
   "author": "pi-goal-x contributors",

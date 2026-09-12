@@ -268,7 +268,7 @@ export function registerDraftingTools(core: GoalCore): void {
 			const target = draft.mode === "tweak" ? core.state.goal : undefined;
 			if (draft.mode === "tweak" && (!target || target.id !== draft.targetGoalId)) return { content: [{ type: "text", text: "The goal changed while drafting; review it and start /goal-tweak again." }], details: goalDetails(core.state.goal) };
 			if (draft.mode === "sisyphus" && !sisyphusObjectiveSufficient(objective)) return { content: [{ type: "text", text: "A Sisyphus goal needs ordered steps with explicit per-step done criteria. Refine the objective with numbered steps (1) ..., 2) ...) or Step N: blocks before proposing again." }], details: goalDetails(core.state.goal) };
-			let confirmation: { decision: ProposalDecision; auditorEnabled: boolean; unavailable: boolean };
+			let confirmation: { decision: ProposalDecision; auditorEnabled: boolean; unavailable: boolean; feedback?: string };
 			if (shouldAutoConfirmProposal({ hasUI: ctx.hasUI, autoConfirmEnv: process.env.PI_GOAL_AUTO_CONFIRM })) {
 				confirmation = { decision: "confirm" as const, auditorEnabled: draft.auditorEnabled, unavailable: false };
 			} else {
@@ -308,7 +308,16 @@ export function registerDraftingTools(core: GoalCore): void {
 					activeDrafts.set(core, next);
 					draftSessionEntry(core, { version: 1, mode: next.mode, seed: next.originalTopic, targetGoalId: next.targetGoalId, startedAt: next.startedAt, auditorEnabled: next.auditorEnabled });
 				}
-				return { content: [{ type: "text", text: `${summary}\n\nGoal draft refinement requested. The goal was not changed; ask what the user wants revised before proposing again.` }], details: goalDetails(core.state.goal) };
+				// §proposal-adjust: the user can type the adjustment in the dialog
+				// itself (the "Continue chatting" option opens an editor). The goal
+				// is still untouched and drafting stays active — the same continue
+				// semantics as before — but the typed text arrives verbatim so the
+				// agent does not have to ask what should be revised.
+				const feedback = confirmation.feedback?.trim();
+				const refinement = feedback
+					? `Goal draft refinement requested. The goal was not changed; the user typed this adjustment request in the dialog (verbatim):\n${feedback}\n\nUse this request as the refinement instruction.`
+					: "Goal draft refinement requested. The goal was not changed; ask what the user wants revised before proposing again.";
+				return { content: [{ type: "text", text: `${summary}\n\n${refinement}` }], details: goalDetails(core.state.goal) };
 			}
 			const skipAuditor = confirmation.auditorEnabled === false;
 			if (draft.mode !== "tweak") {

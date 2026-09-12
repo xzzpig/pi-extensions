@@ -19,6 +19,15 @@ import {
 	DIALOG_UNAVAILABLE_HINT,
 } from "../extensions/goal-questionnaire.ts";
 
+test("normalizeQuestionnaireQuestions keeps a valid editor entry and drops an out-of-range one", () => {
+	assert.deepEqual(
+		normalizeQuestionnaireQuestions([{ id: "q", question: "Q?", options: ["A", "B"], inputOptionIndex: 1, allowEmptyInput: true }]),
+		[{ id: "q", question: "Q?", options: ["A", "B"], recommended: undefined, allowCustom: true, inputOptionIndex: 1, allowEmptyInput: true }],
+	);
+	// An index past the option list would select nothing: dropped, not clamped.
+	assert.equal(normalizeQuestionnaireQuestions([{ id: "q", question: "Q?", options: ["A"], inputOptionIndex: 3 }])[0]?.inputOptionIndex, undefined);
+});
+
 test("normalizeQuestionnaireQuestions trims ids, de-duplicates, filters options, and validates recommended", () => {
 	assert.deepEqual(
 		normalizeQuestionnaireQuestions([
@@ -561,6 +570,8 @@ function openQuestionnaireComponent(
 			options: string[];
 			recommended?: number;
 			allowCustom?: boolean;
+			inputOptionIndex?: number;
+			allowEmptyInput?: boolean;
 		}>;
 	},
 	width = 100,
@@ -580,7 +591,10 @@ function openQuestionnaireComponent(
 		bg: () => "",
 		dim: (v: string) => v,
 	} as unknown as ReturnType<typeof createMockTheme>;
-	const component = record.factory(augmented, ansiTheme, {}, () => {}) as unknown as {
+	// Capture every dialog result so a test can assert the answer the real
+	// component submitted (the proposal dialog's editor entry included).
+	const results: unknown[] = [];
+	const component = record.factory(augmented, ansiTheme, {}, (result: unknown) => { results.push(result); }) as unknown as {
 		render(w: number): string[];
 		handleInput(data: string): void;
 		focused: boolean;
@@ -588,6 +602,8 @@ function openQuestionnaireComponent(
 	return {
 		render: component.render.bind(component),
 		handleInput: component.handleInput!.bind(component),
+		/** Dialog results submitted so far (empty until the dialog closes). */
+		results: () => [...results],
 		/** Set/clear the dialog focus flag exactly as the pi TUI does. */
 		set focused(v: boolean) { component.focused = v; },
 		get focused(): boolean { return component.focused; },
@@ -832,6 +848,97 @@ test("custom answer flows to the summary as (wrote) and Enter submits it", () =>
 	assert.ok(view.includes("(wrote) my custom answer"), "custom answer recorded as (wrote) in the summary");
 });
 
+// ── §proposal-adjust: the Continue chatting row opens the answer editor ──
+// The proposal dialog used to force a reject/round-trip before the user could
+// say what to change. The "Continue chatting — keep refining" row now opens the
+// editor (label and decision semantics unchanged); what the user types is
+// returned as a custom answer, and an empty entry is the plain continue.
+
+const PROPOSAL_INPUT_QUESTION = {
+	id: "confirm",
+	question: "Confirm Goal Draft",
+	context: '● Goal draft ready for confirmation.\n\n─── Proposed Goal ───\n\n│   Objective: Fix the dialog.\n\n│   Adjust: press Enter on "Continue chatting — keep refining" and type what to change.',
+	options: [
+		"Confirm — create this goal now",
+		"Continue chatting — keep refining",
+		"Cancel — discard this draft",
+	],
+	recommended: 0,
+	allowCustom: false,
+	inputOptionIndex: 1,
+	allowEmptyInput: true,
+};
+
+function stripAnsiLine(l: string): string {
+	// eslint-disable-next-line no-control-regex -- ANSI SGR matching
+	return l.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+test("proposal dialog: Enter on Continue chatting opens the editor and the typed adjustment is the answer", () => {
+	const component = openQuestionnaireComponent({ rows: 24, baseFrameLines: 19, questions: [PROPOSAL_INPUT_QUESTION] });
+	const initial = component.render(100).map(stripAnsiLine).join("\n");
+	assert.ok(initial.includes("2. Continue chatting — keep refining"), "the continue row keeps its label");
+	assert.ok(!initial.includes("Write your own answer"), "allowCustom:false adds no second editor row");
+	component.handleInput!(ARROW_DOWN);
+	assert.ok(component.render(100).map(stripAnsiLine).join("\n").includes("> 2. Continue chatting — keep refining"), "selection on the continue row");
+	component.handleInput!(ENTER_KEY);
+	const inputView = component.render(100).map(stripAnsiLine).join("\n");
+	assert.ok(inputView.includes("Your answer:"), "Enter on the continue row opens the editor");
+	assert.ok(inputView.includes("empty = continue without text"), "the empty-submit affordance is advertised");
+	assert.equal(component.results().length, 0, "opening the editor is not yet a decision");
+	for (const ch of "Make the verification contract explicit") component.handleInput!(ch);
+	component.handleInput!(ENTER_KEY);
+	const results = component.results() as Array<{ answers: Array<{ id: string; answer: string; wasCustom: boolean }>; cancelled: boolean }>;
+	assert.equal(results.length, 1, "submitting the editor closes the dialog");
+	assert.deepEqual(results[0]!.answers, [{
+		id: "confirm",
+		question: "Confirm Goal Draft",
+		answer: "Make the verification contract explicit",
+		wasCustom: true,
+	}]);
+	assert.equal(proposalDecisionFromQuestionnaireResult({ cancelled: false, answer: results[0]!.answers[0]!.answer }), "continue");
+});
+
+test("proposal dialog: Enter on an empty editor is the plain continue decision", () => {
+	const component = openQuestionnaireComponent({ rows: 24, baseFrameLines: 19, questions: [PROPOSAL_INPUT_QUESTION] });
+	component.handleInput!(ARROW_DOWN);
+	component.handleInput!(ENTER_KEY); // open the editor
+	component.handleInput!(ENTER_KEY); // submit empty
+	const results = component.results() as Array<{ answers: Array<{ answer: string; wasCustom: boolean }>; cancelled: boolean }>;
+	assert.equal(results.length, 1, "an empty entry still closes the dialog (never trapped in the editor)");
+	assert.equal(results[0]!.cancelled, false);
+	assert.deepEqual(results[0]!.answers, [{ id: "confirm", question: "Confirm Goal Draft", answer: "", wasCustom: true }]);
+	assert.equal(proposalDecisionFromQuestionnaireResult({ cancelled: false, answer: results[0]!.answers[0]!.answer }), "continue");
+});
+
+test("proposal dialog: Esc in the editor returns to the options without submitting", () => {
+	const component = openQuestionnaireComponent({ rows: 24, baseFrameLines: 19, questions: [PROPOSAL_INPUT_QUESTION] });
+	component.handleInput!(ARROW_DOWN);
+	component.handleInput!(ENTER_KEY);
+	for (const ch of "half-typed") component.handleInput!(ch);
+	component.handleInput!(ESC_KEY);
+	const back = component.render(100).map(stripAnsiLine).join("\n");
+	assert.ok(back.includes("Enter select"), "footer is back in select mode");
+	assert.ok(back.includes("1. Confirm — create this goal now"), "options are selectable again");
+	assert.equal(component.results().length, 0, "leaving the editor is not a decision");
+	// Reopening the editor restores the abandoned draft (the selection never
+	// left the continue row).
+	component.handleInput!(ENTER_KEY);
+	assert.ok(component.render(100).map(stripAnsiLine).join("\n").includes("half-typed"), "the abandoned draft is restored");
+});
+
+test("the editor-entry option is not the recommended one and keeps its position", () => {
+	const component = openQuestionnaireComponent({ rows: 24, baseFrameLines: 19, questions: [PROPOSAL_INPUT_QUESTION] });
+	const initial = component.render(100).map(stripAnsiLine);
+	const confirmRow = initial.find((l) => l.includes("Confirm — create this goal now"))!;
+	const continueRow = initial.find((l) => l.includes("Continue chatting — keep refining"))!;
+	const cancelRow = initial.find((l) => l.includes("Cancel — discard this draft"))!;
+	assert.ok(confirmRow.includes("★"), "the recommended marker stays on Confirm");
+	assert.ok(!continueRow.includes("★"), "the editor row is not marked recommended");
+	assert.ok(initial.indexOf(confirmRow) < initial.indexOf(continueRow), "option order is unchanged");
+	assert.ok(initial.indexOf(continueRow) < initial.indexOf(cancelRow), "Cancel stays last");
+});
+
 // ── Hosts with a UI that cannot render TUI components ───────────────────
 // A host embedding pi behind a non-terminal UI installs a real UI context, so
 // `ctx.hasUI` is true, while `ui.custom` stays the SDK's headless default
@@ -889,6 +996,35 @@ test("a free-text question falls back to input, and a dismissed dialog cancels",
 	assert.equal(dismissed.cancelled, true);
 	// Partial answers must not be presented as a finished questionnaire.
 	assert.deepEqual(dismissed.answers, []);
+});
+
+test("proposal dialog: the editor entry survives a select/input host (no TUI renderer)", async () => {
+	// Hosts without a terminal renderer degrade onto select/input; the editor
+	// entry must collect the adjustment the same way there.
+	const { ctx, prompts } = browserLikeUiContext({
+		picks: ["Enabled — require independent approval", "2. Continue chatting — keep refining"],
+		typed: "  shorten the objective  ",
+	});
+	assert.deepEqual(await showProposalDialog(ctx, "OBJECTIVE", "goal", true), {
+		decision: "continue",
+		auditorEnabled: true,
+		unavailable: false,
+		feedback: "shorten the objective",
+	});
+	assert.equal(prompts.length, 3, "auditor select + option select + adjustment input");
+});
+
+test("proposal dialog: an empty or dismissed adjustment on a select/input host is the plain continue", async () => {
+	const blank = browserLikeUiContext({
+		picks: ["Enabled — require independent approval", "2. Continue chatting — keep refining"],
+		typed: "   ",
+	});
+	assert.deepEqual(await showProposalDialog(blank.ctx, "OBJECTIVE", "goal", true), { decision: "continue", auditorEnabled: true, unavailable: false });
+	const dismissed = browserLikeUiContext({
+		picks: ["Enabled — require independent approval", "2. Continue chatting — keep refining"],
+		// ui.input resolves undefined when the host dismisses the prompt.
+	});
+	assert.deepEqual(await showProposalDialog(dismissed.ctx, "OBJECTIVE", "goal", true), { decision: "continue", auditorEnabled: true, unavailable: false });
 });
 
 test("showProposalDialog survives a host whose ui.custom resolves to undefined", async () => {

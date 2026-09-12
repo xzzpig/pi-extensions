@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { Editor, type EditorTheme, Key, matchesKey, Text, visibleWidth } from "@earendil-works/pi-tui";
+import { Editor, type EditorTheme, Key, matchesKey, visibleWidth } from "@earendil-works/pi-tui";
 import { truncateToWidth, wrapTextWithAnsi } from "./widgets/text-cache.ts";
 
 
@@ -12,6 +12,21 @@ export interface GoalQuestionnaireQuestion {
 	options: string[];
 	recommended?: number;
 	allowCustom?: boolean;
+	/**
+	 * §proposal-adjust: index of an option that OPENS the answer editor instead
+	 * of answering immediately, so the user can type the adjustment they want
+	 * in the very dialog that offers the decision (the proposal dialog's
+	 * "Continue chatting — keep refining" row). The option label is unchanged;
+	 * the typed text is returned as a custom answer (`wasCustom: true`).
+	 */
+	inputOptionIndex?: number;
+	/**
+	 * §proposal-adjust: allow an empty (whitespace-only) submission from the
+	 * answer editor. The proposal dialog sets this so pressing Enter on an
+	 * empty adjustment means "continue chatting, no text" instead of trapping
+	 * the user in the editor.
+	 */
+	allowEmptyInput?: boolean;
 }
 
 export interface GoalQuestionnaireAnswer {
@@ -271,7 +286,26 @@ export function normalizeQuestionnaireQuestions(rawQuestions: GoalQuestionnaireQ
 		const recommended = q.recommended !== undefined && q.recommended >= 0 && q.recommended < options.length
 			? q.recommended
 			: undefined;
-		return { ...q, id, options, recommended, allowCustom: q.allowCustom ?? true };
+		// §proposal-adjust: the editor entry / empty submission are optional and
+		// only carried when actually set, so the normalized question keeps its
+		// previous shape for every other caller (an unset field from the caller is
+		// dropped, never left as an out-of-range editor index).
+		const { inputOptionIndex: rawInputOptionIndex, allowEmptyInput: rawAllowEmptyInput, ...rest } = q;
+		// §proposal-adjust: an out-of-range editor index would select nothing, so
+		// it is dropped rather than left to point past the option list.
+		const inputIndex = rawInputOptionIndex;
+		const inputOptionIndex = typeof inputIndex === "number" && Number.isInteger(inputIndex) && inputIndex >= 0 && inputIndex < options.length
+			? inputIndex
+			: undefined;
+		return {
+			...rest,
+			id,
+			options,
+			recommended,
+			allowCustom: q.allowCustom ?? true,
+			...(inputOptionIndex !== undefined ? { inputOptionIndex } : {}),
+			...(rawAllowEmptyInput === true ? { allowEmptyInput: true } : {}),
+		};
 	});
 }
 
@@ -296,9 +330,10 @@ async function runQuestionnaireWithBasicDialogs(
 	auditorToggleInit?: { defaultEnabled: boolean },
 ): Promise<GoalQuestionnaireResult> {
 	const unavailable = (): GoalQuestionnaireResult => ({ questions: [], answers: [], cancelled: true, unavailable: true, ...(auditorToggleInit ? { auditorEnabled: auditorToggleInit.defaultEnabled } : {}) });
-	// Require only the primitives this questionnaire can actually use.
+	// Require only the primitives this questionnaire can actually use. An option
+	// declared as the editor entry (§proposal-adjust) also needs the text input.
 	if ((auditorToggleInit || questions.some(q => q.options.length > 0)) && typeof ctx.ui.select !== "function") return unavailable();
-	if (questions.some(q => q.options.length === 0 || q.allowCustom !== false) && typeof ctx.ui.input !== "function") return unavailable();
+	if (questions.some(q => q.options.length === 0 || q.allowCustom !== false || q.inputOptionIndex !== undefined) && typeof ctx.ui.input !== "function") return unavailable();
 	let auditorEnabled = auditorToggleInit?.defaultEnabled;
 	const cancelled = (): GoalQuestionnaireResult => ({ questions, answers: [], cancelled: true, auditorEnabled });
 	if (auditorToggleInit) {
@@ -324,14 +359,25 @@ async function runQuestionnaireWithBasicDialogs(
 			const picked = await ctx.ui.select(prompt, options);
 			if (picked === undefined) return cancelled();
 			if (!options.includes(picked)) throw new Error("The host returned an unknown questionnaire choice");
-			wasCustom = picked === customLabel && question.allowCustom !== false;
-			if (!wasCustom) answer = question.options[labels.indexOf(picked)];
+			const pickedIndex = labels.indexOf(picked);
+			// §proposal-adjust: an option declared as the editor entry opens the
+			// answer input instead of answering the question immediately.
+			wasCustom = question.inputOptionIndex === pickedIndex
+				|| (picked === customLabel && question.allowCustom !== false);
+			if (!wasCustom && pickedIndex >= 0) answer = question.options[pickedIndex];
 		}
 		if (wasCustom) {
-			// Match the terminal editor: whitespace alone is not a submitted answer.
-			do {
-				answer = (await ctx.ui.input(prompt, "Write your answer"))?.trim();
-			} while (answer === "");
+			if (question.allowEmptyInput) {
+				// §proposal-adjust: an empty (or dismissed) adjustment is a valid
+				// answer here — it is the plain "continue chatting, no text"
+				// decision, so the user is never trapped in the input loop.
+				answer = (await ctx.ui.input(prompt, "Adjustment (optional)"))?.trim() ?? "";
+			} else {
+				// Match the terminal editor: whitespace alone is not a submitted answer.
+				do {
+					answer = (await ctx.ui.input(prompt, "Write your answer"))?.trim();
+				} while (answer === "");
+			}
 		}
 		if (answer === undefined) return cancelled();
 		answers.push({ id: question.id, question: question.question, answer, wasCustom });
@@ -450,8 +496,12 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 		function displayOptions(): Array<{ label: string; isCustom?: boolean }> {
 			const q = currentQuestion();
 			if (!q) return [];
-			const opts: Array<{ label: string; isCustom?: boolean }> = q.options.map((label) => ({ label }));
-			if (q.allowCustom !== false) opts.push({ label: "Write your own answer...", isCustom: true });
+			// §proposal-adjust: an option declared as the editor entry is marked
+			// custom (Enter opens the editor) while keeping its original label.
+			const opts: Array<{ label: string; isCustom?: boolean }> = q.options.map((label, i) => (
+				i === q.inputOptionIndex ? { label, isCustom: true } : { label }
+			));
+			if (q.allowCustom !== false) opts.push({ label: CUSTOM_ANSWER_LABEL, isCustom: true });
 			return opts;
 		}
 
@@ -473,7 +523,12 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 				editor.focused = dialogFocused;
 				tui.setShowHardwareCursor(dialogFocused);
 			} else if (existing?.wasCustom) {
-				optionIndex = q.options.length;
+				// §proposal-adjust: restore the selection onto the declared editor
+				// option when the question has one; otherwise it is the appended
+				// "Write your own answer..." row at index options.length.
+				optionIndex = q.inputOptionIndex !== undefined && q.inputOptionIndex < q.options.length
+					? q.inputOptionIndex
+					: q.options.length;
 			} else if (existing && !existing.wasCustom) {
 				const idx = q.options.indexOf(existing.answer);
 				optionIndex = idx >= 0 ? idx : 0;
@@ -594,6 +649,17 @@ function advanceAfterAnswer() {
 			if (!inputQuestionId) return;
 			const trimmed = value.trim();
 			if (!trimmed) {
+				const question = questions.find((qq) => qq.id === inputQuestionId);
+				// §proposal-adjust: on the proposal dialog an empty adjustment means
+				// "continue chatting, no text" — the same decision the option made
+				// before it opened the editor.
+				if (question?.allowEmptyInput) {
+					drafts.delete(inputQuestionId);
+					saveAnswer(inputQuestionId, "", true);
+					leaveInputMode();
+					advanceAfterAnswer();
+					return;
+				}
 				refresh();
 				return;
 			}
@@ -896,7 +962,7 @@ function advanceAfterAnswer() {
 				add(theme.fg("muted", " Your answer:"));
 				for (const line of editor.render(safeWidth - 2)) add(` ${line}`);
 				lines.push("");
-				add(theme.fg("dim", " Enter to submit • Esc to cancel"));
+				add(theme.fg("dim", q.allowEmptyInput ? " Enter to submit (empty = continue without text) • Esc to cancel" : " Enter to submit • Esc to cancel"));
 			} else if (currentTab === questions.length) {
 				add(theme.fg("accent", theme.bold(" Ready to submit")));
 				protectedCount = lines.length;
@@ -1010,13 +1076,19 @@ function advanceAfterAnswer() {
 /**
  * Confirm a proposed draft through the shared questionnaire UI. Escape / cancel
  * maps to "continue" so the user is never trapped.
+ *
+ * §proposal-adjust: the "Continue chatting — keep refining" row opens the
+ * answer editor instead of answering immediately, so the user can type what to
+ * change in the same dialog (no reject/round-trip first). A non-empty entry is
+ * returned as `feedback`; an empty entry is the same plain continue decision
+ * as before, and confirming/cancelling are untouched.
  */
 export async function showProposalDialog(
 	ctx: ExtensionContext,
 	confirmationText: string,
 	focus: GoalDraftingFocus,
 	defaultAuditorEnabled?: boolean,
-): Promise<{ decision: ProposalDecision; auditorEnabled: boolean; unavailable: boolean }> {
+): Promise<{ decision: ProposalDecision; auditorEnabled: boolean; unavailable: boolean; feedback?: string }> {
 	const headerTitle = focus === "sisyphus" ? "Confirm Sisyphus Goal Draft" : "Confirm Goal Draft";
 	const result = await runGoalQuestionnaire(ctx, [{
 		id: "confirm",
@@ -1025,10 +1097,19 @@ export async function showProposalDialog(
 		options: ["Confirm — create this goal now", "Continue chatting — keep refining", "Cancel — discard this draft"],
 		recommended: 0,
 		allowCustom: false,
+		inputOptionIndex: 1,
+		allowEmptyInput: true,
 	}], defaultAuditorEnabled !== undefined ? { defaultEnabled: defaultAuditorEnabled } : undefined);
+	const answer = result.answers[0];
 	const decision = proposalDecisionFromQuestionnaireResult({
 		cancelled: result.cancelled,
-		answer: result.answers[0]?.answer,
+		answer: answer?.answer,
 	});
-	return { decision, auditorEnabled: result.auditorEnabled ?? true, unavailable: result.unavailable === true };
+	const feedback = answer?.wasCustom === true && answer.answer.trim() ? answer.answer.trim() : undefined;
+	return {
+		decision,
+		auditorEnabled: result.auditorEnabled ?? true,
+		unavailable: result.unavailable === true,
+		...(feedback !== undefined ? { feedback } : {}),
+	};
 }

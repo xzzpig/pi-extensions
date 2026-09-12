@@ -50,6 +50,14 @@ function formatSection(title: string, content: string): string[] {
 	return ["", `─── ${title} ───`, "", ...body];
 }
 
+/**
+ * §proposal-adjust: the "Continue chatting — keep refining" row opens an answer
+ * editor, so the user can type the adjustment in the dialog itself. The option
+ * label stays unchanged (existing decision semantics), which makes this hint
+ * the only in-dialog affordance that advertises the direct input.
+ */
+const ADJUSTMENT_HINT = '│   Adjust: press Enter on "Continue chatting — keep refining" and type what to change.';
+
 export function buildDraftConfirmationText(args: {
 	focus: GoalDraftingFocus;
 	originalTopic: string;
@@ -64,6 +72,7 @@ export function buildDraftConfirmationText(args: {
 	lines.push(`│   Auto-continue: ${args.autoContinue ? "yes" : "no"}`);
 	lines.push(...formatSection("Original Topic", args.originalTopic.trim()));
 	lines.push(...formatSection("Proposed Goal", args.objective));
+	lines.push("", ADJUSTMENT_HINT);
 	return lines.join("\n");
 }
 
@@ -89,6 +98,7 @@ export function buildTweakConfirmationText(args: {
 		for (const tl of taskLines) lines.push(tl);
 		lines.push(`└──────────────────────────────────────────────┘`);
 	}
+	lines.push("", ADJUSTMENT_HINT);
 	return lines.join("\n");
 }
 
@@ -149,7 +159,7 @@ export function goalDraftingPrompt(topic: string, focus: GoalDraftingFocus): str
 		"- If the objective naturally decomposes into trackable milestones, you MUST include the task list in the `tasks` parameter of `propose_goal_draft` so the user can accept both goal and tasks in a single confirmation dialog. Do NOT propose the goal without tasks and then call `propose_task_list` separately.",
 		"- For simple single-step goals, no task list is required. The `tasks` parameter can be omitted.",
 		"- After goal creation, `propose_task_list` is still available for user-requested task additions or structural changes.",
-		"- propose_goal_draft opens the user's Confirm / Continue Chatting dialog. Confirm creates and focuses the goal; Continue Chatting means keep refining through normal proposal cycles.",
+		"- propose_goal_draft opens the user's Confirm / Continue Chatting dialog. Confirm creates and focuses the goal; Continue Chatting means keep refining through normal proposal cycles. The user may also type the adjustment they want directly in the Continue Chatting editor; when they do, the text arrives verbatim in the tool result while the goal stays unchanged — use it instead of asking them to restate it.",
 		"- Call propose_goal_draft with the complete structured proposal. The tool call renderer is the scrollable, complete human presentation of the objective and task tree — do NOT duplicate the full proposal in a preceding prose message. A brief orientation sentence is fine.",
 		"- create_goal is not a shortcut. Direct create_goal calls are rejected so the user keeps explicit say in goal creation.",
 	];

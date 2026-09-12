@@ -91,6 +91,28 @@ for (const enabled of [true, false]) {
 	}
 }
 
+test("RPC: the Continue chatting row collects a typed adjustment and returns it as feedback", async () => {
+	// §proposal-adjust: on a select/input host the editor entry asks for the
+	// adjustment through ui.input instead of answering the proposal directly.
+	const h = host([0, 1], ["  tighten the boundaries  "]);
+	assert.deepEqual(await showProposalDialog(h.ctx, "OBJECTIVE", "goal", true), {
+		decision: "continue",
+		auditorEnabled: true,
+		unavailable: false,
+		feedback: "tighten the boundaries",
+	});
+	assert.equal(h.dialogs.length, 3, "auditor select + proposal select + adjustment input");
+});
+
+test("RPC: an empty adjustment is a plain continue with no feedback key", async () => {
+	for (const blank of ["", "   "]) {
+		const h = host([0, 1], [blank]);
+		const result = await showProposalDialog(h.ctx, "OBJECTIVE", "goal", true);
+		assert.deepEqual(result, { decision: "continue", auditorEnabled: true, unavailable: false });
+		assert.ok(!("feedback" in result), "no feedback when nothing was typed");
+	}
+});
+
 test("auditor cancellation never presents or confirms the proposal", async () => {
 	const h = host([undefined]);
 	assert.equal((await showProposalDialog(h.ctx, "objective", "goal", false)).decision, "continue");

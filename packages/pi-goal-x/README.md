@@ -164,6 +164,8 @@ Start a guided regular goal:
 
 The agent can ask questions and propose a complete objective and task plan. Confirm the proposal to create the goal and begin work.
 
+The confirmation dialog also refines in place: choose **Continue chatting — keep refining** and type what you want changed. The goal is not created, drafting stays active, and the text reaches the agent verbatim — no need to reject the draft and wait a turn first.
+
 Structured clarification during drafting is delegated to the optional
 [`@eko24ive/pi-ask`](https://www.npmjs.com/package/@eko24ive/pi-ask) package:
 when it is installed the agent asks through its `ask_user` tool, and without it
