@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A child session keeps the profile selection it was launched with.** The
+  launcher-provided `PI_SUBAGENT_PERMISSION_PROFILE` selection is captured once
+  at a subagent child's `session_start` and reused for the rest of that child's
+  life, instead of being re-read from the process environment on every decision.
+  The value only exists in the environment while the child is being created (the
+  host restores its own value afterwards, and concurrent in-process children
+  overwrite each other), so re-reading it made a child silently adopt the host
+  session's role selection — or another child's — for the rest of its run. A host
+  session is unchanged and still reads the variable live, so a mid-session
+  profile change applies on the next decision. The launcher announces this with
+  `PI_SUBAGENT_PERMISSION_PROFILE_PINNED=1` rather than relying on subagent
+  detection: a host session also carries subagent environment hints (the
+  pi-subagents adapter sets `PI_SUBAGENT_PARENT_SESSION` in the root session so
+  its children inherit it), and treating those as "this is a child" would freeze
+  the host's own selection. Fork-specific deviation (OpenSpec change
+  `add-agent-role`, requirement 子代理身份隔离).
+
 ## [0.7.0] - 2026-09-11
 
 ### Added

@@ -2,12 +2,9 @@
 
 ## Purpose
 
-
 pi-subagents fleet inspector 的结构化会话视图改由 `@xzzpig/pi-components` 的原生渲染链路呈现：消息使用 Pi 原生消息组件（含 thinking 与 Markdown），工具调用使用 Pi 原生工具执行组件（diff、文件预览等富输出），提升内容直观性，同时保留既有的安全读取、缓存与交互行为。
 
-
 ## Requirements
-
 
 ### Requirement: 结构化会话视图采用原生渲染
 

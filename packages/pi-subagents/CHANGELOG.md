@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.13.0] - 2026-09-11
+
+### Changed
+
+- **Sandbox profile env is pinned per child launch.** Every child launch now writes `PI_SUBAGENT_PERMISSION_PROFILE` explicitly (cleared when the child declares no profile) and drops launcher-owned `PI_SUBAGENT_*PROFILE*` keys from the runner's inherited environment, so a spawned child can neither inherit a host-session role selection nor override its own. The launch also sets `PI_SUBAGENT_PERMISSION_PROFILE_PINNED=1` to tell the permission system that this process owns a launched selection.
+
+### Added
+
+- **Public agent discovery API.** `pi-subagents/agents` now exports `discoverAgentsWithRuntime(pi, cwd, scope, preferredModelProvider?)` alongside the existing registration surface, plus the `AgentConfig`, `AgentDiscoveryDiagnostic`, `AgentDiscoveryResult`, and `AgentScope` types. It returns the same merged view the subagent executor uses — builtin, package, user, and project agent files combined with agents registered at runtime — so an independent extension can offer the launcher's agent list instead of re-implementing discovery. The extension's own runtime discovery now calls the same function.
+
 ## [0.12.0] - 2026-09-11
 
 ### Added
@@ -687,6 +697,7 @@
 - Keep `worktree: true` workflow children on the single-child path while preserving managed patch handoffs.
 
 ### Removed
+
 - Remove unused foreground chain and parallel execution and durable chain management surfaces.
 - Remove legacy subagent tool compatibility fields for append-step control, schedule aliases, async recovery metadata, and string mission goals.
 - Remove chain approval checkpoint steps and the `approve-checkpoint` / `reject-checkpoint` controls.

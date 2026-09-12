@@ -19,9 +19,10 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { keyText, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
-import { discoverAgentSnapshot, discoverAgents, discoverAgentsAll, type AgentConfig, type AgentScope } from "../agents/agents.ts";
+import { discoverAgentsAll, type AgentScope } from "../agents/agents.ts";
 import { mergeAgentsForScope } from "../agents/agent-selection.ts";
-import { clearRuntimeAgentsForPi, listRuntimeAgentConfigs, mergeRuntimeAgents } from "../agents/runtime-agent-registry.ts";
+import { clearRuntimeAgentsForPi } from "../agents/runtime-agent-registry.ts";
+import { discoverAgentsWithRuntime } from "../agents/runtime-discovery.ts";
 import { registerRuntimeAgentEventListener } from "../agents/runtime-agent-events.ts";
 import { ensureAccessibleDir } from "../shared/accessible-dir.ts";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "../shared/artifacts.ts";
@@ -535,24 +536,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		if (scheduledRunManager.observedCompletionRunIds().size > 0) return true;
 		return missionObserverResultCandidateFiles(DIRS.results).length > 0;
 	};
-	const discoverAgentsForRuntime = (cwd: string, scope: AgentScope, preferredModelProvider?: string) => {
-		if (listRuntimeAgentConfigs(pi).length === 0) return discoverAgents(cwd, scope, preferredModelProvider);
-		const snapshot = discoverAgentSnapshot(cwd, scope, preferredModelProvider, { includeChains: false });
-		const discovered = snapshot.effective;
-		const all = snapshot.all;
-		const configuredAgents: AgentConfig[] = [
-			...all.builtin,
-			...all.package,
-			...all.user,
-			...all.project,
-		];
-		const merged = mergeRuntimeAgents(pi, discovered, configuredAgents);
-		if (discovered.maxThinking === undefined) return merged;
-		return {
-			...merged,
-			agents: merged.agents.map((agent) => agent.maxThinking === discovered.maxThinking ? agent : { ...agent, maxThinking: discovered.maxThinking }),
-		};
-	};
+	const discoverAgentsForRuntime = (cwd: string, scope: AgentScope, preferredModelProvider?: string) =>
+		discoverAgentsWithRuntime(pi, cwd, scope, preferredModelProvider);
 	const { ensurePoller, refreshWidget, handleStarted, handleComplete, resetJobs, restoreActiveJobs, dispose: disposeAsyncJobTracker } = createAsyncJobTracker(pi, state, DIRS.async, {
 		widgetEnabled: asyncWidgetEnabled,
 		onJobTerminal: () => refreshResultDelivery(),

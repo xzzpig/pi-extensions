@@ -4,3 +4,10 @@
  */
 
 export { default } from "./src/extension.ts";
+export {
+  getSandboxService,
+  listGlobalSandboxProfiles,
+  registerSandboxService,
+  type SandboxProfileSelectionResult,
+  type SandboxService,
+} from "./src/service.ts";

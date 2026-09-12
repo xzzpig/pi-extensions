@@ -1,3 +1,9 @@
+import { SUBAGENT_PERMISSION_PROFILE_ENV, SUBAGENT_PERMISSION_PROFILE_PINNED_ENV } from "../../shared/permission-profile.ts";
+import {
+	SUBAGENT_SANDBOX_PROFILE_ENV,
+	SUBAGENT_SANDBOX_PROJECT_TRUST_ENV,
+} from "../../shared/sandbox-profile.ts";
+
 export const PI_SUBAGENT_EXTENSION_BINDINGS_ENV = "PI_SUBAGENT_EXTENSION_BINDINGS";
 export const MAX_EXTENSION_BINDING_NAMESPACES = 16;
 export const MAX_EXTENSION_BINDINGS_BYTES = 16 * 1024;
@@ -74,5 +80,24 @@ export function encodeExtensionBindings(input: ExtensionBindings | undefined): s
 
 export function omitExtensionBindingsEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
 	const { [PI_SUBAGENT_EXTENSION_BINDINGS_ENV]: _extensionBindings, ...sanitized } = env;
+	return sanitized;
+}
+
+/**
+ * Drop launcher-owned profile selections from an inherited environment.
+ *
+ * A runner process must not carry the host session's role selection into the
+ * children it launches: each child's own selection is pinned by the child
+ * launch, so anything inherited here would silently apply to every step that
+ * does not declare one.
+ */
+export function omitInheritedProfileEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+	const {
+		[SUBAGENT_PERMISSION_PROFILE_ENV]: _permissionProfile,
+		[SUBAGENT_PERMISSION_PROFILE_PINNED_ENV]: _permissionProfilePinned,
+		[SUBAGENT_SANDBOX_PROFILE_ENV]: _sandboxProfile,
+		[SUBAGENT_SANDBOX_PROJECT_TRUST_ENV]: _sandboxTrust,
+		...sanitized
+	} = env;
 	return sanitized;
 }

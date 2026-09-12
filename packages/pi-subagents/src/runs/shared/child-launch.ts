@@ -18,7 +18,7 @@ import {
 	type RunFanoutBudgetDescriptor,
 } from "../../shared/types.ts";
 import { SUBAGENT_SANDBOX_PROFILE_ENV, SUBAGENT_SANDBOX_PROJECT_TRUST_ENV } from "../../shared/sandbox-profile.ts";
-import { SUBAGENT_PERMISSION_PROFILE_ENV } from "../../shared/permission-profile.ts";
+import { SUBAGENT_PERMISSION_PROFILE_ENV, SUBAGENT_PERMISSION_PROFILE_PINNED_ENV } from "../../shared/permission-profile.ts";
 import type { NestedPathEntry } from "./nested-path.ts";
 import type { McpRuntimeSnapshotHost } from "./mcp-direct-tool-allowlist.ts";
 import type { PermissionRules } from "./permissions.ts";
@@ -251,7 +251,24 @@ export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput)
 		sandboxEnv !== undefined || permissionProfileEnv !== undefined
 			? { ...(sandboxEnv ?? {}), ...(permissionProfileEnv ?? {}) }
 			: undefined;
-	const transientProcessEnv = childEnv ? Object.keys(childEnv) : undefined;
+	// The profile key is pinned for every launch, `undefined` included: a child
+	// that declares no profile must not inherit the host session's role
+	// selection, and one that declares a profile must not be overridden by it
+	// (the launcher env wins inside pi-permission-system). It is kept out of
+	// `childEnv` so a plain in-process child does not also start receiving the
+	// binding and MCP values that only a runner-hosted child used to get.
+	const profilePin: Record<string, string | undefined> = {
+		[SUBAGENT_PERMISSION_PROFILE_ENV]: input.permissionProfile,
+		// Present for every child launch: it is what tells pi-permission-system
+		// this selection is authoritative for the child (see the constant).
+		[SUBAGENT_PERMISSION_PROFILE_PINNED_ENV]: "1",
+	};
+	const transientProcessEnv = [
+		...new Set([
+			...(childEnv ? Object.keys(childEnv) : []),
+			...Object.keys(profilePin),
+		]),
+	];
 
 	const inherited = input.inherited;
 	const fanout = toolPlan.fanoutAuthorized;
@@ -355,8 +372,10 @@ export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput)
 		extensionPaths,
 		ambientExtensions,
 		hooks: createChildHooks(config),
-		...(input.host === "runner" || childEnv ? { processEnv: childProcessEnv(input, toolPlan, childEnv) } : {}),
-		...(transientProcessEnv ? { transientProcessEnv } : {}),
+		...(input.host === "runner" || childEnv
+			? { processEnv: { ...childProcessEnv(input, toolPlan, childEnv), ...profilePin } }
+			: { processEnv: profilePin }),
+		transientProcessEnv,
 		runtime: config,
 		noSkills: !input.inheritSkills,
 		noContextFiles: !input.inheritProjectContext,

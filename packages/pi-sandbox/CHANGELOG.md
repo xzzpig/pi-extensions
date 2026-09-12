@@ -5,6 +5,39 @@ This fork tracks [`carderne/pi-sandbox`](https://github.com/carderne/pi-sandbox)
 via git subtree; entries below describe only fork-specific deviations from
 upstream.
 
+## 0.6.0
+
+### Added
+
+- **Session sandbox profile service.** The package publishes a session-scoped
+  `SandboxService` (`getSandboxService(sessionId?)`, `registerSandboxService`)
+  so an in-process extension can select, change, or clear the sandbox profile for
+  the session it is running in — for example a session role picker. The service
+  is registered at `session_start` and removed at `session_shutdown`; only the
+  profile name crosses the boundary, and it is validated against the same global
+  registry a child launch uses before any state changes. `listProfiles()`
+  returns the global registry names, and `getProfile()` the current selection.
+  Selecting a profile never switches the sandbox on: the selection is recorded,
+  `setProfile` reports a warning that no isolation is active, and the sandbox
+  toggle stays under user control. With the sandbox enabled the policy is
+  reinitialized immediately, and a failed reinitialize leaves the session
+  fail-closed instead of continuing under the previous policy. A rejected
+  selection changes nothing: the previous profile stays in force. The package
+  now declares `main`, `types`, and an `exports` map so `@xzzpig/pi-sandbox` and
+  `@xzzpig/pi-sandbox/service` can be imported.
+
+### Fixed
+
+- **The status line now reports the policy actually in force.** Selecting,
+  changing, or clearing a profile re-renders the footer from the effective
+  configuration, so the write-path count and the profile suffix always describe
+  the current policy instead of the one from session start (an empty
+  `allowWrite` no longer keeps advertising the baseline's write paths).
+- **`/sandbox` states the profile read rule correctly.** With a named profile
+  selected the summary no longer claims `denyRead` is only a prompt default; it
+  now says `denyRead` is enforced before the read tool can prompt, which is what
+  the profile path does.
+
 ## 0.5.0
 
 ### Added

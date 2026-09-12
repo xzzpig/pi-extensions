@@ -28,7 +28,7 @@ import { backgroundProcessOptions } from "../shared/background-process-options.t
 import { buildSkillInjection, normalizeSkillInput, resolveSkillsWithFallback } from "../../agents/skills.ts";
 import { buildAgentMemoryInjection } from "../../agents/agent-memory.ts";
 import { PI_CODING_AGENT_PACKAGE_ROOT_ENV, PROMPT_REDACTED, resolveChildCwd } from "../../shared/utils.ts";
-import { buildModelCandidates, inheritsParentModel, resolveEffectiveSubagentModel, resolveModelOrigin, resolveSubagentModelOverride, type AvailableModelInfo, type ModelOrigin, type ParentModel } from "../shared/model-fallback.ts";
+import { buildModelCandidates, resolveEffectiveSubagentModel, resolveModelOrigin, resolveSubagentModelOverride, type AvailableModelInfo, type ModelOrigin, type ParentModel } from "../shared/model-fallback.ts";
 import { resolveToolTimeoutMs, toolTimeoutFromEnv } from "../shared/tool-timeout.ts";
 import { resolveModelScopesForAgent, type ModelScopeConfig } from "../shared/model-scope.ts";
 import { findModelInfo, resolveEffectiveThinking } from "../../shared/model-info.ts";
@@ -82,7 +82,7 @@ import { SUBAGENT_PROCESS_TERMINAL_EVENT } from "../../shared/types.ts";
 import { assertAgentAllowedByCapabilityCeiling, intersectSubagentCapabilityCeilings, resolveCurrentSubagentCapabilityCeiling, type ResolvedSubagentCapabilityCeiling } from "../shared/capability-ceiling.ts";
 import { agentDefinitionDigest, launchBindingDigest } from "../../shared/launch-contract.ts";
 import { resolvePermissionRules, type PermissionConfig } from "../shared/permissions.ts";
-import { normalizeExtensionBindings, omitExtensionBindingsEnv, type ExtensionBindings } from "../shared/extension-bindings.ts";
+import { normalizeExtensionBindings, omitExtensionBindingsEnv, omitInheritedProfileEnv, type ExtensionBindings } from "../shared/extension-bindings.ts";
 import { assertWorkflowLaneKey, normalizeWorkflowLaneMetadata } from "../shared/lane-metadata.ts";
 
 const require = createRequire(import.meta.url);
@@ -602,7 +602,7 @@ function spawnRunner(cfg: Record<string, unknown>, suffix: string, cwd: string, 
 			...backgroundProcessOptions(),
 			stdio: ["ignore", stdoutFd ?? "ignore", stderrFd ?? "ignore"],
 			env: {
-				...omitExtensionBindingsEnv(process.env),
+				...omitInheritedProfileEnv(omitExtensionBindingsEnv(process.env)),
 				[PI_CODING_AGENT_PACKAGE_ROOT_ENV]: piPackageRoot,
 				[JITI_ALIAS_ENV]: JSON.stringify(hostPeerAliases.aliases),
 			},
@@ -770,7 +770,7 @@ function profileProjectTrustedForCwd(ctx: AsyncExecutionContext, cwd: string): b
 		&& path.resolve(ctx.trustedProjectCwd) === path.resolve(cwd);
 }
 
-function profileProjectTrustError(agent: AgentConfig, ctx: AsyncExecutionContext, cwd: string): string {
+function profileProjectTrustError(agent: AgentConfig, ctx: AsyncExecutionContext): string {
 	if (ctx.projectTrusted !== true) {
 		return `Agent '${agent.name}' selects sandbox profile '${agent.sandbox}' from project scope, but the project is not trusted. Trust the project and retry.`;
 	}
@@ -788,7 +788,6 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		maxSubagentDepth,
 		worktreeBaseDir,
 		worktreeProvider,
-		worktreeBranchPrefix,
 		asyncDir,
 	} = params;
 	const outputBaseDir = params.outputBaseDir;
@@ -905,7 +904,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		const { stepCwd, instructionCwd, readExistenceCwd, behavior, namespaceOutputPath, outputPath, skillNames } = launchPlan;
 		const profileChildCwd = behaviorCwd ?? stepCwd;
 		if (a.sandbox && (a.source === "project" || a.override?.scope === "project") && !profileProjectTrustedForCwd(ctx, profileChildCwd)) {
-			throw new AsyncStartValidationError(profileProjectTrustError(a, ctx, profileChildCwd));
+			throw new AsyncStartValidationError(profileProjectTrustError(a, ctx));
 		}
 		const { resolved: resolvedSkills, missing: missingSkills } = resolveSkillsWithFallback(
 			skillNames,
@@ -1656,7 +1655,7 @@ export function executeAsyncSingle(
 		? resolveExpectedWorktreeAgentCwd(runnerCwd, `${id}-s0`, 0, worktreeBaseDir)
 		: runnerCwd;
 	if (sandbox && (agentConfig.source === "project" || agentConfig.override?.scope === "project") && !profileProjectTrustedForCwd(ctx, instructionCwd)) {
-		return formatAsyncStartError("single", profileProjectTrustError(agentConfig, ctx, instructionCwd));
+		return formatAsyncStartError("single", profileProjectTrustError(agentConfig, ctx));
 	}
 	const readExistenceCwd = params.worktree === true ? runnerCwd : instructionCwd;
 	const skillNames = params.skills ?? agentConfig.skills ?? [];

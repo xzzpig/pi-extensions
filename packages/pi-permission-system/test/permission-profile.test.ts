@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   PERMISSION_PROFILE_ENV,
+  PERMISSION_PROFILE_PINNED_ENV,
+  isPermissionProfilePinned,
   MAX_PERMISSION_PROFILE_NAME_LENGTH,
   readPermissionProfileEnv,
   validatePermissionProfileName,
@@ -77,5 +79,19 @@ describe("readPermissionProfileEnv", () => {
   it("returns the trimmed value when set", () => {
     process.env[PERMISSION_PROFILE_ENV] = "  reviewer-strict  ";
     expect(readPermissionProfileEnv()).toBe("reviewer-strict");
+  });
+});
+
+describe("isPermissionProfilePinned", () => {
+  it("is true only for the launcher marker value", () => {
+    expect(isPermissionProfilePinned({ [PERMISSION_PROFILE_PINNED_ENV]: "1" })).toBe(true);
+    for (const value of ["0", "", "true", "yes", "1 "]) {
+      expect(isPermissionProfilePinned({ [PERMISSION_PROFILE_PINNED_ENV]: value })).toBe(false);
+    }
+    expect(isPermissionProfilePinned({})).toBe(false);
+  });
+
+  it("ignores a pinned profile name without the marker", () => {
+    expect(isPermissionProfilePinned({ [PERMISSION_PROFILE_ENV]: "reviewer" })).toBe(false);
   });
 });

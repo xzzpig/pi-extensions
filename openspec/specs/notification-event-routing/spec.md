@@ -6,7 +6,6 @@
 
 ## Requirements
 
-
 ### Requirement: 封闭的低频语义事件目录
 
 系统 SHALL 只支持 `agent-completed`、`agent-error`、`input-required`、`permission-required`、`context-compacted`、`task-completed` 和 `integration-error` 七个语义事件。事件 ID 常量 SHALL 同时驱动 TypeScript 类型、配置枚举、运行时校验和公共 API。

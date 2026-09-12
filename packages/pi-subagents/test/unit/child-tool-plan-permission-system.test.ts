@@ -586,8 +586,38 @@ describe("resolvePiLaunchToolPlan with permission profiles", () => {
 		assert.ok(session.transientProcessEnv?.includes("PI_SUBAGENT_PERMISSION_PROFILE"));
 	});
 
-	it("fails closed when a permission profile needs pi-permission-system but no package is installed", () => {
-		const { agentDir } = createFixture();
+	it("pins an unset permission profile so a child cannot inherit the host session's role", () => {
+		const { projectDir } = createFixture();
+		const previous = process.env.PI_SUBAGENT_PERMISSION_PROFILE;
+		// The host session selected a role profile; the child declares none.
+		process.env.PI_SUBAGENT_PERMISSION_PROFILE = "session-role";
+		try {
+			const { session } = buildInProcessChildLaunch(
+				childLaunch({ host: "runner", cwd: projectDir }),
+			);
+			const env = session.processEnv ?? {};
+			assert.equal(
+				Object.prototype.hasOwnProperty.call(env, "PI_SUBAGENT_PERMISSION_PROFILE"),
+				true,
+				"the key must be pinned even when the child declares no profile",
+			);
+			assert.equal(env.PI_SUBAGENT_PERMISSION_PROFILE, undefined);
+			assert.equal(
+				env.PI_SUBAGENT_PERMISSION_PROFILE_PINNED,
+				"1",
+				"the launcher marker is what tells pi-permission-system the selection is pinned",
+			);
+			assert.ok(
+				session.transientProcessEnv?.includes("PI_SUBAGENT_PERMISSION_PROFILE"),
+				"the host value must be restored after the child session is created",
+			);
+		} finally {
+			if (previous === undefined) delete process.env.PI_SUBAGENT_PERMISSION_PROFILE;
+			else process.env.PI_SUBAGENT_PERMISSION_PROFILE = previous;
+		}
+	});
+
+	it("fails closed when a permission profile needs pi-permission-system but no package is installed", () => {		const { agentDir } = createFixture();
 		process.env.PI_CODING_AGENT_DIR = agentDir;
 		assert.throws(
 			() => resolvePiLaunchToolPlan({ permissionProfile: "reviewer-strict" }),

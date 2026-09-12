@@ -2,12 +2,9 @@
 
 ## Purpose
 
-
 定义目标完成声明如何由受用户配置约束的独立子代理进行验证，确保审计能够使用标准 Pi 设置、扩展、工具和 MCP 能力，同时只有经过结构化批准的结果才能完成目标。
 
-
 ## Requirements
-
 
 ### Requirement: 实现范围与 pi-subagents 修改边界
 

@@ -6,7 +6,6 @@
 
 ## Requirements
 
-
 ### Requirement: 新包身份与发布内容
 
 系统 SHALL 以目录 `packages/pi-notify`、npm 包名 `@xzzpig/pi-notify` 和初始版本 `0.1.0` 提供扩展。包内容 SHALL 包含扩展、`api.ts`、配置 Schema/example、README 和 512x512 Pi PNG，并 MUST NOT 自动读取旧包配置路径。

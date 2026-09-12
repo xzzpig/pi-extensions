@@ -2,12 +2,9 @@
 
 ## Purpose
 
-
 为 pi-vibeguard 提供映射查看能力：让用户能逐条查看当前会话中被保护内容（原文）与其 placeholder、触发 category 的对应关系及剩余有效期，并按 category 汇总概况，用于排查脱敏误报与配置污染。
 
-
 ## Requirements
-
 
 ### Requirement: 映射数据范围为当前会话存活映射
 

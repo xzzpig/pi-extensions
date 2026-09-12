@@ -7,6 +7,7 @@ import { afterEach, describe, it } from "node:test";
 import { resultFilesForSession } from "../../src/runs/background/result-files.ts";
 import { TEMP_ROOT_DIR } from "../../src/shared/types.ts";
 import { writeNodeCommand } from "../support/node-command.ts";
+import { jitiCliPath } from "../support/tool-cli-paths.ts";
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -63,7 +64,7 @@ describe("external CLI async lifecycle", () => {
 			resultMode: "single",
 		}));
 		const repo = path.resolve(import.meta.dirname, "../..");
-		const exitCode = await runProcess(process.execPath, [path.join(repo, "node_modules/jiti/lib/jiti-cli.mjs"), path.join(repo, "src/runs/background/subagent-runner.ts"), configPath], repo);
+		const exitCode = await runProcess(process.execPath, [jitiCliPath(), path.join(repo, "src/runs/background/subagent-runner.ts"), configPath], repo);
 		assert.equal(exitCode, 0);
 		const status = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8"));
 		assert.equal(status.state, "complete");
@@ -104,7 +105,7 @@ describe("external CLI async lifecycle", () => {
 			resultMode: "single",
 		}));
 		const repo = path.resolve(import.meta.dirname, "../..");
-		const exitCode = await runProcess(process.execPath, [path.join(repo, "node_modules/jiti/lib/jiti-cli.mjs"), path.join(repo, "src/runs/background/subagent-runner.ts"), configPath], repo);
+		const exitCode = await runProcess(process.execPath, [jitiCliPath(), path.join(repo, "src/runs/background/subagent-runner.ts"), configPath], repo);
 		assert.equal(exitCode, 0);
 		const status = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8"));
 		assert.equal(status.state, "complete");
@@ -150,7 +151,7 @@ describe("external CLI async lifecycle", () => {
 		const repo = path.resolve(import.meta.dirname, "../..");
 		const exitCode = await runProcess(
 			process.execPath,
-			[path.join(repo, "node_modules/jiti/lib/jiti-cli.mjs"), path.join(repo, "src/runs/background/subagent-runner.ts"), configPath],
+			[jitiCliPath(), path.join(repo, "src/runs/background/subagent-runner.ts"), configPath],
 			repo,
 			{ ...process.env, PI_CODING_AGENT_DIR: agentDir, PI_SUBAGENT_ORCA_BINARY: fakeOrca, ORCA_TEST_CAPTURE: capture },
 		);

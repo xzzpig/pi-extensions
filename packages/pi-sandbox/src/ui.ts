@@ -383,6 +383,7 @@ export function formatSandboxConfiguration(
   config: SandboxConfig,
   paths: { globalPath: string; projectPath: string },
   allowances: SessionAllowances,
+  profileName?: string,
 ): string {
   return [
     "Sandbox Configuration",
@@ -412,7 +413,11 @@ export function formatSandboxConfiguration(
     "",
     "Note: ALL reads are prompted unless the path is in allowRead or allowWrite.",
     "Note: allowWrite also grants read access to the same path.",
-    "Note: denyRead is not a hard-block — granting a prompt adds to allowRead, overriding denyRead.",
+    // A named profile enforces denyRead before the native read tool can prompt
+    // (the child cannot approve anything), so the ordinary note would be wrong.
+    profileName
+      ? `Note: denyRead is enforced before the read tool can prompt while profile '${profileName}' is selected.`
+      : "Note: denyRead is not a hard-block — granting a prompt adds to allowRead, overriding denyRead.",
     "Note: denyWrite takes PRECEDENCE over allowWrite and is never prompted.",
   ].join("\n");
 }

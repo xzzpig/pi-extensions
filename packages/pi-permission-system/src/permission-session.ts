@@ -108,8 +108,23 @@ export class PermissionSession implements ToolCallGateInputs {
     this.permissionManager.configureForCwd(
       projectTrusted ? ctx.cwd : undefined,
     );
+    // A new session decides for itself whether it holds a launcher-pinned
+    // profile selection (see freezeEnvProfileSelection).
+    this.permissionManager.clearEnvProfileSelection?.();
     this.skillEntries = [];
     this.activate(ctx);
+  }
+
+  /**
+   * Capture the launcher environment's profile selection for this session.
+   *
+   * Called for a subagent child while its creation window is still open: the
+   * shared process environment reverts to the host's value afterwards, and
+   * concurrent in-process children overwrite each other's value, so a child
+   * must keep the selection it was launched with instead of re-reading it.
+   */
+  freezeEnvProfileSelection(): void {
+    this.permissionManager.freezeEnvProfileSelection?.();
   }
 
   /**

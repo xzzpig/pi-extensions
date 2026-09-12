@@ -82,6 +82,14 @@ type ResolvedPermissions = {
 export interface ScopedPermissionManager {
   configureForCwd(cwd: string | undefined | null): void;
   /**
+   * Freeze the launcher-provided profile selection (see
+   * {@link PermissionManager.freezeEnvProfileSelection}). Optional so a narrow
+   * test double stays valid without an unused method.
+   */
+  freezeEnvProfileSelection?(): void;
+  /** Clear a frozen selection when a new session takes over this manager. */
+  clearEnvProfileSelection?(): void;
+  /**
    * Unified resolution entry point (Phase 6 Step 6, #478).
    *
    * Replaces the former `checkPermission` + `checkPathPolicy` method pair with
@@ -126,6 +134,20 @@ export class PermissionManager implements ScopedPermissionManager {
   private readonly flavor: PathFlavor;
   private readonly isYoloEnabled: () => boolean;
   private loader: PolicyLoader;
+  /**
+   * Env selection captured for a child session, or undefined while the
+   * selection is still read live from the process environment.
+   *
+   * A subagent child receives its selection through the launcher environment,
+   * but that value only exists for the child-creation window: the host restores
+   * its own value afterwards, and several children in one process would
+   * otherwise overwrite each other. Freezing it at the child's own
+   * `session_start` makes the child resolve the policy it was launched with for
+   * its whole life, and stops the host session's role selection from leaking
+   * into it. A host session never freezes, so a mid-session profile change
+   * still applies on the next decision (#agent-role).
+   */
+  private envProfileSnapshot: { readonly value: string | undefined } | undefined;
   private readonly resolvedPermissionsCache = new Map<
     string,
     FileCacheEntry<ResolvedPermissions>
@@ -142,6 +164,24 @@ export class PermissionManager implements ScopedPermissionManager {
           ? derivePolicyLoaderOptions(options.agentDir, undefined)
           : options,
       );
+  }
+
+  /**
+   * Capture the current launcher env selection for this session.
+   *
+   * Called once for a subagent child inside its creation window. Repeated calls
+   * keep the first value: the window is the only moment the launcher's selection
+   * is visible in the environment.
+   */
+  freezeEnvProfileSelection(): void {
+    if (this.envProfileSnapshot === undefined) {
+      this.envProfileSnapshot = { value: readPermissionProfileEnv() };
+    }
+  }
+
+  /** Drop a frozen selection so the next session reads the environment live. */
+  clearEnvProfileSelection(): void {
+    this.envProfileSnapshot = undefined;
   }
 
   /**
@@ -190,7 +230,10 @@ export class PermissionManager implements ScopedPermissionManager {
     // The launcher-provided env selection is part of the cache identity: it is
     // fixed for a child process but may differ across processes sharing the
     // same loader paths.
-    const envProfileName = readPermissionProfileEnv();
+    const envProfileName =
+      this.envProfileSnapshot !== undefined
+        ? this.envProfileSnapshot.value
+        : readPermissionProfileEnv();
     const cacheKey = `${agentName ?? "__global__"}|${envProfileName ?? ""}`;
     const stamp = this.loader.getCacheStamp(agentName);
     const cached = this.resolvedPermissionsCache.get(cacheKey);

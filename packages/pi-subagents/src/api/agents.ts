@@ -8,5 +8,12 @@ export {
 	type RuntimeAgentRegistrationRequest,
 	type RuntimeAgentRegistrationResult,
 } from "../agents/runtime-agent-events.ts";
+export { discoverAgentsWithRuntime } from "../agents/runtime-discovery.ts";
 
 export type { RegisterRuntimeAgentInput, RuntimeAgentDefinition, RuntimeAgentRegistration };
+export type {
+	AgentConfig,
+	AgentDiscoveryDiagnostic,
+	AgentDiscoveryResult,
+	AgentScope,
+} from "../agents/agents.ts";

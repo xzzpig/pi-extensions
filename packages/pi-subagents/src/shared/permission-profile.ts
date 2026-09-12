@@ -1,6 +1,18 @@
 /** Shared wire contract for selecting a pi-permission-system profile in a child Pi process. */
 export const SUBAGENT_PERMISSION_PROFILE_ENV = "PI_SUBAGENT_PERMISSION_PROFILE";
 
+/**
+ * Marks a child process whose profile selection was pinned by its launcher.
+ *
+ * The selection key alone cannot express "this child was launched with no
+ * profile": clearing it looks exactly like a host session that never selected
+ * one. pi-permission-system therefore freezes the launcher's selection only when
+ * this marker is present, which keeps a host session reading the value live so a
+ * mid-session role change still applies.
+ */
+export const SUBAGENT_PERMISSION_PROFILE_PINNED_ENV =
+	"PI_SUBAGENT_PERMISSION_PROFILE_PINNED";
+
 const MAX_PERMISSION_PROFILE_NAME_LENGTH = 128;
 const PERMISSION_PROFILE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 

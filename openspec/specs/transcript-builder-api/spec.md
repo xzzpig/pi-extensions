@@ -2,12 +2,9 @@
 
 ## Purpose
 
-
 为 `@xzzpig/pi-components` transcript 模块提供面向"历史记录回放"场景的公开条目构造与状态操作 API，使 pi-subagents（解析持久化 JSONL）与 pi-btw（自建会话线程）能够共享同一套 entries 构造逻辑，消除 pi-btw 中约 200 行的重复状态机代码。
 
-
 ## Requirements
-
 
 ### Requirement: 历史条目的非实时写入
 

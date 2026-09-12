@@ -654,6 +654,32 @@ export function getConfigPaths(cwd: string): { globalPath: string; projectPath: 
   };
 }
 
+/**
+ * Names of the profiles the global configuration defines.
+ *
+ * Profiles are operator-owned and global-only: a project may not define,
+ * override, or remove one, so this deliberately reads only the global file. A
+ * name that fails the shared profile-name grammar is skipped rather than
+ * reported, so every returned name is safe to use as a selector and a malformed
+ * registry entry can never reach a launch site.
+ */
+export function listGlobalSandboxProfiles(cwd: string): string[] {
+  const { globalPath } = getConfigPaths(cwd);
+  const { config } = readJsonConfigResult(globalPath, false);
+  const profiles = config.profiles;
+  if (profiles === undefined || typeof profiles !== "object" || Array.isArray(profiles)) return [];
+  return Object.keys(profiles)
+    .filter((name) => {
+      try {
+        validateSandboxProfileName(name);
+        return true;
+      } catch {
+        return false;
+      }
+    })
+    .sort((left, right) => left.localeCompare(right));
+}
+
 export function loadConfig(cwd: string, options: SandboxConfigLoadOptions = {}): SandboxConfig {
   const { globalPath, projectPath } = getConfigPaths(cwd);
   const globalRead = readJsonConfigResult(globalPath, true);

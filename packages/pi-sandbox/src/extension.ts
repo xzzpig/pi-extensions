@@ -19,6 +19,7 @@ import {
   addReadPathToConfig,
   addWritePathToConfig,
   getConfigPaths,
+  listGlobalSandboxProfiles,
   loadConfig,
   SANDBOX_PROFILE_ENV,
   type SandboxConfig,
@@ -40,6 +41,11 @@ import {
   type SessionAllowances,
   supportsNodeEnvProxy,
 } from "./sandbox-runtime.ts";
+import {
+  registerSandboxService,
+  type SandboxProfileSelectionResult,
+  type SandboxService,
+} from "./service.ts";
 import { maybeDecorateBashForToolDisplay } from "./tool-display-decoration.ts";
 
 const SANDBOX_STARTUP_ACK_PATH_ENV = "PI_SUBAGENT_SANDBOX_STARTUP_ACK_PATH";
@@ -72,7 +78,10 @@ export default function (pi: ExtensionAPI) {
 
   let sandboxEnabled = false;
   let sandboxInitialized = false;
-  const selectedSandboxProfile = process.env[SANDBOX_PROFILE_ENV];
+  // Not a constant: an in-process extension can select a profile for the live
+  // session through the SandboxService, exactly like a child launch selects one
+  // from the environment before the session starts.
+  let selectedSandboxProfile = process.env[SANDBOX_PROFILE_ENV];
   // The launcher applies the sandbox launch keys for the child-session creation
   // window only and restores them right after, so every launch value must be
   // captured here at registration instead of being read later from session_start.
@@ -207,6 +216,57 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  let disposeSandboxService: (() => void) | undefined;
+  // The session context that owns the status line, kept so a change made through
+  // the service (which has no ctx of its own) can re-render it.
+  let lastStatusContext: Parameters<typeof warnIfAllDomainsAllowed>[0] | undefined;
+
+  // In-process extensions (a session role picker, for example) select a profile
+  // by name through this service. Names only: the runtime resolves the name
+  // against the same global registry a child launch uses, so no raw sandbox
+  // configuration ever crosses the extension boundary.
+  const sandboxService: SandboxService = {
+    setProfile: async (profileName): Promise<SandboxProfileSelectionResult> => {
+      if (profileName !== undefined) {
+        try {
+          // Validate before touching state: a rejected selection must leave the
+          // session exactly as it was.
+          loadConfig(localCwd, { profileName, projectTrusted: profileProjectTrusted });
+        } catch (error) {
+          return { ok: false, message: error instanceof Error ? error.message : String(error) };
+        }
+      }
+      const previousProfile = selectedSandboxProfile;
+      selectedSandboxProfile = profileName;
+      refreshStatus();
+      if (!sandboxInitialized) {
+        // The sandbox switch stays user-controlled: selecting a profile applies
+        // the configuration but never forces isolation on by itself.
+        return {
+          ok: true,
+          message:
+            profileName === undefined
+              ? "Sandbox profile cleared, but the sandbox is not enabled for this session, so no isolation is active."
+              : `Sandbox profile '${profileName}' is selected, but the sandbox is not enabled for this session, so no isolation is active.`,
+        };
+      }
+      try {
+        await refreshSandbox(localCwd);
+      } catch (error) {
+        // Nothing changed: the profile was never applied, so the selection goes
+        // back to the one the session was actually running. The recorded startup
+        // failure keeps the session fail-closed until the sandbox recovers, so
+        // this revert cannot re-open a looser policy.
+        selectedSandboxProfile = previousProfile;
+        refreshStatus();
+        return { ok: false, message: error instanceof Error ? error.message : String(error) };
+      }
+      return { ok: true };
+    },
+    getProfile: () => selectedSandboxProfile,
+    listProfiles: () => listGlobalSandboxProfiles(localCwd),
+  };
+
   async function applyChoice(
     choice: Exclude<PermissionPromptResult["action"], "abort">,
     kind: "domain" | "read" | "write",
@@ -227,6 +287,7 @@ export default function (pi: ExtensionAPI) {
       if (choice !== "session") addWritePathToConfig(target, value);
     }
     await refreshSandbox(cwd);
+    refreshStatus();
   }
 
   function updateStatus(
@@ -244,6 +305,27 @@ export default function (pi: ExtensionAPI) {
     } catch {
       // Ignore cosmetic status failures.
     }
+  }
+
+  /**
+   * Re-render the status line from the *effective* configuration.
+   *
+   * The status reports what the session is actually running under, so it must be
+   * recomputed whenever the selection changes — otherwise a session that just
+   * picked a profile keeps advertising the previous policy's write paths.
+   */
+  function refreshStatus(ctx?: Parameters<typeof warnIfAllDomainsAllowed>[0]): void {
+    const target = ctx ?? lastStatusContext;
+    if (!target) return;
+    let config: SandboxConfig;
+    try {
+      config = resolveSandboxConfig(target.cwd);
+    } catch {
+      // The failure path already surfaced the real reason; a stale status line
+      // must not become the only signal.
+      return;
+    }
+    updateStatus(target, config);
   }
 
   async function enableSandbox(
@@ -296,6 +378,7 @@ export default function (pi: ExtensionAPI) {
     // Cosmetic UI runs only after the sandbox state is committed, so a missing
     // theme or a failing notification can never invalidate a working sandbox.
     warnIfAllDomainsAllowed(ctx, config);
+    lastStatusContext = ctx;
     updateStatus(ctx, config);
     return true;
   }
@@ -618,6 +701,17 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    disposeSandboxService?.();
+    // Publishing the service is optional: a host that exposes no session
+    // identity must not lose sandbox enforcement because of it.
+    try {
+      disposeSandboxService = registerSandboxService(
+        ctx.sessionManager.getSessionId(),
+        sandboxService,
+      );
+    } catch {
+      disposeSandboxService = undefined;
+    }
     if (selectedSandboxProfile) profileProjectTrusted = resolvedProfileTrust(ctx);
     if (pi.getFlag("no-sandbox") as boolean) {
       sandboxEnabled = false;
@@ -644,6 +738,8 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async () => {
+    disposeSandboxService?.();
+    disposeSandboxService = undefined;
     if (!sandboxInitialized) return;
     try {
       await SandboxManager.reset();
@@ -738,7 +834,7 @@ export default function (pi: ExtensionAPI) {
         return;
       }
       ctx.ui.notify(
-        `${selectedSandboxProfile ? `${profileLabel()}\n` : ""}${formatSandboxConfiguration(config, getConfigPaths(ctx.cwd), allowances)}`,
+        `${selectedSandboxProfile ? `${profileLabel()}\n` : ""}${formatSandboxConfiguration(config, getConfigPaths(ctx.cwd), allowances, selectedSandboxProfile)}`,
         "info",
       );
     },

@@ -7,6 +7,7 @@ import * as path from "node:path";
 import { afterEach, describe, it } from "node:test";
 import { TEMP_ROOT_DIR } from "../../src/shared/types.ts";
 import { writeNodeCommand } from "../support/node-command.ts";
+import { jitiCliPath } from "../support/tool-cli-paths.ts";
 
 const tempDirs: string[] = [];
 afterEach(() => {
@@ -34,7 +35,7 @@ afterEach(() => {
 const RUNNER_CHILD_SESSION_FACTORY = path.resolve(import.meta.dirname, "../support/runner-child-session-factory.ts");
 
 /** Queue one scripted response every child session the runner creates replays. */
-function scriptChildSessions(dir: string, response: object): string {
+function scriptChildSessions(dir: string, response: Record<string, unknown>): string {
 	const queueDir = path.join(dir, "child-sessions");
 	fs.mkdirSync(queueDir, { recursive: true });
 	fs.writeFileSync(path.join(queueDir, "default-response.json"), JSON.stringify(response), "utf-8");
@@ -108,7 +109,7 @@ describe("Orca progress-tab observer", () => {
 		const repo = path.resolve(import.meta.dirname, "../..");
 		const exitCode = await runProcess(
 			process.execPath,
-			[path.join(repo, "node_modules/jiti/lib/jiti-cli.mjs"), path.join(repo, "src/runs/background/subagent-runner.ts"), configPath],
+			[jitiCliPath(), path.join(repo, "src/runs/background/subagent-runner.ts"), configPath],
 			repo,
 			{
 				...process.env,
@@ -168,7 +169,7 @@ describe("Orca progress-tab observer", () => {
 		const repo = path.resolve(import.meta.dirname, "../..");
 		const exitCode = await runProcess(
 			process.execPath,
-			[path.join(repo, "node_modules/jiti/lib/jiti-cli.mjs"), path.join(repo, "src/runs/background/subagent-runner.ts"), configPath],
+			[jitiCliPath(), path.join(repo, "src/runs/background/subagent-runner.ts"), configPath],
 			repo,
 			{
 				...process.env,

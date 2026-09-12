@@ -35,6 +35,7 @@ import { getSubagentSessionRegistry } from "./authority/subagent-registry";
 import { registerBuiltinToolInputFormatters } from "./builtin-tool-input-formatters";
 import { registerPermissionSystemCommand } from "./config-modal";
 import { getGlobalConfigPath } from "./config-paths";
+import { isPermissionProfilePinned } from "./permission-profile";
 import { ConfigStore } from "./config-store";
 import { DecisionAudit } from "./decision-audit";
 import { GateDecisionReporter } from "./decision-reporter";
@@ -357,9 +358,18 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     gateRunner,
   );
 
-  pi.on("session_start", (event, ctx) =>
-    lifecycle.handleSessionStart(event, ctx),
-  );
+  pi.on("session_start", async (event, ctx) => {
+    await lifecycle.handleSessionStart(event, ctx);
+    // A child launched with a pinned selection keeps that selection for its whole
+    // life: the shared process environment reverts to the host's value once the
+    // creation window closes, and concurrent in-process children overwrite each
+    // other's value. The launcher marks the launch, so a host session — which
+    // also carries subagent environment hints — keeps reading the value live and
+    // a mid-session role change still applies on the next decision.
+    if (isPermissionProfilePinned()) {
+      session.freezeEnvProfileSelection();
+    }
+  });
   pi.on("resources_discover", (event, ctx) =>
     lifecycle.handleResourcesDiscover(event, ctx),
   );

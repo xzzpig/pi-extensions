@@ -9,6 +9,7 @@ import {
 	type ExtensionBindings,
 	normalizeExtensionBindings,
 	omitExtensionBindingsEnv,
+	omitInheritedProfileEnv,
 } from "../../src/runs/shared/extension-bindings.ts";
 import { buildInProcessChildLaunch } from "../../src/runs/shared/child-launch.ts";
 
@@ -56,11 +57,29 @@ describe("extension bindings", () => {
 		assert.equal(Object.hasOwn(omitted, PI_SUBAGENT_EXTENSION_BINDINGS_ENV), true);
 		assert.equal(omitted[PI_SUBAGENT_EXTENSION_BINDINGS_ENV], undefined);
 		assert.equal(childEnv({ "child/1": { z: 1, a: 2 } })[PI_SUBAGENT_EXTENSION_BINDINGS_ENV], '{"child/1":{"a":2,"z":1}}');
-		assert.deepEqual(childEnv({ "child/1": true }, "parent"), {}, "the parent host never writes child environment values");
+		// A plain in-process child gets exactly two environment values: the pinned
+		// permission-profile selection (unset here) and the marker that tells
+		// pi-permission-system the selection is authoritative for this child. It
+		// never gets the runner-only binding or MCP values.
+		assert.deepEqual(childEnv({ "child/1": true }, "parent"), {
+			PI_SUBAGENT_PERMISSION_PROFILE: undefined,
+			PI_SUBAGENT_PERMISSION_PROFILE_PINNED: "1",
+		});
 	});
 
 	it("removes ambient bindings from external runner environments", () => {
 		assert.deepEqual(omitExtensionBindingsEnv({ KEEP_ME: "yes", [PI_SUBAGENT_EXTENSION_BINDINGS_ENV]: "secret" }), { KEEP_ME: "yes" });
+	});
+
+	it("drops launcher-owned profile selections from an inherited environment", () => {
+		const sanitized = omitInheritedProfileEnv({
+			KEEP_ME: "yes",
+			PI_SUBAGENT_PERMISSION_PROFILE: "session-role",
+			PI_SUBAGENT_PERMISSION_PROFILE_PINNED: "1",
+			PI_SUBAGENT_SANDBOX_PROFILE: "session-sandbox",
+			PI_SUBAGENT_SANDBOX_PROJECT_TRUSTED: "1",
+		});
+		assert.deepEqual(sanitized, { KEEP_ME: "yes" });
 	});
 
 	it("changes launch provenance only when the binding changes", () => {

@@ -73,7 +73,7 @@ void result.isError;
 			files: [path.join(consumerRoot, "consumer.ts")],
 		}, null, 2), "utf-8");
 
-		execFileSync(process.execPath, [path.join(projectRoot, "node_modules", "typescript", "bin", "tsc"), "--project", path.join(consumerRoot, "tsconfig.json")], {
+		execFileSync(process.execPath, [hoistedDependencyPath("typescript", "bin", "tsc"), "--project", path.join(consumerRoot, "tsconfig.json")], {
 			cwd: consumerRoot,
 			stdio: "pipe",
 		});

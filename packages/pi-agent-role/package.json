@@ -1,0 +1,65 @@
+{
+  "name": "@xzzpig/pi-agent-role",
+  "version": "0.1.0",
+  "description": "Session roles for Pi: switch the interactive session's agent, sandbox profile, and permission profile from a graphical picker.",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "agent-role",
+    "sandbox-profile",
+    "permission-profile"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xzzpig/pi-extensions.git",
+    "directory": "packages/pi-agent-role"
+  },
+  "homepage": "https://github.com/xzzpig/pi-extensions/tree/main/packages/pi-agent-role#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "files": [
+    "index.ts",
+    "src",
+    "README.md",
+    "CHANGELOG.md",
+    "package.json"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.83.0 <1",
+    "@earendil-works/pi-tui": ">=0.83.0 <0.85.0",
+    "@xzzpig/pi-sandbox": "*",
+    "@xzzpig/pi-subagents": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-tui": {
+      "optional": true
+    },
+    "@xzzpig/pi-sandbox": {
+      "optional": true
+    },
+    "@xzzpig/pi-subagents": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.84.1",
+    "@earendil-works/pi-tui": "^0.84.1",
+    "@types/node": "catalog:",
+    "@xzzpig/pi-sandbox": "workspace:*",
+    "@xzzpig/pi-subagents": "workspace:*",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

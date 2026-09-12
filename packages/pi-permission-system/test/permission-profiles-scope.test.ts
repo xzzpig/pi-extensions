@@ -204,3 +204,77 @@ describe("profile fail-closed", () => {
     expect(read.origin).toBe("global");
   });
 });
+
+/**
+ * Launcher env selection lifetime (agent-role R7).
+ *
+ * pi-agent-role selects a session's permission profile by writing the launcher
+ * environment key. A subagent child receives the value its launcher pinned, but
+ * the shared process environment reverts to the host's value once the child
+ * creation window closes — and concurrent in-process children overwrite each
+ * other's value. A child therefore freezes the selection at its own
+ * `session_start`; a host session keeps reading it live so a mid-session role
+ * change applies on the next decision.
+ */
+describe("launcher env selection lifetime", () => {
+  const buildManager = () =>
+    createInMemoryManager({
+      global: {
+        permission: { read: "allow" },
+        profiles: {
+          hostRole: { permission: { read: "deny" } },
+          childRole: { permission: { read: "ask" } },
+        },
+      },
+    });
+
+  it("keeps reading the environment live for a host session", () => {
+    const manager = buildManager();
+    process.env[PERMISSION_PROFILE_ENV] = "hostRole";
+    expect(manager.check(readCheck()).state).toBe("deny");
+
+    process.env[PERMISSION_PROFILE_ENV] = "childRole";
+    expect(manager.check(readCheck()).state).toBe("ask");
+  });
+
+  it("freezes the selection a child was launched with", () => {
+    const manager = buildManager();
+    process.env[PERMISSION_PROFILE_ENV] = "childRole";
+    manager.freezeEnvProfileSelection?.();
+
+    // The window closes and the host's own role value is back in the shared env.
+    process.env[PERMISSION_PROFILE_ENV] = "hostRole";
+
+    const read = manager.check(readCheck());
+    expect(read.state).toBe("ask");
+    expect(read.origin).toBe("profile");
+  });
+
+  it("keeps a child that declared no profile unselected", () => {
+    const manager = buildManager();
+    delete process.env[PERMISSION_PROFILE_ENV];
+    manager.freezeEnvProfileSelection?.();
+
+    process.env[PERMISSION_PROFILE_ENV] = "hostRole";
+
+    const read = manager.check(readCheck());
+    expect(read.state).toBe("allow");
+    expect(read.origin).toBe("global");
+  });
+
+  it("drops the frozen selection when a new session takes over", () => {
+    const manager = buildManager();
+    process.env[PERMISSION_PROFILE_ENV] = "childRole";
+    manager.freezeEnvProfileSelection?.();
+    manager.clearEnvProfileSelection?.();
+
+    process.env[PERMISSION_PROFILE_ENV] = "hostRole";
+    expect(manager.check(readCheck()).state).toBe("deny");
+
+    // The first freeze wins while a session lives: a second call cannot adopt a
+    // later value.
+    manager.freezeEnvProfileSelection?.();
+    process.env[PERMISSION_PROFILE_ENV] = "childRole";
+    expect(manager.check(readCheck()).state).toBe("deny");
+  });
+});

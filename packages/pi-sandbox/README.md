@@ -166,6 +166,40 @@ profile. A missing profile, invalid profile, unavailable platform, missing
 `pi-sandbox` package, or initialization failure blocks the child before its
 first model turn instead of falling back to unsandboxed execution.
 
+#### Selecting a profile for the current session
+
+An in-process extension can select a profile for the session it is running in
+through the published `SandboxService`, using the same names and the same global
+registry a child launch resolves:
+
+```ts
+import { getSandboxService } from "@xzzpig/pi-sandbox";
+
+const service = getSandboxService(ctx.sessionManager.getSessionId());
+if (service) {
+  const result = await service.setProfile("reviewer-strict");
+  if (!result.ok) notify(result.message);
+  else if (result.message) notify(result.message); // selected, but not enabled
+  service.listProfiles(); // global registry, sorted
+  service.getProfile(); // current selection
+}
+```
+
+Only the name crosses the boundary: the caller never supplies sandbox policy.
+`setProfile` validates the name against the global registry before changing
+anything, so a rejected request leaves the session exactly as it was. Selecting a
+profile does **not** switch the sandbox on — the sandbox toggle stays under user
+control (`Alt+S`, `/sandbox-enable`, `--no-sandbox`). When the sandbox is
+disabled the selection is still recorded and the result carries a warning, so a
+caller can tell "configured" apart from "enforcing". When the sandbox is enabled,
+the policy is reinitialized immediately; if that fails the session stays
+fail-closed rather than continuing under the previous policy.
+
+The service is registered at `session_start` and removed at `session_shutdown`,
+and `getSandboxService()` returns `undefined` before that or when `pi-sandbox` is
+not installed — treat `undefined` as "sandbox controls unavailable" rather than
+assuming the selection succeeded.
+
 #### Usage
 
 ```

@@ -101,6 +101,41 @@ The installed owner applies the existing runtime-agent validation, collision che
 
 This contract is process-local. It does not register agents in child sessions or other Pi processes, and it does not change package discovery or package resolution.
 
+## Agent discovery from independent extensions
+
+An extension that wants to offer the same agent list the subagent launcher uses
+— a session role picker, for example — can call the exported discovery helper
+instead of re-implementing agent loading:
+
+```typescript
+import { discoverAgentsWithRuntime } from "pi-subagents/agents";
+
+const result = discoverAgentsWithRuntime(pi, cwd, "both");
+for (const agent of result.agents) {
+  // agent.name, agent.description, agent.aliases, agent.source,
+  // agent.sandbox, agent.permissionProfile, agent.override?.scope, agent.disabled
+}
+result.agentDiagnostics; // loader problems, per source
+result.projectAgentsDir; // where project agents came from
+```
+
+The result is the merged view: builtin, package, user, and project agent files
+plus anything registered at runtime through the contract above. With nothing
+registered, it is exactly `discoverAgents(cwd, scope)`.
+
+`scope` is `"user" | "project" | "both"`. Pass the caller's `cwd` so project
+layering resolves against the right tree, and pass the caller's `ExtensionAPI`
+because the runtime registry is keyed on it.
+
+Two notes for consumers of an optional dependency:
+
+- Treat the module as optional. A package that is not installed cannot be
+  imported, so load it dynamically and report the failure rather than failing
+  extension load.
+- `agent.source === "project"` (or `agent.override?.scope === "project"`) means
+  the definition comes from the current project. Gate such an agent behind the
+  host's project-trust decision before adopting it for anything.
+
 ## External jobs in FleetView
 
 Use `pi-subagents/external-runs` to publish display-only current-session jobs owned by another extension:
