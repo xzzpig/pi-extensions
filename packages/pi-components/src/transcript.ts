@@ -398,9 +398,10 @@ function isUnsafeTerminalCodePoint(codePoint: number): boolean {
 
 function consumeControlString(
   value: string,
-  index: number,
+  start: number,
   osc: boolean,
 ): number {
+  let index = start;
   while (index < value.length) {
     const codePoint = value.codePointAt(index);
     if (codePoint === undefined) break;
@@ -414,7 +415,8 @@ function consumeControlString(
   return value.length;
 }
 
-function consumeCsi(value: string, index: number): number {
+function consumeCsi(value: string, start: number): number {
+  let index = start;
   while (index < value.length) {
     const codePoint = value.codePointAt(index);
     if (codePoint === undefined) break;
@@ -843,7 +845,12 @@ function finishActiveAssistantSegment(state: TranscriptState): void {
 /**
  * Inserts or updates the thinking/assistant-text entry for `turnId`.
  * Repeated records for the same turn merge into one entry (latest text wins).
- * Public building block for hosts that replay completed message records.
+ * Public building block for hosts that replay the *same* completed message
+ * several times (live message updates persisted line by line).
+ *
+ * Hosts replaying *distinct* assistant messages inside one turn must use
+ * `appendText` / `appendAssistantMessage` instead: a turn that contains
+ * several persisted assistant messages would otherwise keep only the last one.
  */
 export function upsertText(
   state: TranscriptState,
@@ -860,6 +867,55 @@ export function upsertText(
     return;
   }
   appendEntry(state, { type, turnId, text, streaming });
+}
+
+/**
+ * Appends a thinking/assistant-text entry for `turnId` without merging into
+ * any previous entry of the same type. Public building block for hosts that
+ * replay finished transcripts, where every persisted assistant message is a
+ * distinct entry even when several of them share one turn.
+ */
+export function appendText(
+  state: TranscriptState,
+  turnId: number,
+  type: "thinking" | "assistant-text",
+  text: string,
+  streaming = false,
+): TranscriptEntry | undefined {
+  if (!text) return undefined;
+  return appendEntry(state, { type, turnId, text, streaming });
+}
+
+/**
+ * Appends one completed assistant message as its own thinking and/or
+ * assistant-text entries, in the order Pi renders them inside a message.
+ * Unlike `upsertText` it never overwrites an earlier message of the same
+ * turn, so history replay keeps every assistant message and thinking block.
+ */
+export function appendAssistantMessage(
+  state: TranscriptState,
+  turnId: number,
+  message: { thinking?: string; text?: string },
+  streaming = false,
+): { thinkingEntryId?: number; textEntryId?: number } {
+  const result: { thinkingEntryId?: number; textEntryId?: number } = {};
+  const thinking = appendText(
+    state,
+    turnId,
+    "thinking",
+    message.thinking ?? "",
+    streaming,
+  );
+  if (thinking) result.thinkingEntryId = thinking.id;
+  const text = appendText(
+    state,
+    turnId,
+    "assistant-text",
+    message.text ?? "",
+    streaming,
+  );
+  if (text) result.textEntryId = text.id;
+  return result;
 }
 
 /**
@@ -1430,7 +1486,13 @@ function buildRenderBlocks(
   return blocks;
 }
 
-const OSC_133_SEQUENCE = /\x1b]133;[ABC]\x07/g;
+const ESC_SEQUENCE = String.fromCharCode(27);
+const BEL_SEQUENCE = String.fromCharCode(7);
+
+const OSC_133_SEQUENCE = new RegExp(
+  `${ESC_SEQUENCE}]133;[ABC]${BEL_SEQUENCE}`,
+  "g",
+);
 
 type PresentationAssistantMessage = NonNullable<
   ConstructorParameters<typeof AssistantMessageComponent>[0]
@@ -1471,11 +1533,12 @@ function renderNativeAssistantMessage(
   text: string,
   width: number,
   thinkingLabel: string,
+  hideThinkingBlock: boolean,
 ): string[] {
   return stripOsc133(
     new AssistantMessageComponent(
       createPresentationAssistantMessage(thinking, text),
-      false,
+      hideThinkingBlock,
       getMarkdownTheme(),
       thinkingLabel,
       1,
@@ -1496,8 +1559,8 @@ function wrapRenderedLines(
       wrapped.push(line);
       continue;
     }
-    if (!line) wrapped.push("");
-    else wrapped.push(...wrapTextWithAnsi(line, Math.max(1, width)));
+    if (line) wrapped.push(...wrapTextWithAnsi(line, Math.max(1, width)));
+    else wrapped.push("");
   }
   return wrapped;
 }
@@ -1518,7 +1581,14 @@ export interface TranscriptRenderOptions {
   theme: Theme;
   emptyText?: string;
   assistantLabel?: string;
+  /** Collapsed-label text used when `hideThinkingBlock` is enabled. */
   thinkingLabel?: string;
+  /**
+   * Render assistant thinking blocks collapsed to `thinkingLabel`. Defaults to
+   * `false` (expanded), so existing hosts keep Pi's default transcript
+   * behavior; hosts that own their own expansion gesture opt in.
+   */
+  hideThinkingBlock?: boolean;
   assistantBadgeBackground?: ThemeBackground;
   assistantBadgeForeground?: ThemeColor;
   /**
@@ -1616,6 +1686,7 @@ export function renderTranscriptLines(
             block.text,
             width,
             options.thinkingLabel ?? "Thinking",
+            options.hideThinkingBlock === true,
           ),
         );
         break;
@@ -1669,7 +1740,9 @@ export interface TranscriptViewportRender {
  * TUI mode does not already provide it.
  */
 export function getTranscriptMouseScrollDelta(data: string): number | null {
-  const match = data.match(/^\x1b\[<(\d+);\d+;\d+[Mm]$/);
+  const match = data.match(
+    new RegExp(`^${ESC_SEQUENCE}\\[<(\\d+);\\d+;\\d+[Mm]$`),
+  );
   if (!match) return null;
 
   const button = Number(match[1]);

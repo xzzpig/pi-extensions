@@ -4,7 +4,7 @@
   "description": "A pi extension for parallel side conversations with /btw",
   "type": "module",
   "dependencies": {
-    "@xzzpig/pi-components": "0.3.0"
+    "@xzzpig/pi-components": "0.4.0"
   },
   "bundledDependencies": [
     "@xzzpig/pi-components"

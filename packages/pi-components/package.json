@@ -1,6 +1,6 @@
 {
   "name": "@xzzpig/pi-components",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Reusable transcript components for Pi extensions.",
   "license": "MIT",

@@ -3,6 +3,25 @@
 All notable changes to the internal `@xzzpig/pi-components` shared library are
 documented here.
 
+## 0.4.0
+
+### Added
+
+- **`appendText` and `appendAssistantMessage` builder helpers.** `upsertText`
+  is documented as latest-wins merging, which is right for repeated updates of
+  one message but collapses a replayed turn that contains several distinct
+  assistant messages into its final message. The new helpers append one entry
+  per message, so every thinking block and answer survives a replay of
+  persisted records.
+- `TranscriptRenderOptions.hideThinkingBlock` renders assistant thinking blocks
+  collapsed to `thinkingLabel`, letting hosts that replay completed transcripts
+  own their expansion gesture (the collapsed label doubles as its hint).
+  Omitted keeps Pi's default: expanded.
+
+### Changed
+
+- `upsertText` now documents when appending is required instead of merging.
+
 ## 0.3.0
 
 ### Added

@@ -6,6 +6,7 @@ import { describe, it } from "node:test";
 import { visibleWidth, type MarkdownTheme } from "@earendil-works/pi-tui";
 import { EXTERNAL_RUN_REGISTRY_KEY, EXTERNAL_RUN_REGISTRY_VERSION, registerExternalRun } from "../../src/api/external-runs.ts";
 import { collectFleetSnapshot, openSubagentFleet, openSubagentFleetFromStatus, SubagentFleetComponent } from "../../src/tui/fleet.ts";
+import { loadNativeTranscriptSupport } from "../../src/tui/fleet-native-transcript.ts";
 import { persistForegroundRunHistory, restoreForegroundRunHistory } from "../../src/runs/foreground/foreground-history.ts";
 import { FLEET_STATUS_WIDGET_KEY } from "../../src/tui/fleet-status.ts";
 import { registerLivePromptAudit, rewritePromptWithGuidance } from "../../src/runs/foreground/prompt-audit.ts";
@@ -991,8 +992,7 @@ describe("native subagent fleet", () => {
 	it("renders selectable transcript detail and completed artifact paths within terminal width", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-fleet-render-"));
 		try {
-			const asyncDir = writeAsyncRun(root, { id: "async-finished", state: "complete", contexts: ["fork"], output: "FINAL ASYNC OUTPUT" });
-			const state = stateForTest();
+			writeAsyncRun(root, { id: "async-finished", state: "complete", contexts: ["fork"], output: "FINAL ASYNC OUTPUT" });			const state = stateForTest();
 			let closed = false;
 			let renderRequests = 0;
 			const tui = { terminal: { rows: 32, columns: 100 }, requestRender: () => { renderRequests++; } };
@@ -1235,6 +1235,69 @@ describe("native subagent fleet", () => {
 				lines = component.render(100);
 				assert.ok(lines.some((line) => line.includes("Cache refreshed after append")));
 				assert.equal(renderRequests, 2);
+			} finally {
+				component.dispose();
+			}
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("collapses replayed thinking by default and expands it with the thinking binding", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-fleet-thinking-toggle-"));
+		try {
+			const assistant = (index: number): Record<string, unknown> => ({
+				recordType: "message",
+				role: "assistant",
+				model: "test-model",
+				text: `ANSWER_${index}`,
+				message: {
+					role: "assistant",
+					content: [
+						{ type: "thinking", thinking: `THINKING_${index}` },
+						{ type: "text", text: `ANSWER_${index}` },
+					],
+				},
+			});
+			writeAsyncRun(root, {
+				id: "async-thinking",
+				state: "complete",
+				transcript: [
+					assistant(1),
+					{ recordType: "tool_start", toolCallId: "read-1", toolName: "read", argsPayload: JSON.stringify({ path: "src/a.ts" }), ts: 1 },
+					{ recordType: "tool_end", toolCallId: "read-1", toolName: "read", isError: false, ts: 2 },
+					{ recordType: "message", role: "toolResult", toolCallId: "read-1", toolName: "read", isError: false, text: "tool output", message: { role: "toolResult", toolCallId: "read-1", toolName: "read", isError: false, content: [{ type: "text", text: "tool output" }] } },
+					assistant(2),
+				],
+			});
+			const state = stateForTest();
+			state.baseCwd = root;
+			// The shared renderer needs the full host theme surface (`bg` included);
+			// the compact test stub above would throw and silently downgrade the
+			// inspector to the legacy rail, which carries no thinking entries.
+			const nativeTheme = { ...theme, bg: (_name: string, text: string) => text };
+			// Prime the shared renderer so the inspector never falls back to the
+			// legacy rail (which carries no thinking entries at all).
+			assert.ok(await loadNativeTranscriptSupport(), "shared transcript module should load in this workspace");
+			const component = new SubagentFleetComponent(
+				{ terminal: { rows: 32, columns: 110 }, requestRender() {} } as never,
+				nativeTheme as never,
+				state,
+				() => {},
+				{ asyncDirRoot: root, resultsDir: path.join(root, "results"), refreshMs: 60_000, markdownTheme },
+			);
+			try {
+				for (let tick = 0; tick < 4; tick++) await Promise.resolve();
+				let lines = component.render(110);
+				assert.ok(lines.some((line) => line.includes("Thinking (t/T to expand)")), "thinking should be collapsed by default");
+				assert.ok(!lines.some((line) => line.includes("THINKING_1") || line.includes("THINKING_2")), "collapsed thinking must not leak its content");
+				component.handleInput("t");
+				lines = component.render(110);
+				assert.ok(lines.some((line) => line.includes("THINKING_1")), "expanding should reveal the first thinking block");
+				assert.ok(lines.some((line) => line.includes("THINKING_2")), "expanding should reveal every replayed thinking block");
+				component.handleInput("T");
+				lines = component.render(110);
+				assert.ok(lines.some((line) => line.includes("Thinking (t/T to expand)")), "the same binding should collapse again");
 			} finally {
 				component.dispose();
 			}

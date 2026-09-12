@@ -241,6 +241,78 @@ describe("fleet native transcript adapter", () => {
 		}
 	});
 
+	it("keeps every assistant thinking block of one replayed turn and honors the collapse toggle", async () => {
+		const mod = await loadNativeTranscriptSupport();
+		assert.ok(mod);
+		const { root, cleanup } = makeRoot();
+		try {
+			const assistant = (index: number): Record<string, unknown> => {
+				const record = baseRecord("message");
+				record.role = "assistant";
+				record.model = "test-model";
+				record.text = `ANSWER_${index}`;
+				record.message = {
+					role: "assistant",
+					content: [
+						{ type: "thinking", thinking: `THINKING_${index}` },
+						{ type: "text", text: `ANSWER_${index}` },
+					],
+				};
+				return record;
+			};
+			const tool = (index: number): Array<Record<string, unknown>> => {
+				const start = baseRecord("tool_start");
+				start.toolCallId = `call-${index}`;
+				start.toolName = "bash";
+				start.argsPayload = JSON.stringify({ command: `echo ${index}` });
+				const end = baseRecord("tool_end");
+				end.toolCallId = `call-${index}`;
+				end.toolName = "bash";
+				end.isError = false;
+				return [start, end];
+			};
+			// No user record: this mirrors the reader's tail window, where the
+			// whole slice belongs to one open turn.
+			const filePath = writeTranscript(root, [
+				assistant(1),
+				...tool(1),
+				assistant(2),
+				...tool(2),
+				assistant(3),
+			]);
+			const expanded = buildNativeFleetTranscript(mod as NativeTranscriptModule, {
+				filePath,
+				trustedRoots: [root],
+				width: 100,
+				expandedTools: false,
+				hideThinkingBlock: false,
+				theme,
+			});
+			const expandedPlain = stripAnsi(expanded.lines);
+			for (const index of [1, 2, 3]) {
+				assert.ok(expandedPlain.includes(`THINKING_${index}`), `thinking block ${index} must survive replay`);
+				assert.ok(expandedPlain.includes(`ANSWER_${index}`), `assistant answer ${index} must survive replay`);
+			}
+			assert.ok(expandedPlain.indexOf("THINKING_3") > expandedPlain.indexOf("THINKING_1"), "replay order must be preserved");
+
+			const collapsed = buildNativeFleetTranscript(mod as NativeTranscriptModule, {
+				filePath,
+				trustedRoots: [root],
+				width: 100,
+				expandedTools: false,
+				hideThinkingBlock: true,
+				thinkingLabel: "Thinking (t/T to expand)",
+				theme,
+			});
+			const collapsedPlain = stripAnsi(collapsed.lines);
+			assert.ok(collapsedPlain.includes("Thinking (t/T to expand)"), "collapsed view must label each thinking block");
+			assert.ok(!/THINKING_[123]/.test(collapsedPlain), "collapsed view must not leak thinking text");
+			assert.ok(collapsedPlain.includes("ANSWER_1") && collapsedPlain.includes("ANSWER_3"), "collapsing must not hide assistant answers");
+		} finally {
+			cleanup();
+		}
+	});
+
 	it("validates candidate modules through the structural export probe", async () => {
 		const mod = await loadNativeTranscriptSupport();
 		assert.ok(mod);

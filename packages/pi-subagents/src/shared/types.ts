@@ -2532,6 +2532,7 @@ export const FLEET_KEYBINDING_ACTIONS = [
 	"inspect",
 	"stop",
 	"toggleTools",
+	"toggleThinking",
 	"toggleRenderer",
 ] as const;
 

@@ -51,6 +51,34 @@ scrolling. Hosts keep ownership of terminal mouse-reporting setup, dialog
 chrome, focus behavior, input controls, session lifecycle, and cancellation
 policy. `Esc` handling is intentionally delegated to the host overlay.
 
+### History replay
+
+Hosts that rebuild a transcript from persisted records write entries through
+the public builder API (`appendEntry`, `ensureTurn`, `finishTurn`,
+`removeTranscriptTurn`, `ensureToolCall`, `upsertToolResult`, `appendNotice`).
+Text needs two different shapes:
+
+- `upsertText` merges per turn (latest wins) — for one message observed
+  repeatedly, e.g. live `message_update` records.
+- `appendText` / `appendAssistantMessage` never merge — for replaying several
+  finished assistant messages, so every thinking block and answer stays
+  visible instead of collapsing into the last one.
+
+```ts
+const turnId = ensureTurn(state);
+appendAssistantMessage(state, turnId, {
+  thinking: "first pass",
+  text: "writing the patch",
+});
+// later messages in the same turn stay separate entries
+appendAssistantMessage(state, turnId, { thinking: "verify", text: "done" });
+```
+
+`renderTranscriptLines`/`TranscriptViewport` accept `hideThinkingBlock` (with
+`thinkingLabel` as the collapsed label) so a host can present replayed thinking
+collapsed and offer its own expansion gesture; omitted keeps Pi's default
+(expanded).
+
 The transcript normalizes user/assistant events, streaming thinking and text,
 tool calls and results, and automatic retry notices. It bounds retained history
 (entries and total chars — raw tool data is uncapped by design) and sanitizes

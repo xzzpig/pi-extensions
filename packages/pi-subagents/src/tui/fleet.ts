@@ -53,6 +53,7 @@ export const DEFAULT_FLEET_KEYBINDINGS: Record<FleetKeybindingAction, string[]> 
 	inspect: ["return", "H"],
 	stop: ["D"],
 	toggleTools: ["x", "X", "ctrl+o"],
+	toggleThinking: ["t", "T"],
 	toggleRenderer: ["v", "V"],
 };
 
@@ -780,6 +781,7 @@ interface FleetTranscriptCache {
 	fingerprint: string;
 	width: number;
 	expandedTools: boolean;
+	expandedThinking: boolean;
 	conversationState: string;
 	hasContent: boolean;
 	warning?: string;
@@ -806,6 +808,8 @@ export class SubagentFleetComponent implements Component {
 	private bodyHeight = 8;
 	private lastRosterWidth: number | undefined;
 	private expandedTools = false;
+	/** Structured-view thinking visibility; collapsed by default (see spec). */
+	private expandedThinking = false;
 	/** Structured-view renderer selection; legacy is the always-available fallback. */
 	private rendererMode: "native" | "legacy" = "native";
 	/** undefined = still loading, null = unavailable (permanent for this inspector session). */
@@ -865,6 +869,8 @@ export class SubagentFleetComponent implements Component {
 				...(target.trustedFileRoot ? { trustedFileRoot: target.trustedFileRoot } : {}),
 				width,
 				expandedTools: this.expandedTools,
+				hideThinkingBlock: !this.expandedThinking,
+				thinkingLabel: this.thinkingToggleLabel(),
 				cwd: this.state.baseCwd,
 				theme: this.theme,
 			});
@@ -1288,6 +1294,14 @@ export class SubagentFleetComponent implements Component {
 			this.tui.requestRender();
 			return;
 		}
+		if (matchesFleetAction(data, this.keybindings, "toggleThinking")) {
+			// Structured view only: the legacy rail renderer carries no thinking
+			// entries, so the toggle stays inert there instead of erroring.
+			this.expandedThinking = !this.expandedThinking;
+			this.transcriptCache = undefined;
+			this.tui.requestRender();
+			return;
+		}
 		if (matchesFleetAction(data, this.keybindings, "inspect")) {
 			this.inspectSelectedHerdr();
 			return;
@@ -1330,7 +1344,8 @@ export class SubagentFleetComponent implements Component {
 			&& this.transcriptCache.path === target.path
 			&& this.transcriptCache.fingerprint === fingerprint
 			&& this.transcriptCache.width === width
-			&& this.transcriptCache.expandedTools === this.expandedTools) {
+			&& this.transcriptCache.expandedTools === this.expandedTools
+			&& this.transcriptCache.expandedThinking === this.expandedThinking) {
 			return {
 				body: [...this.transcriptCache.body],
 				conversationState: this.transcriptCache.conversationState,
@@ -1344,8 +1359,13 @@ export class SubagentFleetComponent implements Component {
 		const outcome = this.rendererMode === "native" && this.nativeModule
 			? this.nativeRenderedOutcome(this.nativeModule, target, width)
 			: this.legacyRenderedOutcome(target, width);
-		this.transcriptCache = { mode: this.rendererMode, path: target.path, fingerprint, width, expandedTools: this.expandedTools, ...outcome, body: [...outcome.body] };
+		this.transcriptCache = { mode: this.rendererMode, path: target.path, fingerprint, width, expandedTools: this.expandedTools, expandedThinking: this.expandedThinking, ...outcome, body: [...outcome.body] };
 		return outcome;
+	}
+
+	/** Label of a collapsed thinking block, carrying its own expansion hint. */
+	private thinkingToggleLabel(): string {
+		return `Thinking (${bindingLabel(this.keybindings, "toggleThinking")} to expand)`;
 	}
 
 	private promptAuditDetail(width: number): FleetDetailSections {
@@ -1457,7 +1477,7 @@ export class SubagentFleetComponent implements Component {
 			? ` j/k child · 1/2/3 view · g redo with guidance · c copy · wheel ↑↓ · Esc close Prompt Audit · ${position}`
 			: selected?.kind === "external"
 				? ` ${bindingLabel(this.keybindings, "selectUp")}/${bindingLabel(this.keybindings, "selectDown")} job · display-only · ${bindingLabel(this.keybindings, "refresh")} refresh · wheel ↑↓ · ${bindingLabel(this.keybindings, "close")} close · ${position}`
-				: ` ${bindingLabel(this.keybindings, "selectUp")}/${bindingLabel(this.keybindings, "selectDown")} agent · p Prompt Audit · ${bindingLabel(this.keybindings, "inspect")} Herdr · ${bindingLabel(this.keybindings, "steer")} steer · ${bindingLabel(this.keybindings, "stop")} stop · ${bindingLabel(this.keybindings, "toggleTools")} tools · ${bindingLabel(this.keybindings, "toggleRenderer")} view · ${bindingLabel(this.keybindings, "refresh")} refresh · wheel ↑↓ · ${bindingLabel(this.keybindings, "close")} close · ${position}`;
+				: ` ${bindingLabel(this.keybindings, "selectUp")}/${bindingLabel(this.keybindings, "selectDown")} agent · p Prompt Audit · ${bindingLabel(this.keybindings, "inspect")} Herdr · ${bindingLabel(this.keybindings, "steer")} steer · ${bindingLabel(this.keybindings, "stop")} stop · ${bindingLabel(this.keybindings, "toggleTools")} tools · ${bindingLabel(this.keybindings, "toggleThinking")} thinking · ${bindingLabel(this.keybindings, "toggleRenderer")} view · ${bindingLabel(this.keybindings, "refresh")} refresh · wheel ↑↓ · ${bindingLabel(this.keybindings, "close")} close · ${position}`;
 		lines.push(this.theme.fg("border", "│") + fit(this.theme.fg("dim", footer), innerWidth) + this.theme.fg("border", "│"));
 		lines.push(this.theme.fg("border", `╰${"─".repeat(innerWidth)}╯`));
 		return lines.map((line) => truncateToWidth(line, width));

@@ -72,6 +72,8 @@ Default keys:
 - `Shift+K`/`Shift+J` — scroll one line
 - `PgUp`/`PgDn` — scroll one page
 - `x`/`Ctrl+O` — toggle tool details
+- `t`/`T` — expand or collapse the replayed assistant thinking blocks
+- `v` — switch between the structured transcript and the plain-text view
 - `r` — refresh
 - `Esc` — close
 - `Enter` — open the selected inspectable async child in its child-specific Herdr inspector
@@ -80,6 +82,8 @@ Default keys:
 - `H` — open the selected active async child in a Herdr inspector pane (Herdr 0.7.5+)
 
 Set `fleetKeybindings` in the extension config to replace inspector-level keys when a terminal intercepts keys such as `PgUp`, `PgDn`, `Home`, or `End`. Prompt modes keep fixed keys such as `Esc`, `Enter`, `Tab`, and stop-confirmation `Y`/`N`.
+
+In the structured view every replayed assistant message keeps its own thinking block, collapsed by default to a `Thinking` label that names the expand key. The plain-text view (`v`) carries no thinking entries.
 
 `Ctrl+Alt+F` opens the same inspector even while a foreground turn is active and slash input is queued.
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.14.0] - 2026-09-13
+
+### Fixed
+
+- **The fleet inspector no longer drops replayed thinking and assistant messages.** The structured transcript view upserted thinking and assistant text per turn (`upsertText`, whose contract is latest-wins), so a whole child turn collapsed into its last thinking block and last answer — measured on real transcripts, 38 thinking blocks became 1 entry, and it rendered at the very top of the panel while the view auto-followed the bottom. Replay now appends one entry per persisted assistant message, opens a new turn after a finished answer (so the reader's tail window no longer needs the original user record to separate turns), and reads a 600-record window instead of 240 (still capped by the 2 MiB byte limit).
+
+### Added
+
+- **Thinking expansion in the fleet inspector.** Replayed thinking blocks are collapsed by default to a `Thinking (t/T to expand)` label; the new `toggleThinking` Fleet binding (`t`/`T`) expands and collapses them. The plain-text view (`v`) carries no thinking entries, so the toggle stays inert there.
+
 ## [0.13.0] - 2026-09-11
 
 ### Changed

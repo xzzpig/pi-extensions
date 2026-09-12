@@ -29,6 +29,13 @@ const REQUIRED_NATIVE_EXPORTS = [
 let nativeSupportPromise: Promise<NativeTranscriptModule | null> | undefined;
 
 /**
+ * Record window for the native transcript view. Larger than the legacy rail's
+ * 240-record tail so a replayed run still carries its user/turn boundaries and
+ * assistant messages; the shared reader keeps the 2 MiB byte cap on top.
+ */
+const NATIVE_MAX_RECORDS = 600;
+
+/**
  * Structural probe for a candidate transcript module: every export the native
  * renderer calls must be present. Exported pure so hosts and tests can check
  * arbitrary objects (e.g. simulating an older shared-library build).
@@ -63,6 +70,10 @@ export interface NativeFleetBuildInput {
 	trustedFileRoot?: string;
 	width: number;
 	expandedTools: boolean;
+	/** Render replayed thinking blocks collapsed to `thinkingLabel`. */
+	hideThinkingBlock?: boolean;
+	/** Collapsed-label text shown while `hideThinkingBlock` is set. */
+	thinkingLabel?: string;
 	cwd?: string;
 	maxRecords?: number;
 	theme: {
@@ -119,6 +130,34 @@ function parseArgsPayload(value: unknown): Record<string, unknown> | undefined {
 function stringValue(record: Record<string, unknown>, key: string): string | undefined {
 	const value = record[key];
 	return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+/**
+ * Writes one completed assistant message as its own entries. Prefers the
+ * append helper of newer shared-library builds and falls back to the
+ * always-required `appendEntry`, because `upsertText` would collapse a whole
+ * replayed turn into its last assistant message. */
+function appendAssistantMessage(
+	mod: NativeTranscriptModule,
+	state: TranscriptState,
+	turnId: number,
+	thinking: string,
+	text: string,
+): void {
+	const append = (mod as {
+		appendAssistantMessage?: (
+			state: TranscriptState,
+			turnId: number,
+			message: { thinking?: string; text?: string },
+			streaming?: boolean,
+		) => unknown;
+	}).appendAssistantMessage;
+	if (typeof append === "function") {
+		append(state, turnId, { thinking, text }, false);
+		return;
+	}
+	if (thinking) mod.appendEntry(state, { type: "thinking", turnId, text: thinking, streaming: false });
+	if (text) mod.appendEntry(state, { type: "assistant-text", turnId, text, streaming: false });
 }
 
 function nestedField(record: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
@@ -199,15 +238,18 @@ function ingestRecords(
 		}
 
 		if (role === "assistant") {
+			// A recorded turn holds many finished assistant messages (one per tool
+			// cycle). Each is appended as its own entry: merging them would leave
+			// only the last thinking block and last answer of the whole turn.
+			if (state.currentTurnId !== null && currentTurnHasFinishedAssistant) {
+				mod.finishTurn(state);
+			}
 			const turnId = mod.ensureTurn(state);
 			const parts = contentParts(message?.content);
 			const thinking = partsToThinking(parts);
 			const text = partsToText(parts);
-			if (thinking) mod.upsertText(state, turnId, "thinking", thinking, false);
-			if (text) {
-				mod.upsertText(state, turnId, "assistant-text", text, false);
-				currentTurnHasFinishedAssistant = true;
-			}
+			appendAssistantMessage(mod, state, turnId, thinking, text);
+			if (text) currentTurnHasFinishedAssistant = true;
 			continue;
 		}
 
@@ -318,7 +360,7 @@ export function buildNativeFleetTranscript(
 		trustedRoots: input.trustedRoots,
 		...(input.trustedFiles ? { trustedFiles: input.trustedFiles } : {}),
 		...(input.trustedFileRoot ? { trustedFileRoot: input.trustedFileRoot } : {}),
-		...(input.maxRecords !== undefined ? { maxRecords: input.maxRecords } : {}),
+		maxRecords: input.maxRecords ?? NATIVE_MAX_RECORDS,
 	};
 	const read = readTranscriptRecords(input.filePath, readOptions);
 	if (read.records.length === 0) {
@@ -356,6 +398,8 @@ export function buildNativeFleetTranscript(
 		width: input.width,
 		theme: input.theme,
 		toolComponents: registry,
+		...(input.hideThinkingBlock ? { hideThinkingBlock: true } : {}),
+		...(input.thinkingLabel ? { thinkingLabel: input.thinkingLabel } : {}),
 	});
 
 	const indicatorLines: string[] = [];

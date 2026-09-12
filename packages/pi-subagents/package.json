@@ -1,6 +1,6 @@
 {
   "name": "@xzzpig/pi-subagents",
-  "version": "0.13.0",
+  "version": "0.14.0",
   "description": "Pi extension for single-agent delegation and scripted multi-agent workflows",
   "author": "Nico Bailon",
   "license": "MIT",
@@ -92,7 +92,7 @@
     }
   },
   "dependencies": {
-    "@xzzpig/pi-components": "0.3.0",
+    "@xzzpig/pi-components": "0.4.0",
     "acorn": "8.18.0",
     "jiti": "2.7.0",
     "typebox": "1.1.38",

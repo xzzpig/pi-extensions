@@ -60,7 +60,7 @@ importers:
         specifier: '>=0.83.0 <1'
         version: 0.84.2(ws@8.21.2)(zod@4.4.3)
       '@xzzpig/pi-components':
-        specifier: 0.3.0
+        specifier: 0.4.0
         version: link:../pi-components
     devDependencies:
       '@earendil-works/pi-coding-agent':
@@ -297,7 +297,7 @@ importers:
   packages/pi-subagents:
     dependencies:
       '@xzzpig/pi-components':
-        specifier: 0.3.0
+        specifier: 0.4.0
         version: link:../pi-components
       acorn:
         specifier: 8.18.0

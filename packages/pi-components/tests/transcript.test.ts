@@ -4,6 +4,7 @@ import {
   type AgentSessionEvent,
 } from "@earendil-works/pi-coding-agent";
 import {
+  appendAssistantMessage,
   appendEntry,
   createTranscriptState,
   ensureToolCall,
@@ -29,6 +30,9 @@ const theme = {
 };
 
 const event = (value: unknown): AgentSessionEvent => value as AgentSessionEvent;
+
+// Composed at runtime so no control character appears in this source file.
+const ANSI_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
 
 beforeEach(() => {
   initTheme();
@@ -297,7 +301,7 @@ describe("native tool components", () => {
       theme: theme as never,
       toolComponents: transcript.toolComponents,
     }).join("\n");
-    const plain = rendered.replace(/\x1b\[[0-9;]*m/g, "");
+    const plain = rendered.replace(ANSI_PATTERN, "");
     expect(plain).toContain("README.md");
     expect(plain).toContain("contents");
   });
@@ -434,7 +438,7 @@ describe("transcript rendering", () => {
       width: 80,
       theme: theme as never,
     }).join("\n");
-    const plain = rendered.replace(/\x1b\[[0-9;]*m/g, "");
+    const plain = rendered.replace(ANSI_PATTERN, "");
     expect(plain).toContain("const answer = 42;");
     expect(rendered).toContain("\x1b[38;2;");
   });
@@ -750,5 +754,86 @@ describe("historical record ingestion (builder API)", () => {
     expect(
       state.entries.filter((entry) => entry.turnId === turnId),
     ).toHaveLength(0);
+  });
+
+  it("keeps every replayed assistant message of one turn", () => {
+    const state = createTranscriptState();
+    const turnId = ensureTurn(state);
+    for (const index of [1, 2, 3]) {
+      appendAssistantMessage(state, turnId, {
+        thinking: `THINK_${index}`,
+        text: `ANSWER_${index}`,
+      });
+      ensureToolCall(state, turnId, `call-${index}`, "bash", {
+        command: `echo ${index}`,
+      });
+    }
+
+    const thinkingEntries = state.entries.filter(
+      (entry) => entry.type === "thinking",
+    );
+    expect(thinkingEntries.map((entry) => entry.text)).toEqual([
+      "THINK_1",
+      "THINK_2",
+      "THINK_3",
+    ]);
+    expect(thinkingEntries.every((entry) => entry.streaming === false)).toBe(
+      true,
+    );
+
+    const rendered = renderTranscriptLines(state.entries, {
+      width: 100,
+      theme: theme as never,
+    }).join("\n");
+    expect(rendered).toContain("THINK_1");
+    expect(rendered).toContain("THINK_2");
+    expect(rendered).toContain("THINK_3");
+    expect(rendered.indexOf("THINK_3")).toBeGreaterThan(
+      rendered.indexOf("THINK_1"),
+    );
+
+    // The contrast that motivated this API: upsert-style replay (what a host
+    // gets from `upsertText`) keeps only the last message of a turn.
+    const upserted = createTranscriptState();
+    const upsertTurn = ensureTurn(upserted);
+    for (const index of [1, 2, 3]) {
+      upsertText(upserted, upsertTurn, "thinking", `THINK_${index}`, false);
+    }
+    expect(
+      upserted.entries.filter((entry) => entry.type === "thinking"),
+    ).toHaveLength(1);
+  });
+
+  it("collapses thinking on request and expands it again", () => {
+    const state = createTranscriptState();
+    const turnId = ensureTurn(state);
+    appendAssistantMessage(state, turnId, {
+      thinking: "COLLAPSIBLE_THINKING",
+      text: "VISIBLE_ANSWER",
+    });
+
+    const collapsed = renderTranscriptLines(state.entries, {
+      width: 100,
+      theme: theme as never,
+      hideThinkingBlock: true,
+      thinkingLabel: "Thinking (collapsed)",
+    }).join("\n");
+    expect(collapsed).toContain("Thinking (collapsed)");
+    expect(collapsed).not.toContain("COLLAPSIBLE_THINKING");
+    expect(collapsed).toContain("VISIBLE_ANSWER");
+
+    const expanded = renderTranscriptLines(state.entries, {
+      width: 100,
+      theme: theme as never,
+      hideThinkingBlock: false,
+    }).join("\n");
+    expect(expanded).toContain("COLLAPSIBLE_THINKING");
+
+    // Omitted option keeps Pi's default (expanded) for existing hosts.
+    const defaulted = renderTranscriptLines(state.entries, {
+      width: 100,
+      theme: theme as never,
+    }).join("\n");
+    expect(defaulted).toContain("COLLAPSIBLE_THINKING");
   });
 });
