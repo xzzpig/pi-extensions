@@ -168,3 +168,20 @@ test("only events for the requested goal are included", () => {
 	assert.equal(items.length, 1);
 	assert.equal(items[0]!.at, "2026-01-01T09:00:00.000Z");
 });
+
+test("audit spend maps to a readable separate-account line", () => {
+	const items = deriveGoalActivity([
+		ev("audit_usage", "2026-01-01T09:08:30.000Z", {
+			tokens: 4_498,
+			inputTokens: 3_981,
+			outputTokens: 221,
+			cacheReadTokens: 256,
+			cacheWriteTokens: 40,
+			costUsd: 0.00774024,
+			turns: 1,
+		}),
+	], "g1");
+	assert.equal(items.length, 1);
+	assert.equal(items[0]!.kind, "audit");
+	assert.equal(items[0]!.text, "Independent review cost $0.0077 (4,498 tokens).");
+});

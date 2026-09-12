@@ -784,3 +784,146 @@ test("I-14: progress observer errors cannot change a structured verdict", async 
 	});
 	assert.equal(result.approved, true);
 });
+
+// ── Child usage capture (goal-auditor must not drop response.usage) ──────────
+
+const DELEGATION_USAGE = {
+	input: 3_981,
+	output: 221,
+	cacheRead: 256,
+	cacheWrite: 0,
+	cost: 0.00774024,
+	turns: 1,
+	toolCalls: 4,
+	durationMs: 1_234,
+};
+
+function respondWithUsage(
+	events: FakeEvents,
+	response: Record<string, unknown>,
+): void {
+	events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (value) => {
+		const request = value as { requestId: string; ownerRunId: string; nodeId: string };
+		events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+			...identity(request),
+			...response,
+		});
+	});
+}
+
+test("usage: every terminal status carries response.usage into GoalAuditorResult", async () => {
+	const approvedEvents = new FakeEvents();
+	respondWithUsage(approvedEvents, {
+		status: "completed",
+		model: "fixture/auditor",
+		usage: DELEGATION_USAGE,
+		result: { kind: "structured", value: { verdict: "approved", report: "Verified.", findings: [] } },
+	});
+	const approved = await runGoalCompletionAuditor({ ...baseArgs(approvedEvents) });
+	assert.equal(approved.approved, true);
+	assert.deepEqual(approved.usage, DELEGATION_USAGE);
+
+	const disapprovedEvents = new FakeEvents();
+	respondWithUsage(disapprovedEvents, {
+		status: "completed",
+		usage: { ...DELEGATION_USAGE, cost: 0.5, turns: 3 },
+		result: { kind: "structured", value: { verdict: "disapproved", report: "Missing evidence.", findings: [] } },
+	});
+	const disapproved = await runGoalCompletionAuditor({ ...baseArgs(disapprovedEvents) });
+	assert.equal(disapproved.disapproved, true);
+	assert.deepEqual(disapproved.usage, { ...DELEGATION_USAGE, cost: 0.5, turns: 3 });
+
+	const failedEvents = new FakeEvents();
+	respondWithUsage(failedEvents, { status: "failed", error: "provider exploded", usage: DELEGATION_USAGE });
+	const failed = await runGoalCompletionAuditor({ ...baseArgs(failedEvents) });
+	assert.equal(failed.approved, false);
+	assert.match(failed.error ?? "", /provider exploded/);
+	assert.deepEqual(failed.usage, DELEGATION_USAGE);
+});
+
+test("usage: an unacknowledged terminal timeout still charges the child usage it received", async () => {
+	const events = new FakeEvents();
+	events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (value) => {
+		events.emit(SUBAGENT_DELEGATION_STARTED_EVENT, identity(value as { requestId: string; ownerRunId: string; nodeId: string }));
+	});
+	events.on(SUBAGENT_DELEGATION_CANCEL_EVENT, (value) => {
+		events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+			...(value as object),
+			status: "cancelled",
+			usage: DELEGATION_USAGE,
+		});
+	});
+	const result = await runGoalCompletionAuditor({
+		...baseArgs(events),
+		timeouts: { startedMs: 20, terminalMs: 1, cancellationMs: 20 },
+	});
+	assert.match(result.error ?? "", /timeout and was cancelled/);
+	assert.deepEqual(result.usage, DELEGATION_USAGE, "a timed-out audit still reports what the child already spent");
+});
+
+test("usage: an aborted audit keeps the usage of the acknowledged cancellation", async () => {
+	const events = new FakeEvents();
+	const controller = new AbortController();
+	events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (value) => {
+		events.emit(SUBAGENT_DELEGATION_STARTED_EVENT, identity(value as { requestId: string; ownerRunId: string; nodeId: string }));
+	});
+	events.on(SUBAGENT_DELEGATION_CANCEL_EVENT, (value) => {
+		events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+			...(value as object),
+			status: "cancelled",
+			usage: DELEGATION_USAGE,
+		});
+	});
+	const pending = runGoalCompletionAuditor({
+		...baseArgs(events),
+		signal: controller.signal,
+		timeouts: { startedMs: 100, terminalMs: 100, cancellationMs: 20 },
+	});
+	controller.abort();
+	const result = await pending;
+	assert.equal(result.cancelled, true);
+	assert.deepEqual(result.usage, DELEGATION_USAGE);
+});
+
+test("usage: absent or malformed usage stays absent instead of entering accounting", async () => {
+	const absentEvents = new FakeEvents();
+	respondWithUsage(absentEvents, {
+		status: "completed",
+		result: { kind: "structured", value: { verdict: "approved", report: "Verified.", findings: [] } },
+	});
+	const absent = await runGoalCompletionAuditor({ ...baseArgs(absentEvents) });
+	assert.equal("usage" in absent, false);
+
+	for (const malformed of [
+		"not-an-object",
+		{ ...DELEGATION_USAGE, cost: -1 },
+		{ ...DELEGATION_USAGE, input: Number.NaN },
+		{ ...DELEGATION_USAGE, cacheWrite: undefined },
+		{ ...DELEGATION_USAGE, toolCalls: "4" },
+	]) {
+		const events = new FakeEvents();
+		respondWithUsage(events, {
+			status: "completed",
+			usage: malformed,
+			result: { kind: "structured", value: { verdict: "approved", report: "Verified.", findings: [] } },
+		});
+		const result = await runGoalCompletionAuditor({ ...baseArgs(events) });
+		assert.equal("usage" in result, false, `must ignore malformed usage ${JSON.stringify(malformed)}`);
+	}
+});
+
+test("usage: an invalid_request terminal response cannot inject usage", async () => {
+	const events = new FakeEvents();
+	events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (value) => {
+		const request = value as { requestId: string; ownerRunId: string; nodeId: string };
+		events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+			...identity(request),
+			status: "invalid_request",
+			error: "fixture rejected request",
+			usage: DELEGATION_USAGE,
+		});
+	});
+	const result = await runGoalCompletionAuditor({ ...baseArgs(events) });
+	assert.equal(result.approved, false);
+	assert.equal("usage" in result, false);
+});

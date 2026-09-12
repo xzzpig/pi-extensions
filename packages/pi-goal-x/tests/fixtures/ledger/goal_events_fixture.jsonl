@@ -7,6 +7,7 @@
 {"type":"completion_requested","goalId":"goal-a","summary":"All steps verified","at":"2026-08-03T09:05:00.000Z"}
 {"type":"audit_started","goalId":"goal-a","provider":"anthropic","model":"claude","thinkingLevel":"medium","at":"2026-08-03T09:05:01.000Z"}
 {"type":"audit_result","goalId":"goal-a","verdict":"approved","report":"<approved/> all requirements met","at":"2026-08-03T09:05:02.000Z"}
+{"type":"audit_usage","goalId":"goal-a","tokens":4498,"inputTokens":3981,"outputTokens":221,"cacheReadTokens":256,"cacheWriteTokens":40,"costUsd":0.00774024,"turns":1,"at":"2026-08-03T09:05:02.500Z"}
 {"type":"audit_skipped","goalId":"goal-a","reason":"disabled","provider":"anthropic","model":"claude","thinkingLevel":"medium","at":"2026-08-03T09:05:03.000Z"}
 {"type":"goal_completed","goalId":"goal-a","archivePath":".pi/goals/archived/goal_2026080317060000_goal-a.md","at":"2026-08-03T09:06:00.000Z"}
 {"type":"goal_aborted","goalId":"goal-b","reason":"obsolete","archivePath":".pi/goals/archived/goal_2026080317070000_goal-b.md","at":"2026-08-03T09:07:00.000Z"}

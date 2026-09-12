@@ -1,5 +1,5 @@
 import { type AgentToolResult, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { GOAL_AUDIT_ENTRY, detailedSummary, goalDetails } from "./goal-format.ts";
+import { GOAL_AUDIT_ENTRY, detailedSummary, formatAuditUsage, goalDetails } from "./goal-format.ts";
 import {
 	buildCompletionReport,
 	buildTaskSummary,
@@ -16,6 +16,43 @@ import { deleteChangeBaseline } from "./goal-change-baseline.ts";
 import { showEscapeDialog, type EscapeDialogResult } from "./widgets/goal-escape-dialog.ts";
 import type { GoalCore } from "./goal-state.ts";
 import type { GoalMutationOutcome } from "./goal-service.ts";
+import type { SubagentDelegationUsage } from "@xzzpig/pi-subagents/delegation";
+
+/**
+ * Project pi-subagents child usage into pi's tool-result `Usage` shape so the
+ * host accounts the audit spend in this session (footer `$`, `/session` Cost,
+ * `getSessionStats`). pi only counts a tool result that carries `totalTokens`
+ * and an object `cost` with a `total`; pi-subagents' own `Usage` reports `cost`
+ * as a plain number, so it cannot be attached as-is. Absent usage leaves the
+ * result untouched, so every completion branch keeps its previous shape when
+ * the delegation reported no usage.
+ */
+function withAuditorUsage<T extends AgentToolResult<unknown>>(result: T, usage: SubagentDelegationUsage | undefined): T {
+	if (!usage) return result;
+	return {
+		...result,
+		usage: {
+			input: usage.input,
+			output: usage.output,
+			cacheRead: usage.cacheRead,
+			cacheWrite: usage.cacheWrite,
+			totalTokens: usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: usage.cost },
+		},
+	};
+}
+
+/** Total child tokens the auditor burned, across every counter the child reported. */
+function auditorTokens(usage: SubagentDelegationUsage | undefined): number {
+	if (!usage) return 0;
+	return usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+}
+
+/** Audit-card line for the child spend, or undefined when the child reported none. */
+function auditorUsageLine(usage: SubagentDelegationUsage | undefined): string | undefined {
+	if (!usage) return undefined;
+	return formatAuditUsage({ tokens: auditorTokens(usage), costUsd: usage.cost, turns: usage.turns });
+}
 
 // update_goal(complete) execution path: validates the completable state,
 // runs the independent auditor (or the disabled/legacy-skip branches), and
@@ -293,10 +330,34 @@ if (settings.disabled === true) {
 		if (core.auditAbortController === completionAuditController) core.auditAbortController = null;
 		core.stopAuditAnimation();
 	}
+
+	// Child-session accounting. The delegated auditor runs in its own pi session,
+	// so its spend never reaches this session's own turn accounting. Record it as
+	// a separate ledger entry (goal.usage.tokensUsed stays parent-turn-only, so no
+	// token budget changes) and surface the same numbers on the audit card below.
+	const auditUsage = auditor.usage;
+	if (auditUsage) {
+		try {
+			core.goalService.appendEvents(ctx, [{
+				type: "audit_usage",
+				goalId: auditTarget.id,
+				tokens: auditorTokens(auditUsage),
+				inputTokens: auditUsage.input,
+				outputTokens: auditUsage.output,
+				cacheReadTokens: auditUsage.cacheRead,
+				cacheWriteTokens: auditUsage.cacheWrite,
+				costUsd: auditUsage.cost,
+				turns: auditUsage.turns,
+				at: nowIso(),
+			}]);
+		} catch {
+			// Ledger append failure should not block completion
+		}
+	}
 	if (!core.isFocusedOperationCurrent(completionFocus)) {
 		core.auditProgress = null;
 		core.goalWidgetComponentRef.current?.invalidate();
-		return core.focusedOperationCancelledResult("Goal completion", completionFocus);
+		return withAuditorUsage(core.focusedOperationCancelledResult("Goal completion", completionFocus), auditor.usage);
 	}
 
 	// If the audit was aborted by the user (Esc), show a TUI dialog letting
@@ -319,7 +380,7 @@ if (settings.disabled === true) {
 		// Consume the transient abort state recorded by the low-level callback.
 		core.auditAborted = false;
 		if (!core.isFocusedOperationCurrent(completionFocus)) {
-			return core.focusedOperationCancelledResult("Goal completion", completionFocus);
+			return withAuditorUsage(core.focusedOperationCancelledResult("Goal completion", completionFocus), auditor.usage);
 		}
 
 		if (userChoice === "complete_without_audit") {
@@ -347,22 +408,22 @@ if (settings.disabled === true) {
 			// Deferred archival: set goal complete in memory + write the active file
 			// WITHOUT archiving; archival happens at turn_end so the agent can
 			// recognise the skipped audit before the goal is archived.
-			return commitGoalCompletion(core, ctx, {
+			return withAuditorUsage(commitGoalCompletion(core, ctx, {
 				goal: auditTarget,
 				completionFocus,
 				auditSkippedReason: "auditor bypassed (user pressed Escape during audit)",
 				terminate: false,
 				trailing: ["The goal is complete. Provide a final summary of what was accomplished."],
-			});
+			}), auditor.usage);
 		}
 		// ── Continue working ────────────────────────────────────────
 		// The goal stays active: no pause, no stop marker, no skip event.
 		core.goalWidgetComponentRef.current?.invalidate();
 		core.updateUI(ctx);
-		return {
+		return withAuditorUsage({
 			content: [{ type: "text", text: "Audit aborted — the goal remains active and work continues." }],
 			details: goalDetails(auditTarget),
-		};
+		}, auditor.usage);
 	}
 
 	// Show final audit output briefly before clearing
@@ -402,6 +463,7 @@ if (settings.disabled === true) {
 			"Goal completion rejected by independent auditor.",
 			auditor.model ? `Auditor model: ${auditor.model}${auditor.thinkingLevel ? `:${auditor.thinkingLevel}` : ""}` : undefined,
 			auditor.error ? `Auditor error: ${auditor.error}` : undefined,
+			auditorUsageLine(auditUsage),
 			"",
 			auditor.output || "Auditor produced no approval marker.",
 		].filter((line): line is string => line !== undefined).join("\n");
@@ -411,14 +473,15 @@ if (settings.disabled === true) {
 			display: true,
 			details: { phase: "rejected", goalId: auditTarget.id, auditor: auditor.model },
 		});
-		return {
+		return withAuditorUsage({
 			content: [{ type: "text", text: rejectionText }],
 			details: goalDetails(core.state.goal),
-		};
+		}, auditor.usage);
 	}
 	const approvalText = [
 		"Auditor: I approve this completion claim.",
 		auditor.model ? `Auditor model: ${auditor.model}${auditor.thinkingLevel ? `:${auditor.thinkingLevel}` : ""}` : undefined,
+		auditorUsageLine(auditUsage),
 		"",
 		auditor.output || "Auditor approved completion.",
 	].filter((line): line is string => line !== undefined).join("\n");
@@ -434,9 +497,9 @@ if (settings.disabled === true) {
 	// Deferred archival happens inside commitGoalCompletion; archival occurs at
 	// turn_end so the agent can see the auditor approval before the goal is
 	// archived.
-	return commitGoalCompletion(core, ctx, {
+	return withAuditorUsage(commitGoalCompletion(core, ctx, {
 		goal: auditTarget,
 		completionFocus,
 		auditorReport: auditor.output,
-	});
+	}), auditor.usage);
 }

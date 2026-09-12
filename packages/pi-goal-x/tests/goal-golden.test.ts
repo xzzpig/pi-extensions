@@ -283,12 +283,12 @@ test("golden: fixture ledger reads every event type and counts malformed lines",
 			readFileSync(fixturePath("ledger/goal_events_fixture.jsonl"), "utf8"),
 		);
 		const { events, malformed } = readGoalLedger({ cwd });
-		assert.equal(events.length, 17, "all current event types must read");
+		assert.equal(events.length, 18, "all current event types must read");
 		assert.equal(malformed, 1, "the non-JSON line must be counted as malformed");
 
 		const types = events.map((e) => e.type).sort();
 		assert.deepEqual(types, [
-			"audit_result", "audit_skipped", "audit_started", "completion_requested",
+			"audit_result", "audit_skipped", "audit_started", "audit_usage", "completion_requested",
 			"goal_aborted", "goal_completed", "goal_created", "goal_focused",
 			"goal_paused", "goal_resumed", "goal_tweaked", "goal_unfocused",
 			"task_complete", "task_list_set", "task_reopened", "task_skipped",

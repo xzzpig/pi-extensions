@@ -48,6 +48,21 @@ export function usageLines(goal: GoalRecord): string[] {
 	];
 }
 
+/**
+ * One-line summary of what the independent auditor's child session spent.
+ *
+ * This is a separate account from `goal.usage.tokensUsed`, which only tracks
+ * this session's own turns: the delegated audit runs in its own child session,
+ * so its spend is recorded in the ledger (`audit_usage`) and shown on the audit
+ * card instead of changing the goal's token budget.
+ */
+export function formatAuditUsage(usage: { tokens: number; costUsd: number; turns?: number }): string {
+	const turns = Math.max(0, Math.floor(usage.turns ?? 0));
+	let turnLabel = "";
+	if (turns > 0) turnLabel = turns === 1 ? ` · ${turns} turn` : ` · ${turns} turns`;
+	return `Audit cost: $${Math.max(0, usage.costUsd).toFixed(4)} · ${formatTokenValue(usage.tokens)}${turnLabel}`;
+}
+
 export function detailedSummary(goal: GoalRecord | null): string {
 	if (!goal) return "No goal is set. Use /goal <objective> or /sisyphus <objective> to start immediately.";
 	const lines = [

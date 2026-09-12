@@ -275,3 +275,322 @@ test("D-07/I-06/I-10: disapproved structured delegation keeps the goal active wi
 		rmSync(cwd, { recursive: true, force: true });
 	}
 });
+
+// ── Child usage accounting (audit spend must reach the parent session) ───────
+
+const CHILD_USAGE = {
+	input: 3_981,
+	output: 221,
+	cacheRead: 256,
+	cacheWrite: 40,
+	cost: 0.00774024,
+	turns: 1,
+	toolCalls: 4,
+	durationMs: 1_234,
+};
+
+/** pi-ai `Usage` shape pi counts on a tool result: object cost with a total. */
+const EXPECTED_TOOL_USAGE = {
+	input: 3_981,
+	output: 221,
+	cacheRead: 256,
+	cacheWrite: 40,
+	totalTokens: 4_498,
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.00774024 },
+};
+
+function auditorAgentFile(cwd: string): void {
+	mkdirSync(path.join(cwd, ".pi", "agents"), { recursive: true });
+	writeFileSync(path.join(cwd, ".pi", "agents", "goal-auditor.md"), `---
+name: goal-auditor
+description: Test completion auditor
+tools: read, grep, find, ls, bash, report_auditor_progress
+---
+
+Test auditor.
+`, "utf8");
+}
+
+test("usage: an approved completion reports the auditor child usage in pi's tool-result shape", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-delegated-usage-approved-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		const harness = createHarness(cwd);
+		auditorAgentFile(cwd);
+		harness.events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (value) => {
+			const identity = value as { requestId: string; ownerRunId: string; nodeId: string };
+			harness.events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+				...identity,
+				status: "completed",
+				model: "fixture/auditor",
+				usage: CHILD_USAGE,
+				result: { kind: "structured", value: { verdict: "approved", report: "Verified.", findings: [] } },
+			});
+		});
+		await start(harness);
+		const updateGoal = harness.tools.get("update_goal")!;
+		const result = await (updateGoal.execute as any)("complete-usage-approved", { status: "complete" }, new AbortController().signal, undefined, harness.ctx);
+
+		assert.deepEqual(result.usage, EXPECTED_TOOL_USAGE);
+		assert.equal(harness.core.state.goal?.status, "complete");
+		assert.ok(result.details, "usage must not replace the existing result details");
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("usage: a rejected completion still reports what the auditor already spent", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-delegated-usage-rejected-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		const harness = createHarness(cwd);
+		auditorAgentFile(cwd);
+		harness.events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (value) => {
+			const identity = value as { requestId: string; ownerRunId: string; nodeId: string };
+			harness.events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+				...identity,
+				status: "completed",
+				usage: CHILD_USAGE,
+				result: { kind: "structured", value: { verdict: "disapproved", report: "Incomplete.", findings: ["Missing tests."] } },
+			});
+		});
+		await start(harness);
+		const updateGoal = harness.tools.get("update_goal")!;
+		const result = await (updateGoal.execute as any)("complete-usage-rejected", { status: "complete" }, new AbortController().signal, undefined, harness.ctx);
+
+		assert.deepEqual(result.usage, EXPECTED_TOOL_USAGE);
+		assert.equal(harness.core.state.goal?.status, "active");
+		assert.match(result.content[0]?.text ?? "", /Missing tests/);
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("usage: a delegation without usage leaves the completion result unchanged", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-delegated-usage-absent-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		const harness = createHarness(cwd);
+		auditorAgentFile(cwd);
+		harness.events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (value) => {
+			const identity = value as { requestId: string; ownerRunId: string; nodeId: string };
+			harness.events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+				...identity,
+				status: "completed",
+				result: { kind: "structured", value: { verdict: "approved", report: "Verified.", findings: [] } },
+			});
+		});
+		await start(harness);
+		const updateGoal = harness.tools.get("update_goal")!;
+		const result = await (updateGoal.execute as any)("complete-usage-absent", { status: "complete" }, new AbortController().signal, undefined, harness.ctx);
+
+		assert.equal("usage" in result, false);
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("usage: the aborted-audit branches (continue working / Escape bypass) keep the child usage", async () => {
+	for (const choice of ["continue_working", "complete_without_audit"] as const) {
+		const cwd = mkdtempSync(path.join(tmpdir(), `goal-delegated-usage-${choice}-`));
+		mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+		try {
+			const harness = createHarness(cwd);
+			auditorAgentFile(cwd);
+			(harness.ctx as any).hasUI = true;
+			(harness.ctx.ui as any).custom = async () => choice;
+			let release: (() => void) | undefined;
+			const started = new Promise<void>((resolve) => { release = resolve; });
+			harness.events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (value) => {
+				harness.events.emit(SUBAGENT_DELEGATION_STARTED_EVENT, value as { requestId: string; ownerRunId: string; nodeId: string });
+				release?.();
+			});
+			harness.events.on("prompt-template:subagent:cancel", (value) => {
+				harness.events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+					...(value as object),
+					status: "cancelled",
+					usage: CHILD_USAGE,
+				});
+			});
+			await start(harness);
+			const updateGoal = harness.tools.get("update_goal")!;
+			const pending = (updateGoal.execute as any)(`complete-${choice}`, { status: "complete" }, new AbortController().signal, undefined, harness.ctx);
+			await started;
+			harness.core.abortAudit(harness.ctx);
+			const result = await pending;
+
+			assert.deepEqual(result.usage, EXPECTED_TOOL_USAGE, `${choice} must still report the aborted child's spend`);
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	}
+});
+
+test("usage: audit spend is a separate ledger account and never enters goal token usage", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-delegated-usage-ledger-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		const harness = createHarness(cwd);
+		auditorAgentFile(cwd);
+		harness.events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (value) => {
+			const identity = value as { requestId: string; ownerRunId: string; nodeId: string };
+			harness.events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+				...identity,
+				status: "completed",
+				model: "fixture/auditor",
+				usage: CHILD_USAGE,
+				result: { kind: "structured", value: { verdict: "approved", report: "Verified.", findings: [] } },
+			});
+		});
+		await start(harness);
+		const before = harness.core.state.goal?.usage.tokensUsed;
+		const updateGoal = harness.tools.get("update_goal")!;
+		const result = await (updateGoal.execute as any)("complete-usage-ledger", { status: "complete" }, new AbortController().signal, undefined, harness.ctx);
+		const after = harness.core.state.goal?.usage.tokensUsed;
+
+		assert.equal(before, 0);
+		assert.equal(after, before, "child-session spend must not change goal.usage.tokensUsed (token budget stays parent-turn-only)");
+
+		const events = ledgerEvents(cwd);
+		const usageEvent = events.find((entry) => entry.type === "audit_usage") as Record<string, unknown> | undefined;
+		assert.ok(usageEvent, "the audit spend must be recorded as its own durable account");
+		assert.equal(usageEvent.goalId, harness.goal.id);
+		assert.equal(usageEvent.tokens, 4_498);
+		assert.equal(usageEvent.inputTokens, 3_981);
+		assert.equal(usageEvent.outputTokens, 221);
+		assert.equal(usageEvent.cacheReadTokens, 256);
+		assert.equal(usageEvent.cacheWriteTokens, 40);
+		assert.equal(usageEvent.costUsd, 0.00774024);
+		assert.equal(usageEvent.turns, 1);
+		assert.equal(typeof usageEvent.at, "string");
+
+		// The approval card is enqueued and flushed on the next settled turn; it
+		// carries the same spend line the ledger records.
+		await harness.handlers.get("agent_settled")?.({}, harness.ctx);
+		const card = harness.messages
+			.map((message) => (message as { content?: unknown }).content)
+			.find((content) => typeof content === "string" && content.includes("I approve this completion claim"));
+		assert.match(String(card), /Audit cost: \$0\.0077 · 4\.5K \(4,498\) tokens · 1 turn/);
+		assert.match(result.content[0]?.text ?? "", /Goal audit approved/);
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("usage: rejected and bypassed audits still charge the ledger account", async () => {
+	for (const verdict of ["disapproved", "bypass"] as const) {
+		const cwd = mkdtempSync(path.join(tmpdir(), `goal-delegated-usage-ledger-${verdict}-`));
+		mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+		try {
+			const harness = createHarness(cwd);
+			auditorAgentFile(cwd);
+			if (verdict === "bypass") {
+				(harness.ctx as any).hasUI = true;
+				(harness.ctx.ui as any).custom = async () => "complete_without_audit";
+				let release: (() => void) | undefined;
+				const started = new Promise<void>((resolve) => { release = resolve; });
+				harness.events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (value) => {
+					harness.events.emit(SUBAGENT_DELEGATION_STARTED_EVENT, value as { requestId: string; ownerRunId: string; nodeId: string });
+					release?.();
+				});
+				harness.events.on("prompt-template:subagent:cancel", (value) => {
+					harness.events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, { ...(value as object), status: "cancelled", usage: CHILD_USAGE });
+				});
+				await start(harness);
+				const updateGoal = harness.tools.get("update_goal")!;
+				const pending = (updateGoal.execute as any)(`complete-usage-${verdict}`, { status: "complete" }, new AbortController().signal, undefined, harness.ctx);
+				await started;
+				harness.core.abortAudit(harness.ctx);
+				await pending;
+			} else {
+				harness.events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (value) => {
+					const identity = value as { requestId: string; ownerRunId: string; nodeId: string };
+					harness.events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+						...identity,
+						status: "completed",
+						usage: CHILD_USAGE,
+						result: { kind: "structured", value: { verdict: "disapproved", report: "Incomplete.", findings: [] } },
+					});
+				});
+				await start(harness);
+				const updateGoal = harness.tools.get("update_goal")!;
+				const result = await (updateGoal.execute as any)(`complete-usage-${verdict}`, { status: "complete" }, new AbortController().signal, undefined, harness.ctx);
+				assert.match(result.content[0]?.text ?? "", /Audit cost: \$0\.0077/, "rejected audits still report their spend");
+			}
+			const usageEvent = ledgerEvents(cwd).find((entry) => entry.type === "audit_usage") as Record<string, unknown> | undefined;
+			assert.ok(usageEvent, `${verdict} must record the child spend`);
+			assert.equal(usageEvent.costUsd, 0.00774024, `${verdict} must record the child spend`);
+			assert.equal(harness.core.state.goal?.usage.tokensUsed, 0, `${verdict} must not touch goal.usage.tokensUsed`);
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	}
+});
+
+test("usage: both focused-cancel returns keep the auditor usage", async () => {
+	// (a) Focus lost while the audit ran — the post-audit focus check.
+	{
+		const cwd = mkdtempSync(path.join(tmpdir(), "goal-delegated-usage-focus-post-"));
+		mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+		try {
+			const harness = createHarness(cwd);
+			auditorAgentFile(cwd);
+			harness.events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (value) => {
+				const identity = value as { requestId: string; ownerRunId: string; nodeId: string };
+				harness.events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+					...identity,
+					status: "completed",
+					usage: CHILD_USAGE,
+					result: { kind: "structured", value: { verdict: "disapproved", report: "Incomplete.", findings: [] } },
+				});
+				// The user focused another goal (or cleared focus) while the audit ran.
+				harness.core.assignFocusedGoalId(null);
+			});
+			await start(harness);
+			const updateGoal = harness.tools.get("update_goal")!;
+			const result = await (updateGoal.execute as any)("complete-usage-focus-post", { status: "complete" }, new AbortController().signal, undefined, harness.ctx);
+
+			assert.match(result.content[0]?.text ?? "", /no longer focused in this session/);
+			assert.equal(result.terminate, true);
+			assert.deepEqual(result.usage, EXPECTED_TOOL_USAGE, "a cancelled completion still reports the audit spend");
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	}
+
+	// (b) Focus lost while the Escape dialog was open — the inner branch check.
+	{
+		const cwd = mkdtempSync(path.join(tmpdir(), "goal-delegated-usage-focus-escape-"));
+		mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+		try {
+			const harness = createHarness(cwd);
+			auditorAgentFile(cwd);
+			(harness.ctx as any).hasUI = true;
+			(harness.ctx.ui as any).custom = async () => {
+				harness.core.assignFocusedGoalId(null);
+				return "continue_working";
+			};
+			let release: (() => void) | undefined;
+			const started = new Promise<void>((resolve) => { release = resolve; });
+			harness.events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (value) => {
+				harness.events.emit(SUBAGENT_DELEGATION_STARTED_EVENT, value as { requestId: string; ownerRunId: string; nodeId: string });
+				release?.();
+			});
+			harness.events.on("prompt-template:subagent:cancel", (value) => {
+				harness.events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, { ...(value as object), status: "cancelled", usage: CHILD_USAGE });
+			});
+			await start(harness);
+			const updateGoal = harness.tools.get("update_goal")!;
+			const pending = (updateGoal.execute as any)("complete-usage-focus-escape", { status: "complete" }, new AbortController().signal, undefined, harness.ctx);
+			await started;
+			harness.core.abortAudit(harness.ctx);
+			const result = await pending;
+
+			assert.match(result.content[0]?.text ?? "", /no longer focused in this session/);
+			assert.equal(result.terminate, true);
+			assert.deepEqual(result.usage, EXPECTED_TOOL_USAGE, "the Escape-branch cancel still reports the aborted audit's spend");
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+		}
+	}
+});

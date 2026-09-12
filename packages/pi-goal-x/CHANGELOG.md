@@ -2,6 +2,49 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.7.1] — 2026-09-13 (fork release)
+
+### Fixed
+
+- **The independent completion audit's child-session spend is no longer
+  discarded.** `goal-auditor` now reads the `usage` of the delegation terminal
+  response — the pi-subagents child session's tokens, turns, and cost — on every
+  terminal path: approved, disapproved, provider error, terminal timeout, and
+  user cancellation. The payload is validated before it can enter accounting;
+  absent or malformed usage is ignored instead of being charged as `NaN` or a
+  negative counter.
+- **Tracing that spend into the session's own cost totals.**
+  `update_goal({ status: "complete" })` now returns the audit usage on its tool
+  result in pi's tool-result `Usage` shape (`totalTokens` plus an object `cost`
+  with a `total`). The shape matters: pi-subagents reports `cost` as a plain
+  number, and pi only accounts tool results that carry the object form, so the
+  raw delegation usage cannot be attached as-is. With this, the host counts the
+  audit spend in the session — footer `$`, `/session` Cost (grouped under
+  `Tools/summaries`, because a tool result carries no model attribution) and the
+  cumulative token counters. Every completion branch carries it: approved,
+  rejected, audit aborted → continue working, Escape bypass, and **both**
+  focused-operation cancels (one right after the audit settles, one after the
+  Escape dialog). When the delegation reports no usage the returned result keeps
+  its previous shape and no `usage` field appears.
+- **A separate durable account for the audit spend.** A new `audit_usage`
+  ledger event records tokens (with input/output/cache-read/cache-write splits),
+  cost, and turns for each audit. `goal.usage.tokensUsed` is deliberately left
+  untouched so the goal's token budget keeps its parent-turn-only meaning; the
+  same numbers are shown on the audit card, in the goal activity feed, and in
+  the compaction summary.
+
+### Notes
+
+- The audit verdict contract, the completion transaction, the auditor's tool
+  whitelist, and every user-facing completion message are unchanged. Cost
+  reporting never influences a verdict or a completion decision.
+- `/subagent-cost` still does not list the delegated auditor. That command only
+  recognizes `subagent`/`bg_wait` tool results and workflow receipts, and the
+  audit is an extension-to-extension delegation rather than a tool call; use the
+  audit card, the goal activity feed, or the session's own cost totals instead.
+- The blocker Oracle's nested session remains outside this accounting and is not
+  covered by this release.
+
 ## [0.7.0] — 2026-09-13 (fork release)
 
 ### Added

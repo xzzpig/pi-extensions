@@ -14,6 +14,7 @@ import {
 	type SubagentDelegationResponse,
 	type SubagentDelegationThinking,
 	type SubagentDelegationUpdate,
+	type SubagentDelegationUsage,
 } from "@xzzpig/pi-subagents/delegation";
 import type { GoalRecord, GoalTask, GoalTaskList } from "./goal-record.ts";
 import { countTaskSubtree } from "./goal-task-count.ts";
@@ -65,6 +66,12 @@ export interface GoalAuditorResult {
 	cancelled?: boolean;
 	runId?: string;
 	requestId?: string;
+	/**
+	 * Child session usage from the terminal delegation response, when pi-subagents
+	 * reported one. Presentation/accounting only: it never changes the verdict, and
+	 * the caller decides whether it lands on a tool result or the goal ledger.
+	 */
+	usage?: SubagentDelegationUsage;
 }
 
 export const GOAL_AUDITOR_RESULT_SCHEMA = {
@@ -463,6 +470,28 @@ function matchingIdentity(value: unknown, identity: { requestId: string; ownerRu
 		&& candidate.nodeId === identity.nodeId;
 }
 
+const DELEGATION_USAGE_COUNTERS = ["input", "output", "cacheRead", "cacheWrite", "cost", "turns"] as const;
+
+/**
+ * Validate the delegation terminal usage the way other event payloads are
+ * validated: untrusted event data must not enter accounting with NaN, negative,
+ * or missing counters. Returns the received object untouched so callers observe
+ * exactly what pi-subagents reported.
+ */
+function delegationUsage(value: unknown): SubagentDelegationUsage | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const record = value as Record<string, unknown>;
+	for (const key of DELEGATION_USAGE_COUNTERS) {
+		const counter = record[key];
+		if (typeof counter !== "number" || !Number.isFinite(counter) || counter < 0) return undefined;
+	}
+	for (const key of ["toolCalls", "durationMs"] as const) {
+		const counter = record[key];
+		if (counter !== undefined && (typeof counter !== "number" || !Number.isFinite(counter) || counter < 0)) return undefined;
+	}
+	return value as SubagentDelegationUsage;
+}
+
 function progressDetails(value: unknown): { label?: string; percentage?: number } {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
 	const record = value as Record<string, unknown>;
@@ -676,6 +705,7 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 		let terminalTimer: ReturnType<typeof setTimeout> | undefined;
 		let cancellationTimer: ReturnType<typeof setTimeout> | undefined;
 		let cancellationReason: "user_abort" | "terminal_timeout" | undefined;
+		let terminalUsage: SubagentDelegationUsage | undefined;
 		const unsubscribes: Array<() => void> = [];
 		const subscribe = (event: string, handler: (data: unknown) => void): void => {
 			const unsubscribe = events.on(event, handler);
@@ -739,7 +769,8 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 			progress.elapsedMs = Date.now() - startedAt;
 			if (result.output.trim()) progress.recentOutput = result.output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-8);
 			safeProgress(args.onProgress, progress);
-			resolve({ ...result, requestId });
+			const usage = result.usage ?? terminalUsage;
+			resolve({ ...result, ...(usage ? { usage } : {}), requestId });
 		};
 		const armTerminalTimeout = () => {
 			if (terminalTimer) return;
@@ -792,6 +823,7 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 		subscribe(SUBAGENT_DELEGATION_RESPONSE_EVENT, (value) => {
 			if (!matchingIdentity(value, identity)) return;
 			const response = value as SubagentDelegationResponse;
+			if (response.status !== "invalid_request") terminalUsage = delegationUsage(response.usage);
 			if (cancellationReason) {
 				finish(cancellationResult(cancellationReason, true));
 				return;

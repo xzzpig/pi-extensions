@@ -3,6 +3,7 @@ import { buildLedgerIndex, indexLedgerEvent, type GoalLedgerIndex } from "./goal
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { normalizeRelPath, nowIso, safeIdPart, type GoalRecord } from "./goal-record.ts";
+import type { OracleConsultState } from "./goal-oracle.ts";
 
 export const GOAL_LEDGER_FILE = ".pi/goals/goal_events.jsonl";
 
@@ -17,6 +18,7 @@ export type GoalLedgerEvent =
   | { type: "completion_requested"; goalId: string; summary?: string; at: string }
   | { type: "audit_started"; goalId: string; provider?: string; model?: string; thinkingLevel?: string; at: string }
   | { type: "audit_result"; goalId: string; verdict: "approved" | "disapproved" | "error"; report: string; at: string }
+  | { type: "audit_usage"; goalId: string; tokens: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; costUsd: number; turns: number; at: string }
   | { type: "audit_skipped"; goalId: string; reason: "disabled" | "user_aborted"; provider?: string; model?: string; thinkingLevel?: string; at: string }
   | { type: "goal_completed"; goalId: string; archivePath?: string; at: string }
   | { type: "goal_archived"; goalId: string; archivePath: string; at: string }
@@ -305,8 +307,32 @@ function checkpointPathFor(filePath: string): string {
   return path.join(path.dirname(filePath), LEDGER_CHECKPOINT_FILE);
 }
 
+/** JSON-safe projection of one goal state inside a checkpoint file. */
+type CheckpointGoalStateJson = ReconstructedGoalState;
+
+/** JSON-safe runtime-index entry: the Oracle consult map is serialized as pairs. */
+type CheckpointRuntimeIndexJson = Omit<GoalLedgerIndex, "oracle"> & { oracle: Array<[string, OracleConsultState]> };
+
 /** JSON-safe checkpoint shape (Maps serialized as arrays). */
-function checkpointToJson(cp: LedgerCheckpoint): unknown {
+interface LedgerCheckpointJson {
+  version: LedgerCheckpoint["version"];
+  format: LedgerCheckpoint["format"];
+  createdAt: string;
+  coveredBytes: number;
+  coveredEvents: number;
+  acc: {
+    goals: CheckpointGoalStateJson[];
+    terminalGoals: CheckpointGoalStateJson[];
+    focusedGoalId: string | null;
+    focusGeneration: number;
+    focusGenByGoal: Array<[string, number]>;
+  };
+  recentEventsByGoal: Array<[string, GoalLedgerEvent[]]>;
+  runtimeIndex: Array<[string, CheckpointRuntimeIndexJson]>;
+}
+
+/** JSON-safe checkpoint shape (Maps serialized as arrays). */
+function checkpointToJson(cp: LedgerCheckpoint): LedgerCheckpointJson {
   const goalStateToJson = (s: ReconstructedGoalState) => ({
     goalId: s.goalId,
     latestStatus: s.latestStatus,
@@ -336,7 +362,7 @@ function checkpointToJson(cp: LedgerCheckpoint): unknown {
       focusGenByGoal: Array.from(cp.acc.focusGenByGoal.entries()),
     },
     recentEventsByGoal: Array.from(cp.recentEventsByGoal.entries()),
-    runtimeIndex: Array.from(cp.runtimeIndex, ([id, entry]) => [id, { ...entry, oracle: Array.from(entry.oracle) }]),
+    runtimeIndex: Array.from(cp.runtimeIndex, ([id, entry]): [string, CheckpointRuntimeIndexJson] => [id, { ...entry, oracle: Array.from(entry.oracle) }]),
   };
 }
 
@@ -701,6 +727,8 @@ function isValidLedgerEvent(value: unknown): value is GoalLedgerEvent {
       return typeof obj.goalId === "string" && (obj.provider === undefined || typeof obj.provider === "string") && (obj.model === undefined || typeof obj.model === "string") && (obj.thinkingLevel === undefined || typeof obj.thinkingLevel === "string");
     case "audit_result":
       return typeof obj.goalId === "string" && (obj.verdict === "approved" || obj.verdict === "disapproved" || obj.verdict === "error") && typeof obj.report === "string";
+    case "audit_usage":
+      return typeof obj.goalId === "string" && [obj.tokens, obj.inputTokens, obj.outputTokens, obj.cacheReadTokens, obj.cacheWriteTokens, obj.costUsd, obj.turns].every((counter) => typeof counter === "number" && Number.isFinite(counter) && counter >= 0);
     case "audit_skipped":
       return typeof obj.goalId === "string" && (obj.reason === "disabled" || obj.reason === "user_aborted") && (obj.provider === undefined || typeof obj.provider === "string") && (obj.model === undefined || typeof obj.model === "string") && (obj.thinkingLevel === undefined || typeof obj.thinkingLevel === "string");
     case "goal_completed":

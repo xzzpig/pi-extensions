@@ -51,6 +51,9 @@ export function buildGoalCompactSummary(
         case "audit_result":
           lines.push(`    - auditor ${event.verdict}${event.verdict === "disapproved" ? `: ${truncateText(event.report, 80)}` : ""}`);
           break;
+        case "audit_usage":
+          lines.push(`    - audit cost: $${event.costUsd.toFixed(4)} (${event.tokens.toLocaleString("en-US")} tokens)`);
+          break;
         case "goal_completed":
           lines.push("    - completed");
           break;
