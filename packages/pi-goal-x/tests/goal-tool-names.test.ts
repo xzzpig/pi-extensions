@@ -13,7 +13,6 @@ import {
 	GOAL_WORK_TOOL_NAMES,
 	POST_STOP_ALLOWED_TOOLS,
 	PROPOSE_DRAFT_TOOL_NAME,
-	QUESTIONNAIRE_TOOL_NAME,
 	SET_GOAL_TASKS_TOOL_NAME,
 	TASK_TOOL_NAMES,
 	UPDATE_GOAL_TASK_TOOL_NAME,
@@ -22,9 +21,9 @@ import {
 
 const CORE = ["create_goal", "get_goal", "update_goal"];
 
-// Drafting tools belong to the separate transient user-started draft profile,
-// never to the steady three/five execution surface.
-const DRAFTING = ["goal_questionnaire", "propose_goal_draft"];
+// Drafting tools are registered once like every other goal tool; the draft gate
+// lives in their own execute() guards, never in a phase-dependent tool list.
+const DRAFTING = ["propose_goal_draft"];
 
 // Removed steady-state lifecycle tools — none may exist in the module.
 const REMOVED_STEADY = [
@@ -46,14 +45,12 @@ test("fixed profiles: core three, task two, all five registered", () => {
 	assert.deepEqual(FIVE_GOAL_TOOLS, [...CORE, ...TASK_TOOL_NAMES]);
 	assert.deepEqual(CORE_GOAL_TOOLS, CORE);
 	assert.deepEqual(DRAFTING_GOAL_TOOLS, DRAFTING);
-	// The registry is the fixed five plus the transient drafting profile; the
-	// INSTALLED profile (installGoalToolProfile) still only ever installs the
-	// three/five execution set.
+	// The registry is the fixed five plus the drafting-only tool; drafting
+	// isolation comes from the tools' own guards, not from a separate profile.
 	assert.deepEqual(ALL_REGISTERED_GOAL_TOOLS, [...FIVE_GOAL_TOOLS, ...DRAFTING_GOAL_TOOLS]);
 });
 
-test("the module declares drafting names only in the transient profile", () => {
-	assert.equal(QUESTIONNAIRE_TOOL_NAME, "goal_questionnaire");
+test("the module declares only propose_goal_draft as a drafting name", () => {
 	assert.equal(PROPOSE_DRAFT_TOOL_NAME, "propose_goal_draft");
 	// Drafting tools must never leak into the fixed execution profiles.
 	for (const name of DRAFTING) {
@@ -64,11 +61,13 @@ test("the module declares drafting names only in the transient profile", () => {
 	}
 });
 
-test("goal_question is removed — goal_questionnaire covers single-question drafts", async () => {
+test("question tools are removed — clarification belongs to pi-ask's ask_user", async () => {
 	const fs = await import("node:fs/promises");
 	const source = await fs.readFile("extensions/goal-tool-names.ts", "utf8");
 	assert.ok(!source.includes("QUESTION_TOOL_NAME"), "QUESTION_TOOL_NAME constant must be gone");
 	assert.ok(!source.includes('"goal_question"'), "goal_question must not be a registered name");
+	assert.ok(!source.includes("QUESTIONNAIRE_TOOL_NAME"), "QUESTIONNAIRE_TOOL_NAME constant must be gone");
+	assert.ok(!source.includes('"goal_questionnaire"'), "goal_questionnaire must not be a registered name");
 });
 
 test("no steady-state lifecycle tools or phase heuristics remain", async () => {

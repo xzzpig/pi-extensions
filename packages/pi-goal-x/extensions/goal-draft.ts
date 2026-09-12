@@ -141,7 +141,7 @@ export function goalDraftingPrompt(topic: string, focus: GoalDraftingFocus): str
 	const commonProtocol = [
 		"Confirmation protocol:",
 		"- Treat this as a lightweight conversation with the user, not a separate long-running runtime phase.",
-		"- If the topic is vague, ask one focused question with a recommended default. Use goal_questionnaire when a structured answer would help (a single question with no options is a free-text prompt), but plain conversation is acceptable.",
+		"- If the topic is vague, ask one focused question with a recommended default. Use the installed `ask_user` tool (pi-ask) when a structured answer would help; if that tool is not available, ask in plain chat. Plain conversation is always acceptable.",
 		"- Targeted read-only research is allowed when it helps define a better goal contract; do not start implementation before confirmation.",
 		"- If the topic is already concrete, you may proceed directly to propose_goal_draft.",
 		"- The goal contract should make the objective, success criteria, boundaries, constraints, and blocker rule explicit.",

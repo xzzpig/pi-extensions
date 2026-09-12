@@ -44,7 +44,7 @@ The fast local suite uses Node's built-in `node:test` runner and currently cover
 | `extensions/goal-draft.ts` | Lightweight confirmation prompt, draft summary, safe objective escaping, focus/mode gate, Sisyphus prompt-style guidance, drafting tool gate, multi-open draft creation allowance |
 | `extensions/goal-policy.ts` | Creation/completion-from-active-or-paused, abort/pause/resume/clear policy, multi-open creation slot allowance, compaction reminder, full creation/completion reports |
 | `extensions/goal-auditor.ts` | Independent pi auditor agent config parsing, prompt construction, approval marker parsing, and completion audit execution |
-| `extensions/goal-questionnaire.ts` | Question normalization, duplicate id handling, option filtering, recommended-index validation, answer formatting, confirm/cancel mapping, `goal_question` and `goal_questionnaire` registration |
+| `extensions/goal-questionnaire.ts` | Question normalization, duplicate id handling, option filtering, recommended-index validation, confirm/cancel mapping, and the goal-owned confirm dialog (no tool registration since 0.6.0) |
 | `extensions/goal-tool-names.ts` | Published tool constants, active/paused/drafting tool lists, goal work-tool list, progress-tool list for empty-turn gating, post-stop allowlist, question-like tool detection |
 | `extensions/prompts/goal-prompts.ts` | Active-goal, continuation, tweak-drafting, stale-checkpoint, and unfocused multi-open prompt text |
 | `extensions/storage/goal-files.ts` | Safe goal paths, serialize/parse round trip, prompt-body disk edits, active-goal scans, active/archive writes |
@@ -64,7 +64,7 @@ The fast local suite uses Node's built-in `node:test` runner and currently cover
 The following remain intentionally in `goal.ts` until a stronger mock `ExtensionAPI` / `ExtensionContext` harness exists:
 
 - pi command registration;
-- tool registration beyond the questionnaire pair;
+- tool registration beyond the proposal tool;
 - session event hooks;
 - timers and auto-continue scheduling;
 - live TUI widget rendering.

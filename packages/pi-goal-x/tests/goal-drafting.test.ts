@@ -540,65 +540,47 @@ test("headless proposal auto-confirm semantics are explicit", async () => {
 	}
 });
 
-// ── Questionnaire tools ───────────────────────────────────────────────────
+// ── Questionnaire tool removal (clarification is delegated to pi-ask) ─────
 
-test("questionnaire tools require an active draft and return structured answers", async () => {
-	const cwd = mkdtempSync(path.join(tmpdir(), "goal-draft-question-"));
+test("goal_questionnaire is not registered — clarification belongs to pi-ask's ask_user", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-draft-noquestion-"));
 	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
 	try {
 		const h = createHarness(cwd, { hasUI: true });
 		await h.sessionStart();
-		const questionnaire = h.tools.get("goal_questionnaire");
-		assert.ok(questionnaire, "goal_questionnaire registered");
-		const noDraft = await questionnaire.execute("q-1", { questions: [] }, new AbortController().signal, undefined, h.ctx);
-		assert.match(noDraft.content[0].text, /No guided goal draft is active/);
+		// The removed tool must never be registered again: its definition used to
+		// sit in every request's tool prefix for the whole session.
+		assert.equal(h.tools.has("goal_questionnaire"), false, "goal_questionnaire must not be registered");
+		assert.equal(h.tools.has("propose_goal_draft"), true, "propose_goal_draft must stay registered");
 		await h.commands.get("goal")!.handler("Plan a migration", h.ctx);
-		const pending = questionnaire.execute("q-2", {
-			questions: [
-				{ id: "scope", question: "Which systems?", options: ["A", "B"] },
-				{ id: "deadline", question: "When?", options: [] },
-			],
-		}, new AbortController().signal, undefined, h.ctx);
-		assert.ok(h.hasDialog(), "batch questionnaire opens the dialog");
-		h.dialogResult({
-			questions: [
-				{ id: "scope", question: "Which systems?", options: ["A", "B"], allowCustom: true },
-				{ id: "deadline", question: "When?", options: [], allowCustom: true },
-			],
-			answers: [
-				{ id: "scope", question: "Which systems?", answer: "A", wasCustom: false },
-				{ id: "deadline", question: "When?", answer: "Next week", wasCustom: true },
-			],
-			cancelled: false,
-		});
-		const result = await pending;
-		assert.match(result.content[0].text, /\*\*Q:\*\* Which systems\?/);
-		assert.match(result.content[0].text, /\*\*A:\*\* A/);
-		assert.match(result.content[0].text, /\*\*A:\*\* Next week/);
+		assert.equal(h.tools.has("goal_questionnaire"), false, "no questionnaire tool appears with an active draft either");
 	} finally {
 		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
 });
 
-test("single-question goal_questionnaire returns a structured answer", async () => {
-	const cwd = mkdtempSync(path.join(tmpdir(), "goal-draft-singleq-"));
+test("confirm dialog zero-regression: propose_goal_draft still opens it and Confirm creates the goal", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-draft-confirmdialog-"));
 	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
 	try {
 		const h = createHarness(cwd, { hasUI: true });
 		await h.sessionStart();
-		await h.commands.get("goal")!.handler("Automate deploys", h.ctx);
-		const questionnaire = h.tools.get("goal_questionnaire");
-		assert.ok(questionnaire, "goal_questionnaire registered");
-		const pending = questionnaire.execute("q-1", { questions: [{ id: "env", question: "Which environment first?", options: ["staging", "production"] }] }, new AbortController().signal, undefined, h.ctx);
-		assert.ok(h.hasDialog(), "single question opens the dialog");
-		h.dialogResult({
-			questions: [{ id: "env", question: "Which environment first?", options: ["staging", "production"], allowCustom: true }],
-			answers: [{ id: "env", question: "Which environment first?", answer: "staging", wasCustom: false }],
-			cancelled: false,
-		});
+		await h.commands.get("goal")!.handler("Add CSV export", h.ctx);
+		const objective = "Add CSV export to the reports page.\nSuccess criteria: exports use active filters.";
+		const tasks = [
+			{ id: "review", title: "Review the reports page" },
+			{ id: "export", title: "Implement filtered CSV export" },
+		];
+		const pending = runProposal(h, proposalParams(objective, { tasks }));
+		assert.ok(h.hasDialog(), "the goal-owned confirm dialog still opens for propose_goal_draft");
+		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: CONFIRM_ANSWER, wasCustom: false }], cancelled: false, auditorEnabled: true });
 		const result = await pending;
-		assert.match(result.content[0].text, /\*\*Q:\*\* Which environment first\?/);
-		assert.match(result.content[0].text, /\*\*A:\*\* staging/);
+		const text = result.content[0].text;
+		assert.match(text, /✓ Goal created and focused\./);
+		assert.match(text, /Auditor: enabled/);
+		assert.match(text, /Tasks: 2/);
+		assert.equal(firstGoal(cwd).taskList?.tasks.length, 2, "the confirmed task list is applied");
+		assert.equal(activeGoalFiles(cwd).length, 1);
 	} finally {
 		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
 	}
@@ -1109,35 +1091,6 @@ test("confirmed proposal writes the durable summary and the richer confirmation 
 	}
 });
 
-test("questionnaire answers are captured in the confirmed-goal report (E5 §14)", async () => {
-	const cwd = mkdtempSync(path.join(tmpdir(), "goal-draft-qa-echo-"));
-	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
-	try {
-		const h = createHarness(cwd, { hasUI: true });
-		await h.sessionStart();
-		await h.commands.get("goal")!.handler("Scope the migration", h.ctx);
-		const questionnaire = h.tools.get("goal_questionnaire");
-		const pendingQ = questionnaire.execute("q-echo", {
-			questions: [{ id: "scope", question: "Which systems?", options: ["A", "B"] }],
-		}, new AbortController().signal, undefined, h.ctx);
-		assert.ok(h.hasDialog());
-		h.dialogResult({
-			questions: [{ id: "scope", question: "Which systems?", options: ["A", "B"], allowCustom: true }],
-			answers: [{ id: "scope", question: "Which systems?", answer: "A", wasCustom: false }],
-			cancelled: false,
-		});
-		await pendingQ;
-		const pending = runProposal(h, proposalParams("Migrate systems A.\nSuccess criteria: all services moved."));
-		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: CONFIRM_ANSWER, wasCustom: false }], cancelled: false });
-		const result = await pending;
-		// The Q&A echo survives draft clearing and appears in the report.
-		assert.match(result.content[0].text, /Which systems\?/);
-		assert.match(result.content[0].text, /A/);
-	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
-	}
-});
-
 test("cancel and refine outcomes still carry the durable proposal summary", async () => {
 	const cwd = mkdtempSync(path.join(tmpdir(), "goal-draft-summary-cancel-"));
 	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
@@ -1337,7 +1290,7 @@ test("a tweak with no task list retains the current list and keeps its statuses"
 });
 
 for (const unavailable of [false, true]) {
-	test(`all drafting tools preserve the draft when dialogs are ${unavailable ? "unavailable" : "failing"}`, async () => {
+	test(`the drafting tool preserves the draft when dialogs are ${unavailable ? "unavailable" : "failing"}`, async () => {
 		const cwd = mkdtempSync(path.join(tmpdir(), "goal-draft-dialog-failure-"));
 		try {
 			const h = createHarness(cwd, { hasUI: true });
@@ -1345,16 +1298,19 @@ for (const unavailable of [false, true]) {
 			await h.commands.get("goal")!.handler("Ship a tested feature", h.ctx);
 			h.ctx.ui.custom = (async () => { if (!unavailable) throw new Error("Host disconnected"); return undefined; }) as typeof h.ctx.ui.custom;
 			delete (h.ctx.ui as Partial<ExtensionContext["ui"]>).select;
-			for (const [name, params] of [
-				["goal_questionnaire", { questions: [{ id: "scope", question: "Scope?", options: ["A"] }] }],
-				["propose_goal_draft", proposalParams("Ship a tested feature. Success criteria: tests pass.")],
-			] as const) {
-				const result = await h.tools.get(name).execute("test", params, new AbortController().signal, undefined, h.ctx);
-				assert.match(result.content[0].text, unavailable ? /cannot display/ : /Host disconnected/);
-				assert.doesNotMatch(result.content[0].text, /user cancelled|refinement requested/);
-				assert.equal(activeGoalFiles(cwd).length, 0);
-				assert.ok(h.activeTools().includes("propose_goal_draft"));
-			}
+			// propose_goal_draft is the only remaining drafting tool: it still owns
+			// the goal confirm dialog and must preserve the draft on failure.
+			const result = await h.tools.get("propose_goal_draft").execute(
+				"test",
+				proposalParams("Ship a tested feature. Success criteria: tests pass."),
+				new AbortController().signal,
+				undefined,
+				h.ctx,
+			);
+			assert.match(result.content[0].text, unavailable ? /cannot display/ : /Host disconnected/);
+			assert.doesNotMatch(result.content[0].text, /user cancelled|refinement requested/);
+			assert.equal(activeGoalFiles(cwd).length, 0);
+			assert.ok(h.activeTools().includes("propose_goal_draft"));
 		} finally { rmSync(cwd, { recursive: true, force: true }); }
 	});
 }

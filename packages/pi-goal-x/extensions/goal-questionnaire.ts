@@ -275,17 +275,6 @@ export function normalizeQuestionnaireQuestions(rawQuestions: GoalQuestionnaireQ
 	});
 }
 
-export function formatQuestionnaireAnswers(result: GoalQuestionnaireResult): string {
-	return result.answers.map((answer) => {
-		const question = result.questions.find((q) => q.id === answer.id);
-		const lines = [`**Q:** ${answer.question}`];
-		if (question?.context) lines.push(`\n${question.context}`);
-		if (question && question.options.length > 0) lines.push(`\nOptions: ${question.options.join(" / ")}`);
-		lines.push(`\n**A:** ${answer.answer}`);
-		return lines.join("");
-	}).join("\n\n---\n\n");
-}
-
 export function shouldAutoConfirmProposal(args: { hasUI: boolean; autoConfirmEnv?: string }): boolean {
 	if (args.autoConfirmEnv === "0") return false; // explicit opt-out (benchmarking)
 	return !args.hasUI || args.autoConfirmEnv === "1";
@@ -296,13 +285,6 @@ export function proposalDecisionFromQuestionnaireResult(args: { cancelled: boole
 	if ((args.answer ?? "").startsWith("Confirm")) return "confirm";
 	if ((args.answer ?? "").startsWith("Cancel")) return "cancel";
 	return "continue";
-}
-
-export function isHeadlessQuestionSufficientForDraft(args: { topic: string; questionText: string }): boolean {
-	const topic = args.topic.toLowerCase();
-	void args;
-	const vagueTopic = topic.trim().length < 20 || /(整理笔记|organize notes|notes|笔记)$/.test(topic.trim());
-	return !vagueTopic;
 }
 
 const CUSTOM_ANSWER_LABEL = "Write your own answer...";
@@ -365,9 +347,11 @@ export function proposalDialogFailureMessage(error: unknown): string {
 }
 
 /**
- * Shared question UI used by both the agent-callable goal_questionnaire tool and
- * the internal draft-confirm prompt. This keeps pi-goal self-contained and
- * avoids depending on external question/questionnaire packages.
+ * The goal-owned dialog UI for the internal draft-confirm prompt
+ * (`showProposalDialog`). It keeps pi-goal self-contained: structured
+ * clarification during drafting is delegated to pi-ask's `ask_user` when that
+ * package is installed, so no questionnaire tool is registered here and this
+ * UI is not part of the model surface.
  */
 export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: GoalQuestionnaireQuestion[], auditorToggleInit?: { defaultEnabled: boolean }): Promise<GoalQuestionnaireResult> {
 	if (!ctx.hasUI) {
@@ -406,6 +390,9 @@ export async function runGoalQuestionnaire(ctx: ExtensionContext, rawQuestions: 
 		// the question and the actionable options/footer in view (see
 		// fitDialogLines); content that fits renders exactly as the
 		// pre-regression (383ae52) UI. Only applies with real TUI dimensions.
+		// SAFETY: pi's custom-UI contract does not type the renderer's concrete TUI, and only the
+		// real TUI implementation carries `terminal`/`previousLines`; both are read optionally, so
+		// a mock or web host that lacks them yields `undefined` dimensions and simply skips the bound.
 		const tuiInfo = tui as unknown as { terminal?: { rows?: number }; previousLines?: string[] };
 		const terminalRows = tuiInfo.terminal?.rows;
 		const baseFrame = tuiInfo.previousLines?.length;

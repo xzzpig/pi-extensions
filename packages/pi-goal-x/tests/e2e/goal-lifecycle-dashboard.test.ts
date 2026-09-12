@@ -166,18 +166,12 @@ test("full guided lifecycle: create → focus → tasks → audit → archive (�
 		// ── Step 1: guided goal creation ────────────────────────────────────
 		await h.commands.get("goal")!.handler("Add CSV export to the reports page", h.ctx);
 
-		// ── Step 2: clarification questions ─────────────────────────────────
-		const q = callTool(h, "goal_questionnaire", "q-1", {
-			questions: [{ id: "filters", question: "Which filters apply?", options: ["Active filters", "All rows"] }],
-		});
-		assert.ok(h.hasDialog(), "questionnaire dialog opens");
-		h.dialogResult({
-			questions: [{ id: "filters", question: "Which filters apply?", options: ["Active filters", "All rows"], allowCustom: true }],
-			answers: [{ id: "filters", question: "Which filters apply?", answer: "Active filters", wasCustom: false }],
-			cancelled: false,
-		});
-		const qResult = await q;
-		assert.ok(JSON.stringify(qResult.content[0].text).includes("Active filters"), "answer recorded");
+		// ── Step 2: clarification is delegated to pi-ask's `ask_user` ───────────
+		// The goal extension no longer registers a questionnaire tool: its
+		// definition used to sit in every request's tool prefix for the whole
+		// session. Structured clarification now comes from pi-ask.
+		assert.equal(h.tools.has("goal_questionnaire"), false, "no questionnaire tool is registered in the lifecycle flow");
+		assert.equal(h.tools.has("propose_goal_draft"), true, "the proposal tool remains the drafting surface");
 
 		// ── Step 3: confirm a five-task plan ────────────────────────────────
 		const objective = "Add CSV export to the reports page using active filters.\nSuccess criteria: exports match the visible columns.\nVerification contract: Run npm test (0 failures)";

@@ -33,9 +33,9 @@ The current extension also adds behavior specific to goal drafting and lifecycle
 - **Sisyphus as style**: `/sisyphus` and `/sisyphus-set` use the same lifecycle and tools as regular goals; they only change drafting/continuation wording and completion expectations.
 - **Full draft confirmation and creation output**: draft confirmation uses a plain-text report, and after confirmation the finalized objective is printed directly into the conversation.
 - **Full completion output**: completion prints a report directly into the conversation, including optional evidence and full goal details.
-- **Built-in question tools**: `goal_question` and `goal_questionnaire` provide package-local user-dialogue tools with `goal_` prefixes.
+- **Clarification delegation**: drafting clarification comes from the installed pi-ask `ask_user` tool; the package ships no question tool of its own (its former built-in question tools were removed in 0.6.0 — see the CHANGELOG).
 - **Centralized tool names**: published tool names and allowlists live in `goal-tool-names.ts`.
-- **Questionnaire componentization**: normalization, answer formatting, proposal confirmation, and question-tool registration live in `goal-questionnaire.ts`.
+- **Confirm-dialog componentization**: question normalization, proposal confirmation, and the select/input fallback live in `goal-questionnaire.ts`.
 - **Widget module split**: the above-editor Goal Beacon and widget-style notification text live under `extensions/widgets/`.
 - **Record/prompt/storage split**: goal record normalization, prompt construction, and disk serialization now live in separate tested modules instead of the orchestration file.
 

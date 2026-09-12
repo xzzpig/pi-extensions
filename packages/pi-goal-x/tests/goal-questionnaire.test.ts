@@ -10,8 +10,6 @@ import {
 	type DialogScrollState,
 	findProposalPresentationSegments,
 	fitDialogLines,
-	formatQuestionnaireAnswers,
-	isHeadlessQuestionSufficientForDraft,
 	normalizeQuestionnaireQuestions,
 	proposalDialogFailureMessage,
 	proposalDecisionFromQuestionnaireResult,
@@ -19,7 +17,6 @@ import {
 	runGoalQuestionnaire,
 	shouldAutoConfirmProposal,
 	DIALOG_UNAVAILABLE_HINT,
-	type GoalQuestionnaireResult,
 } from "../extensions/goal-questionnaire.ts";
 
 test("normalizeQuestionnaireQuestions trims ids, de-duplicates, filters options, and validates recommended", () => {
@@ -47,35 +44,6 @@ test("dialog line limit supports pi 0.83 frames and pi 0.84 docked/fullscreen fr
 	assert.equal(computeDialogLineLimit({}), undefined);
 });
 
-test("formatQuestionnaireAnswers emits stable Q/A records with context and options", () => {
-	const result: GoalQuestionnaireResult = {
-		cancelled: false,
-		questions: [
-			{ id: "scope", question: "Scope?", context: "Pick one", options: ["A", "B"], allowCustom: true },
-			{ id: "notes", question: "Notes?", options: [], allowCustom: true },
-		],
-		answers: [
-			{ id: "scope", question: "Scope?", answer: "A", wasCustom: false },
-			{ id: "notes", question: "Notes?", answer: "Custom", wasCustom: true },
-		],
-	};
-
-	assert.equal(
-		formatQuestionnaireAnswers(result),
-		"**Q:** Scope?\nPick one\nOptions: A / B\n**A:** A\n\n---\n\n**Q:** Notes?\n**A:** Custom",
-	);
-});
-
-test("headless question sufficiency blocks vague-topic default fabrication", () => {
-	assert.equal(isHeadlessQuestionSufficientForDraft({
-		topic: "整理笔记",
-		questionText: "你的笔记目前存放在哪里，是什么格式？输出为什么形式？",
-	}), false);
-	assert.equal(isHeadlessQuestionSufficientForDraft({
-		topic: "在 sandbox 当前目录创建 hello.txt，内容为 Hello, Goal!，不要修改其他文件。",
-		questionText: "如果 hello.txt 已存在，应该覆盖还是停止？",
-	}), true);
-});
 
 // Realistic repro content from the reported bug: the agent asked "via uv too?"
 // while the goal panel + chat frame (19 lines) left only 10 dialog rows on a
@@ -600,7 +568,7 @@ function openQuestionnaireComponent(
 	const ctx = createMockExtensionContext();
 	void runGoalQuestionnaire(ctx, args.questions);
 	const record = ctx._customCalls[0];
-	assert.ok(record, "goal_questionnaire opens a custom dialog");
+	assert.ok(record, "the goal confirm dialog opens a custom dialog");
 	const { tui, state } = createMockTUI();
 	const augmented = Object.assign(tui, {
 		terminal: { rows: args.rows },

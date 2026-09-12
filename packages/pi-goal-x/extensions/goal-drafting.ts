@@ -8,11 +8,11 @@ import { deriveTasksFromObjective } from "./goal-task-derive.ts";
 import { goalDetails, renderGoalResult } from "./goal-format.ts";
 import { buildGoalCreatedReport } from "./goal-policy.ts";
 import { loadGoalSettings } from "./goal-settings.ts";
-import { DIALOG_UNAVAILABLE_HINT, proposalDialogFailureMessage, formatQuestionnaireAnswers, runGoalQuestionnaire, shouldAutoConfirmProposal, showProposalDialog, type GoalQuestionnaireQuestion, type ProposalDecision } from "./goal-questionnaire.ts";
+import { DIALOG_UNAVAILABLE_HINT, proposalDialogFailureMessage, shouldAutoConfirmProposal, showProposalDialog, type ProposalDecision } from "./goal-questionnaire.ts";
 import { currentTaskIdIsPending, nowIso, type GoalRecord, type GoalTaskList } from "./goal-record.ts";
 import type { GoalCore } from "./goal-state.ts";
 import { convertFlatTasks, countTasks, mergeTasksWithExisting, type FlatTaskInput } from "./goal-task-tools.ts";
-import { PROPOSE_DRAFT_TOOL_NAME, QUESTIONNAIRE_TOOL_NAME } from "./goal-tool-names.ts";
+import { PROPOSE_DRAFT_TOOL_NAME } from "./goal-tool-names.ts";
 
 export type GoalDraftMode = GoalDraftingFocus | "tweak";
 
@@ -41,8 +41,6 @@ export interface ActiveGoalDraft {
 	targetGoalId?: string;
 	startedAt: string;
 	auditorEnabled: boolean;
-	/** E5: formatted questionnaire Q&A to echo in the created-goal report. */
-	questionnaireEcho?: string;
 }
 
 const activeDrafts = new WeakMap<GoalCore, ActiveGoalDraft>();
@@ -238,43 +236,6 @@ function flatTaskSchema() {
 export function registerDraftingTools(core: GoalCore): void {
 	const { pi } = core;
 	pi.registerTool(defineTool({
-		name: QUESTIONNAIRE_TOOL_NAME,
-		label: "Run Drafting Questionnaire",
-		description: "Ask a short structured questionnaire during a user-started goal draft.",
-		promptSnippet: "Ask only the questions needed to make the goal and task plan concrete.",
-		parameters: Type.Object({
-			questions: Type.Array(Type.Object({
-				id: Type.String({ description: "Stable question id." }),
-				question: Type.String({ description: "Question for the user." }),
-				context: Type.Optional(Type.String({ description: "Optional short context." })),
-				options: Type.Array(Type.String({ description: "Answer option." })),
-				recommended: Type.Optional(Type.Integer({ minimum: 0 })),
-				allow_custom: Type.Optional(Type.Boolean()),
-			})),
-		}, { additionalProperties: false }),
-		async execute(_id, params, _signal, _update, ctx) {
-			if (!activeDraft(core)) return { content: [{ type: "text", text: "No guided goal draft is active." }], details: goalDetails(core.state.goal) };
-			const questions: GoalQuestionnaireQuestion[] = params.questions.map((q: GoalQuestionnaireQuestion & { allow_custom?: boolean }) => ({ ...q, allowCustom: q.allow_custom }));
-			core.enterGoalModal();
-			try {
-				const result = await runGoalQuestionnaire(ctx, questions);
-				if (!result.cancelled) {
-					const active = activeDraft(core);
-					if (active) active.questionnaireEcho = formatQuestionnaireAnswers(result); // E5
-				}
-				if (result.unavailable === true) return { content: [{ type: "text", text: `${DIALOG_UNAVAILABLE_HINT} Ask the questions in chat instead.` }], details: goalDetails(core.state.goal) };
-				return { content: [{ type: "text", text: result.cancelled ? "The user cancelled the questionnaire. Continue drafting conversationally." : formatQuestionnaireAnswers(result) }], details: goalDetails(core.state.goal) };
-			} catch (error) {
-				return { content: [{ type: "text", text: `Goal drafting dialog failed: ${error instanceof Error ? error.message : String(error)}. Drafting remains active; ask in chat instead of retrying the dialog.` }], details: goalDetails(core.state.goal) };
-			} finally {
-				core.exitGoalModal();
-			}
-		},
-		renderCall() { return new Text("goal_questionnaire", 0, 0); },
-		renderResult(result, _opts, theme) { return renderGoalResult(result, _opts, theme); },
-	}));
-
-	pi.registerTool(defineTool({
 		name: PROPOSE_DRAFT_TOOL_NAME,
 		label: "Propose Goal Draft",
 		description: "Present the drafted objective and agent-selected task plan for explicit user confirmation.",
@@ -350,9 +311,6 @@ export function registerDraftingTools(core: GoalCore): void {
 				return { content: [{ type: "text", text: `${summary}\n\nGoal draft refinement requested. The goal was not changed; ask what the user wants revised before proposing again.` }], details: goalDetails(core.state.goal) };
 			}
 			const skipAuditor = confirmation.auditorEnabled === false;
-			// §14: capture the questionnaire answers BEFORE clearing draft state so
-			// the confirmed-goal report can include them reliably (E5).
-			const qaEcho = draft.questionnaireEcho;
 			if (draft.mode !== "tweak") {
 				// F2: if the confirmation carried no task plan but the objective has
 				// structure, bootstrap the derived tree so the goal starts trackable.
@@ -365,7 +323,6 @@ export function registerDraftingTools(core: GoalCore): void {
 				const created = core.state.goal;
 				return { content: [{ type: "text", text: `${summary}\n\n${buildGoalCreatedReport({
 					objective: extracted.objective,
-					detailedSummary: qaEcho,
 					confirmed: true,
 					goalId: created?.id,
 					filePath: created?.activePath,

@@ -60,7 +60,7 @@ function createRecordingPi() {
  * The goal tools registered today (registration order, which is also the
  * order pi exposes them in the model tool list): the five execution tools
  * from the split tool modules (goal-core-tools.ts + goal-task-tools.ts) plus
- * the two drafting tools via the goal-tools.ts composition installer.
+ * the drafting-only proposal tool via the goal-tools.ts composition installer.
  */
 const EXPECTED_REGISTERED_TOOLS = [
 	"get_goal",
@@ -68,7 +68,6 @@ const EXPECTED_REGISTERED_TOOLS = [
 	"update_goal",
 	"set_goal_tasks",
 	"update_goal_task",
-	"goal_questionnaire",
 	"propose_goal_draft",
 ] as const;
 
@@ -121,7 +120,7 @@ test("baseline: no duplicate tool or command registrations", () => {
 	assert.equal(new Set(registeredCommands).size, registeredCommands.length);
 });
 
-test("baseline: execution profiles remain three/five tools and drafting is separate", () => {
+test("baseline: execution profiles remain three/five tools and drafting is the proposal tool only", () => {
 	assert.deepEqual(FIVE_GOAL_TOOLS, [
 		"create_goal", "get_goal", "update_goal",
 		"set_goal_tasks", "update_goal_task",
@@ -129,8 +128,11 @@ test("baseline: execution profiles remain three/five tools and drafting is separ
 	assert.deepEqual(CORE_GOAL_TOOLS, [
 		"create_goal", "get_goal", "update_goal",
 	]);
+	// Drafting clarification is delegated to pi-ask's `ask_user`; the goal
+	// extension no longer registers a questionnaire tool, so one tool
+	// definition left every request's tool prefix for good.
 	assert.deepEqual(DRAFTING_GOAL_TOOLS, [
-		"goal_questionnaire", "propose_goal_draft",
+		"propose_goal_draft",
 	]);
 });
 

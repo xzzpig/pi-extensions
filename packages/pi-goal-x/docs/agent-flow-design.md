@@ -94,7 +94,7 @@ The curated fourteen-command palette:
 
 | Command | Behavior |
 |---|---|
-| `/goal [seed]` | Guided regular-goal drafting, questionnaire where useful, then explicit confirmation |
+| `/goal [seed]` | Guided regular-goal drafting, clarification where useful, then explicit confirmation |
 | `/sisyphus [seed]` | Guided Sisyphus drafting with ordered-work constraints and explicit confirmation |
 | `/goal-direct <objective>` | Direct regular-goal creation without drafting |
 | `/sisyphus-direct <objective>` | Direct Sisyphus creation without drafting |
@@ -112,14 +112,15 @@ The curated fourteen-command palette:
 ## 6. Goal creation flow
 
 `/goal [seed]` and `/sisyphus [seed]` enter guided drafting. The agent can ask
-questions via `goal_questionnaire`, and propose both a full objective and a
+questions through the installed pi-ask `ask_user` tool (pi-goal-x registers no
+question tool of its own), and propose both a full objective and a
 task tree in a single confirmation dialog. Confirm creates and focuses the goal
 atomically; Continue Chatting retains the draft. `/goal-direct` and
 `/sisyphus-direct` are the explicit immediate paths.
 
 ## 7. Tool surface and runtime gates
 
-The model surface is CONSTANT — all seven goal tools are installed once at
+The model surface is CONSTANT — all six goal tools are installed once at
 session start and never change (see 0.4.0): execution isolation during drafts
 and with `disableTasks` is enforced by guards inside tool execute(), not by
 swapping the advertised tool list. The registered set:
@@ -127,8 +128,9 @@ swapping the advertised tool list. The registered set:
 - exactly five execution tools — `create_goal`, `get_goal`, `update_goal`,
   `set_goal_tasks`, `update_goal_task` (the task tools enforce `disableTasks`
   and a `goalDraftActive` draft via their own guards);
-- two drafting-only tools — `goal_questionnaire` and `propose_goal_draft` —
-  which reject calls when no user-started draft is active;
+- one drafting-only tool — `propose_goal_draft` — which rejects calls when no
+  user-started draft is active; structured clarification is delegated to
+  pi-ask's `ask_user` when that optional package is installed;
 - ordinary pi work tools (`read`, `write`, `edit`, `bash`, ...) are never
   touched by the extension;
 - invalid lifecycle calls are rejected by the executor with a concise

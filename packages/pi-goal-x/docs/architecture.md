@@ -33,9 +33,9 @@ handlers from their dedicated modules:
 | `goal-auditor.ts` | Independent pi auditor agent prompt/config/decision parsing and completion audit execution |
 | `goal-ledger.ts` | Single-file goal ledger append/read/reconstruction (18 event types incl. `task_reopened`) |
 | `goal-draft.ts` | Drafting prompt/confirmation text helpers (goalDraftingPrompt, buildDraftConfirmationText, renderConfirmationTasks, GoalDraftingFocus) |
-| `goal-drafting.ts` | Guided drafting orchestration: durable `pi-goal-draft` session entries (survive compaction/tree navigation), resume/replace/cancel protection, `core.goalDraftActive` flag consumed by execution-tool guards, `goal_question`/`goal_questionnaire`/`propose_goal_draft` tools, per-draft auditor selection |
-| `goal-questionnaire.ts` | Structured question/answer UI (`runGoalQuestionnaire`, `showProposalDialog`) used by the drafting tools and confirmations |
-| `goal-tool-names.ts` | The seven published tool-name constants (five execution + two drafting), work/progress classification, post-stop allowlist, draft-guard text |
+| `goal-drafting.ts` | Guided drafting orchestration: durable `pi-goal-draft` session entries (survive compaction/tree navigation), resume/replace/cancel protection, `core.goalDraftActive` flag consumed by execution-tool guards, the `propose_goal_draft` tool, per-draft auditor selection |
+| `goal-questionnaire.ts` | Goal confirm-dialog UI (`runGoalQuestionnaire`, `showProposalDialog`, select/input fallback) used by the proposal tool |
+| `goal-tool-names.ts` | The six published tool-name constants (five execution + the drafting proposal tool), work/progress classification, post-stop allowlist, draft-guard text |
 | `goal-detail.ts` | Lossless objective/task/history paging with content-bound cursors |
 | `goal-ledger-index.ts` | Incremental per-goal activity, audit, lifecycle, and Oracle projections |
 | `goal-task-index.ts` | Content-keyed task snapshots shared by prompts, tools, and dashboard models |
@@ -85,7 +85,7 @@ direct write or ledger calls.
 ```text
 /user command or explicit create_goal request
   ├─ /goal [seed] or /sisyphus [seed]
-  │    └─ guided draft: clarify/questionnaire → objective + optional task proposal → explicit confirmation
+  │    └─ guided draft: clarify (pi-ask `ask_user`) → objective + optional task proposal → explicit confirmation
   ├─ /goal-direct <objective> or /sisyphus-direct <objective>
   │    └─ direct creation: objective (1–4000 chars) → active goal file → focused → autoContinue
   ├─ focused active goal
@@ -235,10 +235,9 @@ The extension registers five normal-execution tools and two drafting-only tools:
 | `update_goal` | Run outcomes: `complete` (audited from actual evidence; optional `completion_summary` is an untrusted claim), `blocked` (after three consecutive identical blockers), or `paused` (immediate agent pause with required `reason`). |
 | `set_goal_tasks` | Create or structurally replace the task tree (flat parent-linked input, confirmation dialog, id-stable merge). |
 | `update_goal_task` | Update one task without stopping the turn, or an ordered atomic batch: complete (evidence for contracted tasks), skipped (reason), pending (reopens skipped). |
-| `goal_questionnaire` | Drafting-only clarification UI for one or many structured questions (a single question with no options is a free-text prompt). |
 | `propose_goal_draft` | Drafting-only objective/task proposal with Confirm or Continue Chatting. |
 
-The surface is constant: all seven tools are activated once at session start
+The surface is constant: all six tools are activated once at session start
 (on top of the host's ordinary work-tool selection) and are never added,
 removed, or re-ordered by any lifecycle event, command, draft transition, or
 settings change — every `setActiveTools` call rebuilds the base system prompt
@@ -369,7 +368,7 @@ first-class workflow; see the follow-up section below.)
 The runtime follow-up
 ([`specs/2026-08-04-goal-runtime-follow-up`](../specs/2026-08-04-goal-runtime-follow-up/TECH.md))
 then shipped the remaining work: guided drafting is restored as a
-first-class, transient user-invoked workflow (questionnaire, proposal
+first-class, transient user-invoked workflow (clarification, proposal
 confirmation, atomic creation, durable draft sessions, `/goal-cancel`,
 `/goal-status`, per-draft auditor selection); the settings menu is fully
 operable; `/goal-clear` confirms; task confirmation uses neutral labels;

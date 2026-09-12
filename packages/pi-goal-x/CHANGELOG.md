@@ -2,6 +2,49 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.6.0] — 2026-09-12 (fork release)
+
+### Removed
+
+- **The `goal_questionnaire` tool is no longer registered.** Guided drafting no
+  longer ships a questionnaire tool: its model-visible definition (name,
+  description, prompt snippet, and the `questions` JSON schema — measured at
+  772 bytes) sat in the tool block of every request for the whole session, so
+  removing it shrinks the prompt prefix permanently. The extension now
+  registers six tools instead of seven. Structured clarification during
+  drafting is delegated to the optional
+  [`@eko24ive/pi-ask`](https://www.npmjs.com/package/@eko24ive/pi-ask) package
+  (`ask_user`): install it and the agent asks through it, leave it out and the
+  agent asks in plain chat. pi-goal-x does not depend on pi-ask, bundles
+  nothing from it, and its `pi.extensions` manifest still points at the goal
+  extension only.
+- **E5 questionnaire Q&A echo removed.** The confirmed-goal report no longer
+  carries a clarification summary: `ActiveGoalDraft.questionnaireEcho` and
+  `formatQuestionnaireAnswers` are gone. `buildGoalCreatedReport` keeps its
+  optional `detailedSummary` argument for the direct-creation path.
+- Removed the already-unused `isHeadlessQuestionSufficientForDraft` helper
+  together with the tool-side questionnaire helpers.
+
+### Changed
+
+- `goalDraftingPrompt` now directs drafting clarification to the installed
+  `ask_user` tool and falls back to plain conversation when it is absent.
+- `goal-questionnaire.ts` keeps only the goal-owned confirm dialog
+  (`runGoalQuestionnaire`, `showProposalDialog`, and the `select`/`input`
+  fallback for hosts without a custom UI). It is no longer part of the model
+  surface; the file name is unchanged.
+- `DRAFTING_GOAL_TOOLS` now contains only `propose_goal_draft`;
+  `ALL_REGISTERED_GOAL_TOOLS` is six tools (five execution + the proposal
+  tool). The surface stays constant for the whole session — no conditional
+  registration and no extra `setActiveTools` call.
+- README and docs describe the six-tool surface and the pi-ask delegation.
+
+### Unchanged (explicitly verified)
+
+- The confirm dialog is byte-for-byte the same surface: Confirm / Continue
+  Chatting / Cancel, the `┌─ TASKS ─┐` plan box, the `a` auditor toggle, the
+  `select`/`input` fallback on non-TUI hosts, and `PI_GOAL_AUTO_CONFIRM=1`.
+
 ## [0.5.2] — 2026-09-12 (fork release)
 
 ### Fixed

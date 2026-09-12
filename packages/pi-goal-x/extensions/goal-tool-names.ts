@@ -3,7 +3,6 @@ export const GET_GOAL_TOOL_NAME = "get_goal";
 export const UPDATE_GOAL_TOOL_NAME = "update_goal";
 export const SET_GOAL_TASKS_TOOL_NAME = "set_goal_tasks";
 export const UPDATE_GOAL_TASK_TOOL_NAME = "update_goal_task";
-export const QUESTIONNAIRE_TOOL_NAME = "goal_questionnaire";
 export const PROPOSE_DRAFT_TOOL_NAME = "propose_goal_draft";
 
 /** The stable core model surface: three tools, installed without phase-dependent sync. */
@@ -18,11 +17,14 @@ export const FIVE_GOAL_TOOLS = [...CORE_GOAL_TOOL_NAMES, ...TASK_TOOL_NAMES] as 
 /** Fixed task-disabled profile: the three core tools. */
 export const CORE_GOAL_TOOLS = CORE_GOAL_TOOL_NAMES;
 
-/** User-started drafting uses a separate transient model profile. */
-export const DRAFTING_GOAL_TOOLS = [
-	QUESTIONNAIRE_TOOL_NAME,
-	PROPOSE_DRAFT_TOOL_NAME,
-] as const;
+/**
+ * Drafting-only tools. Registered once like every other goal tool (the model
+ * surface is constant for the whole session); the draft gate is enforced by
+ * their own execute() guards, not by a phase-dependent tool list. Structured
+ * clarification during drafting is delegated to pi-ask's `ask_user` when that
+ * package is installed, so no questionnaire tool is registered here.
+ */
+export const DRAFTING_GOAL_TOOLS = [PROPOSE_DRAFT_TOOL_NAME] as const;
 
 /** Every goal tool this extension registers (used by installGoalTools). */
 export const ALL_REGISTERED_GOAL_TOOLS = [...FIVE_GOAL_TOOLS, ...DRAFTING_GOAL_TOOLS] as const;

@@ -80,14 +80,14 @@ function testFixture() {
 	return { cwd, goal: written, mockCtx, cleanup };
 }
 
-// All seven registered goal tools: five execution + two drafting. The
-// surface is installed once at session start and never changes.
+// All six registered goal tools: five execution + the drafting proposal tool.
+// The surface is installed once at session start and never changes.
 const ALL_GOAL_TOOLS = [
 	"create_goal", "get_goal", "update_goal", "set_goal_tasks", "update_goal_task",
-	"goal_questionnaire", "propose_goal_draft",
+	"propose_goal_draft",
 ];
 const EXECUTION_TOOLS = ["create_goal", "get_goal", "update_goal", "set_goal_tasks", "update_goal_task"];
-const DRAFTING_TOOLS = ["goal_questionnaire", "propose_goal_draft"];
+const DRAFTING_TOOLS = ["propose_goal_draft"];
 
 // Arbitrary host tool seeds: profile installation must never remove these.
 const HOST_SEED_A = ["read", "bash", "edit", "write"];
@@ -95,6 +95,9 @@ const HOST_SEED_B = ["read", "grep", "find", "ls", "fetch", "custom-ext-tool"];
 
 const REMOVED_TOOLS = [
 	"goal_question",
+	// Clarification during drafting is pi-ask's `ask_user`; the goal extension
+	// must never advertise a questionnaire tool again.
+	"goal_questionnaire",
 	"complete_goal", "pause_goal", "abort_goal", "propose_goal_tweak",
 	"step_complete", "propose_task_list", "complete_task", "skip_task",
 ];

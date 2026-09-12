@@ -164,7 +164,14 @@ Start a guided regular goal:
 
 The agent can ask questions and propose a complete objective and task plan. Confirm the proposal to create the goal and begin work.
 
-The questionnaire dialog never truncates the question; when it is taller than the terminal it stays within the height and scrolls — `PgUp`/`PgDn` page and `Ctrl+↑/↓` line-scroll without moving the selection, `↑/↓` selection auto-follows into view, and a `▲`/`… +N more` edge indicator shows what is clipped.
+Structured clarification during drafting is delegated to the optional
+[`@eko24ive/pi-ask`](https://www.npmjs.com/package/@eko24ive/pi-ask) package:
+when it is installed the agent asks through its `ask_user` tool, and without it
+the agent simply asks in plain chat. pi-goal-x does not depend on pi-ask and
+registers no question tool of its own — one fewer tool definition in every
+request's tool prefix.
+
+The confirm dialog never truncates the question; when it is taller than the terminal it stays within the height and scrolls — `PgUp`/`PgDn` page and `Ctrl+↑/↓` line-scroll without moving the selection, `↑/↓` selection auto-follows into view, and a `▲`/`… +N more` edge indicator shows what is clipped.
 
 Start a guided Sisyphus goal:
 
@@ -382,7 +389,7 @@ Each session can focus on one goal while the project keeps other goals open.
 
 The extension is designed so that the provider prompt-cache prefix never
 breaks. The system prompt carries no goal content, and the goal-tool surface
-(all seven tools) is installed once at session start and never changes — no
+(all six tools) is installed once at session start and never changes — no
 lifecycle event, draft transition, or settings change calls `setActiveTools`
 again. Drafting isolation and `disableTasks` are enforced by guards inside
 the tool handlers.
