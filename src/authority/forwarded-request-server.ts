@@ -1,31 +1,15 @@
 import { join } from "node:path";
-import { resolutionFor } from "#src/authority/decision-resolution";
-import type { DecisionSource } from "#src/authority/decision-source";
-import {
-  type ForwarderContext,
-  getSessionId,
-} from "#src/authority/forwarder-context";
-import {
-  createDeniedPermissionDecision,
-  type PermissionPromptDecision,
-} from "#src/authority/permission-dialog";
-import {
-  type ForwardedAccessFacts,
-  type ForwardedAccessIntent,
-  type ForwardedPermissionRequest,
-  type ForwardedPermissionResponse,
-  isForwardedPermissionRequestForSession,
-  type PermissionForwardingLocation,
-} from "#src/authority/permission-forwarding";
-import type { SubagentSessionRegistry } from "#src/authority/subagent-registry";
-import type { DecisionBroadcaster } from "#src/decision-reporter";
-import type { PermissionDecisionEvent } from "#src/permission-events";
+import type { DecisionBroadcaster } from "#src/logging/decision-reporter";
+import type { DebugReviewLogger } from "#src/logging/session-logger";
 import { buildForwardedAskPayload } from "#src/presentation/forwarded-ask-payload";
-import { SessionApproval } from "#src/session-approval";
-import type { SessionApprovalRecorder } from "#src/session-approval-recorder";
-import type { DebugReviewLogger } from "#src/session-logger";
+import type { PermissionDecisionEvent } from "#src/service/permission-events";
+import { SessionApproval } from "#src/session/session-approval";
+import type { SessionApprovalRecorder } from "#src/session/session-approval-recorder";
 import type { PermissionCheckResult } from "#src/types";
 import type { AskEscalator } from "./authorizer-selection";
+import { resolutionFor } from "./decision-resolution";
+import type { DecisionSource } from "./decision-source";
+import { type ForwarderContext, getSessionId } from "./forwarder-context";
 import {
   cleanupPermissionForwardingLocationIfEmpty,
   ensureDirectoryExists,
@@ -38,7 +22,20 @@ import {
   safeDeleteFile,
   writeJsonFileAtomic,
 } from "./forwarding-io";
+import {
+  createDeniedPermissionDecision,
+  type PermissionPromptDecision,
+} from "./permission-dialog";
+import {
+  type ForwardedAccessFacts,
+  type ForwardedAccessIntent,
+  type ForwardedPermissionRequest,
+  type ForwardedPermissionResponse,
+  isForwardedPermissionRequestForSession,
+  type PermissionForwardingLocation,
+} from "./permission-forwarding";
 import type { PromptPermissionDetails } from "./permission-prompter";
+import type { SubagentSessionRegistry } from "./subagent-registry";
 
 /**
  * Narrow seam describing what `ForwardingManager` needs from the server: a

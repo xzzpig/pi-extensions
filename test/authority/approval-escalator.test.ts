@@ -9,11 +9,12 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { ParentAuthorizer } from "#src/authority/approval-escalator";
 import {
   type ForwardedPermissionRequest,
   PERMISSION_FORWARDING_SERVING_GRACE_MS,
+  SUBAGENT_ENV_HINT_KEYS,
 } from "#src/authority/permission-forwarding";
 import { ServingSessionRegistry } from "#src/authority/serving-registry";
 import {
@@ -28,6 +29,18 @@ import {
   makePromptDetails,
   makePromptPayload,
 } from "#test/helpers/prompt-details-fixtures";
+
+// Target resolution reads ambient `process.env`, so clear the hints a host
+// session may export before each test decides what it wants set.
+beforeEach(() => {
+  for (const key of SUBAGENT_ENV_HINT_KEYS) {
+    vi.stubEnv(key, undefined);
+  }
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 // ── Local poll helper ────────────────────────────────────────────────────
 //
@@ -628,6 +641,33 @@ describe("ParentAuthorizer abandonment", () => {
         "Could not resolve a parent session to forward this permission request to",
       ),
     );
+  });
+
+  test("reports a self-naming marker as unresolvable and writes no request", async () => {
+    // A child's own copy of a subagent extension can overwrite the spawner's
+    // marker with the child's own session id. The real parent is then gone from
+    // the process, so the honest answer is an actionable refusal rather than a
+    // request filed into an inbox nobody drains (#907).
+    const temp = createForwardingTempDir("child-session");
+    try {
+      vi.stubEnv("PI_SUBAGENT_PARENT_SESSION", "child-session");
+      const authorizer = new ParentAuthorizer(
+        makeForwarderContext({ hasUI: false, sessionId: "child-session" }),
+        makeParentAuthorizerDeps({
+          forwardingDir: temp.forwardingDir,
+          registry: makeSubagentRegistry("child-session"),
+        }),
+      );
+
+      await expect(authorizer.authorize({ ...forwardedAsk })).resolves.toEqual(
+        unavailableDecision(
+          "Could not resolve a parent session to forward this permission request to",
+        ),
+      );
+      expect(readdirSync(temp.location.requestsDir)).toEqual([]);
+    } finally {
+      temp.cleanup();
+    }
   });
 
   test("reports unusable forwarding directories as unavailable", async () => {

@@ -1,10 +1,12 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { DebugReviewLogger } from "#src/session-logger";
+import type { DebugReviewLogger } from "#src/logging/session-logger";
 import type { InboxProcessor } from "./forwarded-request-server";
 import { getSessionId } from "./forwarder-context";
-import { PERMISSION_FORWARDING_POLL_INTERVAL_MS } from "./permission-forwarding";
+import {
+  normalizePermissionForwardingSessionId,
+  PERMISSION_FORWARDING_POLL_INTERVAL_MS,
+} from "./permission-forwarding";
 import type { ServingAnnouncer } from "./serving-registry";
-import type { SubagentDetector } from "./subagent-detection";
 
 /**
  * Narrow interface for the forwarding lifecycle used by `PermissionSession`.
@@ -17,8 +19,6 @@ export interface ForwardingController {
 
 /** Constructor config for {@link ForwardingManager}. */
 export interface ForwardingManagerDeps {
-  /** Single owner of subagent detection; gates whether this session may serve. */
-  detection: SubagentDetector;
   /** Drains this session's forwarded-permission inbox on each tick. */
   forwarder: InboxProcessor;
   /** Publishes that this session is draining its inbox, for forwarding children. */
@@ -39,6 +39,13 @@ export interface ForwardingManagerDeps {
  * into — and the review log records that id, so a child forwarding to a
  * *different* id is visible as a one-line diff against its
  * `forwarded_permission.request_created` entry (#719).
+ *
+ * Serving eligibility is `hasUI` and nothing else: a node with a UI has a human
+ * who can answer, so it drains its own inbox. It deliberately does **not** ask
+ * whether this process looks like a subagent — a spawner may export a
+ * parent-session marker from its own root process so the children it later
+ * launches inherit it, which made the root withdraw serving and fail every
+ * forwarded ask closed (#907).
  */
 export class ForwardingManager {
   private timer: NodeJS.Timeout | null = null;
@@ -49,13 +56,13 @@ export class ForwardingManager {
   constructor(private readonly deps: ForwardingManagerDeps) {}
 
   /**
-   * Start polling if `ctx` has UI and is not a subagent execution context.
+   * Start polling if `ctx` has UI.
    * No-op (timer stays running) if already polling — updates the stored
    * context so the next tick uses the latest session.
    * Stops any existing poll when the context does not qualify for forwarding.
    */
   start(ctx: ExtensionContext): void {
-    if (!ctx.hasUI || this.deps.detection.isSubagent(ctx)) {
+    if (!ctx.hasUI) {
       this.stop();
       return;
     }
@@ -99,30 +106,44 @@ export class ForwardingManager {
    *
    * A no-op when the id is unchanged, since `start` runs on every
    * `before_agent_start`, `input`, and `tool_call` — the announcement must not
-   * cost a log line per turn.
+   * cost a log line per turn. Also a no-op for an unreachable id: a record
+   * under the `"unknown"` sentinel names a session no child can target.
    */
   private announceServing(sessionId: string): void {
-    if (this.servingSessionId === sessionId) {
+    const served = normalizePermissionForwardingSessionId(sessionId);
+    if (served === null || this.servingSessionId === served) {
       return;
     }
     this.withdrawServing();
-    this.servingSessionId = sessionId;
-    this.deps.serving.markServing(sessionId);
+    this.servingSessionId = served;
+    this.deps.serving.markServing(served);
     this.deps.logger.review("forwarded_permission.serving_started", {
-      sessionId,
+      sessionId: served,
     });
   }
 
   /**
    * Re-announce the served session, keeping a decayable channel current.
    *
-   * Separate from {@link announceServing} because that one detects a change to
-   * write its log line, and this one deliberately writes none — four review
-   * entries a second would drown the log the announcement exists to make
-   * readable.
+   * The id is re-resolved from the live context rather than trusted from
+   * `start`, because a session id can change in place without a turn event and
+   * `ForwardedRequestServer.processInbox` reads the live one on every tick. An
+   * announcement pinned to the id captured at `start` therefore drifts away
+   * from the inbox actually being drained, stranding children on both sides of
+   * the change (#907). A change is rare and diagnosis-worthy, so it is
+   * delegated to {@link announceServing} and logged; the unchanged case never
+   * reaches it and stays silent, since four review entries a second would drown
+   * the log the announcement exists to make readable.
    */
   private refreshServing(): void {
-    if (this.servingSessionId === null) {
+    if (this.servingSessionId === null || this.context === null) {
+      return;
+    }
+    const liveSessionId = normalizePermissionForwardingSessionId(
+      getSessionId(this.context),
+    );
+    if (liveSessionId !== null && liveSessionId !== this.servingSessionId) {
+      this.announceServing(liveSessionId);
       return;
     }
     this.deps.serving.markServing(this.servingSessionId);

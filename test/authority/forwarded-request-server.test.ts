@@ -30,10 +30,10 @@ import {
   PermissionPrompter,
   type PromptPermissionDetails,
 } from "#src/authority/permission-prompter";
-import type { PermissionDecisionEvent } from "#src/permission-events";
-import { PermissionResolver } from "#src/permission-resolver";
+import { PermissionResolver } from "#src/policy/permission-resolver";
 import type { PermissionQuery } from "#src/service";
-import { SessionRules } from "#src/session-rules";
+import type { PermissionDecisionEvent } from "#src/service/permission-events";
+import { SessionRules } from "#src/session/session-rules";
 import type { PermissionCheckResult } from "#src/types";
 import {
   makeAuthorizerSelectionDeps,

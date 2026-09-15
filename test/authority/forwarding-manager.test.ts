@@ -1,15 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ForwardingManager } from "#src/authority/forwarding-manager";
+import { SUBAGENT_ENV_HINT_KEYS } from "#src/authority/permission-forwarding";
 import {
   type ServingAnnouncer,
   ServingSessionRegistry,
 } from "#src/authority/serving-registry";
-import type { SubagentDetector } from "#src/authority/subagent-detection";
 
 // ── Mocks ─────────────────────────────────────────────────────────────────
 
 const mockProcessInbox = vi.fn((): Promise<void> => Promise.resolve());
-const mockIsSubagent = vi.fn((): boolean => false);
 const mockReview = vi.fn();
 
 // ── Helpers ───────────────────────────────────────────────────────────────
@@ -28,8 +27,20 @@ function makeForwarder() {
   return { processInbox: mockProcessInbox };
 }
 
-function makeDetection(): SubagentDetector {
-  return { isSubagent: mockIsSubagent };
+/**
+ * A ctx whose session id can change after `start`, as an in-place session fork
+ * does — the churn that desynchronizes the announcement from the drained inbox.
+ */
+function makeChurningCtx(sessionId: string) {
+  const getSessionId = vi.fn((): string => sessionId);
+  return {
+    getSessionId,
+    ctx: {
+      hasUI: true,
+      sessionManager: { getSessionId },
+      cwd: "/project",
+    } as unknown as import("@earendil-works/pi-coding-agent").ExtensionContext,
+  };
 }
 
 /** A `ServingAnnouncer` whose calls can be counted, for the refresh tests. */
@@ -39,7 +50,6 @@ function makeAnnouncer() {
 
 function makeManager(serving: ServingAnnouncer = new ServingSessionRegistry()) {
   return new ForwardingManager({
-    detection: makeDetection(),
     forwarder: makeForwarder(),
     serving,
     logger: { review: mockReview, debug: vi.fn() },
@@ -51,8 +61,9 @@ function makeManager(serving: ServingAnnouncer = new ServingSessionRegistry()) {
 describe("ForwardingManager", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    mockIsSubagent.mockReset();
-    mockIsSubagent.mockReturnValue(false);
+    for (const key of SUBAGENT_ENV_HINT_KEYS) {
+      vi.stubEnv(key, undefined);
+    }
     mockProcessInbox.mockReset();
     mockProcessInbox.mockResolvedValue(undefined);
     mockReview.mockReset();
@@ -60,6 +71,7 @@ describe("ForwardingManager", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
   });
 
   describe("stop()", () => {
@@ -105,31 +117,20 @@ describe("ForwardingManager", () => {
       expect(mockProcessInbox).not.toHaveBeenCalled();
     });
 
-    it("does not start polling when the detector reports a subagent context", async () => {
-      mockIsSubagent.mockReturnValue(true);
-      const manager = makeManager();
-      const ctx = makeCtx();
-      manager.start(ctx);
+    it.each(SUBAGENT_ENV_HINT_KEYS)(
+      "keeps polling a UI context when %s is set",
+      async (key) => {
+        // Serving eligibility is `hasUI` alone. A spawner may export a marker
+        // from its own root process so its children inherit it, and that root
+        // must keep draining the inbox those children write into (#907).
+        vi.stubEnv(key, "sess-1");
+        const manager = makeManager();
+        manager.start(makeCtx({ sessionId: "sess-1" }));
 
-      await vi.advanceTimersByTimeAsync(500);
-      expect(mockProcessInbox).not.toHaveBeenCalled();
-    });
-
-    it("stops any existing poll when called with a subagent context", async () => {
-      mockIsSubagent.mockReturnValueOnce(false);
-      const manager = makeManager();
-      const ctx1 = makeCtx();
-      manager.start(ctx1);
-
-      // Second call with a subagent context.
-      mockIsSubagent.mockReturnValue(true);
-      const ctx2 = makeCtx();
-      manager.start(ctx2);
-
-      mockProcessInbox.mockClear();
-      await vi.advanceTimersByTimeAsync(500);
-      expect(mockProcessInbox).not.toHaveBeenCalled();
-    });
+        await vi.advanceTimersByTimeAsync(500);
+        expect(mockProcessInbox).toHaveBeenCalled();
+      },
+    );
 
     it("starts polling and calls processInbox on tick", async () => {
       const manager = makeManager();
@@ -188,14 +189,6 @@ describe("ForwardingManager", () => {
       resolveProcess!();
       await vi.advanceTimersByTimeAsync(250);
       expect(mockProcessInbox).toHaveBeenCalledTimes(2);
-    });
-
-    it("consults the detector with the current context", () => {
-      const manager = makeManager();
-      const ctx = makeCtx();
-      manager.start(ctx);
-
-      expect(mockIsSubagent).toHaveBeenCalledWith(ctx);
     });
   });
 
@@ -269,6 +262,21 @@ describe("ForwardingManager", () => {
 
       expect(serving.servingIds()).toEqual([]);
     });
+
+    it("marks nothing when the session id is unreachable", () => {
+      // A serving record under the `unknown` sentinel names a session no child
+      // can target, so publishing one only litters the heartbeat directory.
+      const serving = new ServingSessionRegistry();
+      const { ctx, getSessionId } = makeChurningCtx("sess-1");
+      getSessionId.mockImplementation(() => {
+        throw new Error("session id unavailable");
+      });
+
+      makeManager(serving).start(ctx);
+
+      expect(serving.servingIds()).toEqual([]);
+      expect(mockReview).not.toHaveBeenCalled();
+    });
   });
 
   describe("serving refresh", () => {
@@ -306,6 +314,61 @@ describe("ForwardingManager", () => {
 
       await vi.advanceTimersByTimeAsync(1000);
 
+      expect(mockReview).not.toHaveBeenCalled();
+    });
+
+    it("republishes under the new id when the session id changes mid-session", async () => {
+      // `processInbox` reads the live id on every tick, so an announcement
+      // pinned to the id captured at `start` drifts away from the inbox being
+      // drained: a child holding the old id waits out the full timeout while a
+      // child holding the new one finds no heartbeat at all (#907).
+      const serving = makeAnnouncer();
+      const { ctx, getSessionId } = makeChurningCtx("sess-1");
+      makeManager(serving).start(ctx);
+      serving.markServing.mockClear();
+
+      getSessionId.mockReturnValue("sess-2");
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(serving.clearServing).toHaveBeenCalledExactlyOnceWith("sess-1");
+      expect(serving.markServing).toHaveBeenCalledExactlyOnceWith("sess-2");
+
+      serving.markServing.mockClear();
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(serving.markServing).toHaveBeenCalledTimes(2);
+      expect(serving.markServing).toHaveBeenCalledWith("sess-2");
+    });
+
+    it("logs the migration once, not once per tick", async () => {
+      const { ctx, getSessionId } = makeChurningCtx("sess-1");
+      makeManager(makeAnnouncer()).start(ctx);
+      mockReview.mockClear();
+
+      getSessionId.mockReturnValue("sess-2");
+      await vi.advanceTimersByTimeAsync(1000);
+
+      expect(mockReview.mock.calls).toEqual([
+        ["forwarded_permission.serving_stopped", { sessionId: "sess-1" }],
+        ["forwarded_permission.serving_started", { sessionId: "sess-2" }],
+      ]);
+    });
+
+    it("keeps serving the last reachable id when the live id is unreachable", async () => {
+      const serving = makeAnnouncer();
+      const { ctx, getSessionId } = makeChurningCtx("sess-1");
+      makeManager(serving).start(ctx);
+      serving.markServing.mockClear();
+      mockReview.mockClear();
+
+      getSessionId.mockImplementation(() => {
+        throw new Error("session id unavailable");
+      });
+      await vi.advanceTimersByTimeAsync(750);
+
+      expect(serving.markServing).toHaveBeenCalledTimes(3);
+      expect(serving.markServing).toHaveBeenCalledWith("sess-1");
+      expect(serving.clearServing).not.toHaveBeenCalled();
       expect(mockReview).not.toHaveBeenCalled();
     });
 

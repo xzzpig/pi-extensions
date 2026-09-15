@@ -2,19 +2,19 @@ import {
   type DecisionSource,
   effectiveDecider,
 } from "#src/authority/decision-source";
-import { EXTENSION_ID } from "#src/extension-config";
-import { DEFAULT_RENDER_BUDGET } from "#src/presentation/dialog-renderer";
+import { EXTENSION_ID } from "#src/config/extension-config";
+import type { BashCommandContext } from "#src/types";
+import { DEFAULT_RENDER_BUDGET } from "./dialog-renderer";
 import {
   describeBashCommandContext,
   flaggedElementLabel,
   flaggedElements,
-} from "#src/presentation/fact-vocabulary";
+} from "./fact-vocabulary";
 import {
   allEvidence,
   findEvidence,
   type PromptPayload,
-} from "#src/presentation/prompt-payload";
-import type { BashCommandContext } from "#src/types";
+} from "./prompt-payload";
 
 /**
  * The agent-facing render of a refused permission ask (ADR 0011 §7).

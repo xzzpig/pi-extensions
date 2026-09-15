@@ -12,9 +12,9 @@ import { vi } from "vitest";
 import type { ResolvedAccessIntent } from "#src/access-intent/access-intent";
 import { surfaceFamilyOf } from "#src/access-intent/path-surfaces";
 import type { AskEscalator } from "#src/authority/authorizer-selection";
-import type { ShellToolsConfig } from "#src/config-schema";
-import { GateDecisionReporter } from "#src/decision-reporter";
-import { DEFAULT_EXTENSION_CONFIG } from "#src/extension-config";
+import type { ShellToolsConfig } from "#src/config/config-schema";
+import { DEFAULT_EXTENSION_CONFIG } from "#src/config/extension-config";
+import type { ToolRegistry } from "#src/exposure/tool-registry";
 import { GateRunner } from "#src/handlers/gates/runner";
 import {
   type SkillInputGateInputs,
@@ -25,18 +25,18 @@ import {
   ToolCallGatePipeline,
 } from "#src/handlers/gates/tool-call-gate-pipeline";
 import { PermissionGateHandler } from "#src/handlers/permission-gate-handler";
-import type { PermissionDecisionEvent } from "#src/permission-events";
-import { PERMISSIONS_DECISION_CHANNEL } from "#src/permission-events";
-import type { Rule } from "#src/rule";
-import { SessionRules } from "#src/session-rules";
-import type { ToolRegistry } from "#src/tool-registry";
+import { GateDecisionReporter } from "#src/logging/decision-reporter";
+import type { Rule } from "#src/policy/rule";
+import type { PermissionDecisionEvent } from "#src/service/permission-events";
+import { PERMISSIONS_DECISION_CHANNEL } from "#src/service/permission-events";
+import { SessionRules } from "#src/session/session-rules";
 import type { PermissionCheckResult, PermissionState } from "#src/types";
-import { DECIDED_BY_HUMAN } from "#test/helpers/decision-fixtures";
+import { DECIDED_BY_HUMAN } from "./decision-fixtures";
 import {
   makeConfigStore,
   makeRealResolver,
   makeRealSession,
-} from "#test/helpers/session-fixtures";
+} from "./session-fixtures";
 
 // ── MockGateHandlerSession ────────────────────────────────────────────────
 
@@ -129,10 +129,49 @@ export function makeToolRegistry(
   overrides: Partial<ToolRegistry> = {},
 ): ToolRegistry {
   return {
-    getAll: vi.fn().mockReturnValue([{ name: "read" }, { name: "bash" }]),
+    getAll: vi.fn().mockReturnValue([
+      { name: "read", promptGuidelines: ["Use read to examine files."] },
+      { name: "bash", promptGuidelines: ["Use bash for file operations."] },
+    ]),
     getActive: vi.fn().mockReturnValue(["read", "bash"]),
     setActive: vi.fn(),
     ...overrides,
+  };
+}
+
+/**
+ * `ToolRegistry` double that models Pi's real feedback loop: `getActive()`
+ * reads back whatever the last `setActive()` accepted, so each turn's filtered
+ * output becomes the next turn's observed active set.
+ *
+ * It also mirrors `setActiveToolsByName`, which resolves every requested name
+ * against the full tool registry and silently ignores the ones it does not
+ * know — so a name reactivated after being withheld only takes effect while
+ * the tool is still registered.
+ *
+ * The static {@link makeToolRegistry} above cannot express either behavior;
+ * tests that span turns need this one.
+ */
+export function makeStatefulToolRegistry(seed: {
+  active: readonly string[];
+  registered?: readonly string[];
+}) {
+  const registered = new Set(seed.registered ?? seed.active);
+  let active = [...seed.active];
+  return {
+    getAll: vi.fn((): unknown[] => [...registered].map((name) => ({ name }))),
+    getActive: vi.fn((): string[] => [...active]),
+    setActive: vi.fn((names: string[]): void => {
+      active = names.filter((name) => registered.has(name));
+    }),
+    /** Drop a tool from the registry, as unloading its extension would. */
+    unregister: (name: string): void => {
+      registered.delete(name);
+    },
+    /** Add a tool to the registry without activating it. */
+    register: (name: string): void => {
+      registered.add(name);
+    },
   };
 }
 

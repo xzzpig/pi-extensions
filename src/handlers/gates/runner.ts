@@ -2,16 +2,16 @@ import type { AskEscalator } from "#src/authority/authorizer-selection";
 import { resolutionFor } from "#src/authority/decision-resolution";
 import type { DecisionSource } from "#src/authority/decision-source";
 import type { PermissionPromptDecision } from "#src/authority/permission-dialog";
-import type { DecisionReporter } from "#src/decision-reporter";
-import { applyPermissionGate } from "#src/permission-gate";
+import type { DecisionReporter } from "#src/logging/decision-reporter";
 import { createPermissionRequestId } from "#src/permission-request-id";
-import type { ScopedPermissionResolver } from "#src/permission-resolver";
+import { applyPermissionGate } from "#src/policy/permission-gate";
+import type { ScopedPermissionResolver } from "#src/policy/permission-resolver";
 import {
   renderPolicyDenial,
   renderRefusal,
 } from "#src/presentation/agent-renderer";
 import { renderReviewLogFacts } from "#src/presentation/review-log-renderer";
-import type { SessionApprovalRecorder } from "#src/session-approval-recorder";
+import type { SessionApprovalRecorder } from "#src/session/session-approval-recorder";
 import type { PermissionCheckResult } from "#src/types";
 import type {
   DecisionEventFacts,

@@ -1,29 +1,26 @@
 import type { AccessPath } from "#src/access-intent/access-path";
 import {
-  ARG_NODE_TYPES,
-  SKIP_SUBTREE_TYPES,
-} from "#src/access-intent/bash/node-text";
-import type { TSNode } from "#src/access-intent/bash/parser";
+  mergeTokenEffects,
+  type TokenEffect,
+  UNPROVEN_EFFECT,
+} from "#src/access-intent/effect";
+import { normalizePathPolicyLiteral } from "#src/access-intent/path-normalization";
+import type { PathNormalizer } from "#src/path/path-normalizer";
+import { isSafeSystemPath } from "#src/path/safe-system-paths";
+import { ARG_NODE_TYPES, SKIP_SUBTREE_TYPES } from "./node-text";
+import type { TSNode } from "./parser";
 import {
   classifyBareTokenCandidate,
   classifyTokenAsPathCandidate,
   classifyTokenAsRuleCandidate,
-} from "#src/access-intent/bash/token-classification";
+} from "./token-classification";
 import {
   collectCommandTokens,
   collectPathCandidateTokens,
   collectRedirectTokens,
   extractCommandName,
   type PathToken,
-} from "#src/access-intent/bash/token-collection";
-import {
-  mergeTokenEffects,
-  type TokenEffect,
-  UNPROVEN_EFFECT,
-} from "#src/access-intent/effect";
-import { normalizePathPolicyLiteral } from "#src/access-intent/path-normalization";
-import type { PathNormalizer } from "#src/path-normalizer";
-import { isSafeSystemPath } from "#src/safe-system-paths";
+} from "./token-collection";
 
 // ── Internal types ───────────────────────────────────────────────────────────
 

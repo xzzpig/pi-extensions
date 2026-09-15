@@ -5,6 +5,61 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [31.1.4](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v31.1.3...pi-permission-system-v31.1.4) (2026-09-11)
+
+
+### Bug Fixes
+
+* keep serving forwarded permissions when a parent-session marker is inherited ([0e1188b](https://github.com/gotgenes/pi-packages/commit/0e1188bb88b8d5b3ee14db3027baf4038644678b)), closes [#907](https://github.com/gotgenes/pi-packages/issues/907)
+* republish the serving heartbeat when the session id changes mid-session ([3fcb1a1](https://github.com/gotgenes/pi-packages/commit/3fcb1a1b040709510b774d873e08548da519b09a)), closes [#907](https://github.com/gotgenes/pi-packages/issues/907)
+* refuse a forwarding target that names the requesting session ([30ab5cc](https://github.com/gotgenes/pi-packages/commit/30ab5cc1f1418b38cc572d53b4d166d4097ce3e1)), closes [#907](https://github.com/gotgenes/pi-packages/issues/907)
+
+### Documentation
+
+* record that a UI host always serves forwarded permissions ([f62ca0b](https://github.com/gotgenes/pi-packages/commit/f62ca0b5ed920c0912691a8878375d7ce98d7770)), closes [#907](https://github.com/gotgenes/pi-packages/issues/907)
+
+## [31.1.3](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v31.1.2...pi-permission-system-v31.1.3) (2026-09-08)
+
+
+### Bug Fixes
+
+* **pi-permission-system:** state each session's own tool list instead of editing the inherited one ([190e4c7](https://github.com/gotgenes/pi-packages/commit/190e4c7dc7e1a34e2e3c3ce4b413cd1e3ecd74c7)), closes [#890](https://github.com/gotgenes/pi-packages/issues/890)
+
+### Documentation
+
+* record that the inherited region is shared parts, not shared bytes ([#890](https://github.com/gotgenes/pi-packages/issues/890)) ([5755a9a](https://github.com/gotgenes/pi-packages/commit/5755a9a8ea34bf5c7e08a4cb8abc988c12eb3a59))
+* correct the sub-agent bridge description and the header-match residual ([#890](https://github.com/gotgenes/pi-packages/issues/890)) ([b0db764](https://github.com/gotgenes/pi-packages/commit/b0db764e0ffa484eb18bad2883710e77d93ec99b)), closes [#890](https://github.com/gotgenes/pi-packages/issues/890)
+
+## [31.1.2](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v31.1.1...pi-permission-system-v31.1.2) (2026-09-07)
+
+
+### Miscellaneous Chores
+
+* **pi-permission-system:** add path false-positive measurement script ([464c6a1](https://github.com/gotgenes/pi-packages/commit/464c6a10a2795cbae5fac4e518d0b60ed90c7eaf)), closes [#863](https://github.com/gotgenes/pi-packages/issues/863)
+
+## [31.1.1](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v31.1.0...pi-permission-system-v31.1.1) (2026-09-05)
+
+
+### Documentation
+
+* **pi-permission-system:** record the directory vocabulary and mark Phase 14 Step 13 ([72a3c0d](https://github.com/gotgenes/pi-packages/commit/72a3c0d83eed5489874d93404f4277797e193649)), closes [#837](https://github.com/gotgenes/pi-packages/issues/837)
+
+## [31.1.0](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v31.0.2...pi-permission-system-v31.1.0) (2026-09-04)
+
+
+### Features
+
+* **pi-permission-system:** record every change to the effective tool surface in the debug log ([bf0331a](https://github.com/gotgenes/pi-packages/commit/bf0331a26ace5dcee7f6a26064af1251fecaaa41))
+
+### Bug Fixes
+
+* **pi-permission-system:** restore a tool when its deny rule is relaxed mid-session ([190a25e](https://github.com/gotgenes/pi-packages/commit/190a25eccdcd5101badf6266f10142c809296983))
+* **pi-permission-system:** forget a withheld tool that pi has unregistered ([404d819](https://github.com/gotgenes/pi-packages/commit/404d8194f9763ee8a228bd36176c5adbb944464c)), closes [#873](https://github.com/gotgenes/pi-packages/issues/873)
+
+### Documentation
+
+* **pi-permission-system:** document the tool-surface baseline ([0997065](https://github.com/gotgenes/pi-packages/commit/09970655c60bfe14c5a38b986301c480ed19f316))
+
 ## [31.0.2](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v31.0.1...pi-permission-system-v31.0.2) (2026-09-04)
 
 
