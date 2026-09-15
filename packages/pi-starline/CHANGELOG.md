@@ -5,6 +5,18 @@ This fork tracks [`Andy8647/pi-starline`](https://github.com/Andy8647/pi-starlin
 via git subtree; entries below describe only fork-specific deviations from
 upstream.
 
+## [0.4.0] — 2026-09-13 (fork release)
+
+### Changed
+
+- **Synced upstream v0.3.4 → v0.3.5** (upstream minor release → fork minor
+  bump). Upstream v0.3.5 adds `extensionStatuses.placements[key]: "editor"`,
+  which puts a third-party status on the editor's bottom-right metadata row
+  (the slot the copy and paste hints already use) instead of the footer,
+  plus the tests covering it rank 12 total. The local fork's mouse features
+  remain on `@xzzpig/pi-mouse-events` as before; upstream's copy-handler
+  refactor there does not apply to the fork's `pi-mouse-events` architecture.
+
 ## [0.3.0] — 2026-09-06 (fork release)
 
 ### Changed
