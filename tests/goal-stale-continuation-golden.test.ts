@@ -1,3 +1,5 @@
+import { saveGoalSettingsFileConfig } from "../extensions/goal-settings.ts";
+import type { GoalCore } from "../extensions/goal-state.ts";
 /**
  * Stage 0 golden tests: the continuation checkpoint contract.
  *
@@ -85,6 +87,7 @@ function createHarness(cwd: string) {
 	piGoalExtension(mockPi as never);
 
 	return {
+		core: (mockPi as unknown as { _goalCore: GoalCore })._goalCore,
 		handlers,
 		sentMessages,
 		notifications,
@@ -238,6 +241,15 @@ async function countCheckpoints(h: ReturnType<typeof createHarness>): Promise<nu
 	).length;
 }
 
+/** Mark this agent run as having done goal work (empty-turn gate). */
+async function declareNextRun(h: ReturnType<typeof createHarness>): Promise<void> {
+	await h.handlers["turn_start"]!({}, h.ctx);
+	await h.handlers["tool_call"]!({ toolName: "bash", args: { command: "ls" } }, h.ctx);
+	await h.handlers["tool_execution_end"]!({}, h.ctx);
+	saveGoalSettingsFileConfig(h.ctx.cwd, { maxAutonomousRuns: 5 });
+	assert.equal(h.core.scheduler.declare(h.ctx, { kind: "ready", next_action: "Continue explicit work" }).terminate, true);
+}
+
 test("provider-error guard: turn_end with stopReason=error never queues a continuation", async () => {
 	const { cwd, goal } = fixtureCwd();
 	const h = createHarness(cwd);
@@ -264,7 +276,7 @@ test("provider-error guard: turn_end with stopReason=error never queues a contin
 	}
 });
 
-test("provider-error guard: normal work turn still queues a continuation", async () => {
+test("ordinary work without a disposition does not queue a continuation", async () => {
 	const { cwd, goal } = fixtureCwd();
 	const h = createHarness(cwd);
 	try {
@@ -282,7 +294,7 @@ test("provider-error guard: normal work turn still queues a continuation", async
 		await h.handlers["tool_execution_end"]!({}, h.ctx);
 		await h.handlers["turn_end"]!({ message: { role: "assistant", content: [{ type: "text", text: "done" }] } }, idleCtx(h.ctx));
 
-		assert.equal(await countCheckpoints(h), 1, "normal work turn must queue a continuation");
+		assert.equal(await countCheckpoints(h), 0, "work tools alone must not authorize continuation");
 	} finally {
 		// temp dir cleanup is best-effort.
 	}
@@ -341,6 +353,7 @@ test("a successful Pi retry clears the pending network-error recovery", async ()
 		await h.handlers["agent_end"]!({
 			messages: [{ role: "assistant", stopReason: "error", errorMessage: "Provider finish_reason: network_error" }],
 		}, idleCtx(h.ctx));
+		await declareNextRun(h);
 		await h.handlers["agent_end"]!({
 			messages: [{ role: "assistant", stopReason: "end_turn" }],
 		}, idleCtx(h.ctx));
@@ -358,6 +371,7 @@ test("successful agent_end waits for agent_settled before queuing a continuation
 	const h = createHarness(cwd);
 	try {
 		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
+		await declareNextRun(h);
 
 		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn" }] }, idleCtx(h.ctx));
 		assert.equal(await countCheckpoints(h), 0, "agent_end runs before pi is truly idle");
@@ -368,3 +382,34 @@ test("successful agent_end waits for agent_settled before queuing a continuation
 		// temp dir cleanup is best-effort.
 	}
 });
+
+test("empty no-tool run gets one default repair, then pauses after agent_settled", async () => {
+	const { cwd, goal } = fixtureCwd();
+	const h = createHarness(cwd);
+	try {
+		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
+		await h.handlers["before_agent_start"]!({
+			systemPrompt: "base",
+			prompt: "Continue the fixture goal.",
+			systemPromptOptions: {},
+		}, h.ctx);
+		await h.handlers["agent_start"]!({}, idleCtx(h.ctx));
+
+		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn", content: [{ type: "text", text: "Paused. No action." }] }] }, idleCtx(h.ctx));
+		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+
+		assert.equal(await countCheckpoints(h), 1, "a missing disposition gets exactly one repair");
+		assert.equal(h.core.state.goal?.scheduler?.dispatch?.kind, "repair");
+		await h.handlers["agent_start"]!({}, idleCtx(h.ctx));
+		await h.handlers["message_start"]!({ message: { ...h.sentMessages.at(-1), role: "custom" } }, idleCtx(h.ctx));
+		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn", content: [{ type: "text", text: "Still no action." }] }] }, idleCtx(h.ctx));
+		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+		assert.equal(await countCheckpoints(h), 1, "the unsuccessful repair must not loop");
+		assert.equal(h.core.state.goal?.status, "paused");
+	} finally {
+		h.core.scheduler.shutdown();
+		h.core.runtime.clearContinuationState();
+	}
+});
+
+// Explicit decision invalidation and actual SDK run-boundary coverage live in goal-scheduler.test.ts and goal-scheduler-sdk.test.ts.

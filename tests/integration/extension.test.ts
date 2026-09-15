@@ -431,7 +431,7 @@ describe("five-tool handler integration", () => {
 			return existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : {};
 		};
 
-		it("displays every one of the nine persisted rows and reflects file values", async () => {
+		it("displays every persisted settings row and reflects file values", async () => {
 			const f = fixture();
 			try {
 				writeFileSync(settingsPath(f.cwd), JSON.stringify({
@@ -448,7 +448,7 @@ describe("five-tool handler integration", () => {
 				await start(h);
 				await h.commands.get("goal-settings").handler("", h.ctx);
 				const lines = firstOptions.filter((o) => o.startsWith("  ") && !o.startsWith("  ───"));
-				assert.equal(lines.length, 16, `all sixteen rows rendered, got: ${lines.join(" | ")}`);
+				assert.equal(lines.length, 17, `all seventeen rows rendered, got: ${lines.join(" | ")}`);
 				assert.ok(lines.some((l) => l === "  auditor disabled: true (project override)"));
 				assert.ok(lines.some((l) => l === "  provider: anthropic (project override)"));
 				assert.ok(lines.some((l) => l === "  model: (default) (default)"));

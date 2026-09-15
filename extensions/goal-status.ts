@@ -31,6 +31,7 @@ export const PLAIN_THEME = {
 } as never;
 
 export interface GoalStatusTextOptions {
+	maxAutonomousRuns?: number;
 	goal: GoalRecord | null;
 	focused: boolean;
 	otherOpenGoals: number;
@@ -72,6 +73,7 @@ export function buildGoalStatusText(options: GoalStatusTextOptions): string {
 	const events = options.ledgerEvents ?? [];
 	const model = deriveGoalDashboardModel(options.goal, {
 		focused: options.focused,
+		maxAutonomousRuns: options.maxAutonomousRuns,
 		otherOpenGoals: options.otherOpenGoals,
 		ledgerEvents: events,
 	});
@@ -218,6 +220,7 @@ function visibleLen(value: string): number {
 function buildVerboseStatus(goal: GoalRecord, model: ReturnType<typeof deriveGoalDashboardModel>, events: GoalLedgerEvent[], settingsReport: string[], _width: number): string {
 	const lines: string[] = [];
 	lines.push(`Goal id: ${goal.id}`);
+	lines.push(...(model?.scheduling ?? []));
 	lines.push(`Revision: ${goal.revision ?? 0}`);
 	lines.push(`Status: ${model?.status.label}${model?.focused ? " (focused)" : " (not focused)"}`);
 	lines.push(`Mode: ${goal.sisyphus ? "sisyphus" : "goal"} · auto-continue: ${goal.autoContinue ? "on" : "off"}`);

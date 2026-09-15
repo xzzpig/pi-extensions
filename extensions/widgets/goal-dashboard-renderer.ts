@@ -310,6 +310,8 @@ export function renderCompactDashboard(
 		lines.push(boxLine(theme, safeWidth, statusLine(theme, model)));
 	}
 
+	for (const row of model.scheduling ?? []) lines.push(boxLine(theme, safeWidth, muted(theme, fit(row, inner))));
+
 	// Budget (when configured): fuel gauge + amount, amber until the budget is
 	// exhausted, then soft red.
 	if (model.budget) {
@@ -455,6 +457,7 @@ export function renderExpandedDashboard(
 	lines.push(boxHeader(theme, safeWidth, `${accent(theme, "pi-goal-x")} ${frame(theme, `─ ${model.title}`)}`));
 
 	lines.push(boxLine(theme, safeWidth, statusLine(theme, model)));
+	for (const row of model.scheduling ?? []) lines.push(boxLine(theme, safeWidth, muted(theme, fit(row, inner))));
 
 	if (spec.showPath && model.filePath) {
 		lines.push(boxLine(theme, safeWidth, dim(theme, `File: ${model.filePath}`)));

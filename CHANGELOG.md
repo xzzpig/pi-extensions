@@ -2,6 +2,24 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [Unreleased]
+
+## [0.31.4] — 2026-09-14
+
+### Changed
+
+- **Explicit execution contract (#55)** — automatic continuation is on by default with no run-count limit, using saved ready/wait decisions. Optional `maxAutonomousRuns` caps runs; zero disables them, including when overriding a global allowance. `/goal-resume` renews consumption and works without a configured limit. Tool names no longer determine continuation.
+- Outstanding wait deadlines apply to recovery and repair dispatches, including those delayed by host readiness.
+- Added durable, bounded waits, `pi-goal:wake` signals, atomic generation-tagged dispatch claims, one-shot contract repair, and scheduling status. Existing goals remain readable; interrupted dispatches require explicit resume. Independently triggered host runs remain outside the extension's allowance.
+
+## [0.31.3] — 2026-09-14
+
+### Fixed
+
+- **RPC task approval (#52)** — task proposals use native selection dialogs on RPC and non-terminal hosts. Cancelled or unavailable dialogs preserve existing tasks; the existing headless and explicit auto-confirm policies remain supported.
+
+- **Empty-turn auto-continue loop** — `agent_end` clears the turn_end continuation timer, then `agent_settled` re-queued with `force: true` even when the run called no goal-work tools. A no-tool reply (for example "Paused. No action." after `/goal-resume`) therefore injected another checkpoint forever. Auto-continue now waits for meaningful work in that agent run. User resume, goal creation, and session kickoff still start the first continuation.
+
 ## [0.31.2] — 2026-09-08
 
 ### Changed

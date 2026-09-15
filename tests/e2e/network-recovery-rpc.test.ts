@@ -123,7 +123,7 @@ async function runOutageScenario(t: import("node:test").TestContext, scenario: O
 		},
 	}));
 	// pi-goal-x settings: auto-focus the single active goal in fresh sessions.
-	writeFileSync(path.join(agentDir, "pi-goal-x-settings.json"), JSON.stringify({ autoSelectSingleGoal: true }));
+	writeFileSync(path.join(agentDir, "pi-goal-x-settings.json"), JSON.stringify({ autoSelectSingleGoal: true, maxAutonomousRuns: 100 }));
 
 	// Seed one active auto-continue goal via the extension's own serializers.
 	const goal = createGoal(

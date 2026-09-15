@@ -102,6 +102,8 @@ export interface GoalSettingsResolvedShape {
 	auditorProjectResources?: boolean;
 	/** F5: stall detector timeout in minutes (0 = off). */
 	stallTimeoutMinutes?: number;
+	/** Optional extension-run limit per creation/resume; zero disables, absent inherits (default unlimited). */
+	maxAutonomousRuns?: number;
 	/**
 	 * Maximum objective length in characters (0/unset = no limit, the
 	 * default; >0 caps objectives in create_goal, propose_goal_draft, and
@@ -328,6 +330,7 @@ const ALLOWED_SETTINGS_KEYS = new Set([
 	"autoSelectSingleGoal",
 	"auditorProjectResources",
 	"stallTimeoutMinutes",
+	"maxAutonomousRuns",
 	"objectiveMaxChars",
 	"keybindings",
 	"hideUnfocusedBanner",
@@ -395,6 +398,12 @@ export function parseSettingsLayer(
 				const parsed = asPositiveInt(value);
 				if (parsed === undefined) diagnostics.push(diagnostic("invalid_value", `${key} must be an integer >= 1`, key));
 				else layer.subtaskDepth = parsed;
+				break;
+			}
+			case "maxAutonomousRuns": {
+				const n = typeof value === "number" ? value : typeof value === "string" && /^[0-9]+$/.test(value.trim()) ? Number(value) : NaN;
+				if (!Number.isSafeInteger(n) || n < 0) diagnostics.push(diagnostic("invalid_value", "maxAutonomousRuns must be a nonnegative safe integer (0 disables automatic continuation)", key));
+				else layer.maxAutonomousRuns = n;
 				break;
 			}
 			case "stallTimeoutMinutes":
@@ -781,6 +790,11 @@ function resolvedSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv): Settings
 		globalValue: global.layer.oracle?.maxFailedAttemptsPerBlocker,
 		defaultValue: 2,
 	}));
+	const maxAutonomousRuns = track("maxAutonomousRuns", resolveLeaf<number | undefined>({
+		projectValue: project.layer.maxAutonomousRuns,
+		globalValue: global.layer.maxAutonomousRuns,
+		defaultValue: undefined,
+	}));
 	const stallTimeoutMinutes = track("stallTimeoutMinutes", resolveLeaf<number>({
 		projectValue: project.layer.stallTimeoutMinutes,
 		globalValue: global.layer.stallTimeoutMinutes,
@@ -840,6 +854,7 @@ function resolvedSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv): Settings
 		auditorProjectResources,
 		hideUnfocusedBanner,
 		stallTimeoutMinutes,
+		maxAutonomousRuns,
 		objectiveMaxChars,
 		keybindings,
 		networkRecovery: {
@@ -1189,6 +1204,7 @@ function buildPersistedLayer(settings: GoalSettings): Record<string, unknown> {
 		if (so.maxFailedAttemptsPerBlocker !== undefined) o.maxFailedAttemptsPerBlocker = so.maxFailedAttemptsPerBlocker;
 		if (Object.keys(o).length > 0) persisted.oracle = o;
 	}
+	if (settings.maxAutonomousRuns !== undefined) persisted.maxAutonomousRuns = settings.maxAutonomousRuns;
 	if (settings.stallTimeoutMinutes !== undefined) persisted.stallTimeoutMinutes = settings.stallTimeoutMinutes;
 	if (settings.objectiveMaxChars !== undefined) persisted.objectiveMaxChars = settings.objectiveMaxChars;
 	if (settings.keybindings?.dashboard) {
@@ -1232,6 +1248,7 @@ export function effectiveSettingsReport(cwd: string, env: NodeJS.ProcessEnv = pr
 		{ key: "thinkingLevel", label: "thinking_level", format: () => snapshot.value.thinkingLevel ?? "(default)" },
 		{ key: "auditorProjectResources", label: "auditor project resources", format: () => String(snapshot.value.auditorProjectResources) },
 		{ key: "hideUnfocusedBanner", label: "hide unfocused banner", format: () => String(snapshot.value.hideUnfocusedBanner) },
+		{ key: "maxAutonomousRuns", label: "autonomous run allowance", format: () => snapshot.value.maxAutonomousRuns === 0 ? "0 (disabled)" : String(snapshot.value.maxAutonomousRuns ?? "unlimited (default)") },
 		{ key: "stallTimeoutMinutes", label: "stall timeout (minutes)", format: () => String(snapshot.value.stallTimeoutMinutes) },
 		{ key: "objectiveMaxChars", label: "max objective length (0 = none)", format: () => String(snapshot.value.objectiveMaxChars) },
 		{ key: "networkRecovery", label: "network recovery attempts (0 = unbounded)", format: () => String(snapshot.value.networkRecovery?.maxAttempts ?? 0) },

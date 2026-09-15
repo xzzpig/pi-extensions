@@ -3,10 +3,10 @@
 </div>
 
 <div align="center">
-  <a href="https://pi.dev/packages" target="_blank" rel="noopener noreferrer">
+  <a href="https://pi.dev/packages?type=extension" target="_blank" rel="noopener noreferrer">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="assets/badge-dark.svg">
-      <img src="assets/badge-light.svg" alt="TOP 1% of Pi coding agent packages: #45 of 5,380 by downloads, as of Aug 2026" width="420">
+      <img src="assets/badge-light.svg" alt="TOP 0.3% of Pi coding agent extensions: #7 of 3,200 by downloads · Sep 14, 2026 (best recorded rank)" width="480">
     </picture>
   </a>
 </div>
@@ -115,12 +115,50 @@ Open `/goal-settings` to change these options. You can save defaults for all pro
 
 | Setting | What it controls |
 | --- | --- |
+| Autonomous run allowance (`maxAutonomousRuns`) | Positive whole number of extension-started runs per creation or `/goal-resume` period. **Unset disables automatic continuation.** Settings edits change the limit without resetting usage. |
 | Task tracking (`disableTasks`) | Turn task lists on or off. Set to `true` to disable them. |
 | Subtask depth (`subtaskDepth`) | Limit how many levels of subtasks the agent can create. |
 | Completion requirements (`disableContracts`) | Turn explicit goal and task completion requirements on or off. Set to `true` to disable them. |
 | Auditor disabled | Turn off independent completion review. |
 | Auditor provider, model, and thinking level | Choose which model reviews completed work and its reasoning effort. |
 
+
+### Explicit execution and waiting
+
+Goals no longer restart merely because they remain unfinished or a tool was used. Before yielding, the agent declares runnable work or an external wait using `update_goal`, or reports complete, paused, or blocked. A missing decision permits one repair prompt within the remaining allowance, then pauses.
+
+Set an appropriate allowance in `/goal-settings`, or in `.pi/pi-goal-x-settings.json`:
+
+```json
+{ "maxAutonomousRuns": 20 }
+```
+
+Agents may edit this setting. Changing it does not replenish consumed runs; explicit `/goal-resume` renews the period and continues now, including from a waiting goal. It requires a configured allowance. Tool calls within a run are not separate runs. Existing token budgets still apply.
+
+```js
+update_goal({ continuation: { kind: "ready", next_action: "Verify the build artifacts" } })
+update_goal({ continuation: {
+  kind: "wait", reason: "Await the remote build",
+  deadline: "2026-09-15T12:00:00Z",
+  polling: { interval_seconds: 60, max_checks: 3 }
+} })
+```
+
+Use a future deadline appropriate to the task. Omit `polling` for an event-only wait. Successful declarations terminate the execution segment. On a scheduled check, reuse the returned `wait_id` and original deadline, omitting `polling`; remaining checks cannot be reset. A ready decision ends the wait. Time spent waiting is not active execution time.
+
+The dashboard, `/goal-status`, and `get_goal` show scheduling state, timing, checks, and allowance consumption. Expired waits and exhausted checks or allowance pause without another model call. Waits survive reopening the same session, without replaying missed checks; Pi must remain open for timers to execute. Another session requires explicit resume to take ownership. An ambiguous interrupted dispatch requires resume instead of automatic replay.
+
+### Background producer integration
+
+Budget-controlled producers emit a scheduler signal instead of starting their own model turn:
+
+```js
+pi.events.emit("pi-goal:wake", { goalId, waitToken });
+```
+
+`waitToken` is returned in the wait declaration's tool-result details. Register it before the producer completes, or retain the completion until registration (for example, observe the `update_goal` tool result in the host adapter). The token changes after consumption and re-declaration. A matching signal received before agent settlement is retained; duplicate, stale and wrong-goal tokens are ignored. A signal and timer can claim only one wake.
+
+Existing producers that directly send `triggerTurn`/`followUp` messages still run as ordinary host work and supersede old pending decisions. Those independently started turns are **outside this extension's allowance**; use `pi-goal:wake` to put them through its spending gate. The allowance also does not limit Pi's own within-run tool loop or native retries. It bounds the goal extension's kickoff, continuation, check, signal, repair and recovery dispatches.
 
 ## License
 

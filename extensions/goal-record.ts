@@ -1,3 +1,4 @@
+import { normalizeGoalScheduler, type GoalSchedulerState } from "./goal-scheduler-state.ts";
 export type GoalStatus = "active" | "paused" | "blocked" | "budget_limited" | "complete";
 export type StopReason = "user" | "agent";
 export type GoalEventKind = "checkpoint" | "stale";
@@ -56,6 +57,7 @@ export interface GoalRecord {
 	revision?: number;
 	/** Optional token budget (whole tokens). When accounted usage reaches it, the runtime marks the goal budget_limited. */
 	tokenBudget?: number;
+	scheduler?: GoalSchedulerState;
 	/**
 	 * Execution focus: the id of the task (or subtask) the agent is working on.
 	 * Optional for backward compatibility; normalized at load (only an existing
@@ -119,7 +121,13 @@ export interface GoalStaleDetails {
 }
 
 /** Everything that can appear in a persisted pi-goal-event entry's details. */
-export type GoalEventEntryDetails = GoalCheckpointDetailsV2 | LegacyGoalEventDetails | GoalStaleDetails;
+export interface GoalCheckpointDetailsV3 extends Omit<GoalCheckpointDetailsV2, "version"> {
+	version: 3;
+	generation: string;
+	dispatchId: string;
+}
+
+export type GoalEventEntryDetails = GoalCheckpointDetailsV3 | GoalCheckpointDetailsV2 | LegacyGoalEventDetails | GoalStaleDetails;
 
 /**
  * Legacy normalized renderer shape. Kept as the stable contract for
@@ -181,6 +189,7 @@ function cloneGoalTask(task: GoalTask): GoalTask {
 export function cloneGoal(goal: GoalRecord): GoalRecord {
 	return {
 		...goal,
+		...(goal.scheduler ? { scheduler: structuredClone(goal.scheduler) } : {}),
 		usage: { ...goal.usage },
 		taskList: goal.taskList
 			? { ...goal.taskList, tasks: goal.taskList.tasks.map(cloneGoalTask) }
@@ -370,6 +379,7 @@ export function normalizeGoalRecord(value: unknown): GoalRecord | null {
 		skipAuditor: raw.skipAuditor === true ? true : undefined,
 		revision: Number.isSafeInteger(raw.revision) && (raw.revision as number) >= 0 ? (raw.revision as number) : 0,
 		tokenBudget: normalizePositiveSafeInteger(raw.tokenBudget),
+		...(raw.scheduler !== undefined ? { scheduler: normalizeGoalScheduler(raw.scheduler) } : {}),
 		taskList,
 		currentTaskId,
 		verificationContract: typeof raw.verificationContract === "string" ? raw.verificationContract : undefined,

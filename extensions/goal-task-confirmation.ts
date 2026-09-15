@@ -33,21 +33,24 @@ export interface TaskConfirmationResult {
 }
 
 export async function showTaskConfirmation(ctx: ExtensionContext, proposalText: string): Promise<TaskConfirmationResult> {
-	const autoConfirmEnv = process.env.PI_GOAL_AUTO_CONFIRM;
-	if (autoConfirmEnv === "0") {
-		// Explicit opt-out (benchmarking): in headless mode the proposal is
-		// declined without a dialog.
-		if (!ctx.hasUI) return { decision: "cancel" };
-	} else if (!ctx.hasUI || autoConfirmEnv === "1") {
-		// Headless default, or forced auto-confirm even with a UI.
-		return { decision: "confirm" };
+	if (process.env.PI_GOAL_AUTO_CONFIRM === "1") return { decision: "confirm" };
+	if (!ctx.hasUI) return { decision: process.env.PI_GOAL_AUTO_CONFIRM === "0" ? "cancel" : "confirm" };
+	if (ctx.mode !== "rpc" && typeof ctx.ui.custom === "function") {
+		const result = await showTaskListConfirmationDialog(ctx, proposalText);
+		if (result) return result;
 	}
-	return showTaskListConfirmationDialog(ctx, proposalText);
+	if (typeof ctx.ui.select !== "function") return { decision: "cancel" };
+	const answer = await ctx.ui.select(`Task list confirmation\n\n${proposalText}`, ["Confirm task list", "Keep current tasks"]);
+	return { decision: answer === "Confirm task list" ? "confirm" : "cancel" };
 }
 
-async function showTaskListConfirmationDialog(ctx: ExtensionContext, proposalText: string): Promise<TaskConfirmationResult> {
-	return await ctx.ui.custom<TaskConfirmationResult>(
-		(tui: TUI, theme: Theme, _keybindings: unknown, done: (result: TaskConfirmationResult) => void): Component => {
+async function showTaskListConfirmationDialog(ctx: ExtensionContext, proposalText: string): Promise<TaskConfirmationResult | undefined> {
+	return await ctx.ui.custom<TaskConfirmationResult | undefined>(
+		(tui: TUI, theme: Theme, _keybindings: unknown, done: (result: TaskConfirmationResult | undefined) => void): Component => {
+			if (!tui || typeof tui.getShowHardwareCursor !== "function" || typeof tui.setShowHardwareCursor !== "function" || typeof tui.requestRender !== "function") {
+				done(undefined);
+				return { render: () => [], invalidate: () => {} };
+			}
 			const wasHardwareCursorShown = tui.getShowHardwareCursor();
 			tui.setShowHardwareCursor(false);
 			// Pause pi's working spinner for the dialog duration: its ~80ms re-renders

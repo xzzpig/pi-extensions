@@ -31,6 +31,8 @@ import {
 import { GoalService } from "./goal-service.ts";
 import { goalActivityEvents } from "./goal-ledger.ts";
 import { GoalAccounting } from "./goal-accounting.ts";
+import { newGoalScheduler } from "./goal-scheduler-state.ts";
+import { GoalScheduler } from "./goal-scheduler.ts";
 import { GoalRuntime } from "./goal-runtime.ts";
 import { GoalAuditMessages } from "./goal-session-safety.ts";
 import {
@@ -79,6 +81,7 @@ export interface GoalCore {
 	goalWidgetComponentRef: { current: GoalWidgetComponent | null };
 	goalService: GoalService;
 	runtime: GoalRuntime;
+	scheduler: GoalScheduler;
 	auditMessages: GoalAuditMessages;
 	accounting: GoalAccounting;
 
@@ -262,7 +265,11 @@ export function createGoalCore(
 	// token/time accounting lives in `accounting` (extensions/goal-accounting.ts).
 	let goalWorkToolCalledThisTurn = false;
 
+	let scheduler: GoalScheduler;
 	const runtime = new GoalRuntime({
+		authorize: ctx => scheduler.claim(ctx),
+		recover: ctx => scheduler.recover(ctx),
+		dispatchFailed: ctx => scheduler.failedDispatch(ctx),
 		sendFollowUp: (content, details) => {
 			pi.sendMessage<GoalEventDetails>(
 				{
@@ -365,6 +372,7 @@ export function createGoalCore(
 	}
 
 	function clearContinuationState(resetNetworkErrorBackoff = true): void {
+		scheduler?.cancelTimer();
 		runtime.clearContinuationState(resetNetworkErrorBackoff);
 	}
 
@@ -413,6 +421,7 @@ export function createGoalCore(
 		opts: { recordLedger?: boolean } = {},
 	): void {
 		const previousGoalId = focusedGoalId;
+		if (previousGoalId !== goalId) scheduler.takeover(ctx);
 		if (previousGoalId !== goalId) goalService.flushTurn(ctx); // P1-3: persist the old buffer before switching focus
 		assignFocusedGoalId(goalId && goalsById.has(goalId) ? goalId : null);
 		if (previousGoalId !== focusedGoalId) {
@@ -455,6 +464,7 @@ export function createGoalCore(
 	}
 
 	function beginAccounting(): void {
+		if (scheduler?.isWaiting()) { clearActiveAccounting(); return; }
 		if (!state.goal || (state.goal.status !== "active")) {
 			clearActiveAccounting();
 			return;
@@ -862,8 +872,8 @@ export function createGoalCore(
 	}
 
 	function queueContinuation(ctx: ExtensionContext, force = false): void {
-		if (!state.goal) return;
-		runtime.queueContinuation(ctx, state.goal, force);
+		void force;
+		scheduler.schedule(ctx);
 	}
 
 	function enterGoalModal(): void {
@@ -876,6 +886,7 @@ export function createGoalCore(
 
 	function replaceGoal(config: GoalCreationConfig, ctx: ExtensionContext, startNow = true, verificationContract?: string, tokenBudget?: number): void {
 		const goal = createGoal(config);
+		goal.scheduler = newGoalScheduler(ctx.sessionManager.getSessionId());
 		if (verificationContract) goal.verificationContract = verificationContract;
 		if (config.taskList) goal.taskList = config.taskList;
 		if (typeof tokenBudget === "number" && tokenBudget > 0) goal.tokenBudget = Math.floor(tokenBudget);
@@ -902,10 +913,10 @@ export function createGoalCore(
 		if (result.focusChanged) appendFocusEntry(result.goalId, "created");
 		beginAccounting();
 		ctx.ui.notify(buildGoalRunningNotification(config), "info");
-		if (startNow && state.goal?.autoContinue) queueContinuation(ctx, true);
+		if (startNow && state.goal?.autoContinue) scheduler.kickoff(ctx);
 	}
 
-	return {
+	const core: GoalCore = {
 		pi,
 		dependencies,
 		state,
@@ -1002,6 +1013,7 @@ export function createGoalCore(
 		goalWidgetComponentRef,
 		goalService,
 		runtime,
+		get scheduler() { return scheduler; },
 		auditMessages: new GoalAuditMessages(),
 		accounting,
 		assignFocusedGoalId,
@@ -1049,4 +1061,6 @@ export function createGoalCore(
 		checkStall,
 		replaceGoal,
 	};
+	scheduler = new GoalScheduler(core);
+	return core;
 }

@@ -1,3 +1,4 @@
+import { schedulerSummary } from "../goal-scheduler-state.ts";
 import { taskIndex } from "../goal-task-index.ts";
 import { statusLabel, truncateText } from "../goal-core.ts";
 import { promptSafeObjective } from "../goal-contract.ts";
@@ -182,9 +183,11 @@ export function sisyphusDisciplineBlock(goal: GoalRecord): string {
 }
 
 /** Shared outcome/blocker policy for active goals (bounded). */
-function lifecyclePolicyBlock(): string {
+function lifecyclePolicyBlock(autonomous: boolean): string {
  return [
   "[OUTCOMES]",
+  '- Automatic runs default to unlimited. maxAutonomousRuns in .pi/pi-goal-x-settings.json caps runs; 0 disables (agents may set it). Only creation or user /goal-resume renews usage.',
+  ...(autonomous ? ['- End execution with update_goal: ready for runnable work, wait for an external condition, or a status below. Saved decisions terminate; further work invalidates them. Missing decisions allow one repair. Never busy-poll.'] : []),
   '- update_goal({status: "complete"}) only when every requirement is satisfied; the independent completion auditor checks actual evidence. Approval archives; rejection requires rework.',
   '- update_goal({status: "blocked"}) only after the SAME blocker recurs on three consecutive goal turns; keep trying concrete steps before then.',
   '- update_goal({status: "paused", reason: "…"}) pauses immediately. User controls: /goal-pause, /goal-resume, /goal-clear.',
@@ -204,7 +207,7 @@ let promptCacheChars = 0;
 function cachedPrompt(goal: GoalRecord, settings: GoalSettings | undefined, kind: "goal" | "continuation", build: () => string): string {
  const key = [kind, goal.id, goal.status, goal.autoContinue, goal.sisyphus, goal.objective,
   goal.verificationContract, settings?.disableTasks ? undefined : taskIndex(goal.taskList?.tasks),
-  goal.taskList?.blockCompletion, promptProfile(), goal.currentTaskId, settings?.disableTasks, settings?.disableContracts];
+  goal.taskList?.blockCompletion, promptProfile(), goal.currentTaskId, settings?.disableTasks, settings?.disableContracts, settings?.maxAutonomousRuns !== 0];
  for (let i = promptFragmentCache.length - 1; i >= 0; i--) {
   const entry = promptFragmentCache[i]!;
   if (key.every((part, j) => part === entry.key[j])) return entry.value;
@@ -227,7 +230,7 @@ function retainedTaskChars(task: GoalTask): number {
 export function goalPrompt(goal: GoalRecord, settings?: GoalSettings): string {
 	const fixed = cachedPrompt(goal, settings, "goal", () => buildGoalPrompt(goal, settings));
  const budget = budgetLine(goal);
- return `${fixed}\nUsage: ${formatUsage(goal)}${budget ? `\n${budget}` : ""}`;
+ return `${fixed}\nUsage: ${formatUsage(goal)}${budget ? `\n${budget}` : ""}\n${schedulerSummary(goal.scheduler, settings?.maxAutonomousRuns)}`;
 }
 
 function buildGoalPrompt(goal: GoalRecord, settings?: GoalSettings): string {
@@ -235,7 +238,7 @@ function buildGoalPrompt(goal: GoalRecord, settings?: GoalSettings): string {
  // Bound individual data fields so essential rules can never be sliced off.
  return [
   `[PI GOAL ACTIVE goalId=${goal.id}]`,
-  lifecyclePolicyBlock(), sisyphusDisciplineBlock(goal),
+  lifecyclePolicyBlock(settings?.maxAutonomousRuns !== 0), sisyphusDisciplineBlock(goal),
   `Status: ${statusLabel(goal)}\nMode: ${goal.sisyphus ? "sisyphus" : "regular"}`,
   untrustedObjectiveBlock(goal), taskListBlock(goal, settings), verificationContractBlock(goal, settings),
  ].filter(Boolean).join("\n\n");

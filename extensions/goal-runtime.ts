@@ -9,7 +9,7 @@
  */
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { GoalCheckpointDetailsV2, GoalRecord } from "./goal-record.ts";
+import type { GoalCheckpointDetailsV3, GoalRecord } from "./goal-record.ts";
 import { checkpointTriggerPrompt } from "./prompts/goal-prompts.ts";
 import { POST_STOP_ALLOWED_TOOLS } from "./goal-tool-names.ts";
 import { networkErrorBackoffPlan, type NetworkErrorBackoffPlan, type NetworkErrorRecoveryPolicy } from "./network-error-backoff.ts";
@@ -19,6 +19,9 @@ export const CONTINUATION_IDLE_RETRY_MS = 50;
 const POST_STOP_ALLOWED = new Set<string>(POST_STOP_ALLOWED_TOOLS);
 
 export interface GoalRuntimeHooks {
+	authorize?(ctx: ExtensionContext, goal: GoalRecord): Record<string, unknown> | null;
+	recover?(ctx: ExtensionContext): void;
+	dispatchFailed?(ctx: ExtensionContext): void;
 	/** Dispatch a hidden follow-up checkpoint message (pi.sendMessage + triggerTurn). */
 	sendFollowUp(content: string, details: Record<string, unknown>): void;
 	/** Current focused goal (state.goal). */
@@ -125,7 +128,7 @@ export class GoalRuntime {
 			if (!this.hooks.isActionable(goal.id)) return;
 			const currentGoal = this.hooks.getGoal();
 			if (!currentGoal || currentGoal.id !== goal.id) return;
-			this.queueContinuation(ctx, currentGoal, true);
+			this.hooks.recover?.(ctx);
 		}, plan.delayMs);
 		this.networkErrorRetryTimer.unref?.();
 		return plan;
@@ -172,10 +175,14 @@ export class GoalRuntime {
 			if (this.continuationQueuedFor === scheduledGoalId) this.continuationQueuedFor = null;
 			return;
 		}
+		const authorization = this.hooks.authorize?.(ctx, goal);
+		if (!authorization) return;
 		this.checkpointSeq += 1;
 		this.continuationQueuedFor = goal.id;
-		const details: GoalCheckpointDetailsV2 = {
-			version: 2,
+		const details: GoalCheckpointDetailsV3 = {
+			version: 3,
+			generation: String(authorization.generation),
+			dispatchId: String(authorization.dispatchId),
 			kind: "checkpoint",
 			goalId: goal.id,
 			status: "active",
@@ -183,7 +190,8 @@ export class GoalRuntime {
 			checkpointSeq: this.checkpointSeq,
 			timestamp: Date.now(),
 		};
-		this.hooks.sendFollowUp(checkpointTriggerPrompt(goal.id), details as unknown as Record<string, unknown>);
+		try { this.hooks.sendFollowUp(checkpointTriggerPrompt(goal.id), details as unknown as Record<string, unknown>); }
+		catch { this.hooks.dispatchFailed?.(ctx); }
 	}
 
 	// ── turn-stop guard ──────────────────────────────────────────────────

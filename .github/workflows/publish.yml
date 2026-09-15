@@ -145,9 +145,16 @@ jobs:
           }
           assert(verified, 'Published metadata did not become available');
           if (isNewVersion) {
-            const latest = await fetch(`https://registry.npmjs.org/${pkg.name}/latest`);
-            assert(latest.ok, 'Cannot verify latest');
-            assert.equal((await latest.json()).version, pkg.version, 'latest does not match release');
+            let latestVerified = false;
+            for (let attempt = 0; attempt < 12; attempt++) {
+              const latest = await fetch(`https://registry.npmjs.org/${pkg.name}/latest`);
+              if (latest.ok && (await latest.json()).version === pkg.version) {
+                latestVerified = true;
+                break;
+              }
+              await new Promise(resolve => setTimeout(resolve, 5000));
+            }
+            assert(latestVerified, 'latest did not become available for this release');
           }
           NODE
       - name: Create GitHub release after registry verification

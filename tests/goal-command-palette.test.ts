@@ -232,6 +232,32 @@ test("goal-settings: stall timeout row accepts 0 (row-driven lower bound)", asyn
 	}
 });
 
+test("goal-settings: autonomous allowance accepts an explicit zero override", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-settings-zero-"));
+	const h = createHarness(cwd);
+	try {
+		(h.ctx as { hasUI: boolean }).hasUI = true;
+		let selectCalls = 0;
+		h.ctx.ui.select = async (_title, options) => {
+			selectCalls++;
+			if (selectCalls === 1) {
+				const row = options.find(o => o.includes("autonomous run allowance"));
+				assert.ok(row);
+				return row;
+			}
+			if (selectCalls === 2) return options.find(o => o === "Set project override...");
+			assert.ok(options.some(o => o.includes("autonomous run allowance: 0 (disabled) (project override)")));
+			return "Done";
+		};
+		h.ctx.ui.input = async () => "0";
+		await h.commands.get("goal-settings")!.handler("", h.ctx);
+		const saved = JSON.parse(readFileSync(path.join(cwd, ".pi", "pi-goal-x-settings.json"), "utf8"));
+		assert.equal(saved.maxAutonomousRuns, 0);
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
 test("goal-settings: subtaskDepth rejects 0 (min 1) and never saves it", async () => {
 	const cwd = mkdtempSync(path.join(tmpdir(), "goal-settings-bound-"));
 	mkdirSync(path.join(cwd, ".pi"), { recursive: true });

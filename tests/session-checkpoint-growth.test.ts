@@ -40,6 +40,7 @@ interface SentMessage {
 async function fireContinuation(goal: GoalRecord): Promise<SentMessage> {
 	const sent: SentMessage[] = [];
 	const runtime = new GoalRuntime({
+		authorize: () => ({ generation: "test-generation", dispatchId: "test-dispatch" }),
 		sendFollowUp: (content, details) => {
 			sent.push({ content, details });
 		},
@@ -70,10 +71,12 @@ describe("issue #30: bounded continuation checkpoints", () => {
 		}
 	});
 
-	it("persisted details carry the v2 structured fields", async () => {
+	it("persisted details carry generation-tagged v3 fields", async () => {
 		const goal = activeGoal();
 		const sent = await fireContinuation(goal);
-		assert.equal(sent.details.version, 2);
+		assert.equal(sent.details.version, 3);
+		assert.equal(sent.details.generation, "test-generation");
+		assert.equal(sent.details.dispatchId, "test-dispatch");
 		assert.equal(sent.details.kind, "checkpoint");
 		assert.equal(sent.details.goalId, goal.id);
 		assert.equal(sent.details.status, "active");
@@ -84,6 +87,7 @@ describe("issue #30: bounded continuation checkpoints", () => {
 		const goal = activeGoal();
 		const seqs: unknown[] = [];
 		const runtime = new GoalRuntime({
+		authorize: () => ({ generation: "test-generation", dispatchId: "test-dispatch" }),
 			sendFollowUp: (_content, details) => {
 				seqs.push(details.checkpointSeq);
 			},
