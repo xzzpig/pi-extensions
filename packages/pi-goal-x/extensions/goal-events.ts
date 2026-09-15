@@ -1,3 +1,4 @@
+import { schedulerSummary } from "./goal-scheduler-state.ts";
 import type { BeforeAgentStartEventResult, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	GOAL_EVENT_ENTRY,
@@ -11,7 +12,6 @@ import {
 	isAbortedAssistantMessage,
 	isErrorAssistantMessage,
 	isMeaningfulProgressToolCall,
-	isToolUseAssistantMessage,
 } from "./goal-format.ts";
 import { invalidateGoalLedgerCache } from "./goal-ledger.ts";
 import { shouldArmPostCompactReminder } from "./goal-policy.ts";
@@ -22,7 +22,7 @@ import { asRecord, nowIso, type AssistantMessageLike } from "./goal-record.ts";
 import { goalSelectorLabel, otherOpenGoalCount } from "./goal-pool.ts";
 import { invalidateGoalPoolCache } from "./storage/goal-files.ts";
 import { consumeOracleFollowupMarker, hasPendingOracleAdviceForFocusedGoal } from "./goal-oracle.ts";
-import { staleContinuationPrompt } from "./prompts/goal-prompts.ts";
+import { staleContinuationPrompt, goalPrompt } from "./prompts/goal-prompts.ts";
 import { rehydrateDraft } from "./goal-drafting.ts";
 import { syncTerminalInputPause } from "./goal-widget.ts";
 import type { GoalCore } from "./goal-state.ts";
@@ -91,14 +91,28 @@ export function registerGoalEvents(core: GoalCore): void {
 		core.exitUiPrompt();
 	});
 
-	pi.on("context", async (event) => {
+	pi.on("context", async (event, ctx) => {
 		const filtered = filterGoalSessionContext(event.messages);
 		const messages = filterGoalCheckpointContext(filtered ?? event.messages) ?? filtered;
 		// Reference equality means no goal-event messages existed at all.
+		if (core.scheduler.needsLiveContext() && core.state.goal) {
+			const goal = core.state.goal;
+			const settings = loadGoalSettings(ctx.cwd);
+			// Custom-message runs bypass before_agent_start. Refresh mutable scheduling
+			// state, but do not repeat policy/objective already in the inherited prompt.
+			const content = ctx.getSystemPrompt?.().includes(`[PI GOAL ACTIVE goalId=${goal.id}]`)
+				? `[CURRENT EXECUTION STATE goalId=${goal.id}]\nStatus: ${goal.status}; autoContinue: ${goal.autoContinue}.\n${schedulerSummary(goal.scheduler, settings.maxAutonomousRuns)}`
+				: goalPrompt(goal, settings);
+			const live = { role: "custom" as const, customType: "pi-goal-live-context", content, display: false, timestamp: Date.now() };
+			return { messages: [live, ...(messages ?? event.messages)] as typeof event.messages };
+		}
 		return messages === null ? undefined : { messages: messages as typeof event.messages };
 	});
 
+	pi.on("agent_start", async (_event, ctx) => { core.scheduler.begin(ctx); });
+	pi.on("message_start", async (event, ctx) => { core.scheduler.message(ctx, event.message); });
 	pi.on("turn_start", async (_event, ctx) => {
+		core.scheduler.turn(ctx);
 		// Per-turn flag resets (#4 + C9 fix).
 		core.advanceTurnSeq();
 		core.goalWorkToolCalledThisTurn = false;
@@ -127,6 +141,7 @@ export function registerGoalEvents(core: GoalCore): void {
 	// #4 + C9 fix + Phase 5 C3: gate in-turn tool calls based on lifecycle state.
 	pi.on("tool_call", async (event, ctx) => {
 		const stoppedGoalId = core.currentTurnStoppedGoalId();
+		if (core.scheduler.isDenied()) return { block: true, reason: "Stale goal dispatch; use /goal-resume." };
 		// Post-stop in-turn block: after update_goal / set_goal_tasks (or a user
 		// lifecycle command) fires in this turn, block all subsequent tool calls
 		// except read-only inspection.
@@ -149,7 +164,7 @@ export function registerGoalEvents(core: GoalCore): void {
 					`End the turn with a brief summary and yield to the user.`,
 			};
 		}
-		// Track for #4 empty-turn gate.
+		// Track Oracle work attempts; this does not authorize scheduling.
 		if (isMeaningfulProgressToolCall(event.toolName, asRecord(event)?.args)) {
 			core.goalWorkToolCalledThisTurn = true;
 			// Issue #26: record a meaningful work attempt against armed Oracle
@@ -270,17 +285,6 @@ export function registerGoalEvents(core: GoalCore): void {
 			core.updateUI(ctx);
 		}
 
-		// If the assistant ended a turn without queuing more tool calls, push a continuation right away.
-		// #4: only queue if some real work was done this turn — otherwise the model is
-		// just chatting and we should not keep firing turns on noise.
-		if (
-			!isToolUseAssistantMessage(message)
-			&& core.state.goal?.status === "active"
-			&& core.state.goal.autoContinue
-			&& core.goalWorkToolCalledThisTurn
-		) {
-			core.queueContinuation(ctx);
-		}
 		core.goalService.endTurn(ctx); // P1-3: single flush (lock + write + ledger batch)
 	});
 
@@ -332,11 +336,11 @@ export function registerGoalEvents(core: GoalCore): void {
 			const current = core.state.goal;
 			const shouldResume = await ctx.ui.confirm("Resume paused goal?", `Goal: ${current.objective}`);
 			if (shouldResume) {
-				core.setGoal({ ...current, status: "active", autoContinue: true, stopReason: undefined, pauseReason: undefined, pauseSuggestedAction: undefined }, ctx);
+				core.scheduler.resume(ctx);
 			}
 		}
 		core.beginAccounting();
-		core.queueContinuation(ctx, true);
+		core.scheduler.restore(ctx);
 	});
 
 	pi.on("session_before_compact", async (_event, ctx) => {
@@ -364,10 +368,11 @@ export function registerGoalEvents(core: GoalCore): void {
 		rehydrateDraft(core, ctx);
 		syncTerminalInputPause(core, ctx);
 		core.beginAccounting();
-		core.queueContinuation(ctx, true);
+		core.scheduler.restore(ctx);
 	});
 
 	pi.on("before_agent_start", async (event, ctx): Promise<BeforeAgentStartEventResult | void> => {
+		core.scheduler.prepare();
 		core.advanceTurnSeq();
 		const incomingGoalId = extractGoalIdFromInjectedMessage(event.prompt ?? "");
 
@@ -493,10 +498,8 @@ export function registerGoalEvents(core: GoalCore): void {
 		continuationAfterSettleFor = null;
 		const networkErrorGoalId = networkErrorRecoveryAfterSettleFor;
 		networkErrorRecoveryAfterSettleFor = null;
-		if (goalId && core.isActionableContinuationGoal(goalId)) {
-			core.queueContinuation(ctx, true);
-			return;
-		}
+		core.scheduler.settled(ctx, !!goalId && core.isActionableContinuationGoal(goalId));
+		if (goalId && core.isActionableContinuationGoal(goalId)) return;
 		if (!networkErrorGoalId || !core.isActionableContinuationGoal(networkErrorGoalId)) return;
 		const recovery = loadGoalSettings(ctx.cwd).networkRecovery;
 		const policy = recovery
@@ -520,6 +523,7 @@ export function registerGoalEvents(core: GoalCore): void {
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		core.auditMessages.clear();
+		core.scheduler.shutdown();
 		core.resetUiPromptDepth();
 		continuationAfterSettleFor = null;
 		networkErrorRecoveryAfterSettleFor = null;

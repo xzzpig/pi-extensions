@@ -553,6 +553,7 @@ export class GoalWidgetComponent implements Component {
 			otherOpenGoals: otherCount,
 			ledgerEvents: this.getLedgerEvents(),
 			tasksDisabled: settings.disableTasks === true,
+			maxAutonomousRuns: settings.maxAutonomousRuns,
 		}) : null;
 		this.maybeReanchor(model);
 		const lines = renderGoalWidgetLines(this.getGoal(), this.theme, safeWidth, {
@@ -634,6 +635,7 @@ export class GoalWidgetComponent implements Component {
 			otherOpenGoals: Math.max(0, this.getOpenGoalCount() - 1),
 			ledgerEvents: this.getLedgerEvents(),
 			tasksDisabled: settings.disableTasks === true,
+			maxAutonomousRuns: settings.maxAutonomousRuns,
 		}) : null;
 		const list = model?.taskTree.filter((n) => n.depth === 0) ?? [];
 		const rows = compactTaskViewportRows(this.lastRenderWidth);
@@ -668,6 +670,7 @@ export class GoalWidgetComponent implements Component {
 			otherOpenGoals: Math.max(0, this.getOpenGoalCount() - 1),
 			ledgerEvents: this.getLedgerEvents(),
 			tasksDisabled: settings.disableTasks === true,
+			maxAutonomousRuns: settings.maxAutonomousRuns,
 		}) : null;
 		const list = model?.taskTree ?? [];
 		if (list.length === 0) return false;

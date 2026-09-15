@@ -68,7 +68,7 @@ function accumulateCheckpointHealth(health: CheckpointHealth, entry: unknown): v
 	if (checkpoint.content.length > health.largestCheckpointChars) {
 		health.largestCheckpointChars = checkpoint.content.length;
 	}
-	const isV2 = checkpoint.version === 2 && V2_MARKER_PATTERN.test(checkpoint.content);
+	const isV2 = (checkpoint.version === 2 || checkpoint.version === 3) && V2_MARKER_PATTERN.test(checkpoint.content);
 	if (isV2) {
 		health.v2Minimal += 1;
 	} else {

@@ -358,6 +358,7 @@ export function registerGoalCommands(core: GoalCore): void {
 		const health = /^\s*health\b/i.test(rawArgs);
 		const ledger = readGoalLedger(ctx);
 		const text = buildGoalStatusText({
+			maxAutonomousRuns: loadGoalSettings(ctx.cwd).maxAutonomousRuns,
 			goal: view,
 			focused: view !== null && core.focusedGoalId === view.id,
 			otherOpenGoals: otherCount,
@@ -412,33 +413,10 @@ export function registerGoalCommands(core: GoalCore): void {
 		if (!core.state.goal && otherOpenGoalCount(core.goalsById, null) > 0) {
 			const selected = await chooseOpenGoal(ctx, "Resume or focus open goal");
 			if (!selected) return;
-			if (selected.status === "active") {
-				core.armFocusedContinuation(ctx);
-				ctx.ui.notify(`Goal focused: ${oneLineSummary(selected)}`, "info");
-				return;
-			}
 		}
-		const resumeGate = validateResumeGoal(core.state.goal);
-		if (!resumeGate.ok) {
-			const level = resumeGate.message.includes("already running") ? "info" : "warning";
-			ctx.ui.notify(resumeGate.message, level);
-			return;
-		}
-		if (!core.state.goal) throw new Error("Goal disappeared during resume validation.");
-		core.setGoal(
-			{
-				...mergeGoalPromptFromDisk(ctx, core.state.goal),
-				status: "active",
-				autoContinue: true,
-				stopReason: undefined,
-				pauseReason: undefined,
-				pauseSuggestedAction: undefined,
-			},
-			ctx,
-		);
-		core.beginAccounting();
-		ctx.ui.notify("Goal resumed.", "info");
-		core.queueContinuation(ctx, true);
+		if (!core.state.goal) { ctx.ui.notify("No goal is focused.", "warning"); return; }
+		if (!core.scheduler.resume(ctx)) return;
+		ctx.ui.notify("Goal resumed; autonomous allowance renewed.", "info");
 		// Append ledger event for resumption
 		try {
 			core.goalService.appendEvents(ctx, [{
@@ -472,6 +450,7 @@ export function registerGoalCommands(core: GoalCore): void {
 		{ key: "autoSelectSingleGoal", label: "autoSelectSingleGoal", section: "Goal behavior", kind: "boolean" },
 		{ key: "hideUnfocusedBanner", label: "hideUnfocusedBanner", section: "Goal behavior", kind: "boolean" },
 		{ key: "disableContracts", label: "disableContracts", section: "Goal behavior", kind: "boolean" },
+		{ key: "maxAutonomousRuns", label: "autonomous run allowance", section: "Goal behavior", kind: "positiveInteger" },
 		{ key: "stallTimeoutMinutes", label: "stall timeout (minutes)", section: "Goal behavior", kind: "positiveInteger" },
 		{ key: "objectiveMaxChars", label: "max objective length (0 = none)", section: "Goal behavior", kind: "positiveInteger" },
 		{ key: "changeManifest", label: "change manifest", section: "Goal behavior", kind: "enum", choices: ["auto", "off"] },
@@ -500,6 +479,7 @@ export function registerGoalCommands(core: GoalCore): void {
 		if (key === "auditorAgent") return config.auditorAgent ?? DEFAULT_AUDITOR_AGENT;
 		if (key === "auditorTimeoutMs") return config.auditorTimeoutMs !== undefined ? String(config.auditorTimeoutMs) : String(DEFAULT_AUDITOR_TIMEOUT_MS);
 		if (key === "subtaskDepth") return config.subtaskDepth !== undefined ? String(config.subtaskDepth) : "1";
+		if (key === "maxAutonomousRuns") return config.maxAutonomousRuns === 0 ? "0 (disabled)" : String(config.maxAutonomousRuns ?? "unlimited (default)");
 		if (key === "stallTimeoutMinutes") return config.stallTimeoutMinutes !== undefined ? String(config.stallTimeoutMinutes) : "0";
 		if (key === "objectiveMaxChars") return config.objectiveMaxChars !== undefined ? String(config.objectiveMaxChars) : "0";
 		if (key === "changeManifest") return config.changeManifest ?? "auto";
@@ -670,7 +650,7 @@ export function registerGoalCommands(core: GoalCore): void {
 				}
 
 				if (row.kind === "positiveInteger") {
-					const min = row.path ? 1 : ((row.key === "stallTimeoutMinutes" || row.key === "objectiveMaxChars" || row.key === "changeManifestDepth") ? 0 : 1);
+					const min = row.path ? 1 : ((row.key === "stallTimeoutMinutes" || row.key === "objectiveMaxChars" || row.key === "changeManifestDepth" || row.key === "maxAutonomousRuns") ? 0 : 1);
 					const actions = [`Set ${scope} override...`];
 					if (hasLocalOverride) actions.push(inheritLabel);
 					actions.push("Cancel");
@@ -1008,7 +988,7 @@ export function registerGoalCommands(core: GoalCore): void {
 		},
 	});
 	pi.registerCommand("goal-resume", {
-		description: "Resume a paused or blocked goal.",
+		description: "Continue now and renew the configured autonomous-run allowance.",
 		handler: async (_rawArgs, ctx) => {
 			await handleGoalResume(ctx);
 		},

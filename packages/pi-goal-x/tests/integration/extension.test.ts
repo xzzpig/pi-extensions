@@ -457,7 +457,7 @@ describe("five-tool handler integration", () => {
 			return existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : {};
 		};
 
-		it("displays every one of the eleven persisted rows and reflects file values", async () => {
+		it("displays every persisted settings row and reflects file values", async () => {
 			const f = fixture();
 			try {
 				writeFileSync(settingsPath(f.cwd), JSON.stringify({

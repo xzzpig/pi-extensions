@@ -2,6 +2,19 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.7.2] — 2026-09-16 (fork release)
+
+### Changed
+
+- **Synced upstream v0.31.2 → v0.31.4** (upstream patch releases → fork patch
+  bump). Upstream v0.31.3/v0.31.4 introduce the autonomous-run scheduler: a
+  durable scheduling state on the goal (`goal.scheduler`) with `ready`/`wait`
+  continuation declarations, wake tokens, polling checks, and a per-run
+  allowance capped by the new `maxAutonomousRuns` setting. `update_goal`
+  accepts an optional `continuation` (ready or wait) alongside its status
+  choices; checkpoint dispatch is now authorized by the scheduler's claim.
+  The fork keeps its own per-turn state snapshots (`pi-goal-state-event`) and
+  change-manifest baseline on top of the new scheduling system.
 ## [0.7.1] — 2026-09-13 (fork release)
 
 ### Fixed
@@ -84,6 +97,25 @@ All notable changes to pi-goal-x are documented here.
   collection) and `changeManifestDepth` (nested-repository scan depth below the
   repository root, default `1`, `0` disables the downward scan), both usable in
   the project and global settings files.
+## [Unreleased]
+
+## [0.31.4] — 2026-09-14
+
+### Changed
+
+- **Explicit execution contract (#55)** — automatic continuation is on by default with no run-count limit, using saved ready/wait decisions. Optional `maxAutonomousRuns` caps runs; zero disables them, including when overriding a global allowance. `/goal-resume` renews consumption and works without a configured limit. Tool names no longer determine continuation.
+- Outstanding wait deadlines apply to recovery and repair dispatches, including those delayed by host readiness.
+- Added durable, bounded waits, `pi-goal:wake` signals, atomic generation-tagged dispatch claims, one-shot contract repair, and scheduling status. Existing goals remain readable; interrupted dispatches require explicit resume. Independently triggered host runs remain outside the extension's allowance.
+
+## [0.31.3] — 2026-09-14
+
+### Fixed
+
+- **RPC task approval (#52)** — task proposals use native selection dialogs on RPC and non-terminal hosts. Cancelled or unavailable dialogs preserve existing tasks; the existing headless and explicit auto-confirm policies remain supported.
+
+- **Empty-turn auto-continue loop** — `agent_end` clears the turn_end continuation timer, then `agent_settled` re-queued with `force: true` even when the run called no goal-work tools. A no-tool reply (for example "Paused. No action." after `/goal-resume`) therefore injected another checkpoint forever. Auto-continue now waits for meaningful work in that agent run. User resume, goal creation, and session kickoff still start the first continuation.
+
+## [0.31.2] — 2026-09-08
 
 ### Changed
 
