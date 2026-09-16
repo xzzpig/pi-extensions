@@ -7,7 +7,7 @@ import { writeAtomicJson } from "../../shared/atomic-json.ts";
 import type { Details, HerdrProjectPaneSnapshot, SubagentState } from "../../shared/types.ts";
 import { createHerdrClient, detectHerdr, type HerdrClient, type HerdrErrorCode } from "./client.ts";
 import { focusHerdrPane, herdrPaneFocusTarget, herdrPaneRecord } from "./focus.ts";
-import { formatShellCommand } from "./shell-command.ts";
+import { formatShellCommand } from "../shell-command.ts";
 
 export const HERDR_PROJECT_PANE_ACTIONS = ["project.open", "project.status", "project.close"] as const;
 export type HerdrProjectPaneAction = typeof HERDR_PROJECT_PANE_ACTIONS[number];
@@ -458,6 +458,9 @@ function common(projectRoot: string): ProjectPaneCommonData {
 	};
 }
 
+// Node file-system errors are projected into a JSON-safe diagnostic record; the
+// caller serializes the result without narrowing further.
+// pi-lens-ignore: no-unknown-returns
 function fileSystemErrorDetails(cause: unknown): unknown {
 	if (!(cause instanceof Error)) return cause;
 	const code = (cause as NodeJS.ErrnoException).code;

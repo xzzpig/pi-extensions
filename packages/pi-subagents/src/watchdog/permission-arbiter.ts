@@ -3,6 +3,8 @@ import { convertToLlm, type ExtensionContext } from "@earendil-works/pi-coding-a
 import { streamSimple } from "@earendil-works/pi-ai/compat";
 import { Type, type Static } from "typebox";
 import { appendPermissionAudit, permissionArgsPreview } from "../runs/shared/permissions.ts";
+import { agentStreamOptions } from "../shared/agent-stream-options.ts";
+import { opencodeSessionHeaders } from "../shared/opencode-session-headers.ts";
 import { decodeChildWatchdogConfig } from "./child-status.ts";
 import { childResolvedConfig } from "./register-child.ts";
 import { resolveWatchdogReviewModel } from "./review.ts";
@@ -93,6 +95,7 @@ export function createWatchdogPermissionArbiter(options: WatchdogPermissionArbit
 				const config = childResolvedConfig(childConfig);
 				const selection = await resolveWatchdogReviewModel(request.ctx, config);
 				const auth = selection.auth;
+				const sessionId = request.ctx.sessionManager.getSessionId();
 				const registeredProvider = (request.ctx.modelRegistry as {
 					getRegisteredProviderConfig?: (provider: string) => { api?: string; streamSimple?: StreamFn } | undefined;
 				}).getRegisteredProviderConfig?.(selection.model.provider);
@@ -103,7 +106,7 @@ export function createWatchdogPermissionArbiter(options: WatchdogPermissionArbit
 					...streamOptions,
 					...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
 					env: auth.env || streamOptions?.env ? { ...(auth.env ?? {}), ...(streamOptions?.env ?? {}) } : undefined,
-					headers: { ...(streamOptions?.headers ?? {}), ...(auth.headers ?? {}) },
+					headers: { ...opencodeSessionHeaders(model, sessionId), ...(streamOptions?.headers ?? {}), ...(auth.headers ?? {}) },
 				});
 				agent = new Agent({
 					initialState: {
@@ -118,7 +121,7 @@ export function createWatchdogPermissionArbiter(options: WatchdogPermissionArbit
 						tools: [tool],
 					},
 					convertToLlm,
-					streamFn: streamFn,
+					...agentStreamOptions(streamFn),
 					getApiKey: (providerName) => providerName === selection.model.provider ? auth.apiKey : undefined,
 					beforeToolCall: async ({ toolCall }) => toolCall.name === tool.name ? undefined : { block: true, reason: `Permission arbiter tool '${toolCall.name}' is not allowed.` },
 					toolExecution: "sequential",

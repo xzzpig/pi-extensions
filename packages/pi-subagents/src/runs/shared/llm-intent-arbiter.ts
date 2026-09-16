@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
-import { Agent, type AgentTool, type StreamFn } from "@earendil-works/pi-agent-core";
-import { convertToLlm, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { streamSimple } from "@earendil-works/pi-ai/compat";
+import type { Agent, AgentTool, StreamFn } from "@earendil-works/pi-agent-core";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { ProviderHeaders } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
 import { agentStreamOptions } from "../../shared/agent-stream-options.ts";
+import { opencodeSessionHeaders } from "../../shared/opencode-session-headers.ts";
 
 /**
  * LLM intent arbiter for the completion mutation guard.
@@ -52,7 +52,13 @@ export function mapArbiterDecision(
 
 interface ArbiterRuntime {
 	model: NonNullable<RegistryModel>;
-	baseStreamFn: StreamFn;
+	/** Explicit override; it always wins over a registered provider stream. */
+	explicitStreamFn?: StreamFn;
+	/** Registered provider stream, usable only when its api matches the model. */
+	registeredStreamFn?: StreamFn;
+	registeredApi?: string;
+	/** Session id for OpenCode session-routing headers, when the caller has one. */
+	sessionId?: string;
 	timeoutMs: number;
 }
 
@@ -73,9 +79,14 @@ export interface TaskMutationArbiterOptions {
 const DEFAULT_ARBITER_TIMEOUT_MS = 10_000;
 
 type RegistryModel = ReturnType<NonNullable<ExtensionContext["modelRegistry"]["find"]>>;
+/** Model services the arbiter needs, plus the caller's session id for OpenCode session-routing headers. */
+export type ArbiterModelContext = Pick<ExtensionContext, "model" | "modelRegistry"> & {
+	/** Session id the headers attach to (the child's, captured by detached runners; the parent's, passed by foreground callers). */
+	sessionId?: string;
+};
 
 function resolveArbiterModel(
-	ctx: ExtensionContext,
+	ctx: ArbiterModelContext,
 	options?: TaskMutationArbiterOptions,
 ): NonNullable<RegistryModel> | null {
 	const registry = ctx.modelRegistry as {
@@ -95,7 +106,7 @@ function resolveArbiterModel(
 }
 
 function resolveArbiterRuntime(
-	ctx: ExtensionContext,
+	ctx: ArbiterModelContext,
 	options?: TaskMutationArbiterOptions,
 ): ArbiterRuntime | null {
 	const model = resolveArbiterModel(ctx, options);
@@ -103,23 +114,21 @@ function resolveArbiterRuntime(
 	const registry = ctx.modelRegistry as {
 		getRegisteredProviderConfig?: (provider: string) => { api?: string; streamSimple?: StreamFn } | undefined;
 	};
-	const modelApi = (model as { api?: string }).api;
 	const registered = registry.getRegisteredProviderConfig?.(model.provider);
-	const baseStreamFn = options?.streamFn
-		?? (registered?.streamSimple && registered.api === modelApi
-			? registered.streamSimple
-			: streamSimple);
 	return {
 		model,
-		baseStreamFn,
+		explicitStreamFn: options?.streamFn,
+		registeredStreamFn: registered?.streamSimple,
+		registeredApi: registered?.api,
+		sessionId: ctx.sessionId,
 		timeoutMs: options?.timeoutMs ?? DEFAULT_ARBITER_TIMEOUT_MS,
 	};
 }
 
 async function resolveArbiterAuth(
-	ctx: ExtensionContext,
+	ctx: ArbiterModelContext,
 	model: RegistryModel,
-): Promise<ArbiterAuth> {
+): Promise<ArbiterAuth | undefined> {
 	const registry = ctx.modelRegistry as {
 		getApiKeyAndHeaders?: (m: RegistryModel) => Promise<{
 			ok: boolean;
@@ -135,14 +144,14 @@ async function resolveArbiterAuth(
 	if (!registry.getApiKeyAndHeaders) return {};
 	try {
 		const auth = await registry.getApiKeyAndHeaders(model);
-		if (auth.ok === false) return {};
+		if (auth.ok === false) return undefined;
 		return {
 			...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
 			...(auth.headers ? { headers: auth.headers } : {}),
 			...(auth.env ? { env: auth.env } : {}),
 		};
 	} catch {
-		return {};
+		return undefined;
 	}
 }
 
@@ -150,12 +159,13 @@ async function resolveArbiterAuth(
 function authWrappedStreamFn(
 	base: StreamFn,
 	auth: ArbiterAuth,
+	sessionId: string | undefined,
 ): StreamFn {
 	return (model, context, streamOptions) => base(model, context, {
 		...(streamOptions ?? {}),
 		...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
 		...(auth.env || streamOptions?.env ? { env: { ...(auth.env ?? {}), ...(streamOptions?.env ?? {}) } } : {}),
-		headers: { ...(streamOptions?.headers ?? {}), ...(auth.headers ?? {}) },
+		headers: { ...opencodeSessionHeaders(model, sessionId), ...(streamOptions?.headers ?? {}), ...(auth.headers ?? {}) },
 	});
 }
 
@@ -164,6 +174,15 @@ async function runArbitration(
 	auth: ArbiterAuth,
 	task: string,
 ): Promise<TaskMutationVerdict> {
+	// Keep optional Pi peers out of the detached runner's static import graph.
+	const [{ Agent }, { convertToLlm }, { streamSimple }] = await Promise.all([
+		import("@earendil-works/pi-agent-core"),
+		import("@earendil-works/pi-coding-agent"),
+		import("@earendil-works/pi-ai/compat"),
+	]);
+	const streamFn: StreamFn = runtime.explicitStreamFn
+		?? (runtime.registeredApi !== undefined && runtime.registeredApi === runtime.model.api ? runtime.registeredStreamFn : undefined)
+		?? streamSimple;
 	let decision: DecisionParams | undefined;
 	const tool: AgentTool<typeof DecisionParams, { recorded: boolean }> = {
 		name: "task_mutation_decision",
@@ -190,7 +209,7 @@ async function runArbitration(
 			tools: [tool],
 		},
 		convertToLlm,
-		...agentStreamOptions(authWrappedStreamFn(runtime.baseStreamFn, auth)),
+		...agentStreamOptions(authWrappedStreamFn(streamFn, auth, runtime.sessionId)),
 		getApiKey: (providerName) =>
 			providerName === runtime.model.provider ? auth.apiKey : undefined,
 		beforeToolCall: async ({ toolCall }) =>
@@ -221,9 +240,9 @@ async function runArbitration(
 	}
 }
 
-/** Create a memoized arbiter bound to the parent session's model, or undefined when disabled/unavailable. */
+/** Create a memoized arbiter bound to the supplied model services, or undefined when disabled/unavailable. */
 export function createTaskMutationArbiter(
-	ctx: ExtensionContext,
+	ctx: ArbiterModelContext,
 	options?: TaskMutationArbiterOptions,
 ): TaskMutationArbiter | undefined {
 	if (process.env.PI_SUBAGENTS_LLM_INTENT_ARBITER === "0") return undefined;
@@ -235,7 +254,7 @@ export function createTaskMutationArbiter(
 		const cached = cache.get(key);
 		if (cached) return cached;
 		const auth = await resolveArbiterAuth(ctx, runtime.model);
-		const verdict = await runArbitration(runtime, auth, task);
+		const verdict = auth ? await runArbitration(runtime, auth, task) : "unavailable";
 		if (cache.size > 200) cache.clear();
 		cache.set(key, verdict);
 		return verdict;

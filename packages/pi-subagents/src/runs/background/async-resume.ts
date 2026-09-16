@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { DIRS, type AcceptanceInput, type AsyncStatus, type SteeringRecoveryDescriptor, type SubagentRunMode } from "../../shared/types.ts";
 import type { AgentConfig } from "../../agents/agents.ts";
 import { normalizeExtensionBindings } from "../shared/extension-bindings.ts";
+import { snapshotRequiredChildExtensions } from "../../shared/required-child-extensions.ts";
 import { normalizeWorkflowLaneMetadata } from "../shared/lane-metadata.ts";
 import { validateAcceptanceInput } from "../shared/acceptance.ts";
 import { validateToolBudgetConfig } from "../shared/tool-budget.ts";
@@ -17,6 +18,8 @@ import { intersectThinkingCeilings, parseThinkingLevel, type ThinkingLevel } fro
 import { assertWorkflowGraphHostSteps } from "../shared/host-step-status.ts";
 import { validateSandboxProfileName } from "../../shared/sandbox-profile.ts";
 import { validatePermissionProfileName } from "../../shared/permission-profile.ts";
+import { validateIntercomBridgeConfig } from "../../intercom/intercom-bridge.ts";
+import { validateModelResponseAliases } from "../../shared/model-response-aliases.ts";
 
 export interface AsyncResumeParams {
 	id?: string;
@@ -333,12 +336,13 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': expected an object.`);
 	const parsed = value as Record<string, unknown>;
 	const allowedFields = new Set([
-		"version", "launchContractDigest", "sourceRunId", "agentContract", "agent", "sandbox", "permissionProfile", "sessionFile", "cwd", "model", "modelProvider", "modelOverrideFromParent", "modelOrigin", "fallbackModels", "thinking", "thinkingCeiling", "tools", "allowNestedSubagents", "extensions",
+		"modelResponseAliases", "version", "launchContractDigest", "sourceRunId", "agentContract", "agent", "sandbox", "permissionProfile", "sessionFile", "cwd", "model", "modelProvider", "modelOverrideFromParent", "modelOrigin", "fast", "thinking", "thinkingCeiling", "tools", "allowNestedSubagents", "extensions",
 		"subagentOnlyExtensions", "mcpDirectTools", "excludeTools", "mutationTools", "systemPrompt", "systemPromptMode", "inheritProjectContext", "inheritGlobalContext", "inheritSkills", "skills",
 		"skillPath", "agentFilePath", "completionGuard", "memory", "outputPath", "outputMode", "structuredOutputSchema", "acceptance", "sessionDir", "artifactConfig",
 		"artifactsDir", "maxOutput", "controlConfig", "context", "intercomBridge", "absoluteDeadlineAt", "initialTurnBudget", "initialToolBudget", "maxSubagentDepth", "share", "capabilityCeiling",
 		"launchResolvedExtensions", "runFanoutBudget", "lane", "baseRef",
 		"extensionBindings",
+		"requiredExtensions",
 	]);
 	for (const field of Object.keys(parsed)) {
 		if (!allowedFields.has(field)) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': unknown field '${field}'.`);
@@ -353,9 +357,14 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 	} catch (error) {
 		throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${error instanceof Error ? error.message : String(error)}`);
 	}
+	validateModelResponseAliases(parsed.modelResponseAliases, `async recovery descriptor '${descriptorPath}' modelResponseAliases`);
 	if (parsed.capabilityCeiling !== undefined) parsed.capabilityCeiling = parseSubagentCapabilityCeiling(parsed.capabilityCeiling, `async recovery descriptor '${descriptorPath}' capabilityCeiling`);
 	if (parsed.thinkingCeiling !== undefined) parsed.thinkingCeiling = parseThinkingLevel(parsed.thinkingCeiling, `async recovery descriptor '${descriptorPath}' thinkingCeiling`);
 	if (parsed.extensionBindings !== undefined) parsed.extensionBindings = normalizeExtensionBindings(parsed.extensionBindings)!.value;
+	if (parsed.requiredExtensions !== undefined) {
+		try { parsed.requiredExtensions = snapshotRequiredChildExtensions(parsed.requiredExtensions, "requiredExtensions"); }
+		catch (error) { throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${error instanceof Error ? error.message : String(error)}`); }
+	}
 	if (parsed.lane !== undefined) parsed.lane = normalizeWorkflowLaneMetadata(parsed.lane, `Invalid async recovery descriptor '${descriptorPath}': lane`);
 	if (parsed.agentContract !== undefined) {
 		if (!parsed.agentContract || typeof parsed.agentContract !== "object" || Array.isArray(parsed.agentContract)) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': agentContract must be an object.`);
@@ -366,6 +375,7 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 	if (parsed.outputMode !== "inline" && parsed.outputMode !== "file-only") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': outputMode is invalid.`);
 	if (parsed.context !== undefined && parsed.context !== "fresh" && parsed.context !== "fork") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': context is invalid.`);
 	if (parsed.modelOverrideFromParent !== undefined && typeof parsed.modelOverrideFromParent !== "boolean") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': modelOverrideFromParent must be a boolean.`);
+	if (parsed.fast !== undefined && typeof parsed.fast !== "boolean") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': fast must be a boolean.`);
 	if (parsed.modelOrigin !== undefined && parsed.modelOrigin !== "explicit" && parsed.modelOrigin !== "inherited" && parsed.modelOrigin !== "configured") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': modelOrigin must be 'explicit', 'inherited', or 'configured'.`);
 	if (parsed.modelOrigin === undefined && parsed.model !== undefined) parsed.modelOrigin = parsed.modelOverrideFromParent ? "inherited" : "configured";
 	for (const field of ["inheritProjectContext", "inheritSkills", "share"] as const) {
@@ -375,7 +385,7 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 	else if (typeof parsed.inheritGlobalContext !== "boolean") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': inheritGlobalContext must be a boolean.`);
 	if (parsed.allowNestedSubagents !== undefined && typeof parsed.allowNestedSubagents !== "boolean") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': allowNestedSubagents must be a boolean.`);
 	if (!Number.isInteger(parsed.maxSubagentDepth) || (parsed.maxSubagentDepth as number) < 0) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': maxSubagentDepth must be a non-negative integer.`);
-	for (const field of ["fallbackModels", "tools", "excludeTools", "extensions", "subagentOnlyExtensions", "mcpDirectTools", "mutationTools", "skills", "skillPath"] as const) {
+	for (const field of ["tools", "excludeTools", "extensions", "subagentOnlyExtensions", "mcpDirectTools", "mutationTools", "skills", "skillPath"] as const) {
 		const item = parsed[field];
 		if (item !== undefined && (!Array.isArray(item) || item.some((entry) => typeof entry !== "string" || !entry.trim()))) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${field} must contain non-empty strings.`);
 	}
@@ -427,14 +437,8 @@ export function readAsyncRecoveryDescriptor(asyncDir: string | undefined): Steer
 		if (!Number.isInteger(artifact.cleanupDays) || (artifact.cleanupDays as number) < 0) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': artifactConfig.cleanupDays must be a non-negative integer.`);
 	}
 	if (parsed.intercomBridge !== undefined) {
-		if (!parsed.intercomBridge || typeof parsed.intercomBridge !== "object" || Array.isArray(parsed.intercomBridge)) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': intercomBridge must be an object.`);
-		const bridge = parsed.intercomBridge as Record<string, unknown>;
-		for (const field of Object.keys(bridge)) {
-			if (field !== "mode" && field !== "instructionFile" && field !== "resultDelivery") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': intercomBridge.${field} is not supported.`);
-		}
-		if (bridge.mode !== undefined && bridge.mode !== "off" && bridge.mode !== "fork-only" && bridge.mode !== "always") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': intercomBridge.mode is invalid.`);
-		if (bridge.instructionFile !== undefined && typeof bridge.instructionFile !== "string") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': intercomBridge.instructionFile must be a string.`);
-		if (bridge.resultDelivery !== undefined && typeof bridge.resultDelivery !== "boolean") throw new Error(`Invalid async recovery descriptor '${descriptorPath}': intercomBridge.resultDelivery must be a boolean.`);
+		const bridge = validateIntercomBridgeConfig({ value: parsed.intercomBridge, label: "intercomBridge" });
+		if (!bridge.ok) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': ${bridge.error}`);
 	}
 	if (parsed.controlConfig !== undefined) {
 		if (!parsed.controlConfig || typeof parsed.controlConfig !== "object" || Array.isArray(parsed.controlConfig)) throw new Error(`Invalid async recovery descriptor '${descriptorPath}': controlConfig must be an object.`);
@@ -577,7 +581,11 @@ export function resolveAsyncResumeTarget(params: AsyncResumeParams, deps: AsyncR
 	const index = requestedIndex ?? 0;
 	if (!Number.isInteger(index)) throw new Error(`Async run '${runId}' index must be an integer.`);
 	if (index < 0 || index >= stepCount) throw new Error(`Async run '${runId}' has ${stepCount} children. Index ${index} is out of range.`);
-	const agent = statusSteps[index]?.agent ?? resultSteps[index]?.agent ?? result?.agent;
+	const selectedStatusStep = statusSteps[index];
+	if (selectedStatusStep?.status === "stopped" || selectedStatusStep?.stopped === true) {
+		throw new Error(`Async run '${runId}' child ${index} was stopped and cannot be resumed. Start a new run instead.`);
+	}
+	const agent = selectedStatusStep?.agent ?? resultSteps[index]?.agent ?? result?.agent;
 	if (!agent) throw new Error(`Could not determine child agent for async run '${runId}'.`);
 	if (recoveryDescriptor && recoveryDescriptor.agent !== agent) throw new Error(`Async run '${runId}' has a recovery descriptor for '${recoveryDescriptor.agent}', not '${agent}'.`);
 	const sessionFile = statusSteps[index]?.sessionFile
@@ -624,7 +632,6 @@ export function applySteeringRecoveryAgentConfig(agentConfig: AgentConfig, descr
 		...agentConfig,
 		model: descriptor.model,
 		modelProvider: descriptor.modelProvider,
-		fallbackModels: descriptor.fallbackModels ? [...descriptor.fallbackModels] : undefined,
 		thinking: descriptor.thinking,
 		maxThinking: intersectThinkingCeilings(descriptor.thinkingCeiling, agentConfig.maxThinking),
 		tools: descriptor.tools ? [...descriptor.tools] : undefined,

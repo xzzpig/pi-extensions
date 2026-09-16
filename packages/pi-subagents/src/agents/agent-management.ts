@@ -30,9 +30,9 @@ import {
 import { parseFrontmatter, parseFrontmatterList } from "./frontmatter.ts";
 import { resolvePiLaunchToolPlan } from "../runs/shared/child-tool-plan.ts";
 import { resolveEffectiveThinking, toModelInfo } from "../shared/model-info.ts";
-import { resolveSubagentModelOverride, type ParentModel } from "../runs/shared/model-fallback.ts";
+import { resolveSubagentModelOverride, type ParentModel } from "../runs/shared/model-resolution.ts";
 import { validateToolBudgetConfig } from "../runs/shared/tool-budget.ts";
-import { validateAcceptanceInput } from "../runs/shared/acceptance.ts";
+import { formatReviewGateLabel, validateAcceptanceInput } from "../runs/shared/acceptance.ts";
 import { CODE_OWNED_EXTERNAL_CLI_ADAPTER_LABEL, isCodeOwnedExternalCliAdapterId, resolveExternalCliRunnerStatus, validateCodeOwnedProfileRunner } from "../runs/shared/external-cli-contract.ts";
 import { resolveExternalCliBinaryAvailability, type ExternalCliBinaryAvailability } from "../runs/shared/external-cli-preflight.ts";
 import type { AcceptanceInput, AgentCapabilitiesSnapshot, AgentCapabilityRow, Details, ExtensionConfig, ToolBudgetConfig } from "../shared/types.ts";
@@ -100,7 +100,7 @@ export type EjectAgentDefinitionResult =
 
 type ManagementAction = "list" | "get" | "models" | "create" | "update" | "delete" | "eject" | "disable" | "enable" | "reset";
 type ManagementScope = "user" | "project";
-type ManagementContext = Pick<ExtensionContext, "cwd" | "modelRegistry"> & { isProjectTrusted?: ExtensionContext["isProjectTrusted"]; model?: ExtensionContext["model"]; config?: ExtensionConfig; currentSessionId?: string; runtimeAgentOwner?: RuntimeAgentOwner };
+type ManagementContext = Pick<ExtensionContext, "cwd" | "modelRegistry"> & { isProjectTrusted?: ExtensionContext["isProjectTrusted"]; model?: ExtensionContext["model"]; config?: ExtensionConfig; currentSessionId?: string; runtimeAgentOwner?: RuntimeAgentOwner; onAgentsChanged?: () => void };
 
 interface ManagementParams {
 	action?: string;
@@ -280,13 +280,6 @@ function modelWarning(ctx: ManagementContext, model: string | undefined): string
 	return `Warning: model '${model}' is not in the current model registry. Run subagent({ action: "models" }) to list valid provider/id selectors, then use the exact provider/id form (bare ids resolve only when unique).`;
 }
 
-function fallbackModelsWarning(ctx: ManagementContext, fallbackModels: string[] | undefined): string | undefined {
-	if (!fallbackModels || fallbackModels.length === 0) return undefined;
-	const available = new Set(ctx.modelRegistry.getAvailable().flatMap((m) => [`${m.provider}/${m.id}`, m.id]));
-	const missing = fallbackModels.filter((model) => !available.has(model));
-	return missing.length ? `Warning: fallback models not in the current model registry: ${missing.join(", ")}.` : undefined;
-}
-
 function skillsWarning(cwd: string, agent: Pick<AgentConfig, "skills" | "skillPath" | "filePath">): string | undefined {
 	if (!agent.skills?.length) return undefined;
 	const { missing } = resolveSkills(
@@ -330,7 +323,6 @@ export function editableAgentConfig(agent: AgentConfig): AgentConfig {
 		outputMode: _outputMode,
 		defaultReads: _defaultReads,
 		model: _model,
-		fallbackModels: _fallbackModels,
 		fast: _fast,
 		thinking: _thinking,
 		systemPromptMode: _systemPromptMode,
@@ -367,7 +359,6 @@ export function editableAgentConfig(agent: AgentConfig): AgentConfig {
 		...(base.outputMode !== undefined ? { outputMode: base.outputMode } : {}),
 		...(base.defaultReads !== undefined ? { defaultReads: [...base.defaultReads] } : {}),
 		...(base.model !== undefined && hasDeclaredField("model") ? { model: base.model } : {}),
-		...(base.fallbackModels !== undefined ? { fallbackModels: [...base.fallbackModels] } : {}),
 		...(base.fast !== undefined ? { fast: base.fast } : {}),
 		...(base.thinking !== undefined && hasDeclaredField("thinking") ? { thinking: base.thinking } : {}),
 		systemPromptMode: base.systemPromptMode,
@@ -410,11 +401,11 @@ export function preservedAgentFrontmatterFields(agent: AgentConfig, cfg: Record<
 	if (hasKey(cfg, "name")) changed("name");
 	if (hasKey(cfg, "package")) changed("package");
 	if (hasKey(cfg, "description")) changed("description");
+	if (hasKey(cfg, "advertise")) changed("advertise");
 	if (hasKey(cfg, "aliases")) changed("alias", "aliases");
 	if (hasKey(cfg, "systemPrompt")) changed("systemPrompt");
 	if (hasKey(cfg, "runner")) changed("runner");
 	if (hasKey(cfg, "model")) changed("model");
-	if (hasKey(cfg, "fallbackModels")) changed("fallbackModels");
 	if (hasKey(cfg, "tools")) changed("tools");
 	if (hasKey(cfg, "excludeTools")) changed("excludeTools");
 	if (hasKey(cfg, "skills")) changed("skill", "skills");
@@ -479,6 +470,11 @@ function parseTools(raw: string): { tools?: string[]; mcpDirectTools?: string[] 
 }
 
 function applyAgentConfig(target: AgentConfig, cfg: Record<string, unknown>): string | undefined {
+	if (hasKey(cfg, "advertise")) {
+		if (cfg.advertise === "") delete target.advertise;
+		else if (typeof cfg.advertise === "boolean") target.advertise = cfg.advertise;
+		else return "config.advertise must be a boolean or empty string when provided.";
+	}
 	if (hasKey(cfg, "aliases")) {
 		if (cfg.aliases === false || cfg.aliases === "") delete target.aliases;
 		else if (typeof cfg.aliases === "string") {
@@ -524,21 +520,7 @@ function applyAgentConfig(target: AgentConfig, cfg: Record<string, unknown>): st
 			else delete target.model;
 		} else return "config.model must be a string or false when provided.";
 	}
-	if (hasKey(cfg, "fallbackModels")) {
-		if (cfg.fallbackModels === false || cfg.fallbackModels === "") delete target.fallbackModels;
-		else if (typeof cfg.fallbackModels === "string") {
-			const models = parseCsv(cfg.fallbackModels);
-			if (models.length) target.fallbackModels = models;
-			else delete target.fallbackModels;
-		} else if (Array.isArray(cfg.fallbackModels)) {
-			const models = cfg.fallbackModels
-				.filter((value): value is string => typeof value === "string")
-				.map((value) => value.trim())
-				.filter(Boolean);
-			if (models.length) target.fallbackModels = [...new Set(models)];
-			else delete target.fallbackModels;
-		} else return "config.fallbackModels must be a comma-separated string, string array, or false when provided.";
-	}
+	if (hasKey(cfg, "fallbackModels")) return "config.fallbackModels was removed; configure one model instead.";
 	if (hasKey(cfg, "tools")) {
 		if (cfg.tools === false || cfg.tools === "") { delete target.tools; delete target.mcpDirectTools; }
 		else if (typeof cfg.tools === "string") {
@@ -711,7 +693,6 @@ function applyAgentConfig(target: AgentConfig, cfg: Record<string, unknown>): st
 			target.tools?.length || target.mcpDirectTools?.length ? "tools" : undefined,
 			target.excludeTools?.length ? "excludeTools" : undefined,
 			target.model ? "model" : undefined,
-			target.fallbackModels?.length ? "fallbackModels" : undefined,
 			target.thinking ? "thinking" : undefined,
 			target.extensions?.length ? "extensions" : undefined,
 			target.subagentOnlyExtensions?.length ? "subagentOnlyExtensions" : undefined,
@@ -789,13 +770,19 @@ function externalJobProviderSuffix(provider: string, names: Set<string> | undefi
 
 type ExternalCliAvailabilityByCommand = ReadonlyMap<string, ExternalCliBinaryAvailability>;
 
+/** A placed agent checks only local ssh; machine catalog and remote CLI validation happen at launch. */
+function externalCliAvailabilityKey(command: string, machine: string | undefined): string {
+	return machine ? `ssh@${machine}` : command;
+}
+
 function externalCliAvailabilityForAgents(agents: readonly AgentConfig[]): ExternalCliAvailabilityByCommand {
 	const availability = new Map<string, ExternalCliBinaryAvailability>();
 	for (const agent of agents) {
 		const runner = agent.runner;
-		if (runner?.type === "external-cli" && !availability.has(runner.command)) {
-			availability.set(runner.command, resolveExternalCliBinaryAvailability(runner.command, process.env));
-		}
+		if (runner?.type !== "external-cli") continue;
+		const key = externalCliAvailabilityKey(runner.command, agent.machine);
+		if (availability.has(key)) continue;
+		availability.set(key, resolveExternalCliBinaryAvailability(agent.machine ? "ssh" : runner.command, process.env));
 	}
 	return availability;
 }
@@ -803,10 +790,13 @@ function externalCliAvailabilityForAgents(agents: readonly AgentConfig[]): Exter
 function runnerListBadge(agent: AgentConfig, providerNames: Set<string> | undefined, externalCliAvailability?: ExternalCliAvailabilityByCommand): string | undefined {
 	if (agent.runner?.type === "external-job") return `external-job:${agent.runner.provider} ${externalJobProviderSuffix(agent.runner.provider, providerNames)}`;
 	if (agent.runner?.type === "external-cli") {
-		const availability = externalCliAvailability?.get(agent.runner.command);
-		if (!availability) return "external-cli";
-		return `external-cli:${agent.runner.command} ${availability.available ? "✓" : "missing"}`;
+		const placed = agent.machine ? `${agent.runner.command} @ ${agent.machine}` : agent.runner.command;
+		const availability = externalCliAvailability?.get(externalCliAvailabilityKey(agent.runner.command, agent.machine));
+		if (!availability) return `external-cli:${placed}`;
+		if (agent.machine) return `external-cli:${placed} saved Herdr placement; transport ${availability.available ? "✓" : "missing"}; machine not preflighted`;
+		return `external-cli:${placed} ${availability.available ? "✓" : "missing"}`;
 	}
+	if (agent.machine) return `machine: ${agent.machine} (saved Herdr placement)`;
 	return undefined;
 }
 
@@ -842,7 +832,39 @@ function formatAgentCapabilitiesLine(agent: AgentConfig, providerNames: Set<stri
 		if (agent.modelProvider && !agent.model.includes("/")) model = `${agent.modelProvider}/${agent.model}`;
 	}
 	const thinking = agent.thinking === false ? "off" : agent.thinking ?? "default";
-	return `- ${agent.name} (${agentListMetadata(agent, providerNames, externalCliAvailability)}): Description: ${previewDisplayText(agent.description, 240)}; Tools: ${tools}; Model: ${model}; Thinking: ${thinking}`;
+	const machine = agent.machine ? `; Machine: ${agent.machine} (saved Herdr placement)` : "";
+	const acceptance = formatAcceptanceSummary(agent);
+	return `- ${agent.name} (${agentListMetadata(agent, providerNames, externalCliAvailability)}): Description: ${previewDisplayText(agent.description, 240)}; Tools: ${tools}; Model: ${model}; Thinking: ${thinking}${machine}${acceptance ? `; ${acceptance}` : ""}`;
+}
+
+function formatAcceptanceSummary(agent: AgentConfig): string | undefined {
+	const policy = agent.defaultAcceptance;
+	const summary: string[] = [];
+	if (policy === false) summary.push("Acceptance: disabled");
+	else if (typeof policy === "string") summary.push(`Acceptance: ${policy}`);
+	else if (policy) {
+		const modifiers = [
+			...(policy.evidence ?? []),
+			...(policy.verify ?? []).map((command) => `verify: ${formatAcceptanceDisplayLabel(command.id)}`),
+			...(policy.criteria?.length ? [`criteria: ${policy.criteria.length}`] : []),
+			...(policy.stopRules?.length ? [`stopRules: ${policy.stopRules.length}`] : []),
+		];
+		if (policy.review === false) modifiers.push("review: off");
+		else if (policy.review) {
+			const displayReview = policy.review.agent
+				? { ...policy.review, agent: formatAcceptanceDisplayLabel(policy.review.agent) }
+				: policy.review;
+			modifiers.push(`review: ${formatReviewGateLabel(displayReview)}`);
+		}
+		if (policy.report) modifiers.push(`report: ${policy.report}`);
+		summary.push(`Acceptance: ${policy.level ?? "auto"}${modifiers.length > 0 ? ` (${modifiers.join(", ")})` : ""}`);
+	}
+	if (agent.acceptanceRole) summary.push(`Acceptance role: ${agent.acceptanceRole}`);
+	return summary.length > 0 ? summary.join("; ") : undefined;
+}
+
+function formatAcceptanceDisplayLabel(value: string): string {
+	return JSON.stringify(previewDisplayText(value, 80));
 }
 
 const EXTERNAL_JOB_CAPABILITIES = { stop: false, steer: false, resume: false, structuredOutput: false, toolEvents: false } as const;
@@ -856,11 +878,12 @@ function agentCapabilityRunner(agent: AgentConfig, providerNames: Set<string> | 
 	const runner = agent.runner;
 	if (!runner || runner.type === "pi") return PI_AGENT_RUNNER;
 	if (runner.type === "external-cli") {
-		const availability = externalCliAvailability.get(runner.command)!;
+		const availability = externalCliAvailability.get(externalCliAvailabilityKey(runner.command, agent.machine))!;
 		return {
 			type: "external-cli",
 			adapter: runner.adapter,
 			command: runner.command,
+			...(agent.machine ? { machine: agent.machine } : {}),
 			...availability,
 			capabilities: resolveExternalCliRunnerStatus(runner).capabilities,
 		};
@@ -888,8 +911,9 @@ function agentCapabilityRow(agent: AgentConfig, options: { executable: boolean; 
 		aliases: agent.aliases ? [...agent.aliases] : undefined,
 		runner: agentCapabilityRunner(agent, options.providerNames, options.externalCliAvailability),
 		tools: agentCapabilityTools(agent),
-		model: presentDetails({ value: agent.model, fallbackModels: agent.fallbackModels, thinking: agent.thinking }),
+		model: presentDetails({ value: agent.model, thinking: agent.thinking }),
 		execution: presentDetails({ defaultAsync: agent.defaultAsync, timeoutMs: agent.defaultTimeoutMs }),
+		acceptance: presentDetails({ policy: agent.defaultAcceptance, role: agent.acceptanceRole }),
 		output: presentDetails({ path: agent.output, mode: agent.outputMode }),
 		extensions: presentDetails({ names: agent.extensions, subagentOnly: agent.subagentOnlyExtensions, skills: agent.skills }),
 	};
@@ -990,7 +1014,6 @@ function formatAgentDetail(agent: AgentConfig): string {
 	}
 	if (agent.aliases?.length) lines.push(`Aliases: ${agent.aliases.join(", ")}`);
 	if (agent.model) lines.push(`Model: ${agent.model}`);
-	if (agent.fallbackModels?.length) lines.push(`Fallback models: ${agent.fallbackModels.join(", ")}`);
 	if (tools.length) lines.push(`Tools: ${tools.join(", ")}`);
 	if (agent.excludeTools?.length) lines.push(`Excluded tools: ${agent.excludeTools.join(", ")}`);
 	if (agent.skills?.length) lines.push(`Skills: ${agent.skills.join(", ")}`);
@@ -1135,12 +1158,6 @@ function handleModels(params: ManagementParams, ctx: ManagementContext): AgentTo
 			lines.push(`  ${resolvedModel ?? "(unresolved)"}`);
 			lines.push(`Source: ${source}`);
 			lines.push(`Thinking: ${effectiveThinking ?? "default"}`);
-			if (agent.fallbackModels?.length) {
-				lines.push("Fallback models:");
-				for (const fallback of agent.fallbackModels) {
-					lines.push(`  ${resolveSubagentModelOverride(fallback, currentModel, availableModels, agent.modelProvider ?? preferredProvider) ?? fallback}`);
-				}
-			}
 			if (agent.override) {
 				lines.push("Override file:");
 				lines.push(`  ${agent.override.path}`);
@@ -1160,12 +1177,6 @@ function handleModels(params: ManagementParams, ctx: ManagementContext): AgentTo
 		lines.push(`    ${resolvedModel ?? "(unresolved)"}`);
 		lines.push(`  source: ${source}`);
 		lines.push(`  thinking: ${effectiveThinking ?? "default"}`);
-		if (agent.fallbackModels?.length) {
-			lines.push("  fallback models:");
-			for (const fallback of agent.fallbackModels) {
-				lines.push(`    ${resolveSubagentModelOverride(fallback, currentModel, availableModels, agent.modelProvider ?? preferredProvider) ?? fallback}`);
-			}
-		}
 		if (agent.override) {
 			lines.push("  override file:");
 			lines.push(`    ${agent.override.path}`);
@@ -1255,11 +1266,10 @@ export function handleCreate(params: ManagementParams, ctx: ManagementContext): 
 	if (profileError) return result(profileError, true);
 	const mw = modelWarning(ctx, agent.model);
 	if (mw) warnings.push(mw);
-	const fmw = fallbackModelsWarning(ctx, agent.fallbackModels);
-	if (fmw) warnings.push(fmw);
 	const sw = skillsWarning(ctx.cwd, agent);
 	if (sw) warnings.push(sw);
 	fs.writeFileSync(targetPath, serializeAgent(agent), "utf-8");
+	ctx.onAgentsChanged?.();
 	return result([`Created agent '${runtimeName}' at ${targetPath}.`, ...warnings].join("\n"));
 }
 
@@ -1311,10 +1321,6 @@ export function handleUpdate(params: ManagementParams, ctx: ManagementContext): 
 		const mw = modelWarning(ctx, updated.model);
 		if (mw) warnings.push(mw);
 	}
-	if (hasKey(cfg, "fallbackModels")) {
-		const fmw = fallbackModelsWarning(ctx, updated.fallbackModels);
-		if (fmw) warnings.push(fmw);
-	}
 	if (hasKey(cfg, "skills") || hasKey(cfg, "skillPath")) {
 		const sw = skillsWarning(ctx.cwd, updated);
 		if (sw) warnings.push(sw);
@@ -1325,6 +1331,7 @@ export function handleUpdate(params: ManagementParams, ctx: ManagementContext): 
 		updated.filePath = renamed.filePath!;
 	}
 	fs.writeFileSync(updated.filePath, serializeAgent(updated, { preserveFrontmatterFields }), "utf-8");
+	ctx.onAgentsChanged?.();
 	const headline = updated.name === oldName
 		? `Updated agent '${updated.name}' at ${updated.filePath}.`
 		: `Updated agent '${oldName}' to '${updated.name}' at ${updated.filePath}.`;
@@ -1338,6 +1345,7 @@ function handleDelete(params: ManagementParams, ctx: ManagementContext): AgentTo
 	if ("content" in targetOrError) return targetOrError;
 	const target = targetOrError;
 	fs.unlinkSync(target.filePath);
+	ctx.onAgentsChanged?.();
 	return result(`Deleted agent '${target.name}' at ${target.filePath}.`);
 }
 
@@ -1624,6 +1632,7 @@ function handleEject(params: ManagementParams, ctx: ManagementContext): AgentToo
 		// must supply affirmative project trust themselves.
 		...(scope === "project" ? { projectTrusted: true } : {}),
 	});
+	if (ejected.ok) ctx.onAgentsChanged?.();
 	return result(ejected.message, !ejected.ok);
 }
 
@@ -1646,6 +1655,7 @@ function handleDisable(params: ManagementParams, ctx: ManagementContext): AgentT
 	const settingsPath = mergeBuiltinAgentOverride(ctx.cwd, runtimeName, scope, { disabled: true });
 	const after = resolveEffectiveAgent(discoverAgentsAll(ctx.cwd), raw).agent;
 	if (after?.disabled === true) {
+		ctx.onAgentsChanged?.();
 		return result(`Disabled agent '${runtimeName}' via ${scope} settings override at ${settingsPath}. It is now hidden from runtime discovery and { action: "list" }.`);
 	}
 	return result(`Wrote a disabled override for '${runtimeName}' at ${settingsPath}, but the agent is still enabled. A higher-precedence ${after?.override?.scope ?? "project"} override is likely winning. Try agentScope: '${after?.override?.scope ?? "project"}'.`, true);
@@ -1670,6 +1680,7 @@ function handleEnable(params: ManagementParams, ctx: ManagementContext): AgentTo
 	const { path: settingsPath, removed } = removeBuiltinAgentOverrideFields(ctx.cwd, runtimeName, scope, ["disabled"]);
 	const after = resolveEffectiveAgent(discoverAgentsAll(ctx.cwd), raw).agent;
 	if (after && after.disabled !== true) {
+		if (removed) ctx.onAgentsChanged?.();
 		if (removed) return result(`Enabled agent '${runtimeName}' (removed disabled override at ${settingsPath}).`);
 		return result(`Agent '${runtimeName}' is already enabled.`);
 	}
@@ -1705,8 +1716,8 @@ function handleReset(params: ManagementParams, ctx: ManagementContext): AgentToo
 		fs.unlinkSync(custom.filePath);
 		lines.push(`Deleted custom ${scope} agent file at ${custom.filePath}.`);
 	}
-	const overrideRemoval = removeBuiltinAgentOverride(ctx.cwd, runtimeName, scope);
-	if (overrideRemoval.removed) lines.push(`Removed ${scope} settings override at ${overrideRemoval.path}.`);
+	const overrideRemoval = removeBuiltinAgentOverride(ctx.cwd, runtimeName, scope, { preserveMachine: true });
+	if (overrideRemoval.removed) lines.push(`${overrideRemoval.machinePreserved ? "Cleared customization in" : "Removed"} ${scope} settings override at ${overrideRemoval.path}.${overrideRemoval.machinePreserved ? " Retained machine placement." : ""}`);
 	if (lines.length === 0) {
 		const otherScope = scope === "user" ? "project" : "user";
 		const otherCustom = (otherScope === "user" ? d.user : d.project).find((a) => a.name === raw || a.name === sanitized);
@@ -1717,6 +1728,7 @@ function handleReset(params: ManagementParams, ctx: ManagementContext): AgentToo
 		return result(`Agent '${runtimeName}' has no ${scope} customization to reset.${note} It is at its bundled ${bundled.source} default.`);
 	}
 	lines.push(`Reset agent '${runtimeName}' to its bundled ${bundled.source} default.`);
+	ctx.onAgentsChanged?.();
 	return result(lines.join("\n"));
 }
 

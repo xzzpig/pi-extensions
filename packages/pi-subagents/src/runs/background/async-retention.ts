@@ -154,6 +154,8 @@ function readStatus(runDir: string): AsyncStatus | undefined {
 		|| !RUN_MODES.has(value.mode as AsyncStatus["mode"])
 		|| typeof value.startedAt !== "number"
 		|| !Number.isFinite(value.startedAt)) return undefined;
+	// SAFETY: readStatus validates every field of the raw JSON record above; the
+	// cast only re-narrows the validated record to its domain type.
 	return value as unknown as AsyncStatus;
 }
 
@@ -317,10 +319,21 @@ function parseWaitRunIds(dir: string): { runIds: Set<string>; safe: boolean } {
 
 function readCursor(root: string): RetentionCursor {
 	const value = readJson(path.join(root, CURSOR_NAME));
+	// SAFETY: readCursor checks version === 1 and the cursor shape is the only
+	// v1 record this store writes; the cast re-narrows the validated payload.
 	return value?.version === 1 ? value as unknown as RetentionCursor : { version: 1 };
 }
 
+let currentProcessStartIdentity: string | undefined | null = null;
+
 function processStartIdentity(pid: number): string | undefined {
+	// Foreign PIDs can be reused while this process lives, so resolve them afresh.
+	if (pid !== process.pid) return computeProcessStartIdentity(pid);
+	if (currentProcessStartIdentity === null) currentProcessStartIdentity = computeProcessStartIdentity(pid);
+	return currentProcessStartIdentity;
+}
+
+function computeProcessStartIdentity(pid: number): string | undefined {
 	if (process.platform === "linux") {
 		try {
 			const stat = fs.readFileSync(`/proc/${pid}/stat`).toString("utf8");
@@ -363,6 +376,8 @@ function parseLockOwner(lockDir: string): RetentionLockOwner | undefined {
 		|| typeof owner.startedAt !== "number"
 		|| !Number.isFinite(owner.startedAt)) return undefined;
 	if (owner.processStartIdentity !== undefined && typeof owner.processStartIdentity !== "string") return undefined;
+	// SAFETY: parseLockOwner validates every owner field above; the cast only
+	// re-narrows the validated JSON record to RetentionLockOwner.
 	return owner as unknown as RetentionLockOwner;
 }
 
@@ -465,6 +480,9 @@ function hasUnresolvedResultHandoff(data: Record<string, unknown>): boolean {
 	return typeof manifestPath !== "string" || !manifestPath || unresolvedHandoff(manifestPath);
 }
 
+// The completion mode is an opaque JSON leaf read from the result record; callers
+// narrow it with typeof before use.
+// pi-lens-ignore: no-unknown-returns
 function completionMode(data: Record<string, unknown>): unknown {
 	return data.completion && typeof data.completion === "object" && !Array.isArray(data.completion)
 		? (data.completion as Record<string, unknown>).mode
@@ -572,6 +590,8 @@ function parseDiscoveryResult(message: unknown, passId: string, runBudget: numbe
 			if (typeof operation.session !== "string" || !validRunId(operation.session) || (operation.type === "set-pending" && (typeof operation.value !== "string" || !safeRelative(operation.value)))) throw new Error("Retention discovery worker returned an invalid pending cursor operation.");
 		} else throw new Error("Retention discovery worker returned an unknown cursor operation.");
 	}
+	// SAFETY: parseDiscoveryResult validates every candidate, cursor, and scalar
+	// operation above; the cast re-narrows the worker message to its domain type.
 	return message as unknown as RetentionDiscovery;
 }
 
