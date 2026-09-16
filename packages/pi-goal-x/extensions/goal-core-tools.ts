@@ -545,7 +545,10 @@ pi.registerTool(defineTool({
 		// P1-3: persist any buffered in-turn mutations now so the auditor and
 		// status transitions observe the current task/state, not the stale disk.
 		core.flushGoalTransaction(ctx);
-		if (!!params.continuation === !!params.status || (params.continuation && (params.reason !== undefined || params.attempted_actions !== undefined || params.suggested_action !== undefined || params.completion_summary !== undefined))) {
+		// Exactly one of status or continuation must be present: mixing or omitting both is rejected.
+		const hasStatus = params.status !== undefined;
+		const hasContinuation = params.continuation !== undefined;
+		if (hasStatus === hasContinuation || (params.continuation && (params.reason !== undefined || params.attempted_actions !== undefined || params.suggested_action !== undefined || params.completion_summary !== undefined))) {
 			return { content: [{ type: "text", text: "Provide exactly one lifecycle status or continuation, without mixing their fields." }], details: {}, terminate: false };
 		}
 		if (params.continuation) return core.scheduler.declare(ctx, params.continuation as GoalContinuation);

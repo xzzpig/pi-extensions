@@ -954,7 +954,10 @@ function writeConfigAtomically(path: string, record: ConfigRecord, mode?: number
 		if (file !== undefined) {
 			try {
 				closeSync(file);
-			} catch {}
+			} catch {
+				// Best-effort close during error cleanup; the outer catch
+				// already reports the primary failure.
+			}
 		}
 		try {
 			unlinkSync(tempPath);

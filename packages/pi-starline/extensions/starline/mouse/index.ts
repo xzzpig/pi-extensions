@@ -686,8 +686,8 @@ function expandClickTarget(
  * a non-empty `pressedUrl` means Pi is about to open a link — the box stays
  * as it is and the release goes through unconsumed.
  */
-function pressedUrlAt(receiver: MouseCapableReceiver): unknown {
-	return (receiver as { pressedUrl?: unknown }).pressedUrl;
+function pressedUrlAt(receiver: MouseCapableReceiver): string | undefined {
+	return (receiver as { pressedUrl?: unknown }).pressedUrl as string | undefined;
 }
 
 /**

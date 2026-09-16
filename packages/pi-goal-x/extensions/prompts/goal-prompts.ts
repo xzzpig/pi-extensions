@@ -2,7 +2,7 @@ import { schedulerSummary } from "../goal-scheduler-state.ts";
 import { taskIndex } from "../goal-task-index.ts";
 import { formatTokenValue, statusLabel, truncateText } from "../goal-core.ts";
 import { promptSafeObjective } from "../goal-contract.ts";
-import type { GoalRecord, GoalTask, TaskStatus } from "../goal-record.ts";
+import type { GoalRecord, GoalTask } from "../goal-record.ts";
 import { countTaskSubtree } from "../goal-task-count.ts";
 import type { GoalSettings } from "../goal-settings.ts";
 import { budgetLine, budgetRemaining } from "../goal-accounting.ts";
@@ -61,12 +61,6 @@ export const MAX_STATE_SNAPSHOT_OBJECTIVE_CHARS = 300;
 
 /** Hard cap for the full state snapshot message content. */
 export const MAX_STATE_SNAPSHOT_CHARS = 3_000;
-
-function taskMarker(status: TaskStatus): string {
-	if (status === "complete") return "[x]";
-	if (status === "skipped") return "[~]";
-	return "[ ]";
-}
 
 /** Cap on pending tasks rendered inline in the prompt (P1-4 trim). */
 const MAX_PENDING_RENDERED = 10;

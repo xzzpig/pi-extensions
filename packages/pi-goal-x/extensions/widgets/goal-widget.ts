@@ -458,6 +458,8 @@ export class GoalWidgetComponent implements Component {
 		// shrink full-render (\x1b[2J\x1b[H\x1b[3J) scrollback wipe. Same cast
 		// pattern as the questionnaire churn guard; mock TUIs without a
 		// `terminal` render unbounded.
+		// SAFETY: this.tui is the live pi-tui instance captured by the widget
+		// factory; the widened shape reads one optional field and fails safe.
 		const terminalRows = (this.tui as unknown as { terminal?: { rows?: number } }).terminal?.rows;
 		// Render the current branch unbounded (natural), then apply the
 		// stable-height bound (spec 2026-08-11): the rendered height latches at
@@ -488,6 +490,8 @@ export class GoalWidgetComponent implements Component {
 	 */
 	private measureDockReserve(width: number): number | undefined {
 		type DockChild = { children?: DockChild[]; render?: (w: number) => string[] };
+		// SAFETY: this.tui is the live pi-tui instance captured by the widget
+		// factory; the widened shape reads the dock tree and fails safe.
 		const tui = this.tui as unknown as { children?: DockChild[] };
 		const top = tui.children;
 		if (!Array.isArray(top) || top.length < 2) return undefined;

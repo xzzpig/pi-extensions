@@ -198,7 +198,11 @@ export class GoalRuntime {
 			checkpointSeq: this.checkpointSeq,
 			timestamp: Date.now(),
 		};
-		try { this.hooks.sendFollowUp(checkpointTriggerPrompt(goal.id), details as unknown as Record<string, unknown>); }
+		try {
+			// SAFETY: sendFollowUp takes an opaque details bag; GoalCheckpointDetailsV3
+			// is the concrete shape written by this call site only.
+			this.hooks.sendFollowUp(checkpointTriggerPrompt(goal.id), details as unknown as Record<string, unknown>);
+		}
 		catch { this.hooks.dispatchFailed?.(ctx); }
 	}
 
