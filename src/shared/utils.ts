@@ -135,6 +135,9 @@ function isNotFoundError(error: unknown): boolean {
  * Read async job status from disk (with mtime-based caching)
  */
 export function readStatus(asyncDir: string): AsyncStatus | null {
+	if (Buffer.byteLength(path.basename(asyncDir), "utf-8") > 255) {
+		return null;
+	}
 	const statusPath = path.join(asyncDir, "status.json");
 
 	let stat: fs.Stats;
@@ -454,8 +457,13 @@ export function hasEmptyTerminalAssistantResponse(messages: Message[]): boolean 
 	const lastAssistant = messages.findLast((message) => message.role === "assistant");
 	return lastAssistant?.role === "assistant"
 		&& Array.isArray(lastAssistant.content)
-		&& lastAssistant.content.length === 0
-		&& lastAssistant.usage.output === 0;
+		&& ((lastAssistant.content.length === 0 && lastAssistant.usage.output === 0)
+			|| (messages.at(-1) === lastAssistant
+				&& lastAssistant.stopReason === "stop"
+				&& !lastAssistant.errorMessage
+				&& lastAssistant.content.length > 0
+				// Token accounting can be nonzero even when no response text was emitted.
+				&& lastAssistant.content.every((part) => part.type === "text" && part.text === "")));
 }
 
 export function formatEmptyTerminalAssistantResponseError(messages: Message[]): string {

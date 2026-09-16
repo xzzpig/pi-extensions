@@ -11,17 +11,17 @@ import type { ThinkingLevel } from "../../shared/model-info.ts";
 import { intersectThinkingCeilings } from "../../shared/thinking-ceiling.ts";
 import {
 	resolveChildDepth,
-	type LaunchResolvedChildExtensionsV1,
+	type LaunchResolvedChildExtensions,
 	type ResolvedToolBudget,
 	type RunFanoutBudgetDescriptor,
+	type HerdrMachineReference,
 } from "../../shared/types.ts";
 import type { NestedPathEntry } from "./nested-path.ts";
 import type { McpRuntimeSnapshotHost } from "./mcp-direct-tool-allowlist.ts";
 import type { PermissionRules } from "./permissions.ts";
 import type { StructuredOutputRuntime } from "./structured-output.ts";
 import type { ChildToolDiagnostic } from "./tool-availability.ts";
-import type { RuntimeAcknowledgedChildExtensionsV1 } from "../../shared/types.ts";
-import { projectRuntimeAcknowledgedExtensions } from "./runtime-acknowledged-extensions.ts";
+import type { RuntimeAcknowledgedChildExtensions } from "../../shared/types.ts";
 import { encodeExtensionBindings, PI_SUBAGENT_EXTENSION_BINDINGS_ENV, type ExtensionBindings } from "./extension-bindings.ts";
 import type { ResolvedSubagentCapabilityCeiling, SubagentCapabilityAudit } from "./capability-ceiling.ts";
 import {
@@ -32,8 +32,11 @@ import {
 	type PiLaunchToolPlan,
 } from "./child-tool-plan.ts";
 import type { ChildRuntimeConfig } from "./child-runtime-config.ts";
-import { createChildHooks } from "./child-hooks.ts";
+import { createCapturedChildHooks, withChildSessionErrorReporting } from "./child-hooks.ts";
+import type { ChildTranscriptWriter } from "../../shared/child-transcript.ts";
 import type { ChildSessionLaunch, ChildSessionStorage } from "./child-session.ts";
+import type { ArbiterModelContext } from "./llm-intent-arbiter.ts";
+import { resolveRequiredChildExtensions, type RequiredChildExtensionSnapshot } from "../../shared/required-child-extensions.ts";
 
 /** Environment variable pi-mcp-adapter reads for the tools a child may expose. */
 export const MCP_DIRECT_TOOLS_ENV = "MCP_DIRECT_TOOLS";
@@ -43,7 +46,7 @@ export const MCP_DIRECT_TOOLS_ENV = "MCP_DIRECT_TOOLS";
  * launches inherits. Serialized into the background runner config; the
  * foreground path passes the executor's full `ChildRuntimeConfig`.
  */
-export type InheritedChildRuntime = Pick<ChildRuntimeConfig, "depth" | "maxDepth" | "nestedRoute" | "nestedParent" | "capabilityCeiling" | "thinkingCeiling" | "runFanoutBudget">;
+export type InheritedChildRuntime = Pick<ChildRuntimeConfig, "depth" | "maxDepth" | "nestedRoute" | "nestedParent" | "capabilityCeiling" | "thinkingCeiling" | "runFanoutBudget" | "requiredExtensions">;
 
 export function inheritedChildRuntime(config: ChildRuntimeConfig | undefined): InheritedChildRuntime | undefined {
 	if (!config) return undefined;
@@ -55,10 +58,14 @@ export function inheritedChildRuntime(config: ChildRuntimeConfig | undefined): I
 		...(config.capabilityCeiling ? { capabilityCeiling: config.capabilityCeiling } : {}),
 		...(config.thinkingCeiling ? { thinkingCeiling: config.thinkingCeiling } : {}),
 		...(config.runFanoutBudget ? { runFanoutBudget: config.runFanoutBudget } : {}),
+		...(config.requiredExtensions ? { requiredExtensions: config.requiredExtensions } : {}),
 	};
 }
 
 export interface BuildInProcessChildLaunchInput {
+	machine?: HerdrMachineReference;
+	remoteSkillNames?: string[];
+	remoteReads?: string[] | false;
 	parentSessionId?: string;
 	forkCacheKey?: string;
 	sessionEnabled: boolean;
@@ -75,6 +82,8 @@ export interface BuildInProcessChildLaunchInput {
 	excludeTools?: string[];
 	extensions?: string[];
 	subagentOnlyExtensions?: string[];
+	/** Serialized launch snapshot; omitted only for a top-level parent-process lookup. */
+	requiredExtensions?: RequiredChildExtensionSnapshot;
 	systemPrompt?: string | null;
 	mcpDirectTools?: string[];
 	extensionBindings?: ExtensionBindings;
@@ -89,7 +98,6 @@ export interface BuildInProcessChildLaunchInput {
 	runFanoutBudget?: RunFanoutBudgetDescriptor;
 	structuredOutput?: StructuredOutputRuntime;
 	fast?: boolean;
-	modelCandidates?: readonly string[];
 	toolBudget?: ResolvedToolBudget;
 	permissionRules?: PermissionRules;
 	permissionAuditPath?: string;
@@ -111,12 +119,21 @@ export interface BuildInProcessChildLaunchInput {
 	 * them and exposes the child environment external extensions read.
 	 */
 	host: "parent" | "runner";
+	/**
+	 * Pi core tool names the host runtime provides. When set, child tool plans
+	 * intersect known core slots with this set; declared non-core names remain
+	 * for child startup validation. Review/scout lanes fail closed when a requested,
+	 * still-permitted repository inspection tool is missing from that set.
+	 */
+	hostAvailableBuiltins?: readonly string[];
 }
 
 export interface InProcessChildCapture {
+	completionIntentContext?(): ArbiterModelContext | undefined;
 	structuredOutput(): { called: boolean; value?: unknown; acceptanceReport?: unknown; acceptanceReportProvided: boolean };
 	toolDiagnostic(): ChildToolDiagnostic | undefined;
-	runtimeAcknowledgedExtensions(): RuntimeAcknowledgedChildExtensionsV1 | undefined;
+	runtimeAcknowledgedExtensions(): RuntimeAcknowledgedChildExtensions | undefined;
+	finalDrainHeld(): boolean;
 }
 
 export interface InProcessChildLaunch {
@@ -124,9 +141,14 @@ export interface InProcessChildLaunch {
 	config: ChildRuntimeConfig;
 	session: Omit<ChildSessionLaunch, "onExtensionError">;
 	capture: InProcessChildCapture;
-	launchResolvedExtensions: LaunchResolvedChildExtensionsV1;
+	launchResolvedExtensions: LaunchResolvedChildExtensions;
 	warnings: string[];
 	capabilityAudit?: SubagentCapabilityAudit;
+}
+
+/** Actual host create-input boundary. Evidence remains explicitly opt-in and dormant in production. */
+export function createReportedChildSessionInput(launch: InProcessChildLaunch, transcriptWriter?: ChildTranscriptWriter): ChildSessionLaunch {
+	return withChildSessionErrorReporting(launch.session, transcriptWriter);
 }
 
 /** Escape XML-significant characters in a string for safe attribute interpolation. */
@@ -167,24 +189,26 @@ function childStorage(input: BuildInProcessChildLaunchInput): ChildSessionStorag
 }
 
 export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput): InProcessChildLaunch {
+	const requiredExtensions = input.requiredExtensions ?? input.inherited?.requiredExtensions ?? resolveRequiredChildExtensions(input.parentSessionId);
 	const toolPlan = resolvePiLaunchToolPlan({
 		tools: input.tools,
 		excludeTools: input.excludeTools,
 		allowNestedSubagents: input.allowNestedSubagents,
 		extensions: input.extensions,
 		subagentOnlyExtensions: input.subagentOnlyExtensions,
+		requiredExtensions,
 		mcpDirectTools: input.mcpDirectTools,
 		cwd: input.cwd,
 		requireReadTool: input.requireReadTool,
 		structuredOutput: Boolean(input.structuredOutput),
 		fast: input.fast,
 		model: input.model,
-		modelCandidates: input.modelCandidates,
 		capabilityCeiling: input.capabilityCeiling,
 		inheritedCapabilityCeiling: inheritedCapabilityCeiling(input.inherited),
 		agentName: input.childAgentName,
 		permissionRules: input.permissionRules,
 		runtimeSnapshotHost: input.runtimeSnapshotHost,
+		hostAvailableBuiltins: input.hostAvailableBuiltins,
 	});
 
 	const inherited = input.inherited;
@@ -214,8 +238,6 @@ export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput)
 	let structuredAcceptanceReport: unknown;
 	let structuredCalled = false;
 	let structuredAcceptanceProvided = false;
-	let toolDiagnostic: ChildToolDiagnostic | undefined;
-	let acknowledgedIds: string[] | undefined;
 
 	const config: ChildRuntimeConfig = {
 		...(input.runId ? { runId: input.runId } : {}),
@@ -234,6 +256,7 @@ export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput)
 		maxDepth: childDepth.maxDepth,
 		...(toolPlan.capabilityCeiling ? { capabilityCeiling: toolPlan.capabilityCeiling } : {}),
 		...(thinkingCeiling ? { thinkingCeiling } : {}),
+		...(toolPlan.requiredExtensions.length > 0 ? { requiredExtensions: toolPlan.requiredExtensions } : {}),
 		inheritProjectContext: input.inheritProjectContext,
 		inheritGlobalContext: input.inheritGlobalContext,
 		inheritSkills: input.inheritSkills,
@@ -264,10 +287,9 @@ export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput)
 			: {}),
 		...(toolPlan.requiredChildTools.length > 0 ? { requiredTools: toolPlan.requiredChildTools } : {}),
 		...(toolPlan.effectiveMcpTools.length > 0 ? { mcpDirectTools: toolPlan.effectiveMcpTools } : {}),
-		toolDiagnostic: (diagnostic) => { toolDiagnostic = diagnostic; },
-		runtimeAcknowledgements: (ids) => { acknowledgedIds = ids; },
 		fast: input.fast === true,
 	};
+	const capturedHooks = createCapturedChildHooks(config, input.host === "runner");
 
 	const extensionPaths = toolPlan.extensionArgs.filter((extensionPath) => !isSubagentRuntimeExtensionPath(extensionPath));
 	const ambientExtensions = input.host === "runner" && !toolPlan.disableAmbientExtensions;
@@ -276,19 +298,23 @@ export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput)
 		configuredExtensions: toolPlan.configuredExtensions,
 		extensionArgs: toolPlan.extensionArgs,
 		disableAmbientExtensions: !ambientExtensions,
+		requiredExtensions: toolPlan.requiredExtensions,
 	});
 	const taggedPrompt = input.systemPrompt !== undefined && input.systemPrompt !== null
 		? `<active_agent name="${escapeXmlAttr(input.childAgentName)}"/>\n\n${input.systemPrompt}`
 		: undefined;
 	const session: Omit<ChildSessionLaunch, "onExtensionError"> = {
 		cwd: input.cwd,
+		...(input.machine ? { machine: input.machine } : {}),
+		...(input.machine ? { remoteResources: { agent: input.childAgentName, ...(input.remoteSkillNames ? { skills: input.remoteSkillNames } : {}), ...(input.remoteReads !== undefined ? { reads: input.remoteReads } : {}), ...(toolPlan.explicitToolAllowlist ? { toolCeiling: [...toolPlan.effectiveToolAllowlist] } : toolPlan.capabilityCeiling?.allowedTools ? { toolCeiling: [...toolPlan.capabilityCeiling.allowedTools] } : {}) } } : {}),
 		storage: childStorage(input),
 		...(input.model ? { model: input.model } : {}),
 		...(toolPlan.explicitToolAllowlist ? { tools: toolPlan.effectiveToolAllowlist } : {}),
 		...(!toolPlan.explicitToolAllowlist && toolPlan.excludeTools.length > 0 ? { excludeTools: toolPlan.excludeTools } : {}),
 		extensionPaths,
+		requiredExtensions: toolPlan.requiredExtensions,
 		ambientExtensions,
-		hooks: createChildHooks(config),
+		hooks: capturedHooks.hooks,
 		...(input.host === "runner" ? { processEnv: childProcessEnv(input, toolPlan) } : {}),
 		runtime: config,
 		noSkills: !input.inheritSkills,
@@ -303,9 +329,11 @@ export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput)
 		config,
 		session,
 		capture: {
+			completionIntentContext: capturedHooks.completionIntentContext,
 			structuredOutput: () => ({ called: structuredCalled, value: structuredValue, acceptanceReport: structuredAcceptanceReport, acceptanceReportProvided: structuredAcceptanceProvided }),
-			toolDiagnostic: () => toolDiagnostic,
-			runtimeAcknowledgedExtensions: () => (acknowledgedIds ? projectRuntimeAcknowledgedExtensions(acknowledgedIds) : undefined),
+			toolDiagnostic: capturedHooks.toolDiagnostic,
+			runtimeAcknowledgedExtensions: capturedHooks.runtimeAcknowledgedExtensions,
+			finalDrainHeld: capturedHooks.finalDrainHeld,
 		},
 		launchResolvedExtensions,
 		warnings: toolPlan.warnings,

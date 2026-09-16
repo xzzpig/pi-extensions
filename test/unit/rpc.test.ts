@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
-import { consumeStopRequestPayload, stopRequestPath } from "../../src/runs/background/control-channel.ts";
+import { consumeStopRequestPayload, stopRequestPath, stopRequestsDir } from "../../src/runs/background/control-channel.ts";
 import {
 	SUBAGENT_RPC_PROTOCOL_VERSION,
 	SUBAGENT_RPC_READY_EVENT,
@@ -290,6 +290,65 @@ describe("subagent extension RPC bridge", () => {
 		assert.equal((missingId as { error: { code: string } }).error.code, "invalid_params");
 
 		bridge.dispose();
+	});
+
+	it("forwards RPC schedule.run quiet:true to launch and keeps omitted quiet noisy", async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-rpc-schedule-quiet-"));
+		const project = path.join(root, "project");
+		fs.mkdirSync(project);
+		const scheduleCtx = {
+			cwd: project,
+			sessionManager: {
+				getSessionId: () => "session-a",
+				getSessionFile: () => path.join(project, "session-a.jsonl"),
+			},
+		} as const;
+		type Launch = {
+			params: Record<string, unknown>;
+			resolve(result: { content: Array<{ type: "text"; text: string }>; details: Record<string, unknown> }): void;
+		};
+		const launches: Launch[] = [];
+		const { createScheduledRunManager } = await import("../../src/runs/background/scheduled-runs.ts");
+		const manager = createScheduledRunManager({
+			config: { scheduledRuns: { enabled: true } },
+			storeRoot: path.join(root, "stores"),
+			now: () => Date.parse("2030-01-01T00:00:00Z"),
+			launch: (params) => new Promise((resolve) => launches.push({ params: params as Record<string, unknown>, resolve: resolve as Launch["resolve"] })) as never,
+		});
+		manager.bindSession(scheduleCtx as never);
+		const created = await manager.handleToolCall({
+			action: "schedule.create",
+			id: "quiet-hourly",
+			every: "1h",
+			quiet: true,
+			workflowScript: "return runs.run('main', { agent: 'worker', task: 'Maintain backlog' })",
+		}, scheduleCtx as never);
+		assert.equal(created.isError, undefined);
+
+		const events = new FakeEvents();
+		const bridge = registerSubagentRpcBridge({
+			events,
+			getContext: () => scheduleCtx as never,
+			execute: async (_id, params, _signal, _hook, execCtx) => manager.handleToolCall(params, execCtx),
+		});
+		try {
+			const noisy = request(events, "run-noisy", "manage", { action: "schedule.run", id: "quiet-hourly" });
+			for (let i = 0; i < 8; i++) await Promise.resolve();
+			assert.equal("quiet" in (launches[0]?.params.scheduleOrigin as Record<string, unknown>), false);
+			launches[0]!.resolve({ content: [{ type: "text", text: "Async" }], details: { mode: "single", results: [], asyncId: "rpc-loud" } });
+			assert.equal((await noisy).success, true);
+			manager.handleAsyncCompletion({ runId: "rpc-loud", success: true, summary: "Done" });
+
+			const quiet = request(events, "run-quiet", "manage", { action: "schedule.run", id: "quiet-hourly", quiet: true });
+			for (let i = 0; i < 8; i++) await Promise.resolve();
+			assert.deepEqual(launches[1]?.params.scheduleOrigin, { id: "quiet-hourly", name: "workflowScript -> agent worker", quiet: true });
+			launches[1]!.resolve({ content: [{ type: "text", text: "Async" }], details: { mode: "single", results: [], asyncId: "rpc-quiet" } });
+			assert.equal((await quiet).success, true);
+		} finally {
+			bridge.dispose();
+			manager.stop();
+			fs.rmSync(root, { recursive: true, force: true });
+		}
 	});
 
 	it("projects bounded display-safe active fleet records without internal ids", async () => {
@@ -1037,7 +1096,7 @@ describe("subagent extension RPC bridge", () => {
 		}
 	});
 
-	it("stops reload-recovered workflows through the durable control channel", async () => {
+	for (const scenario of ["no-state", "empty-maps", "child-no-state", "child-controller-only", "child-callback-false", "run-callback-only"] as const) it(`rejects workflow stop without the required live control: ${scenario}`, async () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-rpc-stop-workflow-"));
 		try {
 			const events = new FakeEvents();
@@ -1045,6 +1104,14 @@ describe("subagent extension RPC bridge", () => {
 			const resultsDir = path.join(root, "results");
 			const asyncDir = path.join(asyncRoot, "workflow-run");
 			let killCalls = 0;
+			const controller = new AbortController();
+			const calls: string[] = [];
+			const stopChild = (childId: string) => { calls.push(childId); return false; };
+			const childId = scenario.startsWith("child-") ? "worker" : undefined;
+			const state = scenario === "no-state" || scenario === "child-no-state" ? undefined : {
+				workflowControllers: new Map(scenario === "child-controller-only" || scenario === "child-callback-false" ? [["workflow-run", controller]] : []),
+				workflowChildStops: new Map(scenario === "child-callback-false" || scenario === "run-callback-only" ? [["workflow-run", stopChild]] : []),
+			} as SubagentState;
 			fs.mkdirSync(asyncDir, { recursive: true });
 			fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({
 				runId: "workflow-run",
@@ -1054,10 +1121,15 @@ describe("subagent extension RPC bridge", () => {
 				pid: 4242,
 				startedAt: 100,
 				lastUpdate: 100,
-				steps: [{ agent: "worker", status: "running", startedAt: 100 }],
+				steps: [
+					{ workflowKey: "worker", agent: "worker", status: "running", startedAt: 100 },
+					{ workflowKey: "sibling", agent: "worker", status: "running", startedAt: 100 },
+				],
 			}, null, 2), "utf-8");
+			const statusBefore = fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8");
 			const bridge = registerSubagentRpcBridge({
 				events,
+				state,
 				getContext: () => ctx(),
 				execute: async () => assert.fail("stop should not call executor"),
 				asyncDirRoot: asyncRoot,
@@ -1069,13 +1141,18 @@ describe("subagent extension RPC bridge", () => {
 				now: () => 150,
 			});
 
-			const reply = await request(events, "stop-workflow", "stop", { id: "workflow-run" });
+			const reply = await request(events, "stop-workflow", "stop", { id: "workflow-run", ...(childId ? { childId } : {}) });
 
-			assert.equal(reply.success, true);
-			assert.equal((reply as { data: { runId?: string; state?: string; message?: string } }).data.runId, "workflow-run");
-			assert.equal((reply as { data: { state?: string } }).data.state, "stopping");
-			assert.match((reply as { data: { message?: string } }).data.message ?? "", /Stop requested for async run workflow-run/);
-			assert.equal(consumeStopRequestPayload(asyncDir)?.type, "stop");
+			assert.equal(reply.success, false);
+			assert.equal((reply as { error: { code: string } }).error.code, "invalid_state");
+			assert.match((reply as { error: { message: string } }).error.message,
+				scenario === "child-callback-false" ? /not available to stop/ : childId ? /no live stop callback/ : /no live run controller/);
+			assert.equal(fs.existsSync(stopRequestPath(asyncDir)), false);
+			assert.equal(fs.existsSync(stopRequestsDir(asyncDir)), false);
+			assert.equal(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8"), statusBefore);
+			assert.equal(events.emitted.some(({ event }) => event === SUBAGENT_CHILD_STATUS_EVENT), false);
+			assert.equal(controller.signal.aborted, false);
+			assert.deepEqual(calls, scenario === "child-callback-false" ? ["worker"] : []);
 			assert.equal(killCalls, 0);
 
 			bridge.dispose();

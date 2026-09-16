@@ -10,11 +10,12 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { MockPi } from "../support/helpers.ts";
-import { createMockPi, createTempDir, makeAgent, makeAgentConfigs, removeTempDir } from "../support/helpers.ts";
+import { createMockPi, createTempDir, events, makeAgent, makeAgentConfigs, removeTempDir } from "../support/helpers.ts";
 import { runSync } from "../../src/runs/foreground/execution.ts";
 import { childSessionFactory, createDefaultChildSessionFactory, disposeChildSessions, type ChildSessionFactory, type ChildSessionLaunch, type PiCodingAgentModule } from "../../src/runs/shared/child-session.ts";
 import { createNestedRoute } from "../../src/runs/shared/nested-events.ts";
 import { createStructuredOutputRuntime } from "../../src/runs/shared/structured-output.ts";
+import { rewriteSubagentPrompt } from "../../src/runs/shared/subagent-prompt-runtime.ts";
 import type { ForegroundChildSessionControls, SingleResult } from "../../src/shared/types.ts";
 
 async function waitFor(read: () => boolean, timeoutMs = 5_000): Promise<void> {
@@ -71,6 +72,12 @@ describe("in-process foreground child", () => {
 		}
 	});
 
+	it("projects authoritative native-machine Git evidence into the public foreground result", async () => {
+		mockPi.onCall({ output: "done" }); const base = childSessionFactory(); const wrapped: ChildSessionFactory = { async create(input) { const child = await base.create(input); Object.defineProperty(child, "machineEvidence", { value: { machineId: "remote-machine", initial: { head: "aaa", dirty: false }, final: { head: "bbb", dirty: true } } }); return child; }, dispose: () => base.dispose() };
+		const result = await runSync(tempDir, makeAgentConfigs(["echo"]), "echo", "Task", { runId: "native-git-evidence", waitToolEnabled: false, childSessionFactory: wrapped });
+		assert.deepEqual(result.nativeMachine, { provider: "herdr", machineId: "remote-machine", initialGit: { head: "aaa", dirty: false }, finalGit: { head: "bbb", dirty: true } });
+	});
+
 	it("adds the fanout hook and nested route only for fanout-authorized children", async () => {
 		const route = createNestedRoute("hooks-fanout");
 		try {
@@ -109,6 +116,44 @@ describe("in-process foreground child", () => {
 			{ text: "Then update docs.", mode: "followUp" },
 		]);
 	});
+
+	it("does not abort when a steer arrives after the final stop and turn_start is delayed", async () => {
+		mockPi.onCall({
+			jsonl: [events.assistantMessage("before steer")],
+			keepAliveAfterFinalMessageMs: 15_000,
+			queuedMessageTurnStartDelayMs: 1400,
+			queuedMessageOutput: "after steer",
+		});
+		let controls: ForegroundChildSessionControls | undefined;
+		const run = runSync(tempDir, makeAgentConfigs(["echo"]), "echo", "Task", {
+			runId: "queued-steer-after-final",
+			onChildSession: (next) => { controls = next; },
+		});
+		await waitFor(() => controls !== undefined && mockPi.sessions[0]?.scriptedFinalEmitted === true);
+		await controls!.steer("Continue after the final stop.");
+		const result = await run;
+		assert.equal(result.exitCode, 0, result.error);
+		assert.equal(result.error, undefined);
+		assert.equal(result.finalOutput, "after steer");
+		assert.equal(mockPi.sessions[0]?.aborted, false);
+		assert.deepEqual(mockPi.sessions[0]?.steers, [{ text: "Continue after the final stop.", mode: "steer" }]);
+	});
+
+	for (const type of ["turn_start", "agent_start", "auto_retry_start"]) {
+		it(`foreground keeps resumed work alive after ${type}`, async () => {
+			mockPi.onCall({
+				steps: [
+					{ jsonl: [events.assistantMessage("before continuation"), { type }] },
+					// Queued steering/follow-up work is allowed to outlive the old final-stop grace.
+					{ delay: 1400, jsonl: [events.assistantMessage("after continuation")] },
+				],
+			});
+			const result = await runSync(tempDir, makeAgentConfigs(["echo"]), "echo", "Task", { runId: `resumed-${type}` });
+			assert.equal(result.exitCode, 0, result.error);
+			assert.equal(result.finalOutput, "after continuation");
+			assert.equal(mockPi.sessions[0]?.aborted, false);
+		});
+	}
 
 	it("aborts the child session on interrupt and disposes it", async () => {
 		mockPi.onCall({ hangUntilAbort: true });
@@ -258,12 +303,89 @@ describe("default child session factory", () => {
 		assert.deepEqual(flags, [true, true]);
 	});
 
+	it("runs the child prompt rewrite before ambient prompt capture without reordering ambient extensions", async () => {
+		const agentPrompt = '<active_agent name="remotion-editor"/>\n\neditor instructions';
+		const globalPath = path.join(process.env.HOME ?? process.env.USERPROFILE ?? process.cwd(), ".pi", "agent", "AGENTS.md");
+		const projectPath = path.join(process.cwd(), "AGENTS.md");
+		const orchestrationSkill = '<skill><name>pi-subagents</name><location>/skills/pi-subagents/SKILL.md</location></skill>';
+		const assemble = (extra: string) => `${agentPrompt}${extra}`;
+		const destructivePrompt = assemble([
+			"", "<project_context>",
+			`<project_instructions path="${globalPath}">global parent-only instructions</project_instructions>`,
+			`<project_instructions path="${projectPath}">project instructions</project_instructions>`,
+			"</project_context>", orchestrationSkill,
+		].join("\n\n"));
+		const boundaryOnlyPrompt = assemble("");
+		const orderedPaths: string[][] = [];
+		const captureResults: boolean[] = [];
+		const forwardedPrompts: string[] = [];
+		const pi = stubPi();
+		pi.DefaultResourceLoader = class {
+			loaded = false;
+			private readonly options: { extensionsOverride?: (base: { extensions: Array<{ path: string }>; errors: unknown[]; runtime: object }) => { extensions: Array<{ path: string }>; errors: unknown[]; runtime: object } };
+			private result = { extensions: [] as Array<{ path: string }>, errors: [] as unknown[], runtime: {} };
+			constructor(options: typeof this.options) { this.options = options; }
+			async reload() {
+				const base = {
+					extensions: [
+						{ path: "/ambient/first.ts" },
+						{ path: "/ambient/claude-bridge.ts" },
+						{ path: "/ambient/last.ts" },
+						{ path: "<inline:pi-subagents:prompt-runtime>" },
+						{ path: "<inline:pi-subagents:completion-intent>" },
+					],
+					errors: [] as unknown[],
+					runtime: {},
+				};
+				this.result = this.options.extensionsOverride?.(base) ?? base;
+				orderedPaths.push(this.result.extensions.map(({ path: extensionPath }) => extensionPath));
+				for (const original of [boundaryOnlyPrompt, destructivePrompt]) {
+					let prompt = original;
+					let captured: string | undefined;
+					for (const { path: extensionPath } of this.result.extensions) {
+						if (extensionPath === "<inline:pi-subagents:prompt-runtime>") {
+							prompt = rewriteSubagentPrompt(prompt, { inheritProjectContext: true, inheritGlobalContext: false, inheritSkills: true });
+						}
+						if (extensionPath === "/ambient/claude-bridge.ts") captured = prompt;
+					}
+					captureResults.push(captured === prompt || (captured !== undefined && prompt.includes(captured)));
+					forwardedPrompts.push(prompt);
+				}
+			}
+			getExtensions() { return this.result; }
+		} as unknown as PiCodingAgentModule["DefaultResourceLoader"];
+
+		const factory = createDefaultChildSessionFactory({ loadPiCodingAgent: async () => pi });
+		await factory.create({
+			...stubLaunch,
+			ambientExtensions: true,
+			hooks: [
+				{ name: "pi-subagents:prompt-runtime", factory() {} },
+				{ name: "pi-subagents:completion-intent", factory() {} },
+			],
+		});
+
+		assert.deepEqual(orderedPaths[0], [
+			"<inline:pi-subagents:prompt-runtime>",
+			"/ambient/first.ts",
+			"/ambient/claude-bridge.ts",
+			"/ambient/last.ts",
+			"<inline:pi-subagents:completion-intent>",
+		]);
+		assert.deepEqual(captureResults, [true, true], "bridge-style capture must resolve both wrapping and destructive filtering");
+		assert.match(forwardedPrompts[1]!, /editor instructions/);
+		assert.match(forwardedPrompts[1]!, /project instructions/);
+		assert.doesNotMatch(forwardedPrompts[1]!, /global parent-only instructions/);
+		assert.doesNotMatch(forwardedPrompts[1]!, /<name>pi-subagents<\/name>/);
+	});
+
 	it("resolves models from providers queued during child extension loading", async () => {
 		const registeredProviders: string[] = [];
 		const registeredNativeProviders: string[] = [];
+		let refreshed = false;
 		let pendingRuntime: { pendingProviderRegistrations: unknown[]; pendingNativeProviderRegistrations: unknown[] } | undefined;
 		const pi = stubPi();
-		pi.ModelRuntime = { create: async () => ({ registerProvider: (name: string) => { registeredProviders.push(name); }, registerNativeProvider: (provider: { id: string }) => { registeredNativeProviders.push(provider.id); } }) } as unknown as PiCodingAgentModule["ModelRuntime"];
+		pi.ModelRuntime = { create: async () => ({ registerProvider: (name: string) => { registeredProviders.push(name); }, registerNativeProvider: (provider: { id: string }) => { registeredNativeProviders.push(provider.id); }, refresh: async () => { refreshed = true; } }) } as unknown as PiCodingAgentModule["ModelRuntime"];
 		pi.DefaultResourceLoader = class {
 			runtime = {
 				pendingProviderRegistrations: [{ name: "router", config: { models: [{ id: "mimo-v2.5" }] }, extensionPath: "/extensions/router.ts" }],
@@ -276,6 +398,7 @@ describe("default child session factory", () => {
 			assert.equal(cliModel, "router/mimo-v2.5");
 			assert.deepEqual(registeredProviders, ["router"]);
 			assert.deepEqual(registeredNativeProviders, ["native-router"]);
+			assert.equal(refreshed, true);
 			return { model: { provider: "router", id: "mimo-v2.5" } };
 		}) as unknown as PiCodingAgentModule["resolveCliModel"];
 		pi.createAgentSession = (async ({ model }) => ({ session: { bindExtensions: async () => {}, dispose() {}, extensionRunner: { hasHandlers: () => false }, subscribe: () => () => {}, prompt: async () => {}, abort: async () => {}, steer: async () => {}, followUp: async () => {}, messages: [], sessionId: "s", model } })) as unknown as PiCodingAgentModule["createAgentSession"];
@@ -288,12 +411,77 @@ describe("default child session factory", () => {
 		assert.deepEqual(pendingRuntime?.pendingNativeProviderRegistrations, []);
 	});
 
+	it("resolves queued providers when the loader has no native provider queue", async () => {
+		const registeredProviders: string[] = [];
+		let refreshed = false;
+		let pendingRuntime: { pendingProviderRegistrations?: unknown[] } | undefined;
+		const pi = stubPi();
+		pi.ModelRuntime = { create: async () => ({ registerProvider: (name: string) => { registeredProviders.push(name); }, registerNativeProvider: () => {}, refresh: async () => { refreshed = true; } }) } as unknown as PiCodingAgentModule["ModelRuntime"];
+		pi.DefaultResourceLoader = class {
+			runtime = {
+				pendingProviderRegistrations: [{ name: "router", config: { models: [{ id: "mimo-v2.5" }] }, extensionPath: "/extensions/router.ts" }],
+			};
+			async reload() { pendingRuntime = this.runtime; }
+			getExtensions() { return { extensions: [], errors: [], runtime: this.runtime }; }
+		} as unknown as PiCodingAgentModule["DefaultResourceLoader"];
+		pi.resolveCliModel = (({ cliModel }) => {
+			assert.equal(cliModel, "router/mimo-v2.5");
+			assert.deepEqual(registeredProviders, ["router"]);
+			assert.equal(refreshed, true);
+			return { model: { provider: "router", id: "mimo-v2.5" } };
+		}) as unknown as PiCodingAgentModule["resolveCliModel"];
+		pi.createAgentSession = (async ({ model }) => ({ session: { bindExtensions: async () => {}, dispose() {}, extensionRunner: { hasHandlers: () => false }, subscribe: () => () => {}, prompt: async () => {}, abort: async () => {}, steer: async () => {}, followUp: async () => {}, messages: [], sessionId: "s", model } })) as unknown as PiCodingAgentModule["createAgentSession"];
+
+		const factory = createDefaultChildSessionFactory({ loadPiCodingAgent: async () => pi });
+		const child = await factory.create({ ...stubLaunch, model: "router/mimo-v2.5" });
+
+		assert.equal(child.modelId, "router/mimo-v2.5");
+		assert.deepEqual(pendingRuntime?.pendingProviderRegistrations, []);
+	});
+
 	it("reports a missing extension cache reset when the child loads extension files", async () => {
 		const errors: string[] = [];
 		const factory = createDefaultChildSessionFactory({ loadPiCodingAgent: async () => stubPi() });
 		await factory.create({ ...stubLaunch, onExtensionError: (error) => errors.push(error.extensionPath) });
 		await factory.create({ ...stubLaunch, extensionPaths: ["/tmp/ext.ts"], onExtensionError: (error) => errors.push(error.extensionPath) });
 		assert.deepEqual(errors, ["<loader>"]);
+	});
+
+	it("preserves an initialized parent theme when creating a child session", async () => {
+		const themeKey = Symbol.for("@earendil-works/pi-coding-agent:theme");
+		const globals = globalThis as Record<symbol, unknown>;
+		const previousTheme = globals[themeKey];
+		const initialized: Array<string | undefined> = [];
+		const pi = stubPi();
+		pi.initTheme = ((themeName?: string) => { initialized.push(themeName); }) as PiCodingAgentModule["initTheme"];
+		pi.SettingsManager = { create: () => ({ getTheme: () => "vesper-light/vesper-dark" }) } as unknown as PiCodingAgentModule["SettingsManager"];
+		const factory = createDefaultChildSessionFactory({ loadPiCodingAgent: async () => pi });
+		globals[themeKey] = { name: "vesper-light" };
+		try {
+			await factory.create(stubLaunch);
+			assert.deepEqual(initialized, []);
+		} finally {
+			if (previousTheme === undefined) delete globals[themeKey];
+			else globals[themeKey] = previousTheme;
+		}
+	});
+
+	it("initializes the theme in a headless runner process", async () => {
+		const themeKey = Symbol.for("@earendil-works/pi-coding-agent:theme");
+		const globals = globalThis as Record<symbol, unknown>;
+		const previousTheme = globals[themeKey];
+		const initialized: Array<string | undefined> = [];
+		const pi = stubPi();
+		pi.initTheme = ((themeName?: string) => { initialized.push(themeName); }) as PiCodingAgentModule["initTheme"];
+		pi.SettingsManager = { create: () => ({ getTheme: () => "vesper-light/vesper-dark" }) } as unknown as PiCodingAgentModule["SettingsManager"];
+		const factory = createDefaultChildSessionFactory({ loadPiCodingAgent: async () => pi });
+		delete globals[themeKey];
+		try {
+			await factory.create(stubLaunch);
+			assert.deepEqual(initialized, ["vesper-light/vesper-dark"]);
+		} finally {
+			if (previousTheme !== undefined) globals[themeKey] = previousTheme;
+		}
 	});
 
 	it("disposes the session when bindExtensions rejects", async () => {

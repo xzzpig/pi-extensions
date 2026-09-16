@@ -171,11 +171,31 @@ describe("acceptance gates", () => {
 		assert.equal(formatAcceptancePrompt(dynamicReviewer), "");
 	});
 
-	it("preserves risky keyword review inference when acceptance role metadata is omitted", () => {
-		for (const task of ["Inspect the security posture", "Read-only security audit"]) {
-			const resolved = resolveEffectiveAcceptance({ agentName: "worker", task });
-			assert.equal(resolved.level, "checked", task);
-			assert.equal(resolved.review && resolved.review !== false ? resolved.review.required : undefined, true, task);
+	it("keeps read-only tasks out of writer acceptance despite risk keywords", () => {
+		for (const agentName of ["worker", "read-only-reviewer"]) {
+			for (const task of ["Review the security posture; do not edit files.", "Read-only security audit", "Read-only review. Verify release recovery; do not edit files."]) {
+				const resolved = resolveEffectiveAcceptance({ agentName, task, mode: "single", async: true });
+				assert.equal(resolved.level, "none", `${agentName}: ${task}`);
+				assert.deepEqual(resolved.criteria, []);
+				assert.equal(formatAcceptancePrompt(resolved), "");
+			}
+		}
+	});
+
+	it("retains risk gates for unknown tasks with review names or mixed inspection and writes", async () => {
+		for (const [agentName, task] of [
+			["worker", "Inspect the security posture"],
+			["analyst", "Handle the release."],
+			["release-analyst", "Handle the security rollout."],
+			["worker", "Inspect the release, then run prettier --write files."],
+			["worker", "Inspect the migration and migrate the data."],
+		]) {
+			const resolved = resolveEffectiveAcceptance({ agentName, task, mode: "single", async: true });
+			assert.equal(resolved.level, "checked", `${agentName}: ${task}`);
+			assert.equal(resolved.review && resolved.review.required, true);
+			assert.match(formatAcceptancePrompt(resolved), /Implement the requested change/);
+			const ledger = await evaluateAcceptance({ acceptance: resolved, output: "Done", cwd: process.cwd() });
+			assert.equal(ledger.status, "rejected", `${agentName}: ${task}`);
 		}
 	});
 
@@ -190,7 +210,7 @@ describe("acceptance gates", () => {
 		assert.equal(resolved.verify[0]?.id, "ok");
 	});
 
-	it("agent contract v1 disables inferred acceptance without changing current defaults", () => {
+	it("agent contract disables inferred acceptance without changing current defaults", () => {
 		const current = resolveEffectiveAcceptance({ agentName: "worker", acceptanceRole: "writer", task: "Implement the fix", mode: "single", async: true });
 		assert.equal(current.level, "checked");
 		assert.equal(current.review && current.review !== false ? current.review.required : undefined, true);
@@ -204,7 +224,7 @@ describe("acceptance gates", () => {
 		}
 	});
 
-	it("agent contract v1 keeps explicit acceptance report-optional and verify-only", async () => {
+	it("agent contract keeps explicit acceptance report-optional and verify-only", async () => {
 		const checked = resolveEffectiveAcceptance({
 			agentName: "worker",
 			task: "Implement the fix",
@@ -254,6 +274,16 @@ describe("acceptance gates", () => {
 		assert.match(prompt, /commandsRun\[\]\.result.*passed, failed, not-run/);
 		assert.match(prompt, /manualNotes.*optional strings.*empty string.*does not satisfy.*manual-notes/);
 		assert.match(prompt, /"reviewFindings": \[\n    "blocker:/);
+	});
+
+	it("labels declared review gates as optional when required is false", () => {
+		const optional = resolveEffectiveAcceptance({
+			agentName: "worker",
+			task: "Implement a fix",
+			explicit: { level: "checked", review: { agent: "reviewer", required: false } },
+		});
+
+		assert.match(formatAcceptancePrompt(optional), /Review gate: optional by reviewer\./);
 	});
 
 	it("omits inferred read-only prompts while preserving explicit acceptance", () => {
@@ -1220,6 +1250,17 @@ describe("acceptance gates", () => {
 		assert.match(errors.join("\n"), /acceptance\.review\.required/);
 	});
 
+	it("rejects transport-permitted true acceptance before execution, including nested inputs", () => {
+		const errors = validateExecutionAcceptance({
+			acceptance: true,
+			tasks: [{ acceptance: true }],
+			chain: [{ acceptance: true }, { parallel: [{ acceptance: true }] }, { parallel: { acceptance: true } }],
+		});
+		const paths = ["acceptance", "tasks[0].acceptance", "chain[0].acceptance", "chain[1].parallel[0].acceptance", "chain[2].parallel.acceptance"];
+		assert.equal(errors.length, paths.length);
+		paths.forEach((path, index) => assert.ok(errors[index]?.startsWith(`${path} must be a string level, false, or an object.`)));
+	});
+
 	it("requires outputSchema for explicit structured acceptance report mode", () => {
 		const schema = { type: "object" as const };
 		const errors = validateExecutionAcceptance({
@@ -1227,6 +1268,7 @@ describe("acceptance gates", () => {
 			tasks: [
 				{ acceptance: { level: "checked", report: "off" } },
 				{ outputSchema: schema, acceptance: { level: "checked", report: "on" } },
+				{ outputSchema: false, acceptance: { level: "checked", report: "on" } },
 			],
 			chain: [
 				{ acceptance: { level: "checked", report: "on" } },
@@ -1239,6 +1281,7 @@ describe("acceptance gates", () => {
 		assert.deepEqual(errors, [
 			"acceptance.report requires outputSchema.",
 			"tasks[0].acceptance.report requires outputSchema.",
+			"tasks[2].acceptance.report requires outputSchema.",
 			"chain[0].acceptance.report requires outputSchema.",
 			"chain[2].parallel[0].acceptance.report requires outputSchema.",
 			"chain[3].parallel.acceptance.report requires outputSchema.",
@@ -1312,6 +1355,16 @@ describe("acceptance gates", () => {
 		const conflictingGate = normalizeGateAcceptance("npm test", "checked");
 		assert.equal(conflictingGate.ok, false);
 		assert.match(conflictingGate.error, /cannot be combined with acceptance/);
+		assert.match(conflictingGate.error, /Both fields were present: gate="npm test" acceptance="checked"/);
+		const oversizedAcceptance = normalizeGateAcceptance("npm test", { level: "checked", evidence: ["a".repeat(200)] });
+		assert.equal(oversizedAcceptance.ok, false);
+		assert.match(oversizedAcceptance.error || "", /Both fields were present/);
+		assert.ok(!(oversizedAcceptance.error || "").includes("a".repeat(200)));
+		const disabledAcceptance = normalizeGateAcceptance("npm test", false);
+		assert.deepEqual(disabledAcceptance, {
+			ok: true,
+			acceptance: { level: "verified", verify: [{ id: "gate", command: "npm test" }] },
+		});
 	});
 
 	it("keeps explicit acceptance.verify arrays as existing verified acceptance", async () => {

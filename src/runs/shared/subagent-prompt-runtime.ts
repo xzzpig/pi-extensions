@@ -17,6 +17,7 @@ import { registerChildWatchdog } from "../../watchdog/register-child.ts";
 import type { ChildWatchdogConfig } from "../../watchdog/child-status.ts";
 import { requestWatchdogPermission, type WatchdogPermissionRequest, type WatchdogPermissionResult } from "../../watchdog/permission-arbiter.ts";
 import { SUBAGENT_WATCHDOG_WARNING_TYPE } from "../../watchdog/types.ts";
+import { inheritedNestedRouteOf } from "./nested-events.ts";
 import { registerWaitTool } from "../background/wait-tool.ts";
 import { drainOutstandingWork } from "../background/auto-drain.ts";
 import {
@@ -441,15 +442,21 @@ function registerStructuredOutputTool(pi: ExtensionAPI, structured: NonNullable<
 }
 
 /** Register every child-side hook the prompt runtime owns for one child session. */
-export default function registerSubagentPromptRuntime(pi: ExtensionAPI, config: ChildRuntimeConfig): void {
+export default function registerSubagentPromptRuntime(pi: ExtensionAPI, config?: ChildRuntimeConfig, drainObservation?: import("./readonly-drain-observation.ts").ReadonlyDrainObservation): void {
+	// A path-based load has no ChildRuntimeConfig. This can happen if an
+	// ambient-extension discovery path finds the runtime module in addition to
+	// the configured inline factory. It must be inert rather than crashing the
+	// child before startup; the inline factory remains the real registration path.
+	if (!config) return;
 	registerRuntimeExtensionAcknowledgements(pi, config.runtimeAcknowledgements);
 	registerPermissionGate(pi, config.permissions, config.childWatchdog);
 	registerToolBudget(pi, config.toolBudget);
 	registerChildWatchdog(pi, config.childWatchdog, config.watchdogStatus);
-	const waitState = {
+	const waitState = config.runtimeState ?? {
 		baseCwd: "",
 		currentSessionId: null,
 		asyncJobs: new Map(),
+		foregroundRuns: new Map(),
 		foregroundControls: new Map(),
 		lastForegroundControlId: null,
 		cleanupTimers: new Map(),
@@ -460,7 +467,8 @@ export default function registerSubagentPromptRuntime(pi: ExtensionAPI, config: 
 		watcherRestartTimer: null,
 		resultFileCoalescer: { schedule: () => false, clear: () => {} },
 	} as unknown as SubagentState;
-	if (typeof pi.registerTool === "function") registerWaitTool(pi, waitState, config.waitTool.enabled, undefined, config.waitTool.defaultTimeoutMs);
+	const nestedRootRunId = inheritedNestedRouteOf(config)?.rootRunId;
+	if (typeof pi.registerTool === "function") registerWaitTool(pi, waitState, config.waitTool.enabled, undefined, config.waitTool.defaultTimeoutMs, { nestedRootRunId });
 	const supervisorMetadata = childSupervisorMetadata(config);
 	let nativeSupervisorClientRegistered = false;
 	const registerNativeSupervisorClientOnce = (): void => {
@@ -481,8 +489,18 @@ export default function registerSubagentPromptRuntime(pi: ExtensionAPI, config: 
 		if (diagnostic) throw new Error(formatChildToolDiagnostic(diagnostic));
 	});
 	onRuntimeEvent("agent_end", async (_event: unknown, ctx: unknown) => {
-		if ((ctx as { hasUI?: boolean } | undefined)?.hasUI === true) return;
-		await drainOutstandingWork({ state: waitState, events: pi.events });
+		if ((ctx as { hasUI?: boolean } | undefined)?.hasUI === true) drainObservation?.deny();
+		if (drainObservation) {
+			try {
+				if ((ctx as ExtensionContext)?.sessionManager?.getSessionFile() !== waitState.currentSessionId) drainObservation.deny();
+			} catch { drainObservation.deny(); }
+		}
+		config.holdFinalDrain?.(true);
+		try {
+			await drainOutstandingWork({ state: waitState, events: pi.events, nestedRootRunId, hasPendingSupervisorRequest: config.hasPendingSupervisorRequest }, drainObservation);
+		} finally {
+			config.holdFinalDrain?.(false);
+		}
 	});
 	if (config.structuredOutput) registerStructuredOutputTool(pi, config.structuredOutput);
 

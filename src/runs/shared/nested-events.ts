@@ -6,8 +6,8 @@ import {
 	TEMP_ROOT_DIR,
 	type AsyncJobState,
 	type AsyncStatus,
-	type LaunchResolvedChildExtensionsV1,
-	type RuntimeAcknowledgedChildExtensionsV1,
+	type LaunchResolvedChildExtensions,
+	type RuntimeAcknowledgedChildExtensions,
 	type NestedRouteInfo,
 	type TurnBudgetState,
 	type NestedRunSummary,
@@ -217,7 +217,7 @@ function sanitizeCost(value: unknown): NestedRunSummary["totalCost"] | undefined
 		: undefined;
 }
 
-function sanitizeLaunchResolvedExtensions(value: unknown): LaunchResolvedChildExtensionsV1 | undefined {
+function sanitizeLaunchResolvedExtensions(value: unknown): LaunchResolvedChildExtensions | undefined {
 	if (!value || typeof value !== "object") return undefined;
 	const raw = value as Record<string, unknown>;
 	if (raw.version !== 1 || raw.source !== "launch-resolved" || typeof raw.disableAmbientExtensions !== "boolean") return undefined;
@@ -232,16 +232,18 @@ function sanitizeLaunchResolvedExtensions(value: unknown): LaunchResolvedChildEx
 		disableAmbientExtensions: raw.disableAmbientExtensions,
 		runtime: stringList(raw.runtime),
 		configured: stringList(raw.configured),
+		required: Array.isArray(raw.required) ? raw.required.filter((item): item is string => typeof item === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(item)).slice(0, 32) : [],
 		effective: stringList(raw.effective),
 		omitted: {
 			runtime: omittedCount("runtime"),
 			configured: omittedCount("configured"),
+			required: omittedCount("required"),
 			effective: omittedCount("effective"),
 		},
 	};
 }
 
-function sanitizeRuntimeAcknowledgedExtensions(value: unknown): RuntimeAcknowledgedChildExtensionsV1 | undefined {
+function sanitizeRuntimeAcknowledgedExtensions(value: unknown): RuntimeAcknowledgedChildExtensions | undefined {
 	if (!value || typeof value !== "object") return undefined;
 	const raw = value as Record<string, unknown>;
 	if (raw.version !== 1 || raw.source !== "child-runtime" || !Array.isArray(raw.ids)) return undefined;
@@ -261,7 +263,7 @@ function sanitizeRuntimeAcknowledgedExtensions(value: unknown): RuntimeAcknowled
 	};
 }
 
-function runtimeAcknowledgedEntry(value: unknown): { runtimeAcknowledgedExtensions: RuntimeAcknowledgedChildExtensionsV1 } | Record<string, never> {
+function runtimeAcknowledgedEntry(value: unknown): { runtimeAcknowledgedExtensions: RuntimeAcknowledgedChildExtensions } | Record<string, never> {
 	const sanitized = sanitizeRuntimeAcknowledgedExtensions(value);
 	return sanitized ? { runtimeAcknowledgedExtensions: sanitized } : {};
 }
@@ -286,7 +288,7 @@ function sanitizeTurnBudget(value: unknown): TurnBudgetState | undefined {
 }
 
 function sanitizeState(value: unknown, fallback: NestedRunState): NestedRunState {
-	return value === "queued" || value === "running" || value === "complete" || value === "failed" || value === "partial" || value === "paused" || value === "stopped"
+	return value === "queued" || value === "running" || value === "complete" || value === "failed" || value === "partial" || value === "paused" || value === "stopped" || value === "rejected"
 		? value
 		: fallback;
 }
@@ -296,7 +298,7 @@ function sanitizeStep(input: unknown, depth: number): NestedStepSummary | undefi
 	const raw = input as Record<string, unknown>;
 	const agent = stringValue(raw.agent, 128);
 	if (!agent) return undefined;
-	const status = raw.status === "pending" || raw.status === "running" || raw.status === "complete" || raw.status === "completed" || raw.status === "failed" || raw.status === "paused" || raw.status === "stopped"
+	const status = raw.status === "pending" || raw.status === "running" || raw.status === "complete" || raw.status === "completed" || raw.status === "failed" || raw.status === "partial" || raw.status === "paused" || raw.status === "stopped" || raw.status === "rejected"
 		? raw.status
 		: "pending";
 	const model = stringValue(raw.model);
@@ -438,7 +440,7 @@ export function parseNestedEventRecords(content: string, route: NestedRoute): Ne
 }
 
 function terminal(state: NestedRunState): boolean {
-	return state === "complete" || state === "failed" || state === "partial" || state === "paused" || state === "stopped";
+	return state === "complete" || state === "failed" || state === "partial" || state === "paused" || state === "rejected" || state === "stopped";
 }
 
 function mergeBoundedChildren(existing: NestedRunSummary[] | undefined, incoming: NestedRunSummary[] | undefined): NestedRunSummary[] | undefined {
@@ -1063,8 +1065,15 @@ export function isTopLevelAsyncDir(asyncDir: string): boolean {
 	return containedPath(DIRS.async, resolved) && !containedPath(path.join(TEMP_ROOT_DIR, "nested-subagent-runs"), resolved);
 }
 
-export function nestedResultsPath(rootRunId: string, id: string): string {
+export function nestedRunScope(rootRunId: string) {
 	assertSafeId("rootRunId", rootRunId);
+	return {
+		asyncDirRoot: path.join(TEMP_ROOT_DIR, "nested-subagent-runs", rootRunId),
+		resultsDir: path.join(DIRS.results, "nested", rootRunId),
+	};
+}
+
+export function nestedResultsPath(rootRunId: string, id: string): string {
 	assertSafeId("id", id);
-	return path.join(DIRS.results, "nested", rootRunId, `${id}.json`);
+	return path.join(nestedRunScope(rootRunId).resultsDir, `${id}.json`);
 }

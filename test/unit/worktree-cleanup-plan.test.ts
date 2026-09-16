@@ -30,6 +30,18 @@ function createRepo(prefix: string): string {
 	return repo;
 }
 
+function createHookScript(fileName: string, source: string): string {
+	const hooksDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cleanup-plan-hook-script-"));
+	const hookPath = path.join(hooksDir, fileName);
+	fs.writeFileSync(hookPath, `#!/usr/bin/env node\n${source}\n`, "utf-8");
+	fs.chmodSync(hookPath, 0o755);
+	return hookPath;
+}
+
+const hookScriptSkip = process.platform === "win32"
+	? "Hook script execution differs on Windows CI environments."
+	: undefined;
+
 function removeGeneratedWorktrees(repo: string, setup: WorktreeSetup | undefined): void {
 	for (const worktree of setup?.worktrees ?? []) {
 		try { execFileSync("git", ["-C", repo, "worktree", "remove", "--force", worktree.path], { stdio: "ignore" }); } catch {}
@@ -101,7 +113,7 @@ function writeManifest(input: {
 			},
 		}],
 	}, null, 2), "utf-8");
-	if (patch.changed) fs.writeFileSync(patch.path, "captured patch\n", "utf-8");
+	if (patch.changed) fs.writeFileSync(patch.path, execFileSync("git", ["-C", worktree.path, "diff", "--binary", baseCommit, "HEAD"], { encoding: "utf-8" }), "utf-8");
 }
 
 function entriesByPath(plan: WorktreeCleanupPlan): Map<string, WorktreeCleanupPlan["entries"][number]> {
@@ -136,12 +148,12 @@ describe("worktree cleanup plan", () => {
 		assert.equal(fallbackCalls, 1);
 	});
 
-	it("builds and persists a deterministic metadata-backed plan without removing worktrees", () => {
+	it("builds and persists a deterministic metadata-backed plan without removing worktrees", async () => {
 		const repo = createRepo("pi-cleanup-plan-safe-");
 		const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cleanup-plan-base-"));
 		let setup: WorktreeSetup | undefined;
 		try {
-			setup = createWorktrees(repo, "safe", 1, { baseDir });
+			setup = await createWorktrees(repo, "safe", 1, { baseDir });
 			const manifestPath = path.join(repo, ".pi", "subagents", "artifacts", "handoff.json");
 			writeManifest({ repo, manifestPath, setup });
 			fs.mkdirSync(path.join(baseDir, "unrelated-directory"));
@@ -182,12 +194,12 @@ describe("worktree cleanup plan", () => {
 		}
 	});
 
-	it("keeps dirty and unowned worktrees out of the removable set", () => {
+	it("keeps dirty and unowned worktrees out of the removable set", async () => {
 		const repo = createRepo("pi-cleanup-plan-unknown-");
 		const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cleanup-plan-base-"));
 		let setup: WorktreeSetup | undefined;
 		try {
-			setup = createWorktrees(repo, "unknown", 2, { baseDir });
+			setup = await createWorktrees(repo, "unknown", 2, { baseDir });
 			const manifestPath = path.join(repo, ".pi", "subagents", "artifacts", "handoff.json");
 			writeManifest({ repo, manifestPath, setup });
 			fs.writeFileSync(path.join(setup.worktrees[0]!.path, "tracked.txt"), "dirty\n", "utf-8");
@@ -211,12 +223,12 @@ describe("worktree cleanup plan", () => {
 		}
 	});
 
-	it("keeps active async ownership and reports missing Git worktrees as stale", () => {
+	it("keeps active async ownership and reports missing Git worktrees as stale", async () => {
 		const repo = createRepo("pi-cleanup-plan-active-");
 		const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cleanup-plan-base-"));
 		let setup: WorktreeSetup | undefined;
 		try {
-			setup = createWorktrees(repo, "active", 1, { baseDir });
+			setup = await createWorktrees(repo, "active", 1, { baseDir });
 			const asyncDir = path.join(repo, ".pi", "subagents", "async", "active-run");
 			const manifestPath = path.join(asyncDir, "handoff.json");
 			writeManifest({ repo, manifestPath, setup, runId: "active-run", source: "async" });
@@ -240,12 +252,12 @@ describe("worktree cleanup plan", () => {
 		}
 	});
 
-	it("requires foreground ownership proof instead of inferring activity from the artifacts directory", () => {
+	it("requires foreground ownership proof instead of inferring activity from the artifacts directory", async () => {
 		const repo = createRepo("pi-cleanup-plan-foreground-");
 		const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cleanup-plan-base-"));
 		let setup: WorktreeSetup | undefined;
 		try {
-			setup = createWorktrees(repo, "foreground", 1, { baseDir });
+			setup = await createWorktrees(repo, "foreground", 1, { baseDir });
 			const manifestPath = path.join(repo, ".pi", "subagents", "artifacts", "handoff.json");
 			writeManifest({ repo, manifestPath, setup, runId: "foreground-run", source: "foreground" });
 			const noProof = buildWorktreeCleanupPlan({ repo, handoffPath: manifestPath, worktreeBaseDir: baseDir, now: 35_000, planId: "foreground-no-proof" });
@@ -263,12 +275,12 @@ describe("worktree cleanup plan", () => {
 		}
 	});
 
-	it("requires a recorded patch or local target ancestry for committed divergence", () => {
+	it("requires a recorded patch or local target ancestry for committed divergence", async () => {
 		const repo = createRepo("pi-cleanup-plan-divergence-");
 		const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cleanup-plan-base-"));
 		let setup: WorktreeSetup | undefined;
 		try {
-			setup = createWorktrees(repo, "divergence", 1, { baseDir });
+			setup = await createWorktrees(repo, "divergence", 1, { baseDir });
 			const manifestPath = path.join(repo, ".pi", "subagents", "artifacts", "handoff.json");
 			writeManifest({ repo, manifestPath, setup });
 			const worktree = setup.worktrees[0]!;
@@ -294,12 +306,39 @@ describe("worktree cleanup plan", () => {
 		}
 	});
 
-	it("keeps stale markers, pending captures, and inconsistent cleanup metadata non-removable", () => {
+	it("does not let trusted external diff hide cleanup-plan divergence", { skip: hookScriptSkip }, async () => {
+		const repo = createRepo("pi-cleanup-plan-external-diff-");
+		const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cleanup-plan-base-"));
+		const externalDiffPath = createHookScript("external-diff-plan.mjs", "process.exit(0);");
+		let setup: WorktreeSetup | undefined;
+		try {
+			setup = await createWorktrees(repo, "external-diff", 1, { baseDir });
+			const manifestPath = path.join(repo, ".pi", "subagents", "artifacts", "handoff.json");
+			writeManifest({ repo, manifestPath, setup });
+			const worktree = setup.worktrees[0]!;
+			fs.writeFileSync(path.join(worktree.path, "unmerged.txt"), "unmerged\n", "utf-8");
+			git(worktree.path, ["add", "unmerged.txt"]);
+			git(worktree.path, ["commit", "-m", "unmerged"]);
+			git(repo, ["config", "diff.external", externalDiffPath]);
+			git(repo, ["config", "diff.trustExitCode", "true"]);
+
+			const plan = buildPlan({ repo, worktreeBaseDir: baseDir, now: 40_000, planId: "external-diff-plan" });
+			assert.equal(plan.entries[0]?.decision, "keep");
+			assert.equal(plan.entries[0]?.state, "ineligible");
+			assert.match(plan.entries[0]?.reasons.join(" ") ?? "", /neither preserved.*nor merged/i);
+		} finally {
+			removeGeneratedWorktrees(repo, setup);
+			fs.rmSync(repo, { recursive: true, force: true });
+			fs.rmSync(baseDir, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps stale markers, pending captures, and inconsistent cleanup metadata non-removable", async () => {
 		const repo = createRepo("pi-cleanup-plan-stale-");
 		const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cleanup-plan-base-"));
 		let setup: WorktreeSetup | undefined;
 		try {
-			setup = createWorktrees(repo, "stale", 1, { baseDir });
+			setup = await createWorktrees(repo, "stale", 1, { baseDir });
 			const asyncDir = path.join(repo, ".pi", "subagents", "async", "stale-run");
 			const manifestPath = path.join(asyncDir, "handoff.json");
 			writeManifest({ repo, manifestPath, setup, runId: "stale-run", source: "async" });
@@ -347,12 +386,12 @@ describe("worktree cleanup plan", () => {
 		}
 	});
 
-	it("treats nested project directory as cleanup containment root", () => {
+	it("treats nested project directory as cleanup containment root", async () => {
 		const repo = createRepo("pi-cleanup-plan-nested-root-");
 		const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-cleanup-plan-nested-base-"));
 		let setup: WorktreeSetup | undefined;
 		try {
-			setup = createWorktrees(repo, "nested-root", 1, { baseDir });
+			setup = await createWorktrees(repo, "nested-root", 1, { baseDir });
 			const manifestPath = path.join(repo, ".pi", "subagents", "artifacts", "handoff.json");
 			writeManifest({ repo, manifestPath, setup });
 			const plan = buildPlan({ repo, worktreeBaseDir: baseDir, now: 60_000, planId: "nested-root-plan" });
@@ -366,14 +405,14 @@ describe("worktree cleanup plan", () => {
 		}
 	});
 
-	it("uses git toplevel parent as default cleanup root when input.repo is a subdirectory", () => {
+	it("uses git toplevel parent as default cleanup root when input.repo is a subdirectory", async () => {
 		const repo = createRepo("pi-cleanup-plan-subdir-root-");
 		const previous = process.env.PI_SUBAGENTS_WORKTREE_DIR;
 		delete process.env.PI_SUBAGENTS_WORKTREE_DIR;
 		let setup: WorktreeSetup | undefined;
 		try {
 			fs.mkdirSync(path.join(repo, "packages", "app"), { recursive: true });
-			setup = createWorktrees(repo, "from-subdir", 1, { provider: "native" });
+			setup = await createWorktrees(repo, "from-subdir", 1, { provider: "native" });
 			const manifestPath = path.join(repo, ".pi", "subagents", "artifacts", "handoff.json");
 			writeManifest({ repo, manifestPath, setup });
 			const plan = buildPlan({ repo: path.join(repo, "packages", "app"), now: 61_500, planId: "subdir-root-plan" });

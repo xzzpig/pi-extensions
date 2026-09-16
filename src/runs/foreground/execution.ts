@@ -6,8 +6,8 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import { discoverAgents, formatUnknownAgentError, unknownAgentDiagnosticContext, type AgentConfig } from "../../agents/agents.ts";
-import { appendAgentRefinementOverlay } from "../../agents/agent-refinements.ts";
 import { alignForkedSessionCwd } from "../../shared/fork-session-cwd.ts";
+import { buildEffectiveSystemPrompt } from "../shared/effective-system-prompt.ts";
 import {
 	ensureArtifactsDir,
 	formatOutputArtifactContent,
@@ -20,7 +20,6 @@ import {
 	type AgentProgress,
 	type ArtifactPaths,
 	type ControlEvent,
-	type ModelAttempt,
 	type RunSyncOptions,
 	type SingleResult,
 	type Usage,
@@ -52,12 +51,10 @@ import {
 	boundStreamedRecentOutput,
 	boundStreamedToolCalls,
 } from "../../shared/utils.ts";
-import { buildSkillInjection, resolveSkillsWithFallback } from "../../agents/skills.ts";
-import { buildAgentMemoryInjection } from "../../agents/agent-memory.ts";
+import { resolveSkillsWithFallback } from "../../agents/skills.ts";
 import { effectiveToolTimeoutMs, formatToolTimeoutMessage, resolveToolTimeoutMs, toolTimeoutCallKey, toolTimeoutFromEnv } from "../shared/tool-timeout.ts";
 import { evaluateCompletionMutationGuard, expectsImplementationMutation, hasMutationToolCapability, validateImplementationToolContract } from "../shared/completion-guard.ts";
 import { planCompletionEvidence } from "../shared/completion-evidence.ts";
-import { planAbortRecovery } from "../shared/abort-recovery.ts";
 import { arbitrateCompletionGuardRescue } from "../shared/llm-intent-arbiter.ts";
 import { preflightLaunchCwd } from "../shared/launch-cwd.ts";
 import { createJsonlWriter } from "../../shared/jsonl-writer.ts";
@@ -71,16 +68,15 @@ import { assertThinkingWithinCeiling, intersectThinkingCeilings } from "../../sh
 import { MISSING_STRUCTURED_ACCEPTANCE_REPORT_ERROR, MISSING_STRUCTURED_OUTPUT_CALL_ERROR } from "../shared/structured-output.ts";
 import { formatMidToolExitError, isOrdinaryToolForMidToolExit } from "../shared/process-signal.ts";
 import { formatChildToolDiagnostic } from "../shared/tool-availability.ts";
+import { formatChildModelResolutionDiagnostic, isChildModelResolutionFailure } from "../shared/model-resolution-diagnostic.ts";
+import { planAbortRecovery } from "../shared/abort-recovery.ts";
 import { buildTimeoutRecoverySummary, collectTrackedMutationEvidence, snapshotTrackedMutations } from "../shared/mutation-evidence.ts";
-import { captureSingleOutputSnapshot, extractChildWrittenOutput, finalizeSingleOutput, formatSavedOutputReference, hasSingleOutputChangedSinceSnapshot, injectOutputPathSystemPrompt, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
+import { captureSingleOutputSnapshot, extractChildWrittenOutput, finalizeSingleOutput, formatSavedOutputReference, hasSingleOutputChangedSinceSnapshot, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
 import {
-	buildModelCandidates,
 	formatSubagentModelVerificationError,
-	formatModelAttemptNote,
 	isContextOverflow,
-	isRetryableModelFailureAttempt,
-	recordRetryableModelFailure,
-} from "../shared/model-fallback.ts";
+	resolveModelSelection,
+} from "../shared/model-resolution.ts";
 import {
 	createMutatingFailureState,
 	didMutatingToolFail,
@@ -94,10 +90,10 @@ import {
 } from "../shared/long-running-guard.ts";
 import { acceptanceFailureMessage, buildSkippedAcceptanceLedger, evaluateAcceptance, formatAcceptancePrompt, resolveEffectiveAcceptance, stripAcceptanceReport, validateAcceptanceInput } from "../shared/acceptance.ts";
 import { PROMPT_REDACTED } from "../../shared/utils.ts";
-import { attachContractProjections, isAgentContractV1 } from "../shared/agent-contract.ts";
+import { attachContractProjections, isAgentContract } from "../shared/agent-contract.ts";
 import { initialToolBudgetState, toolBudgetState } from "../shared/tool-budget.ts";
 import { resolveWatchdogConfig } from "../../watchdog/settings.ts";
-import { agentDefinitionDigest, launchBindingDigest } from "../../shared/launch-contract.ts";
+import { resolveLaunchBinding } from "../../shared/launch-contract.ts";
 import { consumeWorkflowChildPermit } from "../../shared/workflow-child-permit.ts";
 import { projectChildLifecycle, type ChildLifecycleAction, type ChildLifecycleState } from "../shared/child-lifecycle.ts";
 import {
@@ -109,8 +105,8 @@ import {
 	type ChildWatchdogStateSnapshot,
 	type ChildWatchdogStatusEvent,
 } from "../../watchdog/child-status.ts";
-import { buildInProcessChildLaunch } from "../shared/child-launch.ts";
-import { childSessionFactory, projectChildSessionEventForJson, type ChildSession, type ChildSessionEvent } from "../shared/child-session.ts";
+import { buildInProcessChildLaunch, createReportedChildSessionInput } from "../shared/child-launch.ts";
+import { childSessionFactory, childSessionHasQueuedMessages, projectChildSessionEventForJson, type ChildSession, type ChildSessionEvent } from "../shared/child-session.ts";
 
 const artifactOutputByResult = new WeakMap<SingleResult, string>();
 const acceptanceOutputByResult = new WeakMap<SingleResult, string>();
@@ -158,8 +154,7 @@ function persistSingleResultMetadata(input: {
 		processSignal: target.processSignal,
 		usage: target.usage,
 		model: target.model,
-		attemptedModels: target.attemptedModels,
-		modelAttempts: target.modelAttempts,
+		requestedModel: target.requestedModel,
 		durationMs: target.progressSummary?.durationMs,
 		toolCount: target.progressSummary?.toolCount,
 		error: target.error,
@@ -259,13 +254,6 @@ function snapshotResult(result: SingleResult, progress: AgentProgress): SingleRe
 		messages: result.outputMode === "file-only" && result.savedOutputPath ? undefined : result.messages ? [...result.messages] : undefined,
 		usage: { ...result.usage },
 		skills: result.skills ? [...result.skills] : undefined,
-		attemptedModels: result.attemptedModels ? [...result.attemptedModels] : undefined,
-		modelAttempts: result.modelAttempts
-			? result.modelAttempts.map((attempt) => ({
-				...attempt,
-				usage: attempt.usage ? { ...attempt.usage } : undefined,
-			}))
-			: undefined,
 		controlEvents: result.controlEvents ? result.controlEvents.map((event) => ({ ...event })) : undefined,
 		progress,
 		progressSummary: result.progressSummary ? { ...result.progressSummary } : undefined,
@@ -338,10 +326,10 @@ function structuredDelegationProgressChanged(
 	return false;
 }
 
-const AFTER_COMPACTION_SETTLEMENT = Symbol("afterCompactionSettlement");
-type AbortRecoverySingleResult = SingleResult & { [AFTER_COMPACTION_SETTLEMENT]?: true };
 
 const STOPPED_BEFORE_COMPLETION_ERROR = "Subagent stopped before completion.";
+const AFTER_COMPACTION_SETTLEMENT = Symbol("afterCompactionSettlement");
+type AbortRecoverySingleResult = SingleResult & { [AFTER_COMPACTION_SETTLEMENT]?: true };
 
 
 async function runSingleAttempt(
@@ -353,8 +341,8 @@ async function runSingleAttempt(
 	shared: {
 		sessionEnabled: boolean;
 		systemPrompt: string;
+		acceptancePrompt: string;
 		resolvedSkillNames?: string[];
-		modelCandidates?: string[];
 		skillsWarning?: string;
 		jsonlPath?: string;
 		artifactPaths?: ArtifactPaths;
@@ -391,6 +379,11 @@ async function runSingleAttempt(
 		: undefined;
 	let onWatchdogStatus: ((event: ChildWatchdogStatusEvent) => void) | undefined;
 	const launch = buildInProcessChildLaunch({
+		machine: options.machine,
+		remoteSkillNames: options.skills ?? agent.skills,
+		remoteReads: options.remoteReads,
+		extensionBindings: options.extensionBindings,
+		requiredExtensions: options.requiredExtensions,
 		sessionEnabled: shared.sessionEnabled,
 		sessionDir: options.sessionDir,
 		sessionFile: options.sessionFile,
@@ -405,7 +398,8 @@ async function runSingleAttempt(
 		allowNestedSubagents: agent.allowNestedSubagents,
 		extensions: agent.extensions,
 		subagentOnlyExtensions: agent.subagentOnlyExtensions,
-		systemPrompt: shared.systemPrompt,
+		// Exact terminal protocol belongs to session resources, not compactable history.
+		systemPrompt: shared.acceptancePrompt ? `${shared.systemPrompt}\n${shared.acceptancePrompt}` : shared.systemPrompt,
 		mcpDirectTools: agent.mcpDirectTools,
 		cwd: options.cwd ?? runtimeCwd,
 		intercomSessionName: options.intercomSessionName,
@@ -420,21 +414,23 @@ async function runSingleAttempt(
 		forkCacheKey: options.context === "fork" ? deriveForkPromptCacheKey(options.parentSessionId) : undefined,
 		structuredOutput: options.structuredOutput,
 		fast: options.fast ?? agent.fast,
-		modelCandidates: shared.modelCandidates,
 		toolBudget: options.toolBudget,
 		permissionRules,
 		permissionAuditPath,
 		childWatchdog,
-		watchdogStatus: (event) => onWatchdogStatus?.(event),
+		// registerChildWatchdog returns before reading the sink when no watchdog exists.
+		watchdogStatus: childWatchdog ? (event) => onWatchdogStatus?.(event) : undefined,
 		waitToolEnabled: options.waitToolEnabled,
 		waitToolDefaultTimeoutMs: options.waitToolDefaultTimeoutMs,
 		capabilityCeiling: options.capabilityCeiling,
 		thinkingCeiling: options.thinkingCeiling,
 		maxSubagentDepth: options.maxSubagentDepth,
 		runtimeSnapshotHost: options.runtimeSnapshotHost,
+		hostAvailableBuiltins: options.hostAvailableBuiltins,
 		inherited: options.childRuntime,
 		host: "parent",
 	});
+	if (!options.machine && options.parentProviderRegistry) launch.session.parentProviderRegistry = options.parentProviderRegistry;
 	const { toolPlan, capabilityAudit, warnings, launchResolvedExtensions, capture } = launch;
 	if (!shared.launchWarnings.emitted && warnings.length > 0) {
 		for (const warning of warnings) console.warn(`[pi-subagents] ${warning}`);
@@ -465,31 +461,21 @@ async function runSingleAttempt(
 			error: contractError,
 			usage: emptyUsage(),
 			model: modelArg,
-			modelAttempts: [],
-			attemptedModels: [],
 			progressSummary: { status: "failed", toolCount: 0, tokens: 0, durationMs: 0 },
 			...(toolPlan.capabilityCeiling ? { capabilityCeiling: toolPlan.capabilityCeiling } : {}),
 			...(toolPlan.capabilityAudit ? { capabilityAudit: toolPlan.capabilityAudit } : {}),
 		};
 	}
-	const launchContractDigest = launchBindingDigest({
-		definitionDigest: agentDefinitionDigest(agent),
+	const fast = options.fast ?? agent.fast;
+	const { launchContractDigest } = resolveLaunchBinding({
+		agent,
 		task: shared.originalTask ?? task,
-		...(modelArg ? { model: modelArg } : {}),
-		modelCandidates: shared.modelCandidates,
-		...((options.fast ?? agent.fast) !== undefined ? { fast: options.fast ?? agent.fast } : {}),
+		model: modelArg,
+		...(fast !== undefined ? { fast } : {}),
 		...(resolvedThinking ? { thinking: resolvedThinking } : {}),
-		...(options.thinkingCeiling ? { thinkingCeiling: options.thinkingCeiling } : {}),
 		systemPrompt: effectiveSystemPrompt,
-		systemPromptMode: agent.systemPromptMode,
-		inheritProjectContext: agent.inheritProjectContext,
-		inheritGlobalContext: agent.inheritGlobalContext,
-		inheritSkills: agent.inheritSkills,
 		skills: shared.resolvedSkillNames ?? [],
-		tools: toolPlan.effectiveToolAllowlist,
-		...(toolPlan.excludeTools.length > 0 ? { excludeTools: toolPlan.excludeTools } : {}),
-		extensions: toolPlan.extensionArgs,
-		mcpDirectTools: toolPlan.effectiveMcpTools,
+		toolPlan,
 		...(options.outputPath ? { outputPath: options.outputPath } : {}),
 		outputMode: options.outputMode ?? "inline",
 		...(options.structuredOutput ? { structuredOutputSchema: options.structuredOutput.schema } : {}),
@@ -565,12 +551,13 @@ async function runSingleAttempt(
 		};
 		return result;
 	}
-	const mutationSnapshot = snapshotTrackedMutations(options.cwd ?? runtimeCwd);
+	const mutationSnapshot = options.machine ? { source: "tracked-files" as const, trackedOnly: true as const, cwd: options.cwd ?? runtimeCwd, dirtyFiles: [], fingerprints: {}, unavailable: "Local Git evidence is not authoritative for a pane-native remote run." } : snapshotTrackedMutations(options.cwd ?? runtimeCwd);
 	let observedMutationAttempt = false;
 	let structuredOutputToolInvoked = false;
 	let structuredOutputMessageStartIndex: number | undefined;
 	let toolAvailabilityError: string | undefined;
 	let abortedBySignal = options.signal?.aborted === true;
+	let afterCompactionSettlement = false;
 
 	if (options.workflowChildPermitLaunch) {
 		const permitError = consumeWorkflowChildPermit(options.workflowChildPermitLaunch.permit, {
@@ -591,7 +578,6 @@ async function runSingleAttempt(
 		}
 	}
 	const childSessions = options.childSessionFactory ?? childSessionFactory();
-	let afterCompactionSettlement = false;
 	const exitCode = await new Promise<number>((resolve) => {
 		const jsonlWriter = createJsonlWriter(shared.jsonlPath, { pause() {}, resume() {} });
 		let session: ChildSession | undefined;
@@ -671,6 +657,7 @@ async function runSingleAttempt(
 		let forcedTermination = false;
 		let cleanTerminalAssistantStopReceived = false;
 		let agentSettledReceived = false;
+		let queuedDrainHold = false;
 		let compactionStartedReceived = false;
 		let finalDrainTimer: NodeJS.Timeout | undefined;
 		let finalHardFinishTimer: NodeJS.Timeout | undefined;
@@ -697,14 +684,28 @@ async function runSingleAttempt(
 				finalHardFinishTimer = undefined;
 			}
 		};
+		const observeQueuedDrainHold = (): boolean => {
+			if (childSessionHasQueuedMessages(session)) queuedDrainHold = true;
+			return queuedDrainHold;
+		};
 		const startFinalDrain = () => {
 			if (childWatchdogIsActive(childWatchdogState)) {
 				armWatchdogTail();
 				return;
 			}
 			if (sessionSettled || finalDrainTimer || lifecycleFinished) return;
+			if (observeQueuedDrainHold()) return;
+			armFinalDrainTimer();
+		};
+		const armFinalDrainTimer = () => {
+			if (sessionSettled || finalDrainTimer || lifecycleFinished) return;
 			finalDrainTimer = setTimeout(() => {
 				if (lifecycleFinished || sessionSettled) return;
+				if (capture.finalDrainHeld() || observeQueuedDrainHold()) {
+					finalDrainTimer = undefined;
+					armFinalDrainTimer();
+					return;
+				}
 				forcedTermination = true;
 				if (!cleanTerminalAssistantStopReceived && !agentSettledReceived && !assistantError) {
 					result.error = result.error ?? `Subagent session did not settle within ${FINAL_STOP_GRACE_MS}ms after its terminal event. Aborting it.`;
@@ -736,6 +737,8 @@ async function runSingleAttempt(
 		}
 		const applyChildLifecycle = (action: ChildLifecycleAction): void => {
 			if (action === "cancel-drain") {
+				cleanTerminalAssistantStopReceived = false;
+				agentSettledReceived = false;
 				clearFinalDrainTimers();
 				clearWatchdogTailTimer();
 				return;
@@ -780,7 +783,9 @@ async function runSingleAttempt(
 				// JSONL artifact flush is best effort.
 			});
 			// Report the run only after the child's extensions have shut down.
-			void Promise.resolve().then(() => session?.dispose()).catch(() => undefined).then(() => resolve(code));
+			void Promise.resolve().then(() => session?.dispose()).catch(() => undefined).then(() => {
+				resolve(code);
+			});
 		};
 
 		const drainPendingControlEvents = (): ControlEvent[] | undefined => {
@@ -979,9 +984,26 @@ async function runSingleAttempt(
 				compactionStartedReceived = false;
 				afterCompactionSettlement = false;
 			}
+			if (evt.type === "turn_start" || evt.type === "agent_start" || evt.type === "auto_retry_start") {
+				queuedDrainHold = false;
+			}
 			if (evt.type === "agent_start" || evt.type === "auto_retry_start") {
 				compactionStartedReceived = false;
 				afterCompactionSettlement = false;
+			}
+			if (evt.type === "agent_start") {
+				const diagnostic = capture.toolDiagnostic();
+				if (diagnostic) {
+					const message = formatChildToolDiagnostic(diagnostic, { host: "parent" });
+					toolAvailabilityError = message;
+					result.error = message;
+					result.finalOutput = message;
+					progress.status = "failed";
+					progress.error = message;
+					fireUpdate();
+					abortChild();
+					return;
+				}
 			}
 			const lifecycleAction = projectChildLifecycle(evt, false, childLifecycleState);
 			if (evt.type === "agent_settled" && lifecycleAction === "start-drain") {
@@ -1086,11 +1108,15 @@ async function runSingleAttempt(
 						progress.model = evt.message.model;
 						if (!result.model) result.model = evt.message.model;
 						if (expectedModelForVerification && !hasToolCall) {
-							const modelVerificationError = formatSubagentModelVerificationError(expectedModelForVerification, evt.message.model, options.availableModels);
+							const modelVerificationError = formatSubagentModelVerificationError(expectedModelForVerification, evt.message.model, options.availableModels, options.modelResponseAliases);
 							if (modelVerificationError && !result.error) result.error = modelVerificationError;
 						}
 					}
 					if (evt.message.errorMessage) assistantError = evt.message.errorMessage;
+					else if (hasToolCall && evt.message.stopReason === "toolUse") {
+						// A recovered request can finish via a terminating tool, without a text stop.
+						assistantError = undefined;
+					}
 					const assistantText = extractTextFromContent(evt.message.content);
 					appendRecentOutput(progress, assistantText.split("\n").slice(-10));
 					// Final assistant message: start the settle drain window.
@@ -1264,9 +1290,23 @@ async function runSingleAttempt(
 			const toolDiagnosticError = diagnostic ? formatChildToolDiagnostic(diagnostic, { host: "parent" }) : undefined;
 			toolAvailabilityError = toolDiagnosticError;
 			result.runtimeAcknowledgedExtensions = capture.runtimeAcknowledgedExtensions();
+			if (session?.machineEvidence) result.nativeMachine = { provider: "herdr", machineId: session.machineEvidence.machineId, ...(session.machineEvidence.initial ? { initialGit: session.machineEvidence.initial } : {}), ...(session.machineEvidence.final ? { finalGit: session.machineEvidence.final } : {}) };
 			let closeError = result.error ?? toolDiagnosticError ?? assistantError;
-			if (!closeError && promptError !== undefined) {
-				closeError = promptError instanceof Error ? promptError.message : String(promptError);
+			const promptErrorMessage = promptError === undefined ? undefined : promptError instanceof Error ? promptError.message : String(promptError);
+			if (!closeError && promptErrorMessage !== undefined) {
+				closeError = promptErrorMessage;
+			}
+			// A foreground child never loads the parent's ambient extensions, so a
+			// provider one registers resolves as "not found" before the child starts.
+			// Annotate only a creation/prompt failure that produced no turn; keep the
+			// core error and add the host rule and both remedies after it.
+			if (promptErrorMessage !== undefined
+				&& closeError === promptErrorMessage
+				&& isChildModelResolutionFailure(promptErrorMessage)
+				&& (result.messages?.length ?? 0) === 0
+				&& result.usage.turns === 0
+				&& !launch.session.ambientExtensions) {
+				closeError = `${promptErrorMessage}\n\n${formatChildModelResolutionDiagnostic({ agent: agent.name, model: launch.session.model, host: "parent", capabilityCeiling: launch.toolPlan.capabilityCeiling })}`;
 			}
 			const forcedDrainAfterFinalSuccess = (forced || forcedTermination) && (cleanTerminalAssistantStopReceived || agentSettledReceived) && !closeError;
 			const forcedDrainAfterEmptyTerminal = forcedDrainAfterFinalSuccess && hasEmptyTerminalAssistantResponse(result.messages ?? []);
@@ -1338,17 +1378,23 @@ async function runSingleAttempt(
 
 		void (async () => {
 			try {
-				const created = await childSessions.create({
-					...launch.session,
-					onExtensionError: (error) => {
-						shared.transcriptWriter?.writeStderrLine(`Extension error (${error.extensionPath}, ${error.event}): ${error.error instanceof Error ? error.error.message : String(error.error)}`);
-					},
-				});
+				const input = createReportedChildSessionInput(launch, shared.transcriptWriter);
+				const created = await childSessions.create(input);
 				if (lifecycleFinished) {
 					void created.dispose();
 					return;
 				}
 				session = created;
+				const steer = created.steer.bind(created);
+				const followUp = created.followUp.bind(created);
+				created.steer = async (text) => {
+					if (cleanTerminalAssistantStopReceived || agentSettledReceived) queuedDrainHold = true;
+					return steer(text);
+				};
+				created.followUp = async (text) => {
+					if (cleanTerminalAssistantStopReceived || agentSettledReceived) queuedDrainHold = true;
+					return followUp(text);
+				};
 				created.detached = detached;
 				unsubscribe = created.subscribe((event) => processEvent(event as Parameters<typeof processEvent>[0]));
 				if (abortedBySignal || interruptedByControl || result.timedOut) {
@@ -1453,7 +1499,8 @@ async function runSingleAttempt(
 		tokens: progress.tokens,
 		durationMs: progress.durationMs,
 	};
-	const mutationEvidence = collectTrackedMutationEvidence(mutationSnapshot, options.cwd ?? runtimeCwd);
+	const remoteGitChanged = result.nativeMachine?.initialGit && result.nativeMachine.finalGit ? result.nativeMachine.initialGit.head !== result.nativeMachine.finalGit.head || result.nativeMachine.initialGit.dirty !== result.nativeMachine.finalGit.dirty : undefined;
+	const mutationEvidence = result.nativeMachine ? { source: "tracked-files" as const, trackedOnly: true as const, changedFiles: [], attemptedMutation: remoteGitChanged === true, ...(remoteGitChanged === undefined ? { unavailable: "Remote Git before/after evidence was incomplete." } : {}) } : collectTrackedMutationEvidence(mutationSnapshot, options.cwd ?? runtimeCwd);
 
 	const acceptanceOutput = getFinalOutput(result.messages ?? []);
 	let fullOutput = stripAcceptanceReport(acceptanceOutput);
@@ -1483,7 +1530,7 @@ async function runSingleAttempt(
 			? `${timeoutMessage}\n\n${result.timeoutRecovery.message}\n\nPartial output before timeout:\n${fullOutput}`
 			: `${timeoutMessage}\n\n${result.timeoutRecovery.message}`;
 	}
-	const completionGuardEnabled = isAgentContractV1(options.agentContract) ? agent.completionGuard === true : agent.completionGuard !== false;
+	const completionGuardEnabled = isAgentContract(options.agentContract) ? agent.completionGuard === true : agent.completionGuard !== false;
 	const completionGuard = ((result.exitCode === 0 && !result.error) || toolAvailabilityError) && completionGuardEnabled
 		? evaluateCompletionMutationGuard({
 			agent: agent.name,
@@ -1523,7 +1570,7 @@ async function runSingleAttempt(
 		mutationAttemptObserved,
 		mutationEvidence,
 		arbiterRescued,
-		agentContractV1: isAgentContractV1(options.agentContract),
+		agentContractEnabled: isAgentContract(options.agentContract),
 	});
 	if (completionEvidence.fileMutation) {
 		result.effects = {
@@ -1719,7 +1766,7 @@ async function runSyncCompletionInner(
 		dynamicGroup: options.acceptanceContext?.dynamicGroup,
 		agentContract: options.agentContract,
 	});
-	const acceptancePrompt = formatAcceptancePrompt(effectiveAcceptance, { reportOptional: isAgentContractV1(options.agentContract), structuredOutput: Boolean(options.structuredOutput?.acceptanceReportPath) });
+	const acceptancePrompt = formatAcceptancePrompt(effectiveAcceptance, { reportOptional: isAgentContract(options.agentContract), structuredOutput: Boolean(options.structuredOutput?.acceptanceReportPath) });
 	const taskWithAcceptance = acceptancePrompt ? `${task}\n${acceptancePrompt}` : task;
 	options.onEffectivePrompt?.(taskWithAcceptance);
 	const sessionEnabled = Boolean(options.sessionFile || options.sessionDir) || shareEnabled;
@@ -1746,21 +1793,10 @@ async function runSyncCompletionInner(
 			error: "Skills not found: pi-subagents",
 		}, options.context));
 	}
-	let systemPrompt = agent.systemPrompt?.trim() || "";
-	if (resolvedSkills.length > 0) {
-		const skillInjection = buildSkillInjection(resolvedSkills);
-		systemPrompt = systemPrompt ? `${systemPrompt}\n\n${skillInjection}` : skillInjection;
-	}
-	const memoryInjection = buildAgentMemoryInjection(agent, skillCwd);
-	if (memoryInjection) {
-		systemPrompt = systemPrompt ? `${systemPrompt}\n\n${memoryInjection}` : memoryInjection;
-	}
-	systemPrompt = appendAgentRefinementOverlay(systemPrompt, { cwd: skillCwd, agentName });
-	systemPrompt = injectOutputPathSystemPrompt(systemPrompt, options.outputPath, agent);
+	const systemPrompt = buildEffectiveSystemPrompt({ agent, resolvedSkills, cwd: skillCwd, ...(options.outputPath ? { outputPath: options.outputPath } : {}) });
 
-	const candidates = buildModelCandidates(
+	const { model: selectedModel, requestedModel } = resolveModelSelection(
 		options.modelOverride ?? agent.model,
-		agent.fallbackModels,
 		options.availableModels,
 		agent.modelProvider ?? options.preferredModelProvider,
 		{
@@ -1769,23 +1805,9 @@ async function runSyncCompletionInner(
 			origin: options.modelOrigin ?? (options.modelOverrideFromParent ? "inherited" : "configured"),
 		},
 	);
-	if (options.workflowChildPermitLaunch && candidates.length > 1) {
-		const error = "Workflow child permit does not support model fallback.";
-		return redactResultPrompt(withRunContext({
-			index: options.index ?? 0,
-			agent: agent.name,
-			task,
-			exitCode: 1,
-			messages: [],
-			usage: emptyUsage(),
-			error,
-		}, options.context));
-	}
 	try {
-		for (const candidate of candidates) {
-			const model = applyThinkingSuffix(candidate, options.thinkingOverride ?? agent.thinking, options.thinkingOverride !== undefined);
-			assertThinkingWithinCeiling({ model, configThinking: options.thinkingOverride ?? agent.thinking, ceiling: options.thinkingCeiling, agent: agent.name, runId: options.runId });
-		}
+		const model = applyThinkingSuffix(selectedModel, options.thinkingOverride ?? agent.thinking, options.thinkingOverride !== undefined);
+		assertThinkingWithinCeiling({ model, configThinking: options.thinkingOverride ?? agent.thinking, ceiling: options.thinkingCeiling, agent: agent.name, runId: options.runId });
 	} catch (error) {
 		return redactResultPrompt(withRunContext({
 			index: options.index ?? 0,
@@ -1797,8 +1819,6 @@ async function runSyncCompletionInner(
 			error: error instanceof Error ? error.message : String(error),
 		}, options.context));
 	}
-	const attemptedModels: string[] = [];
-	const modelAttempts: ModelAttempt[] = [];
 	const aggregateUsage = emptyUsage();
 	const attemptNotes: string[] = [];
 	const launchWarnings = { emitted: false };
@@ -1849,10 +1869,11 @@ async function runSyncCompletionInner(
 		});
 	};
 
-	let intercomDetached = false;
 	let detachedReason: string | undefined;
+	const logicalDeadline = options.deadlineAt ?? (options.timeoutMs === undefined ? undefined : Date.now() + options.timeoutMs);
 	const attemptOptions: RunSyncOptions = {
 		...options,
+		deadlineAt: logicalDeadline,
 		onDetachReceipt: (receipt) => {
 			receipt.acceptance = buildPendingAcceptanceLedger(effectiveAcceptance);
 			try {
@@ -1863,108 +1884,65 @@ async function runSyncCompletionInner(
 			const accepted = options.onDetachReceipt?.(receipt) === true;
 			if (accepted) {
 				detachedReason = receipt.detachedReason;
-				if (receipt.detachedReason === "intercom coordination") intercomDetached = true;
 			}
 			return accepted;
 		},
 	};
+	const candidate = selectedModel;
+	const verifyModel = Boolean(candidate) && !options.modelOverrideFromParent;
 	let lastResult: SingleResult | undefined;
-	const modelsToTry = candidates.length > 0 ? candidates : [undefined];
-	let abortRecoveryAttempted = false;
-	let nextAttemptTask = taskWithAcceptance;
-	modelAttemptsLoop: for (let modelIndex = 0; modelIndex < modelsToTry.length; modelIndex++) {
-		const candidate = modelsToTry[modelIndex];
-		// The inner loop re-runs the same candidate at most once, for abort recovery.
-		for (;;) {
-			const recoveringAbort = abortRecoveryAttempted;
-			const attemptTask = nextAttemptTask;
-			const verifyModel = Boolean(candidate) && !(options.modelOverrideFromParent && modelIndex === 0);
-			const outputSnapshot = captureSingleOutputSnapshot(options.outputPath);
-			const result = await runSingleAttempt(runtimeCwd, agent, attemptTask, candidate, attemptOptions, {
-				sessionEnabled,
-				systemPrompt,
-				resolvedSkillNames: resolvedSkills.length > 0 ? resolvedSkills.map((skill) => skill.name) : undefined,
-				skillsWarning: missingSkills.length > 0 ? `Skills not found: ${missingSkills.join(", ")}` : undefined,
-				jsonlPath,
-				artifactPaths: artifactPathsResult,
-				transcriptWriter,
-				attemptNotes,
-				modelCandidates: candidates
-					.map((modelCandidate) => applyThinkingSuffix(modelCandidate, options.thinkingOverride ?? agent.thinking, options.thinkingOverride !== undefined))
-					.filter((modelCandidate): modelCandidate is string => Boolean(modelCandidate)),
-				outputSnapshot,
-				originalTask: task,
-				orcaProgressTab,
-				launchWarnings,
-				verifyModel,
-			});
-			lastResult = result;
-			if (!recoveringAbort) {
-				if (result.model) attemptedModels.push(result.model);
-				else if (candidate) attemptedModels.push(candidate);
-			}
-			sumUsage(aggregateUsage, result.usage);
-			totalToolCount += result.progressSummary?.toolCount ?? 0;
-			totalDurationMs += result.progressSummary?.durationMs ?? 0;
-			const attemptSucceeded = result.exitCode === 0 && !result.error;
-			const attempt: ModelAttempt = {
-				model: result.model ?? candidate ?? agent.model ?? "default",
-				success: attemptSucceeded,
-				exitCode: result.exitCode,
-				error: result.error,
-				usage: { ...result.usage },
-			};
-			modelAttempts.push(attempt);
-			if (!attemptSucceeded) {
-				const afterCompactionSettlement = (result as AbortRecoverySingleResult)[AFTER_COMPACTION_SETTLEMENT];
-				const abortRecovery = planAbortRecovery({
-					messages: result.messages ?? [],
-					error: result.error,
-					processSignal: result.processSignal,
-					sessionAvailable: Boolean(options.sessionFile && existsSync(options.sessionFile)),
-					alreadyResumed: abortRecoveryAttempted,
-					stopped: result.stopped || result.detached || options.signal?.aborted,
-					interrupted: result.interrupted || intercomDetached || options.interruptSignal?.aborted,
-					timedOut: result.timedOut,
-					toolBudgetExhausted: result.toolBudgetBlocked,
-					usageBudgetExhausted: false,
-					structuredOutputFailed: result.structuredOutputFailed,
-					acceptanceFailed: false,
-					currentTool: result.progress?.currentTool,
-					afterCompactionSettlement,
-				});
-				if (abortRecovery.action === "resume") {
-					abortRecoveryAttempted = true;
-					nextAttemptTask = abortRecovery.prompt;
-					attemptNotes.push("[abort-recovery] provider/transport abort after useful progress; resuming the retained child session once.");
-					continue;
-				}
-				if (abortRecovery.diagnostic) {
-					result.error = result.error ? `${result.error}\n${abortRecovery.diagnostic}` : abortRecovery.diagnostic;
-					attempt.error = result.error;
-					break modelAttemptsLoop;
-				}
-			}
-			if (recoveringAbort && !attemptSucceeded) break modelAttemptsLoop;
-			if (options.workflowChildPermitLaunch && !attemptSucceeded) break modelAttemptsLoop;
-			// Preserve the legacy intercom handoff contract: once this logical run has
-			// been handed to a supervisor, terminating that attempt must not launch a
-			// model fallback. Explicit user detach retains fallback.
-			if (intercomDetached || result.timedOut) break modelAttemptsLoop;
-			if (attemptSucceeded) break modelAttemptsLoop;
-
-			const retryableModelFailure = isRetryableModelFailureAttempt({ error: result.error, messages: result.messages, toolCount: result.progressSummary?.toolCount });
-			if (retryableModelFailure) recordRetryableModelFailure(result.model ?? candidate, result.error);
-			if (isContextOverflow(result.error)) {
-				result.contextOverflow = true;
-				attemptNotes.push(`[fallback] ${attempt.model} failed: context overflow — the input exceeds this model's context window. Reduce the task input or use a model with a larger context window.`);
-				break modelAttemptsLoop;
-			}
-			if (!retryableModelFailure || modelIndex === modelsToTry.length - 1) break modelAttemptsLoop;
-			attemptNotes.push(formatModelAttemptNote(attempt, modelsToTry[modelIndex + 1]));
-			break;
+	let recoveryPrompt = task;
+	for (let attemptIndex = 0; attemptIndex < 2; attemptIndex++) {
+		const outputSnapshot = captureSingleOutputSnapshot(options.outputPath);
+		const attemptResult = await runSingleAttempt(runtimeCwd, agent, recoveryPrompt, candidate, attemptOptions, {
+			sessionEnabled,
+			systemPrompt,
+			acceptancePrompt,
+			resolvedSkillNames: resolvedSkills.length > 0 ? resolvedSkills.map((skill) => skill.name) : undefined,
+			skillsWarning: missingSkills.length > 0 ? `Skills not found: ${missingSkills.join(", ")}` : undefined,
+			jsonlPath,
+			artifactPaths: artifactPathsResult,
+			transcriptWriter,
+			attemptNotes,
+			outputSnapshot,
+			originalTask: task,
+			orcaProgressTab,
+			launchWarnings,
+			verifyModel,
+		});
+		lastResult = attemptResult;
+		sumUsage(aggregateUsage, attemptResult.usage);
+		totalToolCount += attemptResult.progressSummary?.toolCount ?? 0;
+		totalDurationMs += attemptResult.progressSummary?.durationMs ?? 0;
+		if (attemptResult.exitCode === 0 && !attemptResult.error) break;
+		const recovery = planAbortRecovery({
+			messages: attemptResult.messages ?? [],
+			error: attemptResult.error,
+			processSignal: attemptResult.processSignal,
+			sessionAvailable: Boolean(options.sessionFile && existsSync(options.sessionFile)),
+			alreadyResumed: attemptIndex > 0,
+			stopped: attemptResult.stopped || attemptResult.detached || Boolean(detachedReason) || Boolean(options.workflowChildPermitLaunch) || options.signal?.aborted,
+			interrupted: attemptResult.interrupted || options.interruptSignal?.aborted,
+			timedOut: attemptResult.timedOut,
+			toolBudgetExhausted: attemptResult.toolBudgetBlocked,
+			usageBudgetExhausted: false,
+			structuredOutputFailed: attemptResult.structuredOutputFailed,
+			acceptanceFailed: false,
+			currentTool: attemptResult.progress?.currentTool,
+			afterCompactionSettlement: (attemptResult as AbortRecoverySingleResult)[AFTER_COMPACTION_SETTLEMENT],
+		});
+		if (recovery.action === "resume") {
+			recoveryPrompt = recovery.prompt;
+			attemptNotes.push("[abort-recovery] compaction abort after useful progress; resuming the retained child session once on the same model.");
+			continue;
 		}
+		if (recovery.diagnostic) {
+			attemptResult.error = attemptResult.error ? `${attemptResult.error}\n${recovery.diagnostic}` : recovery.diagnostic;
+		}
+		break;
 	}
+	if (!lastResult) throw new Error("Subagent did not produce a result.");
+	if (isContextOverflow(lastResult.error)) lastResult.contextOverflow = true;
 
 	const result = withRunContext(lastResult ?? {
 		index: options.index ?? 0,
@@ -1978,8 +1956,7 @@ async function runSyncCompletionInner(
 	result.task = task;
 
 	result.usage = aggregateUsage;
-	result.attemptedModels = attemptedModels.length > 0 ? attemptedModels : undefined;
-	result.modelAttempts = modelAttempts.length > 0 ? modelAttempts : undefined;
+	result.requestedModel = requestedModel;
 	result.progressSummary = {
 		...(childSessionName ? { sessionName: childSessionName } : {}),
 		toolCount: totalToolCount,
@@ -2045,7 +2022,7 @@ async function runSyncCompletionInner(
 					? { content: childWrittenOutput, path: options.outputPath, authoritative: options.outputMode === "file-only", durable: result.savedOutputPath !== undefined }
 					: undefined,
 				cwd: options.cwd ?? runtimeCwd,
-				reportOptional: isAgentContractV1(options.agentContract),
+				reportOptional: isAgentContract(options.agentContract),
 				artifactsDir: options.artifactsDir,
 				runId: options.runId,
 				watchdog: result.watchdog,
@@ -2057,7 +2034,7 @@ async function runSyncCompletionInner(
 	}
 	const acceptanceFailure = acceptanceFailureMessage(result.acceptance);
 	stripAcceptanceReportsFromMessages(result.messages);
-	if (acceptanceFailure && result.acceptance.explicit && result.exitCode === 0 && !result.interrupted && !result.timedOut && !isAgentContractV1(options.agentContract)) {
+	if (acceptanceFailure && result.acceptance.explicit && result.exitCode === 0 && !result.interrupted && !result.timedOut && !isAgentContract(options.agentContract)) {
 		result.exitCode = 1;
 		if (result.savedOutputPath) {
 			result.finalOutput = finalizeSingleOutput({
@@ -2069,7 +2046,6 @@ async function runSyncCompletionInner(
 				savedPath: result.savedOutputPath,
 				outputReference: result.outputReference,
 			}).displayOutput;
-			artifactOutputByResult.set(result, result.finalOutput);
 		}
 		result.error = result.error ? `${result.error}\n${acceptanceFailure}` : acceptanceFailure;
 		if (artifactPathsResult && options.artifactConfig?.enabled !== false && options.artifactConfig?.includeOutput !== false) {
@@ -2090,7 +2066,7 @@ async function runSyncCompletionInner(
 			result.progress.error = result.error;
 		}
 	}
-	if (isAgentContractV1(options.agentContract)) attachContractProjections(result);
+	if (isAgentContract(options.agentContract)) attachContractProjections(result);
 	redactResultPrompt(result);
 	try {
 		persistResultMetadata(result);
@@ -2135,7 +2111,7 @@ export async function runSync(
 ): Promise<SingleResult> {
 	// Capture the strict contract before consumer-owned objects can be mutated
 	// after a detached receipt is published.
-	const strictContract = isAgentContractV1(options.agentContract);
+	const strictContract = isAgentContract(options.agentContract);
 	let detachedReason: string | undefined;
 	let publishedReceipt: SingleResult | undefined;
 	let activeDetachAttempt: ((reason?: string) => boolean) | undefined;
@@ -2233,13 +2209,13 @@ export async function runSync(
 	});
 
 	let terminalCallbackInvoked = false;
-	void authoritativeCompletion.then((terminalResult) => {
+	void authoritativeCompletion.then(async (terminalResult) => {
 		if (!detachedReason || terminalCallbackInvoked) return;
 		terminalCallbackInvoked = true;
 		terminalResult.detached = undefined;
 		terminalResult.detachedReason = detachedReason;
 		try {
-			options.onDetachedExit?.(terminalResult);
+			await options.onDetachedExit?.(terminalResult);
 		} catch {
 			// The authoritative result has settled. Consumer callback failures are
 			// contained here; each consumer owns cleanup through its own finally block.

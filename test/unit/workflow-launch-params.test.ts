@@ -1,10 +1,38 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { prepareWorkflowLaunchParams, promptAuditRedoParams, resolveRevivalControlConfig, sanitizeRunPathSegment } from "../../src/runs/foreground/subagent-executor.ts";
+import type { AgentConfig } from "../../src/agents/agents.ts";
+import { prepareWorkflowLaunchParams, promptAuditRedoParams, resolveRevivalControlConfig, resolveWorkflowChildLocalCwd, sanitizeRunPathSegment } from "../../src/runs/foreground/subagent-executor.ts";
 import { resolveControlConfig } from "../../src/runs/shared/subagent-control.ts";
 
 describe("workflow launch params", () => {
-	it("keeps omitted workflow child async foreground", () => {
+	it("keeps remote workflow cwd out of local discovery for explicit and agent-pinned machines", () => {
+		const workflowCwd = "/local/workflow";
+		const discoverCalls: string[] = [];
+		const pinned: AgentConfig = {
+			name: "pinned",
+			description: "Pinned agent",
+			systemPrompt: "Run remotely.",
+			systemPromptMode: "replace",
+			inheritProjectContext: false,
+			inheritGlobalContext: false,
+			inheritSkills: false,
+			source: "project",
+			filePath: "/local/workflow/.pi/agents/pinned.md",
+			machine: "workmac",
+		};
+		const discoverAgents = (cwd: string) => {
+			discoverCalls.push(cwd);
+			return { agents: [pinned] };
+		};
+		const shared = { workflowCwd, discoverAgents, agents: [] as AgentConfig[] };
+
+		assert.equal(resolveWorkflowChildLocalCwd({ ...shared, params: { agent: "worker", machine: "workmac", cwd: "/remote/repo" } }), workflowCwd);
+		assert.deepEqual(discoverCalls, []);
+		assert.equal(resolveWorkflowChildLocalCwd({ ...shared, params: { agent: "pinned", cwd: "/remote/repo" } }), workflowCwd);
+		assert.deepEqual(discoverCalls, [workflowCwd]);
+	});
+
+	it("preserves omitted workflow child async defaults and awaits background resolution", () => {
 		assert.deepEqual(
 			prepareWorkflowLaunchParams(
 				{},
@@ -15,7 +43,7 @@ describe("workflow launch params", () => {
 			{
 				agent: "worker",
 				task: "Run",
-				async: false,
+				workflowAwaitAsync: true,
 				workflowParentRunId: "workflow-run",
 				workflowKey: "run",
 			},
@@ -131,7 +159,8 @@ describe("workflow launch params", () => {
 			"run",
 			{ parentDeadlineAt },
 		);
-		assert.equal(params.async, false);
+		assert.equal(params.async, undefined);
+		assert.equal(params.workflowAwaitAsync, true);
 		assert.equal(params.timeoutMs, undefined);
 		assert.equal(params.workflowParentDeadlineAt, parentDeadlineAt);
 	});
@@ -238,7 +267,7 @@ describe("workflow launch params", () => {
 				agent: "worker",
 				task: "Run",
 				intercomBridge: { mode: "off" },
-				async: false,
+				workflowAwaitAsync: true,
 				workflowParentRunId: "workflow-run",
 				workflowKey: "isolated",
 			},
@@ -265,7 +294,7 @@ describe("workflow launch params", () => {
 				agent: "worker",
 				task: "Implement",
 				worktree: true,
-				async: false,
+				workflowAwaitAsync: true,
 				workflowParentRunId: "workflow-run",
 				workflowKey: "gated",
 				acceptance: { level: "verified", verify: [{ id: "gate", command: "npm test" }] },

@@ -24,7 +24,6 @@ export interface RuntimeAgentDefinition {
 	allowNestedSubagents?: boolean;
 	mcpDirectTools?: readonly string[];
 	model?: string;
-	fallbackModels?: readonly string[];
 	thinking?: string | false;
 	systemPromptMode?: "append" | "replace";
 	inheritProjectContext?: boolean;
@@ -37,6 +36,7 @@ export interface RuntimeAgentDefinition {
 	defaultAcceptance?: AcceptanceInput;
 	acceptanceRole?: AcceptanceRole;
 	runner?: AgentRunnerConfig;
+	machine?: string;
 	skills?: readonly string[];
 	skillPath?: readonly string[];
 	extensions?: readonly string[];
@@ -199,9 +199,9 @@ function validateDefinition(value: unknown): RuntimeAgentDefinition {
 	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Runtime agent definition must be an object.");
 	const definition = value as Record<string, unknown>;
 	const supported = new Set([
-		"description", "systemPrompt", "aliases", "tools", "excludeTools", "allowNestedSubagents", "mcpDirectTools", "model", "fallbackModels", "thinking",
+		"description", "systemPrompt", "aliases", "tools", "excludeTools", "allowNestedSubagents", "mcpDirectTools", "model", "thinking",
 		"systemPromptMode", "inheritProjectContext", "inheritGlobalContext", "inheritSkills", "defaultContext", "defaultAsync", "defaultTimeoutMs",
-		"defaultToolTimeoutMs", "defaultAcceptance", "acceptanceRole", "runner", "skills", "skillPath",
+		"defaultToolTimeoutMs", "defaultAcceptance", "acceptanceRole", "runner", "machine", "skills", "skillPath",
 		"extensions", "subagentOnlyExtensions", "mutationTools", "output", "outputMode", "defaultReads", "defaultProgress", "interactive",
 		"maxSubagentDepth", "completionGuard", "toolBudget", "permissions",
 	]);
@@ -223,7 +223,7 @@ function validateDefinition(value: unknown): RuntimeAgentDefinition {
 	const allowNestedSubagents = validateBoolean(definition.allowNestedSubagents, "Runtime agent definition allowNestedSubagents");
 	const mcpDirectTools = validateStringList(definition.mcpDirectTools, "Runtime agent definition mcpDirectTools");
 	const model = validateOptionalString(definition.model, "Runtime agent definition model");
-	const fallbackModels = validateStringList(definition.fallbackModels, "Runtime agent definition fallbackModels");
+	if ((definition as Record<string, unknown>).fallbackModels !== undefined) throw new Error("Runtime agent definition fallbackModels was removed; configure one model instead.");
 	const inheritProjectContext = validateBoolean(definition.inheritProjectContext, "Runtime agent definition inheritProjectContext");
 	const inheritGlobalContext = validateBoolean(definition.inheritGlobalContext, "Runtime agent definition inheritGlobalContext");
 	const inheritSkills = validateBoolean(definition.inheritSkills, "Runtime agent definition inheritSkills");
@@ -237,6 +237,7 @@ function validateDefinition(value: unknown): RuntimeAgentDefinition {
 	const extensions = validateStringList(definition.extensions, "Runtime agent definition extensions");
 	const subagentOnlyExtensions = validateStringList(definition.subagentOnlyExtensions, "Runtime agent definition subagentOnlyExtensions");
 	const mutationTools = validateStringList(definition.mutationTools, "Runtime agent definition mutationTools");
+	const machine = validateOptionalString(definition.machine, "Runtime agent definition machine");
 	const output = validateOptionalString(definition.output, "Runtime agent definition output");
 	const defaultReads = validateStringList(definition.defaultReads, "Runtime agent definition defaultReads");
 	const defaultProgress = validateBoolean(definition.defaultProgress, "Runtime agent definition defaultProgress");
@@ -254,7 +255,6 @@ function validateDefinition(value: unknown): RuntimeAgentDefinition {
 		...(allowNestedSubagents !== undefined ? { allowNestedSubagents } : {}),
 		...(mcpDirectTools ? { mcpDirectTools } : {}),
 		...(model ? { model } : {}),
-		...(fallbackModels ? { fallbackModels } : {}),
 		...(thinking !== undefined ? { thinking: thinking as string | false } : {}),
 		...(systemPromptMode !== undefined ? { systemPromptMode: systemPromptMode as "append" | "replace" } : {}),
 		...(inheritProjectContext !== undefined ? { inheritProjectContext } : {}),
@@ -272,6 +272,7 @@ function validateDefinition(value: unknown): RuntimeAgentDefinition {
 		...(extensions ? { extensions } : {}),
 		...(subagentOnlyExtensions ? { subagentOnlyExtensions } : {}),
 		...(mutationTools ? { mutationTools } : {}),
+		...(machine ? { machine } : {}),
 		...(output ? { output } : {}),
 		...(outputMode !== undefined ? { outputMode: outputMode as OutputMode } : {}),
 		...(defaultReads ? { defaultReads } : {}),
@@ -334,7 +335,6 @@ function toAgentConfig(name: string, definition: RuntimeAgentDefinition): AgentC
 		...(definition.allowNestedSubagents !== undefined ? { allowNestedSubagents: definition.allowNestedSubagents } : {}),
 		...(definition.mcpDirectTools !== undefined ? { mcpDirectTools: [...definition.mcpDirectTools] } : {}),
 		...(definition.model !== undefined ? { model: definition.model } : {}),
-		...(definition.fallbackModels !== undefined ? { fallbackModels: [...definition.fallbackModels] } : {}),
 		...(definition.thinking !== undefined ? { thinking: definition.thinking } : {}),
 		systemPromptMode: definition.systemPromptMode ?? defaultSystemPromptMode(name),
 		inheritProjectContext: definition.inheritProjectContext ?? defaultInheritProjectContext(name),
@@ -354,6 +354,7 @@ function toAgentConfig(name: string, definition: RuntimeAgentDefinition): AgentC
 		...(definition.extensions !== undefined ? { extensions: [...definition.extensions] } : {}),
 		...(definition.subagentOnlyExtensions !== undefined ? { subagentOnlyExtensions: [...definition.subagentOnlyExtensions] } : {}),
 		...(definition.mutationTools !== undefined ? { mutationTools: [...definition.mutationTools] } : {}),
+		...(definition.machine !== undefined ? { machine: definition.machine } : {}),
 		...(definition.output !== undefined ? { output: definition.output } : {}),
 		...(definition.outputMode !== undefined ? { outputMode: definition.outputMode } : {}),
 		...(definition.defaultReads !== undefined ? { defaultReads: [...definition.defaultReads] } : {}),
