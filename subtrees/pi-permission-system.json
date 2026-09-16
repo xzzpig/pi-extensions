@@ -5,10 +5,10 @@
   "upstreamPath": "packages/pi-permission-system",
   "source": "https://github.com/gotgenes/pi-packages.git",
   "remote": "upstream-pi-permission-system",
-  "ref": "pi-permission-system-v31.0.2",
-  "version": "31.0.2",
-  "upstreamCommit": "8ce106cae4454c8f1dc37d8da764f8a0d392b1de",
+  "ref": "pi-permission-system-v31.1.4",
+  "version": "31.1.4",
+  "upstreamCommit": "5b7c823f593c73da0734cd1766892efea45db522",
   "squash": true,
-  "lastSyncedAt": "2026-09-05T02:42:11+08:00",
-  "notes": "Forked from gotgenes/pi-packages; local wrapper-floor rework (fallback mode) intentionally diverges from upstream."
+  "lastSyncedAt": "2026-09-16T18:28:54+08:00",
+  "notes": "Forked from gotgenes/pi-packages; local wrapper-floor rework (fallback mode) intentionally diverges from upstream. v31.1.4 sync adopted upstream's #src/<domain>/ directory layout."
 }
