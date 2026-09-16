@@ -1624,7 +1624,9 @@ function createManager(legacySingleton: boolean): ISandboxManager {
         httpProxyPort:
           hasNetworkConfig && !networkDisabled ? getProxyPort() : undefined,
         socksProxyPort:
-          hasNetworkConfig && !networkDisabled ? getSocksProxyPort() : undefined,
+          hasNetworkConfig && !networkDisabled
+            ? getSocksProxyPort()
+            : undefined,
         proxyAuthToken: hasNetworkConfig ? proxyAuthToken : undefined,
         // mode:'deny' env vars are structurally absent (fresh
         // srt-sandbox profile env). mode:'mask' sentinels are

@@ -5,6 +5,25 @@ This fork tracks [`carderne/sandbox-runtime`](https://github.com/carderne/sandbo
 (itself derived from Anthropic's sandbox-runtime) via git subtree; entries below
 describe only fork-specific deviations from upstream.
 
+## 0.0.72
+
+### Changed
+
+- **Synced to upstream `v0.0.72`** (from `v0.0.70`), which bundles two upstream
+  releases: `feat: add independent sandbox manager instances (#20)` — separate
+  `createSandboxManager()` sessions with their own policy and proxies, a reworked
+  proxy/lifecycle core in `sandbox-manager.ts`, a Windows `srt-win` installer and
+  proxy-port-range pass, plus new `manager-instances` / `winsrt` / `proxy-env-vars`
+  coverage — and `fix: reject sandbox commands when the network proxy is unavailable
+(#19)`. The fork's `network.disabled` and `filesystem.protectNonexistentFiles`
+  behavior is re-applied on top of the refactor and is unchanged.
+- `wrapWithSandbox()` now fails closed when network restriction is requested but no
+  proxy is running (upstream #19): a per-call `network` block that omits `disabled`
+  after a session initialized with `network.disabled: true` now throws
+  `Sandbox network proxy is not initialized` instead of silently emitting a
+  hard-blocked command. Toggle network enforcement with `reset()` + `initialize()`.
+  Callers that pass no per-call `network` block (e.g. pi-sandbox) are unaffected.
+
 ## 0.0.71
 
 ### Added

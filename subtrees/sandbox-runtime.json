@@ -4,10 +4,10 @@
   "prefix": "packages/sandbox-runtime",
   "source": "https://github.com/carderne/sandbox-runtime.git",
   "remote": "upstream-sandbox-runtime",
-  "ref": "v0.0.70",
-  "version": "0.0.70",
-  "upstreamCommit": "476bf986ef63410b61febf879a6f1a46b7898d5f",
+  "ref": "v0.0.72",
+  "version": "0.0.72",
+  "upstreamCommit": "dea3f1a241c189f0f954ac989dfc2c2a95b64c39",
   "squash": true,
-  "lastSyncedAt": "2026-08-21T02:30:00.000Z",
-  "notes": "Forked from carderne/sandbox-runtime (itself derived from Anthropic's sandbox-runtime); local fork adds filesystem.protectNonexistentFiles so embedders can skip bwrap placeholder mounts for not-yet-existing dangerous files. Published locally as @xzzpig/sandbox-runtime; it is a support library for pi-sandbox rather than a Pi plugin, so the record keeps the plain upstream-derived name instead of the pi-* plugin convention."
+  "lastSyncedAt": "2026-09-17T01:05:00+08:00",
+  "notes": "Forked from carderne/sandbox-runtime (itself derived from Anthropic's sandbox-runtime); local fork adds filesystem.protectNonexistentFiles so embedders can skip bwrap placeholder mounts for not-yet-existing dangerous files, and network.disabled so a session can run with all network policy enforcement off (no proxy/bridge started, no network rules emitted). Published locally as @xzzpig/sandbox-runtime; it is a support library for pi-sandbox rather than a Pi plugin, so the record keeps the plain upstream-derived name instead of the pi-* plugin convention. v0.0.72 sync adopted upstream's independent sandbox manager instances (#20), the sandbox-manager.ts proxy/lifecycle rework, the Windows srt-win installer and proxy-port-range work, and upstream's fail-closed 'reject sandbox commands when the network proxy is unavailable' guard (#19) — that guard changes one fork test (a per-call network block omitting disabled after a network.disabled session now throws instead of emitting a hard-blocked command); pi-sandbox passes no per-call network block, so its behavior is unchanged. Re-apply network.disabled, filesystem.protectNonexistentFiles, the readdirSync withFileTypes cast (sandbox-utils.ts), and the closeAllConnections cast (sandbox-manager.ts) on each future sync."
 }
