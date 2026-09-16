@@ -33,6 +33,7 @@ import { childNodeAbsentMessage } from "#src/authority/child-node-audit";
 import {
   createPermissionForwardingLocation,
   type ForwardedPermissionRequest,
+  SUBAGENT_ENV_HINT_KEYS,
 } from "#src/authority/permission-forwarding";
 import { getServingSessionRegistry } from "#src/authority/serving-registry";
 import {
@@ -44,15 +45,15 @@ import {
   getGlobalConfigPath,
   getGlobalLogsDir,
   REVIEW_LOG_FILENAME,
-} from "#src/config-paths";
-import { DEFAULT_EXTENSION_CONFIG } from "#src/extension-config";
+} from "#src/config/config-paths";
+import { DEFAULT_EXTENSION_CONFIG } from "#src/config/extension-config";
 import piPermissionSystemExtension from "#src/index";
+import { getPermissionsService } from "#src/service";
 import {
   PERMISSIONS_FORWARDED_DECISION_CHANNEL,
   PERMISSIONS_READY_CHANNEL,
   type PermissionsReadyEvent,
-} from "#src/permission-events";
-import { getPermissionsService } from "#src/service";
+} from "#src/service/permission-events";
 import { publishServingHeartbeat } from "#test/helpers/forwarding-fixtures";
 import { makeFakePi } from "#test/helpers/make-fake-pi";
 
@@ -79,6 +80,11 @@ const EXPECTED_HANDLERS = [
 let agentDir: string;
 
 beforeEach(() => {
+  // The factory's detection and forwarding paths read ambient `process.env`, so
+  // a host session exporting a subagent marker must not change the answers.
+  for (const key of SUBAGENT_ENV_HINT_KEYS) {
+    vi.stubEnv(key, undefined);
+  }
   agentDir = mkdtempSync(join(tmpdir(), "pi-perm-comp-root-"));
   vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
 });
@@ -506,6 +512,61 @@ describe("unguarded in-process child detection", () => {
     expect(notified).toEqual([]);
 
     rmSync(childCwd, { recursive: true, force: true });
+  });
+});
+
+describe("interactive serving eligibility", () => {
+  // A spawner may export the parent-session marker from its own root process so
+  // the children it later launches inherit it — `nicobailon/pi-subagents` sets
+  // it to the root's own session id at `session_start`. A node with a UI has a
+  // human who can answer, so it serves its inbox whatever the marker names
+  // (#907).
+  async function startRootThenSetMarker(
+    markerValue: string,
+  ): Promise<{ cwd: string; pi: ReturnType<typeof makeFakePi> }> {
+    const cwd = mkdtempSync(join(tmpdir(), "pi-perm-root-serving-cwd-"));
+    const pi = makeFakePi();
+    const ctx = makeBaseCtx(cwd, "ui-root-session");
+    piPermissionSystemExtension(pi as unknown as ExtensionAPI);
+
+    await fireSessionStart(pi, ctx);
+    expect(getServingSessionRegistry().servingIds()).toEqual([
+      "ui-root-session",
+    ]);
+
+    vi.stubEnv("PI_SUBAGENT_PARENT_SESSION", markerValue);
+    await pi.fire(
+      "before_agent_start",
+      { systemPrompt: "", systemPromptOptions: { cwd: "/test" } },
+      ctx,
+    );
+
+    return { cwd, pi };
+  }
+
+  it("keeps serving when the root inherits its own session id as the marker", async () => {
+    const { cwd, pi } = await startRootThenSetMarker("ui-root-session");
+
+    expect(getServingSessionRegistry().servingIds()).toEqual([
+      "ui-root-session",
+    ]);
+
+    await pi.fire("session_shutdown");
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("keeps serving when the marker names a different session", async () => {
+    // Not merely the self-naming case: the marker is stale after any mid-session
+    // id change, since the spawner refreshes it only at `session_start`. A UI
+    // host serves regardless of what the marker names.
+    const { cwd, pi } = await startRootThenSetMarker("some-other-session");
+
+    expect(getServingSessionRegistry().servingIds()).toEqual([
+      "ui-root-session",
+    ]);
+
+    await pi.fire("session_shutdown");
+    rmSync(cwd, { recursive: true, force: true });
   });
 });
 
@@ -1078,8 +1139,16 @@ describe("ready emitted after service publication", () => {
     const ctx = makeBaseCtx(cwd, "latch-session");
     await fireSessionStart(pi, ctx);
 
-    await pi.fire("before_agent_start", { systemPrompt: "" }, ctx);
-    await pi.fire("before_agent_start", { systemPrompt: "" }, ctx);
+    await pi.fire(
+      "before_agent_start",
+      { systemPrompt: "", systemPromptOptions: { cwd: "/test" } },
+      ctx,
+    );
+    await pi.fire(
+      "before_agent_start",
+      { systemPrompt: "", systemPromptOptions: { cwd: "/test" } },
+      ctx,
+    );
 
     // One emission at session_start, one at the *first* before_agent_start —
     // the second turn adds none.
@@ -1104,14 +1173,26 @@ describe("ready emitted after service publication", () => {
     piPermissionSystemExtension(pi as unknown as ExtensionAPI);
     const ctx = makeBaseCtx(cwd, "latch-reload-session");
     await fireSessionStart(pi, ctx);
-    await pi.fire("before_agent_start", { systemPrompt: "" }, ctx);
+    await pi.fire(
+      "before_agent_start",
+      { systemPrompt: "", systemPromptOptions: { cwd: "/test" } },
+      ctx,
+    );
     expect(emissions).toBe(2);
 
     // A reload runs session_start again: the new generation announces at
     // session_start and once more at its first turn.
     await fireSessionStart(pi, ctx);
-    await pi.fire("before_agent_start", { systemPrompt: "" }, ctx);
-    await pi.fire("before_agent_start", { systemPrompt: "" }, ctx);
+    await pi.fire(
+      "before_agent_start",
+      { systemPrompt: "", systemPromptOptions: { cwd: "/test" } },
+      ctx,
+    );
+    await pi.fire(
+      "before_agent_start",
+      { systemPrompt: "", systemPromptOptions: { cwd: "/test" } },
+      ctx,
+    );
     expect(emissions).toBe(4);
 
     rmSync(cwd, { recursive: true, force: true });

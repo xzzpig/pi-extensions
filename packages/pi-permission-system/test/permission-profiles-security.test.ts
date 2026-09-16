@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { createAgentDirHarness, createInMemoryPolicyLoader } from "#test/helpers/manager-harness";
-import { getGlobalConfigPath, getProjectAgentsDir } from "#src/config-paths";
-import { PermissionManager } from "#src/permission-manager";
-import { FilePolicyLoader } from "#src/policy-loader";
+import { getGlobalConfigPath, getProjectAgentsDir } from "#src/config/config-paths";
+import { PermissionManager } from "#src/policy/permission-manager";
+import { FilePolicyLoader } from "#src/config/policy-loader";
 
 /**
  * Security boundaries of named permission profiles (OpenSpec

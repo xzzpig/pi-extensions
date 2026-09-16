@@ -18,15 +18,15 @@
  * ensures resilience across `/reload` and load-order edge cases.
  */
 
-import type { Authorizer } from "./authority/authorizer";
-import type { ToolAccessExtractor } from "./tool-access-extractor-registry";
-import type { ToolInputFormatter } from "./tool-input-formatter-registry";
+import type { Authorizer } from "#src/authority/authorizer";
+import type { ToolAccessExtractor } from "#src/tool-input/tool-access-extractor-registry";
+import type { ToolInputFormatter } from "#src/tool-input/tool-input-formatter-registry";
 import type { PermissionCheckResult, PermissionState } from "./types";
 
 export type {
-	Authorizer,
-	AuthorizerVerdict,
-} from "./authority/authorizer";
+  Authorizer,
+  AuthorizerVerdict,
+} from "#src/authority/authorizer";
 
 /**
  * The narrow review-log seam handed to a chain link at `authorize` time
@@ -43,22 +43,22 @@ export interface AuthorizerLog {
 	review(event: string, details?: Record<string, unknown>): void;
 	debug(event: string, details?: Record<string, unknown>): void;
 }
-export type { PromptPermissionDetails } from "./authority/permission-prompter";
+export type { PromptPermissionDetails } from "#src/authority/permission-prompter";
 export type {
-	ForwardedPromptContext,
-	PermissionDecisionEvent,
-	PermissionForwardedDecisionEvent,
-	PermissionForwardedDecisionResolution,
-	PermissionsReadyEvent,
-	PermissionUiPromptEvent,
-	PermissionUiPromptSource,
-} from "./permission-events";
+  ForwardedPromptContext,
+  PermissionDecisionEvent,
+  PermissionForwardedDecisionEvent,
+  PermissionForwardedDecisionResolution,
+  PermissionsReadyEvent,
+  PermissionUiPromptEvent,
+  PermissionUiPromptSource,
+} from "#src/service/permission-events";
 export {
-	PERMISSIONS_DECISION_CHANNEL,
-	PERMISSIONS_FORWARDED_DECISION_CHANNEL,
-	PERMISSIONS_READY_CHANNEL,
-	PERMISSIONS_UI_PROMPT_CHANNEL,
-} from "./permission-events";
+  PERMISSIONS_DECISION_CHANNEL,
+  PERMISSIONS_FORWARDED_DECISION_CHANNEL,
+  PERMISSIONS_READY_CHANNEL,
+  PERMISSIONS_UI_PROMPT_CHANNEL,
+} from "#src/service/permission-events";
 // The declaration bundle already inlines these through `PromptPermissionDetails`
 // and `PermissionUiPromptEvent`; the named exports are what a consumer needs to
 // annotate a variable of their own.
@@ -69,7 +69,7 @@ export type {
   PromptPayloadKind,
   PromptRequester,
   PromptRequestFacts,
-} from "./presentation/prompt-payload";
+} from "#src/presentation/prompt-payload";
 export type { PermissionCheckResult, PermissionState, ToolInputFormatter };
 
 /** Process-global key for the session-keyed service map (ADR 0012 decision 2). */

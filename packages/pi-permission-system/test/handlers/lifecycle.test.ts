@@ -4,7 +4,7 @@ import {
   SessionLifecycleHandler,
   UNTRUSTED_PROJECT_MESSAGE,
 } from "#src/handlers/lifecycle";
-import type { ServiceLifecycle } from "#src/service-lifecycle";
+import type { ServiceLifecycle } from "#src/service/service-lifecycle";
 
 import { makeCtx } from "#test/helpers/handler-fixtures";
 import {
@@ -14,7 +14,7 @@ import {
 } from "#test/helpers/session-fixtures";
 
 // ── status stub ────────────────────────────────────────────────────────────
-vi.mock("../../src/status", () => ({
+vi.mock("#src/config/status", () => ({
   PERMISSION_SYSTEM_STATUS_KEY: "permission-system",
   syncPermissionSystemStatus: vi.fn(),
   getPermissionSystemStatus: vi.fn(),

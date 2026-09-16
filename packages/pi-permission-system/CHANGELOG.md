@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Synced with upstream pi-permission-system v31.0.2 → v31.1.4** (fork 0.7.0 → 0.8.0). Adopted upstream's `src/` tree reorganization into `#src/<domain>/` subdirectories, forwarded-permission serving heartbeat fixes (#907), and the tool-surface relocation documentation, while preserving the fork's named permission profiles, session role layer, wrapper floors, and forwarded-decision broadcast.
 - **A child session keeps the profile selection it was launched with.** The
   launcher-provided `PI_SUBAGENT_PERMISSION_PROFILE` selection is captured once
   at a subagent child's `session_start` and reused for the rest of that child's
@@ -51,7 +52,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Synced the fork with upstream pi-permission-system v27.0.1 while preserving the configurable wrapper-floor (fallback/always) divergence. Adopted upstream #726 decision attribution (`decidedBy` carried on forwarded responses), #745 prompt payload contracts (deprecated preview caps are now dropped from config), #746 review-log request facts and `reviewLogFieldMaxWidth`, #787 re-emitted `permissions:ready` at first `before_agent_start`, #794 session-keyed service locator (`getRootPermissionsService` deprecated; root publish/unpublish accessors renamed), #789 subagent detection via parent-session env vars, and the `gen:schema` / `verify:public-types` scripts. Fork additions kept: `permissions:forwarded_decision` broadcast, injectable response writer, and the payload-less wrapper adjudication.
-
 ## [31.0.2](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v31.0.1...pi-permission-system-v31.0.2) (2026-09-04)
 
 

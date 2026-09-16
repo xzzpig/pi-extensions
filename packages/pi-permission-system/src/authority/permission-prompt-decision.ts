@@ -1,10 +1,10 @@
-import type { SessionGrantWidth } from "#src/approval-grant";
+import type { SessionGrantWidth } from "#src/session/approval-grant";
 import {
   createDeniedPermissionDecision,
   normalizePermissionDenialReason,
   type RequestPermissionOptions,
   type UnattributedDecision,
-} from "#src/authority/permission-dialog";
+} from "./permission-dialog";
 
 /**
  * Pure decision model for the inline keybind permission dialog.

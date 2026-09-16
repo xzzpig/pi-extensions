@@ -3,23 +3,23 @@ import type {
   InputEventResult,
 } from "@earendil-works/pi-coding-agent";
 import {
-  formatMissingToolNameReason,
-  formatUnknownToolReason,
-} from "#src/permission-prompts";
-import type { PermissionSession } from "#src/permission-session";
-import {
   checkRequestedToolRegistration,
   getToolNameFromValue,
   type ToolRegistry,
-} from "#src/tool-registry";
-import { toRecord } from "#src/value-guards";
-import type { GateRunner } from "./gates/runner";
+} from "#src/exposure/tool-registry";
+import type { GateRunner } from "#src/handlers/gates/runner";
 import type {
   GateNotifier,
   SkillInputGatePipeline,
-} from "./gates/skill-input-gate-pipeline";
-import type { ToolCallGatePipeline } from "./gates/tool-call-gate-pipeline";
-import type { GateOutcome, ToolCallContext } from "./gates/types";
+} from "#src/handlers/gates/skill-input-gate-pipeline";
+import type { ToolCallGatePipeline } from "#src/handlers/gates/tool-call-gate-pipeline";
+import type { GateOutcome, ToolCallContext } from "#src/handlers/gates/types";
+import {
+  formatMissingToolNameReason,
+  formatUnknownToolReason,
+} from "#src/presentation/permission-prompts";
+import type { PermissionSession } from "#src/session/permission-session";
+import { toRecord } from "#src/value-guards";
 
 /** Minimal subset of InputEvent used by handleInput. */
 interface InputPayload {

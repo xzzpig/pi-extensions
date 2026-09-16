@@ -2,8 +2,8 @@ import {
   type BashCommand,
   collectCommands,
   type ParseProgram,
-} from "#src/access-intent/bash/command-enumeration";
-import { getWarmBashParser } from "#src/access-intent/bash/parser";
+} from "./command-enumeration";
+import { getWarmBashParser } from "./parser";
 
 /**
  * Synchronously enumerate the command-pattern units of a bash command using the

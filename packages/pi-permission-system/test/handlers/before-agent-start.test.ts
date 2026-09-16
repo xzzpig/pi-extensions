@@ -1,13 +1,18 @@
+import type { BuildSystemPromptOptions } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
-
+import type { ToolRegistry } from "#src/exposure/tool-registry";
 import {
   AgentPrepHandler,
   shouldExposeTool,
 } from "#src/handlers/before-agent-start";
 import { SessionTurnPrep } from "#src/handlers/session-turn-prep";
-import type { ToolRegistry } from "#src/tool-registry";
 
-import { makeCheckResult, makeCtx } from "#test/helpers/handler-fixtures";
+import {
+  makeCheckResult,
+  makeCtx,
+  makeStatefulToolRegistry,
+  makeToolRegistry,
+} from "#test/helpers/handler-fixtures";
 import {
   makeRealResolver,
   makeRealSession,
@@ -25,25 +30,34 @@ vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
-function makeEvent(systemPrompt = "You are an assistant.") {
-  return { systemPrompt };
-}
-
-function makeToolRegistry(overrides: Partial<ToolRegistry> = {}): ToolRegistry {
+function makeEvent(
+  systemPrompt = "You are an assistant.",
+  systemPromptOptions: Partial<BuildSystemPromptOptions> = {},
+) {
   return {
-    getAll: vi.fn().mockReturnValue([]),
-    getActive: vi.fn().mockReturnValue([]),
-    setActive: vi.fn(),
-    ...overrides,
+    systemPrompt,
+    systemPromptOptions: {
+      cwd: "/test/project",
+      toolSnippets: {},
+      promptGuidelines: [],
+      ...systemPromptOptions,
+    },
   };
 }
 
 function makeSetup(opts?: {
   toolFullyDenied?: boolean;
   toolRegistry?: Partial<ToolRegistry>;
+  registry?: ToolRegistry;
 }) {
-  const { session, permissionManager, sessionRules, configStore, forwarding } =
-    makeRealSession();
+  const {
+    session,
+    permissionManager,
+    sessionRules,
+    configStore,
+    forwarding,
+    logger,
+  } = makeRealSession();
   const { resolver } = makeRealResolver(permissionManager, sessionRules);
   if (opts?.toolFullyDenied !== undefined) {
     vi.mocked(permissionManager.isToolFullyDenied).mockReturnValue(
@@ -52,7 +66,7 @@ function makeSetup(opts?: {
   }
   // Default check returns allow (for skill-prompt sanitizer via resolver.checkPermission)
   vi.mocked(permissionManager.check).mockReturnValue(makeCheckResult());
-  const toolRegistry = makeToolRegistry(opts?.toolRegistry);
+  const toolRegistry = opts?.registry ?? makeToolRegistry(opts?.toolRegistry);
   const warmParser = vi.fn();
   // A real SessionTurnPrep over the same session: the tool-filtering and
   // prompt-sanitization assertions below read state an activated session owns,
@@ -65,6 +79,7 @@ function makeSetup(opts?: {
     session,
     resolver,
     toolRegistry,
+    logger,
   );
   return {
     handler,
@@ -75,6 +90,7 @@ function makeSetup(opts?: {
     configStore,
     forwarding,
     toolRegistry,
+    logger,
     warmParser,
   };
 }
@@ -223,11 +239,11 @@ describe("AgentPrepHandler.handle", () => {
     );
   });
 
-  it("returns empty object on repeated calls with unchanged inputs", async () => {
+  it("returns the same override on repeated calls with unchanged inputs", async () => {
     const { handler } = makeSetup();
-    await handler.handle(makeEvent(), makeCtx());
-    const result = await handler.handle(makeEvent(), makeCtx());
-    expect(result).toEqual({});
+    const first = await handler.handle(makeEvent(), makeCtx());
+    const second = await handler.handle(makeEvent(), makeCtx());
+    expect(second.systemPrompt).toBe(first.systemPrompt);
   });
 
   it("stores resolved skill entries on the session", async () => {
@@ -244,15 +260,30 @@ describe("AgentPrepHandler.handle", () => {
     expect(result).toHaveProperty("systemPrompt");
   });
 
-  it("returns empty object when systemPrompt is unchanged", async () => {
+  it("states the session's tools for a prompt that carries no tool surface", async () => {
+    // A subagent child's inherited identity has none: its parent's node already
+    // relocated the surface out of the region the child copies (#890).
     const prompt = "No tools section here.";
-    const { handler } = makeSetup();
-    const result = await handler.handle(makeEvent(prompt), makeCtx());
-    expect(result).toEqual({});
+    const { handler } = makeSetup({
+      toolRegistry: { getActive: vi.fn().mockReturnValue(["read"]) },
+    });
+
+    const result = await handler.handle(
+      makeEvent(prompt, { toolSnippets: { read: "Read file contents" } }),
+      makeCtx(),
+    );
+
+    expect(result.systemPrompt).toContain(
+      "Available tools:\n- read: Read file contents",
+    );
+    expect(result.systemPrompt?.startsWith(prompt)).toBe(true);
   });
 
-  it("narrows a denied tool out of the Available tools listing without removing the section", async () => {
+  it("states the allowed tools instead of editing the listing Pi wrote", async () => {
+    const identity = "You are an assistant.";
     const systemPrompt = [
+      identity,
+      "",
       "Available tools:",
       "- read: Read file contents",
       "- bash: Run shell commands",
@@ -266,16 +297,39 @@ describe("AgentPrepHandler.handle", () => {
       (tool) => tool === "bash",
     );
 
-    const result = await handler.handle(makeEvent(systemPrompt), makeCtx());
+    const result = await handler.handle(
+      makeEvent(systemPrompt, {
+        toolSnippets: {
+          read: "Read file contents",
+          bash: "Run shell commands",
+        },
+      }),
+      makeCtx(),
+    );
 
-    expect(result.systemPrompt).toBeDefined();
     const out = result.systemPrompt ?? "";
-    expect(out).toContain("Available tools:");
-    expect(out).toContain("- read: Read file contents");
+    // The identity Pi wrote is left alone; the surface is restated after it.
+    expect(out.startsWith(identity)).toBe(true);
+    expect(out).toContain("Available tools:\n- read: Read file contents");
     expect(out).not.toContain("- bash");
   });
 
-  it("keeps the wire system prompt byte-stable across the tool-listing drift between turns", async () => {
+  it("carries the registry's guidelines for allowed tools and drops a denied tool's", async () => {
+    // The whole path: toolRegistry.getAll() -> readRegisteredTools ->
+    // guidelinesByTool -> renderToolSurface. The unit tests cover each hop; this
+    // pins that the handler actually connects them.
+    const { handler, permissionManager } = makeSetup();
+    vi.mocked(permissionManager.isToolFullyDenied).mockImplementation(
+      (tool) => tool === "bash",
+    );
+
+    const result = await handler.handle(makeEvent(), makeCtx());
+
+    expect(result.systemPrompt).toContain("- Use read to examine files.");
+    expect(result.systemPrompt).not.toContain("Use bash for file operations.");
+  });
+
+  it("keeps the wire system prompt stable across the tool-listing drift between turns", async () => {
     const fullProse = [
       "You are an assistant.",
       "",
@@ -283,11 +337,9 @@ describe("AgentPrepHandler.handle", () => {
       "- bash: Run shell commands",
       "- read: Read file contents",
       "- edit: Edit a file",
-      "- write: Write a file",
       "",
       "Guidelines:",
-      "- use bash for file operations like ls, rg, find",
-      "- use read to examine files instead of cat or sed.",
+      "- Use bash for file operations like ls, rg, find",
       "- Be concise in your responses",
     ].join("\n");
     const narrowedProse = [
@@ -296,15 +348,18 @@ describe("AgentPrepHandler.handle", () => {
       "Available tools:",
       "- read: Read file contents",
       "- edit: Edit a file",
-      "- write: Write a file",
       "",
       "Guidelines:",
-      "- use read to examine files instead of cat or sed.",
       "- Be concise in your responses",
     ].join("\n");
+    const snippets = {
+      bash: "Run shell commands",
+      read: "Read file contents",
+      edit: "Edit a file",
+    };
     const { handler, permissionManager } = makeSetup({
       toolRegistry: {
-        getActive: vi.fn().mockReturnValue(["bash", "read", "edit", "write"]),
+        getActive: vi.fn().mockReturnValue(["bash", "read", "edit"]),
       },
     });
     vi.mocked(permissionManager.isToolFullyDenied).mockImplementation(
@@ -312,14 +367,163 @@ describe("AgentPrepHandler.handle", () => {
     );
 
     // Turn 1: Pi feeds the full default listing.
-    const first = await handler.handle(makeEvent(fullProse), makeCtx());
+    const first = await handler.handle(
+      makeEvent(fullProse, { toolSnippets: snippets }),
+      makeCtx(),
+    );
     // Turn 2: Pi's setActive rebuild means the event now carries the narrowed
     // listing, so the override the handler returns must still match turn 1.
-    const second = await handler.handle(makeEvent(narrowedProse), makeCtx());
+    const second = await handler.handle(
+      makeEvent(narrowedProse, { toolSnippets: snippets }),
+      makeCtx(),
+    );
 
-    const wire1 = first.systemPrompt ?? fullProse;
-    const wire2 = second.systemPrompt ?? narrowedProse;
-    expect(wire1).toBe(narrowedProse);
-    expect(wire2).toBe(narrowedProse);
+    expect(second.systemPrompt).toBe(first.systemPrompt);
+    expect(first.systemPrompt).toBe(
+      [
+        "You are an assistant.",
+        "",
+        "Available tools:",
+        "- read: Read file contents",
+        "- edit: Edit a file",
+        "",
+        "Guidelines:",
+        "- Use read to examine files.",
+        "- Be concise in your responses",
+        "- Show file paths clearly when working with files",
+      ].join("\n"),
+    );
+  });
+
+  describe("policy changes across turns", () => {
+    const PI_DEFAULTS = ["read", "bash", "edit", "write"];
+    const LAUNCHED_WITH = [...PI_DEFAULTS, "ls", "find", "grep"];
+
+    function denyOnly(deniedTool: string) {
+      return (toolName: string) => toolName === deniedTool;
+    }
+
+    it("restores a tool after its deny rule is removed, without a restart", async () => {
+      const registry = makeStatefulToolRegistry({ active: LAUNCHED_WITH });
+      const { handler, permissionManager } = makeSetup({ registry });
+
+      await handler.handle(makeEvent(), makeCtx());
+      expect(registry.getActive()).toEqual(LAUNCHED_WITH);
+
+      vi.mocked(permissionManager.isToolFullyDenied).mockImplementation(
+        denyOnly("ls"),
+      );
+      await handler.handle(makeEvent(), makeCtx());
+      expect(registry.getActive()).toEqual([
+        "read",
+        "bash",
+        "edit",
+        "write",
+        "find",
+        "grep",
+      ]);
+
+      vi.mocked(permissionManager.isToolFullyDenied).mockReturnValue(false);
+      await handler.handle(makeEvent(), makeCtx());
+      expect(registry.getActive()).toEqual(LAUNCHED_WITH);
+    });
+
+    it("keeps a tool withheld for as long as its deny rule stands", async () => {
+      const registry = makeStatefulToolRegistry({ active: LAUNCHED_WITH });
+      const { handler, permissionManager } = makeSetup({ registry });
+      vi.mocked(permissionManager.isToolFullyDenied).mockImplementation(
+        denyOnly("ls"),
+      );
+
+      await handler.handle(makeEvent(), makeCtx());
+      await handler.handle(makeEvent(), makeCtx());
+      await handler.handle(makeEvent(), makeCtx());
+
+      expect(registry.getActive()).not.toContain("ls");
+    });
+
+    it("does not reactivate a withheld tool that pi unregistered and re-registered", async () => {
+      const registry = makeStatefulToolRegistry({ active: LAUNCHED_WITH });
+      const { handler, permissionManager } = makeSetup({ registry });
+      vi.mocked(permissionManager.isToolFullyDenied).mockImplementation(
+        denyOnly("ls"),
+      );
+
+      await handler.handle(makeEvent(), makeCtx());
+      registry.unregister("ls");
+      await handler.handle(makeEvent(), makeCtx());
+      registry.register("ls");
+      vi.mocked(permissionManager.isToolFullyDenied).mockReturnValue(false);
+      await handler.handle(makeEvent(), makeCtx());
+
+      expect(registry.getActive()).not.toContain("ls");
+    });
+
+    it("records the withheld tools on the debug stream when the surface changes", async () => {
+      const registry = makeStatefulToolRegistry({ active: LAUNCHED_WITH });
+      const { handler, permissionManager, logger } = makeSetup({ registry });
+      vi.mocked(permissionManager.isToolFullyDenied).mockImplementation(
+        denyOnly("ls"),
+      );
+
+      await handler.handle(makeEvent(), makeCtx());
+
+      expect(logger.debug).toHaveBeenCalledWith("tool_surface.changed", {
+        exposed: ["read", "bash", "edit", "write", "find", "grep"],
+        withheld: ["ls"],
+        restored: [],
+      });
+    });
+
+    it("records the restored tools when a rule is relaxed", async () => {
+      const registry = makeStatefulToolRegistry({ active: LAUNCHED_WITH });
+      const { handler, permissionManager, logger } = makeSetup({ registry });
+      vi.mocked(permissionManager.isToolFullyDenied).mockImplementation(
+        denyOnly("ls"),
+      );
+      await handler.handle(makeEvent(), makeCtx());
+      vi.mocked(logger.debug).mockClear();
+
+      vi.mocked(permissionManager.isToolFullyDenied).mockReturnValue(false);
+      await handler.handle(makeEvent(), makeCtx());
+
+      expect(logger.debug).toHaveBeenCalledWith("tool_surface.changed", {
+        exposed: LAUNCHED_WITH,
+        withheld: [],
+        restored: ["ls"],
+      });
+    });
+
+    it("stays quiet while the surface is unchanged", async () => {
+      const registry = makeStatefulToolRegistry({ active: LAUNCHED_WITH });
+      const { handler, permissionManager, logger } = makeSetup({ registry });
+      vi.mocked(permissionManager.isToolFullyDenied).mockImplementation(
+        denyOnly("ls"),
+      );
+      await handler.handle(makeEvent(), makeCtx());
+      vi.mocked(logger.debug).mockClear();
+
+      await handler.handle(makeEvent(), makeCtx());
+      await handler.handle(makeEvent(), makeCtx());
+
+      expect(logger.debug).not.toHaveBeenCalled();
+    });
+
+    it("does not activate a registered tool pi left inactive when the policy relaxes", async () => {
+      const registry = makeStatefulToolRegistry({
+        active: PI_DEFAULTS,
+        registered: LAUNCHED_WITH,
+      });
+      const { handler, permissionManager } = makeSetup({ registry });
+      vi.mocked(permissionManager.isToolFullyDenied).mockImplementation(
+        denyOnly("bash"),
+      );
+
+      await handler.handle(makeEvent(), makeCtx());
+      vi.mocked(permissionManager.isToolFullyDenied).mockReturnValue(false);
+      await handler.handle(makeEvent(), makeCtx());
+
+      expect(registry.getActive()).toEqual(PI_DEFAULTS);
+    });
   });
 });

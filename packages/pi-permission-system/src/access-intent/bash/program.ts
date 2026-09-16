@@ -1,3 +1,4 @@
+import type { PathNormalizer } from "#src/path/path-normalizer";
 import {
   type BashExternalPath,
   BashPathResolver,
@@ -9,7 +10,6 @@ import {
   type ParseProgram,
 } from "#src/access-intent/bash/command-enumeration";
 import { getParser, type TSNode } from "#src/access-intent/bash/parser";
-import type { PathNormalizer } from "#src/path-normalizer";
 
 export type { BashCommand, BashExternalPath, BashPathRuleCandidate };
 

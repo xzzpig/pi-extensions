@@ -2,16 +2,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AccessIntent } from "#src/access-intent/access-intent";
 import { AuthorizerRegistry } from "#src/authority/authorizer-registry";
 import { posixPathFlavor } from "#src/path/path-flavor";
-import { PathNormalizer } from "#src/path-normalizer";
-import { LocalPermissionsService } from "#src/permissions-service";
+import { PathNormalizer } from "#src/path/path-normalizer";
 import type { PermissionsService } from "#src/service";
 import {
   getPermissionsService,
   publishPermissionsService,
   unpublishPermissionsService,
 } from "#src/service";
-import { ToolAccessExtractorRegistry } from "#src/tool-access-extractor-registry";
-import { ToolInputFormatterRegistry } from "#src/tool-input-formatter-registry";
+import { LocalPermissionsService } from "#src/service/permissions-service";
+import { ToolAccessExtractorRegistry } from "#src/tool-input/tool-access-extractor-registry";
+import { ToolInputFormatterRegistry } from "#src/tool-input/tool-input-formatter-registry";
 import type { PermissionCheckResult, PermissionState } from "#src/types";
 import { makeFakePermissionsService } from "#test/helpers/service-fixtures";
 

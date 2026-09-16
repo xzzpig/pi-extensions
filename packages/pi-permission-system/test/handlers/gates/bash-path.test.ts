@@ -20,8 +20,8 @@ import type {
 import { isGateBypass, isGateDescriptor } from "#src/handlers/gates/descriptor";
 import type { ToolCallContext } from "#src/handlers/gates/types";
 import { pathFlavorForPlatform, posixPathFlavor } from "#src/path/path-flavor";
-import { PathNormalizer } from "#src/path-normalizer";
-import type { ScopedPermissionResolver } from "#src/permission-resolver";
+import { PathNormalizer } from "#src/path/path-normalizer";
+import type { ScopedPermissionResolver } from "#src/policy/permission-resolver";
 import { getNonEmptyString, toRecord } from "#src/value-guards";
 
 import {

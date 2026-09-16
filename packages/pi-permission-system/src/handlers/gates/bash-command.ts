@@ -3,8 +3,8 @@ import type {
   WrapperKind,
 } from "#src/access-intent/bash/command-enumeration";
 import type { WrapperFloors } from "#src/types";
-import type { ScopedPermissionResolver } from "#src/permission-resolver";
-import { pickMostRestrictive } from "#src/restrictiveness";
+import type { ScopedPermissionResolver } from "#src/policy/permission-resolver";
+import { pickMostRestrictive } from "#src/policy/restrictiveness";
 import type { PermissionCheckResult } from "#src/types";
 
 /**

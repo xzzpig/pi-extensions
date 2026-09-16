@@ -8,30 +8,27 @@
 import { vi } from "vitest";
 import { surfaceFamilyOf } from "#src/access-intent/path-surfaces";
 import type { AskEscalator } from "#src/authority/authorizer-selection";
-import { GateDecisionReporter } from "#src/decision-reporter";
 import { GateRunner } from "#src/handlers/gates/runner";
 import { SkillInputGatePipeline } from "#src/handlers/gates/skill-input-gate-pipeline";
 import { ToolCallGatePipeline } from "#src/handlers/gates/tool-call-gate-pipeline";
 import { PermissionGateHandler } from "#src/handlers/permission-gate-handler";
-import type { ScopedPermissionManager } from "#src/permission-manager";
-import type { SessionLogger } from "#src/session-logger";
+import { GateDecisionReporter } from "#src/logging/decision-reporter";
+import type { SessionLogger } from "#src/logging/session-logger";
+import type { ScopedPermissionManager } from "#src/policy/permission-manager";
+import { wildcardMatch } from "#src/policy/wildcard-matcher";
 import type { PermissionCheckResult, PermissionState } from "#src/types";
-import { wildcardMatch } from "#src/wildcard-matcher";
 import {
   DECIDED_BY_ABSENT_AUTHORITY,
   DECIDED_BY_HUMAN,
-} from "#test/helpers/decision-fixtures";
+} from "./decision-fixtures";
 
 import {
   getDecisionEvents,
   makeEvents,
   makeSurfaceCheck,
   makeToolRegistry,
-} from "#test/helpers/handler-fixtures";
-import {
-  makeRealResolver,
-  makeRealSession,
-} from "#test/helpers/session-fixtures";
+} from "./handler-fixtures";
+import { makeRealResolver, makeRealSession } from "./session-fixtures";
 
 // ── Shared constants ───────────────────────────────────────────────────────
 

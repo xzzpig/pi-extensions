@@ -13,7 +13,7 @@ import {
   emitForwardedDecisionEvent,
   type PermissionEventBus,
   type PermissionForwardedDecisionResolution,
-} from "#src/permission-events";
+} from "#src/service/permission-events";
 import {
   type ForwardedAccessFacts,
   type ForwardedAccessIntent,
@@ -23,12 +23,11 @@ import {
   type PermissionForwardingLocation,
 } from "#src/authority/permission-forwarding";
 import type { SubagentSessionRegistry } from "#src/authority/subagent-registry";
-import type { DecisionBroadcaster } from "#src/decision-reporter";
-import type { PermissionDecisionEvent } from "#src/permission-events";
+import type { DecisionBroadcaster } from "#src/logging/decision-reporter";
 import { buildForwardedAskPayload } from "#src/presentation/forwarded-ask-payload";
-import { SessionApproval } from "#src/session-approval";
-import type { SessionApprovalRecorder } from "#src/session-approval-recorder";
-import type { DebugReviewLogger } from "#src/session-logger";
+import type { PermissionDecisionEvent } from "#src/service/permission-events";
+import { SessionApproval } from "#src/session/session-approval";
+import type { SessionApprovalRecorder } from "#src/session/session-approval-recorder";
 import type { PermissionCheckResult } from "#src/types";
 import type { AskEscalator } from "./authorizer-selection";
 import {
@@ -44,6 +43,7 @@ import {
   writeJsonFileAtomic,
 } from "./forwarding-io";
 import type { PromptPermissionDetails } from "./permission-prompter";
+import type { DebugReviewLogger } from "#src/logging/session-logger";
 
 /**
  * Narrow seam describing what `ForwardingManager` needs from the server: a
