@@ -118,12 +118,14 @@ describe.if(isLinux)('network.disabled on Linux', () => {
     await SandboxManager.initialize(configWith(true))
 
     // Global init skipped the proxies, so a per-call override that omits
-    // `disabled` re-applies namespace isolation (hard-blocked network —
-    // documented limitation; use reset()+initialize() to toggle globally).
-    const wrapped = await SandboxManager.wrapWithSandbox('echo hi', undefined, {
-      network: { allowedDomains: ['example.com'], deniedDomains: [] },
-    })
-    expect(wrapped).toContain('--unshare-net')
+    // `disabled` asks for restriction while no proxy exists. The runtime
+    // fails closed here (upstream v0.0.72) instead of emitting a silently
+    // hard-blocked command; toggle globally with reset() + initialize().
+    expect(
+      SandboxManager.wrapWithSandbox('echo hi', undefined, {
+        network: { allowedDomains: ['example.com'], deniedDomains: [] },
+      }),
+    ).rejects.toThrow('Sandbox network proxy is not initialized')
   })
 })
 

@@ -30,6 +30,7 @@ import {
   cleanupBwrapMountPoints,
 } from '../../src/sandbox/linux-sandbox-utils.js'
 import { getDangerousDirectories } from '../../src/sandbox/sandbox-utils.js'
+import { createSandboxManager } from '../../src/sandbox/sandbox-manager.js'
 import { isLinux, isSupportedPlatform } from '../helpers/platform.js'
 
 /**
@@ -570,6 +571,7 @@ describe.if(isSupportedPlatform)(
         // stops applying inside the still-running sandbox.
 
         it('defers mount point cleanup while another sandbox is still running', async () => {
+          const otherManager = createSandboxManager()
           const raceDir = join(TEST_DIR, 'race-test')
           mkdirSync(raceDir, { recursive: true })
           mkdirSync(join(raceDir, '.claude'), { recursive: true })
@@ -578,6 +580,10 @@ describe.if(isSupportedPlatform)(
           process.chdir(raceDir)
 
           try {
+            await otherManager.initialize({
+              network: { allowedDomains: [], deniedDomains: [] },
+              filesystem: { denyRead: [], allowWrite: [], denyWrite: [] },
+            })
             const protectedFile = join(raceDir, '.claude', 'settings.json')
             const writeConfig = {
               allowOnly: ['.'],
@@ -626,8 +632,12 @@ describe.if(isSupportedPlatform)(
             // Without deferral, this would delete sandbox A's mount point too.
             cleanupBwrapMountPoints()
 
+            // Tearing down another manager must not complete sandbox A's command.
+            await otherManager.reset()
+            expect(existsSync(protectedFile)).toBe(true)
+
             // Wait for sandbox A to attempt its write
-            await exitA
+            expect(await exitA).not.toBe(0)
 
             // The deny rule must have held — the file should not contain the
             // write from sandbox A. If cleanup had deleted the mount point
@@ -640,6 +650,7 @@ describe.if(isSupportedPlatform)(
 
             cleanupBwrapMountPoints()
           } finally {
+            await otherManager.reset()
             process.chdir(originalDir)
             rmSync(raceDir, { recursive: true, force: true })
           }
