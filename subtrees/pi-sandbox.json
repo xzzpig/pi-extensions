@@ -4,10 +4,10 @@
   "prefix": "packages/pi-sandbox",
   "source": "https://github.com/carderne/pi-sandbox.git",
   "remote": "upstream-pi-sandbox",
-  "ref": "v0.6.6",
-  "version": "0.6.6",
-  "upstreamCommit": "d76ad64a42532f83639f934019aabdeb8c20f4fa",
+  "ref": "v0.6.8",
+  "version": "0.6.8",
+  "upstreamCommit": "31fa5060689624467c1aeace2664ce91784522ff",
   "squash": true,
-  "lastSyncedAt": "2026-09-05T00:34:37+08:00",
-  "notes": "Forked from carderne/pi-sandbox; local fork adds optional pi-tool-display bash rendering decoration with graceful fallback to built-in rendering when pi-tool-display is absent."
+  "lastSyncedAt": "2026-09-17T03:30:00+08:00",
+  "notes": "Forked from carderne/pi-sandbox; local fork adds optional pi-tool-display bash rendering decoration with graceful fallback to built-in rendering when pi-tool-display is absent, named sandbox profiles for subagents, the per-session SandboxService profile layer, network.disabled, and protectNonexistentFiles passthrough. v0.6.8 sync adopted upstream's per-session sandbox managers (#84: createSandboxManager per registration instead of the process-wide singleton, manager threaded through initializeSandbox/updateSandboxConfig/createSandboxedBashOps) and hot config updates (#83: updateConfig instead of reset+initialize, preserving in-flight proxy connections); the fork's sandboxManagerFactory seam in src/sandbox-runtime.ts lets tests substitute a stub manager, and fork tests that monkey-patched the old singleton were adapted to the factory. Upstream removed createNetworkAskCallback (stale init-time allowlist could re-allow removed domains); pi-sandbox's interactive promptDomainBlock flow is unaffected. Re-apply the factory seam, tool-display decoration, profile layer, network.disabled, and protectNonexistentFiles on each future sync."
 }

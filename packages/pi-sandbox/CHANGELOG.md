@@ -5,6 +5,28 @@ This fork tracks [`carderne/pi-sandbox`](https://github.com/carderne/pi-sandbox)
 via git subtree; entries below describe only fork-specific deviations from
 upstream.
 
+## 0.6.1
+
+### Changed
+
+- **Synced upstream 0.6.6 → 0.6.8**, adopting two upstream releases:
+  `fix: preserve active proxy connections during permission updates (#83)` —
+  session-level updates now hot-apply through `updateConfig()` (network rules
+  apply immediately, new commands pick up filesystem rules when wrapped)
+  instead of `reset()` + `initialize()`, so a permission or profile change no
+  longer tears down the proxy mid-command — and `fix: isolate sandbox managers
+  between agent sessions (#84)` — the extension owns one per-registration
+  `createSandboxManager()` instead of the process-wide singleton, threaded
+  through `initializeSandbox(manager, …)` / `updateSandboxConfig(manager, …)` /
+  `createSandboxedBashOps(manager, …)`. The fork's session profile service,
+  named profiles, `network.disabled`, and `protectNonexistentFiles` behavior
+  are preserved on top of the manager-based architecture.
+- **Domain checks now follow the runtime's live allowlist.** Upstream removed
+  the `createNetworkAskCallback` capture because an init-time snapshot could
+  re-allow a domain removed by a later update; the runtime now decides against
+  its current allowlist. The fork's interactive `/sandbox-allow` prompt flow
+  and profile fail-closed reporting are unchanged.
+
 ## 0.6.0
 
 ### Added
