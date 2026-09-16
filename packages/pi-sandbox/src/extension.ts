@@ -12,7 +12,6 @@ import {
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { Key } from "@earendil-works/pi-tui";
-import { SandboxManager } from "@xzzpig/sandbox-runtime";
 
 import {
   addDomainToConfig,
@@ -36,7 +35,8 @@ import {
   createSandboxedBashOps,
   extractBlockedWritePath,
   initializeSandbox,
-  reinitializeSandbox,
+  sandboxManagerFactory,
+  updateSandboxConfig,
   resolveAllowances,
   type SessionAllowances,
   supportsNodeEnvProxy,
@@ -66,6 +66,7 @@ import {
 } from "./ui.ts";
 
 export default function (pi: ExtensionAPI) {
+  const sandboxManager = sandboxManagerFactory.create();
   pi.registerFlag("no-sandbox", {
     description: "Disable OS-level sandboxing for bash commands",
     type: "boolean",
@@ -204,7 +205,7 @@ export default function (pi: ExtensionAPI) {
   async function refreshSandbox(cwd: string): Promise<void> {
     if (!sandboxInitialized) return;
     try {
-      await reinitializeSandbox(resolveSandboxConfig(cwd), allowances);
+      updateSandboxConfig(sandboxManager, resolveSandboxConfig(cwd), allowances);
     } catch (error) {
       recordProfileStartupFailure(error);
       if (selectedSandboxProfile) {
@@ -212,7 +213,7 @@ export default function (pi: ExtensionAPI) {
           profileBlockReason() ?? profileScopedReason("sandbox reinitialization failed."),
         );
       }
-      writeSandboxDiagnostic(`Warning: Failed to reinitialize sandbox: ${error}`);
+      writeSandboxDiagnostic(`Warning: Failed to update sandbox configuration: ${error}`);
     }
   }
 
@@ -353,7 +354,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     try {
-      await initializeSandbox(config, allowances);
+      await initializeSandbox(sandboxManager, config, allowances);
       writeProfileStartupAcknowledgement();
       if (
         setProxyEnvironment &&
@@ -401,7 +402,7 @@ export default function (pi: ExtensionAPI) {
 
     if (sandboxInitialized) {
       try {
-        await SandboxManager.reset();
+        await sandboxManager.reset();
       } catch {
         // Ignore cleanup errors.
       }
@@ -455,7 +456,11 @@ export default function (pi: ExtensionAPI) {
           );
         }
         return createBashToolDefinition(localCwd, {
-          operations: createSandboxedBashOps(userShellPath, config.network?.sshProxy !== false),
+          operations: createSandboxedBashOps(
+            sandboxManager,
+            userShellPath,
+            config.network?.sshProxy !== false,
+          ),
           shellPath: userShellPath,
         }).execute(id, params, signal, onUpdate, ctx);
       };
@@ -587,7 +592,11 @@ export default function (pi: ExtensionAPI) {
       }
     }
     return {
-      operations: createSandboxedBashOps(userShellPath, config.network?.sshProxy !== false),
+      operations: createSandboxedBashOps(
+        sandboxManager,
+        userShellPath,
+        config.network?.sshProxy !== false,
+      ),
     };
   });
 
@@ -742,7 +751,7 @@ export default function (pi: ExtensionAPI) {
     disposeSandboxService = undefined;
     if (!sandboxInitialized) return;
     try {
-      await SandboxManager.reset();
+      await sandboxManager.reset();
     } catch {
       // Ignore cleanup errors.
     }

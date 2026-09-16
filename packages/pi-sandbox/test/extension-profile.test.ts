@@ -5,10 +5,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, test } from "node:test";
 
-import { SandboxManager } from "@xzzpig/sandbox-runtime";
+import type { ISandboxManager } from "@xzzpig/sandbox-runtime";
 import assert from "node:assert/strict";
 
 import registerSandbox from "../src/extension.ts";
+import { sandboxManagerFactory } from "../src/sandbox-runtime.ts";
 
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 const originalProfile = process.env.PI_SUBAGENT_SANDBOX_PROFILE;
@@ -18,7 +19,7 @@ const originalStartupAckToken = process.env.PI_SUBAGENT_SANDBOX_STARTUP_ACK_TOKE
 const originalInProcessChild = process.env.PI_SUBAGENT_SANDBOX_IN_PROCESS_CHILD;
 const originalDiagnosticsPath = process.env.PI_SUBAGENT_SANDBOX_DIAGNOSTICS_PATH;
 const originalExitCode = process.exitCode;
-const originalInitialize = SandboxManager.initialize;
+const originalCreate = sandboxManagerFactory.create;
 const roots: string[] = [];
 
 afterEach(() => {
@@ -39,9 +40,26 @@ afterEach(() => {
     delete process.env.PI_SUBAGENT_SANDBOX_DIAGNOSTICS_PATH;
   else process.env.PI_SUBAGENT_SANDBOX_DIAGNOSTICS_PATH = originalDiagnosticsPath;
   process.exitCode = originalExitCode;
-  SandboxManager.initialize = originalInitialize;
+  sandboxManagerFactory.create = originalCreate;
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
+
+/**
+ * Substitute a stub manager for the extension's per-session sandbox manager.
+ * The runtime now creates one manager per registration (upstream #84), so
+ * patching the old singleton no longer intercepts initialization; the stub
+ * shares the real manager's methods but starts no proxies or bwrap commands.
+ */
+function makeSandboxStub(): ISandboxManager {
+  const real = originalCreate();
+  const stub: ISandboxManager = {
+    ...real,
+    initialize: async () => {},
+    updateConfig: () => {},
+  };
+  sandboxManagerFactory.create = () => stub;
+  return stub;
+}
 
 function createMockPi() {
   const handlers = new Map<string, Array<(event: unknown, ctx: ExtensionContext) => unknown>>();
@@ -111,7 +129,8 @@ test("a headless child applies a valid global profile and blocks unapproved read
   process.env.PI_SUBAGENT_SANDBOX_STARTUP_ACK_TOKEN = startupAckToken;
 
   let initializedConfig: { filesystem?: { allowRead?: string[] } } | undefined;
-  SandboxManager.initialize = async (config) => {
+  const sandboxStub = makeSandboxStub();
+  sandboxStub.initialize = async (config) => {
     initializedConfig = config;
   };
 
@@ -242,7 +261,8 @@ test("a print-mode child without an initialized theme still enables its profile"
   process.env.PI_SUBAGENT_SANDBOX_STARTUP_ACK_TOKEN = "no-theme-token";
 
   let initialized = false;
-  SandboxManager.initialize = async () => {
+  const sandboxStub = makeSandboxStub();
+  sandboxStub.initialize = async () => {
     initialized = true;
   };
 

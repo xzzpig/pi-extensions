@@ -5,16 +5,17 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, test } from "node:test";
 
-import { SandboxManager } from "@xzzpig/sandbox-runtime";
+import type { ISandboxManager } from "@xzzpig/sandbox-runtime";
 import assert from "node:assert/strict";
 
 import registerSandbox from "../src/extension.ts";
+import { sandboxManagerFactory } from "../src/sandbox-runtime.ts";
 import { getSandboxService, listGlobalSandboxProfiles } from "../src/service.ts";
 
 const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
 const originalProfile = process.env.PI_SUBAGENT_SANDBOX_PROFILE;
 const originalTrust = process.env.PI_SUBAGENT_SANDBOX_PROJECT_TRUSTED;
-const originalInitialize = SandboxManager.initialize;
+const originalCreate = sandboxManagerFactory.create;
 const originalExitCode = process.exitCode;
 const roots: string[] = [];
 
@@ -26,9 +27,26 @@ afterEach(() => {
   if (originalTrust === undefined) delete process.env.PI_SUBAGENT_SANDBOX_PROJECT_TRUSTED;
   else process.env.PI_SUBAGENT_SANDBOX_PROJECT_TRUSTED = originalTrust;
   process.exitCode = originalExitCode;
-  SandboxManager.initialize = originalInitialize;
+  sandboxManagerFactory.create = originalCreate;
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
+
+/**
+ * Substitute a stub manager for the extension's per-session sandbox manager.
+ * The runtime now creates one manager per registration (upstream #84), so
+ * patching the old singleton no longer intercepts initialization; the stub
+ * shares the real manager's methods but starts no proxies or bwrap commands.
+ */
+function makeSandboxStub(): ISandboxManager {
+  const real = originalCreate();
+  const stub: ISandboxManager = {
+    ...real,
+    initialize: async () => {},
+    updateConfig: () => {},
+  };
+  sandboxManagerFactory.create = () => stub;
+  return stub;
+}
 
 function createMockPi() {
   const handlers = new Map<string, Array<(event: unknown, ctx: ExtensionContext) => unknown>>();
@@ -216,11 +234,11 @@ test("scopes the service per session and disposes it on shutdown", async () => {
 });
 
 test("keeps a failed profile switch fail-closed and reports it", async () => {
+  const sandboxStub = makeSandboxStub();
   const probe = createProbe({
     enabled: true,
     profiles: { strict: STRICT_PROFILE, loose: STRICT_PROFILE },
   });
-  SandboxManager.initialize = async () => {};
   await startSession(probe.handlers, probe.ctx);
   const service = getSandboxService(probe.sessionId);
   assert.ok(service, "session_start must publish the sandbox service");
@@ -232,7 +250,7 @@ test("keeps a failed profile switch fail-closed and reports it", async () => {
   // The sandbox stops coming up: the requested profile cannot be applied, so
   // the switch must report failure and leave the session on what it was
   // actually running rather than claiming a policy that is not in force.
-  SandboxManager.initialize = async () => {
+  sandboxStub.updateConfig = () => {
     throw new Error("bwrap is unavailable");
   };
   const failed = await service.setProfile("loose");
@@ -252,13 +270,13 @@ test("keeps a failed profile switch fail-closed and reports it", async () => {
 
 test("re-renders the status line from the selected profile's effective config", async () => {
   const statuses: Array<string | undefined> = [];
+  makeSandboxStub();
   const probe = createProbe({
     enabled: true,
     mode: "tui",
     statuses,
     profiles: { strict: STRICT_PROFILE, loose: STRICT_PROFILE },
   });
-  SandboxManager.initialize = async () => {};
   await startSession(probe.handlers, probe.ctx);
   const service = getSandboxService(probe.sessionId);
   assert.ok(service);
