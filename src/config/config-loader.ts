@@ -16,6 +16,7 @@ import {
   type UnifiedPermissionConfig,
   unifiedConfigSchema,
 } from "./config-schema";
+import { type DialogKeysConfig, resolveDialogKeys } from "./dialog-keys";
 
 // The unified config shape is derived from the zod schema (config-schema.ts,
 // the single source of truth) and re-exported so existing importers keep their
@@ -196,6 +197,7 @@ function formatConfigIssues(error: ZodError): string[] {
  *   present in the override.
  * - Array fields (piInfrastructureReadPaths) replace the base when present in
  *   the override (override-wins, same as scalars).
+ * - `permissionDialogKeys` replaces the base map whole, unlike `shellTools`.
  */
 // Scalar knobs merged by override-replaces-base; keep in sync with
 // PermissionSystemExtensionConfig booleans (debugLog, permissionReviewLog,
@@ -240,6 +242,16 @@ export function mergeUnifiedConfigs(
     if (value !== undefined) {
       merged[key] = value;
     }
+  }
+
+  // permissionDialogKeys: whole-object replacement. A key map is validated as
+  // a unit, so merging two individually valid maps could bind one character to
+  // two decisions with neither file's own validation able to see it. Dropping a
+  // base entry only restores a default letter, which is why this does not need
+  // the shellTools rule below.
+  const dialogKeys = override.permissionDialogKeys ?? base.permissionDialogKeys;
+  if (dialogKeys !== undefined) {
+    merged.permissionDialogKeys = dialogKeys;
   }
 
   // shellTools: shallow-merge by tool name so a project entry overrides a
@@ -378,6 +390,9 @@ export function loadAndMergeConfigs(
   const deprecatedCapsIssue = detectDeprecatedPreviewCaps(merged);
   if (deprecatedCapsIssue) allIssues.push(deprecatedCapsIssue);
 
+  const dialogKeysIssue = detectUnusableDialogKeys(merged);
+  if (dialogKeysIssue) allIssues.push(dialogKeysIssue);
+
   return {
     global: globalConfig,
     project: projectConfig,
@@ -443,6 +458,30 @@ export function detectDeprecatedPreviewCaps(
     "which is deprecated and ignored. The prompt is bounded by " +
     "'promptMaxRows' and 'promptFieldMaxWidth' instead; remove the setting."
   );
+}
+
+/**
+ * Detect a `permissionDialogKeys` entry the dialog cannot honor.
+ *
+ * Deliberately a warning rather than a fail-closed rejection: a mistyped hotkey
+ * is cosmetic, and clamping the session's `allow` rules to `ask` over one would
+ * make a display preference a policy event. The decision keeps its default
+ * letter, and the message names the entry, the reason, and the letter kept.
+ *
+ * Where that message surfaces is the caller's problem and is currently a narrow
+ * one: `ConfigStore` dedupes against a warning recorded by a factory-time
+ * refresh with no ctx to notify, so an issue already on disk reaches the debug
+ * log alone. That predates this detector and swallows its two siblings the same
+ * way (#933).
+ *
+ * Pure, following {@link detectPermissiveBashFallback}: it takes the merged
+ * config and returns a message; the caller owns pushing it onto the issue list.
+ */
+export function detectUnusableDialogKeys(
+  config: DialogKeysConfig,
+): string | undefined {
+  const { issues } = resolveDialogKeys(config);
+  return issues.length === 0 ? undefined : issues.join(" ");
 }
 
 /**

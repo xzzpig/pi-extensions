@@ -207,6 +207,18 @@ describe("normalizePermissionSystemConfig", () => {
     const result = normalizePermissionSystemConfig({});
     expect("authorizerChain" in result).toBe(false);
   });
+
+  it("includes permissionDialogKeys when provided", () => {
+    const result = normalizePermissionSystemConfig({
+      permissionDialogKeys: { approve: "1", deny: "4" },
+    });
+    expect(result.permissionDialogKeys).toEqual({ approve: "1", deny: "4" });
+  });
+
+  it("omits permissionDialogKeys when absent", () => {
+    const result = normalizePermissionSystemConfig({});
+    expect("permissionDialogKeys" in result).toBe(false);
+  });
 });
 
 describe("ensurePermissionSystemLogsDirectory", () => {

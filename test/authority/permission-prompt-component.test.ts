@@ -10,6 +10,7 @@ import {
   presentInlinePermissionPrompt,
   requestPermissionDecision,
 } from "#src/authority/permission-prompt-component";
+import { DEFAULT_DIALOG_KEYS } from "#src/config/dialog-keys";
 import { DEFAULT_RENDER_BUDGET } from "#src/presentation/dialog-renderer";
 import type { PromptPayload } from "#src/presentation/prompt-payload";
 import { makePromptPayload } from "#test/helpers/prompt-details-fixtures";
@@ -47,6 +48,7 @@ function makeFakeView(
   doublePressToConfirm: boolean,
   expandKey = CTRL_O,
   budget = DEFAULT_RENDER_BUDGET,
+  dialogKeys = DEFAULT_DIALOG_KEYS,
 ) {
   const captured: {
     component?: CapturedComponent;
@@ -85,6 +87,7 @@ function makeFakeView(
       setToolsExpanded,
     },
     budget,
+    dialogKeys,
   );
   return { view, captured, getToolsExpanded, setToolsExpanded };
 }
@@ -101,11 +104,12 @@ function makeView(
   doublePressToConfirm: boolean,
   ui: unknown,
   budget = DEFAULT_RENDER_BUDGET,
+  dialogKeys = DEFAULT_DIALOG_KEYS,
 ): PermissionPromptView {
   return {
     mode,
     ui: ui as PermissionPromptUi,
-    ...makePromptPreferences({ doublePressToConfirm, budget }),
+    ...makePromptPreferences({ doublePressToConfirm, budget, dialogKeys }),
   };
 }
 
@@ -230,6 +234,66 @@ describe("presentInlinePermissionPrompt", () => {
         approved: false,
         state: "denied",
       });
+    });
+  });
+
+  describe("configured hotkey bindings", () => {
+    const DIGITS = {
+      approve: "1",
+      approveSession: "2",
+      approveSessionBoth: "3",
+      deny: "4",
+      denyWithReason: "5",
+    } as const;
+    /** Approve and deny traded, so a character alone cannot predict the outcome. */
+    const SWAPPED = {
+      ...DEFAULT_DIALOG_KEYS,
+      approve: "n",
+      deny: "y",
+    } as const;
+
+    it("renders each decision row with its configured binding", () => {
+      const { view, captured } = makeFakeView(
+        true,
+        CTRL_O,
+        DEFAULT_RENDER_BUDGET,
+        DIGITS,
+      );
+      void presentInlinePermissionPrompt(view, "Permission Required", ASK);
+      expect(decisionOptionKeys(captured)).toEqual(["1", "2", "4", "5"]);
+    });
+
+    it("commits the decision whose configured binding was pressed", async () => {
+      const { view, captured } = makeFakeView(
+        true,
+        CTRL_O,
+        DEFAULT_RENDER_BUDGET,
+        DIGITS,
+      );
+      const promise = presentInlinePermissionPrompt(
+        view,
+        "Permission Required",
+        ASK,
+      );
+      captured.component?.handleInput("4");
+      captured.component?.handleInput("4");
+      expect(await promise).toEqual({ approved: false, state: "denied" });
+    });
+
+    it("routes a keystroke by the action it is bound to, not by its letter", async () => {
+      const { view, captured } = makeFakeView(
+        false,
+        CTRL_O,
+        DEFAULT_RENDER_BUDGET,
+        SWAPPED,
+      );
+      const promise = presentInlinePermissionPrompt(
+        view,
+        "Permission Required",
+        ASK,
+      );
+      captured.component?.handleInput("y");
+      expect(await promise).toEqual({ approved: false, state: "denied" });
     });
   });
 

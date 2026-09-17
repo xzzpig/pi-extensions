@@ -36,6 +36,7 @@ import { getSubagentSessionRegistry } from "#src/authority/subagent-registry";
 import { registerPermissionSystemCommand } from "#src/config/config-modal";
 import { getGlobalConfigPath } from "#src/config/config-paths";
 import { ConfigStore } from "#src/config/config-store";
+import { resolveDialogKeys } from "#src/config/dialog-keys";
 import { isYoloModeEnabled } from "#src/config/extension-config";
 import { computeExtensionPaths } from "#src/config/extension-paths";
 import { GateRunner } from "#src/handlers/gates/runner";
@@ -150,6 +151,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     getPromptPreferences: () => ({
       doublePressToConfirm: configStore.current().doublePressToConfirm,
       budget: resolveRenderBudget(configStore.current()),
+      dialogKeys: resolveDialogKeys(configStore.current()).keys,
     }),
     requestPermissionDecision,
     forwardingDir: paths.forwardingDir,

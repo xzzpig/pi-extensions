@@ -9,6 +9,7 @@ import type {
   ShellToolsConfig,
   UnifiedPermissionConfig,
 } from "./config-loader";
+import type { DialogKeyOverrides } from "./dialog-keys";
 
 export const EXTENSION_ID = "pi-permission-system";
 
@@ -28,6 +29,8 @@ export interface PermissionSystemExtensionConfig {
   promptFieldMaxWidth?: number;
   /** Max characters of any one value written to the permission review log. Defaults to 1000. */
   reviewLogFieldMaxWidth?: number;
+  /** The inline dialog's hotkey bindings, as configured; resolved at prompt time. */
+  permissionDialogKeys?: DialogKeyOverrides;
   /** Non-bash tools that carry shell semantics, keyed by tool name. */
   shellTools?: ShellToolsConfig;
   /** Ordered names of registered live-authority chain links to consult before the terminal authorizer. */
@@ -91,6 +94,9 @@ export function normalizePermissionSystemConfig(
   // absent: the schema and the merge still accept them so the deprecation
   // detector can see an operator's setting, but no runtime consumer may read
   // one (ADR 0011 §5, #745).
+  if (raw.permissionDialogKeys !== undefined) {
+    result.permissionDialogKeys = raw.permissionDialogKeys;
+  }
   if (raw.shellTools !== undefined) {
     result.shellTools = raw.shellTools;
   }

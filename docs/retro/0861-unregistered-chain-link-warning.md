@@ -77,4 +77,75 @@ The plan's `**Release:** ship independently` marker stands — nothing to defer,
 No deferred work.
 The TDD stage's one reviewer WARN was fixed and re-reviewed to PASS before this sync; nothing carries forward.
 
+## Stage: Final Retrospective (2026-09-16T16:43:28Z)
+
+### Session summary
+
+Shipped #861 through the worktree lane: fast-forward-merged `issue-861-pi-permission-system-a-locally-adjudicat` into `main`, ran the pre-push gates, pushed, verified CI, closed the issue, dispatched and verified the release (`pi-permission-system-v32.0.5`), and tore down the worktree.
+The whole four-stage arc — planning, TDD, sync, ship — ran without a single operator correction, and the ship half took 36 tool calls with zero rework.
+
+### Observations
+
+#### What went well
+
+- The planning session's measurement of the defect **iterated until it was right**, and the two traps it caught are the novel part.
+  A raw `grep -c` on the review log reported 54 `authorizer_chain_unregistered_link` hits; six were the string appearing inside a logged `bash` heredoc, leaving 48 genuine events.
+  And 44 of the 48 predate the `requestId` field, so the natural `requestId`-keyed dedup under-counted them.
+  Four tool calls (planning turns 25–28) turned a plausible-looking number into a defensible one, and the 48-events-across-13-days figure is what grounded the whole gate.
+- The TDD session **substituted a planned killing mutation on a reasoned ground** rather than either skipping it or forcing it.
+  The plan named "construct the audit inside the constructor instead of injecting it"; that does not compile (`deps.logger` is a `DebugReviewLogger` with no `warn`) and at run time would crash, which `/tdd-plan` explicitly warns is not a discrimination signal.
+  It was replaced with a payload mutation (a constant `requestId` in the relayed `UnregisteredLink`), which reddened the two assertions that pin the payload.
+- `/tdd-plan`'s "a new test stayed green during Red" case fired for real and was handled as designed.
+  The relaying-node test (`does not report an unregistrable link as an unregistered one`) never went red, so Red produced no evidence it discriminates; hoisting the audit call above `linksFor`'s `adjudicatesLocally` early return reddened it alone and proved it does.
+- Every mutation cycle used the `cp <file> /tmp/green-*.ts` save/restore discipline rather than `git checkout -- <file>`, which would have discarded the step's own uncommitted green edit.
+  Six mutations across two steps, no lost work.
+- The `external_directory` permission gate caught the one bad file path in the session (see below) and named the corrected location in its denial — the exact use case ADR 0007 describes, working on the first try.
+
+#### What caused friction (agent side)
+
+- `missing-context` — the planning session hunted for the slash-command registration through five consecutive greps (`addCommand`, `registerCommand`, `pi.command`, `commands\b`, `slash`) across turns 11–15 before finding it in `src/config/config-modal.ts`.
+  The `colgrep` skill was loaded in that same session and never used, and this is precisely its case: the symbol name was unknown, which is what makes an exact-match grep a guessing game.
+  Impact: about five extra tool calls in the planning session; no rework, and the answer only fed Option C, which the operator did not choose.
+- `instruction-violation` (self-identified, gate-caught) — TDD turn 84 called `Edit` with a hand-built absolute path (`/Users/chris/development/pi-permission-system/test/...`) that omitted the worktree prefix, and `pi-permission-model-judge` denied it.
+  `AGENTS.md` says to pass file tool paths repo-relative for exactly this reason (Refs #726).
+  The session had been mixing both conventions — several earlier calls used full worktree-absolute paths successfully — so the hand-built path had precedent in the same transcript.
+  Impact: one denied tool call, corrected on the next turn.
+- `other` — the ship session drafted the close comment into `/tmp/close-861.md` with a shell heredoc, verified the five SHAs **against that file**, and then published a **retyped** copy of the body through `issue_close`, which takes a string.
+  The scratch file was never consumed by anything.
+  So the artifact that was verified and the artifact that was published were two different strings; they happened to agree, but nothing enforced that.
+  This is the `/ship` "verify the draft, not your intent to cite" rule defeated by staging the draft somewhere the publishing call does not read from.
+  Impact: one wasted tool call and a verification gap that did not bite.
+- `missing-context` (planning, surfaced by the reviewer) — the pre-completion reviewer's single WARN was a comment in `test/composition-root.test.ts` still calling the skip's loudness an open question, in the very block the change modified to pin the warning.
+  The rule that would have caught this already exists in `/plan-issue` ("a predicted-unchanged file is a falsifiable claim; an omitted one is invisible", Refs #878), and the planning grep sweep's output contained the line.
+  It was not a missing rule but an unapplied one: a sweep's *output* and a plan's *file list* are different artifacts, and nothing reconciles them.
+  Impact: one extra `docs:` commit (`docs(pi-permission-system): state the resolved skip in the boundary test comment`) after the main work, plus a second reviewer dispatch.
+
+#### What caused friction (user side)
+
+- Nothing to flag — the clarification gate was answered in one pass with three sub-decisions settled at once (report at the first ask that skips, name all three causes unbranched, latch per name), and no stage needed a correction.
+- Light opportunity: the operator's own `authorizerChain: ["model-judge"]` config and the 13-day history of the defect in their review log were the evidence that grounded the design, and neither was in the issue body.
+  An issue that ships its own measurement would save the planning session the four-call excavation — though in this case the excavation itself surfaced the two counting traps, so the cost bought something.
+
+### Diagnostic details
+
+- **Model-performance correlation** — planning and TDD ran on `anthropic/claude-opus-5`; sync and ship ran on `anthropic/claude-sonnet-5`.
+  The split matches the work: planning carried the ADR reconciliation, the cross-node design, and the mutation reasoning, while sync and ship are deterministic gate-running, merging, and dispatching.
+  No mismatch found in either direction.
+  Subagent dispatches were all in planning and TDD — `Explore` for the `ui.notify` trace in the Pi checkout, `tidy-first-assessor` for the preparatory refactor, and `pre-completion-reviewer` twice.
+  Dispatching `Explore` for the Pi-checkout trace kept a multi-hop read out of the planning session's context, as `AGENTS.md` prescribes.
+- **Escalation-delay tracking** — the slash-command hunt above ran five consecutive tool calls on the same unknown, which is at the flagging threshold.
+  A `colgrep` query would have been the cheaper first move; an `Explore` dispatch would have been overkill for a single-package question.
+  No other sequence exceeded two calls on the same error.
+- **Feedback-loop gap analysis** — no gap.
+  The TDD session established a four-gate green baseline (`check`, `lint`, `test`, `fallow dead-code`) before the first cycle, ran `pnpm run check` immediately after the step that changed a shared type (the `AuthorizerSelectionConstructorDeps` extraction), and ran the affected test file at every Red and Green.
+  Lint ran after each step rather than only at the end.
+  The ship session re-ran `lint` and `fallow dead-code` on the merged tree, which is the tree neither the peer's pre-rebase check nor CI had seen at that point.
+
+### Changes made
+
+1. `packages/pi-permission-system/docs/retro/0861-unregistered-chain-link-warning.md` — appended this Final Retrospective stage entry.
+2. `.pi/prompts/ship.md` — added one sentence to step 9, after the existing "verify the draft" rule: compose the close comment in the `issue_close` call itself rather than in a scratch file, since the tool takes a string and a staged file is verified and then retyped.
+
+Considered and rejected, all as duplicates of rules that already exist and were simply not applied: a `/plan-issue` rule reconciling a grep sweep's output against the plan's file list (Refs #878 covers it), a colgrep-before-symbol-guessing rule (`AGENTS.md` § Shell and search covers it), and a repo-relative-path reminder for worktree sessions (Refs #726 covers it, and the permission gate enforces it).
+
 [#792]: https://github.com/gotgenes/pi-packages/issues/792

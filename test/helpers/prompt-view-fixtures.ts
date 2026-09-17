@@ -9,6 +9,7 @@
  */
 
 import type { PromptPreferences } from "#src/authority/permission-prompt-component";
+import { DEFAULT_DIALOG_KEYS } from "#src/config/dialog-keys";
 import { DEFAULT_RENDER_BUDGET } from "#src/presentation/dialog-renderer";
 
 /** The live prompt preferences, override-driven. */
@@ -18,6 +19,7 @@ export function makePromptPreferences(
   return {
     doublePressToConfirm: true,
     budget: DEFAULT_RENDER_BUDGET,
+    dialogKeys: DEFAULT_DIALOG_KEYS,
     ...overrides,
   };
 }

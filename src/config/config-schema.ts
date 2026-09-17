@@ -245,6 +245,52 @@ function rejectUnusableSurfaceKeys(
   }
 }
 
+/**
+ * The inline dialog's hotkey bindings, one printable character per decision.
+ *
+ * The schema checks *shape* only — an unknown decision name or a non-string
+ * value is a load-time error like any other malformed field, because a
+ * misspelled key would otherwise sit inert with no feedback. Whether a
+ * well-formed string is a *usable* binding is `resolveDialogKeys`' question,
+ * and it answers tolerantly: an unusable, reserved, or colliding entry keeps
+ * its default letter and is reported, so a mistyped hotkey never reaches the
+ * permission policy.
+ */
+const dialogKeysSchema = z
+  .strictObject({
+    approve: z.string().optional().meta({
+      description: "Key that approves the pending call once. Default: y.",
+    }),
+    approveSession: z.string().optional().meta({
+      description: "Key that approves for the rest of the session. Default: s.",
+    }),
+    approveSessionBoth: z.string().optional().meta({
+      description:
+        "Key that approves for the session in both directions. Default: b.",
+    }),
+    deny: z.string().optional().meta({
+      description: "Key that denies the pending call. Default: n.",
+    }),
+    denyWithReason: z.string().optional().meta({
+      description: "Key that denies and opens the reason editor. Default: r.",
+    }),
+  })
+  .meta({
+    description:
+      "Remaps the inline TUI permission dialog's decision hotkeys. Each value is one printable character.",
+    markdownDescription:
+      "Remaps the inline **TUI** permission dialog's decision hotkeys, which default to `y` / `s` / `b` / `n` / `r`.\n\nEach value is a single printable character — a lowercase letter, a digit, or a symbol. Digits are the usual choice for input-method-editor (IME) users, whose composition mode swallows letter keys before they reach the terminal.\n\n`j` and `k` are reserved for moving the dialog's highlight, uppercase is rejected (pi lowercases a key identifier, so `\"Y\"` would answer to `y`), and two decisions may not share a character. An entry that breaks one of those rules is ignored with a warning and its decision keeps its default letter.\n\nA project config replaces a global one's map entirely rather than merging entry by entry.",
+    examples: [
+      {
+        approve: "1",
+        approveSession: "2",
+        approveSessionBoth: "3",
+        deny: "4",
+        denyWithReason: "5",
+      },
+    ],
+  });
+
 const shellToolAliasSchema = z
   .strictObject({
     commandArgument: z.string().min(1).meta({
@@ -322,6 +368,7 @@ export const unifiedConfigSchema = z
         "Require a confirming second press of a decision hotkey (`y`/`s`/`n`/`r`) in the inline permission dialog before it commits — the first press arms the action and shows a `Press y again to approve.` hint.\n\nApplies to interactive **TUI** sessions only; the non-TUI (RPC/frontend) prompt keeps its single-select flow. Set to `false` to commit decisions on the first hotkey press.",
       default: true,
     }),
+    permissionDialogKeys: dialogKeysSchema.optional(),
     forwardingTimeoutMs: z.number().int().min(1).optional().meta({
       description:
         "How long a subagent waits for the parent session to answer a forwarded permission request, in milliseconds. Omit to use the default (600000, ten minutes).",

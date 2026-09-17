@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [32.1.0](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v32.0.6...pi-permission-system-v32.1.0) (2026-09-16)
+
+
+### Features
+
+* **pi-permission-system:** let the permission dialog's hotkeys be remapped ([e8fa79b](https://github.com/gotgenes/pi-packages/commit/e8fa79b6a30b925441aa2afb21c13fb10ff0b133)), closes [#927](https://github.com/gotgenes/pi-packages/issues/927)
+* **pi-permission-system:** report a refused permission-dialog key binding ([6798c63](https://github.com/gotgenes/pi-packages/commit/6798c6359cee2abed5f3e1cf28f10002d22d765d)), closes [#927](https://github.com/gotgenes/pi-packages/issues/927)
+
+### Documentation
+
+* **pi-permission-system:** document permissionDialogKeys ([63d3221](https://github.com/gotgenes/pi-packages/commit/63d3221c5b3eac76843c63b4d1e81e8afde60c8f)), closes [#927](https://github.com/gotgenes/pi-packages/issues/927)
+
+## [32.0.6](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v32.0.5...pi-permission-system-v32.0.6) (2026-09-16)
+
+
+### Bug Fixes
+
+* **pi-permission-system:** stop a removed prompt section from swallowing the prose after it ([af79199](https://github.com/gotgenes/pi-packages/commit/af79199ac42e6b09587bf0cbb256435a176660ab))
+* **pi-permission-system:** keep a custom system prompt's own tool and guideline sections ([7cce96a](https://github.com/gotgenes/pi-packages/commit/7cce96af106d4822799b4728ecf1432526a79ba1))
+* **pi-permission-system:** leave an unedited prompt region byte-identical ([1f1ce66](https://github.com/gotgenes/pi-packages/commit/1f1ce669d6d19d591da1262e89b3c919300b0f75))
+
+### Documentation
+
+* **pi-permission-system:** record the tool-surface removal boundary ([ebbb8f0](https://github.com/gotgenes/pi-packages/commit/ebbb8f07c77eaa22c45b83e2d43397770dde1054))
+* **pi-permission-system:** record the footerless-prompt edge in the tool-surface pass ([2aa7435](https://github.com/gotgenes/pi-packages/commit/2aa74353864cf648f802a8a63cbe5b1b141c27af))
+
 ## [32.0.5](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v32.0.4...pi-permission-system-v32.0.5) (2026-09-16)
 
 

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   detectDeprecatedPreviewCaps,
+  detectUnusableDialogKeys,
   loadAndMergeConfigs,
   loadUnifiedConfig,
   mergeUnifiedConfigs,
@@ -666,6 +667,30 @@ describe("mergeUnifiedConfigs", () => {
     expect(merged.authorizerChain).toEqual(["kept-judge"]);
   });
 
+  // Whole-object replacement rather than the shellTools shallow merge: a
+  // key map is validated as a unit, and merging two valid maps could produce
+  // a collision neither file's own validation could see.
+  it("override permissionDialogKeys replaces the base map entirely", () => {
+    const merged = mergeUnifiedConfigs(
+      { permissionDialogKeys: { approve: "1", deny: "4" } },
+      { permissionDialogKeys: { deny: "8" } },
+    );
+    expect(merged.permissionDialogKeys).toEqual({ deny: "8" });
+  });
+
+  it("base permissionDialogKeys survives when override omits it", () => {
+    const merged = mergeUnifiedConfigs(
+      { permissionDialogKeys: { approve: "1" } },
+      { debugLog: true },
+    );
+    expect(merged.permissionDialogKeys).toEqual({ approve: "1" });
+  });
+
+  it("permissionDialogKeys is absent when both base and override omit it", () => {
+    const merged = mergeUnifiedConfigs({ debugLog: true }, { yoloMode: false });
+    expect(merged).not.toHaveProperty("permissionDialogKeys");
+  });
+
   it("base shellTools survives when override omits it", () => {
     const merged = mergeUnifiedConfigs(
       { shellTools: { exec_command: { commandArgument: "cmd" } } },
@@ -996,5 +1021,39 @@ describe("detectDeprecatedPreviewCaps", () => {
 
   it("returns undefined when neither cap is set", () => {
     expect(detectDeprecatedPreviewCaps({})).toBeUndefined();
+  });
+});
+
+// ── detectUnusableDialogKeys ───────────────────────────────────────────────
+
+describe("detectUnusableDialogKeys", () => {
+  it("returns undefined when no dialog keys are configured", () => {
+    expect(detectUnusableDialogKeys({})).toBeUndefined();
+  });
+
+  it("returns undefined when every configured binding is usable", () => {
+    expect(
+      detectUnusableDialogKeys({
+        permissionDialogKeys: { approve: "1", deny: "4" },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("names the decision, the refused character, and the default it keeps", () => {
+    const notice = detectUnusableDialogKeys({
+      permissionDialogKeys: { deny: "j" },
+    });
+    expect(notice).toBe(
+      'permissionDialogKeys.deny: "j" is reserved for moving the ' +
+        `dialog's highlight; keeping the default "n".`,
+    );
+  });
+
+  it("joins one sentence per refused binding", () => {
+    const notice = detectUnusableDialogKeys({
+      permissionDialogKeys: { approve: "A", deny: "k" },
+    });
+    expect(notice).toContain("permissionDialogKeys.approve");
+    expect(notice).toContain("permissionDialogKeys.deny");
   });
 });

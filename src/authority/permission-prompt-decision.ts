@@ -1,3 +1,4 @@
+import type { DialogKeyBindings, PromptAction } from "#src/config/dialog-keys";
 import type { SessionGrantWidth } from "#src/session/approval-grant";
 import {
   createDeniedPermissionDecision,
@@ -16,26 +17,30 @@ import {
  * forwards keystrokes to {@link reducePrompt} and renders the returned state.
  */
 
-/**
- * The decision hotkeys, in display order.
- *
- * `b` is conditional: it appears only for an ask whose session grant can be
- * widened to both directions (#813), so the roster an ask actually offers
- * comes from {@link visibleOptionKeys} rather than from this type.
- */
-export type PromptKey = "y" | "s" | "b" | "n" | "r";
-
 /** Which sub-view the dialog is showing. */
 export type PromptStep = "decision" | "reason" | "scope";
 
-const OPTION_ORDER: readonly PromptKey[] = ["y", "s", "b", "n", "r"];
+/**
+ * The decisions in display order.
+ *
+ * `approveSessionBoth` is conditional: it appears only for an ask whose session
+ * grant can be widened to both directions (#813), so the roster an ask actually
+ * offers comes from {@link visibleActions} rather than from this list.
+ */
+const OPTION_ORDER: readonly PromptAction[] = [
+  "approve",
+  "approveSession",
+  "approveSessionBoth",
+  "deny",
+  "denyWithReason",
+];
 
-const NARROW_OPTION_ORDER: readonly PromptKey[] = OPTION_ORDER.filter(
-  (key) => key !== "b",
+const NARROW_OPTION_ORDER: readonly PromptAction[] = OPTION_ORDER.filter(
+  (action) => action !== "approveSessionBoth",
 );
 
 /**
- * The decision step's option keys, in display order.
+ * The decision step's options, in display order.
  *
  * A function of the config rather than an exported constant, so which options
  * an ask offers is decided in the model and the component renders whatever it
@@ -45,24 +50,31 @@ const NARROW_OPTION_ORDER: readonly PromptKey[] = OPTION_ORDER.filter(
  * The width option is offered iff the ask supplied a label for it, so an ask
  * that proves no single direction is rendered and navigated exactly as before.
  */
-export function visibleOptionKeys(
+export function visibleActions(
   config: PromptModelConfig,
-): readonly PromptKey[] {
+): readonly PromptAction[] {
   return config.widthLabel ? OPTION_ORDER : NARROW_OPTION_ORDER;
 }
 
-const OPTION_VERBS: Record<PromptKey, string> = {
-  y: "approve",
-  s: "approve for this session",
-  b: "approve both directions for this session",
-  n: "deny",
-  r: "deny with a reason",
+const OPTION_VERBS: Record<PromptAction, string> = {
+  approve: "approve",
+  approveSession: "approve for this session",
+  approveSessionBoth: "approve both directions for this session",
+  deny: "deny",
+  denyWithReason: "deny with a reason",
 };
 
 /** Static configuration for a single prompt presentation. */
 export interface PromptModelConfig {
-  /** When true, a letter hotkey arms first and commits only on a second press. */
+  /** When true, a hotkey arms first and commits only on a second press. */
   doublePressToConfirm: boolean;
+  /**
+   * The character bound to each decision.
+   *
+   * What the dialog matches keystrokes against and what it renders, so an
+   * option's identity and the key that selects it are separate values.
+   */
+  keys: DialogKeyBindings;
   /** Label shown beside the approve-for-session option. */
   sessionLabel: string;
   /**
@@ -83,9 +95,9 @@ export interface PromptModelConfig {
 /** The re-render view state the component draws from. */
 export interface PromptViewState {
   step: PromptStep;
-  highlightedKey: PromptKey;
+  highlightedAction: PromptAction;
   /** Set only while awaiting the confirming second press of a hotkey. */
-  armedKey?: PromptKey;
+  armedAction?: PromptAction;
   /** "Press y again to approve." while armed; empty otherwise. */
   hint: string;
   /** Set when an empty reason submit is rejected. */
@@ -106,7 +118,7 @@ export interface PromptViewState {
 /** An input event the reducer understands. */
 export type PromptEvent =
   | { type: "nav"; direction: "up" | "down" }
-  | { type: "hotkey"; key: PromptKey }
+  | { type: "hotkey"; action: PromptAction }
   | { type: "confirm" }
   | { type: "cancel" }
   | { type: "submitReason"; draft: string };
@@ -121,8 +133,8 @@ export function initialPromptState(
 ): PromptViewState {
   return {
     step: "decision",
-    highlightedKey: "y",
-    armedKey: undefined,
+    highlightedAction: "approve",
+    armedAction: undefined,
     hint: "",
     reasonError: undefined,
     scopeServing: false,
@@ -162,16 +174,20 @@ function reduceDecisionStep(
     case "nav":
       return render({
         ...state,
-        highlightedKey: shiftKey(config, state.highlightedKey, event.direction),
-        armedKey: undefined,
+        highlightedAction: shiftAction(
+          config,
+          state.highlightedAction,
+          event.direction,
+        ),
+        armedAction: undefined,
         hint: "",
       });
     case "hotkey":
-      return visibleOptionKeys(config).includes(event.key)
-        ? pressHotkey(config, state, event.key)
+      return visibleActions(config).includes(event.action)
+        ? pressHotkey(config, state, event.action)
         : render(state);
     case "confirm":
-      return commit(config, state, state.highlightedKey);
+      return commit(config, state, state.highlightedAction);
     case "cancel":
       return { kind: "decision", decision: createDeniedPermissionDecision() };
     case "submitReason":
@@ -182,52 +198,53 @@ function reduceDecisionStep(
 function pressHotkey(
   config: PromptModelConfig,
   state: PromptViewState,
-  key: PromptKey,
+  action: PromptAction,
 ): PromptOutcome {
-  if (!config.doublePressToConfirm || state.armedKey === key) {
-    return commit(config, state, key);
+  if (!config.doublePressToConfirm || state.armedAction === action) {
+    return commit(config, state, action);
   }
   return render({
     ...state,
-    highlightedKey: key,
-    armedKey: key,
-    hint: `Press ${key} again to ${OPTION_VERBS[key]}.`,
+    highlightedAction: action,
+    armedAction: action,
+    hint: `Press ${config.keys[action]} again to ${OPTION_VERBS[action]}.`,
   });
 }
 
 function commit(
   config: PromptModelConfig,
   state: PromptViewState,
-  key: PromptKey,
+  action: PromptAction,
 ): PromptOutcome {
-  switch (key) {
-    case "y":
+  switch (action) {
+    case "approve":
       return {
         kind: "decision",
         decision: { approved: true, state: "approved" },
       };
-    case "n":
+    case "deny":
       return { kind: "decision", decision: createDeniedPermissionDecision() };
-    case "r":
+    case "denyWithReason":
       return render({
         ...state,
         step: "reason",
-        highlightedKey: "r",
-        armedKey: undefined,
+        highlightedAction: "denyWithReason",
+        armedAction: undefined,
         hint: "",
         reasonError: undefined,
       });
-    case "s":
-    case "b": {
+    case "approveSession":
+    case "approveSessionBoth": {
       // The two session options differ only in the width they grant; which
       // scope they land on is the forwarded scope step's separate question.
-      const grantWidth: SessionGrantWidth = key === "b" ? "family" : "proven";
+      const grantWidth: SessionGrantWidth =
+        action === "approveSessionBoth" ? "family" : "proven";
       if (config.sessionScope) {
         return render({
           ...state,
           step: "scope",
-          highlightedKey: key,
-          armedKey: undefined,
+          highlightedAction: action,
+          armedAction: undefined,
           hint: "",
           scopeServing: false,
           grantWidth,
@@ -268,7 +285,7 @@ function reduceReasonStep(
     return render({
       ...state,
       step: "decision",
-      armedKey: undefined,
+      armedAction: undefined,
       hint: "",
       reasonError: undefined,
       grantWidth: "proven",
@@ -311,7 +328,7 @@ function reduceScopeStep(
       return render({
         ...state,
         step: "decision",
-        armedKey: undefined,
+        armedAction: undefined,
         hint: "",
         grantWidth: "proven",
       });
@@ -320,16 +337,16 @@ function reduceScopeStep(
   }
 }
 
-function shiftKey(
+function shiftAction(
   config: PromptModelConfig,
-  current: PromptKey,
+  current: PromptAction,
   direction: "up" | "down",
-): PromptKey {
-  const keys = visibleOptionKeys(config);
-  const index = keys.indexOf(current);
+): PromptAction {
+  const actions = visibleActions(config);
+  const index = actions.indexOf(current);
   const delta = direction === "down" ? 1 : -1;
-  const next = (index + delta + keys.length) % keys.length;
-  return keys[next] ?? current;
+  const next = (index + delta + actions.length) % actions.length;
+  return actions[next] ?? current;
 }
 
 function render(state: PromptViewState): PromptOutcome {

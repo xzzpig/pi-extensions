@@ -31,6 +31,43 @@
       "default": true,
       "type": "boolean"
     },
+    "permissionDialogKeys": {
+      "type": "object",
+      "properties": {
+        "approve": {
+          "description": "Key that approves the pending call once. Default: y.",
+          "type": "string"
+        },
+        "approveSession": {
+          "description": "Key that approves for the rest of the session. Default: s.",
+          "type": "string"
+        },
+        "approveSessionBoth": {
+          "description": "Key that approves for the session in both directions. Default: b.",
+          "type": "string"
+        },
+        "deny": {
+          "description": "Key that denies the pending call. Default: n.",
+          "type": "string"
+        },
+        "denyWithReason": {
+          "description": "Key that denies and opens the reason editor. Default: r.",
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Remaps the inline TUI permission dialog's decision hotkeys. Each value is one printable character.",
+      "markdownDescription": "Remaps the inline **TUI** permission dialog's decision hotkeys, which default to `y` / `s` / `b` / `n` / `r`.\n\nEach value is a single printable character — a lowercase letter, a digit, or a symbol. Digits are the usual choice for input-method-editor (IME) users, whose composition mode swallows letter keys before they reach the terminal.\n\n`j` and `k` are reserved for moving the dialog's highlight, uppercase is rejected (pi lowercases a key identifier, so `\"Y\"` would answer to `y`), and two decisions may not share a character. An entry that breaks one of those rules is ignored with a warning and its decision keeps its default letter.\n\nA project config replaces a global one's map entirely rather than merging entry by entry.",
+      "examples": [
+        {
+          "approve": "1",
+          "approveSession": "2",
+          "approveSessionBoth": "3",
+          "deny": "4",
+          "denyWithReason": "5"
+        }
+      ]
+    },
     "forwardingTimeoutMs": {
       "description": "How long a subagent waits for the parent session to answer a forwarded permission request, in milliseconds. Omit to use the default (600000, ten minutes).",
       "markdownDescription": "How long a subagent waits for the parent session to answer a forwarded permission request, in milliseconds.\n\nOmit to use the default (`600000`, ten minutes). A child whose in-process parent is not draining its inbox at all gives up in a couple of seconds regardless of this value, so lower it only to bound how long you are willing to leave an *unanswered* prompt pending.",
