@@ -1,8 +1,7 @@
-import { schedulerSummary } from "./goal-scheduler-state.ts";
-import type { BeforeAgentStartEventResult, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { cacheGoalHistory } from "./goal-prompt-cache.ts";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	GOAL_EVENT_ENTRY,
-	GOAL_STEERING_EVENT_ENTRY,
 	assistantTurnTokens,
 	extractGoalIdFromInjectedMessage,
 	goalEventMessageId,
@@ -13,50 +12,44 @@ import {
 	isErrorAssistantMessage,
 	isMeaningfulProgressToolCall,
 } from "./goal-format.ts";
-import { invalidateGoalLedgerCache } from "./goal-ledger.ts";
-import { shouldArmPostCompactReminder } from "./goal-policy.ts";
+import { buildCompactionSummary, buildPostCompactionGoalDelta } from "./goal-compaction.ts";
+import { latestAuditorResultForGoal, readGoalLedger, goalRuntimeEvents, invalidateGoalLedgerCache } from "./goal-ledger.ts";
+import { shouldArmPostCompactReminder, shouldInjectPostCompactReminder } from "./goal-policy.ts";
+import { formatTokenValue } from "./goal-core.ts";
 import { loadGoalSettings, invalidateGoalSettingsCache, DEFAULT_CHANGE_MANIFEST_DEPTH } from "./goal-settings.ts";
-import { createBaselineCaptureState, maybeCaptureBaseline } from "./goal-change-baseline.ts";
-import { deleteChangeBaseline } from "./goal-change-baseline.ts";
-import { asRecord, nowIso, type AssistantMessageLike } from "./goal-record.ts";
+import { createBaselineCaptureState, maybeCaptureBaseline, deleteChangeBaseline } from "./goal-change-baseline.ts";
+import { budgetLine, budgetRemaining } from "./goal-accounting.ts";
+import { asRecord, nowIso, type AssistantMessageLike, type GoalRecord } from "./goal-record.ts";
 import { goalSelectorLabel, otherOpenGoalCount } from "./goal-pool.ts";
 import { invalidateGoalPoolCache } from "./storage/goal-files.ts";
-import { consumeOracleFollowupMarker, hasPendingOracleAdviceForFocusedGoal } from "./goal-oracle.ts";
-import { staleContinuationPrompt, goalPrompt } from "./prompts/goal-prompts.ts";
-import { rehydrateDraft } from "./goal-drafting.ts";
+import { checkpointTriggerPrompt } from "./prompts/goal-prompts.ts";
+import { consumeOracleFollowupMarker, hasPendingOracleAdviceForFocusedGoal } from "./goal-oracle.ts";import {
+	goalPrompt,
+	staleContinuationPrompt,
+	unfocusedOpenGoalsPrompt,
+	untrustedObjectiveBlock,
+} from "./prompts/goal-prompts.ts";
+import { hasActiveDraft, rehydrateDraft } from "./goal-drafting.ts";
 import { syncTerminalInputPause } from "./goal-widget.ts";
 import type { GoalCore } from "./goal-state.ts";
 import { filterGoalSessionContext } from "./goal-session-safety.ts";
 import type { GoalMutationOutcome } from "./goal-service.ts";
 
-/**
- * Checkpoint markers are pure plumbing: the goal_id they carry exists for
- * extension bookkeeping and stale-trigger diagnosis, while the goal state the
- * model needs rides the state snapshot message persisted right before each
- * marker (see GoalRuntime.sendQueuedContinuation). Filtering every marker here
- * is a pure per-message decision, so the request context stays append-only and
- * prefix-stable across requests — provider prompt caches keep hitting.
- *
- * This replaces compactGoalCheckpointContext (issue #30's drop-all-but-last
- * rewrite): dropping historical markers shifted the message sequence
- * mid-history and invalidated the prompt cache after the first continuation of
- * every session, and rewriting the surviving marker bought nothing because the
- * persisted v2 content already equals checkpointTriggerPrompt output. Audit
- * events (pi-goal-audit-event) and state snapshots (pi-goal-state-event) pass
- * through untouched.
- */
-export function filterGoalCheckpointContext(messages: readonly unknown[]): unknown[] | null {
-	let filtered = false;
-	const output: unknown[] = [];
-	for (let i = 0; i < messages.length; i += 1) {
-		const message = messages[i] as { customType?: string; details?: unknown; content?: unknown };
-		if (goalEventMessageId(message) !== null) {
-			filtered = true;
-			continue;
-		}
-		output.push(messages[i]);
-	}
-	return filtered ? output : null;
+/** Normalize checkpoints independently: deleting old markers shifts the cached prefix. */
+export function compactGoalCheckpointContext(
+ messages: readonly unknown[],
+ _currentGoal: GoalRecord | null,
+): unknown[] | null {
+ let output: unknown[] | null = null;
+ for (let i = 0; i < messages.length; i++) {
+  const message = messages[i] as { customType?: string; details?: unknown; content?: unknown };
+  const id = goalEventMessageId(message);
+  if (id === null) { output?.push(message); continue; }
+  output ??= messages.slice(0, i);
+  output.push({ ...message, content: checkpointTriggerPrompt(id), display: false,
+   details: { version: 2, kind: "checkpoint", goalId: id } });
+ }
+ return output;
 }
 
 /**
@@ -68,43 +61,21 @@ export function filterGoalCheckpointContext(messages: readonly unknown[]): unkno
  */
 export function registerGoalEvents(core: GoalCore): void {
 	const { pi } = core;
+	let liveContent: string | undefined;
+	pi.on("before_provider_request", event => cacheGoalHistory(event.payload, liveContent));
 	let continuationAfterSettleFor: string | null = null;
 	let networkErrorRecoveryAfterSettleFor: string | null = null;
 	// Change-manifest baseline bookkeeping: at most one capture attempt per goal
 	// for the lifetime of this registration (success or failure alike).
 	const baselineCapture = createBaselineCaptureState();
 
-	// Escape belongs to the open dialog. pi core (>= 0.84.4) wraps every
-	// blocking extension UI call in the OUTERMOST `ctx.ui.*` span and dispatches
-	// `ui_prompt_start`/`ui_prompt_end` (from a microtask, so the counter settles
-	// well before any human keypress). The span is shared across extensions, so
-	// this also covers dialogs owned by pi-subagents, pi-ask,
-	// pi-permission-system, pi-sandbox, and any other plugin — including the
-	// non-overlay `select`/`confirm`/`input`/`editor`/`custom` dialogs that
-	// replace the editor and are therefore invisible to `tui.hasOverlay()`.
-	// goal-widget.ts reads the depth so a foreign dialog keeps its Escape.
-	pi.on("ui_prompt_start", async () => {
-		core.enterUiPrompt();
-	});
-
-	pi.on("ui_prompt_end", async () => {
-		core.exitUiPrompt();
-	});
-
 	pi.on("context", async (event, ctx) => {
 		const filtered = filterGoalSessionContext(event.messages);
-		const messages = filterGoalCheckpointContext(filtered ?? event.messages) ?? filtered;
-		// Reference equality means no goal-event messages existed at all.
-		if (core.scheduler.needsLiveContext() && core.state.goal) {
-			const goal = core.state.goal;
-			const settings = loadGoalSettings(ctx.cwd);
-			// Custom-message runs bypass before_agent_start. Refresh mutable scheduling
-			// state, but do not repeat policy/objective already in the inherited prompt.
-			const content = ctx.getSystemPrompt?.().includes(`[PI GOAL ACTIVE goalId=${goal.id}]`)
-				? `[CURRENT EXECUTION STATE goalId=${goal.id}]\nStatus: ${goal.status}; autoContinue: ${goal.autoContinue}.\n${schedulerSummary(goal.scheduler, settings.maxAutonomousRuns)}`
-				: goalPrompt(goal, settings);
-			const live = { role: "custom" as const, customType: "pi-goal-live-context", content, display: false, timestamp: Date.now() };
-			return { messages: [live, ...(messages ?? event.messages)] as typeof event.messages };
+		const messages = compactGoalCheckpointContext(filtered ?? event.messages, core.state.goal) ?? filtered;
+		const content = liveContent = currentGoalContext(ctx);
+		if (content) {
+			const live = { role: "custom" as const, customType: "pi-goal-live-context", content, display: false, timestamp: 0 };
+			return { messages: [...(messages ?? event.messages), live] as typeof event.messages };
 		}
 		return messages === null ? undefined : { messages: messages as typeof event.messages };
 	});
@@ -244,9 +215,6 @@ export function registerGoalEvents(core: GoalCore): void {
 				archiveResult = { ok: false, message: err instanceof Error ? err.message : String(err) };
 			}
 			if (archiveResult.ok) {
-				// Baseline lifecycle: the deferred archival committed; the goal is
-				// terminal, so its execution-window baseline goes with it.
-				deleteChangeBaseline(ctx, completedGoal.id);
 				core.goalsById.delete(completedGoal.id);
 				core.assignFocusedGoalId(null);
 				core.appendFocusEntry(null, "completed");
@@ -300,9 +268,6 @@ export function registerGoalEvents(core: GoalCore): void {
 
 	pi.on("session_start", async (event, ctx) => {
 		core.auditMessages.clear();
-		// A dialog span cannot survive a session boundary: clear any leaked depth
-		// so Escape is never permanently trapped by a goal guard.
-		core.resetUiPromptDepth();
 		// NAF: the zero-op read caches are session-scoped — a new session always
 		// re-reads settings/pool/ledger fresh from disk (cross-process and
 		// hand-edited changes are picked up at the session boundary).
@@ -351,12 +316,10 @@ export function registerGoalEvents(core: GoalCore): void {
 		core.goalService.flushTurn(ctx); // P1-3: persist any buffered transaction before reload
 		if (core.state.goal) core.persist(ctx);
 		core.beginAccounting();
-		// The compaction summary eats the earlier goal-context message, so
-		// re-send the full authoritative copy (append-only; no delta). Mid-run
-		// auto-compaction queues it into the live run's next request; manual
-		// compaction appends while idle.
+		// Arm a deterministic compaction summary for the next agent turn.
+		// This replaces the generic reminder with artifact-backed state.
 		if (shouldArmPostCompactReminder(core.state.goal)) {
-			core.sendGoalContextMessage(ctx, "compacted");
+			core.runtime.armPostCompactReminder();
 		}
 		core.queueContinuation(ctx, true);
 	});
@@ -371,9 +334,9 @@ export function registerGoalEvents(core: GoalCore): void {
 		core.scheduler.restore(ctx);
 	});
 
-	pi.on("before_agent_start", async (event, ctx): Promise<BeforeAgentStartEventResult | void> => {
-		core.scheduler.prepare();
+	pi.on("before_agent_start", async (event, ctx) => {
 		core.advanceTurnSeq();
+  if (!hasActiveDraft(core)) core.installGoalTools();
 		const incomingGoalId = extractGoalIdFromInjectedMessage(event.prompt ?? "");
 
 		// If this turn was triggered by a hidden goal checkpoint that no longer
@@ -391,20 +354,9 @@ export function registerGoalEvents(core: GoalCore): void {
 			if (!core.isActionableContinuationGoal(incomingGoalId)) {
 				try {
 					ctx.abort?.();
-				} catch {
-					// Abort is best-effort; a failed abort must not break the stale-checkpoint steering path.
-				}
+				} catch {}
 				core.updateUI(ctx);
-				// The system prompt carries no goal content: the stale-checkpoint
-				// note rides as an append-only steering message instead.
-				return {
-					message: {
-						customType: GOAL_STEERING_EVENT_ENTRY,
-						content: staleContinuationPrompt(incomingGoalId, core.state.goal),
-						display: false,
-						details: { reason: "stale-checkpoint", goalId: incomingGoalId, timestamp: Date.now() },
-					},
-				};
+				return;
 			}
 			core.runtime.setCheckpoint(null);
 		} else {
@@ -416,26 +368,105 @@ export function registerGoalEvents(core: GoalCore): void {
 			networkErrorRecoveryAfterSettleFor = null;
 		}
 
-		if (!core.state.goal) {
-			core.runningGoalId = null;
-			return;
-		}
 		core.reconcileFocusedGoalFromDisk(ctx);
+		core.runningGoalId = core.state.goal?.status === "active" ? core.state.goal.id : null;
+	});
+
+	/** Request-only state: no live counters, focus, or reminders enter the system prefix. */
+	function currentGoalContext(ctx: ExtensionContext): string | undefined {
+		const checkpoint = core.runtime.getCheckpointGoalId();
+		if (checkpoint !== null && !core.isActionableContinuationGoal(checkpoint)) {
+			return staleContinuationPrompt(checkpoint, core.state.goal);
+		}
+		// Several prompt enrichments may need the same ledger snapshot. Keep one
+		// local read for this hook instead of repeatedly traversing the cached
+		// ledger when rejection and post-compaction steering overlap.
+		let promptLedger: ReturnType<typeof readGoalLedger> | undefined;
+		const getPromptLedger = () => promptLedger ??= { events: core.state.goal ? goalRuntimeEvents(ctx, core.state.goal.id) : [], malformed: 0 };
+
 		if (!core.state.goal) {
-			core.runningGoalId = null;
+			const openCount = otherOpenGoalCount(core.goalsById, null);
+			if (openCount > 0) {
+				return unfocusedOpenGoalsPrompt(openCount);
+			}
 			return;
 		}
-		core.runningGoalId = core.state.goal.status === "active" ? core.state.goal.id : null;
 		if (core.state.goal.status === "complete") return;
-
-		// The system prompt carries no goal content: the per-turn state snapshot
-		// rides as an append-only custom message right after the user's prompt
-		// (one-shot steering notes fold into it inside the core). Paused and
-		// budget_limited goals get the same snapshot with their status gate text,
-		// replacing the old per-turn system-prompt blocks.
-		const snapshot = core.buildTurnSnapshot(ctx);
-		return snapshot ? { message: snapshot } : undefined;
-	});
+		if (core.state.goal.status === "paused") {
+			const current = core.state.goal;
+			const pauseExtras: string[] = [];
+			if (current.stopReason === "agent") {
+				pauseExtras.push("");
+				pauseExtras.push(`Pause reason: ${current.pauseReason ?? "(unknown)"}`);
+				if (current.pauseSuggestedAction) pauseExtras.push(`Suggested action: ${current.pauseSuggestedAction}`);
+			}
+				// Inject durable auditor feedback if available
+				let auditorExtra = "";
+				try {
+					const ledger = getPromptLedger();
+				const auditorResult = latestAuditorResultForGoal(ledger.events, current.id);
+				if (auditorResult && auditorResult.verdict === "disapproved") {
+					auditorExtra = `\n\n[AUDITOR REJECTION] An independent auditor previously rejected a completion request for this goal. Reason: ${auditorResult.report.slice(0, 300)}\nAddress the auditor's objections before requesting completion again.`;
+				}
+			} catch {
+				// Ledger read failure should not break the prompt
+			}
+			return `[PI GOAL PAUSED goalId=${current.id}]\n${untrustedObjectiveBlock(current)}${pauseExtras.join("\n")}${auditorExtra}\n\nThe goal is paused. Do not autonomously continue substantive work unless the user resumes it with /goal-resume. If the user explicitly asks to finish the paused goal and the objective is already satisfied based on available evidence, you may call update_goal({status: "complete"}). To abandon a goal, the user runs /goal-clear. Do not report the goal blocked in response to a pause.`;
+		}
+		// Token-budget-limited goals get one-time wrap-up steering: summarize,
+		// do not start new substantive work, never claim completion unless real.
+		if (core.state.goal?.status === "budget_limited") {
+			const limitedGoal = core.state.goal;
+			const budgetText = budgetLine(limitedGoal);
+			// E4: surface the remaining-vs-overshoot fact in the wrap-up steering.
+			const remaining = budgetRemaining(limitedGoal);
+			const balanceText = typeof remaining === "number"
+				? remaining < 0
+					? ` — ${formatTokenValue(-remaining)} over the budget`
+					: ` — ${formatTokenValue(remaining)} remaining`
+				: "";
+			const reminder = core.runtime.consumePostBudgetReminder()
+				? `\n\n[TOKEN BUDGET REACHED goalId=${limitedGoal.id}]\nThe goal's token budget has been reached${budgetText ? ` (${budgetText}${balanceText})` : ""}. Wrap up the current work in one final response: summarize what was accomplished and what remains, do not start new substantive work, and do not claim the goal is complete unless it actually is. To continue, the user must raise or remove the budget and resume the goal.`
+				: "";
+			return `[PI GOAL BUDGET LIMITED goalId=${limitedGoal.id}]\n${untrustedObjectiveBlock(limitedGoal)}${budgetText ? `\n${budgetText}` : ""}${reminder}`;
+		}
+  if (core.state.goal.status === "blocked") {
+   const blocked = core.state.goal;
+   return `[PI GOAL BLOCKED goalId=${blocked.id}]\n${untrustedObjectiveBlock(blocked)}\nBlocker: ${blocked.pauseReason ?? "unspecified"}\nThe goal is blocked; the user must run /goal-resume before goal work continues.`;
+  }
+		const activeGoal = core.state.goal;
+		const settings = loadGoalSettings(ctx.cwd);
+		let prompt = goalPrompt(activeGoal, settings);
+		// F5: [GOAL STALLED] steering note when the detector fired.
+		const stalledNote = core.checkStall(ctx);
+		if (stalledNote) prompt += stalledNote;
+		// Inject durable auditor feedback if the latest result was a rejection
+		try {
+			const ledger = getPromptLedger();
+			const auditorResult = latestAuditorResultForGoal(ledger.events, activeGoal.id);
+			if (auditorResult && auditorResult.verdict === "disapproved" && ledger.events.some((e) => e.type === "completion_requested" && e.goalId === activeGoal.id)) {
+				prompt = `${prompt}\n\n[AUDITOR REJECTION goalId=${activeGoal.id}]\nAn independent auditor previously rejected a completion request for this goal. Reason: ${auditorResult.report.slice(0, 300)}\nAddress the auditor's objections before requesting completion again.`;
+			}
+		} catch {
+			// Ledger read failure should not break the prompt
+		}
+		if (core.runtime.isPostCompactReminderPending() && shouldInjectPostCompactReminder({ pending: true, goal: activeGoal })) {
+			core.runtime.clearPostCompactReminder();
+			// PR E §62: post-compaction DELTA — the current goal block already
+			// carries objective/policy/task gate/contract; inject only what
+			// compaction may have lost. Falls back to a generic note on ledger
+			// read failure.
+			try {
+				const ledger = getPromptLedger();
+				const otherOpenCount = core.openGoals().filter((g) => g.id !== activeGoal.id).length;
+				const delta = buildPostCompactionGoalDelta({ goal: activeGoal, ledgerEvents: ledger.events, otherOpenCount });
+				prompt = `${prompt}\n\n${delta}`;
+			} catch {
+				prompt = `${prompt}\n\n[POST-COMPACTION RESYNC goalId=${core.state.goal.id}]\nThe conversation was just compacted. Re-read the objective and continue from the actual artifacts/state; do not rely on memory of the prior chat.`;
+			}
+		}
+		return prompt;
+	}
 
 	pi.on("agent_end", async (event, ctx) => {
 		const endedGoalId = core.runningGoalId;
@@ -524,7 +555,6 @@ export function registerGoalEvents(core: GoalCore): void {
 	pi.on("session_shutdown", async (_event, ctx) => {
 		core.auditMessages.clear();
 		core.scheduler.shutdown();
-		core.resetUiPromptDepth();
 		continuationAfterSettleFor = null;
 		networkErrorRecoveryAfterSettleFor = null;
 		core.accountProgress(ctx);

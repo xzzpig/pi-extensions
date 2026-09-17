@@ -11,7 +11,7 @@ import { goalDetailPage } from "../extensions/goal-detail.ts";
 import { readGoalLedger, appendGoalEvents, invalidateGoalLedgerCache, loadLedgerState, LEDGER_CHECKPOINT_FILE, type GoalLedgerEvent } from "../extensions/goal-ledger.ts";
 import { recentNonEmptyLines } from "../extensions/goal-auditor.ts";
 import { readActiveGoalPool, readActiveGoalPoolAsync, invalidateGoalPoolCache, writeActiveGoalFile, archiveGoalFile } from "../extensions/storage/goal-files.ts";
-import { filterGoalCheckpointContext } from "../extensions/goal-events.ts";
+import { compactGoalCheckpointContext } from "../extensions/goal-events.ts";
 import { inspectCheckpointHealth, readSessionCheckpointHealth } from "../extensions/goal-session-health.ts";
 import { updateTaskInTree } from "../extensions/goal-policy.ts";
 import { truncateToWidth, wrapTextWithAnsi } from "../extensions/widgets/text-cache.ts";
@@ -105,13 +105,15 @@ test("text caches preserve SDK ANSI, Unicode, padding and width semantics and re
  }
 });
 
-test("context filter drops every checkpoint marker and keeps interleaved messages in order (fork semantics)", () => {
+test("context normalization preserves all marker positions and ignores mutable goal state", () => {
  const f=fixture(); try {
   const marker = {customType:"pi-goal-event",content:"legacy",details:{goalId:f.goal.id,kind:"checkpoint",version:1}};
   const a={role:"user",content:"a"}; const b={role:"assistant",content:"b"}; const c={role:"toolResult",content:"c"};
-  const result=filterGoalCheckpointContext([a,marker,b,marker,c])!;
-  assert.equal(result.length,3); assert.equal(result[0],a); assert.equal(result[1],b); assert.equal(result[2],c);
-  assert.equal(filterGoalCheckpointContext([a,b,c]),null);
+  const result=compactGoalCheckpointContext([a,marker,b,marker,c],f.goal)!;
+  assert.equal(result.length,5); assert.equal(result[0],a); assert.equal(result[2],b); assert.equal(result[4],c);
+  assert.equal((result[1] as {details:{kind:string}}).details.kind,"checkpoint");
+  assert.equal((compactGoalCheckpointContext([marker],null)![0] as {details:{kind:string}}).details.kind,"checkpoint");
+  assert.equal(compactGoalCheckpointContext([a,b,c],null),null);
  } finally {f.cleanup();}
 });
 

@@ -590,3 +590,7 @@ Both `provider` and `model` must be set explicitly — the executor model is nev
 ## License
 
 MIT
+
+### Prompt caching
+
+Goal state is refreshed at the request tail while the system prompt and conversation prefix stay stable. Pi retains control of provider cache settings. See [prompt caching](docs/prompt-caching.md) for explicit-cache handling, validation, and cache invalidation boundaries.

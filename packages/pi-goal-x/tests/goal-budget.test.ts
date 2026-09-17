@@ -72,7 +72,7 @@ function fixture() {
 	const sessionEntries = [
 		{ type: "custom", customType: "pi-goal-focus", data: goalFocusDetails(goal.id, "created") },
 	];
-	const cleanup = () => { try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ } };
+	const cleanup = () => { try { rmSync(cwd, { recursive: true, force: true }); } catch {} };
 	return { cwd, goal: written, sessionEntries, cleanup };
 }
 
@@ -117,25 +117,25 @@ test("budget reached marks the goal budget_limited exactly once with ledger + on
 		assert.equal(budgetEvents[0]!.budget, 100);
 		assert.ok(Number(budgetEvents[0]!.tokensUsed) >= 100);
 
-		// One-time wrap-up steering is folded into the per-turn snapshot.
-		const result = await handlers.get("before_agent_start")?.({
+		// One-time wrap-up steering is injected on the next agent start.
+		await handlers.get("before_agent_start")?.({
 			systemPrompt: "base",
 			prompt: "",
 			systemPromptOptions: {},
 		}, ctx);
-		const snapshotContent = result?.message?.content ?? "";
-		assert.ok(!("systemPrompt" in (result ?? {})), "no system prompt override is returned");
-		assert.equal(result?.message?.customType, "pi-goal-state-event");
-		assert.ok(snapshotContent.includes("BUDGET LIMITED"), "budget-limited gate carried by the snapshot");
-		assert.ok(snapshotContent.includes("TOKEN BUDGET REACHED"), "one-time wrap-up steering folded into the snapshot");
+		const result = await handlers.get("context")?.({ messages: [] }, ctx);
+		const promptText = result?.messages?.at(-1)?.content ?? "";
+		assert.ok(promptText.includes("BUDGET LIMITED"), "budget-limited block injected");
+		assert.ok(promptText.includes("TOKEN BUDGET REACHED"), "one-time wrap-up steering injected");
 
 		// A second agent start must NOT re-inject the one-time steering.
-		const second = await handlers.get("before_agent_start")?.({
+		await handlers.get("before_agent_start")?.({
 			systemPrompt: "base",
 			prompt: "",
 			systemPromptOptions: {},
 		}, ctx);
-		assert.ok(!(second?.message?.content ?? "").includes("TOKEN BUDGET REACHED"), "steering fires exactly once");
+		const second = await handlers.get("context")?.({ messages: [] }, ctx);
+		assert.ok(!(second?.messages?.at(-1)?.content ?? "").includes("TOKEN BUDGET REACHED"), "steering fires exactly once");
 
 		// A further turn_end cannot re-fire the transition (status not active).
 		await handlers.get("turn_end")?.({ message: turnEndMessage(50) }, ctx);
@@ -163,6 +163,6 @@ test("goal without a budget never transitions", async () => {
 		assert.equal(disk.status, "active", "no budget → no transition");
 		assert.equal(ledgerEvents(cwd).filter((e) => e.type === "goal_budget_limited").length, 0);
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
+		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
 	}
 });

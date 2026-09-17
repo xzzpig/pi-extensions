@@ -1,6 +1,6 @@
 {
   "name": "@xzzpig/pi-goal-x",
-  "version": "0.7.3",
+  "version": "0.7.4",
   "description": "Goal mode extension for pi: durable long-running objectives, a constant six-tool surface, structured tasks, independent completion audit, Sisyphus mode, auto-continue, and a status overlay.",
   "license": "MIT",
   "author": "pi-goal-x contributors",
@@ -39,6 +39,7 @@
     "docs/agent-flow-design.md",
     "docs/agentic-runtime-prd.md",
     "docs/architecture.md",
+    "docs/prompt-caching.md",
     "docs/pi-autoresearch-survey.md",
     "docs/pi-goal-x-unified-dashboard-plan.md",
     "docs/unified-dashboard.md",

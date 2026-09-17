@@ -13,8 +13,8 @@ export const MAX_PROMPT_FRAGMENT_CHARS = 10_000;
 
 /**
  * Issue #30: a persisted continuation checkpoint is a tiny trigger record, not
- * a full prompt. The authoritative goal state is injected once per turn by
- * before_agent_start; the persisted marker only needs to carry the goal id.
+ * a full prompt. The authoritative goal state is injected at the request tail by
+ * the context hook; the persisted marker only needs to carry the goal id.
  */
 export const CHECKPOINT_TRIGGER_MAX_CHARS = 160;
 

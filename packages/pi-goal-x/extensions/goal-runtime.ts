@@ -57,6 +57,7 @@ export class GoalRuntime {
 	private checkpointSeq = 0;
 
 	// ── one-time steering reminders ──────────────────────────────────────
+	private postCompactReminderPending = false;
 	private postBudgetReminderPending = false;
 
 	private readonly hooks: GoalRuntimeHooks;
@@ -244,6 +245,26 @@ export class GoalRuntime {
 	}
 
 	// ── one-time steering reminders ──────────────────────────────────────
+
+	armPostCompactReminder(): void {
+		this.postCompactReminderPending = true;
+	}
+
+	/** Whether a post-compaction reminder is pending (read-only). */
+	isPostCompactReminderPending(): boolean {
+		return this.postCompactReminderPending;
+	}
+
+	clearPostCompactReminder(): void {
+		this.postCompactReminderPending = false;
+	}
+
+	/** True once if a post-compaction reminder is pending; clears it. */
+	consumePostCompactReminder(): boolean {
+		if (!this.postCompactReminderPending) return false;
+		this.postCompactReminderPending = false;
+		return true;
+	}
 
 	armPostBudgetReminder(): void {
 		this.postBudgetReminderPending = true;

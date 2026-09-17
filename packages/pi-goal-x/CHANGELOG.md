@@ -2,6 +2,25 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.7.4] — 2026-09-18 (fork release)
+
+### Changed
+
+- **Synced upstream v0.31.5 → v0.31.6** (upstream patch release → fork patch
+  bump). Adopted upstream's prompt-cache fix (#67/#68): the context hook now
+  appends live goal state (`pi-goal-live-context`) at the request tail instead
+  of prepending it, `compactGoalCheckpointContext` rewrites every checkpoint
+  marker in place (no more mid-history deletion that shifted the cache
+  prefix), `before_agent_start` no longer injects changing state into the
+  system prompt, and `cacheGoalHistory` moves existing Anthropic/Bedrock
+  cache breakpoints before the transient tail. Fork additions are preserved:
+  the persisted `pi-goal-context-event` channel (re-sent on session_compact),
+  `pi-goal-state-event` snapshots, the ui_prompt_start/end Escape-to-dialog
+  depth (reset on session_start), the change-manifest baseline capture, and
+  the constant tool-surface install. `goal-context-filter.test.ts` was
+  rewritten for `compactGoalCheckpointContext` semantics (in-place rewrite,
+  not drop).
+
 ## [0.7.2] — 2026-09-16 (fork release)
 
 ### Changed
@@ -98,6 +117,12 @@ All notable changes to pi-goal-x are documented here.
   repository root, default `1`, `0` disables the downward scan), both usable in
   the project and global settings files.
 ## [Unreleased]
+
+## [0.31.6] — 2026-09-17
+
+### Fixed
+
+- Preserve prompt-cache prefixes across normal turns, checkpoints, and tool loops (#67): move live goal state out of the system/history prefix, keep bounded checkpoint markers in place, and place existing Anthropic/Bedrock cache breakpoints before transient state. Provider cache settings remain unchanged.
 
 ## [0.31.5] — 2026-09-16
 
