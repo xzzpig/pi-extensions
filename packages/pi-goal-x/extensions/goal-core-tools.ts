@@ -515,8 +515,8 @@ async function runGoalAgentPauseFlow(ctx: ExtensionContext, reason: string | und
 pi.registerTool(defineTool({
 	name: "update_goal",
 	label: "Update Goal",
-	description: "Report a terminal or pausing outcome for the current run: \"complete\" runs the independent completion auditor (completion_summary is an untrusted claim only); \"blocked\" records a distinct agent-blocked state and stops continuation per the active-goal policy; \"paused\" pauses immediately with a required reason. Never archive or abandon a goal yourself — ask the user to run /goal-clear.",
-	promptSnippet: "Report the current run as complete (audited) or blocked per the active-goal lifecycle policy; paused is immediate with a required reason.",
+	description: "Report a terminal or pausing outcome for the current run: \"complete\" runs the independent completion auditor (completion_summary is an untrusted claim only); \"blocked\" records a distinct agent-blocked state and stops continuation per the active-goal policy; \"paused\" pauses immediately with a required reason. Never archive or abandon a goal yourself — ask the user to run /goal-clear. New waits require strictExecutionContract opt-in.",
+	promptSnippet: "Report the current run as complete (audited) or blocked per the active-goal lifecycle policy; paused is immediate with a required reason. Optionally save a scheduling decision.",
 	promptGuidelines: [
 		// PR E §54: capability + hard boundary here; the WHEN rules (evidence,
 		// third-identical-blocker, objective immutability) live once in the

@@ -6,7 +6,7 @@
   <a href="https://pi.dev/packages" target="_blank" rel="noopener noreferrer">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="assets/badge-dark.svg">
-      <img src="assets/badge-light.svg" alt="TOP 1% of Pi coding agent packages: #45 of 5,380 by downloads, as of Aug 2026" width="420">
+      <img src="assets/badge-light.svg" alt="TOP 0.3% of Pi coding agent extensions: #7 of 3,352 by downloads · Sep 16, 2026 (best recorded rank)" width="480">
     </picture>
   </a>
 </div>
@@ -486,7 +486,15 @@ Settings resolve per setting in this order (highest wins):
 environment > project layer > global layer > defaults
 ```
 
-Files:
+| Setting | What it controls |
+| --- | --- |
+| Explicit execution contracts (`strictExecutionContract`) | Opt-in ready/wait protocol with one missing-decision repair, then pause. Defaults to `false`: successful executions continue automatically. |
+| Autonomous run allowance (`maxAutonomousRuns`) | Positive whole number of extension-started runs per creation or `/goal-resume` period. **Unset means unlimited; zero disables automatic continuation.** Settings edits change the limit without resetting usage. |
+| Task tracking (`disableTasks`) | Turn task lists on or off. Set to `true` to disable them. |
+| Subtask depth (`subtaskDepth`) | Limit how many levels of subtasks the agent can create. |
+| Completion requirements (`disableContracts`) | Turn explicit goal and task completion requirements on or off. Set to `true` to disable them. |
+| Auditor disabled | Turn off independent completion review. |
+| Auditor provider, model, and thinking level | Choose which model reviews completed work and its reasoning effort. |
 
 ```text
 global:  ~/.pi/pi-goal-x-settings.json   (or $PI_CODING_AGENT_DIR, or $PI_GOAL_GLOBAL_SETTINGS_FILE)
@@ -496,6 +504,12 @@ project: <cwd>/.pi/pi-goal-x-settings.json   (or $PI_GOAL_SETTINGS_FILE)
 Define shared configuration once in the global file and override per project. Explicit `false`/`0` values in a lower layer override inherited values; nested `keybindings` inherit per key. `/goal-settings` shows each row's effective value and source, can switch the edited scope, and can remove a local override to return to inheritance.
 
 Use `/goal-settings` to configure task lists, verification contracts, subtask depth, automatic goal selection, the `auditorAgent` name (default `goal-auditor`), the `auditorTimeoutMs` audit wall-clock cap (default `1800000`, 30 minutes), and model/thinking overrides (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`; `max` requires auditor-model support via pi-subagents' model registry). `changeManifest` (default `auto`) turns the workspace change manifest collected for the audit on or off, and `changeManifestDepth` (default `1`, `0` disables the downward scan) sets how many directory levels below the repository root are searched for nested repositories. Goal objectives have no hard length limit by default; set `objectiveMaxChars` (or `PI_GOAL_OBJECTIVE_MAX_CHARS`, `0` = no limit) to cap objective length across `create_goal`, `propose_goal_draft`, and `/goal-tweak`.
+
+### Automatic continuation and optional execution contracts
+
+Active goals continue automatically after successful executions, including reasoning-only responses and final-task verification. No tool call, task update, scheduling declaration, or cooldown is required. Unproductive loops remain possible; optional run limits and token budgets still apply.
+
+Enable `strictExecutionContract: true` in `/goal-settings` or your global/project settings to require explicit ready/wait decisions. In that mode, a missing decision permits one repair prompt within the remaining allowance, then pauses. This is a user preference; agents should not enable it merely to continue.
 
 The selected auditor is a normal pi-subagents agent. Eject the bundled default
 before editing it:
@@ -551,6 +565,10 @@ Configure the task shortcuts in the same file when the terminal captures the def
 ```
 
 The default task bindings are `ctrl+shift+t`, `ctrl+shift+up`, and `ctrl+shift+down`. Use pi key names such as `ctrl+shift+up`.
+
+Agents may edit this setting. Changing it does not replenish consumed runs; explicit `/goal-resume` renews the period and continues now, including from a waiting goal. No configured allowance is required unless the effective limit is zero, which disables resume. Tool calls within a run are not separate runs. Existing token budgets still apply.
+
+Explicit `ready` is optional in default mode. New `wait` declarations require strict mode; otherwise they return a non-terminating error. Previously saved waits retain their deadline, checks, and repair rules when upgrading or disabling strict mode, and may be re-declared with the same identity. Mode changes never resume a paused goal or renew consumed runs.
 
 ### Blocker Oracle (opt-in)
 

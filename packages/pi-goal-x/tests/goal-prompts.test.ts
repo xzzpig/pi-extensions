@@ -8,6 +8,7 @@ import {
 	budgetReachedReminderNote,
 	checkpointTriggerPrompt,
 	goalContextMessagePrompt,
+	goalPrompt,
 	goalStateSnapshotPrompt,
 	pausedGateBlock,
 	promptProfile,
@@ -493,4 +494,28 @@ test("budget wrap-up note carries the one-time reached banner and balance", () =
 
 test("paused gate block is shared between the snapshot and any other consumer", () => {
 	assert.match(pausedGateBlock(), /Do not report the goal blocked in response to a pause\./);
+});
+
+test("allowance configuration refreshes cached guidance without bloating disabled prompts", () => {
+	const current = goal();
+	const off = goalPrompt(current, { maxAutonomousRuns: 0 });
+	assert.match(off, /agents may set it/);
+	assert.doesNotMatch(off, /Saved decisions terminate/);
+	const on = goalPrompt(current, { maxAutonomousRuns: 4 });
+	assert.match(on, /no scheduling declaration is required/);
+	assert.ok(on.length - off.length < 300);
+	const defaults = goalPrompt(current);
+	assert.match(defaults, /no scheduling declaration is required/);
+	assert.doesNotMatch(defaults, /Missing decisions allow one repair/);
+	const strict = goalPrompt(current, { strictExecutionContract: true });
+	assert.match(strict, /Missing decisions allow one repair/);
+	assert.equal(goalPrompt(current), defaults);
+	const waiting = {...current, scheduler: {version: 1 as const, owner: "owner", generation: "generation", used: 1, phase: "waiting" as const, repairUsed: false, wait: {id: "wait", token: "token", reason: "Saved wait", deadline: 9999999999999}}};
+	assert.match(goalPrompt(waiting), /Missing decisions allow one repair/);
+	assert.equal(goalPrompt(current), defaults, "leaving a grandfathered wait restores implicit guidance");
+	assert.match(defaults, /0\/unlimited/);
+	assert.equal(goalPrompt(current, { maxAutonomousRuns: 0 }), off, "disabling again must not reuse enabled guidance");
+	const zero = goalPrompt(current, { maxAutonomousRuns: 0 });
+	assert.doesNotMatch(zero, /Saved decisions terminate/);
+	assert.match(zero, /0\/0 \(automatic continuation disabled\)/);
 });

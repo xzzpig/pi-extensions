@@ -326,6 +326,22 @@ export function sisyphusDisciplineBlock(goal: GoalRecord): string {
 	].join("\n");
 }
 
+/** Shared outcome/blocker policy for active goals (bounded). */
+function lifecyclePolicyBlock(autonomous: boolean, strict: boolean): string {
+	return [
+		"[OUTCOMES]",
+		'- Automatic runs default to unlimited. maxAutonomousRuns in .pi/pi-goal-x-settings.json caps runs; 0 disables (agents may set it). Only creation or user /goal-resume renews usage.',
+		...(autonomous && strict ? ['- End execution with update_goal: ready for runnable work, wait for an external condition, or a status below. Saved decisions terminate; further work invalidates them. Missing decisions allow one repair. Never busy-poll.'] : []),
+		...(autonomous && !strict ? ['- Continue pursuing the goal automatically after each execution; no scheduling declaration is required. Optional ready saves a next action. New waits require user opt-in to strictExecutionContract; do not enable it merely to continue.'] : []),
+		'- update_goal({status: "complete"}) only when every requirement is satisfied; the independent auditor derives the requirements from the objective and any verification contract and inspects the actual workspace evidence. Approval archives; rejection keeps the goal open with feedback.',
+		'- update_goal({status: "blocked"}) only after the SAME blocker recurs on three consecutive goal turns; keep trying concrete steps before then.',
+		'- update_goal({status: "paused", reason: "…"}) pauses immediately. A user pause is a distinct state controlled by the user (/goal-pause, /goal-resume, /goal-clear).',
+		'- The objective is immutable: never edit it yourself; ask the user to run /goal-tweak.',
+		'- Use work tools directly. Do not call get_goal repeatedly when the needed state is already visible.',
+		'- Tasks: update_goal_task updates one task without stopping the turn (complete requires evidence for contracted tasks; skipped requires a reason; pending reopens a skipped task). set_goal_tasks restructures the tree with confirmation.',
+		'- Retrieve omitted requirements before acting on them. Re-read changed requirements and details lost after compaction. Full objective/contracts: get_goal(section="objective"); tasks: get_goal(section="tasks").',
+	].join("\n");
+}
 /**
  * Fragment memo (P1-4): the goal prompt block is rebuilt per context call;
  * keyed on every field that changes output, so steady-state turns reuse it.
@@ -336,7 +352,7 @@ let promptCacheChars = 0;
 function cachedPrompt(goal: GoalRecord, settings: GoalSettings | undefined, kind: "goal" | "continuation", build: () => string): string {
 	const key = [kind, goal.id, goal.status, goal.autoContinue, goal.sisyphus, goal.objective,
 		goal.verificationContract, settings?.disableTasks ? undefined : taskIndex(goal.taskList?.tasks),
-		goal.taskList?.blockCompletion, promptProfile(), goal.currentTaskId, settings?.disableTasks, settings?.disableContracts, settings?.maxAutonomousRuns !== 0];
+		goal.taskList?.blockCompletion, promptProfile(), goal.currentTaskId, settings?.disableTasks, settings?.disableContracts, settings?.maxAutonomousRuns !== 0, settings?.strictExecutionContract === true, !!goal.scheduler?.wait];
 	for (let i = promptFragmentCache.length - 1; i >= 0; i--) {
 		const entry = promptFragmentCache[i]!;
 		if (key.every((part, j) => part === entry.key[j])) return entry.value;
@@ -351,6 +367,17 @@ function cachedPrompt(goal: GoalRecord, settings: GoalSettings | undefined, kind
 	}
 	return value;
 }
+
+function formatUsage(goal: GoalRecord): string {
+	const bits: string[] = [];
+	if (goal.usage.activeSeconds > 0) {
+		const s = goal.usage.activeSeconds;
+		bits.push(`${Math.floor(s / 60)}m${s % 60}s`);
+	}
+	if (goal.usage.tokensUsed > 0) bits.push(`${goal.usage.tokensUsed} tokens`);
+	return bits.length > 0 ? bits.join(" · ") : "none";
+}
+
 function retainedTaskChars(task: GoalTask): number {
 	return task.id.length + task.title.length + (task.verificationContract?.length ?? 0) + (task.evidence?.length ?? 0)
 		+ (task.skipReason?.length ?? 0) + (task.subtasks?.reduce((n, child) => n + retainedTaskChars(child), 0) ?? 0);
@@ -370,36 +397,10 @@ function buildGoalPrompt(goal: GoalRecord, settings?: GoalSettings): string {
 	// Bound individual data fields so essential rules can never be sliced off.
 	return [
 		`[PI GOAL ACTIVE goalId=${goal.id}]`,
-		lifecyclePolicyBlock(settings?.maxAutonomousRuns !== 0), sisyphusDisciplineBlock(goal),
+		lifecyclePolicyBlock(settings?.maxAutonomousRuns !== 0, settings?.strictExecutionContract === true || !!goal.scheduler?.wait), sisyphusDisciplineBlock(goal),
 		`Status: ${statusLabel(goal)}\nMode: ${goal.sisyphus ? "sisyphus" : "regular"}`,
 		untrustedObjectiveBlock(goal), taskListBlock(goal, settings), verificationContractBlock(goal, settings),
 	].filter(Boolean).join("\n\n");
-}
-
-function formatUsage(goal: GoalRecord): string {
-	const bits: string[] = [];
-	if (goal.usage.activeSeconds > 0) {
-		const s = goal.usage.activeSeconds;
-		bits.push(`${Math.floor(s / 60)}m${s % 60}s`);
-	}
-	if (goal.usage.tokensUsed > 0) bits.push(`${goal.usage.tokensUsed} tokens`);
-	return bits.length > 0 ? bits.join(" · ") : "none";
-}
-
-/** Shared outcome/blocker policy for active goals (bounded). */
-function lifecyclePolicyBlock(autonomous: boolean): string {
-	return [
-		"[OUTCOMES]",
-		'- Automatic runs default to unlimited. maxAutonomousRuns in .pi/pi-goal-x-settings.json caps runs; 0 disables (agents may set it). Only creation or user /goal-resume renews usage.',
-		...(autonomous ? ['- End execution with update_goal: ready for runnable work, wait for an external condition, or a status below. Saved decisions terminate; further work invalidates them. Missing decisions allow one repair. Never busy-poll.'] : []),
-		'- update_goal({status: "complete"}) only when every requirement is satisfied; the independent auditor derives the requirements from the objective and any verification contract and inspects the actual workspace evidence. Approval archives; rejection keeps the goal open with feedback.',
-		'- update_goal({status: "blocked"}) only after the SAME blocker recurs on three consecutive goal turns; keep trying concrete steps before then.',
-		'- update_goal({status: "paused", reason: "…"}) pauses immediately. A user pause is a distinct state controlled by the user (/goal-pause, /goal-resume, /goal-clear).',
-		'- The objective is immutable: never edit it yourself; ask the user to run /goal-tweak.',
-		'- Use work tools directly. Do not call get_goal repeatedly when the needed state is already visible.',
-		'- Tasks: update_goal_task updates one task without stopping the turn (complete requires evidence for contracted tasks; skipped requires a reason; pending reopens a skipped task). set_goal_tasks restructures the tree with confirmation.',
-		'- Retrieve omitted requirements before acting on them. Re-read changed requirements and details lost after compaction. Full objective/contracts: get_goal(section="objective"); tasks: get_goal(section="tasks").',
-	].join("\n");
 }
 
 function inject(fragment: string, block: string): string {
@@ -427,7 +428,7 @@ ${untrustedObjectiveBlock(goal)}
 
 Available work tools for pursuing the active goal include write, read, bash, and edit. Use those tools directly for file and shell work; do not call get_goal repeatedly to discover tools.
 
-${lifecyclePolicyBlock(settings?.maxAutonomousRuns !== 0)}
+${lifecyclePolicyBlock(settings?.maxAutonomousRuns !== 0, settings?.strictExecutionContract === true || !!goal.scheduler?.wait)}
 ${sisyphusDisciplineBlock(goal)}
 Scheduling: ${schedulerSummary(goal.scheduler, settings?.maxAutonomousRuns)}
 `;
