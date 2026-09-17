@@ -16,7 +16,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Container, ScrollView, Text, TuiAltScreen, VStack } from "@earendil-works/pi-tui";
 import { renderLayoutFrame } from "@earendil-works/pi-tui/dist/layout.js";
 import type { MouseEventsApi } from "@xzzpig/pi-mouse-events/api";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { PolishedTuiConfig } from "../../extensions/starline/config";
 import { setActiveEditor } from "../../extensions/starline/mouse/editor-mouse";
 import {

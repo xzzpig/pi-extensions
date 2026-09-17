@@ -5,7 +5,6 @@ import type {
 	Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { EditorTheme, TUI } from "@earendil-works/pi-tui";
-import type { MouseEventsApi } from "@xzzpig/pi-mouse-events/api";
 import {
 	type ColorSourcesConfig,
 	type ContextStyle,
