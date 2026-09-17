@@ -38,6 +38,7 @@ See [migration/0644-project-trust-gating.md](migration/0644-project-trust-gating
 
 The `permission` object uses deep-shallow merge: string-vs-string replaces; both-object shallow-merges pattern maps; string-vs-object the override wins entirely.
 Scalar fields (`debugLog`, `permissionReviewLog`, `yoloMode`, `doublePressToConfirm`, `forwardingTimeoutMs`, `promptMaxRows`, `promptFieldMaxWidth`) use simple replacement.
+`permissionDialogKeys` replaces the whole map rather than merging entry by entry, so the map that was validated is the map that applies.
 
 ## Named Permission Profiles
 
@@ -171,6 +172,7 @@ This clamp is deny-preserving and, like `yoloMode`, applied at composition; when
 | `permissionReviewLog`       | `true`   | Enables the permission request/denial review log at `logs/pi-permission-system-permission-review.jsonl`. Records bash command strings, masked only where a name binds the secret — see [Log file sensitivity](#log-file-sensitivity)         |
 | `yoloMode`                  | `false`  | Auto-approves `ask` results instead of prompting when yolo mode is enabled                                                                                                                                                                   |
 | `doublePressToConfirm`      | `true`   | Requires a confirming second press of a decision hotkey in the inline TUI dialog (see below). TUI sessions only; set to `false` for single-press.                                                                                            |
+| `permissionDialogKeys`      | —        | Remaps the inline TUI dialog's decision hotkeys (see below). One printable character per decision; omitted decisions keep `y` / `s` / `b` / `n` / `r`.                                                                                       |
 | `forwardingTimeoutMs`       | `600000` | How long a subagent waits for the parent session to answer a forwarded permission request, in milliseconds. A child whose parent is not draining its inbox gives up in ~2 s regardless, whether that parent runs in this process or its own. |
 | `promptMaxRows`             | `24`     | Max rows a permission prompt renders before eliding its evidence. The request's own facts are never elided by this budget; `Ctrl+O` expands the prompt to the complete request.                                                              |
 | `promptFieldMaxWidth`       | `400`    | Max characters of any one field shown in a permission prompt. This is what bounds a single long field (a here-string command, say) that would otherwise fill the prompt through wrapping.                                                    |
@@ -200,12 +202,50 @@ Every other ask shows the four options above without it.
 See [session-approvals.md](session-approvals.md#grant-direction) for what the two widths grant.
 
 Arrow keys / `j`/`k` move the highlight, `enter` confirms the highlighted option, and `esc` denies.
-With `doublePressToConfirm` enabled (the default), a letter hotkey **arms** its action and shows a `Press y again to approve.` hint; press the same key again to commit.
+With `doublePressToConfirm` enabled (the default), a hotkey **arms** its action and shows a `Press y again to approve.` hint; press the same key again to commit.
 Set `doublePressToConfirm` to `false` to commit on the first press.
+
+#### Remapping the hotkeys
+
+Set `permissionDialogKeys` to bind any decision to a different key:
+
+```jsonc
+{
+  "permissionDialogKeys": {
+    "approve": "1",
+    "approveSession": "2",
+    "approveSessionBoth": "3",
+    "deny": "4",
+    "denyWithReason": "5"
+  }
+}
+```
+
+The five decision names above are the only keys the map accepts, and each is optional — a decision you do not name keeps its default letter.
+
+This exists for input method editors.
+While an IME is composing — Chinese Pinyin or Wubi, Japanese, Korean — a letter keypress is consumed by the candidate buffer and never reaches the terminal, so `y` and `n` do nothing and the dialog looks frozen.
+The usual way out of a candidate popup is `esc`, which *does* reach the terminal and which this dialog reads as a denial, so a call you meant to approve gets refused.
+Digits are unaffected on essentially every layout, which is why `1`–`5` is the mapping to reach for.
+
+Each value is a **single printable character**: a lowercase letter, a digit, or a symbol.
+Three things are refused:
+
+- `j` and `k`, which move the dialog's highlight — a decision bound to one would never fire.
+- An uppercase letter.
+  Pi lowercases a key identifier, so `"Y"` would answer to a lowercase `y` rather than to the keystroke you asked for.
+- A character two decisions would share, including one a decision you did **not** remap already holds.
+  Trading two decisions' keys is fine (`{"approve": "n", "deny": "y"}`), because neither keeps the other's.
+
+A refused entry is a warning, never a policy event: that decision keeps its default letter, the rest of the map still applies, and your permission rules are untouched.
+Named keys (`f1`, `pageUp`) and modifier combinations (`ctrl+g`) are not accepted.
+
+One collision no check can see: if you rebind Pi's own `app.tools.expand` to a printable character that is also a dialog binding, expansion wins — the dialog offers that action first, before it maps a decision key.
 
 Pi's tool-expansion binding (`app.tools.expand`, `Ctrl+O` by default) stays live while the dialog is open.
 It expands both the prompt itself — to the complete request, unbounded by `promptMaxRows` and `promptFieldMaxWidth` — and the host's pending tool call, so one keystroke shows you everything before you decide.
 It only toggles the display — it never resolves, commits, or arms the pending decision.
+Because it is offered ahead of the decision keys, a printable rebinding of it shadows a `permissionDialogKeys` entry that names the same character.
 While you are typing a denial reason it is not intercepted, so a rebound printable key still reaches the reason editor.
 
 The reason editor is Pi's own line editor, so it behaves like the chat input: pasting works, as do cursor movement, word and line deletion, the kill ring, and undo.
@@ -1251,7 +1291,8 @@ Additional behaviors:
 - On the turn a tool is restored, it is callable immediately but its `Available tools:` line reappears one turn later: pi builds the prompt parts an extension receives before the extension runs, so the restored tool has no one-line description to render until it is already active
 - A tool is removed only when every value under its surface resolves to `deny`; a surface with any reachable `allow` or `ask` pattern stays available (see [Tool Surfaces](#tool-surfaces))
 - The `Available tools:` and `Guidelines:` sections are **relocated** rather than edited in place: the copies pi wrote are removed, and this session's own are rendered at the end of the system prompt, after pi's `Current working directory:` footer.
-  Each session states its own tool surface, which is what keeps a subagent child's inherited prompt byte-identical to its parent's (see [ADR 0014](decisions/0014-tool-surface-is-node-local-prose.md)); the tool list moves to the end of the prompt for every session, whether or not anything is denied
+  Each session states its own tool surface, which is what keeps a subagent child's inherited prompt byte-identical to its parent's (see [ADR 0014](decisions/0014-tool-surface-is-node-local-prose.md)); the tool list moves to the end of the prompt for every session, whether or not anything is denied.
+  Only the copies pi wrote are removed: a custom system prompt (`.pi/SYSTEM.md`, `~/.pi/agent/SYSTEM.md`, `--system-prompt`) keeps its own text untouched, sections and all, because pi writes no tool surface of its own under one — so a prompt that lists tools itself is shown alongside this session's block rather than replaced by it.
 - The rendered sections follow pi's own rules: a tool is listed only when pi supplied a one-line description for it, and the guideline bullets are the allowed tools' own contributions around pi's built-in ones
 - The prompt is recomputed and returned on every turn but is stable across turns for a stable policy/agent, so the provider's prompt cache (tools + system prefix) is preserved rather than rewritten each turn.
   A policy change is an intentional cache transition, as a mid-session agent switch already is.- Extension-provided tools like `task`, `mcp`, and third-party tools are handled by exact registered name

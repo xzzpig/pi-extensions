@@ -4,8 +4,9 @@ import {
   type PromptModelConfig,
   type PromptOutcome,
   reducePrompt,
-  visibleOptionKeys,
+  visibleActions,
 } from "#src/authority/permission-prompt-decision";
+import { DEFAULT_DIALOG_KEYS } from "#src/config/dialog-keys";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -32,6 +33,7 @@ function makeConfig(
   return {
     doublePressToConfirm: true,
     sessionLabel: "Yes, for this session",
+    keys: DEFAULT_DIALOG_KEYS,
     ...overrides,
   };
 }
@@ -44,8 +46,8 @@ describe("reducePrompt", () => {
       const state = initialPromptState(makeConfig());
       expect(state).toEqual({
         step: "decision",
-        highlightedKey: "y",
-        armedKey: undefined,
+        highlightedAction: "approve",
+        armedAction: undefined,
         hint: "",
         reasonError: undefined,
         scopeServing: false,
@@ -59,14 +61,14 @@ describe("reducePrompt", () => {
       const config = makeConfig();
       const outcome = reducePrompt(config, initialPromptState(config), {
         type: "hotkey",
-        key: "y",
+        action: "approve",
       });
       expect(outcome).toEqual({
         kind: "render",
         state: {
           step: "decision",
-          highlightedKey: "y",
-          armedKey: "y",
+          highlightedAction: "approve",
+          armedAction: "approve",
           hint: "Press y again to approve.",
           reasonError: undefined,
           scopeServing: false,
@@ -79,12 +81,12 @@ describe("reducePrompt", () => {
       const config = makeConfig();
       const armed = reducePrompt(config, initialPromptState(config), {
         type: "hotkey",
-        key: "y",
+        action: "approve",
       });
       assertRender(armed);
       const outcome = reducePrompt(config, armed.state, {
         type: "hotkey",
-        key: "y",
+        action: "approve",
       });
       expect(outcome).toEqual({
         kind: "decision",
@@ -96,19 +98,19 @@ describe("reducePrompt", () => {
       const config = makeConfig();
       const armedY = reducePrompt(config, initialPromptState(config), {
         type: "hotkey",
-        key: "y",
+        action: "approve",
       });
       assertRender(armedY);
       const armedN = reducePrompt(config, armedY.state, {
         type: "hotkey",
-        key: "n",
+        action: "deny",
       });
       expect(armedN).toEqual({
         kind: "render",
         state: {
           step: "decision",
-          highlightedKey: "n",
-          armedKey: "n",
+          highlightedAction: "deny",
+          armedAction: "deny",
           hint: "Press n again to deny.",
           reasonError: undefined,
           scopeServing: false,
@@ -121,12 +123,12 @@ describe("reducePrompt", () => {
       const config = makeConfig();
       const armed = reducePrompt(config, initialPromptState(config), {
         type: "hotkey",
-        key: "n",
+        action: "deny",
       });
       assertRender(armed);
       const outcome = reducePrompt(config, armed.state, {
         type: "hotkey",
-        key: "n",
+        action: "deny",
       });
       expect(outcome).toEqual({
         kind: "decision",
@@ -140,7 +142,7 @@ describe("reducePrompt", () => {
       const config = makeConfig({ doublePressToConfirm: false });
       const outcome = reducePrompt(config, initialPromptState(config), {
         type: "hotkey",
-        key: "y",
+        action: "approve",
       });
       expect(outcome).toEqual({
         kind: "decision",
@@ -154,7 +156,7 @@ describe("reducePrompt", () => {
       const config = makeConfig();
       const armed = reducePrompt(config, initialPromptState(config), {
         type: "hotkey",
-        key: "y",
+        action: "approve",
       });
       assertRender(armed);
       const outcome = reducePrompt(config, armed.state, {
@@ -165,8 +167,8 @@ describe("reducePrompt", () => {
         kind: "render",
         state: {
           step: "decision",
-          highlightedKey: "s",
-          armedKey: undefined,
+          highlightedAction: "approveSession",
+          armedAction: undefined,
           hint: "",
           reasonError: undefined,
           scopeServing: false,
@@ -187,7 +189,7 @@ describe("reducePrompt", () => {
         state = outcome.state;
       }
       // up from y wraps to r, then walks r→n→s→y over four presses
-      expect(state.highlightedKey).toBe("y");
+      expect(state.highlightedAction).toBe("approve");
     });
 
     it("confirms the highlighted option in a single enter press even when double-press is enabled", () => {
@@ -229,19 +231,19 @@ describe("reducePrompt", () => {
       const config = makeConfig();
       const armed = reducePrompt(config, initialPromptState(config), {
         type: "hotkey",
-        key: "r",
+        action: "denyWithReason",
       });
       assertRender(armed);
       const outcome = reducePrompt(config, armed.state, {
         type: "hotkey",
-        key: "r",
+        action: "denyWithReason",
       });
       expect(outcome).toEqual({
         kind: "render",
         state: {
           step: "reason",
-          highlightedKey: "r",
-          armedKey: undefined,
+          highlightedAction: "denyWithReason",
+          armedAction: undefined,
           hint: "",
           reasonError: undefined,
           scopeServing: false,
@@ -254,7 +256,7 @@ describe("reducePrompt", () => {
       const config = makeConfig({ doublePressToConfirm: false });
       const outcome = reducePrompt(config, initialPromptState(config), {
         type: "hotkey",
-        key: "r",
+        action: "denyWithReason",
       });
       expect(outcome.kind).toBe("render");
       assertRender(outcome);
@@ -265,7 +267,7 @@ describe("reducePrompt", () => {
       const config = makeConfig({ doublePressToConfirm: false });
       const opened = reducePrompt(config, initialPromptState(config), {
         type: "hotkey",
-        key: "r",
+        action: "denyWithReason",
       });
       assertRender(opened);
       const outcome = reducePrompt(config, opened.state, {
@@ -276,8 +278,8 @@ describe("reducePrompt", () => {
         kind: "render",
         state: {
           step: "reason",
-          highlightedKey: "r",
-          armedKey: undefined,
+          highlightedAction: "denyWithReason",
+          armedAction: undefined,
           hint: "",
           reasonError: "A reason is required.",
           scopeServing: false,
@@ -290,7 +292,7 @@ describe("reducePrompt", () => {
       const config = makeConfig({ doublePressToConfirm: false });
       const opened = reducePrompt(config, initialPromptState(config), {
         type: "hotkey",
-        key: "r",
+        action: "denyWithReason",
       });
       assertRender(opened);
       const outcome = reducePrompt(config, opened.state, {
@@ -311,7 +313,7 @@ describe("reducePrompt", () => {
       const config = makeConfig({ doublePressToConfirm: false });
       const opened = reducePrompt(config, initialPromptState(config), {
         type: "hotkey",
-        key: "r",
+        action: "denyWithReason",
       });
       assertRender(opened);
       const outcome = reducePrompt(config, opened.state, { type: "cancel" });
@@ -319,8 +321,8 @@ describe("reducePrompt", () => {
         kind: "render",
         state: {
           step: "decision",
-          highlightedKey: "r",
-          armedKey: undefined,
+          highlightedAction: "denyWithReason",
+          armedAction: undefined,
           hint: "",
           reasonError: undefined,
           scopeServing: false,
@@ -340,7 +342,7 @@ describe("reducePrompt", () => {
       const config = makeConfig({ doublePressToConfirm: false, sessionScope });
       const outcome = reducePrompt(config, initialPromptState(config), {
         type: "hotkey",
-        key: "s",
+        action: "approveSession",
       });
       expect(outcome.kind).toBe("render");
       assertRender(outcome);
@@ -352,7 +354,7 @@ describe("reducePrompt", () => {
       const config = makeConfig({ doublePressToConfirm: false, sessionScope });
       const opened = reducePrompt(config, initialPromptState(config), {
         type: "hotkey",
-        key: "s",
+        action: "approveSession",
       });
       assertRender(opened);
       const outcome = reducePrompt(config, opened.state, { type: "confirm" });
@@ -366,7 +368,7 @@ describe("reducePrompt", () => {
       const config = makeConfig({ doublePressToConfirm: false, sessionScope });
       const opened = reducePrompt(config, initialPromptState(config), {
         type: "hotkey",
-        key: "s",
+        action: "approveSession",
       });
       assertRender(opened);
       const moved = reducePrompt(config, opened.state, {
@@ -386,7 +388,7 @@ describe("reducePrompt", () => {
       const config = makeConfig({ doublePressToConfirm: false, sessionScope });
       const opened = reducePrompt(config, initialPromptState(config), {
         type: "hotkey",
-        key: "s",
+        action: "approveSession",
       });
       assertRender(opened);
       const outcome = reducePrompt(config, opened.state, { type: "cancel" });
@@ -399,7 +401,7 @@ describe("reducePrompt", () => {
       const config = makeConfig({ doublePressToConfirm: false });
       const outcome = reducePrompt(config, initialPromptState(config), {
         type: "hotkey",
-        key: "s",
+        action: "approveSession",
       });
       expect(outcome).toEqual({
         kind: "decision",
@@ -413,21 +415,26 @@ describe("reducePrompt", () => {
       'Yes, allow reads and writes to "/tmp/*" for this session';
 
     it("offers the width option only when the ask is widenable", () => {
-      expect(visibleOptionKeys(makeConfig({ widthLabel }))).toEqual([
-        "y",
-        "s",
-        "b",
-        "n",
-        "r",
+      expect(visibleActions(makeConfig({ widthLabel }))).toEqual([
+        "approve",
+        "approveSession",
+        "approveSessionBoth",
+        "deny",
+        "denyWithReason",
       ]);
-      expect(visibleOptionKeys(makeConfig())).toEqual(["y", "s", "n", "r"]);
+      expect(visibleActions(makeConfig())).toEqual([
+        "approve",
+        "approveSession",
+        "deny",
+        "denyWithReason",
+      ]);
     });
 
     it("commits the family width on b", () => {
       const config = makeConfig({ doublePressToConfirm: false, widthLabel });
       const outcome = reducePrompt(config, initialPromptState(config), {
         type: "hotkey",
-        key: "b",
+        action: "approveSessionBoth",
       });
       expect(outcome).toEqual({
         kind: "decision",
@@ -443,7 +450,7 @@ describe("reducePrompt", () => {
       const config = makeConfig({ doublePressToConfirm: false, widthLabel });
       const outcome = reducePrompt(config, initialPromptState(config), {
         type: "hotkey",
-        key: "s",
+        action: "approveSession",
       });
       expect(outcome).toEqual({
         kind: "decision",
@@ -455,14 +462,14 @@ describe("reducePrompt", () => {
       const config = makeConfig({ widthLabel });
       const outcome = reducePrompt(config, initialPromptState(config), {
         type: "hotkey",
-        key: "b",
+        action: "approveSessionBoth",
       });
       expect(outcome).toEqual({
         kind: "render",
         state: {
           step: "decision",
-          highlightedKey: "b",
-          armedKey: "b",
+          highlightedAction: "approveSessionBoth",
+          armedAction: "approveSessionBoth",
           hint: "Press b again to approve both directions for this session.",
           reasonError: undefined,
           scopeServing: false,
@@ -475,7 +482,7 @@ describe("reducePrompt", () => {
       const config = makeConfig({ doublePressToConfirm: false });
       const outcome = reducePrompt(config, initialPromptState(config), {
         type: "hotkey",
-        key: "b",
+        action: "approveSessionBoth",
       });
       expect(outcome).toEqual({
         kind: "render",
@@ -494,9 +501,15 @@ describe("reducePrompt", () => {
         });
         assertRender(outcome);
         state = outcome.state;
-        seen.push(state.highlightedKey);
+        seen.push(state.highlightedAction);
       }
-      expect(seen).toEqual(["s", "b", "n", "r", "y"]);
+      expect(seen).toEqual([
+        "approveSession",
+        "approveSessionBoth",
+        "deny",
+        "denyWithReason",
+        "approve",
+      ]);
     });
 
     it("skips b when navigating an ask that is not widenable", () => {
@@ -510,9 +523,14 @@ describe("reducePrompt", () => {
         });
         assertRender(outcome);
         state = outcome.state;
-        seen.push(state.highlightedKey);
+        seen.push(state.highlightedAction);
       }
-      expect(seen).toEqual(["s", "n", "r", "y"]);
+      expect(seen).toEqual([
+        "approveSession",
+        "deny",
+        "denyWithReason",
+        "approve",
+      ]);
     });
 
     describe("with a forwarded ask's scope step", () => {
@@ -529,7 +547,7 @@ describe("reducePrompt", () => {
         });
         const opened = reducePrompt(config, initialPromptState(config), {
           type: "hotkey",
-          key: "b",
+          action: "approveSessionBoth",
         });
         assertRender(opened);
         expect(opened.state.step).toBe("scope");
@@ -553,7 +571,7 @@ describe("reducePrompt", () => {
         });
         const opened = reducePrompt(config, initialPromptState(config), {
           type: "hotkey",
-          key: "b",
+          action: "approveSessionBoth",
         });
         assertRender(opened);
         const moved = reducePrompt(config, opened.state, {
@@ -579,7 +597,7 @@ describe("reducePrompt", () => {
         });
         const opened = reducePrompt(config, initialPromptState(config), {
           type: "hotkey",
-          key: "b",
+          action: "approveSessionBoth",
         });
         assertRender(opened);
         const cancelled = reducePrompt(config, opened.state, {
@@ -591,7 +609,7 @@ describe("reducePrompt", () => {
         // The narrow option must not inherit the width the user backed out of.
         const reopened = reducePrompt(config, cancelled.state, {
           type: "hotkey",
-          key: "s",
+          action: "approveSession",
         });
         assertRender(reopened);
         expect(
@@ -601,6 +619,36 @@ describe("reducePrompt", () => {
           decision: { approved: true, state: "approved_for_session" },
         });
       });
+    });
+  });
+
+  describe("bound characters", () => {
+    const REMAPPED = {
+      approve: "1",
+      approveSession: "2",
+      approveSessionBoth: "3",
+      deny: "4",
+      denyWithReason: "5",
+    } as const;
+
+    it("names the bound character in the arming hint", () => {
+      const config = makeConfig({ keys: REMAPPED });
+      const outcome = reducePrompt(config, initialPromptState(config), {
+        type: "hotkey",
+        action: "approve",
+      });
+      assertRender(outcome);
+      expect(outcome.state.hint).toBe("Press 1 again to approve.");
+    });
+
+    it("names the default letter when no binding was configured", () => {
+      const config = makeConfig();
+      const outcome = reducePrompt(config, initialPromptState(config), {
+        type: "hotkey",
+        action: "deny",
+      });
+      assertRender(outcome);
+      expect(outcome.state.hint).toBe("Press n again to deny.");
     });
   });
 });

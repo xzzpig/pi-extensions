@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Synced with upstream pi-permission-system v32.0.5 → v32.1.0** (fork 1.0.0 → 1.1.0). Adopted upstream's region-scoped tool-surface removal for custom system prompts (#919) and configurable permission-dialog hotkeys via `permissionDialogKeys` (#927), while preserving the fork's named permission profiles, session role layer, wrapper floors, and forwarded-decision broadcast.
+
+### Added
+
 - **Synced with upstream pi-permission-system v31.1.4 → v32.0.5** (fork 0.8.0 → 1.0.0). Adopted upstream's parent-session prompting for UI children (#907/#909), deny-preempts-ask (#899), transient filesystem retry for forwarded writes (#914), command-string secret redaction (#920), bash partial-parse salvage (#875), and unregistered chain-link warning (#861), while preserving the fork's named permission profiles, session role layer, wrapper floors, and forwarded-decision broadcast.
 
 ### Added
