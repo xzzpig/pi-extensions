@@ -4,6 +4,28 @@ All notable changes to the `@xzzpig/pi-btw` fork are documented here. This
 fork tracks [`dbachelder/pi-btw`](https://github.com/dbachelder/pi-btw) via git
 subtree; entries below describe only fork-specific deviations from upstream.
 
+## 0.8.0
+
+### Changed
+
+- **Synced upstream `v0.4.1` → `v0.5.0`**, adopting the new features: `Alt+w`
+  full-width overlay toggle, abort-first Escape while streaming, configurable
+  `PI_BTW_FOCUS_KEYS` focus shortcuts, Markdown rendering in the overlay,
+  custom-provider support in BTW sub-sessions, subscription/keyless model
+  auth, mouse-scroll preservation across TUI modes, overlay double-close
+  fix, RPC-host note surfacing, and the bundled `btw` skill in the npm
+  package. Turn endings now record an outcome (`completed`/`aborted`/
+  `failed`).
+- **The fork keeps its pi-components migration on top of the upstream
+  rewrite.** Upstream's own overlay transcript builder
+  (`buildOverlayTranscript` + per-entry helpers) is not adopted; rendering
+  stays on `@xzzpig/pi-components`'s shared `renderTranscriptLines` (already
+  markdown-aware via Pi's native components). The new outcome semantics were
+  added as an optional `outcome` field on turn-boundary entries in
+  `@xzzpig/pi-components` (`TranscriptTurnOutcome`, `finishTurn` third
+  parameter) so aborted/failed turns render and are counted consistently
+  with upstream.
+
 ## 0.7.1
 
 ### Changed
