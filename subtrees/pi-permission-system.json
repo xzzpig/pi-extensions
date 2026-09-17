@@ -5,10 +5,10 @@
   "upstreamPath": "packages/pi-permission-system",
   "source": "https://github.com/gotgenes/pi-packages.git",
   "remote": "upstream-pi-permission-system",
-  "ref": "pi-permission-system-v32.0.5",
-  "version": "32.0.5",
-  "upstreamCommit": "e74af72419c80f61e2636bd4d20c4d98b336d9c9",
+  "ref": "pi-permission-system-v32.1.0",
+  "version": "32.1.0",
+  "upstreamCommit": "e607d637f0bf8a7b24c54e545982f94a492aa831",
   "squash": true,
-  "lastSyncedAt": "2026-09-17T15:00:00+08:00",
-  "notes": "Forked from gotgenes/pi-packages; local wrapper-floor rework (fallback mode) intentionally diverges from upstream. v32.0.5 sync adopted upstream's parent-session prompting for UI children (#907/#909), deny-preempts-ask (#899), transient filesystem retry for forwarded writes (#914), command-string secret redaction (#920), bash partial-parse salvage (#875), and unregistered chain-link warning (#861), while preserving the fork's named permission profiles, session role layer, wrapper floors, and forwarded-decision broadcast. The bash salvage merge keeps fork's parseProgram recursion (wrapperFloors) alongside upstream's withSalvagedRoots via a module-level activeParseProgram."
+  "lastSyncedAt": "2026-09-17T15:55:00+08:00",
+  "notes": "Forked from gotgenes/pi-packages; local wrapper-floor rework (fallback mode) intentionally diverges from upstream. v32.1.0 sync adopted upstream's region-scoped tool-surface removal for custom system prompts (#919) and configurable permission-dialog hotkeys via permissionDialogKeys (#927), while preserving the fork's named permission profiles, session role layer, wrapper floors, and forwarded-decision broadcast. The bash salvage merge keeps fork's parseProgram recursion (wrapperFloors) alongside upstream's withSalvagedRoots."
 }
