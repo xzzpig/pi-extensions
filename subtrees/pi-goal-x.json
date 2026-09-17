@@ -4,9 +4,10 @@
   "prefix": "packages/pi-goal-x",
   "source": "https://github.com/tmonk/pi-goal-x.git",
   "remote": "upstream-pi-goal-x",
-  "ref": "v0.31.4",
-  "version": "0.31.4",
-  "upstreamCommit": "323fd4c3b07902e5b354f7d8b7fa0b7ae5bf072f",
+  "ref": "v0.31.5",
+  "version": "0.31.5",
+  "upstreamCommit": "5a7c4cd5b3d3bfb07a33f1babdaed8eedc4b9987",
   "squash": true,
-  "lastSyncedAt": "2026-09-16T03:47:35+08:00"
+  "lastSyncedAt": "2026-09-17T11:20:00+08:00",
+  "notes": "v0.31.5 sync: adopted upstream's strictExecutionContract opt-in setting (default false: successful executions continue automatically; strict mode requires explicit ready/wait with one missing-decision repair then pause). lifecyclePolicyBlock gained the strict parameter with fork's auditor/paused/tasks text preserved; cachedPrompt key extended with strictExecutionContract + scheduler.wait; goalContextMessagePrompt and buildGoalPrompt pass the strict flag. update_goal description/promptSnippet merged with the strictExecutionContract wait opt-in note. README adopted upstream's settings table + automatic-continuation section while keeping fork's config-inheritance paragraph and task-bindings note. goal-prompts.test.ts keeps fork's state-snapshot test and adds upstream's allowance-configuration test. Known pre-existing debt (not from this sync): tests/goal-auditor-package.test.ts D-04/D-05 fail because pi-subagents 0.15.0 injects contact_supervisor into the goal-auditor declaredBuiltin list; fix the test expectation when pi-subagents sync lands."
 }
