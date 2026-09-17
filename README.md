@@ -13,13 +13,15 @@ A small [pi](https://github.com/earendil-works/pi-mono) extension that adds a `/
 - keeps a continuous BTW thread by default
 - supports `/btw:tangent` for a contextless side thread that does not inherit the current main-session conversation
 - opens a focused BTW modal shell with its own composer and transcript
-- keeps the BTW overlay open while you switch focus back to the main editor with `Alt+/`
+- keeps the BTW overlay open while you switch focus back to the main editor with `Alt+/`, `Super+/`, or `Ctrl+Alt+W` (all remappable)
 - keeps BTW thread entries out of the main agent's future context
 - supports BTW-only model and thinking overrides without changing the main thread settings
 - lets you inject the full thread, or a summary of it, back into the main agent
 - optionally saves an individual BTW exchange as a visible session note with `--save`
 
 ## Install
+
+pi-btw requires Pi 0.85.1 or newer.
 
 ### From npm (after publish)
 
@@ -70,14 +72,24 @@ pi install /absolute/path/to/pi-btw
 - continues the current BTW thread
 - opens or refreshes the focused BTW modal shell
 - streams into the BTW modal transcript/status surface
+- on RPC/SDK hosts, displays completed inline-question responses as visible session notes instead
+- composer-only `/btw` requires the TUI; pass the question inline on RPC/SDK hosts
 - persists the BTW exchange as hidden thread state
 - with `--save`, also saves that single exchange as a visible session note
 
 ## Overlay controls
 
-- `Alt+/` toggles focus between BTW and the main editor without closing the overlay
-- `Ctrl+Alt+W` is a fallback focus toggle for terminals that do not deliver `Alt+/` as a usable shortcut
-- `Esc` still dismisses BTW immediately while the overlay is focused
+- `Alt+w` toggles the overlay between the framed window layout (inset from the terminal edges) and a full-width layout
+- full-width mode makes terminal Shift+drag selection capture only the dialog's own text, which is handy for copying without pulling in surrounding main-screen content
+- window mode keeps the full box frame; full-width mode drops the side borders and corner glyphs (keeping only horizontal rules) so those border columns never land inside a drag selection
+- `Alt+/`, `Super+/`, or `Ctrl+Alt+W` toggles focus between BTW and the main editor without closing the overlay
+- `Super+/` requires a terminal that reports the Super modifier, typically through the Kitty keyboard protocol
+- `Ctrl+Alt+W` remains a fallback for terminals that do not deliver either primary shortcut
+- set the `PI_BTW_FOCUS_KEYS` environment variable to remap these when they conflict with your window manager or terminal
+- the value is a comma-separated list of pi-tui key identifiers such as `PI_BTW_FOCUS_KEYS="ctrl+/,ctrl+alt+b"`; it replaces the defaults entirely
+- identifiers combine `ctrl`, `shift`, `alt`, and `super` with a single base key (letter, digit, symbol, or named key like `enter`/`f5`); blank or invalid entries are ignored, and the defaults are kept if none are usable
+- while BTW is streaming, the first `Esc` aborts the request and keeps its partial transcript visible; press `Esc` again to dismiss
+- while BTW is idle, `Esc` dismisses the overlay immediately
 - BTW now opens top-centered so the main session remains visible underneath it
 
 ### `/btw:new [question]`

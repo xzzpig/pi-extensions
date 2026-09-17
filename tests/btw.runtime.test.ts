@@ -1,12 +1,32 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, RegisteredCommand } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import btwExtension from "../extensions/btw";
+import btwExtension, {
+  describeFocusShortcuts,
+  isValidFocusShortcut,
+  resolveBtwFocusShortcuts,
+} from "../extensions/btw";
 
-const { promptStreamMock, createAgentSessionMock, sessionManagerInMemoryMock, subSessionRecords } = vi.hoisted(() => ({
+const {
+  promptStreamMock,
+  createAgentSessionMock,
+  sessionManagerInMemoryMock,
+  modelRuntimeExport,
+  modelRuntimeCreateMock,
+  modelRuntimeRecords,
+  subSessionRecords,
+} = vi.hoisted(() => ({
   promptStreamMock: vi.fn(),
   createAgentSessionMock: vi.fn(),
   sessionManagerInMemoryMock: vi.fn(() => ({ type: "in-memory-session" })),
+  modelRuntimeExport: {} as { create: ReturnType<typeof vi.fn> },
+  modelRuntimeCreateMock: vi.fn(),
+  modelRuntimeRecords: [] as Array<{
+    registerProvider: ReturnType<typeof vi.fn>;
+    registerNativeProvider: ReturnType<typeof vi.fn>;
+    refresh: ReturnType<typeof vi.fn>;
+    setRuntimeApiKey: ReturnType<typeof vi.fn>;
+  }>,
   subSessionRecords: [] as Array<{
     options: any;
     session: any;
@@ -18,11 +38,30 @@ const { promptStreamMock, createAgentSessionMock, sessionManagerInMemoryMock, su
   }>,
 }));
 
+const markdownTheme = {
+  heading: (text: string) => `<heading>${text}</heading>`,
+  link: (text: string) => text,
+  linkUrl: (text: string) => text,
+  code: (text: string) => text,
+  codeBlock: (text: string) => text,
+  codeBlockBorder: (text: string) => text,
+  quote: (text: string) => text,
+  quoteBorder: (text: string) => text,
+  hr: (text: string) => text,
+  listBullet: (text: string) => text,
+  bold: (text: string) => `<bold>${text}</bold>`,
+  italic: (text: string) => `<italic>${text}</italic>`,
+  strikethrough: (text: string) => text,
+  underline: (text: string) => text,
+};
+
 vi.mock("@earendil-works/pi-coding-agent", async () => {
   const actual = await vi.importActual<typeof import("@earendil-works/pi-coding-agent")>("@earendil-works/pi-coding-agent");
   return {
     ...actual,
     createAgentSession: createAgentSessionMock,
+    getMarkdownTheme: () => markdownTheme,
+    ModelRuntime: modelRuntimeExport,
     SessionManager: {
       ...actual.SessionManager,
       inMemory: sessionManagerInMemoryMock,
@@ -32,6 +71,10 @@ vi.mock("@earendil-works/pi-coding-agent", async () => {
 
 type CustomEntry = { type: "custom"; customType: string; data?: unknown };
 type SessionEntry = CustomEntry | { type: string; role?: string; customType?: string; content?: unknown; [key: string]: unknown };
+
+type TestAuthResult =
+  | { ok: true; apiKey?: string; headers?: Record<string, string>; env?: Record<string, string> }
+  | { ok: false; error: string };
 
 type StreamContext = {
   systemPrompt: string;
@@ -166,6 +209,28 @@ function createBlockingToolStream() {
         type: "error" as const,
         error: {
           ...makeAssistantMessage(""),
+          stopReason: "aborted" as const,
+        },
+      };
+    },
+  };
+}
+
+function createBlockingPartialAbortStream() {
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  return {
+    release,
+    stream: async function* () {
+      yield { type: "text_delta" as const, delta: "Partial answer" };
+      await blocked;
+      yield {
+        type: "error" as const,
+        error: {
+          ...makeAssistantMessage("Partial answer"),
           stopReason: "aborted" as const,
         },
       };
@@ -455,10 +520,13 @@ function createHarness(
       bold: (text: string) => string;
     };
     keybindingMatches?: (data: string, id: string) => boolean;
+    tuiMode?: "regular" | "fullscreen";
+    contextMode?: "tui" | "rpc" | "json" | "print";
   } = {},
 ) {
   const commands = new Map<string, RegisteredCommand>();
   const shortcuts = new Map<string, any>();
+  const messageRenderers = new Map<string, any>();
   const handlers = new Map<string, Function[]>();
   const entries: SessionEntry[] = [...initialEntries];
   const notifications: Array<{ message: string; type?: string }> = [];
@@ -467,7 +535,12 @@ function createHarness(
   const sentUserMessages: Array<{ content: unknown; options?: unknown }> = [];
   const overlayHandles: FakeOverlayHandle[] = [];
   const overlays: Array<{ factoryOptions?: unknown; done?: (result: unknown) => void; component?: any }> = [];
-  const tui = { requestRender: vi.fn() };
+  const terminalWrites: string[] = [];
+  const tui = {
+    requestRender: vi.fn(),
+    terminal: { write: (data: string) => terminalWrites.push(data) },
+    mode: options.tuiMode,
+  };
   const theme = options.theme ?? {
     fg: (_name: string, text: string) => text,
     bg: (_name: string, text: string) => text,
@@ -488,11 +561,21 @@ function createHarness(
   let idle = true;
   let hasCredentials = true;
   let mainThinkingLevel: string = "off";
+  let credentialSource: string | undefined;
+  let authResolver: ((model: { provider: string; id: string; api: string }) => TestAuthResult | Promise<TestAuthResult>) | null = null;
+  let configuredAuthResolver: ((model: { provider: string; id: string; api: string }) => boolean) | null = null;
   let credentialResolver: ((model: { provider: string; id: string; api: string }) => string | undefined) | null = null;
   // Models that ctx.modelRegistry.find(provider, id) should return for /btw:model resolution.
   // Tests that exercise overrides should call harness.registerModel(...) so the resolved
   // Model.api preserves the value the test cares about (otherwise we synthesize a default).
   const registeredModels = new Map<string, { provider: string; id: string; api: string }>();
+  const registeredProviderConfigs = new Map<string, unknown>();
+  const registeredNativeProviders = new Map<string, unknown>();
+  const modelRegistryRuntime = {
+    registeredProviderConfigs,
+    registeredNativeProviders,
+    getCredentialSource: () => credentialSource,
+  };
   // Pre-register the common BTW override fixture used by most tests.
   registeredModels.set("fast-provider/fast-model", { provider: "fast-provider", id: "fast-model", api: "custom-api" });
   const mainSessionInputs: string[] = [];
@@ -507,13 +590,20 @@ function createHarness(
     },
     custom: async (factory: any, options?: any) => {
       let done!: (result: unknown) => void;
+      let component: any;
       const resultPromise = new Promise((resolve) => {
-        done = (result: unknown) => resolve(result);
+        done = (result: unknown) => {
+          // Match pi's custom-overlay close callback: pop the topmost overlay,
+          // then dispose the component after resolving the custom UI promise.
+          overlayHandles.at(-1)?.hide();
+          component?.dispose?.();
+          resolve(result);
+        };
       });
       const handle = new FakeOverlayHandle();
       overlayHandles.push(handle);
       options?.onHandle?.(handle);
-      const component = await factory(tui as any, theme as any, keybindings as any, done);
+      component = await factory(tui as any, theme as any, keybindings as any, done);
       overlays.push({ factoryOptions: options, done, component });
       return resultPromise;
     },
@@ -553,7 +643,7 @@ function createHarness(
     }) as any,
     registerFlag: vi.fn() as any,
     getFlag: vi.fn() as any,
-    registerMessageRenderer: vi.fn() as any,
+    registerMessageRenderer: ((type: string, renderer: unknown) => messageRenderers.set(type, renderer)) as any,
     sendMessage: ((message: unknown, options?: unknown) => sentMessages.push({ message, options })) as any,
     sendUserMessage: ((content: unknown, options?: unknown) => sentUserMessages.push({ content, options })) as any,
     appendEntry: ((customType: string, data?: unknown) => entries.push({ type: "custom", customType, data })) as any,
@@ -575,24 +665,64 @@ function createHarness(
 
   const baseCtx = {
     hasUI: true,
+    mode: options.contextMode ?? "tui",
     ui: ui as any,
     sessionManager: sessionManager as any,
     modelRegistry: {
+      runtime: modelRegistryRuntime,
       getApiKeyAndHeaders: vi.fn(async (requestedModel: { provider: string; id: string; api: string }) => {
+        if (authResolver) {
+          return authResolver(requestedModel);
+        }
         if (credentialResolver) {
           const key = credentialResolver(requestedModel);
           return key ? { ok: true, apiKey: key, headers: undefined } : { ok: true, apiKey: undefined, headers: undefined };
         }
         return hasCredentials ? { ok: true, apiKey: "test-key", headers: undefined } : { ok: true, apiKey: undefined, headers: undefined };
       }),
-      // pi 0.74 ExtensionContext.modelRegistry.find(provider, modelId) -> Model<Api> | undefined.
-      // The mock looks up entries from `registeredModels`; falls back to a default api so legacy
-      // tests that don't register a model still get a non-null result.
+      hasConfiguredAuth: vi.fn((requestedModel: { provider: string; id: string; api: string }) => {
+        if (configuredAuthResolver) {
+          return configuredAuthResolver(requestedModel);
+        }
+        if (authResolver) {
+          const auth = authResolver(requestedModel);
+          if (auth instanceof Promise) {
+            return false;
+          }
+          return (
+            auth.ok &&
+            (!!auth.apiKey || !!Object.keys(auth.headers ?? {}).length || !!Object.keys(auth.env ?? {}).length)
+          );
+        }
+        if (credentialResolver) {
+          return !!credentialResolver(requestedModel);
+        }
+        return hasCredentials;
+      }),
+      // Resolve explicitly registered fixtures, falling back to the harness model shape.
       find: vi.fn((provider: string, id: string) => {
         const key = `${provider}/${id}`;
         const known = registeredModels.get(key);
         if (known) return known;
         return { provider, id, api: "anthropic-messages" } as any;
+      }),
+      // ModelRegistry methods delegate through runtime state. Keep the receiver
+      // dependency here so detached method calls fail in tests too.
+      getRegisteredProviderConfig: vi.fn(function (
+        this: { runtime: typeof modelRegistryRuntime },
+        provider: string,
+      ) {
+        return this.runtime.registeredProviderConfigs.get(provider);
+      }),
+      getRegisteredNativeProvider: vi.fn(function (
+        this: { runtime: typeof modelRegistryRuntime },
+        provider: string,
+      ) {
+        return this.runtime.registeredNativeProviders.get(provider);
+      }),
+      getProviderAuthStatus: vi.fn(function (this: { runtime: typeof modelRegistryRuntime }) {
+        const source = this.runtime.getCredentialSource();
+        return source ? { configured: true, source } : { configured: false };
       }),
     },
     model,
@@ -651,12 +781,14 @@ function createHarness(
   return {
     api,
     entries,
+    messageRenderers,
     notifications,
     widgets,
     sentMessages,
     sentUserMessages,
     overlayHandles,
     overlays,
+    terminalWrites,
     baseCtx,
     mainSessionInputs,
     runSessionStart,
@@ -675,12 +807,27 @@ function createHarness(
     setCredentialResolver(value: ((model: { provider: string; id: string; api: string }) => string | undefined) | null) {
       credentialResolver = value;
     },
+    setAuthResolver(value: ((model: { provider: string; id: string; api: string }) => TestAuthResult | Promise<TestAuthResult>) | null) {
+      authResolver = value;
+    },
+    setConfiguredAuthResolver(value: ((model: { provider: string; id: string; api: string }) => boolean) | null) {
+      configuredAuthResolver = value;
+    },
+    setCredentialSource(value: string | undefined) {
+      credentialSource = value;
+    },
     setMainThinkingLevel(value: string) {
       mainThinkingLevel = value;
     },
     /** Register a model so ctx.modelRegistry.find(provider, id) returns it (with the given api). */
     registerModel(provider: string, id: string, api: string) {
       registeredModels.set(`${provider}/${id}`, { provider, id, api });
+    },
+    registerProviderConfig(provider: string, config: unknown) {
+      registeredProviderConfigs.set(provider, config);
+    },
+    registerNativeProvider(provider: string, nativeProvider: unknown) {
+      registeredNativeProviders.set(provider, nativeProvider);
     },
   };
 }
@@ -690,9 +837,22 @@ describe("btw runtime behavior", () => {
     promptStreamMock.mockReset();
     createAgentSessionMock.mockReset();
     sessionManagerInMemoryMock.mockClear();
+    modelRuntimeCreateMock.mockReset();
+    modelRuntimeExport.create = modelRuntimeCreateMock;
+    modelRuntimeRecords.length = 0;
     subSessionRecords.length = 0;
 
     createAgentSessionMock.mockImplementation(async (options: any) => createMockAgentSession(options));
+    modelRuntimeCreateMock.mockImplementation(async () => {
+      const runtime = {
+        registerProvider: vi.fn(),
+        registerNativeProvider: vi.fn(),
+        refresh: vi.fn(async () => ({ aborted: false, errors: new Map() })),
+        setRuntimeApiKey: vi.fn(async () => {}),
+      };
+      modelRuntimeRecords.push(runtime);
+      return runtime;
+    });
     promptStreamMock.mockImplementation((_record: unknown, _text: string, context: StreamContext) => {
       return streamAnswer(`default:${(context.messages.at(-1)?.content[0] as any)?.text ?? ""}`);
     });
@@ -709,17 +869,165 @@ describe("btw runtime behavior", () => {
 
     const options = createAgentSessionMock.mock.calls[0][0];
     expect(options.model).toBe(harness.baseCtx.model);
-    expect(options.modelRegistry).toBe(harness.baseCtx.modelRegistry);
+    expect(options).not.toHaveProperty("modelRegistry");
+    expect(options).not.toHaveProperty("modelRuntime");
     expect(options.tools).toEqual(["read", "bash", "edit", "write"]);
     expect(options.resourceLoader.getAppendSystemPrompt()[0]).toContain(
       "You are having an aside conversation with the user, separate from their main working session.",
     );
+    expect(options.resourceLoader.getSystemPromptSource()).toBeUndefined();
+    expect(options.resourceLoader.getAppendSystemPromptSources()).toEqual([]);
 
     const subSession = subSessionRecords[0]?.session;
     expect(subSession).toBeDefined();
     expect(subSession.bindExtensions).not.toHaveBeenCalled();
     expect(subSession.getActiveToolNames()).toEqual(["read", "bash", "edit", "write"]);
     expect(subSession.prompt).toHaveBeenCalledWith("first question", { source: "extension" });
+  });
+
+  it("accepts configured keyless auth for normal BTW prompts", async () => {
+    const harness = createHarness();
+    harness.setAuthResolver(() => ({ ok: true }));
+    harness.setConfiguredAuthResolver(() => true);
+
+    await harness.runSessionStart();
+    await harness.command("btw", "credential-chain question");
+
+    expect(createAgentSessionMock).toHaveBeenCalledTimes(1);
+    expect(subSessionRecords[0]?.session.prompt).toHaveBeenCalledWith("credential-chain question", { source: "extension" });
+    expect(getCustomEntries(harness.entries, "btw-thread-entry")).toHaveLength(1);
+    expect(harness.notifications.some((entry) => entry.message.includes("No credentials"))).toBe(false);
+  });
+
+  it("accepts header-based auth for a BTW model override", async () => {
+    const harness = createHarness();
+    harness.setAuthResolver((requestedModel) =>
+      requestedModel.provider === "fast-provider"
+        ? { ok: true, headers: { Authorization: "Bearer subscription-token" } }
+        : { ok: true, apiKey: "main-key" },
+    );
+
+    await harness.runSessionStart();
+    await harness.command("btw:model", "fast-provider fast-model custom-api");
+    await harness.command("btw", "subscription question");
+
+    expect(createAgentSessionMock.mock.calls[0][0].model).toEqual({
+      provider: "fast-provider",
+      id: "fast-model",
+      api: "custom-api",
+    });
+  });
+
+  it("accepts environment-based auth when summarizing", async () => {
+    const harness = createHarness();
+    promptStreamMock
+      .mockImplementationOnce(() => streamAnswer("First answer"))
+      .mockImplementationOnce(() => streamAnswer("Environment-auth summary"));
+
+    await harness.runSessionStart();
+    await harness.command("btw", "first question");
+    harness.setAuthResolver(() => ({ ok: true, env: { AWS_PROFILE: "bedrock" } }));
+    await harness.command("btw:summarize", "handoff this");
+
+    expect(createAgentSessionMock).toHaveBeenCalledTimes(2);
+    expect(harness.sentUserMessages[0]?.content).toBe(
+      "Here is a summary of a side conversation I had. handoff this\n\nEnvironment-auth summary",
+    );
+  });
+
+  it("copies a registered custom provider into BTW and summary child runtimes", async () => {
+    const harness = createHarness();
+    const providerConfig = { api: "commandcode-custom", streamSimple: vi.fn() };
+    harness.registerProviderConfig("test-provider", providerConfig);
+
+    await harness.runSessionStart();
+    await harness.command("btw", "first question");
+    await harness.command("btw:summarize", "handoff this");
+
+    expect(modelRuntimeCreateMock).toHaveBeenCalledTimes(2);
+    expect(modelRuntimeCreateMock).toHaveBeenCalledWith({ allowModelNetwork: false });
+    expect(modelRuntimeRecords).toHaveLength(2);
+    for (const runtime of modelRuntimeRecords) {
+      expect(runtime.registerProvider).toHaveBeenCalledWith("test-provider", providerConfig);
+      expect(runtime.refresh).toHaveBeenCalledWith({ allowNetwork: false });
+    }
+
+    expect(createAgentSessionMock.mock.calls[0][0].modelRuntime).toBe(modelRuntimeRecords[0]);
+    expect(createAgentSessionMock.mock.calls[1][0].modelRuntime).toBe(modelRuntimeRecords[1]);
+  });
+
+  it("copies a temporary runtime API key into BTW and summary child runtimes", async () => {
+    const harness = createHarness();
+    harness.registerProviderConfig("test-provider", { api: "commandcode-custom", streamSimple: vi.fn() });
+    harness.setCredentialSource("runtime");
+
+    await harness.runSessionStart();
+    await harness.command("btw", "first question");
+    await harness.command("btw:summarize", "handoff this");
+
+    expect(modelRuntimeRecords).toHaveLength(2);
+    for (const runtime of modelRuntimeRecords) {
+      expect(runtime.setRuntimeApiKey).toHaveBeenCalledWith("test-provider", "test-key");
+    }
+  });
+
+  it("copies a temporary runtime API key even when no provider registration needs copying", async () => {
+    const harness = createHarness();
+    harness.setCredentialSource("runtime");
+
+    await harness.runSessionStart();
+    await harness.command("btw", "first question");
+    await harness.command("btw:summarize", "handoff this");
+
+    expect(modelRuntimeRecords).toHaveLength(2);
+    for (const runtime of modelRuntimeRecords) {
+      expect(runtime.registerProvider).not.toHaveBeenCalled();
+      expect(runtime.setRuntimeApiKey).toHaveBeenCalledWith("test-provider", "test-key");
+    }
+  });
+
+  it("copies a custom BTW model override into both child runtimes without changing thinking behavior", async () => {
+    const harness = createHarness();
+    const providerConfig = { api: "custom-api", streamSimple: vi.fn() };
+    harness.registerModel("override-provider", "override-model", "custom-api");
+    harness.registerProviderConfig("override-provider", providerConfig);
+
+    await harness.runSessionStart();
+    await harness.command("btw:model", "override-provider override-model custom-api");
+    await harness.command("btw:thinking", "low");
+    await harness.command("btw", "first question");
+    await harness.command("btw:summarize", "handoff this");
+
+    expect(modelRuntimeRecords).toHaveLength(2);
+    for (const runtime of modelRuntimeRecords) {
+      expect(runtime.registerProvider).toHaveBeenCalledWith("override-provider", providerConfig);
+    }
+
+    const [btwOptions, summaryOptions] = createAgentSessionMock.mock.calls.map(([options]) => options);
+    expect(btwOptions).toMatchObject({
+      model: { provider: "override-provider", id: "override-model", api: "custom-api" },
+      thinkingLevel: "low",
+      modelRuntime: modelRuntimeRecords[0],
+    });
+    expect(summaryOptions).toMatchObject({
+      model: { provider: "override-provider", id: "override-model", api: "custom-api" },
+      thinkingLevel: "off",
+      modelRuntime: modelRuntimeRecords[1],
+    });
+  });
+
+  it("copies a registered native provider into the BTW child runtime", async () => {
+    const harness = createHarness();
+    const nativeProvider = { id: "test-provider" };
+    harness.registerNativeProvider("test-provider", nativeProvider);
+
+    await harness.runSessionStart();
+    await harness.command("btw", "first question");
+
+    expect(modelRuntimeCreateMock).toHaveBeenCalledTimes(1);
+    expect(modelRuntimeRecords[0].registerNativeProvider).toHaveBeenCalledWith(nativeProvider);
+    expect(modelRuntimeRecords[0].registerProvider).not.toHaveBeenCalled();
+    expect(createAgentSessionMock.mock.calls[0][0].modelRuntime).toBe(modelRuntimeRecords[0]);
   });
 
   it("uses BTW-specific model and thinking overrides for BTW prompts", async () => {
@@ -807,9 +1115,8 @@ describe("btw runtime behavior", () => {
         },
       },
     ]);
-    // pi 0.74: ctx.modelRegistry.find(provider, id) is the source of truth for the
-    // resolved Model. Register the saved override so restoration produces a Model whose
-    // .api matches what the persisted session was created with.
+    // Register the saved override so restoration resolves a model whose API matches
+    // the persisted session entry.
     harness.registerModel("saved-provider", "saved-model", "saved-api");
 
     await harness.runSessionStart();
@@ -1048,10 +1355,12 @@ describe("btw runtime behavior", () => {
     expect(harness.overlayHandles.at(-1)?.hideCalls).toBe(1);
   });
 
-  it("aborts, disposes, and unsubscribes the active BTW sub-session when Escape dismisses mid-stream", async () => {
+  it("aborts mid-stream on first Escape but keeps the overlay open, then dismisses on second Escape", async () => {
     const harness = createHarness();
     const blocking = createBlockingToolStream();
-    promptStreamMock.mockImplementation(() => blocking.stream());
+    promptStreamMock
+      .mockImplementationOnce(() => blocking.stream())
+      .mockImplementationOnce(() => streamAnswer("Recovered after abort"));
 
     await harness.runSessionStart();
     const pendingCommand = harness.command("btw", "first question");
@@ -1065,17 +1374,286 @@ describe("btw runtime behavior", () => {
     expect(firstRecord.getIsStreaming()).toBe(true);
     expect(firstRecord.getListenerCount()).toBe(1);
 
+    // First Escape: abort the in-flight request, keep the overlay open.
     overlay.input.onEscape?.();
     await flushAsyncWork();
 
     expect(firstRecord.session.abort).toHaveBeenCalledTimes(1);
-    expect(firstRecord.session.dispose).toHaveBeenCalledTimes(1);
+    expect(firstRecord.session.dispose).not.toHaveBeenCalled();
+    expect(firstRecord.getListenerCount()).toBe(1);
+    expect(harness.overlayHandles.at(-1)?.hideCalls).toBe(0);
+    expect(overlay.statusText.text).toContain("Press Esc again to dismiss");
+
+    // The aborted request settles without persisting a completed exchange, while
+    // its partial user/tool transcript remains readable.
+    blocking.release();
+    await pendingCommand;
     expect(firstRecord.getIsStreaming()).toBe(false);
+    expect(getCustomEntries(harness.entries, "btw-thread-entry")).toHaveLength(0);
+    expect(transcriptText(overlay)).toContain("first question");
+    expect(transcriptText(overlay)).toContain("read");
+
+    // The same side session remains usable for a successful follow-up.
+    overlay.input.onSubmit?.("follow-up after abort");
+    await flushAsyncWork();
+
+    expect(firstRecord.session.prompt).toHaveBeenLastCalledWith("follow-up after abort", { source: "extension" });
+    expect(getCustomEntries(harness.entries, "btw-thread-entry")).toHaveLength(1);
+    expect(transcriptText(overlay)).toContain("first question");
+    expect(transcriptText(overlay)).toContain("follow-up after abort");
+    expect(transcriptText(overlay)).toContain("Recovered after abort");
+
+    // Second Escape (now idle): dismiss and dispose as before.
+    overlay.input.onEscape?.();
+    await flushAsyncWork();
+
+    expect(firstRecord.session.dispose).toHaveBeenCalledTimes(1);
     expect(firstRecord.getListenerCount()).toBe(0);
     expect(harness.overlayHandles.at(-1)?.hideCalls).toBe(1);
+  });
+
+  it("keeps partial assistant output visible without counting or persisting an aborted exchange", async () => {
+    const harness = createHarness();
+    const blocking = createBlockingPartialAbortStream();
+    promptStreamMock.mockImplementation(() => blocking.stream());
+
+    await harness.runSessionStart();
+    const pendingCommand = harness.command("btw", "partial question");
+    await flushAsyncWork();
+
+    const overlay = harness.latestOverlayComponent();
+    expect(transcriptText(overlay)).toContain("Partial answer");
+
+    overlay.input.onEscape?.();
+    await flushAsyncWork();
+    blocking.release();
+    await pendingCommand;
+
+    expect(transcriptText(overlay)).toContain("Partial answer");
+    expect(findLatest(transcriptEntries(overlay), (entry: any) => entry.type === "assistant-text")).toMatchObject({
+      text: "Partial answer",
+      streaming: false,
+    });
+    expect(overlay.summaryText.text).toContain("0 exchanges");
+    expect(getCustomEntries(harness.entries, "btw-thread-entry")).toHaveLength(0);
+  });
+
+  it("waits for abort settlement before submitting a follow-up", async () => {
+    const harness = createHarness();
+    const blocking = createBlockingToolStream();
+    promptStreamMock
+      .mockImplementationOnce(() => blocking.stream())
+      .mockImplementationOnce(() => streamAnswer("First follow-up after cancellation"))
+      .mockImplementationOnce(() => streamAnswer("Second follow-up after cancellation"));
+
+    await harness.runSessionStart();
+    const pendingCommand = harness.command("btw", "cancel this");
+    await flushAsyncWork();
+
+    const overlay = harness.latestOverlayComponent();
+    const record = subSessionRecords[0];
+    let releaseAbort!: () => void;
+    const abortPending = new Promise<void>((resolve) => {
+      releaseAbort = resolve;
+    });
+    record.session.abort.mockImplementationOnce(() => abortPending);
+
+    overlay.input.onEscape?.();
+    await flushAsyncWork();
+    overlay.input.onSubmit?.("first follow-up while cancelling");
+    overlay.input.onSubmit?.("second follow-up while cancelling");
+    await flushAsyncWork();
+
+    expect(record.session.prompt).toHaveBeenCalledTimes(1);
+    expect(record.session.abort).toHaveBeenCalledTimes(1);
+    expect(record.session.dispose).not.toHaveBeenCalled();
+    expect(transcriptText(overlay)).not.toContain("Agent is already processing");
 
     blocking.release();
     await pendingCommand;
+    releaseAbort();
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    expect(record.session.prompt).toHaveBeenCalledTimes(3);
+    expect(record.session.prompt).toHaveBeenNthCalledWith(2, "first follow-up while cancelling", { source: "extension" });
+    expect(record.session.prompt).toHaveBeenNthCalledWith(3, "second follow-up while cancelling", { source: "extension" });
+    expect(record.session.abort).toHaveBeenCalledTimes(1);
+    expect(record.session.dispose).not.toHaveBeenCalled();
+    expect(getCustomEntries(harness.entries, "btw-thread-entry")).toHaveLength(2);
+    expect(transcriptText(overlay)).toContain("First follow-up after cancellation");
+    expect(transcriptText(overlay)).toContain("Second follow-up after cancellation");
+    expect(transcriptText(overlay)).not.toContain("Agent is already processing");
+  });
+
+  it("does not revive a dismissed session after delayed prompt preflight", async () => {
+    const harness = createHarness();
+
+    await harness.runSessionStart();
+    await harness.command("btw", "");
+
+    const overlay = harness.latestOverlayComponent();
+    const record = subSessionRecords[0];
+    let releaseAuth!: (auth: TestAuthResult) => void;
+    const authPending = new Promise<TestAuthResult>((resolve) => {
+      releaseAuth = resolve;
+    });
+    harness.setAuthResolver(() => authPending);
+    harness.setConfiguredAuthResolver(() => true);
+
+    overlay.input.onSubmit?.("stale preflight follow-up");
+    await flushAsyncWork();
+    overlay.input.onEscape?.();
+    await flushAsyncWork();
+
+    expect(harness.overlayHandles.at(-1)?.hideCalls).toBe(1);
+    expect(record.session.dispose).toHaveBeenCalledTimes(1);
+    expect(record.session.prompt).not.toHaveBeenCalled();
+
+    releaseAuth({ ok: true, headers: { Authorization: "Bearer delayed" } });
+    await flushAsyncWork();
+    await flushAsyncWork();
+
+    expect(createAgentSessionMock).toHaveBeenCalledTimes(1);
+    expect(record.session.prompt).not.toHaveBeenCalled();
+    expect(getCustomEntries(harness.entries, "btw-thread-entry")).toHaveLength(0);
+    expect(harness.overlays).toHaveLength(1);
+  });
+
+  it("dismisses on a rapid second Escape while the first abort is still settling", async () => {
+    const harness = createHarness();
+    const blocking = createBlockingToolStream();
+    promptStreamMock.mockImplementation(() => blocking.stream());
+
+    await harness.runSessionStart();
+    const pendingCommand = harness.command("btw", "slow abort");
+    await flushAsyncWork();
+
+    const overlay = harness.latestOverlayComponent();
+    const record = subSessionRecords[0];
+    let releaseAbort!: () => void;
+    const abortPending = new Promise<void>((resolve) => {
+      releaseAbort = resolve;
+    });
+    record.session.abort.mockImplementationOnce(() => abortPending);
+
+    overlay.input.onEscape?.();
+    await flushAsyncWork();
+    expect(record.getIsStreaming()).toBe(true);
+    expect(overlay.statusText.text).toContain("Aborting");
+
+    overlay.input.onEscape?.();
+    await flushAsyncWork();
+    expect(harness.overlayHandles.at(-1)?.hideCalls).toBe(1);
+    expect(record.getListenerCount()).toBe(0);
+    expect(record.session.dispose).not.toHaveBeenCalled();
+
+    blocking.release();
+    await pendingCommand;
+    releaseAbort();
+    await flushAsyncWork();
+
+    expect(record.session.abort).toHaveBeenCalledTimes(1);
+    expect(record.session.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  for (const handoffCommand of ["btw:inject", "btw:summarize"] as const) {
+    it(`waits for a first pending turn before ${handoffCommand}`, async () => {
+      const harness = createHarness();
+      const blocking = createBlockingSuccessStream("First pending answer");
+      promptStreamMock.mockImplementationOnce(() => blocking.stream());
+      if (handoffCommand === "btw:summarize") {
+        promptStreamMock.mockImplementationOnce(() => streamAnswer("Pending turn summary"));
+      }
+
+      await harness.runSessionStart();
+      const pendingTurn = harness.command("btw", "first pending question");
+      await flushAsyncWork();
+      const handoff = harness.command(handoffCommand, "");
+      await flushAsyncWork();
+
+      expect(harness.sentUserMessages).toHaveLength(0);
+      expect(harness.notifications.some((entry) => entry.message.includes("No BTW thread"))).toBe(false);
+
+      blocking.release();
+      await pendingTurn;
+      await handoff;
+
+      expect(harness.sentUserMessages).toHaveLength(1);
+      const content = String(harness.sentUserMessages[0]?.content);
+      if (handoffCommand === "btw:inject") {
+        expect(content).toContain("first pending question");
+        expect(content).toContain("First pending answer");
+      } else {
+        expect(content).toContain("Pending turn summary");
+      }
+    });
+  }
+
+  it("waits for cancellation before extracting a handoff", async () => {
+    const harness = createHarness();
+    const blocking = createBlockingToolStream();
+    promptStreamMock
+      .mockImplementationOnce(() => streamAnswer("Existing answer"))
+      .mockImplementationOnce(() => blocking.stream());
+
+    await harness.runSessionStart();
+    await harness.command("btw", "existing question");
+
+    const overlay = harness.latestOverlayComponent();
+    const record = subSessionRecords[0];
+    overlay.input.onSubmit?.("cancelling question");
+    await flushAsyncWork();
+
+    let releaseAbort!: () => void;
+    const abortPending = new Promise<void>((resolve) => {
+      releaseAbort = resolve;
+    });
+    record.session.abort.mockImplementationOnce(() => abortPending);
+
+    overlay.input.onEscape?.();
+    await flushAsyncWork();
+    const handoff = harness.command("btw:inject", "");
+    await flushAsyncWork();
+
+    expect(harness.sentUserMessages).toHaveLength(0);
+
+    blocking.release();
+    await flushAsyncWork();
+    releaseAbort();
+    await handoff;
+
+    expect(harness.sentUserMessages).toHaveLength(1);
+    expect(harness.sentUserMessages[0]?.content).toContain("existing question");
+    expect(harness.sentUserMessages[0]?.content).toContain("Existing answer");
+    expect(harness.sentUserMessages[0]?.content).not.toContain("cancelling question");
+  });
+
+  it("excludes an aborted turn from a later handoff", async () => {
+    const harness = createHarness();
+    const blocking = createBlockingToolStream();
+    promptStreamMock
+      .mockImplementationOnce(() => blocking.stream())
+      .mockImplementationOnce(() => streamAnswer("Follow-up answer"));
+
+    await harness.runSessionStart();
+    const pendingCommand = harness.command("btw", "aborted question");
+    await flushAsyncWork();
+
+    const overlay = harness.latestOverlayComponent();
+    overlay.input.onEscape?.();
+    await flushAsyncWork();
+    blocking.release();
+    await pendingCommand;
+
+    overlay.input.onSubmit?.("completed follow-up");
+    await flushAsyncWork();
+    await harness.command("btw:inject", "");
+
+    expect(harness.sentUserMessages).toHaveLength(1);
+    expect(harness.sentUserMessages[0]?.content).toContain("completed follow-up");
+    expect(harness.sentUserMessages[0]?.content).toContain("Follow-up answer");
+    expect(harness.sentUserMessages[0]?.content).not.toContain("aborted question");
   });
 
   it("allows main-session input to proceed while the BTW sub-session is streaming", async () => {
@@ -1116,6 +1694,23 @@ describe("btw runtime behavior", () => {
 
     mainTurn.finish();
     expect(harness.baseCtx.isIdle()).toBe(true);
+  });
+
+  it("dismisses immediately on Escape when the side session is idle", async () => {
+    const harness = createHarness();
+
+    await harness.runSessionStart();
+    await harness.command("btw", "");
+
+    const overlay = harness.latestOverlayComponent();
+    const record = subSessionRecords[0];
+    expect(record.getIsStreaming()).toBe(false);
+
+    overlay.input.onEscape?.();
+    await flushAsyncWork();
+
+    expect(record.session.dispose).toHaveBeenCalledTimes(1);
+    expect(harness.overlayHandles.at(-1)?.hideCalls).toBe(1);
   });
 
   it("ignores late session events after overlay dismissal disposes the sub-session", async () => {
@@ -1290,7 +1885,7 @@ describe("btw runtime behavior", () => {
 
     const transcript = transcriptText(overlay);
     expect(transcript).toContain("<bg:toolPendingBg>");
-    expect(transcript).toContain("<italic>Inspecting package.json</italic>");
+    expect(transcript).toContain("<italic><fg:warning>Inspecting package.json</fg:warning></italic>");
     expect(transcript).toContain("<bold>read</bold>");
     expect(transcript).toContain("package.json");
     expect(transcript).toContain("↳ result");
@@ -1407,6 +2002,69 @@ describe("btw runtime behavior", () => {
     expect(transcript).toContain("<fg:success>");
   });
 
+  it("renders overlay Markdown and wraps tables within the dialog width", async () => {
+    const harness = createHarness();
+    const answer = [
+      "# Result",
+      "",
+      "**Ready**",
+      "",
+      "| Check | Status | Detail |",
+      "| --- | --- | --- |",
+      "| Markdown | pass | Tables wrap in narrow overlays |",
+    ].join("\n");
+    promptStreamMock.mockImplementation(() => streamAnswer(answer));
+
+    await harness.runSessionStart();
+    await harness.command("btw", "show the result");
+
+    const rendered = harness.latestOverlayComponent().render(72);
+    const transcript = rendered.join("\n");
+    expect(transcript).toContain("<heading><bold>Result</bold></heading>");
+    expect(transcript).toContain("<bold>Ready</bold>");
+    expect(transcript).toContain("Tables");
+    expect(transcript).toContain("┌");
+    expect(transcript).toContain("┘");
+    expect(transcript).not.toContain("| --- | --- | --- |");
+    expect(rendered.every((line: string) => visibleWidth(line) <= 72)).toBe(true);
+
+    const resized = harness.latestOverlayComponent().render(90);
+    expect(resized.join("\n")).toContain("Tables wrap in narrow overlays");
+    expect(resized.every((line: string) => visibleWidth(line) <= 90)).toBe(true);
+  });
+
+  it("renders saved BTW notes as Markdown, including legacy note details", () => {
+    const harness = createHarness();
+    const renderMessage = harness.messageRenderers.get("btw-note");
+    expect(renderMessage).toBeTypeOf("function");
+
+    const box = renderMessage(
+      {
+        customType: "btw-note",
+        content: "Q: legacy question\n\nA: raw answer",
+        details: {
+          question: "legacy question",
+          answer: "| Check | Status |\n| --- | --- |\n| Saved note | pass |",
+          provider: "test-provider",
+          model: "test-model",
+          api: "openai-responses",
+          thinkingLevel: "off",
+        },
+      },
+      { expanded: false },
+      harness.baseCtx.ui.theme,
+    );
+    const markdown = box.children[1];
+    const rendered = markdown.render(56).join("\n");
+
+    expect(rendered).toContain("<bold>Question</bold>");
+    expect(rendered).toContain("<bold>Answer</bold>");
+    expect(rendered).toContain("Saved note");
+    expect(rendered).toContain("┌");
+    expect(rendered).toContain("┘");
+    expect(rendered).not.toContain("| --- | --- |");
+  });
+
   it("surfaces missing credentials as an explicit error without creating a thread entry", async () => {
     const harness = createHarness();
     harness.setCredentials(false);
@@ -1424,6 +2082,77 @@ describe("btw runtime behavior", () => {
     });
   });
 
+  it("displays inline BTW responses as visible notes in RPC mode", async () => {
+    const harness = createHarness([], { contextMode: "rpc" });
+    promptStreamMock.mockImplementation(() => streamAnswer("RPC answer"));
+
+    await harness.runSessionStart();
+    await harness.command("btw", "rpc question");
+
+    expect(harness.overlays).toHaveLength(0);
+    expect(harness.sentMessages).toHaveLength(1);
+    expect(harness.sentMessages[0]).toEqual({
+      message: expect.objectContaining({
+        customType: "btw-note",
+        display: true,
+        content: "**Question**\n\nrpc question\n\n**Answer**\n\nRPC answer",
+      }),
+      options: undefined,
+    });
+    expect(getCustomEntries(harness.entries, "btw-thread-entry")).toHaveLength(1);
+  });
+
+  it("does not duplicate an explicitly saved RPC response and queues it while the main session is busy", async () => {
+    const harness = createHarness([], { contextMode: "rpc" });
+    promptStreamMock.mockImplementation(() => streamAnswer("Busy RPC answer"));
+    harness.setIdle(false);
+
+    await harness.runSessionStart();
+    await harness.command("btw", "--save busy question");
+
+    expect(harness.sentMessages).toHaveLength(1);
+    expect(harness.sentMessages[0]).toEqual({
+      message: expect.objectContaining({
+        customType: "btw-note",
+        display: true,
+        content: "**Question**\n\nbusy question\n\n**Answer**\n\nBusy RPC answer",
+      }),
+      options: { deliverAs: "followUp" },
+    });
+  });
+
+  for (const commandName of ["btw", "btw:tangent", "btw:new"] as const) {
+    it(`guides ${commandName} users without clearing their thread when RPC cannot open a composer`, async () => {
+      const existingEntry = {
+        type: "custom",
+        customType: "btw-thread-entry",
+        data: {
+          question: "existing question",
+          thinking: "",
+          answer: "existing answer",
+          provider: "test-provider",
+          model: "test-model",
+          api: "openai-responses",
+          thinkingLevel: "off",
+          timestamp: 1,
+        },
+      } as SessionEntry;
+      const harness = createHarness([existingEntry], { contextMode: "rpc" });
+
+      await harness.runSessionStart();
+      await harness.command(commandName, "");
+
+      expect(createAgentSessionMock).not.toHaveBeenCalled();
+      expect(harness.overlays).toHaveLength(0);
+      expect(getCustomEntries(harness.entries, "btw-thread-entry")).toHaveLength(1);
+      expect(getCustomEntries(harness.entries, "btw-thread-reset")).toHaveLength(0);
+      expect(harness.notifications.at(-1)).toMatchObject({
+        message: expect.stringContaining("Pass the question inline instead."),
+        type: "warning",
+      });
+    });
+  }
+
   it("keeps BTW in a top-centered non-capturing overlay and does not leave a persistent widget above the main input", async () => {
     const harness = createHarness();
     promptStreamMock.mockImplementation(() => streamAnswer("Overlay answer"));
@@ -1439,6 +2168,117 @@ describe("btw runtime behavior", () => {
       },
     });
     expect(harness.widgets.some((entry) => entry.key === "btw" && typeof entry.content === "function")).toBe(false);
+  });
+
+  it("defaults to the framed window width and advertises the Alt+w width toggle", async () => {
+    const harness = createHarness();
+    promptStreamMock.mockImplementation(() => streamAnswer("Overlay answer"));
+
+    await harness.runSessionStart();
+    await harness.command("btw", "overlay question");
+
+    expect(harness.overlays.at(-1)?.factoryOptions?.overlayOptions).toMatchObject({
+      width: "78%",
+      margin: { top: 1, left: 2, right: 2 },
+    });
+
+    const overlay = harness.latestOverlayComponent();
+    overlay.refresh();
+    expect(overlay.hintsText.text).toContain("Alt+w width");
+  });
+
+  it("toggles the overlay between window and full-width layouts on Alt+w, preserving the draft", async () => {
+    const harness = createHarness();
+    promptStreamMock.mockImplementation(() => streamAnswer("Overlay answer"));
+
+    await harness.runSessionStart();
+    await harness.command("btw", "overlay question");
+
+    const overlay = harness.latestOverlayComponent();
+    overlay.setDraft("kept draft");
+
+    // Alt+w (legacy ESC-prefixed) switches to full-width and re-opens the overlay.
+    overlay.handleInput("\x1bw");
+    await flushAsyncWork();
+
+    expect(harness.overlays.at(-1)?.factoryOptions?.overlayOptions).toMatchObject({
+      width: "100%",
+      margin: { top: 1 },
+    });
+    const fullOverlay = harness.latestOverlayComponent();
+    expect(fullOverlay.getDraft()).toBe("kept draft");
+    expect(fullOverlay.statusText.text).toContain("Full-width mode");
+
+    // Alt+w again restores the framed window layout.
+    await harness.shortcut("alt+w");
+    await flushAsyncWork();
+
+    expect(harness.overlays.at(-1)?.factoryOptions?.overlayOptions).toMatchObject({
+      width: "78%",
+      margin: { top: 1, left: 2, right: 2 },
+    });
+    const windowOverlay = harness.latestOverlayComponent();
+    expect(windowOverlay.getDraft()).toBe("kept draft");
+    expect(windowOverlay.statusText.text).toContain("Window mode");
+  });
+
+  it("keeps the box frame in window mode but drops all border glyphs in full-width mode", async () => {
+    const harness = createHarness();
+    promptStreamMock.mockImplementation(() => streamAnswer("Framed answer"));
+
+    await harness.runSessionStart();
+    await harness.command("btw", "overlay question");
+
+    // Window mode: full box frame with corners and vertical bars.
+    const windowRender = harness.latestOverlayComponent().render(80);
+    expect(windowRender[0]).toContain("┌");
+    expect(windowRender.at(-1)).toContain("└");
+    expect(windowRender.some((line: string) => line.includes("│"))).toBe(true);
+
+    const overlay = harness.latestOverlayComponent();
+    overlay.handleInput("\x1bw");
+    await flushAsyncWork();
+
+    // Full-width mode: horizontal rules only, no corners and no side bars, so a
+    // Shift+drag selection can't pick up border glyphs beside the text.
+    const fullRender = harness.latestOverlayComponent().render(80);
+    expect(fullRender[0]).toContain("─");
+    expect(fullRender[0]).not.toContain("┌");
+    expect(fullRender[0]).not.toContain("┐");
+    expect(fullRender.at(-1)).not.toContain("└");
+    expect(fullRender.at(-1)).not.toContain("┘");
+    expect(fullRender.every((line: string) => !line.includes("│"))).toBe(true);
+  });
+
+  it("does not change Pi-owned terminal mouse reporting in fullscreen mode", async () => {
+    const harness = createHarness([], { tuiMode: "fullscreen" });
+
+    await harness.runSessionStart();
+    await harness.command("btw", "");
+
+    const overlay = harness.latestOverlayComponent();
+    overlay.input.onEscape?.();
+    await flushAsyncWork();
+
+    expect(harness.terminalWrites).toEqual([]);
+  });
+
+  it("balances BTW-owned terminal mouse reporting in regular mode", async () => {
+    const harness = createHarness([], { tuiMode: "regular" });
+
+    await harness.runSessionStart();
+    await harness.command("btw", "");
+
+    expect(harness.terminalWrites).toEqual(["\x1b[?1000h\x1b[?1006h"]);
+
+    const overlay = harness.latestOverlayComponent();
+    overlay.input.onEscape?.();
+    await flushAsyncWork();
+
+    expect(harness.terminalWrites).toEqual([
+      "\x1b[?1000h\x1b[?1006h",
+      "\x1b[?1000l\x1b[?1006l",
+    ]);
   });
 
   it("toggles BTW overlay focus with the registered focus shortcuts without closing it", async () => {
@@ -1463,6 +2303,20 @@ describe("btw runtime behavior", () => {
     expect(handle?.isFocused()).toBe(true);
     expect(handle?.isHidden()).toBe(false);
     expect(overlay.focused).toBe(true);
+
+    // Kitty keyboard protocol: slash (47) with Super modifier (8 + 1).
+    overlay.handleInput("\x1b[47;9u");
+    expect(handle?.isFocused()).toBe(false);
+    expect(handle?.isHidden()).toBe(false);
+    expect(overlay.focused).toBe(false);
+
+    await harness.shortcut("super+/");
+    expect(handle?.isFocused()).toBe(true);
+    expect(handle?.isHidden()).toBe(false);
+    expect(overlay.focused).toBe(true);
+
+    overlay.refresh();
+    expect(overlay.hintsText.text).toContain("Super+/");
   });
 
   it("marks the overlay input focused when BTW opens so the cursor stays in the composer", async () => {
@@ -2177,3 +3031,54 @@ describe("btw runtime behavior", () => {
     }
   });
 });
+describe("configurable BTW focus shortcuts", () => {
+  it("uses the built-in defaults when PI_BTW_FOCUS_KEYS is unset or blank", () => {
+    expect(resolveBtwFocusShortcuts({})).toEqual(["alt+/", "super+/", "ctrl+alt+w"]);
+    expect(resolveBtwFocusShortcuts({ PI_BTW_FOCUS_KEYS: "   " })).toEqual([
+      "alt+/",
+      "super+/",
+      "ctrl+alt+w",
+    ]);
+  });
+
+  it("replaces the defaults with a normalized, de-duplicated override list", () => {
+    expect(
+      resolveBtwFocusShortcuts({ PI_BTW_FOCUS_KEYS: "Ctrl+/ , ctrl+alt+b, CTRL+/ " }),
+    ).toEqual(["ctrl+/", "ctrl+alt+b"]);
+  });
+
+  it("drops unparseable entries but keeps the valid ones", () => {
+    expect(
+      resolveBtwFocusShortcuts({ PI_BTW_FOCUS_KEYS: "cmd+/,ctrl+/,control+x,super+enter" }),
+    ).toEqual(["ctrl+/", "super+enter"]);
+  });
+
+  it("falls back to defaults when no override entry is usable", () => {
+    expect(resolveBtwFocusShortcuts({ PI_BTW_FOCUS_KEYS: "cmd+/, bogus+++" })).toEqual([
+      "alt+/",
+      "super+/",
+      "ctrl+alt+w",
+    ]);
+  });
+
+  it("validates identifiers against the pi-tui key grammar", () => {
+    expect(isValidFocusShortcut("ctrl+/")).toBe(true);
+    expect(isValidFocusShortcut("super+enter")).toBe(true);
+    expect(isValidFocusShortcut("f5")).toBe(true);
+    expect(isValidFocusShortcut("a")).toBe(true);
+    expect(isValidFocusShortcut("cmd+/")).toBe(false);
+    expect(isValidFocusShortcut("control+x")).toBe(false);
+    expect(isValidFocusShortcut("ctrl+ctrl+/")).toBe(false);
+    expect(isValidFocusShortcut("ctrl+")).toBe(false);
+    expect(isValidFocusShortcut("")).toBe(false);
+  });
+
+  it("describes shortcuts with a human-readable label", () => {
+    expect(describeFocusShortcuts(["alt+/", "super+/", "ctrl+alt+w"])).toBe(
+      "Alt+/, Super+/ or Ctrl+Alt+W",
+    );
+    expect(describeFocusShortcuts(["ctrl+/"])).toBe("Ctrl+/");
+    expect(describeFocusShortcuts([])).toBe("");
+  });
+});
+

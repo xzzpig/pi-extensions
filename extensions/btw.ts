@@ -2,20 +2,29 @@ import {
   buildSessionContext,
   createAgentSession,
   createExtensionRuntime,
+  getMarkdownTheme,
+  ModelRuntime,
   SessionManager,
   type AgentSession,
+  type CreateAgentSessionOptions,
   type AgentSessionEvent,
   type ExtensionAPI,
   type ExtensionCommandContext,
   type ExtensionContext,
   type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
-import { type AssistantMessage, type Message, type ThinkingLevel as AiThinkingLevel, type UserMessage } from "@earendil-works/pi-ai";
+import {
+  type AssistantMessage,
+  type Message,
+  type ThinkingLevel as AiThinkingLevel,
+  type UserMessage,
+} from "@earendil-works/pi-ai";
 import {
   Box,
   Container,
   Input,
   Key,
+  Markdown,
   Text,
   matchesKey,
   truncateToWidth,
@@ -23,7 +32,10 @@ import {
   wrapTextWithAnsi,
   type Focusable,
   type KeybindingsManager,
+  type KeyId,
+  type MarkdownTheme,
   type OverlayHandle,
+  type OverlayOptions,
   type TUI,
 } from "@earendil-works/pi-tui";
 
@@ -32,11 +44,122 @@ const BTW_ENTRY_TYPE = "btw-thread-entry";
 const BTW_RESET_TYPE = "btw-thread-reset";
 const BTW_MODEL_OVERRIDE_TYPE = "btw-model-override";
 const BTW_THINKING_OVERRIDE_TYPE = "btw-thinking-override";
-const BTW_FOCUS_SHORTCUTS = [Key.alt("/"), Key.ctrlAlt("w")] as const;
+const BTW_DEFAULT_FOCUS_SHORTCUTS: readonly KeyId[] = [Key.alt("/"), Key.super("/"), Key.ctrlAlt("w")];
+const BTW_FOCUS_KEYS_ENV = "PI_BTW_FOCUS_KEYS";
+const BTW_FOCUS_MODIFIERS = new Set(["ctrl", "shift", "alt", "super"]);
+// Mirrors the SpecialKey union in @earendil-works/pi-tui keys.d.ts (lower-cased).
+const BTW_FOCUS_SPECIAL_KEYS = new Set([
+  "escape", "esc", "enter", "return", "tab", "space", "backspace", "delete", "insert", "clear",
+  "home", "end", "pageup", "pagedown", "up", "down", "left", "right",
+  "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12",
+]);
+// Symbols from the SymbolKey union (letters/digits are matched directly).
+const BTW_FOCUS_SYMBOL_KEYS = new Set([
+  "`", "-", "=", "[", "]", "\\", ";", "'", ",", ".", "/", "!", "@", "#", "$", "%", "^", "&", "*",
+  "(", ")", "_", "+", "|", "~", "{", "}", ":", "<", ">", "?",
+]);
+
+/**
+ * Resolve the BTW overlay focus-toggle shortcuts.
+ *
+ * Users whose window manager or terminal claims the default shortcuts can override them by
+ * setting PI_BTW_FOCUS_KEYS to a comma-separated list of pi-tui key identifiers
+ * (e.g. "ctrl+/,ctrl+alt+b"). Blank, duplicate, or unparseable entries are ignored; if no
+ * usable entries remain, the defaults are kept so focus toggling never becomes impossible.
+ */
+export function resolveBtwFocusShortcuts(env: NodeJS.ProcessEnv = process.env): KeyId[] {
+  const raw = env[BTW_FOCUS_KEYS_ENV];
+  if (typeof raw !== "string" || raw.trim() === "") {
+    return [...BTW_DEFAULT_FOCUS_SHORTCUTS];
+  }
+
+  const seen = new Set<string>();
+  const shortcuts: KeyId[] = [];
+  for (const part of raw.split(",")) {
+    const candidate = part.trim().toLowerCase();
+    if (!candidate || seen.has(candidate) || !isValidFocusShortcut(candidate)) {
+      continue;
+    }
+    seen.add(candidate);
+    shortcuts.push(candidate as KeyId);
+  }
+
+  return shortcuts.length > 0 ? shortcuts : [...BTW_DEFAULT_FOCUS_SHORTCUTS];
+}
+
+/**
+ * Validate a candidate against the pi-tui KeyId grammar: zero or more distinct recognized
+ * modifiers followed by exactly one base key (letter, digit, symbol, or named special key).
+ * Rejects typos like "cmd+/" or "control+x" and duplicate/empty segments.
+ */
+export function isValidFocusShortcut(candidate: string): boolean {
+  const segments = candidate.split("+");
+  const base = segments.pop();
+  if (base === undefined || !isValidFocusBaseKey(base)) {
+    return false;
+  }
+
+  const seen = new Set<string>();
+  for (const segment of segments) {
+    if (!BTW_FOCUS_MODIFIERS.has(segment) || seen.has(segment)) {
+      return false;
+    }
+    seen.add(segment);
+  }
+
+  return true;
+}
+
+function isValidFocusBaseKey(base: string): boolean {
+  if (base.length === 1) {
+    return /[a-z0-9]/.test(base) || BTW_FOCUS_SYMBOL_KEYS.has(base);
+  }
+  return BTW_FOCUS_SPECIAL_KEYS.has(base);
+}
+
+function formatFocusShortcutLabel(shortcut: KeyId): string {
+  return shortcut
+    .split("+")
+    .map((segment) => {
+      switch (segment) {
+        case "ctrl":
+          return "Ctrl";
+        case "alt":
+          return "Alt";
+        case "shift":
+          return "Shift";
+        case "super":
+          return "Super";
+        default:
+          return segment.length === 1 ? segment.toUpperCase() : segment;
+      }
+    })
+    .join("+");
+}
+
+export function describeFocusShortcuts(shortcuts: readonly KeyId[]): string {
+  const labels = shortcuts.map(formatFocusShortcutLabel);
+  if (labels.length <= 1) {
+    return labels[0] ?? "";
+  }
+  return `${labels.slice(0, -1).join(", ")} or ${labels[labels.length - 1]}`;
+}
+
+const BTW_FOCUS_SHORTCUTS: readonly KeyId[] = resolveBtwFocusShortcuts();
+const BTW_FOCUS_SHORTCUTS_LABEL = describeFocusShortcuts(BTW_FOCUS_SHORTCUTS);
 
 function matchesBtwFocusShortcut(data: string): boolean {
   return BTW_FOCUS_SHORTCUTS.some((shortcut) => matchesKey(data, shortcut));
 }
+
+/** Toggles the overlay between framed "window" width and edge-to-edge "full" width. */
+const BTW_WIDTH_TOGGLE_SHORTCUT: KeyId = Key.alt("w");
+
+function matchesBtwWidthToggle(data: string): boolean {
+  return matchesKey(data, BTW_WIDTH_TOGGLE_SHORTCUT);
+}
+
+type BtwOverlayWidthMode = "window" | "full";
 
 const BTW_SYSTEM_PROMPT = [
   "You are having an aside conversation with the user, separate from their main working session.",
@@ -109,8 +232,10 @@ type ResolvedBtwSettings = {
   fallbackReason?: string;
 };
 
+type BtwTurnOutcome = "completed" | "aborted" | "failed";
+
 type BtwTranscriptEntry =
-  | { id: number; turnId: number; type: "turn-boundary"; phase: "start" | "end" }
+  | { id: number; turnId: number; type: "turn-boundary"; phase: "start" | "end"; outcome?: BtwTurnOutcome }
   | { id: number; turnId: number; type: "user-message"; text: string }
   | { id: number; turnId: number; type: "thinking"; text: string; streaming: boolean }
   | { id: number; turnId: number; type: "assistant-text"; text: string; streaming: boolean }
@@ -143,6 +268,8 @@ type BtwSessionRuntime = {
   mode: BtwThreadMode;
   subscriptions: Set<() => void>;
   sideThreadStartIndex: number;
+  abortPromise?: Promise<void>;
+  promptQueue: Promise<void>;
 };
 
 type OverlayRuntime = {
@@ -176,17 +303,73 @@ function createBtwResourceLoader(
   const extensionsResult = { extensions: [], errors: [], runtime: createExtensionRuntime() };
   const systemPrompt = stripDynamicSystemPromptFooter(ctx.getSystemPrompt());
 
-  return {
+  const resourceLoader: ResourceLoader = {
     getExtensions: () => extensionsResult,
     getSkills: () => ({ skills: [], diagnostics: [] }),
     getPrompts: () => ({ prompts: [], diagnostics: [] }),
     getThemes: () => ({ themes: [], diagnostics: [] }),
     getAgentsFiles: () => ({ agentsFiles: [] }),
     getSystemPrompt: () => systemPrompt,
+    getSystemPromptSource: () => undefined,
     getAppendSystemPrompt: () => appendSystemPrompt,
+    getAppendSystemPromptSources: () => [],
     extendResources: () => {},
-    reload: async () => {},
+    reload: async (_options) => {},
   };
+
+  return resourceLoader;
+}
+
+async function createBtwModelRuntimeOptions(
+  ctx: ExtensionCommandContext,
+  model: SessionModel,
+): Promise<Pick<CreateAgentSessionOptions, "modelRuntime">> {
+  const nativeProvider = ctx.modelRegistry.getRegisteredNativeProvider(model.provider);
+  const providerConfig = ctx.modelRegistry.getRegisteredProviderConfig(model.provider);
+  const hasRuntimeApiKey = ctx.modelRegistry.getProviderAuthStatus(model.provider).source === "runtime";
+
+  if (!nativeProvider && !providerConfig && !hasRuntimeApiKey) {
+    return {};
+  }
+
+  const modelRuntime = await ModelRuntime.create({ allowModelNetwork: false });
+  if (nativeProvider) {
+    modelRuntime.registerNativeProvider(nativeProvider);
+  } else if (providerConfig) {
+    modelRuntime.registerProvider(model.provider, providerConfig);
+  }
+  await modelRuntime.refresh({ allowNetwork: false });
+
+  // --api-key is stored only in the parent runtime.
+  if (hasRuntimeApiKey) {
+    const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+    if (auth.ok && auth.apiKey) {
+      await modelRuntime.setRuntimeApiKey(model.provider, auth.apiKey);
+    }
+  }
+
+  return { modelRuntime };
+}
+
+function hasResolvedAuthValues(values?: Record<string, string | null | undefined>): boolean {
+  return !!values && Object.values(values).some((value) => typeof value === "string" && value.length > 0);
+}
+
+function hasUsableModelAuth(
+  ctx: ExtensionCommandContext,
+  model: SessionModel,
+  auth: Awaited<ReturnType<ExtensionCommandContext["modelRegistry"]["getApiKeyAndHeaders"]>>,
+): boolean {
+  if (!auth.ok) {
+    return false;
+  }
+
+  return (
+    !!auth.apiKey ||
+    hasResolvedAuthValues(auth.headers) ||
+    hasResolvedAuthValues(auth.env) ||
+    ctx.modelRegistry.hasConfiguredAuth(model)
+  );
 }
 
 function extractText(parts: AssistantMessage["content"], type: "text" | "thinking"): string {
@@ -415,17 +598,29 @@ function ensureTranscriptTurn(state: BtwTranscriptState): number {
   return turnId;
 }
 
-function finishTranscriptTurn(state: BtwTranscriptState, turnId?: number | null): void {
+function finishTranscriptTurn(
+  state: BtwTranscriptState,
+  turnId?: number | null,
+  outcome: BtwTurnOutcome = "completed",
+): void {
   const resolvedTurnId = turnId ?? state.currentTurnId;
   if (resolvedTurnId === null || resolvedTurnId === undefined) {
     return;
   }
 
-  const hasEndBoundary = state.entries.some(
-    (entry) => entry.turnId === resolvedTurnId && entry.type === "turn-boundary" && entry.phase === "end",
+  const endBoundary = state.entries.find(
+    (entry): entry is Extract<BtwTranscriptEntry, { type: "turn-boundary" }> =>
+      entry.turnId === resolvedTurnId && entry.type === "turn-boundary" && entry.phase === "end",
   );
-  if (!hasEndBoundary) {
-    appendTranscriptEntry(state, { type: "turn-boundary", turnId: resolvedTurnId, phase: "end" } as Omit<Extract<BtwTranscriptEntry, { type: "turn-boundary" }>, "id">);
+  if (endBoundary) {
+    endBoundary.outcome = outcome;
+  } else {
+    appendTranscriptEntry(state, {
+      type: "turn-boundary",
+      turnId: resolvedTurnId,
+      phase: "end",
+      outcome,
+    } as Omit<Extract<BtwTranscriptEntry, { type: "turn-boundary" }>, "id">);
   }
 
   for (const entry of state.entries) {
@@ -441,26 +636,6 @@ function finishTranscriptTurn(state: BtwTranscriptState, turnId?: number | null)
   state.lastTurnId = resolvedTurnId;
   if (state.currentTurnId === resolvedTurnId) {
     state.currentTurnId = null;
-  }
-}
-
-function removeTranscriptTurn(state: BtwTranscriptState, turnId: number | null): void {
-  if (turnId === null) {
-    return;
-  }
-
-  state.entries = state.entries.filter((entry) => entry.turnId !== turnId);
-  for (const [toolCallId, toolCall] of state.toolCalls.entries()) {
-    if (toolCall.turnId === turnId) {
-      state.toolCalls.delete(toolCallId);
-    }
-  }
-
-  if (state.currentTurnId === turnId) {
-    state.currentTurnId = null;
-  }
-  if (state.lastTurnId === turnId) {
-    state.lastTurnId = null;
   }
 }
 
@@ -746,7 +921,10 @@ function applyTranscriptEvent(state: BtwTranscriptState, event: AgentSessionEven
       return;
     }
     case "turn_end": {
-      finishTranscriptTurn(state);
+      const stopReason = event.message.role === "assistant" ? event.message.stopReason : "stop";
+      const outcome: BtwTurnOutcome =
+        stopReason === "aborted" ? "aborted" : stopReason === "error" ? "failed" : "completed";
+      finishTranscriptTurn(state, undefined, outcome);
       return;
     }
     default:
@@ -767,7 +945,7 @@ function appendPersistedTranscriptTurn(state: BtwTranscriptState, details: BtwDe
 function setTranscriptFailure(state: BtwTranscriptState, message: string): void {
   const turnId = state.currentTurnId ?? state.lastTurnId ?? ensureTranscriptTurn(state);
   upsertTranscriptTextEntry(state, turnId, "assistant-text", `❌ ${message}`, false);
-  finishTranscriptTurn(state, turnId);
+  finishTranscriptTurn(state, turnId, "failed");
 }
 
 function hasStreamingTranscriptEntry(entries: BtwTranscript): boolean {
@@ -779,10 +957,26 @@ function hasStreamingTranscriptEntry(entries: BtwTranscript): boolean {
 }
 
 function getCompletedExchangeCount(entries: BtwTranscript): number {
-  return entries.filter((entry) => entry.type === "assistant-text" && !entry.streaming).length;
+  const completedTurnIds = new Set(
+    entries.flatMap((entry) =>
+      entry.type === "turn-boundary" &&
+      entry.phase === "end" &&
+      (entry.outcome === undefined || entry.outcome === "completed")
+        ? [entry.turnId]
+        : [],
+    ),
+  );
+  return entries.filter(
+    (entry) => entry.type === "assistant-text" && !entry.streaming && completedTurnIds.has(entry.turnId),
+  ).length;
 }
 
-function buildOverlayTranscript(entries: BtwTranscript, theme: ExtensionContext["ui"]["theme"]): string[] {
+function buildOverlayTranscript(
+  entries: BtwTranscript,
+  theme: ExtensionContext["ui"]["theme"],
+  markdownTheme: MarkdownTheme,
+  contentWidth: number,
+): string[] {
   if (entries.length === 0) {
     return [theme.fg("dim", "No BTW thread yet. Ask a side question to start one.")];
   }
@@ -793,7 +987,7 @@ function buildOverlayTranscript(entries: BtwTranscript, theme: ExtensionContext[
   const toolBadge = buildTranscriptBadge(theme, "Tool", "toolPendingBg", "warning");
   const assistantBadge = buildTranscriptBadge(theme, "Assistant", "customMessageBg", "success");
   const separator = theme.fg("borderMuted", "────────────────────────────────────────");
-  const blockIndent = "    ";
+  const blockIndent = BTW_BLOCK_INDENT;
   const resultIndent = blockIndent;
 
   const pushBlankLine = () => {
@@ -854,9 +1048,17 @@ function buildOverlayTranscript(entries: BtwTranscript, theme: ExtensionContext[
 
     if (entry.type === "thinking") {
       const thinkingHeader = entry.streaming ? `${thinkingBadge} ${theme.fg("warning", "▍")}` : thinkingBadge;
-      pushStackedBlock(thinkingHeader, entry.text, {
-        style: (line) => theme.fg("warning", theme.italic(line)),
-      });
+      const markdownLines = new Markdown(entry.text, 0, 0, markdownTheme, {
+        color: (text: string) => theme.fg("warning", text),
+        italic: true,
+      })
+        .render(Math.max(1, contentWidth))
+        .map((line) => line.replace(/\s+$/u, ""));
+      pushBlankLine();
+      lines.push(thinkingHeader);
+      for (const line of markdownLines) {
+        lines.push(line ? `${blockIndent}${line}` : "");
+      }
       continue;
     }
 
@@ -884,7 +1086,14 @@ function buildOverlayTranscript(entries: BtwTranscript, theme: ExtensionContext[
 
     if (entry.type === "assistant-text") {
       const assistantHeader = entry.streaming ? `${assistantBadge} ${theme.fg("warning", "▍")}` : assistantBadge;
-      pushStackedBlock(assistantHeader, entry.text);
+      const markdownLines = new Markdown(entry.text, 0, 0, markdownTheme)
+        .render(Math.max(1, contentWidth))
+        .map((line) => line.replace(/\s+$/u, ""));
+      pushBlankLine();
+      lines.push(assistantHeader);
+      for (const line of markdownLines) {
+        lines.push(line ? `${blockIndent}${line}` : "");
+      }
     }
   }
 
@@ -908,7 +1117,7 @@ type BtwHandoffExchange = {
 };
 
 function buildBtwMessageContent(question: string, answer: string): string {
-  return `Q: ${question}\n\nA: ${answer}`;
+  return `**Question**\n\n${question}\n\n**Answer**\n\n${answer}`;
 }
 
 function formatThread(thread: BtwHandoffExchange[]): string {
@@ -932,18 +1141,18 @@ function extractBtwHandoffThread(sessionRuntime: BtwSessionRuntime): BtwHandoffE
   const exchanges: BtwHandoffExchange[] = [];
   let currentUser = "";
   let currentAssistant = "";
+  let excludeCurrent = false;
 
   const pushCurrent = () => {
-    if (!currentUser && !currentAssistant) {
-      return;
+    if (!excludeCurrent && (currentUser || currentAssistant)) {
+      exchanges.push({
+        user: currentUser.trim() || "(No user prompt)",
+        assistant: currentAssistant.trim() || "(No assistant response)",
+      });
     }
-
-    exchanges.push({
-      user: currentUser.trim() || "(No user prompt)",
-      assistant: currentAssistant.trim() || "(No assistant response)",
-    });
     currentUser = "";
     currentAssistant = "";
+    excludeCurrent = false;
   };
 
   for (const message of threadMessages) {
@@ -951,18 +1160,25 @@ function extractBtwHandoffThread(sessionRuntime: BtwSessionRuntime): BtwHandoffE
       continue;
     }
 
-    const text = extractMessageText(message).trim();
-    if (!text) {
-      continue;
-    }
-
     if (message.role === "user") {
+      const text = extractMessageText(message).trim();
+      if (!text) {
+        continue;
+      }
       pushCurrent();
       currentUser = text;
       continue;
     }
 
-    currentAssistant = currentAssistant ? `${currentAssistant}\n\n${text}` : text;
+    if (message.stopReason === "aborted" || message.stopReason === "error") {
+      excludeCurrent = true;
+      continue;
+    }
+
+    const text = extractMessageText(message).trim();
+    if (text) {
+      currentAssistant = currentAssistant ? `${currentAssistant}\n\n${text}` : text;
+    }
   }
 
   pushCurrent();
@@ -995,6 +1211,17 @@ function saveVisibleBtwNote(
   return "saved";
 }
 
+function canRenderBtwOverlay(ctx: ExtensionContext | ExtensionCommandContext): boolean {
+  return ctx.hasUI && ctx.mode === "tui";
+}
+
+function notifyInlineQuestionRequired(
+  ctx: ExtensionCommandContext,
+  command: "/btw" | "/btw:tangent" | "/btw:new",
+): void {
+  notify(ctx, `${command} cannot open its composer outside Pi's TUI. Pass the question inline instead.`, "warning");
+}
+
 function notify(ctx: ExtensionContext | ExtensionCommandContext, message: string, level: "info" | "warning" | "error"): void {
   if (ctx.hasUI) {
     ctx.ui.notify(message, level);
@@ -1003,6 +1230,8 @@ function notify(ctx: ExtensionContext | ExtensionCommandContext, message: string
 
 /** Fixed overlay rows outside the transcript viewport (must match render() structure). */
 const BTW_OVERLAY_CHROME_LINES = 9;
+/** Indent applied to transcript block bodies. */
+const BTW_BLOCK_INDENT = "    ";
 
 function getOverlayTitle(mode: BtwThreadMode): string {
   return mode === "tangent" ? "BTW tangent" : "BTW";
@@ -1027,14 +1256,19 @@ class BtwOverlayComponent extends Container implements Focusable {
   private readonly readTranscriptEntries: () => BtwTranscript;
   private readonly getStatus: () => string | null;
   private readonly getMode: () => BtwThreadMode;
+  private readonly getWidthMode: () => BtwOverlayWidthMode;
   private readonly onSubmitCallback: (value: string) => void;
   private readonly onDismissCallback: () => void;
   private readonly onUnfocusCallback: () => void;
+  private readonly onToggleWidthCallback: () => void;
   private readonly tui: TUI;
   private readonly theme: ExtensionContext["ui"]["theme"];
+  private readonly markdownTheme: MarkdownTheme;
+  private readonly managesMouseReporting: boolean;
   private transcriptLines: string[] = [];
   private transcriptScrollOffset = 0;
   private transcriptViewportHeight = 8;
+  private contentWidth = 66;
   private followTranscript = true;
   private _focused = false;
   private modeTextValue = "";
@@ -1058,19 +1292,27 @@ class BtwOverlayComponent extends Container implements Focusable {
     readTranscriptEntries: () => BtwTranscript,
     getStatus: () => string | null,
     getMode: () => BtwThreadMode,
+    getWidthMode: () => BtwOverlayWidthMode,
     onSubmit: (value: string) => void,
     onDismiss: () => void,
     onUnfocus: () => void,
+    onToggleWidth: () => void,
   ) {
     super();
     this.tui = tui;
     this.theme = theme;
+    this.markdownTheme = getMarkdownTheme();
+    // Fullscreen Pi owns mouse reporting for the entire terminal session. In
+    // regular mode BTW manages it while the overlay exists.
+    this.managesMouseReporting = tui.mode !== "fullscreen";
     this.readTranscriptEntries = readTranscriptEntries;
     this.getStatus = getStatus;
     this.getMode = getMode;
+    this.getWidthMode = getWidthMode;
     this.onSubmitCallback = onSubmit;
     this.onDismissCallback = onDismiss;
     this.onUnfocusCallback = onUnfocus;
+    this.onToggleWidthCallback = onToggleWidth;
 
     this.modeText = new Text("", 1, 0);
     this.summaryText = new Text("", 1, 0);
@@ -1088,8 +1330,9 @@ class BtwOverlayComponent extends Container implements Focusable {
 
     this.hintsText = new Text("", 1, 0);
 
-    // Enable SGR mouse reporting so wheel/touchpad events reach handleInput().
-    this.tui.terminal?.write?.("\x1b[?1000h\x1b[?1006h");
+    if (this.managesMouseReporting) {
+      this.tui.terminal?.write?.("\x1b[?1000h\x1b[?1006h");
+    }
 
     const originalHandleInput = this.input.handleInput.bind(this.input);
     this.input.handleInput = (data: string) => {
@@ -1114,17 +1357,33 @@ class BtwOverlayComponent extends Container implements Focusable {
     this.refresh();
   }
 
+  private get borderless(): boolean {
+    // Full-width mode drops the vertical bars and corner glyphs so a terminal
+    // Shift+drag selection captures only the dialog's own text — with side
+    // borders, the leftmost/rightmost columns would land inside the drag.
+    return this.getWidthMode() === "full";
+  }
+
   private frameLine(content: string, innerWidth: number): string {
     const truncated = truncateToWidth(content, innerWidth, "");
     const padding = Math.max(0, innerWidth - visibleWidth(truncated));
+    if (this.borderless) {
+      return `${truncated}${" ".repeat(padding)}`;
+    }
     return `${this.theme.fg("border", "│")}${truncated}${" ".repeat(padding)}${this.theme.fg("border", "│")}`;
   }
 
   private ruleLine(innerWidth: number): string {
+    if (this.borderless) {
+      return this.theme.fg("border", "─".repeat(innerWidth));
+    }
     return this.theme.fg("border", `├${"─".repeat(innerWidth)}┤`);
   }
 
   private borderLine(innerWidth: number, edge: "top" | "bottom"): string {
+    if (this.borderless) {
+      return this.theme.fg("border", "─".repeat(innerWidth));
+    }
     const left = edge === "top" ? "┌" : "└";
     const right = edge === "top" ? "┐" : "┘";
     return this.theme.fg("border", `${left}${"─".repeat(innerWidth)}${right}`);
@@ -1156,7 +1415,9 @@ class BtwOverlayComponent extends Container implements Focusable {
   }
 
   dispose(): void {
-    this.tui.terminal?.write?.("\x1b[?1000l\x1b[?1006l");
+    if (this.managesMouseReporting) {
+      this.tui.terminal?.write?.("\x1b[?1000l\x1b[?1006l");
+    }
   }
 
   private getMouseScrollDelta(data: string): number | null {
@@ -1176,6 +1437,11 @@ class BtwOverlayComponent extends Container implements Focusable {
   handleInput(data: string): void {
     if (matchesBtwFocusShortcut(data)) {
       this.onUnfocusCallback();
+      return;
+    }
+
+    if (matchesBtwWidthToggle(data)) {
+      this.onToggleWidthCallback();
       return;
     }
 
@@ -1201,7 +1467,8 @@ class BtwOverlayComponent extends Container implements Focusable {
   }
 
   private inputFrameLine(dialogWidth: number): string {
-    const targetWidth = Math.max(1, dialogWidth - 2);
+    const borderColumns = this.borderless ? 0 : 2;
+    const targetWidth = Math.max(1, dialogWidth - borderColumns);
     const previousFocused = this.input.focused;
     // Input.render() emits CURSOR_MARKER when focused. In overlay mode that APC marker
     // can skew width/composition on this one row before the TUI strips it, producing a
@@ -1212,6 +1479,9 @@ class BtwOverlayComponent extends Container implements Focusable {
       const renderedInputLine = this.input.render(targetWidth)[0] ?? "";
       const inputLine = truncateToWidth(renderedInputLine, targetWidth, "");
       const padding = Math.max(0, targetWidth - visibleWidth(inputLine));
+      if (this.borderless) {
+        return `${inputLine}${" ".repeat(padding)}`;
+      }
       return `${this.theme.fg("border", "│")}${inputLine}${" ".repeat(padding)}${this.theme.fg("border", "│")}`;
     } finally {
       this.input.focused = previousFocused;
@@ -1224,7 +1494,13 @@ class BtwOverlayComponent extends Container implements Focusable {
 
   override render(width: number): string[] {
     const dialogWidth = Math.max(24, width);
-    const innerWidth = Math.max(22, dialogWidth - 2);
+    const borderColumns = this.borderless ? 0 : 2;
+    const innerWidth = Math.max(22, dialogWidth - borderColumns);
+    const contentWidth = Math.max(1, innerWidth - BTW_BLOCK_INDENT.length);
+    if (contentWidth !== this.contentWidth) {
+      this.contentWidth = contentWidth;
+      this.rebuildTranscriptLines();
+    }
     const transcriptLines = this.wrapTranscript(innerWidth);
     const dialogHeight = this.getDialogHeight();
     const chromeHeight = BTW_OVERLAY_CHROME_LINES;
@@ -1288,6 +1564,15 @@ class BtwOverlayComponent extends Container implements Focusable {
     return this.readTranscriptEntries().map((entry) => ({ ...entry }));
   }
 
+  private rebuildTranscriptLines(): void {
+    this.transcriptLines = buildOverlayTranscript(
+      this.readTranscriptEntries(),
+      this.theme,
+      this.markdownTheme,
+      this.contentWidth,
+    );
+  }
+
   refresh(): void {
     this.modeTextValue = `${getOverlayTitle(this.getMode())} · hidden thread preserved`;
     this.modeText.setText(this.modeTextValue);
@@ -1297,7 +1582,7 @@ class BtwOverlayComponent extends Container implements Focusable {
     this.summaryTextValue = `${exchanges} exchange${exchanges === 1 ? "" : "s"}${active}`;
     this.summaryText.setText(this.summaryTextValue);
 
-    this.transcriptLines = buildOverlayTranscript(entries, this.theme);
+    this.rebuildTranscriptLines();
     this.transcript.clear();
     for (const line of this.transcriptLines) {
       this.transcript.addChild(new Text(line, 1, 0));
@@ -1306,7 +1591,7 @@ class BtwOverlayComponent extends Container implements Focusable {
     const status = this.getStatus() ?? "Ready. Enter submits; Escape dismisses without clearing.";
     this.statusTextValue = status;
     this.statusText.setText(this.statusTextValue);
-    this.hintsTextValue = "Scroll wheel ↑↓ PgUp/PgDn · Enter · Alt+/ focus · Esc";
+    this.hintsTextValue = `Scroll wheel ↑↓ PgUp/PgDn · Enter · ${BTW_FOCUS_SHORTCUTS_LABEL} focus · Alt+w width · Esc`;
     this.hintsText.setText(this.hintsTextValue);
     this.tui.requestRender();
   }
@@ -1320,9 +1605,16 @@ export default function (pi: ExtensionAPI) {
   let transcriptState = createEmptyTranscriptState();
   let overlayStatus: string | null = null;
   let overlayDraft = "";
+  let overlayWidthMode: BtwOverlayWidthMode = "window";
   let overlayRuntime: OverlayRuntime | null = null;
   let lastUiContext: ExtensionContext | ExtensionCommandContext | null = null;
   let activeBtwSession: BtwSessionRuntime | null = null;
+  let btwLifecycleGeneration = 0;
+  let btwSubmissionQueue = Promise.resolve();
+
+  function invalidateBtwLifecycle(): void {
+    btwLifecycleGeneration += 1;
+  }
 
   function syncUi(ctx?: ExtensionContext | ExtensionCommandContext): void {
     const activeCtx = ctx ?? lastUiContext;
@@ -1371,6 +1663,43 @@ export default function (pi: ExtensionAPI) {
     handle.setHidden(false);
     handle.focus();
     overlayRuntime?.refresh?.();
+  }
+
+  function getOverlayOptions(): OverlayOptions {
+    const base: OverlayOptions = {
+      minWidth: 72,
+      maxHeight: "78%",
+      anchor: "top-center",
+      nonCapturing: true,
+    };
+    if (overlayWidthMode === "full") {
+      // Edge-to-edge so a terminal Shift+drag selection captures only the
+      // dialog's own text — nothing from the main screen sits beside it.
+      return { ...base, width: "100%", margin: { top: 1 } };
+    }
+    // Framed "window" look: narrower, inset from the terminal edges.
+    return { ...base, width: "78%", margin: { top: 1, left: 2, right: 2 } };
+  }
+
+  async function toggleOverlayWidth(ctx: ExtensionContext | ExtensionCommandContext): Promise<void> {
+    overlayWidthMode = overlayWidthMode === "window" ? "full" : "window";
+
+    // overlayOptions is resolved once at showOverlay time, so a width change
+    // requires tearing down and re-opening the overlay. The close path persists
+    // the draft into overlayDraft, and ensureOverlay restores it on reopen.
+    const wasFocused = overlayRuntime?.handle?.isFocused() ?? true;
+    dismissOverlay();
+    await ensureOverlay(ctx);
+    if (!wasFocused) {
+      overlayRuntime?.handle?.unfocus();
+      overlayRuntime?.refresh?.();
+    }
+    setOverlayStatus(
+      overlayWidthMode === "full"
+        ? "Full-width mode. Shift+drag now selects only the dialog. Alt+w to restore the window."
+        : "Window mode. Alt+w switches to full-width for clean copy selection.",
+      ctx,
+    );
   }
 
   function removeBtwSessionSubscription(sessionRuntime: BtwSessionRuntime, unsubscribe: () => void): void {
@@ -1439,6 +1768,15 @@ export default function (pi: ExtensionAPI) {
     sessionRuntime.subscriptions.add(unsubscribe);
   }
 
+  function requestBtwSessionAbort(sessionRuntime: BtwSessionRuntime): Promise<void> {
+    sessionRuntime.abortPromise ??= Promise.resolve()
+      .then(() => sessionRuntime.session.abort())
+      .catch(() => {
+        // Ignore abort errors during BTW cancellation/replacement/shutdown.
+      });
+    return sessionRuntime.abortPromise;
+  }
+
   async function disposeBtwSession(): Promise<void> {
     const current = activeBtwSession;
     activeBtwSession = null;
@@ -1447,19 +1785,36 @@ export default function (pi: ExtensionAPI) {
     }
 
     clearBtwSessionSubscriptions(current);
-
-    try {
-      await current.session.abort();
-    } catch {
-      // Ignore abort errors during BTW session replacement/shutdown.
-    }
-
+    await requestBtwSessionAbort(current);
     current.session.dispose();
   }
 
   async function dismissOverlaySession(): Promise<void> {
+    invalidateBtwLifecycle();
     dismissOverlay();
     await disposeBtwSession();
+  }
+
+  /**
+   * Escape behaves differently depending on whether the BTW side session is
+   * currently doing work:
+   *
+   * - streaming: the first Escape aborts the in-flight request but keeps the
+   *   overlay open (so the partial transcript stays readable and the thread
+   *   remains usable). A second Escape dismisses, even while cancellation settles.
+   * - idle: Escape dismisses the overlay immediately (previous behavior).
+   */
+  async function dismissOrAbortOverlaySession(): Promise<void> {
+    const sessionRuntime = activeBtwSession;
+    if (sessionRuntime?.session.isStreaming && !sessionRuntime.abortPromise) {
+      setOverlayStatus("⏹ Aborting. Press Esc again to dismiss the BTW overlay.");
+      await requestBtwSessionAbort(sessionRuntime);
+      if (activeBtwSession === sessionRuntime && overlayRuntime) {
+        setOverlayStatus("⏹ Aborted. Press Esc again to dismiss the BTW overlay.");
+      }
+      return;
+    }
+    await dismissOverlaySession();
   }
 
   async function resolveBtwModel(
@@ -1468,7 +1823,7 @@ export default function (pi: ExtensionAPI) {
   ): Promise<ResolvedBtwModel> {
     if (btwModelOverride) {
       const auth = await ctx.modelRegistry.getApiKeyAndHeaders(btwModelOverride);
-      if (auth.ok && auth.apiKey) {
+      if (hasUsableModelAuth(ctx, btwModelOverride, auth)) {
         return {
           model: btwModelOverride,
           source: "override",
@@ -1559,6 +1914,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function setBtwModelOverride(ctx: ExtensionCommandContext, nextModel: SessionModel | null): Promise<void> {
+    invalidateBtwLifecycle();
     btwModelOverride = nextModel;
     const details: BtwModelOverrideDetails = nextModel
       ? { action: "set", timestamp: Date.now(), provider: nextModel.provider, id: nextModel.id, api: nextModel.api }
@@ -1577,6 +1933,7 @@ export default function (pi: ExtensionAPI) {
     ctx: ExtensionCommandContext,
     nextThinkingLevel: SessionThinkingLevel | null,
   ): Promise<void> {
+    invalidateBtwLifecycle();
     btwThinkingOverride = nextThinkingLevel;
     const details: BtwThinkingOverrideDetails = nextThinkingLevel
       ? { action: "set", timestamp: Date.now(), thinkingLevel: nextThinkingLevel }
@@ -1591,32 +1948,38 @@ export default function (pi: ExtensionAPI) {
     notify(ctx, `${message} ${describeResolvedThinking(settings)}`, "info");
   }
 
-  async function createBtwSubSession(ctx: ExtensionCommandContext, mode: BtwThreadMode): Promise<BtwSessionRuntime> {
-    const settings = await resolveBtwSettings(ctx, true);
+  async function createBtwSubSession(
+    ctx: ExtensionCommandContext,
+    mode: BtwThreadMode,
+    settings: ResolvedBtwSettings,
+  ): Promise<BtwSessionRuntime> {
     if (!settings.model) {
       throw new Error(settings.fallbackReason || "No active model selected.");
     }
 
-    const { session } = await createAgentSession({
+    const modelRuntimeOptions = await createBtwModelRuntimeOptions(ctx, settings.model);
+
+    const sessionOptions: CreateAgentSessionOptions = {
       sessionManager: SessionManager.inMemory(),
       model: settings.model,
-      modelRegistry: ctx.modelRegistry as AgentSession["modelRegistry"],
+      ...modelRuntimeOptions,
       thinkingLevel: settings.thinkingLevel,
       // Match pi's default coding-agent toolset (read/bash/edit/write).
       tools: ["read", "bash", "edit", "write"],
       resourceLoader: createBtwResourceLoader(ctx),
-    });
+    };
+    const { session } = await createAgentSession(sessionOptions);
 
     const { messages: seedMessages, sideThreadStartIndex } = buildBtwSeedState(ctx, pendingThread, mode, settings.model);
     if (seedMessages.length > 0) {
       session.agent.state.messages = seedMessages as typeof session.state.messages;
     }
 
-    return { session, mode, subscriptions: new Set(), sideThreadStartIndex };
+    return { session, mode, subscriptions: new Set(), sideThreadStartIndex, promptQueue: Promise.resolve() };
   }
 
   async function ensureBtwSession(ctx: ExtensionCommandContext, mode: BtwThreadMode): Promise<BtwSessionRuntime | null> {
-    const settings = await resolveBtwSettings(ctx);
+    const settings = await resolveBtwSettings(ctx, true);
     if (!settings.model) {
       return null;
     }
@@ -1626,12 +1989,12 @@ export default function (pi: ExtensionAPI) {
     }
 
     await disposeBtwSession();
-    activeBtwSession = await createBtwSubSession(ctx, mode);
+    activeBtwSession = await createBtwSubSession(ctx, mode, settings);
     return activeBtwSession;
   }
 
   async function ensureOverlay(ctx: ExtensionCommandContext | ExtensionContext): Promise<void> {
-    if (!ctx.hasUI) {
+    if (!canRenderBtwOverlay(ctx)) {
       return;
     }
     lastUiContext = ctx;
@@ -1651,7 +2014,6 @@ export default function (pi: ExtensionAPI) {
       if (activeBtwSession) {
         clearBtwSessionSubscriptions(activeBtwSession);
       }
-      runtime.handle?.hide();
       if (overlayRuntime === runtime) {
         overlayRuntime = null;
       }
@@ -1675,15 +2037,19 @@ export default function (pi: ExtensionAPI) {
             () => transcriptState.entries,
             () => overlayStatus,
             () => pendingMode,
+            () => overlayWidthMode,
             (value) => {
               void submitFromOverlay(ctx, value);
             },
             () => {
-              void dismissOverlaySession();
+              void dismissOrAbortOverlaySession();
             },
             () => {
               overlayRuntime?.handle?.unfocus();
               overlayRuntime?.refresh?.();
+            },
+            () => {
+              void toggleOverlayWidth(ctx);
             },
           );
 
@@ -1698,7 +2064,6 @@ export default function (pi: ExtensionAPI) {
           };
           runtime.close = () => {
             overlayDraft = overlay.getDraft();
-            overlay.dispose();
             closeRuntime();
           };
 
@@ -1712,14 +2077,7 @@ export default function (pi: ExtensionAPI) {
         },
         {
           overlay: true,
-          overlayOptions: {
-            width: "78%",
-            minWidth: 72,
-            maxHeight: "78%",
-            anchor: "top-center",
-            margin: { top: 1, left: 2, right: 2 },
-            nonCapturing: true,
-          },
+          overlayOptions: getOverlayOptions(),
           onHandle: (handle) => {
             runtime.handle = handle;
             handle.focus();
@@ -1743,6 +2101,10 @@ export default function (pi: ExtensionAPI) {
     if (name === "btw") {
       const { question, save } = parseBtwArgs(trimmedArgs);
       if (!question) {
+        if (!canRenderBtwOverlay(ctx)) {
+          notifyInlineQuestionRequired(ctx, "/btw");
+          return true;
+        }
         await ensureBtwSession(ctx, pendingMode);
         await ensureOverlay(ctx);
         return true;
@@ -1758,6 +2120,10 @@ export default function (pi: ExtensionAPI) {
 
     if (name === "btw:tangent") {
       const { question, save } = parseBtwArgs(trimmedArgs);
+      if (!question && !canRenderBtwOverlay(ctx)) {
+        notifyInlineQuestionRequired(ctx, "/btw:tangent");
+        return true;
+      }
       if (pendingMode !== "tangent") {
         await resetThread(ctx, true, "tangent");
       }
@@ -1773,8 +2139,13 @@ export default function (pi: ExtensionAPI) {
     }
 
     if (name === "btw:new") {
-      await resetThread(ctx, true, "contextual");
       const { question, save } = parseBtwArgs(trimmedArgs);
+      if (!question && !canRenderBtwOverlay(ctx)) {
+        notifyInlineQuestionRequired(ctx, "/btw:new");
+        return true;
+      }
+
+      await resetThread(ctx, true, "contextual");
       if (question) {
         await runBtw(ctx, question, save, "contextual");
       } else {
@@ -1840,6 +2211,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     if (name === "btw:inject") {
+      await btwSubmissionQueue;
       if (pendingThread.length === 0) {
         notify(ctx, "No BTW thread to inject.", "warning");
         return true;
@@ -1868,6 +2240,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     if (name === "btw:summarize") {
+      await btwSubmissionQueue;
       if (pendingThread.length === 0) {
         notify(ctx, "No BTW thread to summarize.", "warning");
         return true;
@@ -1943,6 +2316,7 @@ export default function (pi: ExtensionAPI) {
     persist = true,
     mode: BtwThreadMode = "contextual",
   ): Promise<void> {
+    invalidateBtwLifecycle();
     await disposeBtwSession();
     pendingThread = [];
     pendingMode = mode;
@@ -1957,6 +2331,7 @@ export default function (pi: ExtensionAPI) {
   }
 
   async function restoreThread(ctx: ExtensionContext): Promise<void> {
+    invalidateBtwLifecycle();
     await disposeBtwSession();
     pendingThread = [];
     pendingMode = "contextual";
@@ -2031,8 +2406,30 @@ export default function (pi: ExtensionAPI) {
     saveRequested: boolean,
     mode: BtwThreadMode,
   ): Promise<void> {
+    const generation = btwLifecycleGeneration;
+    const submission = btwSubmissionQueue.then(async () => {
+      if (generation !== btwLifecycleGeneration) {
+        return;
+      }
+      await executeBtw(ctx, question, saveRequested, mode, generation);
+    });
+    btwSubmissionQueue = submission.catch(() => {});
+    await submission;
+  }
+
+  async function executeBtw(
+    ctx: ExtensionCommandContext,
+    question: string,
+    saveRequested: boolean,
+    mode: BtwThreadMode,
+    generation: number,
+  ): Promise<void> {
+    const isCurrentGeneration = () => generation === btwLifecycleGeneration;
     lastUiContext = ctx;
     const settings = await resolveBtwSettings(ctx);
+    if (!isCurrentGeneration()) {
+      return;
+    }
     const model = settings.model;
     if (!model) {
       const message = settings.fallbackReason || "No active model selected.";
@@ -2042,7 +2439,10 @@ export default function (pi: ExtensionAPI) {
     }
 
     const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-    if (!auth.ok || !auth.apiKey) {
+    if (!isCurrentGeneration()) {
+      return;
+    }
+    if (!hasUsableModelAuth(ctx, model, auth)) {
       const message = auth.ok ? `No credentials available for ${model.provider}/${model.id}.` : auth.error;
       setOverlayStatus(message, ctx);
       notify(ctx, message, "error");
@@ -2051,6 +2451,12 @@ export default function (pi: ExtensionAPI) {
     }
 
     const sessionRuntime = await ensureBtwSession(ctx, mode);
+    if (!isCurrentGeneration()) {
+      if (sessionRuntime && activeBtwSession === sessionRuntime) {
+        await disposeBtwSession();
+      }
+      return;
+    }
     if (!sessionRuntime) {
       setOverlayStatus("No active model selected.", ctx);
       notify(ctx, "No active model selected.", "error");
@@ -2059,22 +2465,58 @@ export default function (pi: ExtensionAPI) {
 
     const session = sessionRuntime.session;
     const wasBusy = !ctx.isIdle();
+    const overlayAvailable = canRenderBtwOverlay(ctx);
     pendingMode = mode;
     const thinkingLevel = settings.thinkingLevel;
 
+    let releasePromptTurn!: () => void;
+    const previousPromptTurns = sessionRuntime.promptQueue;
+    const currentPromptTurn = new Promise<void>((resolve) => {
+      releasePromptTurn = resolve;
+    });
+    sessionRuntime.promptQueue = previousPromptTurns.then(() => currentPromptTurn);
+
+    if (session.isStreaming || sessionRuntime.abortPromise) {
+      setOverlayStatus("⏳ waiting for the current BTW turn to finish...", ctx);
+    }
+    await previousPromptTurns;
+    if (activeBtwSession !== sessionRuntime) {
+      releasePromptTurn();
+      return;
+    }
+
+    if (sessionRuntime.abortPromise) {
+      setOverlayStatus("⏳ waiting for cancellation to finish...", ctx);
+      await sessionRuntime.abortPromise;
+      if (activeBtwSession !== sessionRuntime) {
+        releasePromptTurn();
+        return;
+      }
+    }
+
+    if (!isCurrentGeneration()) {
+      releasePromptTurn();
+      return;
+    }
+
+    sessionRuntime.abortPromise = undefined;
     setOverlayStatus("⏳ streaming...", ctx);
     await ensureOverlay(ctx);
 
     try {
       await session.prompt(question, { source: "extension" });
+      if (!isCurrentGeneration()) {
+        return;
+      }
 
       const response = getLastAssistantMessage(session);
       if (!response) {
         throw new Error("BTW request finished without a response.");
       }
       if (response.stopReason === "aborted") {
-        removeTranscriptTurn(transcriptState, transcriptState.lastTurnId ?? transcriptState.currentTurnId);
-        setOverlayStatus("Request aborted.", ctx);
+        const abortedTurnId = transcriptState.currentTurnId ?? transcriptState.lastTurnId;
+        finishTranscriptTurn(transcriptState, abortedTurnId, "aborted");
+        setOverlayStatus("⏹ Aborted. Press Esc again to dismiss the BTW overlay.", ctx);
         return;
       }
       if (response.stopReason === "error") {
@@ -2102,8 +2544,15 @@ export default function (pi: ExtensionAPI) {
       pendingThread.push(details);
       pi.appendEntry(BTW_ENTRY_TYPE, details);
 
-      const saveState = saveVisibleBtwNote(pi, details, saveRequested, wasBusy);
-      if (saveState === "saved") {
+      const saveState = saveVisibleBtwNote(pi, details, saveRequested || !overlayAvailable, wasBusy);
+      if (!overlayAvailable) {
+        const message =
+          saveState === "queued"
+            ? "BTW response queued to display after the current turn finishes."
+            : "Displayed BTW response in the session.";
+        notify(ctx, message, "info");
+        setOverlayStatus(message, ctx);
+      } else if (saveState === "saved") {
         notify(ctx, "Saved BTW note to the session.", "info");
         setOverlayStatus("Saved BTW note to the session.", ctx);
       } else if (saveState === "queued") {
@@ -2113,12 +2562,16 @@ export default function (pi: ExtensionAPI) {
         setOverlayStatus("Ready for a follow-up. Hidden BTW thread updated.", ctx);
       }
     } catch (error) {
+      if (!isCurrentGeneration()) {
+        return;
+      }
       const errorMessage = error instanceof Error ? error.message : String(error);
       setTranscriptFailure(transcriptState, errorMessage);
       setOverlayStatus("Request failed. Thread preserved for retry or follow-up.", ctx);
       notify(ctx, errorMessage, "error");
       await disposeBtwSession();
     } finally {
+      releasePromptTurn();
       syncUi(ctx);
     }
   }
@@ -2130,7 +2583,20 @@ export default function (pi: ExtensionAPI) {
   async function getBtwHandoffThread(
     ctx: ExtensionCommandContext,
   ): Promise<{ sessionRuntime: BtwSessionRuntime | null; thread: BtwHandoffExchange[] }> {
+    const pendingSubmissions = btwSubmissionQueue;
+    await pendingSubmissions;
+
     const sessionRuntime = activeBtwSession ?? (await ensureBtwSession(ctx, pendingMode));
+    if (sessionRuntime) {
+      const pendingPromptTurns = sessionRuntime.promptQueue;
+      const pendingAbort = sessionRuntime.abortPromise;
+      await pendingPromptTurns;
+      await pendingAbort;
+      if (activeBtwSession !== sessionRuntime) {
+        throw new Error("BTW session closed before handoff completed.");
+      }
+    }
+
     const thread = sessionRuntime ? extractBtwHandoffThread(sessionRuntime) : [];
     const resolvedThread = thread.length > 0 ? thread : getPendingThreadForHandoff();
 
@@ -2149,18 +2615,21 @@ export default function (pi: ExtensionAPI) {
     }
 
     const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-    if (!auth.ok || !auth.apiKey) {
+    if (!hasUsableModelAuth(ctx, model, auth)) {
       throw new Error(auth.ok ? `No credentials available for ${model.provider}/${model.id}.` : auth.error);
     }
 
-    const { session } = await createAgentSession({
+    const modelRuntimeOptions = await createBtwModelRuntimeOptions(ctx, model);
+
+    const sessionOptions: CreateAgentSessionOptions = {
       sessionManager: SessionManager.inMemory(),
       model,
-      modelRegistry: ctx.modelRegistry as AgentSession["modelRegistry"],
+      ...modelRuntimeOptions,
       thinkingLevel: "off",
       tools: [],
       resourceLoader: createBtwResourceLoader(ctx, [BTW_SUMMARIZE_SYSTEM_PROMPT]),
-    });
+    };
+    const { session } = await createAgentSession(sessionOptions);
 
     try {
       await session.prompt(formatThread(thread), { source: "extension" });
@@ -2197,29 +2666,46 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerMessageRenderer(BTW_MESSAGE_TYPE, (message, { expanded }, theme) => {
     const details = message.details as BtwDetails | undefined;
-    const content = typeof message.content === "string" ? message.content : "[non-text btw message]";
-    const lines = [theme.fg("accent", theme.bold("[BTW]")), content];
+    const content = details
+      ? buildBtwMessageContent(details.question, details.answer)
+      : typeof message.content === "string"
+        ? message.content
+        : "[non-text btw message]";
+
+    const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
+    box.addChild(new Text(theme.fg("accent", theme.bold("[BTW]")), 0, 0));
+    box.addChild(
+      new Markdown(content, 0, 0, getMarkdownTheme(), {
+        color: (text: string) => theme.fg("customMessageText", text),
+      }),
+    );
 
     if (expanded && details) {
-      lines.push(
-        theme.fg(
-          "dim",
-          `model: ${details.provider}/${details.model} (${details.api ?? "openai-responses"}) · thinking: ${details.thinkingLevel}`,
+      box.addChild(
+        new Text(
+          theme.fg(
+            "dim",
+            `model: ${details.provider}/${details.model} (${details.api ?? "openai-responses"}) · thinking: ${details.thinkingLevel}`,
+          ),
+          0,
+          0,
         ),
       );
 
       if (details.usage) {
-        lines.push(
-          theme.fg(
-            "dim",
-            `tokens: in ${details.usage.input} · out ${details.usage.output} · total ${details.usage.totalTokens}`,
+        box.addChild(
+          new Text(
+            theme.fg(
+              "dim",
+              `tokens: in ${details.usage.input} · out ${details.usage.output} · total ${details.usage.totalTokens}`,
+            ),
+            0,
+            0,
           ),
         );
       }
     }
 
-    const box = new Box(1, 1, (text) => theme.bg("customMessageBg", text));
-    box.addChild(new Text(lines.join("\n"), 0, 0));
     return box;
   });
 
@@ -2238,6 +2724,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async () => {
+    invalidateBtwLifecycle();
     await disposeBtwSession();
     dismissOverlay();
   });
@@ -2250,6 +2737,16 @@ export default function (pi: ExtensionAPI) {
       },
     });
   }
+
+  pi.registerShortcut(BTW_WIDTH_TOGGLE_SHORTCUT, {
+    description: "Toggle the BTW overlay between window and full-width layouts.",
+    handler: async () => {
+      if (!overlayRuntime || !lastUiContext) {
+        return;
+      }
+      await toggleOverlayWidth(lastUiContext);
+    },
+  });
 
   pi.registerCommand("btw", {
     description: "Continue a side conversation in a focused BTW modal. Add --save to also persist a visible note.",
@@ -2307,3 +2804,4 @@ export default function (pi: ExtensionAPI) {
     },
   });
 }
+
