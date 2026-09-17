@@ -69,6 +69,23 @@ export function registerGoalEvents(core: GoalCore): void {
 	// for the lifetime of this registration (success or failure alike).
 	const baselineCapture = createBaselineCaptureState();
 
+	// Escape belongs to the open dialog. pi core (>= 0.84.4) wraps every
+	// blocking extension UI call in the OUTERMOST `ctx.ui.*` span and dispatches
+	// `ui_prompt_start`/`ui_prompt_end` (from a microtask, so the counter settles
+	// well before any human keypress). The span is shared across extensions, so
+	// this also covers dialogs owned by pi-subagents, pi-ask, pi-permission-system,
+	// pi-sandbox, and any other plugin — including the non-overlay
+	// `select`/`confirm`/`input`/`editor`/`custom` dialogs that replace the
+	// editor and are therefore invisible to `tui.hasOverlay()`.
+	// goal-widget.ts reads the depth so a foreign dialog keeps its Escape.
+	pi.on("ui_prompt_start", async () => {
+		core.enterUiPrompt();
+	});
+
+	pi.on("ui_prompt_end", async () => {
+		core.exitUiPrompt();
+	});
+
 	pi.on("context", async (event, ctx) => {
 		const filtered = filterGoalSessionContext(event.messages);
 		const messages = compactGoalCheckpointContext(filtered ?? event.messages, core.state.goal) ?? filtered;
@@ -268,6 +285,9 @@ export function registerGoalEvents(core: GoalCore): void {
 
 	pi.on("session_start", async (event, ctx) => {
 		core.auditMessages.clear();
+		// A dialog span cannot survive a session boundary: clear any leaked depth
+		// so Escape is never permanently trapped by a goal guard.
+		core.resetUiPromptDepth();
 		// NAF: the zero-op read caches are session-scoped — a new session always
 		// re-reads settings/pool/ledger fresh from disk (cross-process and
 		// hand-edited changes are picked up at the session boundary).
@@ -320,6 +340,10 @@ export function registerGoalEvents(core: GoalCore): void {
 		// This replaces the generic reminder with artifact-backed state.
 		if (shouldArmPostCompactReminder(core.state.goal)) {
 			core.runtime.armPostCompactReminder();
+			// The compaction summary eats the earlier goal-context message, so
+			// re-send the full authoritative copy (append-only; no delta) to keep
+			// the fork's persisted pi-goal-context-event channel alive.
+			core.sendGoalContextMessage(ctx, "compacted");
 		}
 		core.queueContinuation(ctx, true);
 	});

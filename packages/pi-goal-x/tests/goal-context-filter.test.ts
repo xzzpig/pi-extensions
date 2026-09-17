@@ -104,8 +104,9 @@ test("context normalize: prefix-stable across a growing session (prompt-cache co
 
 	// The turn-one request context must be an exact prefix of the turn-two
 	// request context, or the provider prompt cache diverges mid-history.
-	assert.deepEqual(normalizedOne, [user, { ...markerOne, content: checkpointTriggerPrompt("g1") }, snapshotOne, work]);
+	const rewrittenMarkerOne = { ...markerOne, content: checkpointTriggerPrompt("g1"), details: { version: 2, kind: "checkpoint", goalId: "g1" } };
+	assert.deepEqual(normalizedOne, [user, rewrittenMarkerOne, snapshotOne, work]);
 	for (let i = 0; i < normalizedOne.length; i += 1) {
-		assert.equal(normalizedTwo[i], normalizedOne[i], `position ${i} shifted between requests`);
+		assert.deepEqual(normalizedTwo[i], normalizedOne[i], `position ${i} shifted between requests`);
 	}
 });
