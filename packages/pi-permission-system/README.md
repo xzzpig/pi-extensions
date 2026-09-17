@@ -37,7 +37,7 @@ Permission enforcement extension for the [Pi](https://pi.mariozechner.at/) codin
 - **Gates MCP and skill access** at server, tool, and skill-name granularity
 - **Protects sensitive file patterns** — cross-cutting `path` rules deny `.env`, `~/.ssh/*`, etc. across all tools and bash at once, matching both the path as referenced and its symlink-resolved form so a deny cannot be evaded through a symlink alias
 - **Guards external paths** — prompts before file tools or bash commands reach outside `cwd`
-- **Fails closed** — an internal gate error blocks the tool (with a `gate_error` review-log entry and a matching `permissions:decision` broadcast), and a bash command the parser could not resolve, in whole or in part — or an indirection wrapper that hides the gated command (`bash -c`/`eval`, `sudo`, `env`, `xargs`, `find -exec`, …) — prompts (`ask`) rather than passing silently, unless the wrapped command is a pure reader whose direction is provable whatever it is fed (`xargs grep -l foo`)
+- **Fails closed** — an internal gate error blocks the tool (with a `gate_error` review-log entry and a matching `permissions:decision` broadcast), and a bash command the parser could not resolve, in whole or in part — or an indirection wrapper that hides the gated command (`bash -c`/`eval`, `sudo`, `env`, `xargs`, `find -exec`, …) — prompts (`ask`) rather than passing silently, unless the wrapped command is a pure reader whose direction is provable whatever it is fed (`xargs grep -l foo`); where a partial parse failure's own region re-parses cleanly on its own, the commands and paths it holds are recovered and gated rather than merely prompted for
 - **Forwards prompts from subagents** — `ask` policies work even in non-UI execution contexts
 - **Broadcasts UI prompt events** — `permissions:ui_prompt` fires only when the permission system is about to invoke the active user-facing permission UI, and every prompt it announces — including one forwarded up from a subagent — is answered by a `permissions:decision` on the same bus. Fork addition: `permissions:forwarded_decision` confirms when a parent response has been persisted for a forwarded request
 - **Native [`@xzzpig/pi-subagents`](https://www.npmjs.com/package/@xzzpig/pi-subagents) integration** — in-process child sessions register with the permission system automatically, enabling per-agent policy enforcement and `ask`-state forwarding to the parent UI without configuration
@@ -115,6 +115,7 @@ The trailing `*` is greedy and crosses subdirectory boundaries, so it allows eve
 
 Four layers compose with most-restrictive-wins: `path` (cross-cutting) → `external_directory` (CWD boundary) → per-tool patterns → `bash` command patterns.
 Because `ask` is more restrictive than `allow`, a `path` allow cannot loosen an `external_directory: ask` boundary — allow outside-CWD directories on `external_directory`.
+And because `deny` is more restrictive than `ask`, a `deny` on any layer refuses the call without prompting, naming the rule that decided.
 See [docs/configuration.md](docs/configuration.md) for the full recipe.
 
 Both path surfaces also carry a **direction**, so you can permit reading somewhere without permitting writing there: `path_read`, `path_write`, `external_directory_read`, and `external_directory_write`.
@@ -194,7 +195,8 @@ Hardening the gates against bypass, fail-closed corrections (breaking ones inclu
 - _Permissive defaults, trust profiles, or workflow presets._
   Your risk profile is not knowable from here, so defaults are least-privilege and common policies ship as documented recipes rather than preset keywords.
 - _Guessing what is sensitive._
-  No built-in secret denylist, and log redaction is key-name-structural rather than predictive — a redactor that silently misses a key invites treating the log as safe to share.
+  No built-in secret denylist, and log redaction is name-structural rather than predictive: a value is masked because of the name that binds it — a log key, a shell variable, a request header field — never because of what it looks like.
+  A redactor that guesses invites treating the log as safe to share.
 - _Model judgment in the core._
   This package makes no LLM call and holds no model config; model-assisted judging attaches as a chain link over the authorizer seam instead.
   A link decides nothing until you name it in `authorizerChain`, and its `allow` on an excluded surface is downgraded to `defer`.

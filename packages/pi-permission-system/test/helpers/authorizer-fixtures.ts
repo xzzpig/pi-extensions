@@ -8,13 +8,13 @@
  * `AskEscalator` to exercise the chain end to end.
  */
 
-import { type Mock, vi } from "vitest";
-import type {
-  AuthorizerVerdict,
-  AuthorizerSelectionDeps as SelectionCtorDeps,
-} from "#src/authority/authorizer";
+import { afterEach, beforeEach, type Mock, vi } from "vitest";
+import type { AuthorizerVerdict } from "#src/authority/authorizer";
+import type { UnregisteredLinkAuditor } from "#src/authority/authorizer-chain-audit";
 import { AuthorizerRegistry } from "#src/authority/authorizer-registry";
+import type { AuthorizerSelectionConstructorDeps } from "#src/authority/authorizer-selection";
 import { ForwardingLivenessJudge } from "#src/authority/forwarding-liveness";
+import { SUBAGENT_ENV_HINT_KEYS } from "#src/authority/permission-forwarding";
 import type { PermissionPrompterApi } from "#src/authority/permission-prompter";
 import { ServingSessionRegistry } from "#src/authority/serving-registry";
 import type { SubagentDetector } from "#src/authority/subagent-detection";
@@ -23,13 +23,40 @@ import { makeAuthorizerLog } from "./authorizer-log-fixtures";
 import { DECIDED_BY_HUMAN } from "./decision-fixtures";
 import { makePromptPreferences } from "./prompt-view-fixtures";
 
-/** The full constructor bag `AuthorizerSelection` takes (the ctor intersection). */
-export type AuthorizerSelectionTestDeps = SelectionCtorDeps & {
-  prompter: PermissionPrompterApi;
-  getPermissionQuery: () => PermissionQuery;
+/**
+ * The full constructor bag `AuthorizerSelection` takes, narrowed to the
+ * concrete `AuthorizerRegistry` so a test can register links into the same
+ * instance it hands the selection.
+ */
+export type AuthorizerSelectionTestDeps = Omit<
+  AuthorizerSelectionConstructorDeps,
+  "authorizerRegistry"
+> & {
   authorizerRegistry: AuthorizerRegistry;
-  getAuthorizerChain: () => string[];
 };
+
+/**
+ * Clear every subagent env hint before each test in the calling file, and
+ * restore the host environment afterwards.
+ *
+ * `selectAuthorizer` resolves a forwarding target through ambient
+ * `process.env`, so a developer running with `PI_SUBAGENT_PARENT_SESSION`
+ * exported would otherwise change what these fixtures select. The same pair is
+ * spelled out in `approval-escalator.test.ts` and `forwarding-manager.test.ts`;
+ * it lives here so the files sharing these fixtures do not copy it a third and
+ * fourth time.
+ */
+export function neutralizeSubagentEnvHints(): void {
+  beforeEach(() => {
+    for (const key of SUBAGENT_ENV_HINT_KEYS) {
+      vi.stubEnv(key, undefined);
+    }
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+}
 
 /** A `SubagentDetector` answering a fixed verdict. */
 export function makeDetection(isSubagent = false): SubagentDetector {
@@ -77,6 +104,16 @@ function makeQuery(): PermissionQuery {
   return { checkPermission: vi.fn(), getToolPermission: vi.fn() };
 }
 
+/** A recording `UnregisteredLinkAuditor` double. */
+export function makeChainAudit(): {
+  auditUnregisteredLink: Mock<UnregisteredLinkAuditor["auditUnregisteredLink"]>;
+} {
+  return {
+    auditUnregisteredLink:
+      vi.fn<UnregisteredLinkAuditor["auditUnregisteredLink"]>(),
+  };
+}
+
 /** The `AuthorizerSelection` constructor bag, override-driven. */
 export function makeAuthorizerSelectionDeps(
   overrides: Partial<AuthorizerSelectionTestDeps> = {},
@@ -111,5 +148,6 @@ export function makeAuthorizerSelectionDeps(
     authorizerRegistry:
       overrides.authorizerRegistry ?? new AuthorizerRegistry(),
     getAuthorizerChain: overrides.getAuthorizerChain ?? (() => []),
+    chainAudit: overrides.chainAudit ?? makeChainAudit(),
   };
 }

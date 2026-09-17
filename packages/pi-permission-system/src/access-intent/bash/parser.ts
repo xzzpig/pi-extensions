@@ -15,6 +15,8 @@ export interface TSNode {
   readonly text: string;
   /** Absolute byte offset of this node's start in the parsed source. */
   readonly startIndex: number;
+  /** Absolute byte offset one past this node's end in the parsed source. */
+  readonly endIndex: number;
   readonly childCount: number;
   /** False for anonymous tokens (operators, delimiters); true for named nodes. */
   readonly isNamed: boolean;
@@ -77,16 +79,32 @@ export function parseUnresolvedAt(node: TSNode): boolean {
  * fact about redirects, not about statements: a statement whose *predecessor*
  * failed is not itself unparsed, and borrowing the wider predicate here would
  * condemn every statement following a failed one.
+ *
+ * `unresolved-salvage.ts` asks the same question twice over: to locate the
+ * innermost region worth re-parsing, and to refuse the re-parse's own result
+ * when it failed too (#875).
  */
 export function parseUnresolvedWithin(node: TSNode): boolean {
   return node.hasError;
 }
 
 /**
+ * The one parse capability a consumer needs to re-parse a fragment of a
+ * command on its own.
+ *
+ * Narrower than {@link TSParser} on purpose: that interface also carries the
+ * parser's own `delete()`, which destroys the process-wide memoized parser for
+ * every later command. A consumer re-parsing a fragment has no business
+ * holding that, so it takes this instead (`unresolved-salvage.ts`, #875).
+ */
+export interface BashReparser {
+  parse(input: string): { rootNode: TSNode; delete(): void } | null;
+}
+
+/**
  * Minimal subset of web-tree-sitter's Parser used by this module.
  */
-interface TSParser {
-  parse(input: string): { rootNode: TSNode; delete(): void } | null;
+interface TSParser extends BashReparser {
   delete(): void;
 }
 

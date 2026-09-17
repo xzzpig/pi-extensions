@@ -7,9 +7,11 @@ import {
   selectAuthorizer,
 } from "./authorizer";
 import { composeAuthorizerChain } from "./authorizer-chain";
+import type { UnregisteredLinkAuditor } from "./authorizer-chain-audit";
 import type { AuthorizerLookup } from "./authorizer-registry";
 import { encloseInDelegationEnvelope } from "./delegation-envelope";
 import type { PermissionPromptDecision } from "./permission-dialog";
+import type { PermissionForwardingTarget } from "./permission-forwarding";
 import type {
   PermissionPrompterApi,
   PromptPermissionDetails,
@@ -48,13 +50,39 @@ export interface AskEscalator {
  * so a sibling extension learns it without knowing what a subagent is) and by
  * the registration observer (which records a link registered where no chain
  * runs). Both depend on this single-method view rather than the selection
- * itself, and neither may re-derive the role from `detection.isSubagent(ctx)`:
- * `selectAuthorizer` tests `hasUI` first, so a subagent with its own UI
- * adjudicates locally.
+ * itself, and neither may re-derive the role from `ctx.hasUI` or
+ * `detection.isSubagent(ctx)`: a node with a UI relays when it names another
+ * session that is draining its inbox, and decides locally otherwise (#909).
+ *
+ * Because the selection is remade on every activation, the answer can change
+ * within one session — a node stops relaying as soon as its declared parent
+ * stops serving.
  */
 export interface AdjudicationRole {
   adjudicatesLocally(): boolean;
 }
+
+/**
+ * Everything {@link AuthorizerSelection} is constructed with: the
+ * {@link AuthorizerSelectionDeps} `selectAuthorizer` itself needs, plus the
+ * collaborators only the class uses to resolve and run the chain.
+ *
+ * Named rather than left anonymous on the constructor because the test
+ * fixtures mirror it: an addition here is otherwise an addition in two places.
+ * `selectAuthorizer` keeps the narrower parameter type (ISP) — it resolves no
+ * links and must not see the chain collaborators.
+ */
+export type AuthorizerSelectionConstructorDeps = AuthorizerSelectionDeps & {
+  prompter: PermissionPrompterApi;
+  /** The session-scoped query injected into each chain link (ADR 0007 §3). */
+  getPermissionQuery: () => PermissionQuery;
+  /** Read-only lookup of registered links by name. */
+  authorizerRegistry: AuthorizerLookup;
+  /** The operator's configured link names, read live per ask. */
+  getAuthorizerChain: () => string[];
+  /** Told about each configured name the registry could not resolve. */
+  chainAudit: UnregisteredLinkAuditor;
+};
 
 /**
  * Context-owning selection root for the Authorizer spine.
@@ -72,18 +100,9 @@ export class AuthorizerSelection
   implements AskEscalator, AuthorizerSelectionLifecycle, AdjudicationRole
 {
   private authority: SelectedAuthority | null = null;
+  private relayTarget: PermissionForwardingTarget | null = null;
 
-  constructor(
-    private readonly deps: AuthorizerSelectionDeps & {
-      prompter: PermissionPrompterApi;
-      /** The session-scoped query injected into each chain link (ADR 0007 §3). */
-      getPermissionQuery: () => PermissionQuery;
-      /** Read-only lookup of registered links by name. */
-      authorizerRegistry: AuthorizerLookup;
-      /** The operator's configured link names, read live per ask. */
-      getAuthorizerChain: () => string[];
-    },
-  ) {}
+  constructor(private readonly deps: AuthorizerSelectionConstructorDeps) {}
 
   /**
    * Select the live authority for `ctx` and store it. The non-terminal
@@ -92,7 +111,39 @@ export class AuthorizerSelection
    * activation, so link resolution is deferred to the session's first ask.
    */
   activate(ctx: ExtensionContext): void {
-    this.authority = selectAuthorizer(ctx, this.deps);
+    const authority = selectAuthorizer(ctx, this.deps);
+    this.recordRelayTransition(authority.relayTarget ?? null);
+    this.authority = authority;
+  }
+
+  /**
+   * Record that this node started, stopped, or redirected its relaying.
+   *
+   * `activate` runs on every turn event, so only a change is worth a line: the
+   * pair reads beside the serving node's own
+   * `forwarded_permission.serving_started`/`serving_stopped`, which is what
+   * makes a misdirected relay a one-line diff across the two sessions. A node
+   * that never relays writes nothing at all.
+   */
+  private recordRelayTransition(
+    target: PermissionForwardingTarget | null,
+  ): void {
+    const previous = this.relayTarget;
+    if (previous?.sessionId === target?.sessionId) {
+      return;
+    }
+    this.relayTarget = target;
+    if (previous !== null) {
+      this.deps.logger.review("forwarded_permission.relay_stopped", {
+        targetSessionId: previous.sessionId,
+      });
+    }
+    if (target !== null) {
+      this.deps.logger.review("forwarded_permission.relay_started", {
+        targetSessionId: target.sessionId,
+        channel: target.source,
+      });
+    }
   }
 
   /**
@@ -127,10 +178,11 @@ export class AuthorizerSelection
 
   /**
    * Resolve the operator's `authorizerChain` names to registered links, in
-   * config order (ADR 0007 invariant 1). An unregistered name is skipped with a
-   * warning (invariant 2 — more prompting, never less); each resolved link is
-   * wrapped in the bounded-delegation envelope so an `allow` on an excluded
-   * surface cannot exceed the operator's policy.
+   * config order (ADR 0007 invariant 1). An unregistered name is skipped
+   * fail-safe (invariant 2 — more prompting, never less) and handed to the
+   * chain audit, which records it and tells the operator once per name; each
+   * resolved link is wrapped in the bounded-delegation envelope so an `allow`
+   * on an excluded surface cannot exceed the operator's policy.
    *
    * The resolved names are recorded against the ask before any link runs — a
    * link that defers decides nothing and would otherwise leave no evidence it
@@ -146,10 +198,7 @@ export class AuthorizerSelection
     for (const name of configured) {
       const authorize = this.deps.authorizerRegistry.get(name);
       if (authorize === undefined) {
-        this.deps.logger.review("authorizer_chain_unregistered_link", {
-          requestId,
-          name,
-        });
+        this.deps.chainAudit.auditUnregisteredLink({ requestId, name });
         continue;
       }
       resolved.push(name);
@@ -181,6 +230,7 @@ export class AuthorizerSelection
 
   /** Clear the stored selection. */
   deactivate(): void {
+    this.recordRelayTransition(null);
     this.authority = null;
   }
 

@@ -1,14 +1,14 @@
 ---
 status: accepted
 date: 2026-08-22
-amended: 2026-08-25
+amended: 2026-09-15
 ---
 
 # 0013 — The permission policy model: capability as an axis
 
 ## Status
 
-Accepted, as amended 2026-08-29.
+Accepted, as amended 2026-09-15.
 
 This decision settles the shape of the deterministic policy model: whether access capability (reading versus writing a path) becomes first-class, how it is spelled in config, what composes with what, and where the enforcement boundary of this package lies.
 It composes with `docs/decisions/0009-bash-path-projection-completeness-contract.md`, whose layering asymmetry it preserves and whose per-command-table rejection it deliberately re-scopes (§7), and with `docs/decisions/0007-model-judge-authorizer-chain-adr.md`, to which it routes judgment the deterministic layer cannot supply and whose delegation exclusions it restates as surface families (§4) so they survive the new key names unamended.
@@ -95,6 +95,37 @@ The rest of §10 — blame propagation, per-node verdict objects, and the effect
 §10's *control-flow body* case earns no `BashCommandContext` variant.
 A body runs in the current shell, so it has no distinct execution context to name, and the enum is validated by `BASH_COMMAND_CONTEXTS` in the tolerant reader a serving node uses on a forwarded request read off disk (ADR 0012) — an unknown value there makes an older node reject the whole payload.
 The "why is the gate showing me this fragment" question the variant would have served is §10's blame propagation, still unwritten.
+
+### Amendment, 2026-09-15 — the enumeration residual had a fourth remedy
+
+The paragraph above names three candidate fixes for [#875] and calls them all outside this record's fold.
+There is a fourth, and it is inside the fold, because it changes what the verdict fold is *given* rather than what the fold does.
+
+**Re-parse the smallest unresolved node's own source text on its own, and admit the result only when that re-parse is clean.**
+The grammar gap is in the *combination* — `<<TAG`, `2>&1`, and `|` together — so `2>&1 | rm -rf /tmp/x`, lifted out and parsed alone, resolves perfectly.
+The recovered region's command units and path tokens are then enumerated *in addition to* the primary parse's, each marked `parseUnresolved`, so the floor above still clamps their `allow` while an explicit `deny` finally fires.
+
+The clean-re-parse condition is the whole safety argument, and it is what keeps [#742]'s finding intact: error recovery *invents* the structure inside an unresolved region, and invented structure does not re-parse.
+Measured, dropping that condition makes `cat <> rw.txt` emit a command unit whose text is `">"`, and `cat $(( > out.txt` emit a duplicate `cat` plus a `"$(("` — nonsense strings then matched against the `bash:` patterns.
+With it, both [#814] shapes and all four malformed families salvage nothing at all.
+
+Measured over the local review log at implementation time — 9191 `bash` entries, **6911 distinct intact** after excluding 333 truncated by the field cap — **7** commands have a parse error, **all 7** salvage cleanly, each recovering exactly its real dropped command, and **0** salvaged unit is invented.
+No decision changes under the measured config, because every one of the 7 already prompted under the floor; what changes is that a `bash:` rule is now consulted for the command that runs.
+
+Salvaging is additive but not automatically monotonic, and one seam had to be moved to make it so.
+The [#452] branch that resolves the **whole command string** — the only surface an explicit `deny` can reach when the parse matched nothing — was keyed on the unit list being empty.
+A body-less leading redirect ahead of the gap (`> f <<'M' 2>&1 | rm -rf /tmp/x`, valid bash that really runs) yields **zero** primary units and one salvaged one, so keying on the combined list would have skipped that check and turned a `deny` on a context-naming rule such as `"* rm -rf *"` into an `ask`.
+The check is therefore keyed on the **primary** parse having matched nothing, which the `salvaged` marker on a recovered unit is what distinguishes; only the synthetic `<unparseable-bash-command>` ask is skipped when recovered units exist to carry the verdict.
+This was found by adversarial review rather than by the corpus, which holds no such command — the same lesson ADR 0009's 2026-08-29 amendment records: a measurement over real traffic prices a change and does not enumerate a mechanism's inputs.
+
+Two consequences for this record.
+
+The residual the paragraph above describes is discharged for the population that runs, and what remains is narrower: a region whose *own* re-parse also fails is still consulted against no rule, and that is the fail-closed direction rather than a gap — the floor prompts, naming the whole command line.
+
+The clause's trigger stays the parse's **health**, never a node type.
+Every salvageable region of the one grammar gap this package has met is a `file_redirect`, across twenty-five probed spellings including the gap nested in a control-flow body, a subshell, and a substitution — so no real command distinguishes "the innermost unresolved node" from "the innermost unresolved `file_redirect`", and the narrower rule is unfalsifiable on real input.
+It is rejected anyway, for the reason the 2026-09-04 amendment already gave about the marker: a node-type trigger silently drops the next gap that lands somewhere else.
+A stub-node test pins the distinction the corpus cannot.
 
 ## Context
 
@@ -675,6 +706,7 @@ Issue [#620] carries the judgment slice the chain retains under §7.
 
 [#301]: https://github.com/gotgenes/pi-packages/issues/301
 [#306]: https://github.com/gotgenes/pi-packages/issues/306
+[#452]: https://github.com/gotgenes/pi-packages/issues/452
 [#472]: https://github.com/gotgenes/pi-packages/issues/472
 [#490]: https://github.com/gotgenes/pi-packages/issues/490
 [#575]: https://github.com/gotgenes/pi-packages/issues/575
@@ -700,6 +732,7 @@ Issue [#620] carries the judgment slice the chain retains under §7.
 [#804]: https://github.com/gotgenes/pi-packages/issues/804
 [#806]: https://github.com/gotgenes/pi-packages/issues/806
 [#807]: https://github.com/gotgenes/pi-packages/issues/807
+[#814]: https://github.com/gotgenes/pi-packages/issues/814
 [#840]: https://github.com/gotgenes/pi-packages/issues/840
 [#875]: https://github.com/gotgenes/pi-packages/issues/875
 [openai/codex#28732]: https://github.com/openai/codex/issues/28732

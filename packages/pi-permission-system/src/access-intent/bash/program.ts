@@ -3,13 +3,15 @@ import {
   type BashExternalPath,
   BashPathResolver,
   type BashPathRuleCandidate,
-} from "#src/access-intent/bash/bash-path-resolver";
+} from "./bash-path-resolver";
 import {
   type BashCommand,
   collectCommands,
+  collectSalvagedCommands,
   type ParseProgram,
-} from "#src/access-intent/bash/command-enumeration";
-import { getParser, type TSNode } from "#src/access-intent/bash/parser";
+} from "./command-enumeration";
+import { getParser, type TSNode } from "./parser";
+import { withSalvagedRoots } from "./unresolved-salvage";
 
 export type { BashCommand, BashExternalPath, BashPathRuleCandidate };
 
@@ -62,16 +64,21 @@ export class BashProgram {
     try {
       const parseProgram: ParseProgram = (source) =>
         parseCommandUnits(source, parser, parseProgram);
-      const { externalAccesses, ruleCandidates } = new BashPathResolver(
-        normalizer,
-        options?.workdir,
-      ).resolve(tree.rootNode);
-      return new BashProgram(
-        command,
-        collectCommands(tree.rootNode, { parseProgram }),
-        externalAccesses,
-        ruleCandidates,
-      );
+      return withSalvagedRoots(tree.rootNode, parser, (salvaged) => {
+        const { externalAccesses, ruleCandidates } = new BashPathResolver(
+          normalizer,
+          options?.workdir,
+        ).resolve(tree.rootNode, salvaged);
+        return new BashProgram(
+          command,
+          [
+            ...collectCommands(tree.rootNode, { parseProgram }),
+            ...salvaged.flatMap(collectSalvagedCommands),
+          ],
+          externalAccesses,
+          ruleCandidates,
+        );
+      });
     } finally {
       tree.delete();
     }

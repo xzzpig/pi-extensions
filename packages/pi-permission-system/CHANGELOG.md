@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Synced with upstream pi-permission-system v31.1.4 → v32.0.5** (fork 0.8.0 → 1.0.0). Adopted upstream's parent-session prompting for UI children (#907/#909), deny-preempts-ask (#899), transient filesystem retry for forwarded writes (#914), command-string secret redaction (#920), bash partial-parse salvage (#875), and unregistered chain-link warning (#861), while preserving the fork's named permission profiles, session role layer, wrapper floors, and forwarded-decision broadcast.
+
+### Added
+
 - **Synced with upstream pi-permission-system v31.0.2 → v31.1.4** (fork 0.7.0 → 0.8.0). Adopted upstream's `src/` tree reorganization into `#src/<domain>/` subdirectories, forwarded-permission serving heartbeat fixes (#907), and the tool-surface relocation documentation, while preserving the fork's named permission profiles, session role layer, wrapper floors, and forwarded-decision broadcast.
 - **A child session keeps the profile selection it was launched with.** The
   launcher-provided `PI_SUBAGENT_PERMISSION_PROFILE` selection is captured once

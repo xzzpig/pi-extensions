@@ -173,10 +173,11 @@ function forwardableRequestId(requesterRequestId: string): string {
  * Owns the escalation-up role of the forwarded-permission behavior: builds
  * and persists a request file, then polls for the parent session's
  * response. `ctx` is bound once at construction — `selectAuthorizer` only
- * constructs a `ParentAuthorizer` for a context it has already confirmed has
- * no UI and is a subagent, so `authorize` never re-derives that dispatch
- * (formerly `ApprovalEscalator.requestApproval`'s `hasUI` / `!isSubagent`
- * arms, both dead once every caller routes through `selectAuthorizer`).
+ * constructs a `ParentAuthorizer` for a context it has already established is a
+ * child, whether that child has a UI of its own (#909) or not, so `authorize`
+ * never re-derives that dispatch (formerly `ApprovalEscalator.requestApproval`'s
+ * `hasUI` / `!isSubagent` arms, both dead once every caller routes through
+ * `selectAuthorizer`).
  */
 export class ParentAuthorizer implements TerminalAuthorizer {
   private readonly forwardingDir: string;
@@ -221,10 +222,9 @@ export class ParentAuthorizer implements TerminalAuthorizer {
   ): Promise<PermissionPromptDecision> {
     const requesterSessionId = getSessionId(ctx);
     const target = resolvePermissionForwardingTarget({
-      hasUI: ctx.hasUI,
-      // Invariant: selectAuthorizer only selects ParentAuthorizer for a
-      // no-UI subagent context, so this is always true — no detection dep
-      // needed to re-derive it here.
+      // Invariant: selectAuthorizer only selects ParentAuthorizer for a context
+      // it has already established is a child — no detection dep needed to
+      // re-derive it here.
       isSubagent: true,
       currentSessionId: requesterSessionId,
       env: process.env,

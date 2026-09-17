@@ -168,7 +168,7 @@ This clamp is deny-preserving and, like `yoloMode`, applied at composition; when
 | Key                         | Default  | Description                                                                                                                                                                                                                                  |
 | --------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `debugLog`                  | `false`  | Enables verbose diagnostic logging to `logs/pi-permission-system-debug.jsonl`                                                                                                                                                                |
-| `permissionReviewLog`       | `true`   | Enables the permission request/denial review log at `logs/pi-permission-system-permission-review.jsonl`. Records bash command strings unredacted — see [Log file sensitivity](#log-file-sensitivity)                                         |
+| `permissionReviewLog`       | `true`   | Enables the permission request/denial review log at `logs/pi-permission-system-permission-review.jsonl`. Records bash command strings, masked only where a name binds the secret — see [Log file sensitivity](#log-file-sensitivity)         |
 | `yoloMode`                  | `false`  | Auto-approves `ask` results instead of prompting when yolo mode is enabled                                                                                                                                                                   |
 | `doublePressToConfirm`      | `true`   | Requires a confirming second press of a decision hotkey in the inline TUI dialog (see below). TUI sessions only; set to `false` for single-press.                                                                                            |
 | `forwardingTimeoutMs`       | `600000` | How long a subagent waits for the parent session to answer a forwarded permission request, in milliseconds. A child whose parent is not draining its inbox gives up in ~2 s regardless, whether that parent runs in this process or its own. |
@@ -294,9 +294,11 @@ Three invariants govern the chain:
 
 1. **Config order wins, never registration order.**
    The order in `authorizerChain` — not the order extensions happen to register in — fixes the security-relevant chain order.
-2. **A missing link is skipped fail-safe.**
-   A name with no registered link is skipped with a logged warning; the `ask` still reaches the terminal.
+2. **A missing link is skipped fail-safe, and you are told.**
+   A name with no registered link is skipped; the `ask` still reaches the terminal.
    Absence of a judge means *more* prompting, never less.
+   Because you asked for that judge and did not get it, the skip also raises a warning naming the link — once per session per name, beside the per-ask review record.
+   Three things leave the identical absence, so the warning names the likeliest and admits the others: the extension providing the link is not loaded in this session (a subagent child's `excludedExtensionPackages` does this), it failed to load, or it declined to register because it has no configuration of its own.
 3. **Registration alone grants no authority.**
    Installing a judge extension gives it nothing; a link decides nothing until you name it here (opt-in activation).
 
@@ -312,12 +314,12 @@ The subagent itself resolves no links (an extension cannot register one in a chi
 
 Three review-log records make the chain observable, all keyed by the ask's `requestId`:
 
-| Record                               | Meaning                                                                                                  |
-| ------------------------------------ | -------------------------------------------------------------------------------------------------------- |
-| `authorizer_chain_resolved`          | the links consulted on this ask, recorded before they run — a link that defers otherwise leaves no trace |
-| `authorizer_chain_delegated`         | the ask came from a relaying subagent node; the named links were deliberately not run here               |
-| `authorizer_chain_unregistered_link` | a configured name had no registered link — a real misconfiguration; the ask still reaches the terminal   |
-| `authorizer_link_vacant`             | a link was registered on a relaying node, which runs no chain — accepted and recorded, never consulted   |
+| Record                               | Meaning                                                                                                                                                |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `authorizer_chain_resolved`          | the links consulted on this ask, recorded before they run — a link that defers otherwise leaves no trace                                               |
+| `authorizer_chain_delegated`         | the ask came from a relaying subagent node; the named links were deliberately not run here                                                             |
+| `authorizer_chain_unregistered_link` | a configured name had no registered link — a real misconfiguration; the ask still reaches the terminal, and the first skip of that name also warns you |
+| `authorizer_link_vacant`             | a link was registered on a relaying node, which runs no chain — accepted and recorded, never consulted                                                 |
 
 Extension authors: register a link from a `permissions:ready` handler via `getPermissionsService(sessionId).registerAuthorizer(name, authorize)`, taking `sessionId` from that event's payload; the callback receives the ask details and a narrow, session-scoped `PermissionQuery` (`checkPermission` / `getToolPermission`) so it can consult the deterministic engine at gate parity.
 Registration returns a disposer, and only one link may hold a given name.
@@ -497,11 +499,13 @@ The bash gate fails closed: when in doubt it blocks or prompts, never silently a
 - If the permission gate throws an internal error (for example a transient tree-sitter parser-init failure), the tool call is **blocked** rather than passed ungated, and a `gate_error` entry is written to the review log naming the failure.
 - A non-empty command that cannot be parsed into command units resolves to **`ask`** (the synthetic `<unparseable-bash-command>` pattern in the review log) instead of falling through to a permissive top-level `*`.
   A `deny` rule covering the whole command still denies outright — the synthetic `ask` never masks a hard deny into an approvable prompt.
+  That whole-command check runs whenever the parse itself matched nothing, including when the recovery below went on to recover a command from the wreckage, so a rule naming the command in context (`"* rm -rf *"`) is still consulted.
   An empty, whitespace-only, or comment-only command has nothing to gate and is resolved normally.
 - A command the parser could only *partly* resolve is floored the same way (the synthetic `<unparsed-bash-subtree>` pattern in the review log).
   Recovered structure is not evidence of what runs, so any command unit at or beneath the statement holding the unresolved region has its `allow` clamped up to `ask`; an explicit `deny` or `ask` on that unit still decides.
-  The prompt names the **whole** command rather than the unit, because a partial failure can drop a command from the parse entirely and the fragment that did parse is not what you need to see.
+  The prompt names the **whole** command rather than the unit, because the fragment that did parse is not what you need to see.
   A statement beside the failed one keeps its own rule.
+  Where the unresolved region's own text parses cleanly on its own, the commands and paths inside it are recovered and gated too, so a `deny` covering one of them still denies rather than prompting — a region whose own text does not re-parse is left to the floor, since error recovery invents the structure inside one and inventions do not re-parse.
   Most such commands are simply malformed, and the shell would refuse them too — but not all: `git commit -F - <<'MSG' 2>&1 | tail -4` is valid bash that `tree-sitter-bash` cannot parse, because a heredoc redirect combined with `2>&1` **and** a pipe defeats the grammar though each pairing alone is fine.
 - An opaque-payload wrapper — `bash`/`sh`/`dash`/`zsh`/`ksh` invoked with `-c`, or `eval` — carries its inner program in a quoted argument. The fork **re-parses the payload** with the same tree-sitter parser and gates its inner commands as their own units (marked `inside an opaque wrapper payload (eval/bash -c)` in prompts), so `eval "git status"` matches `git status *`/`*` like a plain command, while `eval "rm -rf /"` still hits `rm -rf *: ask` and `eval "sudo rm …"` still hits `sudo rm *: deny`. A provably empty invocation — a bare `eval`, a missing/blank payload (`eval ""`), or a payload that cleanly parses to no commands (comments, pure assignments) — executes nothing and is gated as an ordinary command by its own text instead of being floored. Only when a non-empty payload fails to parse is the wrapper's `allow` floored to at least **`ask`** (the synthetic `<opaque-bash-wrapper>` pattern in the review log).
 - An indirection wrapper — `sudo`, `env`, `xargs`, `time`, `nohup`, `timeout`, `nice`, `parallel`, `rust-parallel`, `rush`, `doas`, `setsid`, `stdbuf`, `watch`, `flock`, or `find`/`fd` carrying a per-result exec flag (`find` with `-exec`/`-execdir`/`-ok`/`-okdir`, `fd` with `-x`/`--exec`/`-X`/`--exec-batch`) — runs a following command. The fork **locates the inner command** (skipping the wrapper's own options, option values, `env`-assignments, `timeout` durations, `flock` lockfiles, and `--`) and gates it as its own unit (marked `inside an indirection wrapper (env/xargs/…)` in prompts), so `sudo aws s3 ls` is gated by the `aws s3 ls` rules and `timeout 570 nix eval …` is gated by `nix eval …`. A bare `find . -name '*.py'` search (no exec flag) is unaffected.
@@ -631,6 +635,10 @@ Four orthogonal layers compose with most-restrictive-wins:
 Use `path` to **deny** sensitive files everywhere (`.env`, `~/.ssh/*`); use `external_directory` to **allow** a directory outside the working tree (a cache, a sibling project).
 Because the layers compose with most-restrictive-wins, a `path` allow cannot loosen an `external_directory: ask` boundary — `ask` is more restrictive than `allow`, so the prompt still fires.
 Adding `"~/.cargo/registry": "allow"` to the `path` surface therefore does **not** stop the outside-CWD prompt; put the rule on `external_directory` instead (see below).
+
+The same ordering runs the other way at the top of the scale.
+`deny` is more restrictive than `ask`, so a `deny` on any layer refuses the call **without prompting**, whichever layer carries the rule.
+A `bash: {"find / *": "deny"}` rule therefore suppresses the outside-CWD prompt that `find /` would otherwise raise, and the refusal names the `bash` rule that decided rather than the boundary that asked.
 
 Configs without a `path` key behave identically to before — the gate does not fire.
 When no `path` key is present, the universal fallback (`permission["*"]`) applies: `"*": "allow"` keeps the gate transparent, while `"*": "deny"` would deny all file access via every surface including `path`.
@@ -1265,19 +1273,30 @@ Both logs are created **owner-only** (`0600`, in a `0700` directory), and a log 
 The permission-forwarding request and response files are written the same way.
 This closes the shared-host case: another user on the same machine cannot read them.
 
-Values bound to a **sensitive key name** — `authorization`, `token`, `secret`, `password`, `credential`, `cookie`, `api_key`, `private_key`, matched case-insensitively — are masked as `[redacted]` before anything is written.
+Values bound to a **sensitive name** — `authorization`, `token`, `secret`, `password`, `credential`, `cookie`, and a bare or suffixed `key` (`api_key`, `private_key`, `OPENROUTER_KEY`, `apiKey`), matched case-insensitively — are masked as `[redacted]` before anything is written.
 So a tool called with `{"authorization": "Bearer …"}` records `{"authorization": "[redacted]"}`.
+
+A bash command binds values to names too, and the same predicate answers for those.
+The command is parsed, and a value is masked when it is bound to a sensitive name by a shell assignment or a request header field:
+
+```text
+KEY="sk-or-v1-…" curl https://x        →  KEY=[redacted] curl https://x
+env MY_KEY=… deploy                    →  env MY_KEY=[redacted] deploy
+curl -H "Authorization: Bearer sk-…"   →  curl -H "Authorization:[redacted]"
+```
 
 The boundary is worth stating exactly, because it is easy to over-read:
 
-> A value bound to a sensitive key name is masked; a secret embedded in a bash command string is not.
+> A value bound to a sensitive name is masked — whether the name is a log key, a shell variable, or a request header field.
+> A secret with no name bound to it, such as one typed as a `grep` pattern, is not.
 
-A command string has no keys, so `deploy --token abc123` is logged unredacted.
+So `grep -r "sk-ant-…" .` and `deploy --token abc123` are both logged unredacted: the first binds the secret to nothing, and the second binds it to a flag rather than a name.
 The extension deliberately does not try to guess which parts of a command look secret-shaped — see [ADR 0010] for the measured reasoning.
+A command the parser could not fully resolve, and a secret inside an inline-shell payload (`bash -c '…'`) or a heredoc body, are masked only as far as the parse reached.
 
 Every value the **review** log writes is narrowed to `reviewLogFieldMaxWidth` (1000 characters by default) and marked with an ellipsis, so a single pathological command cannot put tens of kilobytes in one entry.
 This is a length bound, not redaction: it never inspects a value to decide what to hide, and it applies to every field alike.
-The two compose — a sensitive-keyed value is masked whole however long it was.
+The two compose, and masking runs first — a sensitively-named value is masked whole however long it was, and the cap never shortens one.
 The debug log is left unbounded, since it is opt-in and exists to be read in full.
 
 Practical guidance:

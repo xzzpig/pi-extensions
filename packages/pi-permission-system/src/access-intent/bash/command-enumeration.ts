@@ -65,6 +65,7 @@ export interface BashCommand {
 	 * commands were resolved.
 	 */
 	readonly payloadUnresolved?: boolean;
+  readonly salvaged?: true;
 }
 
 /**
@@ -92,27 +93,49 @@ export type ParseProgram = (source: string) => BashCommand[] | null;
  * command in front of the operator is.
  */
 interface UnitScope {
-	/**
-	 * Execution context for a nested command (substitution or subshell); absent
-	 * for a current-shell (top-level) command.
-	 */
-	readonly context?: BashCommandContext;
-	/**
-	 * True when the enclosing statement redirects output into a real file, which
-	 * withholds the floor exemption from any wrapper unit beneath it.
-	 */
-	readonly writesViaRedirect: boolean;
-	/**
-	 * True when the enclosing statement holds a region tree-sitter could not
-	 * resolve, so every unit beneath it is floored rather than trusted (#840).
-	 */
-	readonly parseUnresolved: boolean;
+  /**
+   * Execution context for a nested command (substitution or subshell); absent
+   * for a current-shell (top-level) command.
+   */
+  readonly context?: BashCommandContext;
+  /**
+   * True when the enclosing statement redirects output into a real file, which
+   * withholds the floor exemption from any wrapper unit beneath it.
+   */
+  readonly writesViaRedirect: boolean;
+  /**
+   * True when the enclosing statement holds a region tree-sitter could not
+   * resolve, so every unit beneath it is floored rather than trusted (#840).
+   */
+  readonly parseUnresolved: boolean;
+  /**
+   * True when the walk started from a salvaged region rather than the primary
+   * parse tree (#875). Relayed unchanged, including into nested executions:
+   * everything found inside a salvaged region is salvaged.
+   */
+  readonly salvaged: boolean;
 }
 
 /** A top-level command in the current shell, writing no file, fully parsed. */
 const TOP_LEVEL_SCOPE: UnitScope = {
-	writesViaRedirect: false,
-	parseUnresolved: false,
+  writesViaRedirect: false,
+  parseUnresolved: false,
+  salvaged: false,
+};
+
+/**
+ * The scope a salvaged region's own units run under.
+ *
+ * Marked unresolved because the region reached the salvage only by failing in
+ * the primary parse, so the verdict fold floors what it recovers rather than
+ * trusting it. `writesViaRedirect` starts false for the same reason
+ * {@link collectHostedCommands} resets it: a redirect established outside the
+ * region is the enclosing statement's, not the region's.
+ */
+const SALVAGED_SCOPE: UnitScope = {
+  writesViaRedirect: false,
+  parseUnresolved: true,
+  salvaged: true,
 };
 
 // ── Node-type vocabulary ─────────────────────────────────────────────────────
@@ -239,19 +262,42 @@ const STATEMENT_TYPES = new Set([
  * provably payload-less invocation (`timeout 5`, bare `env`) is gated by its
  * own text.
  */
+/** Active parseProgram during a collectCommands walk (fork wrapperFloors). */
+let activeParseProgram: ParseProgram | undefined;
+
 export function collectCommands(
 	node: TSNode,
 	options?: { parseProgram?: ParseProgram },
 ): BashCommand[] {
 	const out: BashCommand[] = [];
-	collectCommandsInto(node, TOP_LEVEL_SCOPE, options?.parseProgram, out);
+	activeParseProgram = options?.parseProgram;
+	try {
+		collectCommandsInto(node, TOP_LEVEL_SCOPE, out);
+	} finally {
+		activeParseProgram = undefined;
+	}
 	return out;
+}
+
+/**
+ * Enumerate the command units of a region the primary parse could not resolve,
+ * re-parsed cleanly on its own (`unresolved-salvage.ts`, #875).
+ *
+ * The same walk as {@link collectCommands}, differing only in the scope it
+ * starts from: every unit is marked {@link BashCommand.parseUnresolved}, so a
+ * command the primary parse dropped is matched against the bash rules — an
+ * explicit `deny` fires — while its `allow` is still floored to `ask` by the
+ * verdict fold (#840).
+ */
+export function collectSalvagedCommands(node: TSNode): BashCommand[] {
+  const out: BashCommand[] = [];
+  collectCommandsInto(node, SALVAGED_SCOPE, out);
+  return out;
 }
 
 function collectCommandsInto(
 	node: TSNode,
 	inherited: UnitScope,
-	parseProgram: ParseProgram | undefined,
 	out: BashCommand[],
 ): void {
 	// Anonymous tokens (operators `&&`/`;`/`|`, delimiters `$(`/`)`/`` ` ``/`(`)
@@ -261,45 +307,45 @@ function collectCommandsInto(
 
 	const scope = unresolvedScope(node, inherited);
 
-	if (node.type === "command") {
-		makeCommandUnit(node, scope, parseProgram, out);
-		// A command's text already contains any substitution; descend its subtree
-		// to ALSO emit the inner commands of command/process substitutions.
-		collectHostedCommands(node, out);
-		return;
-	}
+  if (node.type === "command") {
+    makeCommandUnit(node, scope, out);
+    // A command's text already contains any substitution; descend its subtree
+    // to ALSO emit the inner commands of command/process substitutions.
+    collectHostedCommands(node, scope, out);
+    return;
+  }
 
 	if (node.type === "redirected_statement") {
-		descendCommandChildren(node, redirectedScope(node, scope), parseProgram, out);
+		descendCommandChildren(node, redirectedScope(node, scope), out);
 		return;
 	}
 
-	if (EXECUTION_HOST_TYPES.has(node.type)) {
-		// Not a command itself, but its subtree can host one that really runs
-		// (`> $(rm x)`, `< <(rm c)`). Emit only what it hosts (#741).
-		collectHostedCommands(node, out);
-		return;
-	}
+  if (EXECUTION_HOST_TYPES.has(node.type)) {
+    // Not a command itself, but its subtree can host one that really runs
+    // (`> $(rm x)`, `< <(rm c)`). Emit only what it hosts (#741).
+    collectHostedCommands(node, scope, out);
+    return;
+  }
 
 	if (node.type === "subshell") {
 		out.push(makeUnit(node.text, scope)); // never-weaker whole emit
-		descendCommandChildren(node, { ...scope, context: "subshell" }, parseProgram, out);
+		descendCommandChildren(node, { ...scope, context: "subshell" }, out);
 		return;
 	}
 
 	if (COMMAND_ENUM_DESCEND.has(node.type)) {
-		descendCommandChildren(node, scope, parseProgram, out);
+		descendCommandChildren(node, scope, out);
 		return;
 	}
 
 	if (COMPOUND_STATEMENT_TYPES.has(node.type)) {
 		out.push(makeUnit(node.text, scope)); // never-weaker whole emit
-		descendStatementChildren(node, scope, parseProgram, out);
+		descendStatementChildren(node, scope, out);
 		return;
 	}
 
 	if (STATEMENT_GROUP_TYPES.has(node.type)) {
-		descendStatementChildren(node, scope, parseProgram, out);
+		descendStatementChildren(node, scope, out);
 		return;
 	}
 
@@ -312,13 +358,13 @@ function collectCommandsInto(
 		return;
 	}
 
-	// Any other named statement (compound_statement `{ … }`, if/while/for/case,
-	// function_definition): emit whole, do not descend — deferred (#306).
-	// A declaration, assignment, test, or `unset` still hosts executions that
-	// really run (`local x=$(rm y)`, `[[ $(rm x) ]]`), so those are enumerated
-	// in addition to the statement (#742).
-	out.push(makeUnit(node.text, scope));
-	collectHostedCommands(node, out);
+  // Any other named statement (compound_statement `{ … }`, if/while/for/case,
+  // function_definition): emit whole, do not descend — deferred (#306).
+  // A declaration, assignment, test, or `unset` still hosts executions that
+  // really run (`local x=$(rm y)`, `[[ $(rm x) ]]`), so those are enumerated
+  // in addition to the statement (#742).
+  out.push(makeUnit(node.text, scope));
+  collectHostedCommands(node, scope, out);
 }
 
 /**
@@ -371,9 +417,10 @@ function makeUnit(
 		payloadUnresolved === undefined
 			? exempted
 			: { ...exempted, payloadUnresolved };
-	return scope.parseUnresolved
+	const marked: BashCommand = scope.parseUnresolved
 		? { ...payloadMarked, parseUnresolved: true }
 		: payloadMarked;
+	return scope.salvaged ? { ...marked, salvaged: true } : marked;
 }
 
 /**
@@ -391,12 +438,11 @@ function makeUnit(
 function makeCommandUnit(
 	node: TSNode,
 	scope: UnitScope,
-	parseProgram: ParseProgram | undefined,
 	out: BashCommand[],
 ): void {
 	const text = commandUnitText(node);
 	const words = readCommandWords(node);
-	const classification = classifyWrapperCommand(node, parseProgram);
+	const classification = classifyWrapperCommand(node, activeParseProgram);
 	if (classification === undefined) {
 		out.push(
 			makeUnit(text, scope, {
@@ -951,12 +997,11 @@ function commandUnitText(node: TSNode): string {
 function descendCommandChildren(
 	node: TSNode,
 	scope: UnitScope,
-	parseProgram: ParseProgram | undefined,
 	out: BashCommand[],
 ): void {
 	for (let i = 0; i < node.childCount; i++) {
 		const child = node.child(i);
-		if (child) collectCommandsInto(child, scope, parseProgram, out);
+		if (child) collectCommandsInto(child, scope, out);
 	}
 }
 
@@ -979,16 +1024,14 @@ function descendCommandChildren(
 function descendStatementChildren(
 	node: TSNode,
 	scope: UnitScope,
-	parseProgram: ParseProgram | undefined,
 	out: BashCommand[],
 ): void {
-	for (let i = 0; i < node.childCount; i++) {
-		const child = node.child(i);
-		if (!child?.isNamed) continue;
-		if (STATEMENT_TYPES.has(child.type))
-			collectCommandsInto(child, scope, parseProgram, out);
-		else collectHostedCommands(child, out);
-	}
+  for (let i = 0; i < node.childCount; i++) {
+    const child = node.child(i);
+    if (!child?.isNamed) continue;
+    if (STATEMENT_TYPES.has(child.type)) collectCommandsInto(child, scope, out);
+    else collectHostedCommands(child, scope, out);
+  }
 }
 
 /**
@@ -1002,19 +1045,27 @@ function descendStatementChildren(
  * `node` may be a context outright or merely host one, so the traversal is the
  * root-inclusive `forEachExecutionIn`.
  */
-function collectHostedCommands(node: TSNode, out: BashCommand[]): void {
-	forEachExecutionIn(node, (contextNode, context) => {
-		// A nested execution starts fresh: an enclosing statement's redirect is
-		// that statement's, not the substitution's, exactly as #807 attributes a
-		// nested command's path tokens to its own command. The parse question
-		// starts fresh for the same reason and costs nothing either way — each
-		// statement inside re-asks it of itself, and the enclosing statement's own
-		// units carry the mark regardless, so the verdict is unchanged (#840).
-		descendCommandChildren(
-			contextNode,
-			{ context, writesViaRedirect: false, parseUnresolved: false },
-			undefined,
-			out,
-		);
-	});
+function collectHostedCommands(
+  node: TSNode,
+  scope: UnitScope,
+  out: BashCommand[],
+): void {
+  forEachExecutionIn(node, (contextNode, context) => {
+    // A nested execution starts fresh: an enclosing statement's redirect is
+    // that statement's, not the substitution's, exactly as #807 attributes a
+    // nested command's path tokens to its own command. The parse question
+    // starts fresh for the same reason and costs nothing either way — each
+    // statement inside re-asks it of itself, and the enclosing statement's own
+    // units carry the mark regardless, so the verdict is unchanged (#840).
+    descendCommandChildren(
+      contextNode,
+      {
+        context,
+        writesViaRedirect: false,
+        parseUnresolved: false,
+        salvaged: scope.salvaged,
+      },
+      out,
+    );
+  });
 }
