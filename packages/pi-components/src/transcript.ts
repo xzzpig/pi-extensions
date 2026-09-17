@@ -79,12 +79,21 @@ type ThemeBackground = string;
 
 export type TranscriptNoticeTone = "info" | "warning" | "error";
 
+/**
+ * How a turn ended. A host that distinguishes a completed exchange from one the
+ * user aborted or that failed records it on the turn's end boundary; rendering
+ * treats every finished turn the same, so this stays metadata for hosts/tests.
+ */
+export type TranscriptTurnOutcome = "completed" | "aborted" | "failed";
+
 export type TranscriptEntry =
   | {
       id: number;
       turnId: number;
       type: "turn-boundary";
       phase: "start" | "end";
+      /** Present on `end` boundaries when the host reported how the turn ended. */
+      outcome?: TranscriptTurnOutcome;
     }
   | { id: number; turnId: number; type: "user-message"; text: string }
   | {
@@ -555,22 +564,33 @@ export function findLatestEntry<TType extends TranscriptEntry["type"]>(
  * Closes `turnId` (defaulting to the current turn): appends the end boundary
  * unless one already exists, clears streaming flags on the turn's entries,
  * and updates bookkeeping. Idempotent — finishing an already-finished turn is
- * a no-op for boundary creation. Public building block for hosts that know
- * when a replayed exchange is complete.
+ * a no-op for boundary creation. An optional `outcome` is recorded on the end
+ * boundary, letting hosts distinguish completed, aborted, and failed turns.
+ * Public building block for hosts that know when a replayed exchange is
+ * complete.
  */
 export function finishTurn(
   state: TranscriptState,
   turnId: number | null = state.currentTurnId,
+  outcome?: TranscriptTurnOutcome,
 ): void {
   if (turnId === null) return;
-  const alreadyFinished = state.entries.some(
-    (entry) =>
+  const endBoundary = state.entries.find(
+    (entry): entry is Extract<TranscriptEntry, { type: "turn-boundary" }> =>
       entry.turnId === turnId &&
       entry.type === "turn-boundary" &&
       entry.phase === "end",
   );
-  if (!alreadyFinished)
-    appendEntry(state, { type: "turn-boundary", turnId, phase: "end" });
+  if (endBoundary) {
+    if (outcome !== undefined) endBoundary.outcome = outcome;
+  } else {
+    appendEntry(state, {
+      type: "turn-boundary",
+      turnId,
+      phase: "end",
+      ...(outcome === undefined ? {} : { outcome }),
+    });
+  }
   for (const entry of state.entries) {
     if (entry.turnId !== turnId) continue;
     if (
