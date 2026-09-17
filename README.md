@@ -6,7 +6,7 @@
   <a href="https://pi.dev/packages?type=extension" target="_blank" rel="noopener noreferrer">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="assets/badge-dark.svg">
-      <img src="assets/badge-light.svg" alt="TOP 0.3% of Pi coding agent extensions: #7 of 3,200 by downloads · Sep 14, 2026 (best recorded rank)" width="480">
+      <img src="assets/badge-light.svg" alt="TOP 0.3% of Pi coding agent extensions: #7 of 3,352 by downloads · Sep 16, 2026 (best recorded rank)" width="480">
     </picture>
   </a>
 </div>
@@ -115,7 +115,8 @@ Open `/goal-settings` to change these options. You can save defaults for all pro
 
 | Setting | What it controls |
 | --- | --- |
-| Autonomous run allowance (`maxAutonomousRuns`) | Positive whole number of extension-started runs per creation or `/goal-resume` period. **Unset disables automatic continuation.** Settings edits change the limit without resetting usage. |
+| Explicit execution contracts (`strictExecutionContract`) | Opt-in ready/wait protocol with one missing-decision repair, then pause. Defaults to `false`: successful executions continue automatically. |
+| Autonomous run allowance (`maxAutonomousRuns`) | Positive whole number of extension-started runs per creation or `/goal-resume` period. **Unset means unlimited; zero disables automatic continuation.** Settings edits change the limit without resetting usage. |
 | Task tracking (`disableTasks`) | Turn task lists on or off. Set to `true` to disable them. |
 | Subtask depth (`subtaskDepth`) | Limit how many levels of subtasks the agent can create. |
 | Completion requirements (`disableContracts`) | Turn explicit goal and task completion requirements on or off. Set to `true` to disable them. |
@@ -123,9 +124,11 @@ Open `/goal-settings` to change these options. You can save defaults for all pro
 | Auditor provider, model, and thinking level | Choose which model reviews completed work and its reasoning effort. |
 
 
-### Explicit execution and waiting
+### Automatic continuation and optional execution contracts
 
-Goals no longer restart merely because they remain unfinished or a tool was used. Before yielding, the agent declares runnable work or an external wait using `update_goal`, or reports complete, paused, or blocked. A missing decision permits one repair prompt within the remaining allowance, then pauses.
+Active goals continue automatically after successful executions, including reasoning-only responses and final-task verification. No tool call, task update, scheduling declaration, or cooldown is required. Unproductive loops remain possible; optional run limits and token budgets still apply.
+
+Enable `strictExecutionContract: true` in `/goal-settings` or your global/project settings to require explicit ready/wait decisions. In that mode, a missing decision permits one repair prompt within the remaining allowance, then pauses. This is a user preference; agents should not enable it merely to continue.
 
 Set an appropriate allowance in `/goal-settings`, or in `.pi/pi-goal-x-settings.json`:
 
@@ -133,7 +136,9 @@ Set an appropriate allowance in `/goal-settings`, or in `.pi/pi-goal-x-settings.
 { "maxAutonomousRuns": 20 }
 ```
 
-Agents may edit this setting. Changing it does not replenish consumed runs; explicit `/goal-resume` renews the period and continues now, including from a waiting goal. It requires a configured allowance. Tool calls within a run are not separate runs. Existing token budgets still apply.
+Agents may edit this setting. Changing it does not replenish consumed runs; explicit `/goal-resume` renews the period and continues now, including from a waiting goal. No configured allowance is required unless the effective limit is zero, which disables resume. Tool calls within a run are not separate runs. Existing token budgets still apply.
+
+Explicit `ready` is optional in default mode. New `wait` declarations require strict mode; otherwise they return a non-terminating error. Previously saved waits retain their deadline, checks, and repair rules when upgrading or disabling strict mode, and may be re-declared with the same identity. Mode changes never resume a paused goal or renew consumed runs.
 
 ```js
 update_goal({ continuation: { kind: "ready", next_action: "Verify the build artifacts" } })

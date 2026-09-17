@@ -383,7 +383,7 @@ test("successful agent_end waits for agent_settled before queuing a continuation
 	}
 });
 
-test("empty no-tool run gets one default repair, then pauses after agent_settled", async () => {
+test("empty no-tool runs continue implicitly after agent_settled", async () => {
 	const { cwd, goal } = fixtureCwd();
 	const h = createHarness(cwd);
 	try {
@@ -398,14 +398,14 @@ test("empty no-tool run gets one default repair, then pauses after agent_settled
 		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn", content: [{ type: "text", text: "Paused. No action." }] }] }, idleCtx(h.ctx));
 		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
 
-		assert.equal(await countCheckpoints(h), 1, "a missing disposition gets exactly one repair");
-		assert.equal(h.core.state.goal?.scheduler?.dispatch?.kind, "repair");
+		assert.equal(await countCheckpoints(h), 1, "a successful no-tool execution continues");
+		assert.equal(h.core.state.goal?.scheduler?.dispatch?.kind, "ready");
 		await h.handlers["agent_start"]!({}, idleCtx(h.ctx));
 		await h.handlers["message_start"]!({ message: { ...h.sentMessages.at(-1), role: "custom" } }, idleCtx(h.ctx));
 		await h.handlers["agent_end"]!({ messages: [{ role: "assistant", stopReason: "end_turn", content: [{ type: "text", text: "Still no action." }] }] }, idleCtx(h.ctx));
 		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
-		assert.equal(await countCheckpoints(h), 1, "the unsuccessful repair must not loop");
-		assert.equal(h.core.state.goal?.status, "paused");
+		assert.equal(await countCheckpoints(h), 2, "missing declarations never require repair in default mode");
+		assert.equal(h.core.state.goal?.status, "active");
 	} finally {
 		h.core.scheduler.shutdown();
 		h.core.runtime.clearContinuationState();

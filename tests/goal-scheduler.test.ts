@@ -11,13 +11,13 @@ import { writeActiveGoalFile, parseGoalFile } from "../extensions/storage/goal-f
 import { invalidateGoalSettingsCache, parseGoalSettings, saveGoalSettingsFileConfig, loadGoalSettings } from "../extensions/goal-settings.ts";
 import { normalizeGoalScheduler, schedulerSummary } from "../extensions/goal-scheduler-state.ts";
 
-async function fixture(t: TestContext, limit?: number, owner = "owner", existing?: string) {
+async function fixture(t: TestContext, limit?: number, owner = "owner", existing?: string, strict = true) {
 	const cwd = existing ?? mkdtempSync(path.join(tmpdir(), "goal-scheduler-"));
 	const prior = process.env.PI_GOAL_GLOBAL_SETTINGS_FILE;
 	process.env.PI_GOAL_GLOBAL_SETTINGS_FILE = path.join(cwd, "absent-global.json");
 	if (!existing) {
 		mkdirSync(path.join(cwd, ".pi"), { recursive: true });
-		writeFileSync(path.join(cwd, ".pi", "pi-goal-x-settings.json"), JSON.stringify(limit !== undefined ? { maxAutonomousRuns: limit } : {}));
+		writeFileSync(path.join(cwd, ".pi", "pi-goal-x-settings.json"), JSON.stringify({ strictExecutionContract: strict, ...(limit !== undefined ? { maxAutonomousRuns: limit } : {}) }));
 	}
 	invalidateGoalSettingsCache();
 	const goal = createGoal({ objective: "Test explicit scheduling", autoContinue: true, sisyphus: false });
@@ -61,7 +61,7 @@ test("explicit zero means no automatic model runs, even for missing disposition"
 });
 
 for (const start of ["creation", "resume"] as const) {
-	test(`default ${start} starts automatically and still allows only one repair`, async t => {
+	test(`strict ${start} starts automatically and still allows only one repair`, async t => {
 		const h = await fixture(t);
 		t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
 		if (start === "creation") h.core.replaceGoal({ objective: "Work automatically", autoContinue: true, sisyphus: false }, h.ctx);
@@ -365,4 +365,99 @@ test("explicit resume during an execution waits for settlement and dispatches ki
 	t.mock.timers.tick(1);
 	assert.equal(h.core.state.goal?.scheduler?.dispatch?.kind, "kickoff");
 	assert.equal(h.core.state.goal?.scheduler?.used, 1);
+});
+
+// Default policy deliberately does not infer productivity from tool activity.
+test("implicit executions continue without tools through task completion and wrap-up", async t => {
+ const h = await fixture(t, undefined, "owner", undefined, false);
+ t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+ h.core.goalService.apply(h.ctx, {mutate: g => ({...g, taskList: {proposedAt: new Date().toISOString(), tasks: [{id: "one", title: "One", status: "pending"}, {id: "two", title: "Two", status: "pending"}], blockCompletion: false}})});
+ h.begin();
+ for (const id of [undefined, "one", "two", undefined]) {
+  if (id) await h.tools.get("update_goal_task").execute("test", {task_id: id, status: "complete"}, undefined, undefined, h.ctx);
+  h.core.scheduler.settled(h.ctx); t.mock.timers.tick(1);
+  assert.equal(h.core.state.goal?.scheduler?.dispatch?.kind, "ready");
+  assert.equal(h.core.state.goal?.status, "active");
+  h.admit();
+ }
+ assert.equal(h.sent.length, 4);
+ assert.equal(h.core.state.goal?.scheduler?.used, 4);
+ assert.ok(h.core.state.goal?.taskList?.tasks.every(task => task.status === "complete"));
+});
+
+test("default rejects new waits without terminating or mutating; optional ready succeeds", async t => {
+ const h = await fixture(t, 4, "owner", undefined, false);
+ h.begin();
+ const before = structuredClone(h.core.state.goal);
+ const result = h.wait();
+ assert.equal(result.terminate, false);
+ assert.match(JSON.stringify(result.content), /strictExecutionContract=true/);
+ assert.deepEqual(h.core.state.goal, before);
+ assert.equal(h.ready().terminate, true);
+});
+
+for (const stage of ["schedule", "claim"] as const) {
+ test(`disabling strict mode converts queued repair at ${stage} without renewing allowance`, async t => {
+  const h = await fixture(t, 5);
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  h.begin(); h.core.scheduler.settled(h.ctx);
+  assert.equal(h.core.state.goal?.scheduler?.decision?.kind, "ready");
+  saveGoalSettingsFileConfig(h.cwd, {maxAutonomousRuns: 5, strictExecutionContract: false});
+  if (stage === "schedule") h.core.scheduler.schedule(h.ctx);
+  t.mock.timers.tick(1);
+  assert.equal(h.core.state.goal?.scheduler?.dispatch?.kind, "ready");
+  assert.equal(h.core.state.goal?.scheduler?.used, 1);
+  assert.doesNotMatch(JSON.stringify(h.core.state.goal?.scheduler?.decision), /repair prompt/);
+  h.admit(); h.core.scheduler.settled(h.ctx); t.mock.timers.tick(1);
+  assert.equal(h.core.state.goal?.scheduler?.used, 2);
+ });
+}
+
+test("existing waits keep identity, deadline and repair bounds after opt-out", async t => {
+ const h = await fixture(t, 8);
+ t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+ h.begin(); h.wait();
+ const wait = structuredClone(h.core.state.goal!.scheduler!.wait!);
+ saveGoalSettingsFileConfig(h.cwd, {strictExecutionContract: false, maxAutonomousRuns: 8});
+ h.core.scheduler.settled(h.ctx); t.mock.timers.tick(1001); h.admit();
+ assert.equal(h.core.scheduler.declare(h.ctx, {kind: "wait", wait_id: wait.id, reason: wait.reason, deadline: new Date(wait.deadline).toISOString()}).terminate, true);
+ assert.equal(h.core.state.goal?.scheduler?.wait?.remainingChecks, 1);
+ assert.equal(h.core.state.goal?.scheduler?.wait?.deadline, wait.deadline);
+ h.core.scheduler.settled(h.ctx); t.mock.timers.tick(1001); h.admit();
+ h.core.scheduler.settled(h.ctx); t.mock.timers.tick(1);
+ assert.equal(h.core.state.goal?.scheduler?.dispatch?.kind, "repair");
+ h.admit(); h.core.scheduler.settled(h.ctx);
+ assert.equal(h.core.state.goal?.status, "paused");
+ assert.match(h.core.state.goal?.pauseReason ?? "", /No execution disposition/);
+});
+
+test("enabling strict mode at settlement requires a disposition without resetting usage", async t => {
+ const h = await fixture(t, 5, "owner", undefined, false);
+ t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+ h.begin(); h.core.scheduler.settled(h.ctx); t.mock.timers.tick(1); h.admit();
+ saveGoalSettingsFileConfig(h.cwd, {strictExecutionContract: true, maxAutonomousRuns: 5});
+ h.core.scheduler.settled(h.ctx); t.mock.timers.tick(1);
+ assert.equal(h.core.state.goal?.scheduler?.dispatch?.kind, "repair");
+ assert.equal(h.core.state.goal?.scheduler?.used, 2);
+ h.admit(); h.core.scheduler.settled(h.ctx);
+ assert.equal(h.core.state.goal?.status, "paused");
+ saveGoalSettingsFileConfig(h.cwd, {strictExecutionContract: false});
+ h.core.scheduler.restore(h.ctx); t.mock.timers.tick(1000);
+ assert.equal(h.core.state.goal?.status, "paused");
+ assert.equal(h.sent.length, 2);
+});
+
+test("default settings inherit strict mode with explicit false overriding global true", async t => {
+ const h = await fixture(t, undefined, "owner", undefined, false);
+ saveGoalSettingsFileConfig(h.cwd, {});
+ assert.equal(loadGoalSettings(h.cwd).strictExecutionContract, false);
+ writeFileSync(process.env.PI_GOAL_GLOBAL_SETTINGS_FILE!, JSON.stringify({strictExecutionContract: true}));
+ invalidateGoalSettingsCache();
+ assert.equal(loadGoalSettings(h.cwd).strictExecutionContract, true);
+ saveGoalSettingsFileConfig(h.cwd, {strictExecutionContract: false});
+ assert.equal(loadGoalSettings(h.cwd).strictExecutionContract, false);
+ saveGoalSettingsFileConfig(h.cwd, {});
+ assert.equal(loadGoalSettings(h.cwd).strictExecutionContract, true);
+ assert.deepEqual(parseGoalSettings({strictExecutionContract: false}), {strictExecutionContract: false});
+ assert.equal(parseGoalSettings({strictExecutionContract: "invalid"}).strictExecutionContract, undefined);
 });

@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
-test("real SDK: default uncapped runs retain waits, one repair and stale-wake protection", { timeout: 30000 }, async () => {
+test("real SDK: opt-in uncapped runs retain waits, one repair and stale-wake protection", { timeout: 30000 }, async () => {
 	const { stdout } = await promisify(execFile)(process.execPath, ["--experimental-strip-types", fileURLToPath(new URL("../scheduler-sdk-worker.mjs", import.meta.url)), "--uncapped"], { timeout: 25000 });
 	const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
 	assert.equal(result.passed, true);
@@ -26,4 +26,12 @@ test("real SDK: native retry and compaction preserve consumed autonomous allowan
 	assert.equal(result.used, 4);
 	assert.equal(result.compactionRequests, 1);
 	assert.ok(result.retries > 0);
+});
+
+ test("real SDK: default runs continue without tools or declarations until configured cap", { timeout: 30000 }, async () => {
+ const { stdout } = await promisify(execFile)(process.execPath, ["--experimental-strip-types", fileURLToPath(new URL("../scheduler-sdk-worker.mjs", import.meta.url)), "--implicit"], { timeout: 25000 });
+ const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
+ assert.equal(result.passed, true);
+ assert.equal(result.requests, 5);
+ assert.equal(result.used, 4);
 });

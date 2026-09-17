@@ -23,6 +23,13 @@ export class GoalScheduler {
 
 	private owner(ctx: ExtensionContext): string { return ctx.sessionManager.getSessionId() || "unknown-session"; }
 	private limit(ctx: ExtensionContext): number | undefined { return loadGoalSettings(ctx.cwd).maxAutonomousRuns; }
+	private strict(ctx: ExtensionContext, s: GoalSchedulerState): boolean {
+		return loadGoalSettings(ctx.cwd).strictExecutionContract === true || !!s.wait;
+	}
+	private implicitReady(s: GoalSchedulerState): void {
+		s.phase = "ready"; s.dispatch = undefined; s.generation = randomUUID();
+		s.decision = { kind: "ready", nextAction: "Continue pursuing the goal, then verify and complete it when satisfied.", purpose: "ready" };
+	}
 	private available(ctx: ExtensionContext, s: GoalSchedulerState): boolean {
 		const limit = this.limit(ctx);
 		return limit === undefined || s.used < limit;
@@ -148,6 +155,7 @@ export class GoalScheduler {
 					if (typeof input.next_action !== "string" || !input.next_action.trim() || input.next_action.length > 2000) throw new Error("ready requires a nonempty next_action (at most 2000 characters).");
 					s.phase = "ready"; s.decision = { kind: "ready", nextAction: input.next_action.trim(), purpose: "ready" }; s.wait = undefined;
 				} else if (input.kind === "wait") {
+					if (!this.strict(ctx, s)) throw new Error("New waits require strictExecutionContract=true in /goal-settings. This is a user preference; continue pursuing the goal without a wait unless the user opts in.");
 					if (typeof input.reason !== "string" || !input.reason.trim() || input.reason.length > 2000) throw new Error("wait requires a nonempty reason (at most 2000 characters).");
 					const deadline = Date.parse(input.deadline);
 					if (!/T.*(?:Z|[+-]\d\d:\d\d)$/.test(input.deadline) || !Number.isSafeInteger(deadline) || deadline <= Date.now()) throw new Error("wait requires a future ISO deadline with a timezone.");
@@ -230,11 +238,16 @@ export class GoalScheduler {
 	settled(ctx: ExtensionContext, successful = true): void {
 		this.inRun = false;
 		if (this.denied || (this.runGoalId && this.core.state.goal?.id !== this.runGoalId)) return;
+		invalidateGoalSettingsCache();
 		this.safe(ctx, () => {
 			const goal = this.core.state.goal;
 			if (!goal || goal.status !== "active" || !goal.autoContinue || !successful) return;
 			if (this.declared && goal.scheduler?.decision) { this.schedule(ctx); return; }
 			const s = this.state(ctx, goal);
+			if (!this.strict(ctx, s)) {
+				this.update(ctx, state => this.implicitReady(state));
+				this.schedule(ctx); return;
+			}
 			if (s.repairUsed || !this.available(ctx, s)) {
 				this.pause(ctx, !this.available(ctx, s) ? this.allowanceReason(ctx) : "No execution disposition after the contract-repair prompt. Use /goal-resume to continue.");
 				return;
@@ -248,7 +261,7 @@ export class GoalScheduler {
 	}
 	recover(ctx: ExtensionContext): void {
 		this.safe(ctx, () => {
-			this.update(ctx, s => { s.phase = "ready"; s.dispatch = undefined; s.decision = { kind: "ready", nextAction: "Retry after the provider error, then declare an execution disposition.", purpose: "recovery" }; });
+			this.update(ctx, s => { s.phase = "ready"; s.dispatch = undefined; s.decision = { kind: "ready", nextAction: this.strict(ctx, s) ? "Retry after the provider error, then declare an execution disposition." : "Retry after the provider error and continue pursuing the goal.", purpose: "recovery" }; });
 			this.schedule(ctx);
 		});
 	}
@@ -264,11 +277,15 @@ export class GoalScheduler {
 	}
 	schedule(ctx: ExtensionContext): void {
 		if (this.inRun) return;
+		invalidateGoalSettingsCache();
 		this.safe(ctx, () => {
 			this.core.reconcileFocusedGoalFromDisk(ctx);
 			const g = this.core.state.goal;
 			if (!g || g.status !== "active" || !g.autoContinue || !g.scheduler) return;
-			const s = this.state(ctx, g);
+			let s = this.state(ctx, g);
+			if (s.phase === "ready" && s.decision?.kind === "ready" && s.decision.purpose === "repair" && !this.strict(ctx, s)) {
+				s = this.update(ctx, state => this.implicitReady(state)).scheduler!;
+			}
 			if (!["ready", "waiting"].includes(s.phase)) return;
 			if (budgetReached(g)) { this.pause(ctx, "Goal token budget exhausted."); return; }
 			if (!this.available(ctx, s)) { this.pause(ctx, this.allowanceReason(ctx)); return; }
@@ -299,6 +316,7 @@ export class GoalScheduler {
 				if (s.generation !== generation) throw new Error("Scheduling generation changed.");
 				if (g.status !== "active" || !g.autoContinue || budgetReached(g) || !this.available(ctx, s)) throw new Error(this.allowanceReason(ctx));
 				if (s.wait && Date.now() >= s.wait.deadline) throw new Error("Wait deadline reached.");
+				if (s.phase === "ready" && s.decision?.kind === "ready" && s.decision.purpose === "repair" && !this.strict(ctx, s)) this.implicitReady(s);
 				let kind = s.phase === "ready" && s.decision?.kind === "ready" ? s.decision.purpose : undefined;
 				if (s.phase === "waiting" && s.wait) {
 					if (s.wait.signalled) kind = "wake";

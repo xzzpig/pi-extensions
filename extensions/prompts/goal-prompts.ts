@@ -183,11 +183,12 @@ export function sisyphusDisciplineBlock(goal: GoalRecord): string {
 }
 
 /** Shared outcome/blocker policy for active goals (bounded). */
-function lifecyclePolicyBlock(autonomous: boolean): string {
+function lifecyclePolicyBlock(autonomous: boolean, strict: boolean): string {
  return [
   "[OUTCOMES]",
   '- Automatic runs default to unlimited. maxAutonomousRuns in .pi/pi-goal-x-settings.json caps runs; 0 disables (agents may set it). Only creation or user /goal-resume renews usage.',
-  ...(autonomous ? ['- End execution with update_goal: ready for runnable work, wait for an external condition, or a status below. Saved decisions terminate; further work invalidates them. Missing decisions allow one repair. Never busy-poll.'] : []),
+  ...(autonomous && strict ? ['- End execution with update_goal: ready for runnable work, wait for an external condition, or a status below. Saved decisions terminate; further work invalidates them. Missing decisions allow one repair. Never busy-poll.'] : []),
+  ...(autonomous && !strict ? ['- Continue pursuing the goal automatically after each execution; no scheduling declaration is required. Optional ready saves a next action. New waits require user opt-in to strictExecutionContract; do not enable it merely to continue.'] : []),
   '- update_goal({status: "complete"}) only when every requirement is satisfied; the independent completion auditor checks actual evidence. Approval archives; rejection requires rework.',
   '- update_goal({status: "blocked"}) only after the SAME blocker recurs on three consecutive goal turns; keep trying concrete steps before then.',
   '- update_goal({status: "paused", reason: "…"}) pauses immediately. User controls: /goal-pause, /goal-resume, /goal-clear.',
@@ -207,7 +208,7 @@ let promptCacheChars = 0;
 function cachedPrompt(goal: GoalRecord, settings: GoalSettings | undefined, kind: "goal" | "continuation", build: () => string): string {
  const key = [kind, goal.id, goal.status, goal.autoContinue, goal.sisyphus, goal.objective,
   goal.verificationContract, settings?.disableTasks ? undefined : taskIndex(goal.taskList?.tasks),
-  goal.taskList?.blockCompletion, promptProfile(), goal.currentTaskId, settings?.disableTasks, settings?.disableContracts, settings?.maxAutonomousRuns !== 0];
+  goal.taskList?.blockCompletion, promptProfile(), goal.currentTaskId, settings?.disableTasks, settings?.disableContracts, settings?.maxAutonomousRuns !== 0, settings?.strictExecutionContract === true, !!goal.scheduler?.wait];
  for (let i = promptFragmentCache.length - 1; i >= 0; i--) {
   const entry = promptFragmentCache[i]!;
   if (key.every((part, j) => part === entry.key[j])) return entry.value;
@@ -238,7 +239,7 @@ function buildGoalPrompt(goal: GoalRecord, settings?: GoalSettings): string {
  // Bound individual data fields so essential rules can never be sliced off.
  return [
   `[PI GOAL ACTIVE goalId=${goal.id}]`,
-  lifecyclePolicyBlock(settings?.maxAutonomousRuns !== 0), sisyphusDisciplineBlock(goal),
+  lifecyclePolicyBlock(settings?.maxAutonomousRuns !== 0, settings?.strictExecutionContract === true || !!goal.scheduler?.wait), sisyphusDisciplineBlock(goal),
   `Status: ${statusLabel(goal)}\nMode: ${goal.sisyphus ? "sisyphus" : "regular"}`,
   untrustedObjectiveBlock(goal), taskListBlock(goal, settings), verificationContractBlock(goal, settings),
  ].filter(Boolean).join("\n\n");

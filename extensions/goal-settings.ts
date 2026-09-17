@@ -104,6 +104,7 @@ export interface GoalSettingsResolvedShape {
 	stallTimeoutMinutes?: number;
 	/** Optional extension-run limit per creation/resume; zero disables, absent inherits (default unlimited). */
 	maxAutonomousRuns?: number;
+	strictExecutionContract?: boolean;
 	/**
 	 * Maximum objective length in characters (0/unset = no limit, the
 	 * default; >0 caps objectives in create_goal, propose_goal_draft, and
@@ -331,6 +332,7 @@ const ALLOWED_SETTINGS_KEYS = new Set([
 	"auditorProjectResources",
 	"stallTimeoutMinutes",
 	"maxAutonomousRuns",
+	"strictExecutionContract",
 	"objectiveMaxChars",
 	"keybindings",
 	"hideUnfocusedBanner",
@@ -380,6 +382,7 @@ export function parseSettingsLayer(
 
 	for (const [key, value] of Object.entries(record)) {
 		switch (key) {
+			case "strictExecutionContract":
 			case "disableTasks":
 			case "disableContracts":
 			case "disabled":
@@ -790,6 +793,11 @@ function resolvedSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv): Settings
 		globalValue: global.layer.oracle?.maxFailedAttemptsPerBlocker,
 		defaultValue: 2,
 	}));
+	const strictExecutionContract = track("strictExecutionContract", resolveLeaf<boolean>({
+		projectValue: project.layer.strictExecutionContract,
+		globalValue: global.layer.strictExecutionContract,
+		defaultValue: false,
+	}));
 	const maxAutonomousRuns = track("maxAutonomousRuns", resolveLeaf<number | undefined>({
 		projectValue: project.layer.maxAutonomousRuns,
 		globalValue: global.layer.maxAutonomousRuns,
@@ -855,6 +863,7 @@ function resolvedSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv): Settings
 		hideUnfocusedBanner,
 		stallTimeoutMinutes,
 		maxAutonomousRuns,
+		strictExecutionContract,
 		objectiveMaxChars,
 		keybindings,
 		networkRecovery: {
@@ -1204,6 +1213,7 @@ function buildPersistedLayer(settings: GoalSettings): Record<string, unknown> {
 		if (so.maxFailedAttemptsPerBlocker !== undefined) o.maxFailedAttemptsPerBlocker = so.maxFailedAttemptsPerBlocker;
 		if (Object.keys(o).length > 0) persisted.oracle = o;
 	}
+	if (settings.strictExecutionContract !== undefined) persisted.strictExecutionContract = settings.strictExecutionContract;
 	if (settings.maxAutonomousRuns !== undefined) persisted.maxAutonomousRuns = settings.maxAutonomousRuns;
 	if (settings.stallTimeoutMinutes !== undefined) persisted.stallTimeoutMinutes = settings.stallTimeoutMinutes;
 	if (settings.objectiveMaxChars !== undefined) persisted.objectiveMaxChars = settings.objectiveMaxChars;
@@ -1248,6 +1258,7 @@ export function effectiveSettingsReport(cwd: string, env: NodeJS.ProcessEnv = pr
 		{ key: "thinkingLevel", label: "thinking_level", format: () => snapshot.value.thinkingLevel ?? "(default)" },
 		{ key: "auditorProjectResources", label: "auditor project resources", format: () => String(snapshot.value.auditorProjectResources) },
 		{ key: "hideUnfocusedBanner", label: "hide unfocused banner", format: () => String(snapshot.value.hideUnfocusedBanner) },
+		{ key: "strictExecutionContract", label: "explicit execution contracts (opt-in)", format: () => String(snapshot.value.strictExecutionContract) },
 		{ key: "maxAutonomousRuns", label: "autonomous run allowance", format: () => snapshot.value.maxAutonomousRuns === 0 ? "0 (disabled)" : String(snapshot.value.maxAutonomousRuns ?? "unlimited (default)") },
 		{ key: "stallTimeoutMinutes", label: "stall timeout (minutes)", format: () => String(snapshot.value.stallTimeoutMinutes) },
 		{ key: "objectiveMaxChars", label: "max objective length (0 = none)", format: () => String(snapshot.value.objectiveMaxChars) },

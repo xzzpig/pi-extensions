@@ -344,3 +344,25 @@ function readFileSyncSafe(p: string): string | null {
 		return null;
 	}
 }
+
+test("goal-settings: execution-contract opt-in can be set and removed through the menu", async () => {
+ const cwd = mkdtempSync(path.join(tmpdir(), "goal-settings-contract-"));
+ mkdirSync(path.join(cwd, ".pi"), {recursive: true});
+ const h = createHarness(cwd);
+ try {
+  (h.ctx as {hasUI: boolean}).hasUI = true;
+  const ui = h.ctx.ui as unknown as {select: (title: string, options: string[]) => Promise<string | undefined>};
+  for (const action of ["Set project override to true", "Set project override to false", "Use inherited value"]) {
+   let step = 0;
+   ui.select = async (_title, options) => {
+    step++;
+    if (step === 1) return options.find(option => option.includes("explicit execution contracts (opt-in):"));
+    if (step === 2) { assert.ok(options.includes(action)); return action; }
+    return "Done";
+   };
+   await h.commands.get("goal-settings")!.handler("", h.ctx);
+   const saved = JSON.parse(readFileSync(path.join(cwd, ".pi", "pi-goal-x-settings.json"), "utf8"));
+   assert.equal(saved.strictExecutionContract, action === "Use inherited value" ? undefined : action.endsWith("true"));
+  }
+ } finally { rmSync(cwd, {recursive: true, force: true}); }
+});

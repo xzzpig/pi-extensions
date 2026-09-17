@@ -448,13 +448,14 @@ describe("five-tool handler integration", () => {
 				await start(h);
 				await h.commands.get("goal-settings").handler("", h.ctx);
 				const lines = firstOptions.filter((o) => o.startsWith("  ") && !o.startsWith("  ───"));
-				assert.equal(lines.length, 17, `all seventeen rows rendered, got: ${lines.join(" | ")}`);
+				assert.equal(lines.length, 18, `all eighteen rows rendered, got: ${lines.join(" | ")}`);
 				assert.ok(lines.some((l) => l === "  auditor disabled: true (project override)"));
 				assert.ok(lines.some((l) => l === "  provider: anthropic (project override)"));
 				assert.ok(lines.some((l) => l === "  model: (default) (default)"));
 				assert.ok(lines.some((l) => l === "  thinking_level: high (project override)"));
 				assert.ok(lines.some((l) => l === "  disableTasks: true (project override)"));
 				assert.ok(lines.some((l) => l === "  disableContracts: false (default)"));
+				assert.ok(lines.includes("  explicit execution contracts (opt-in): false (default)"));
 				assert.ok(lines.some((l) => l === "  subtaskDepth: 3 (project override)"));
 				assert.ok(lines.some((l) => l === "  autoSelectSingleGoal: false (default)"));
 				assert.ok(lines.some((l) => l === "  hideUnfocusedBanner: false (default)"));

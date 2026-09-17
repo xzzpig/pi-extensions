@@ -12,8 +12,9 @@ import { writeActiveGoalFile } from '../extensions/storage/goal-files.ts';
 
 const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'scheduler-sdk-'));
 fs.mkdirSync(path.join(cwd, '.pi'));
+const implicit = process.argv.includes('--implicit');
 const uncapped = process.argv.includes('--uncapped');
-if (!uncapped) fs.writeFileSync(path.join(cwd, '.pi', 'pi-goal-x-settings.json'), JSON.stringify({ maxAutonomousRuns: 4 }));
+fs.writeFileSync(path.join(cwd, '.pi', 'pi-goal-x-settings.json'), JSON.stringify({ ...(!implicit ? { strictExecutionContract: true } : {}), ...(!uncapped ? { maxAutonomousRuns: 4 } : {}) }));
 process.env.PI_GOAL_GLOBAL_SETTINGS_FILE = path.join(cwd, 'absent-global');
 let session, core, piApi;
 const requests = [];
@@ -34,6 +35,7 @@ const server = http.createServer(async (req, res) => {
 	if (n === 2 || n === 6) call = ['update_goal', { continuation: { kind: 'ready', next_action: 'Inspect the fixture result' } }];
 	if (n === 3 || n === 5) call = ['read', { path: 'sample.txt' }];
 	if (n === 4) call = ['update_goal', { continuation: { kind: 'wait', reason: 'Await producer', deadline: new Date(Date.now() + 15000).toISOString(), polling: { interval_seconds: 10, max_checks: 1 } } }];
+	if (implicit) call = undefined;
 	res.writeHead(200, { 'content-type': 'text/event-stream' });
 	const emit = (delta, finish_reason = null) => res.write(`data: ${JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', created: 1, model: 'fixture', choices: [{ index: 0, delta, finish_reason }] })}\n\n`);
 	if (call) {
@@ -60,6 +62,13 @@ try {
 	await session.bindExtensions({});
 	session.subscribe(event => { if (event.type === 'auto_retry_start') retries++; });
 	await session.prompt('Run the fixture.');
+	if (implicit) {
+		await until(() => core.state.goal?.status === 'paused' && session.isIdle);
+		assert.equal(workRequests, 5, 'host execution plus four declaration-free continuations');
+		assert.equal(core.state.goal.scheduler.used, 4);
+		assert.match(core.state.goal.pauseReason, /allowance exhausted/);
+		assert.ok(!JSON.stringify(requests).includes('This is the only repair prompt'));
+	} else {
 	await until(() => core.state.goal?.scheduler?.phase === 'waiting' && session.isIdle);
 	assert.equal(workRequests, 4);
 	assert.equal(core.state.goal.scheduler.used, 1);
@@ -92,6 +101,7 @@ try {
 		assert.equal(failedRequests, 1);
 		assert.ok(retries > 0, 'actual Pi retry lifecycle was exercised');
 		assert.equal(requests.length, 10, 'eight work requests, one failed attempt, one compaction');
+	}
 	}
 	const requestChars = requests.map(r => JSON.stringify(r).length);
 	const liveContextChars = requests.map(r => (r.messages ?? []).filter(m => JSON.stringify(m.content).includes('[CURRENT EXECUTION STATE')).reduce((n, m) => n + JSON.stringify(m.content).length, 0));
