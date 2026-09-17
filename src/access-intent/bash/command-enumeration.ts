@@ -57,6 +57,19 @@ export interface BashCommand {
    * 0013 §10's fail-closed base case (#840).
    */
   readonly parseUnresolved?: true;
+  /**
+   * Set when this unit came from a region re-parsed out of a subtree the
+   * primary parse could not resolve, rather than from the primary parse
+   * itself (#875).
+   *
+   * Narrower than {@link parseUnresolved}, which a primary unit also carries
+   * when its enclosing statement failed. The verdict fold needs the
+   * distinction to tell whether the *primary* parse found anything: when it
+   * found nothing, the whole command string is the only surface an explicit
+   * `deny` can reach (#452), and salvaging a unit must not make that check
+   * unreachable.
+   */
+  readonly salvaged?: true;
 }
 
 /**
@@ -83,12 +96,34 @@ interface UnitScope {
    * resolve, so every unit beneath it is floored rather than trusted (#840).
    */
   readonly parseUnresolved: boolean;
+  /**
+   * True when the walk started from a salvaged region rather than the primary
+   * parse tree (#875). Relayed unchanged, including into nested executions:
+   * everything found inside a salvaged region is salvaged.
+   */
+  readonly salvaged: boolean;
 }
 
 /** A top-level command in the current shell, writing no file, fully parsed. */
 const TOP_LEVEL_SCOPE: UnitScope = {
   writesViaRedirect: false,
   parseUnresolved: false,
+  salvaged: false,
+};
+
+/**
+ * The scope a salvaged region's own units run under.
+ *
+ * Marked unresolved because the region reached the salvage only by failing in
+ * the primary parse, so the verdict fold floors what it recovers rather than
+ * trusting it. `writesViaRedirect` starts false for the same reason
+ * {@link collectHostedCommands} resets it: a redirect established outside the
+ * region is the enclosing statement's, not the region's.
+ */
+const SALVAGED_SCOPE: UnitScope = {
+  writesViaRedirect: false,
+  parseUnresolved: true,
+  salvaged: true,
 };
 
 // ── Node-type vocabulary ─────────────────────────────────────────────────────
@@ -212,6 +247,22 @@ export function collectCommands(node: TSNode): BashCommand[] {
   return out;
 }
 
+/**
+ * Enumerate the command units of a region the primary parse could not resolve,
+ * re-parsed cleanly on its own (`unresolved-salvage.ts`, #875).
+ *
+ * The same walk as {@link collectCommands}, differing only in the scope it
+ * starts from: every unit is marked {@link BashCommand.parseUnresolved}, so a
+ * command the primary parse dropped is matched against the bash rules — an
+ * explicit `deny` fires — while its `allow` is still floored to `ask` by the
+ * verdict fold (#840).
+ */
+export function collectSalvagedCommands(node: TSNode): BashCommand[] {
+  const out: BashCommand[] = [];
+  collectCommandsInto(node, SALVAGED_SCOPE, out);
+  return out;
+}
+
 function collectCommandsInto(
   node: TSNode,
   inherited: UnitScope,
@@ -228,7 +279,7 @@ function collectCommandsInto(
     out.push(makeCommandUnit(node, scope));
     // A command's text already contains any substitution; descend its subtree
     // to ALSO emit the inner commands of command/process substitutions.
-    collectHostedCommands(node, out);
+    collectHostedCommands(node, scope, out);
     return;
   }
 
@@ -240,7 +291,7 @@ function collectCommandsInto(
   if (EXECUTION_HOST_TYPES.has(node.type)) {
     // Not a command itself, but its subtree can host one that really runs
     // (`> $(rm x)`, `< <(rm c)`). Emit only what it hosts (#741).
-    collectHostedCommands(node, out);
+    collectHostedCommands(node, scope, out);
     return;
   }
 
@@ -281,7 +332,7 @@ function collectCommandsInto(
   // really run (`local x=$(rm y)`, `[[ $(rm x) ]]`), so those are enumerated
   // in addition to the statement (#742).
   out.push(makeUnit(node.text, scope));
-  collectHostedCommands(node, out);
+  collectHostedCommands(node, scope, out);
 }
 
 /**
@@ -328,9 +379,10 @@ function makeUnit(
     executedUnit === undefined ? flagged : { ...flagged, executedUnit };
   const exempted =
     floorExemption === undefined ? named : { ...named, floorExemption };
-  return scope.parseUnresolved
+  const marked: BashCommand = scope.parseUnresolved
     ? { ...exempted, parseUnresolved: true }
     : exempted;
+  return scope.salvaged ? { ...marked, salvaged: true } : marked;
 }
 
 /**
@@ -450,7 +502,7 @@ function descendStatementChildren(
     const child = node.child(i);
     if (!child?.isNamed) continue;
     if (STATEMENT_TYPES.has(child.type)) collectCommandsInto(child, scope, out);
-    else collectHostedCommands(child, out);
+    else collectHostedCommands(child, scope, out);
   }
 }
 
@@ -465,7 +517,11 @@ function descendStatementChildren(
  * `node` may be a context outright or merely host one, so the traversal is the
  * root-inclusive `forEachExecutionIn`.
  */
-function collectHostedCommands(node: TSNode, out: BashCommand[]): void {
+function collectHostedCommands(
+  node: TSNode,
+  scope: UnitScope,
+  out: BashCommand[],
+): void {
   forEachExecutionIn(node, (contextNode, context) => {
     // A nested execution starts fresh: an enclosing statement's redirect is
     // that statement's, not the substitution's, exactly as #807 attributes a
@@ -475,7 +531,12 @@ function collectHostedCommands(node: TSNode, out: BashCommand[]): void {
     // units carry the mark regardless, so the verdict is unchanged (#840).
     descendCommandChildren(
       contextNode,
-      { context, writesViaRedirect: false, parseUnresolved: false },
+      {
+        context,
+        writesViaRedirect: false,
+        parseUnresolved: false,
+        salvaged: scope.salvaged,
+      },
       out,
     );
   });

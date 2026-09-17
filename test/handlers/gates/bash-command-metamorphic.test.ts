@@ -10,6 +10,8 @@
  * full fuzzer (tree-sitter fuzzing is brittle); it pins A3 directly.
  */
 import { describe, expect, it } from "vitest";
+import { collectCommands } from "#src/access-intent/bash/command-enumeration";
+import { getParser } from "#src/access-intent/bash/parser";
 import { BashProgram } from "#src/access-intent/bash/program";
 import { resolveBashCommandCheck } from "#src/handlers/gates/bash-command";
 import { pathFlavorForPlatform } from "#src/path/path-flavor";
@@ -241,8 +243,8 @@ describe("bash command gate — a parse it could not resolve fails closed", () =
   const unresolved: { label: string; command: string }[] = [
     // Valid bash (`bash -n` accepts it): a heredoc redirect combined with
     // `2>&1` AND a pipe, though each pairing alone parses. The only shape in
-    // the measured corpus, and the one that really runs — the recovery drops
-    // the piped command from enumeration entirely.
+    // the measured corpus, and the one that really runs — the recovery leaves
+    // the piped command in no unit, which the salvage restores (#875).
     {
       label: "a heredoc redirect with 2>&1 and a pipe",
       command: "git commit -F - <<'MSG' 2>&1 | tail -4\nmsg\nMSG",
@@ -266,6 +268,29 @@ describe("bash command gate — a parse it could not resolve fails closed", () =
     // well-formed redirect preceded by an unrelated recovery failure.
     { label: "a read-write open", command: "cat <> rw.txt" },
     { label: "an unclosed arithmetic expansion", command: "cat $(( > out.txt" },
+    // Further spellings of the grammar gap, probed against the real parser:
+    // the failing region can sit inside any enclosing statement, and the
+    // redirect can take several forms before the pipe.
+    {
+      label: "the gap inside a control-flow body",
+      command: "if true; then cat <<'EOF' 2>&1 | rm -rf /x\nbody\nEOF\nfi",
+    },
+    {
+      label: "the gap inside a subshell",
+      command: "(cat <<'E' 2>&1 | rm -rf /x\nb\nE\n)",
+    },
+    {
+      label: "the gap inside a command substitution",
+      command: "x=$(cat <<'E' 2>&1 | rm -rf /x\nb\nE\n)",
+    },
+    {
+      label: "the gap with a duplicating redirect to stderr",
+      command: "cat <<'E' 1>&2 | rm -rf /x\nb\nE",
+    },
+    {
+      label: "the gap piping stderr too",
+      command: "cat <<'E' 2>&1 |& rm -rf /x\nb\nE",
+    },
   ];
 
   /** Commands that parse cleanly, as the control set. */
@@ -306,6 +331,51 @@ describe("bash command gate — a parse it could not resolve fails closed", () =
     });
   });
 
+  describe("the salvage only ever adds to what the primary parse found", () => {
+    /** The units the primary parse alone yields, with no salvage. */
+    async function primaryUnitsOf(command: string) {
+      const parser = await getParser();
+      const tree = parser.parse(command);
+      if (!tree) throw new Error("parse returned null");
+      try {
+        return collectCommands(tree.rootNode);
+      } finally {
+        tree.delete();
+      }
+    }
+
+    it.each([...unresolved.map(({ command }) => command), ...resolved])(
+      "keeps every primary unit, in order, for %s",
+      async (command) => {
+        // Salvaging is additive by construction, and this is the property that
+        // says so: a mechanism that reordered or replaced units could weaken a
+        // decision the primary parse already reached.
+        const units = (await BashProgram.parse(command, normalizer)).commands();
+        const primary = await primaryUnitsOf(command);
+
+        expect(units.slice(0, primary.length)).toEqual(primary);
+      },
+    );
+
+    it.each([...unresolved.map(({ command }) => command), ...resolved])(
+      "emits no unit whose text the command does not contain, for %s",
+      async (command) => {
+        // Anti-invention: every unit's text is sliced from a parse of the
+        // command's own source, salvaged or not. Recovery's invented structure
+        // is refused a step earlier, when its re-parse fails.
+        const units = (await BashProgram.parse(command, normalizer)).commands();
+
+        expect(units.filter(({ text }) => !command.includes(text))).toEqual([]);
+      },
+    );
+
+    it.each(resolved)("adds no unit at all to %s", async (command) => {
+      const units = (await BashProgram.parse(command, normalizer)).commands();
+
+      expect(units).toEqual(await primaryUnitsOf(command));
+    });
+  });
+
   describe("the gate floors what the enumerator marked", () => {
     it.each(unresolved)(
       "asks for $label under a permissive catch-all",
@@ -332,6 +402,62 @@ describe("bash command gate — a parse it could not resolve fails closed", () =
           resolver,
         ),
       ).toBe("deny");
+    });
+  });
+
+  describe("the gate consults the rules of a command the parse dropped (#875)", () => {
+    const dropped =
+      "git add -A . && git commit -F - <<'MSG' 2>&1 | rm -rf /tmp/x\nmsg\nMSG";
+
+    it("denies on a rule covering only the dropped command", async () => {
+      // The defect: `rm -rf /tmp/x` was in no unit, so this rule was never
+      // evaluated and the user was prompted about `git commit` instead.
+      const resolver = makeKeyedResolver([{ match: "rm -rf", state: "deny" }]);
+
+      expect(await decide(dropped, resolver)).toBe("deny");
+    });
+
+    it("names the dropped command as the offender", async () => {
+      const resolver = makeKeyedResolver([{ match: "rm -rf", state: "deny" }]);
+      const program = await BashProgram.parse(dropped, normalizer);
+
+      expect(
+        resolveBashCommandCheck(
+          dropped,
+          program.commands(),
+          undefined,
+          resolver,
+        ).command,
+      ).toBe("rm -rf /tmp/x");
+    });
+
+    it("still only asks when no rule covers the dropped command", async () => {
+      // The salvaged unit is marked, so its `allow` floors like every other
+      // marked unit — the salvage adds restriction and removes none.
+      expect(await decide(dropped, makeKeyedResolver([]))).toBe("ask");
+    });
+
+    it("still resolves the whole command when the primary parse found nothing", async () => {
+      // A body-less leading redirect ahead of the gap: the primary parse
+      // yields zero units, so the whole command string is the only surface an
+      // explicit deny can reach (#452, #712). Salvaging a unit must not make
+      // that check unreachable — `deny` → `ask` would be a real weakening, and
+      // the only one this otherwise-additive mechanism could cause.
+      const resolver = makeKeyedResolver([
+        { match: " rm -rf ", state: "deny" },
+      ]);
+
+      expect(
+        await decide("> f <<'M' 2>&1 | rm -rf /tmp/x\nmsg\nM", resolver),
+      ).toBe("deny");
+    });
+
+    it("consults no rule for a region whose own re-parse fails", async () => {
+      // `<>` recovery invents the token `">"`; admitting it as a unit would
+      // match it against the bash rules (#814).
+      const resolver = makeKeyedResolver([{ match: ">", state: "deny" }]);
+
+      expect(await decide("cat <> rw.txt", resolver)).toBe("ask");
     });
   });
 });

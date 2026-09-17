@@ -1,16 +1,34 @@
 ---
 status: accepted
 date: 2026-07-24
-amended: 2026-09-02
+amended: 2026-09-15
 ---
 
 # 0009 — The bash path projection is a completeness contract, not a best-effort heuristic
 
 ## Status
 
-Accepted, as amended 2026-09-02.
+Accepted, as amended 2026-09-15.
 This decision states the contract the bash path projection upholds, and settles how a "the gate missed my path" report is triaged.
 It is the framing for [#645], which closes two gaps the contract names as in-scope; it composes with `docs/decisions/0003-git-bash-posix-path-semantics.md` (win32 token shapes) and `docs/decisions/0007-model-judge-authorizer-chain-adr.md` (the judge that absorbs false positives).
+
+### Amendment, 2026-09-15 — a region the parse could not resolve still owes its operands
+
+Every guarantee below is written about a token the parse **found**, and a partial parse failure can drop a whole region before any of them is asked.
+`tree-sitter-bash` 0.25.1 cannot parse a heredoc redirect combined with `2>&1` and a pipe, and its recovery leaves the piped command's words under a node the collectors descend for substitutions and never read for text.
+Measured through the real `BashProgram`, `cat <<'MSG' 2>&1 | cat /etc/shadow` returned **both** slices empty: `/etc/shadow` reached neither `path` nor `external_directory`, and the command reached no `bash:` rule either ([#875]).
+
+This is a violation of the contract, not a residual.
+None of the *What the projection deliberately omits* bullets covers it — the token is an absolute literal in command-operand position, the plainest shape the guarantees name — and the failure is unrecoverable in this record's sense: nothing else in the command carries the path, so no surface sees it at all.
+
+The fix is upstream of the classifiers and changes none of them.
+The dropped region's own source text is re-parsed standalone and admitted only when that re-parse is clean, and its tokens are then collected into the same candidate array as the primary parse's — before projection, so a path both name folds to one entry rather than showing twice (ADR 0013's 2026-09-15 amendment records the mechanism and its measured population).
+
+One residual is **added** to the list below by this amendment, deliberately.
+A salvaged region is walked under the **unknown** effective base, never the session cwd.
+The fragment carries no record of the `cd` in force where it sat, so resolving `cat ../secret` after `cd /outside` against the cwd would name `/projects/secret` — a different file than the one that runs, which a rule for that other path could then allow.
+Declining the claim is [#393]'s machinery applied to a new source of unknown base: an absolute or `~` token stays literal-only and is treated as unconditionally external, while a relative or bare token in a salvaged region is not projected.
+That is strictly better than the drop it replaces, and it is the recoverable direction.
 
 ### Amendment, 2026-09-02 — a statement's own operands are projected
 
@@ -206,6 +224,8 @@ These are **accepted residuals**, not open bugs:
   The containment boundary still sees it, because the literal resolves against the effective working directory; an **explicit rule pattern** does not, because it is matched against the token's spelling — `path: {".env": "deny"}` does not match the token `[.]env` ([#822]).
 - **Per-command argument semantics** — which positional argument of `grep`/`git`/`kubectl` is a file.
   `PATTERN_FIRST_COMMANDS` encodes a deliberately small exception for pattern-first commands; generalizing it means shipping and maintaining an option table per tool.
+- **A relative or bare operand inside a region the parse could not resolve** — the salvaged fragment carries no record of the `cd` in force where it sat, so it is walked under the unknown base and only its absolute and `~` tokens project ([#875]).
+  A region whose own re-parse also fails projects nothing at all, and the command surface's floor prompts for it naming the whole command line.
 
 ### The layering principle — surface deterministically, discriminate with judgment
 
@@ -298,4 +318,5 @@ Cost is ~0.04 ms p95 per command, ~19% of the already-paid tree-sitter parse.
 [#839]: https://github.com/gotgenes/pi-packages/issues/839
 [#821]: https://github.com/gotgenes/pi-packages/issues/821
 [#822]: https://github.com/gotgenes/pi-packages/issues/822
+[#875]: https://github.com/gotgenes/pi-packages/issues/875
 [#823]: https://github.com/gotgenes/pi-packages/issues/823

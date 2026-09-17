@@ -29,6 +29,7 @@ import {
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { unregisteredLinkMessage } from "#src/authority/authorizer-chain-audit";
 import { childNodeAbsentMessage } from "#src/authority/child-node-audit";
 import {
   createPermissionForwardingLocation,
@@ -662,6 +663,54 @@ describe("out-of-process forwarding liveness", () => {
     rmSync(childCwd, { recursive: true, force: true });
     rmSync(externalDir, { recursive: true, force: true });
   });
+
+  // A subprocess child kept visible for observability — a Pi Herdsman managed
+  // agent in its own Herdr pane — has a UI of its own and still names the lead
+  // session as its forwarding target (#909).
+  it("forwards from a child that has its own UI while the named parent serves", async () => {
+    writeGlobalConfig(externalAsk);
+    const childCwd = mkdtempSync(join(tmpdir(), "pi-perm-child-cwd-"));
+    const externalDir = mkdtempSync(join(tmpdir(), "pi-perm-external-"));
+    const forwardingDir = join(agentDir, "sessions", "permission-forwarding");
+    const parentSessionId = "parent-session-ui-child";
+    vi.stubEnv("PI_SUBAGENT_PARENT_SESSION", parentSessionId);
+    publishServingHeartbeat(forwardingDir, parentSessionId);
+
+    const capturedTitles: string[] = [];
+    const childPi = makeFakePi({
+      events: createEventBus(),
+      toolNames: ["read"],
+    });
+    piPermissionSystemExtension(childPi as unknown as ExtensionAPI);
+    const firePromise = childPi.fire(
+      "tool_call",
+      {
+        toolName: "read",
+        toolCallId: "ui-child-external-read",
+        input: { path: join(externalDir, "secret.txt") },
+      },
+      makeBaseCtx(childCwd, "child-session-ui", {
+        select: async (title: string): Promise<string | undefined> => {
+          capturedTitles.push(title);
+          return "Yes";
+        },
+      }),
+    );
+
+    const request = await approveForwardedRequest(
+      forwardingDir,
+      parentSessionId,
+    );
+    expect(request.requesterSessionId).toBe("child-session-ui");
+
+    const result = (await firePromise) as { block?: true };
+    expect(result.block).toBeUndefined();
+    // The pane's own dialog never opened: the parent answered.
+    expect(capturedTitles).toEqual([]);
+
+    rmSync(childCwd, { recursive: true, force: true });
+    rmSync(externalDir, { recursive: true, force: true });
+  });
 });
 
 describe("shutdown teardown chain", () => {
@@ -940,8 +989,8 @@ describe("fact-shaping inheritance stops at live authority", () => {
   // A link returns a verdict, so live authority converges at the adjudicating
   // node (ADR 0007 §7) and inheriting one would run authority the operator's
   // own exclusion removed. That a configured-but-absent link is skipped here
-  // rather than borrowed is deliberate; whether the skip should be louder is
-  // its own question, tracked as #861.
+  // rather than borrowed is deliberate — and since #861 the skip is no longer
+  // silent: the operator answering the ask is told once per configured name.
   it("does not resolve an authorizer registered only in the parent", async () => {
     writeGlobalConfig({
       permission: { "*": "ask" },
@@ -964,17 +1013,27 @@ describe("fact-shaping inheritance stops at live authority", () => {
     });
     piPermissionSystemExtension(childPi as unknown as ExtensionAPI);
 
-    await fireSessionStart(parentPi, makeBaseCtx(parentCwd, parentSessionId));
+    // The parent is headless so it serves no inbox: a serving parent would make
+    // the child relay its ask instead of deciding it (#909), and the question
+    // here is what a *locally adjudicating* child does with a link it does not
+    // have. It still publishes its service and its registry entry, which is all
+    // the ancestor walk under test needs.
+    await fireSessionStart(
+      parentPi,
+      makeBaseCtx(parentCwd, parentSessionId, { hasUI: false }),
+    );
     getSubagentSessionRegistry().register(childSessionId, { parentSessionId });
 
-    // hasUI makes the child adjudicate locally, so its own chain runs — the
-    // one shape in which a missing link changes the verdict.
+    // The child has UI and no serving parent, so it adjudicates locally and its
+    // own chain runs — the one shape in which a missing link changes the verdict.
     const capturedTitles: string[] = [];
+    const notified: string[] = [];
     const childCtx = makeBaseCtx(childCwd, childSessionId, {
       select: async (title: string): Promise<string | undefined> => {
         capturedTitles.push(title);
         return "Yes";
       },
+      notify: (message: string) => notified.push(message),
     });
     await fireSessionStart(childPi, childCtx);
 
@@ -1000,6 +1059,9 @@ describe("fact-shaping inheritance stops at live authority", () => {
     expect(readReviewLog().map((entry) => entry.event)).toContain(
       "authorizer_chain_unregistered_link",
     );
+    // And the operator answering that prompt is told why no judge answered it:
+    // the review log alone left the skip invisible (#861).
+    expect(notified).toEqual([unregisteredLinkMessage("parent-only-judge")]);
 
     rmSync(parentCwd, { recursive: true, force: true });
     rmSync(childCwd, { recursive: true, force: true });

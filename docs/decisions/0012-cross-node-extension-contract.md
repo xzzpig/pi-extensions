@@ -306,7 +306,8 @@ Three properties keep the clause from generalizing into the authority registries
    A link's name is written in `authorizerChain`, so excluding its provider contradicts a statement the operator made — a conflict to resolve, not a capability to restore.
 
 ADR 0007 §7 therefore stands unamended, and there is deliberately no reader for the authorizer registry on `PermissionsService`.
-The live-authority case — a locally-adjudicating child skipping a configured link whose provider did not load there, recorded today as `authorizer_chain_unregistered_link` — is a separate question about whether that fail-safe skip should be louder, tracked as [#861].
+The live-authority case — a locally-adjudicating child skipping a configured link whose provider did not load there — was a separate question about whether that fail-safe skip should be louder, and [#861] answered it: the skip stands, and it is now reported to the operator once per session per configured name, beside the `authorizer_chain_unregistered_link` record it already wrote.
+That is the whole of the repair, because the conflict above is between two operator statements and this package cannot resolve one in favor of the other — it can only stop deciding it silently.
 
 Two costs are accepted rather than hidden.
 A child is no longer explainable from the child alone: the same call can resolve differently if an ancestor's provider is disposed.

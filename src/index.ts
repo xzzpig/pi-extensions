@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getAgentDir, getPackageDir } from "@earendil-works/pi-coding-agent";
 import { warmBashParser } from "#src/access-intent/bash/parser";
 import { buildResolvedIntentFromMatchValues } from "#src/access-intent/input-normalizer";
+import { AuthorizerChainAudit } from "#src/authority/authorizer-chain-audit";
 import {
   AuthorizerRegistry,
   ObservedAuthorizerRegistrar,
@@ -168,6 +169,10 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     // resolved in config order at activation.
     authorizerRegistry,
     getAuthorizerChain: () => configStore.current().authorizerChain ?? [],
+    // Records each configured name this node could not resolve, and tells the
+    // operator once per name — the ask is decided without the judge they
+    // asked for, and the review log alone never said so (#861).
+    chainAudit: new AuthorizerChainAudit(logger),
   });
 
   // Resolver composes the manager + session ruleset and owns the

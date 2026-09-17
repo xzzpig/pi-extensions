@@ -4,6 +4,7 @@ import {
   EXTENSION_ID,
   type PermissionSystemExtensionConfig,
 } from "#src/config/extension-config";
+import { maskCommandFields } from "./command-redaction";
 import { capLogFieldWidths, resolveReviewLogFieldWidth } from "./log-field-cap";
 import {
   OWNER_ONLY_FILE_MODE,
@@ -39,13 +40,41 @@ export function createPermissionSystemLogger(
   const hardened = new Set<string>();
 
   /**
-   * The only place a log line is produced.
+   * The transform stages every log line passes through, in the order they must
+   * run.
+   *
+   * Command masking runs first, and it runs for both streams. Capping a command
+   * before masking it would hand the masker a truncated command — a parse of
+   * something the agent never ran — and the debug stream carries the same
+   * payload as the review stream, so a mask that skipped it would only move the
+   * exposure rather than close it.
    *
    * `maxFieldWidth` bounds every string the line carries; it is supplied for
    * the review stream and withheld for the debug stream, which is opt-in and
-   * exists to be read in full. Capping happens before redaction, which masks
-   * by key name and so still masks a sensitive value whole.
+   * exists to be read in full. Capping happens before key-name redaction, which
+   * masks by name and so still masks a sensitive value whole.
    */
+  const prepareLogLine = (
+    stream: "debug" | "review",
+    event: string,
+    details: Record<string, unknown>,
+    maxFieldWidth?: number,
+  ): string | undefined => {
+    const masked = maskCommandFields(details);
+    const bounded =
+      maxFieldWidth === undefined
+        ? masked
+        : capLogFieldWidths(masked, maxFieldWidth);
+    return redactedJsonStringify({
+      timestamp: new Date().toISOString(),
+      extension: EXTENSION_ID,
+      stream,
+      event,
+      ...bounded,
+    });
+  };
+
+  /** The only place a log line is produced. */
   const writeLine = (
     stream: "debug" | "review",
     path: string,
@@ -59,17 +88,7 @@ export function createPermissionSystemLogger(
     }
 
     try {
-      const bounded =
-        maxFieldWidth === undefined
-          ? details
-          : capLogFieldWidths(details, maxFieldWidth);
-      const line = redactedJsonStringify({
-        timestamp: new Date().toISOString(),
-        extension: EXTENSION_ID,
-        stream,
-        event,
-        ...bounded,
-      });
+      const line = prepareLogLine(stream, event, details, maxFieldWidth);
       if (!line) {
         return `Failed to write permission-system ${stream} log '${path}': event could not be serialized.`;
       }

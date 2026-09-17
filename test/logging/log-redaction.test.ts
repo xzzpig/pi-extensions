@@ -1,49 +1,89 @@
 import { describe, expect, test } from "vitest";
 import {
-  isSensitiveLogKey,
+  isSensitiveName,
   REDACTED_PLACEHOLDER,
   redactedJsonStringify,
 } from "#src/logging/log-redaction";
 
-describe("isSensitiveLogKey", () => {
-  test.each([
-    "authorization",
-    "Authorization",
-    "apiKey",
-    "api_key",
-    "api-key",
-    "x-api-key",
-    "ANTHROPIC_API_KEY",
-    "secret",
-    "clientSecret",
-    "token",
-    "accessToken",
-    "refresh_token",
-    "password",
-    "passwd",
-    "credential",
-    "credentials",
-    "cookie",
-    "privateKey",
-    "private_key",
-  ])("treats %s as sensitive", (key) => {
-    expect(isSensitiveLogKey(key)).toBe(true);
+describe("isSensitiveName", () => {
+  describe("names the shipped key-name pattern already masked", () => {
+    // Every one of these must stay sensitive: the widening is a union with the
+    // pattern it replaces, so it can add names but never drop one. `apikey` and
+    // `privatekey` are the separator-less forms a name-boundary `key` rule
+    // alone would lose.
+    test.each([
+      "authorization",
+      "Authorization",
+      "authorization_header",
+      "apiKey",
+      "api_key",
+      "api-key",
+      "apikey",
+      "x-api-key",
+      "ANTHROPIC_API_KEY",
+      "secret",
+      "clientSecret",
+      "token",
+      "tokenCount",
+      "accessToken",
+      "refresh_token",
+      "password",
+      "passwd",
+      "credential",
+      "credentials",
+      "cookie",
+      "privateKey",
+      "private_key",
+      "privatekey",
+    ])("treats %s as sensitive", (name) => {
+      expect(isSensitiveName(name)).toBe(true);
+    });
   });
 
-  test.each([
-    "toolName",
-    "command",
-    "path",
-    "target",
-    "origin",
-    "matchedPattern",
-    "resolution",
-    "toolInputPreview",
-    "requesterAgentName",
-    "denialReason",
-    "",
-  ])("treats %s as not sensitive", (key) => {
-    expect(isSensitiveLogKey(key)).toBe(false);
+  describe("a bare or suffixed key, which the shipped pattern missed", () => {
+    test.each([
+      "KEY",
+      "key",
+      "keys",
+      "OPENROUTER_KEY",
+      "MY_KEY",
+      "my-key",
+      "X-Api-Key",
+      "cacheKey",
+      "sortKeys",
+    ])("treats %s as sensitive", (name) => {
+      expect(isSensitiveName(name)).toBe(true);
+    });
+  });
+
+  describe("names that bind no credential", () => {
+    test.each([
+      "toolName",
+      "command",
+      "path",
+      "target",
+      "origin",
+      "matchedPattern",
+      "resolution",
+      "toolInputPreview",
+      "requesterAgentName",
+      "denialReason",
+      "Content-Type",
+      "monkey",
+      "keyboard",
+      "turnkey",
+      "donkeys",
+      "whiskey",
+      "",
+    ])("treats %s as not sensitive", (name) => {
+      expect(isSensitiveName(name)).toBe(false);
+    });
+
+    test("misses a camel-cased key used as a name prefix", () => {
+      // An accepted limitation rather than an intended answer: widening the
+      // prefix side to match `keySet` also re-admits `keyboard`-shaped names.
+      expect(isSensitiveName("keySet")).toBe(false);
+    });
   });
 });
 

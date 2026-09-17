@@ -5,6 +5,79 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [32.0.5](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v32.0.4...pi-permission-system-v32.0.5) (2026-09-16)
+
+
+### Bug Fixes
+
+* **pi-permission-system:** tell the operator when a configured chain link is missing ([3662541](https://github.com/gotgenes/pi-packages/commit/3662541d4ebc555d54faf2934085d22b36ee618e)), closes [#861](https://github.com/gotgenes/pi-packages/issues/861)
+
+### Documentation
+
+* **pi-permission-system:** record the unregistered-link warning ([f70b1e3](https://github.com/gotgenes/pi-packages/commit/f70b1e3ce52a38744da2a07880878efb61dfae00)), closes [#861](https://github.com/gotgenes/pi-packages/issues/861)
+* **pi-permission-system:** state the resolved skip in the boundary test comment ([9cd18f1](https://github.com/gotgenes/pi-packages/commit/9cd18f1ef6bd8f9dbabf6fc6ce6b9dfa58d64764)), closes [#861](https://github.com/gotgenes/pi-packages/issues/861)
+
+## [32.0.4](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v32.0.3...pi-permission-system-v32.0.4) (2026-09-16)
+
+
+### Bug Fixes
+
+* **pi-permission-system:** evaluate bash rules against a command a partial parse dropped ([28cedc4](https://github.com/gotgenes/pi-packages/commit/28cedc45dd4a11ee9189f41ee661a051d2b13936)), closes [#875](https://github.com/gotgenes/pi-packages/issues/875)
+* **pi-permission-system:** gate the paths a command dropped by a partial parse reads ([6f1d032](https://github.com/gotgenes/pi-packages/commit/6f1d0328f8151da8716641f0ee0c25341699cd75)), closes [#875](https://github.com/gotgenes/pi-packages/issues/875)
+* **pi-permission-system:** keep the whole-command deny reachable when a salvage recovers the only units ([ab91a66](https://github.com/gotgenes/pi-packages/commit/ab91a660eafb879a3370104cb6f68353041a7cbb)), closes [#875](https://github.com/gotgenes/pi-packages/issues/875)
+
+### Documentation
+
+* **pi-permission-system:** record the salvage of a bash command a partial parse dropped ([17a3684](https://github.com/gotgenes/pi-packages/commit/17a3684f182467c19e1ca56664e1adf900980f11))
+
+## [32.0.3](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v32.0.2...pi-permission-system-v32.0.3) (2026-09-15)
+
+
+### Bug Fixes
+
+* **pi-permission-system:** mask a value bound to a bare or suffixed key name ([f23b8b9](https://github.com/gotgenes/pi-packages/commit/f23b8b93ceafa732ffe9d5484e4a935094d06754)), closes [#920](https://github.com/gotgenes/pi-packages/issues/920)
+* **pi-permission-system:** stop writing a named secret into the permission logs ([cf4f370](https://github.com/gotgenes/pi-packages/commit/cf4f370d192d778e600a253331bbf6e42b3cd758)), closes [#920](https://github.com/gotgenes/pi-packages/issues/920)
+
+### Documentation
+
+* **pi-permission-system:** restate the log-redaction boundary as name-structural ([958cba1](https://github.com/gotgenes/pi-packages/commit/958cba124a1b799a7e6af959440a26d7cf722934)), closes [#920](https://github.com/gotgenes/pi-packages/issues/920)
+* **pi-permission-system:** correct the review-log knob's unredacted claim ([0664a6c](https://github.com/gotgenes/pi-packages/commit/0664a6cf6fbf3e75c4a6864cc582716dd6d15a26)), closes [#920](https://github.com/gotgenes/pi-packages/issues/920)
+
+## [32.0.2](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v32.0.1...pi-permission-system-v32.0.2) (2026-09-11)
+
+
+### Bug Fixes
+
+* **pi-permission-system:** keep a forwarded write when a file lock blocks the atomic rename ([d901116](https://github.com/gotgenes/pi-packages/commit/d9011165203b130675a3affd20a2792f7abd7105)), closes [#914](https://github.com/gotgenes/pi-packages/issues/914)
+* **pi-permission-system:** create a forwarding directory blocked by a transient file lock ([245683c](https://github.com/gotgenes/pi-packages/commit/245683c9153712d8991ceb21ece7884b2fb12f2a)), closes [#914](https://github.com/gotgenes/pi-packages/issues/914)
+
+### Documentation
+
+* **pi-permission-system:** record the transient filesystem retry ([eb7ab58](https://github.com/gotgenes/pi-packages/commit/eb7ab58cfd79d15de77bafa6afe8813e9dff7b72)), closes [#914](https://github.com/gotgenes/pi-packages/issues/914)
+
+## [32.0.1](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v32.0.0...pi-permission-system-v32.0.1) (2026-09-11)
+
+
+### Bug Fixes
+
+* **pi-permission-system:** deny a forbidden command without prompting first ([b840196](https://github.com/gotgenes/pi-packages/commit/b8401962a9eeb012317771fc204c3fde8aa8a9a2)), closes [#899](https://github.com/gotgenes/pi-packages/issues/899)
+
+### Documentation
+
+* **pi-permission-system:** document that a deny on any layer needs no prompt ([e526e95](https://github.com/gotgenes/pi-packages/commit/e526e950ab6d957e6b5bc4d6f7740bcce2e35dca)), closes [#899](https://github.com/gotgenes/pi-packages/issues/899)
+
+## [32.0.0](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v31.1.4...pi-permission-system-v32.0.0) (2026-09-11)
+
+
+### Features
+
+* **pi-permission-system:** **breaking:** prompt in the parent session for a subagent that has its own UI ([24b56a2](https://github.com/gotgenes/pi-packages/commit/24b56a2181df3db8b17e45b1acefd5a53fe2eddf)), closes [#907](https://github.com/gotgenes/pi-packages/issues/907), closes [#909](https://github.com/gotgenes/pi-packages/issues/909)
+* **pi-permission-system:** record when a session starts or stops relaying its asks ([7d1e2bb](https://github.com/gotgenes/pi-packages/commit/7d1e2bbe69d59360a66a27d3277d41aedecbefb5)), closes [#909](https://github.com/gotgenes/pi-packages/issues/909)
+
+### Documentation
+
+* **pi-permission-system:** document relaying from a session that has its own UI ([0250d68](https://github.com/gotgenes/pi-packages/commit/0250d68bb3a89e32782836ed1b6a17d4e52d25e8)), closes [#909](https://github.com/gotgenes/pi-packages/issues/909)
+
 ## [31.1.4](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v31.1.3...pi-permission-system-v31.1.4) (2026-09-11)
 
 
