@@ -9,6 +9,7 @@
 - 在请求发送到 LLM 提供商**之前**，将配置的敏感字符串替换为占位符（提供商永远看不到明文）
 - 在模型输出**完成后**，将占位符还原为原文（本地显示/存储更自然）
 - 在工具**执行前**还原占位符（如 `bash` / `write` / `edit`），确保本地工具使用真实值运行
+- **会话级临时挂起**：`/vibeguard:disable [category]` / `/vibeguard:enable [category]`、`/vibeguard:status`、交互式类别选择器 `/vibeguard:categories` —— 不重启、不改配置即可在运行时临时停用脱敏
 
 占位符格式（与 VibeGuard 对齐）：
 
@@ -86,6 +87,40 @@ LLM:  ['_', '_', 'V', 'G', '_', 'O', 'P', 'E', 'N', 'A', 'I', '_', 'K',
 ```
 
 LLM 提供商**从未收到原始值**——它只看到占位符。LLM 输出中包含占位符是预期且无害的行为。
+
+## 临时挂起（会话级）
+
+有时你需要暂时关闭脱敏（例如让模型直接处理真实示例数据）。可以**临时挂起**脱敏——不重启 pi、不改配置文件。
+
+语义：
+
+- **挂起只停新内容**：挂起期间新产生的用户/工具/assistant 内容以明文通过，不再生成新占位符。
+- **历史占位符不受影响**：本会话中先前已生成的占位符仍然照常自动还原——工具执行前还原、assistant 输出后还原两条路径在挂起期间均不受影响。
+- **状态仅存在于当前会话内存**：随新会话/重启 pi 自动复位到配置里的 `enabled` 值。磁盘上的 `vibeguard.config.json` 永不修改。
+
+### 命令
+
+| 命令 | 效果 |
+| --- | --- |
+| `/vibeguard:disable` | 整体挂起：新内容不再脱敏（历史占位符仍恢复） |
+| `/vibeguard:disable <CATEGORY>` | 只挂起该类别，如 `/vibeguard:disable API_KEY`（未知类别会提示可用列表） |
+| `/vibeguard:enable` | 整体恢复：所有规则恢复脱敏 |
+| `/vibeguard:enable <CATEGORY>` | 只恢复该类别 |
+| `/vibeguard:status` | 显示当前脱敏状态（生效中 / 挂起类别） |
+| `/vibeguard:categories` | 打开交互式类别选择器：`Space`/`Enter` 切换当前行（第 1 行=整体挂起），`↑/↓` `j/k` 移动，`q`/`Esc` 关闭 |
+
+类别名不区分大小写。状态栏同步反映状态：`VibeGuard[OFF]`（整体挂起）、`VibeGuard[OFF:EMAIL,MAC]`（按类别挂起）、`VibeGuard[ON]`（生效中）。
+
+### 示例
+
+```text
+> /vibeguard:disable
+  VibeGuard: 已整体挂起 —— 新内容不再脱敏；会话历史中的占位符仍会照常恢复（/vibeguard:enable 恢复）
+
+  # 后续新输入的手机号会以明文发往模型……
+  > /vibeguard:enable
+  VibeGuard: 已整体恢复 —— 新内容将重新脱敏
+```
 
 ## 调试
 

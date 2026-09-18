@@ -246,6 +246,80 @@ function buildPatternSet(patterns: VibeguardConfig["patterns"]): PatternSet {
 }
 
 // ============================================================================
+// Suspension State (runtime, session-scoped)
+//
+// Temporary runtime suspension: stops NEW content from being redacted (either
+// globally or per category) without touching the on-disk config. Restore paths
+// (tool_call / message_end) are NOT part of this state — historical
+// placeholders already in the session keep being restored regardless of
+// suspension.
+// ============================================================================
+
+export class SuspensionState {
+  private all = false;
+  private categories = new Set<string>();
+
+  /** True when redaction is globally suspended (no new placeholder generation). */
+  get globallySuspended(): boolean {
+    return this.all;
+  }
+
+  /** Sanitized category names whose redaction is currently suspended. */
+  get suspendedCategories(): ReadonlySet<string> {
+    return this.categories;
+  }
+
+  /** True when any form of suspension is active (global or per-category). */
+  get anySuspended(): boolean {
+    return this.all || this.categories.size > 0;
+  }
+
+  setGlobal(value: boolean): void {
+    this.all = value;
+  }
+
+  /** Suspend/resume one category (input is normalized like config categories). */
+  setCategory(category: string, suspended: boolean): void {
+    const normalized = sanitizeCategory(category);
+    if (suspended) this.categories.add(normalized);
+    else this.categories.delete(normalized);
+  }
+
+  /** Toggle one category; returns the new suspended state of that category. */
+  toggleCategory(category: string): boolean {
+    const normalized = sanitizeCategory(category);
+    if (this.categories.has(normalized)) {
+      this.categories.delete(normalized);
+      return false;
+    }
+    this.categories.add(normalized);
+    return true;
+  }
+
+  isCategorySuspended(category: string): boolean {
+    return this.categories.has(sanitizeCategory(category));
+  }
+
+  /** Global suspension overrides everything; otherwise checks one category. */
+  isSuspended(category?: string): boolean {
+    if (this.all) return true;
+    if (category) return this.categories.has(sanitizeCategory(category));
+    return false;
+  }
+
+  /** Sorted snapshot of suspended categories (for status/list display). */
+  suspendedCategoryList(): string[] {
+    return [...this.categories].sort((a, b) => a.localeCompare(b));
+  }
+
+  /** Fresh session state: nothing suspended, back to config.enabled semantics. */
+  reset(): void {
+    this.all = false;
+    this.categories.clear();
+  }
+}
+
+// ============================================================================
 // PlaceholderSession
 // ============================================================================
 
@@ -412,6 +486,7 @@ function redactText(
   input: string,
   patterns: PatternSet,
   session: PlaceholderSession,
+  suspendedCategories?: ReadonlySet<string>,
 ): { text: string; matches: Match[] } {
   const text = String(input ?? "");
   if (!text) return { text, matches: [] };
@@ -420,6 +495,7 @@ function redactText(
 
   // Keywords
   for (const rule of patterns.keywords) {
+    if (suspendedCategories?.has(rule.category)) continue;
     const needle = rule.value;
     if (!needle) continue;
     let idx = 0;
@@ -437,6 +513,7 @@ function redactText(
 
   // Regex
   for (const rule of patterns.regex) {
+    if (suspendedCategories?.has(rule.category)) continue;
     const baseFlags = String(rule.flags ?? "");
     const flags = baseFlags.includes("g") ? baseFlags : `${baseFlags}g`;
     const re = new RegExp(rule.pattern, flags);
@@ -514,6 +591,7 @@ function redactDeep(
   value: unknown,
   patterns: PatternSet,
   session: PlaceholderSession,
+  suspendedCategories?: ReadonlySet<string>,
 ): void {
   const seen = new WeakSet<object>();
   const walk = (node: unknown): void => {
@@ -524,7 +602,7 @@ function redactDeep(
     if (Array.isArray(node)) {
       for (let i = 0; i < node.length; i++) {
         const v = node[i];
-        if (typeof v === "string") node[i] = redactText(v, patterns, session).text;
+        if (typeof v === "string") node[i] = redactText(v, patterns, session, suspendedCategories).text;
         if (v && typeof v === "object") walk(v);
       }
       return;
@@ -534,7 +612,7 @@ function redactDeep(
 
     for (const key of Object.keys(node)) {
       const v = node[key];
-      if (typeof v === "string") node[key] = redactText(v, patterns, session).text;
+      if (typeof v === "string") node[key] = redactText(v, patterns, session, suspendedCategories).text;
       if (v && typeof v === "object") walk(v);
     }
   };
@@ -572,18 +650,23 @@ function restoreDeep(value: unknown, session: PlaceholderSession): void {
 // Message helpers for pi's AgentMessage types
 // ============================================================================
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function redactMessageContent(msg: any, patterns: PatternSet, session: PlaceholderSession): void {
+function redactMessageContent(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  msg: any,
+  patterns: PatternSet,
+  session: PlaceholderSession,
+  suspendedCategories?: ReadonlySet<string>,
+): void {
   if (!msg) return;
 
   // UserMessage, CustomMessage: content is string or array of {type, text}
   if (msg.role === "user" || msg.role === "custom") {
     if (typeof msg.content === "string") {
-      msg.content = redactText(msg.content, patterns, session).text;
+      msg.content = redactText(msg.content, patterns, session, suspendedCategories).text;
     } else if (Array.isArray(msg.content)) {
       for (const part of msg.content) {
         if (part && typeof part === "object" && part.type === "text" && typeof part.text === "string") {
-          part.text = redactText(part.text, patterns, session).text;
+          part.text = redactText(part.text, patterns, session, suspendedCategories).text;
         }
       }
     }
@@ -595,15 +678,15 @@ function redactMessageContent(msg: any, patterns: PatternSet, session: Placehold
       if (!part || typeof part !== "object") continue;
       // TextContent: {type: "text", text: string}
       if (part.type === "text" && typeof part.text === "string") {
-        part.text = redactText(part.text, patterns, session).text;
+        part.text = redactText(part.text, patterns, session, suspendedCategories).text;
       }
       // ThinkingContent: {type: "thinking", thinking: string}
       if (part.type === "thinking" && typeof part.thinking === "string") {
-        part.thinking = redactText(part.thinking, patterns, session).text;
+        part.thinking = redactText(part.thinking, patterns, session, suspendedCategories).text;
       }
       // ToolCall: {type: "toolCall", id, name, arguments: Record<string, any>}
       if (part.type === "toolCall" && part.arguments && typeof part.arguments === "object") {
-        redactDeep(part.arguments, patterns, session);
+        redactDeep(part.arguments, patterns, session, suspendedCategories);
       }
     }
   }
@@ -612,7 +695,7 @@ function redactMessageContent(msg: any, patterns: PatternSet, session: Placehold
   if (msg.role === "toolResult" && Array.isArray(msg.content)) {
     for (const part of msg.content) {
       if (part && typeof part === "object" && part.type === "text" && typeof part.text === "string") {
-        part.text = redactText(part.text, patterns, session).text;
+        part.text = redactText(part.text, patterns, session, suspendedCategories).text;
       }
     }
   }
@@ -620,16 +703,16 @@ function redactMessageContent(msg: any, patterns: PatternSet, session: Placehold
   // BashExecutionMessage: command and output strings
   if (msg.role === "bashExecution") {
     if (typeof msg.command === "string") {
-      msg.command = redactText(msg.command, patterns, session).text;
+      msg.command = redactText(msg.command, patterns, session, suspendedCategories).text;
     }
     if (typeof msg.output === "string") {
-      msg.output = redactText(msg.output, patterns, session).text;
+      msg.output = redactText(msg.output, patterns, session, suspendedCategories).text;
     }
   }
 
   // CompactionSummaryMessage / BranchSummaryMessage: summary string
   if ((msg.role === "compactionSummary" || msg.role === "branchSummary") && typeof msg.summary === "string") {
-    msg.summary = redactText(msg.summary, patterns, session).text;
+    msg.summary = redactText(msg.summary, patterns, session, suspendedCategories).text;
   }
 }
 
@@ -763,6 +846,8 @@ interface MappingViewOptions {
   mode: MappingViewMode;
   entries: MappingEntry[];
   ttlMs: number;
+  /** Warning line shown under the title when redaction is temporarily suspended. */
+  suspensionNote?: string;
 }
 
 export class MappingViewModal implements Component {
@@ -773,6 +858,7 @@ export class MappingViewModal implements Component {
   private readonly entries: MappingEntry[];
   private readonly stats: CategoryStat[];
   private readonly ttlMs: number;
+  private readonly suspensionNote: string;
   private reveal = false;
   private scrollOffset = 0;
 
@@ -784,6 +870,7 @@ export class MappingViewModal implements Component {
     this.entries = options.entries;
     this.stats = buildCategoryStats(options.entries);
     this.ttlMs = options.ttlMs;
+    this.suspensionNote = options.suspensionNote ?? "";
   }
 
   private dataRowCount(): number {
@@ -827,6 +914,12 @@ export class MappingViewModal implements Component {
     });
   }
 
+  /** Warning banner shown while redaction is temporarily suspended. */
+  private renderSuspensionNote(width: number): string[] {
+    if (!this.suspensionNote) return [];
+    return this.frameRows([this.theme.fg("warning", `⚠ ${this.suspensionNote}`)], width);
+  }
+
   invalidate(): void {
     // All rendering is computed per-call; nothing cached to invalidate.
   }
@@ -842,6 +935,7 @@ export class MappingViewModal implements Component {
       const statsTitle = ` VibeGuard 统计 · ${total} 条 / ${this.stats.length} 类 `;
       return [
         this.frameTop(statsTitle, "accent", width),
+        ...this.renderSuspensionNote(width),
         ...this.frameRows(this.renderStatsContent(width), width),
         this.frameBottom("↑/↓ j/k 滚动 · q/Esc 关闭", width),
       ];
@@ -849,6 +943,7 @@ export class MappingViewModal implements Component {
 
     return [
       this.frameTop(title, revealColor, width),
+      ...this.renderSuspensionNote(width),
       ...this.frameRows(this.renderListContent(width), width),
       this.frameBottom("↑/↓ j/k 滚动 · PgUp/PgDn 翻页 · r 切换原文 · q/Esc 关闭", width),
     ];
@@ -944,6 +1039,169 @@ export class MappingViewModal implements Component {
 }
 
 // ============================================================================
+// Category Picker (temporary suspension management)
+//
+// Interactive multi-select: toggle the global suspension or individual
+// categories with Space/Enter. Changes apply immediately and are synced to
+// the status bar; q/Esc closes. Renders to the local TUI only.
+// ============================================================================
+
+export interface CategoryPickerOptions {
+  tui: TUI;
+  theme: Theme;
+  done: () => void;
+  /** Known, sanitized, sorted categories. */
+  categories: string[];
+  getGlobal: () => boolean;
+  isSuspended: (category: string) => boolean;
+  setGlobal: (value: boolean) => void;
+  setCategory: (category: string, suspended: boolean) => void;
+  /** Called after each toggle so the status bar stays in sync. */
+  onStatusSync: () => void;
+}
+
+interface PickerRow {
+  kind: "global" | "category";
+  category?: string;
+}
+
+export class CategoryPickerModal implements Component {
+  private readonly tui: TUI;
+  private readonly theme: Theme;
+  private readonly done: () => void;
+  private readonly categories: string[];
+  private readonly getGlobal: () => boolean;
+  private readonly isSuspended: (category: string) => boolean;
+  private readonly setGlobal: (value: boolean) => void;
+  private readonly setCategory: (category: string, suspended: boolean) => void;
+  private readonly onStatusSync: () => void;
+  private selected = 0;
+
+  constructor(options: CategoryPickerOptions) {
+    this.tui = options.tui;
+    this.theme = options.theme;
+    this.done = options.done;
+    this.categories = options.categories;
+    this.getGlobal = options.getGlobal;
+    this.isSuspended = options.isSuspended;
+    this.setGlobal = options.setGlobal;
+    this.setCategory = options.setCategory;
+    this.onStatusSync = options.onStatusSync;
+  }
+
+  private rows(): PickerRow[] {
+    return [
+      { kind: "global" },
+      ...this.categories.map((category) => ({ kind: "category" as const, category })),
+    ];
+  }
+
+  private frameTop(label: string, color: "accent" | "warning", width: number): string {
+    const t = this.theme;
+    const fixed = visibleWidth("┌─ ") + visibleWidth(" ") + visibleWidth("┐");
+    let lab = label;
+    if (visibleWidth(lab) + 1 > Math.max(0, width - fixed)) {
+      lab = truncateToWidth(lab, Math.max(0, width - fixed - 1), "…");
+    }
+    const fill = Math.max(0, width - fixed - visibleWidth(lab));
+    return t.fg(color, "┌─ ") + t.fg(color, t.bold(lab)) + t.fg(color, " " + "─".repeat(fill) + "┐");
+  }
+
+  private frameBottom(label: string, width: number): string {
+    const t = this.theme;
+    const fixed = visibleWidth("└─ ") + visibleWidth(" ") + visibleWidth("┘");
+    let lab = label;
+    if (visibleWidth(lab) + 1 > Math.max(0, width - fixed)) lab = "";
+    const fill = Math.max(0, width - fixed - visibleWidth(lab));
+    return t.fg("dim", "└─ " + lab + " " + "─".repeat(fill) + "┘");
+  }
+
+  private frameRows(lines: string[], width: number): string[] {
+    const t = this.theme;
+    const contentW = Math.max(1, width - 4);
+    return lines.map((line) => {
+      const cell = padCell(truncateToWidth(line, contentW, "…"), contentW);
+      return t.fg("borderAccent", "│ ") + cell + t.fg("borderAccent", " │");
+    });
+  }
+
+  invalidate(): void {
+    // All rendering is computed per-call; nothing cached to invalidate.
+  }
+
+  render(width: number): string[] {
+    const t = this.theme;
+    const suspendedCount = this.categories.filter((c) => this.isSuspended(c)).length;
+    const title = this.getGlobal()
+      ? ` VibeGuard 挂起管理 · ${this.categories.length} 类 · 整体挂起 `
+      : ` VibeGuard 挂起管理 · ${this.categories.length} 类 · 已挂起 ${suspendedCount} `;
+
+    const rows = this.rows();
+    const viewport = Math.max(4, Math.min(20, terminalRows() - 14));
+    const start = Math.min(this.selected, Math.max(0, rows.length - viewport));
+    const content: string[] = [""];
+    for (let i = start; i < Math.min(rows.length, start + viewport); i++) {
+      const row = rows[i]!;
+      const active = i === this.selected;
+      const prefix = active ? t.fg("accent", t.bold("▸")) : " ";
+      if (row.kind === "global") {
+        const on = this.getGlobal();
+        const mark = on ? t.fg("warning", "☑") : t.fg("dim", "☐");
+        const label = on
+          ? "整体挂起（新内容不再脱敏，历史仍恢复）"
+          : "整体挂起（点击 Space 切换）";
+        content.push(` ${prefix} ${mark} ${active ? t.fg("text", t.bold(label)) : t.fg("text", label)}`);
+      } else {
+        const category = row.category ?? "";
+        const on = this.isSuspended(category);
+        const mark = on ? t.fg("warning", "☑") : t.fg("dim", "☐");
+        const label = on ? `${category}（已挂起）` : category;
+        content.push(` ${prefix} ${mark} ${active ? t.fg("text", t.bold(label)) : t.fg("text", label)}`);
+      }
+    }
+
+    return [
+      this.frameTop(title, this.getGlobal() ? "warning" : "accent", width),
+      ...this.frameRows(content, width),
+      this.frameBottom("↑/↓ j/k 选择 · Space/Enter 切换 · q/Esc 关闭", width),
+    ];
+  }
+
+  handleInput(data: string): void {
+    if (matchesKey(data, Key.escape) || data === "q" || data === "Q") {
+      this.done();
+      return;
+    }
+
+    const rows = this.rows();
+    if (
+      data === " " ||
+      data === "\r" ||
+      data === "\n" ||
+      matchesKey(data, Key.enter) ||
+      matchesKey(data, Key.space)
+    ) {
+      const row = rows[this.selected];
+      if (!row) return;
+      if (row.kind === "global") this.setGlobal(!this.getGlobal());
+      else if (row.category) this.setCategory(row.category, !this.isSuspended(row.category));
+      this.onStatusSync();
+      this.tui.requestRender();
+      return;
+    }
+
+    let next = this.selected;
+    if (matchesKey(data, Key.up) || data === "k") next -= 1;
+    else if (matchesKey(data, Key.down) || data === "j") next += 1;
+    else if (matchesKey(data, Key.home)) next = 0;
+    else if (matchesKey(data, Key.end)) next = rows.length - 1;
+    else return;
+    this.selected = Math.min(rows.length - 1, Math.max(0, next));
+    this.tui.requestRender();
+  }
+}
+
+// ============================================================================
 // Pi Extension Entry
 // ============================================================================
 
@@ -951,6 +1209,9 @@ export default function (pi: ExtensionAPI) {
   let config: VibeguardConfig = { enabled: false, debug: false, prefix: "__VG_", ttlMs: 3600000, maxMappings: 100000, patterns: {} };
   let patterns: PatternSet = { keywords: [], regex: [], exclude: new Set() };
   let session: PlaceholderSession | null = null;
+  // Runtime, session-scoped suspension (temporary disable). Reset on every
+  // session_start so a fresh session returns to the config.enabled semantics.
+  const suspension = new SuspensionState();
 
   const debug = (msg: string): void => {
     if (config.debug) console.log(`[pi-vibeguard] ${msg}`);
@@ -959,6 +1220,8 @@ export default function (pi: ExtensionAPI) {
   // Load config and init on session start
   pi.on("session_start", async (_event, ctx) => {
     try {
+      // Temporary suspension never survives a session boundary.
+      suspension.reset();
       config = await loadConfig(ctx.cwd, debug);
       if (config.debug) {
         debug(`Startup: prefix=${config.prefix} ttl=${config.ttlMs}ms maxMappings=${config.maxMappings}`);
@@ -987,6 +1250,10 @@ export default function (pi: ExtensionAPI) {
   // Redact messages before each LLM call
   pi.on("context", async (event, ctx) => {
     if (!config.enabled || !session) return;
+    // Global suspension: stop generating placeholders for new content. Historical
+    // placeholders already in the conversation remain untouched here and are
+    // still restored inbound (tool_call / message_end).
+    if (suspension.globallySuspended) return { messages: event.messages };
     session.cleanup();
 
     const msgs = event.messages;
@@ -996,13 +1263,16 @@ export default function (pi: ExtensionAPI) {
       let changedCount = 0;
       for (const msg of msgs) {
         const before = JSON.stringify(msg).length;
-        redactMessageContent(msg, patterns, session);
+        redactMessageContent(msg, patterns, session, suspension.suspendedCategories);
         const after = JSON.stringify(msg).length;
         if (after !== before) changedCount++;
       }
 
       if (changedCount > 0) {
-        const info = `\x1b[33mVibeGuard[${changedCount}]\x1b[0m`;
+        const marker = suspension.anySuspended
+          ? `|${suspension.globallySuspended ? "OFF" : `OFF:${suspension.suspendedCategoryList().join(",")}`}`
+          : "";
+        const info = `\x1b[33mVibeGuard[${changedCount}${marker}]\x1b[0m`;
         debug(info);
         ctx.ui.setStatus("vibeguard", info);
       }
@@ -1079,6 +1349,7 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify("VibeGuard: 当前会话暂无存活映射", "info");
       return;
     }
+    const suspensionNote = suspension.anySuspended ? suspensionSummary() : "";
     await ctx.ui.custom<void>(
       (tui, theme, _keybindings, done) =>
         new MappingViewModal({
@@ -1088,6 +1359,7 @@ export default function (pi: ExtensionAPI) {
           mode,
           entries,
           ttlMs: current.ttlMs,
+          suspensionNote,
         }),
       { overlay: true, overlayOptions: resolveMappingOverlayOptions() },
     );
@@ -1101,6 +1373,148 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("vibeguard:stats", {
     description: "VibeGuard: 按 category 汇总当前会话的存活映射",
     handler: (_args, ctx) => openMappingView("stats", ctx),
+  });
+
+  // ==========================================================================
+  // Temporary suspension commands (session-scoped; reset on session_start)
+  // ==========================================================================
+
+  const extensionActiveReason = (): string | null => {
+    if (config.enabled && session) return null;
+    return config.loadedFrom
+      ? `插件未启用（配置：${config.loadedFrom}）`
+      : "插件未启用（未找到 vibeguard.config.json）";
+  };
+
+  const knownCategories = (): string[] => {
+    const set = new Set<string>();
+    for (const r of patterns.keywords) set.add(r.category);
+    for (const r of patterns.regex) set.add(r.category);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  };
+
+  /** Human-readable suspension summary ("" when fully active). */
+  const suspensionSummary = (): string => {
+    if (suspension.globallySuspended) return "整体挂起：新内容不再脱敏，历史占位符仍照常恢复";
+    const cats = suspension.suspendedCategoryList();
+    if (cats.length === 0) return "";
+    return `挂起类别：${cats.join(", ")}（该类新内容不再脱敏，历史占位符仍照常恢复）`;
+  };
+
+  /** Reflect the current suspension state in the status bar. */
+  const setSuspensionStatus = (ui: ExtensionCommandContext["ui"]): void => {
+    if (suspension.globallySuspended) {
+      ui.setStatus("vibeguard", "\x1b[33mVibeGuard[OFF]\x1b[0m");
+      return;
+    }
+    const cats = suspension.suspendedCategoryList();
+    ui.setStatus(
+      "vibeguard",
+      cats.length > 0
+        ? `\x1b[33mVibeGuard[OFF:${cats.join(",")}]\x1b[0m`
+        : "\x1b[33mVibeGuard[ON]\x1b[0m",
+    );
+  };
+
+  const requireActive = (ctx: ExtensionCommandContext): boolean => {
+    const reason = extensionActiveReason();
+    if (reason) {
+      ctx.ui.notify(`VibeGuard: ${reason}`, "warning");
+      return false;
+    }
+    return true;
+  };
+
+  /** Shared body of /vibeguard:disable and /vibeguard:enable. */
+  const handleSuspendChange = async (
+    args: string,
+    suspend: boolean,
+    ctx: ExtensionCommandContext,
+  ): Promise<void> => {
+    if (!requireActive(ctx)) return;
+
+    const category = String(args ?? "").trim().split(/\s+/)[0] ?? "";
+
+    // No category: toggle the whole extension (global suspend / full resume).
+    if (!category) {
+      if (suspend) {
+        suspension.setGlobal(true);
+        ctx.ui.notify(
+          "VibeGuard: 已整体挂起 —— 新内容不再脱敏；会话历史中的占位符仍会照常恢复（/vibeguard:enable 恢复）",
+          "warning",
+        );
+      } else {
+        suspension.setGlobal(false);
+        for (const c of suspension.suspendedCategoryList()) suspension.setCategory(c, false);
+        ctx.ui.notify("VibeGuard: 已整体恢复 —— 新内容将重新脱敏", "info");
+      }
+      setSuspensionStatus(ctx.ui);
+      return;
+    }
+
+    const normalized = sanitizeCategory(category);
+    const known = knownCategories();
+    if (!known.includes(normalized)) {
+      ctx.ui.notify(
+        `VibeGuard: 未知类别 ${normalized}（可用类别：${known.length ? known.join(", ") : "（无）"}）`,
+        "warning",
+      );
+      return;
+    }
+
+    suspension.setCategory(normalized, suspend);
+    ctx.ui.notify(
+      suspend
+        ? `VibeGuard: 已挂起类别 ${normalized} —— 该类新内容不再脱敏，历史占位符仍会恢复`
+        : `VibeGuard: 已恢复类别 ${normalized}`,
+      suspend ? "warning" : "info",
+    );
+    setSuspensionStatus(ctx.ui);
+  };
+
+  pi.registerCommand("vibeguard:disable", {
+    description: "VibeGuard: 临时挂起脱敏。无参数=整体挂起（新内容不再脱敏，历史映射仍恢复）；带类别=只挂起该类别",
+    handler: (args, ctx) => handleSuspendChange(args, true, ctx),
+  });
+
+  pi.registerCommand("vibeguard:enable", {
+    description: "VibeGuard: 恢复脱敏。无参数=整体恢复；带类别=恢复该类别",
+    handler: (args, ctx) => handleSuspendChange(args, false, ctx),
+  });
+
+  pi.registerCommand("vibeguard:status", {
+    description: "VibeGuard: 显示当前脱敏状态（启用/挂起类别）",
+    handler: async (_args, ctx) => {
+      if (!requireActive(ctx)) return;
+      const summary = suspensionSummary();
+      const msg = summary
+        ? `VibeGuard: 已启用 · ${summary}（/vibeguard:enable 恢复）`
+        : "VibeGuard: 已启用 · 全部规则生效中（/vibeguard:disable 临时挂起）";
+      ctx.ui.notify(msg, summary ? "warning" : "info");
+      setSuspensionStatus(ctx.ui);
+    },
+  });
+
+  pi.registerCommand("vibeguard:categories", {
+    description: "VibeGuard: 打开类别挂起管理弹窗（整体/按类别切换临时挂起）",
+    handler: async (_args, ctx) => {
+      if (!requireActive(ctx)) return;
+      await ctx.ui.custom<void>(
+        (tui, theme, _keybindings, done) =>
+          new CategoryPickerModal({
+            tui,
+            theme,
+            done,
+            categories: knownCategories(),
+            getGlobal: () => suspension.globallySuspended,
+            isSuspended: (c) => suspension.isCategorySuspended(c),
+            setGlobal: (v) => suspension.setGlobal(v),
+            setCategory: (c, v) => suspension.setCategory(c, v),
+            onStatusSync: () => setSuspensionStatus(ctx.ui),
+          }),
+        { overlay: true, overlayOptions: resolveMappingOverlayOptions() },
+      );
+    },
   });
 
   debug("Extension loaded");

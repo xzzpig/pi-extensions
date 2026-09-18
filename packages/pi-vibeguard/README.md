@@ -8,6 +8,8 @@
 > - `/vibeguard:list` — table of the current session's live placeholder mappings: CATEGORY | PLACEHOLDER | ORIGINAL (masked by default, press `r` to reveal) | TTL remaining; scroll with arrows / j/k / PgUp / PgDn, close with `q` or Esc.
 > - `/vibeguard:stats` — per-category summary of live mappings, sorted by count.
 >
+> It also adds **session-scoped temporary suspension**: `/vibeguard:disable [category]` / `/vibeguard:enable [category]`, `/vibeguard:status`, and an interactive category picker at `/vibeguard:categories` — suspend redaction at runtime without restarting pi or editing the config file.
+>
 > Command output renders to the local TUI only and never enters the LLM context.
 
 Inspired by [VibeGuard](https://github.com/inkdust2021/VibeGuard) and [opencode-vibeguard](https://github.com/inkdust2021/opencode-vibeguard).
@@ -94,6 +96,40 @@ LLM:  ['_', '_', 'V', 'G', '_', 'O', 'P', 'E', 'N', 'A', 'I', '_', 'K',
 ```
 
 The LLM provider **never receives the original value** — it only sees placeholders. The LLM's output also contains placeholders, which is expected and harmless.
+
+## Temporary suspension (session-scoped)
+
+Sometimes you want redaction off for a while (e.g. asking the model to work with real example data). You can **temporarily suspend** redaction at runtime — no restart, no config edit.
+
+Semantics:
+
+- **While suspended, only NEW content skips redaction**: new user/tool/assistant content passes through as plaintext and produces no new placeholders.
+- **Historical placeholders are unaffected**: placeholders already created earlier in the session are still automatically restored — both restore paths (before tool execution, and after assistant output) keep working while suspended.
+- **State is session-scoped, in-memory only**: it lives in the current pi session and resets to the config `enabled` value after a pi restart or a new session. The on-disk `vibeguard.config.json` is never modified.
+
+### Commands
+
+| Command | Effect |
+| --- | --- |
+| `/vibeguard:disable` | Suspend everything — new content is no longer redacted (history still restores) |
+| `/vibeguard:disable <CATEGORY>` | Suspend only that category, e.g. `/vibeguard:disable API_KEY` (unknown category prints the available list) |
+| `/vibeguard:enable` | Full resume — all rules redact again |
+| `/vibeguard:enable <CATEGORY>` | Resume only that category |
+| `/vibeguard:status` | Show whether rules are active or which categories are suspended |
+| `/vibeguard:categories` | Open the interactive category picker: `Space`/`Enter` toggles the focused row (row 0 = global), `↑/↓` `j/k` navigate, `q`/`Esc` closes |
+
+Category names are case-insensitive. The status bar reflects the state: `VibeGuard[OFF]` (globally suspended), `VibeGuard[OFF:EMAIL,MAC]` (per-category suspended), `VibeGuard[ON]` (active).
+
+### Example
+
+```text
+> /vibeguard:disable
+  VibeGuard: 已整体挂起 —— 新内容不再脱敏；会话历史中的占位符仍会照常恢复（/vibeguard:enable 恢复）
+
+  # New prompt: the phone number you type is sent to the model as plaintext …
+  > /vibeguard:enable
+  VibeGuard: 已整体恢复 —— 新内容将重新脱敏
+```
 
 ## Debug
 

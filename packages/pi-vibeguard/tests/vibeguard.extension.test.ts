@@ -31,6 +31,7 @@ function makeHarness() {
   const handlers = new Map<string, Handler[]>();
   const commands = new Map<string, { name: string; description?: string; handler: Handler }>();
   const notifications: Array<{ message: string; level?: string }> = [];
+  const statuses: Array<{ key: string; status: string }> = [];
    
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const components: any[] = [];
@@ -49,7 +50,9 @@ function makeHarness() {
       components.push(component);
       return undefined;
     },
-    setStatus: () => {},
+    setStatus: (key: string, status: string) => {
+      statuses.push({ key, status });
+    },
   };
 
   const api = {
@@ -82,7 +85,7 @@ function makeHarness() {
     return result;
   };
 
-  return { api, commands, notifications, components, sentMessages, sentUserMessages, appendedEntries, ui, dispatch };
+  return { api, commands, notifications, statuses, components, sentMessages, sentUserMessages, appendedEntries, ui, dispatch };
 }
 
 // ---------------------------------------------------------------------------
@@ -241,5 +244,245 @@ describe("vibeguard extension with mapping commands", () => {
     await listCmd!.handler("", { ui: harness.ui });
     expect(harness.components).toHaveLength(0);
     expect(harness.notifications.at(-1)?.message).toContain("未启用");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Temporary suspension (session-scoped) — commands + status + picker
+// ---------------------------------------------------------------------------
+
+// Two categories: builtin china_phone → CHINA_PHONE, keyword → API_KEY.
+const TWO_CATEGORY_CONFIG = {
+  enabled: true,
+  patterns: {
+    builtin: ["china_phone"],
+    keywords: [{ value: "supersecret", category: "API_KEY" }],
+  },
+};
+
+describe("vibeguard temporary suspension", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await makeConfigDir(TWO_CATEGORY_CONFIG);
+  });
+
+  async function bootActive() {
+    const harness = makeHarness();
+    vibeguardExtension(harness.api);
+    await harness.dispatch("session_start", {}, { cwd: dir, ui: harness.ui });
+    return harness;
+  }
+
+  const runContext = async (h: ReturnType<typeof makeHarness>, text: string) =>
+    h.dispatch("context", { messages: [{ role: "user", content: text }] }, { ui: h.ui });
+
+  it("registers the suspension commands with descriptions", async () => {
+    const harness = await bootActive();
+    for (const name of ["vibeguard:disable", "vibeguard:enable", "vibeguard:status", "vibeguard:categories"]) {
+      expect(harness.commands.has(name)).toBe(true);
+      expect(harness.commands.get(name)?.description).toBeTruthy();
+    }
+  });
+
+  it("global disable stops new redaction; enable resumes it", async () => {
+    const harness = await bootActive();
+    const disableCmd = harness.commands.get("vibeguard:disable")!;
+    const enableCmd = harness.commands.get("vibeguard:enable")!;
+
+    // Active: phone is redacted before the LLM sees it.
+    let res = (await runContext(harness, `call ${PHONE} now`)) as { messages: Array<{ content: string }> };
+    expect(res.messages[0]!.content).not.toContain(PHONE);
+
+    // Global suspend: notify + status bar sync.
+    await disableCmd.handler("", { ui: harness.ui });
+    expect(harness.notifications.at(-1)?.message).toContain("整体挂起");
+    expect(harness.statuses.at(-1)?.status).toContain("[OFF]");
+
+    // Suspended: new content passes through unredacted.
+    res = (await runContext(harness, `again ${PHONE}`)) as { messages: Array<{ content: string }> };
+    expect(res.messages[0]!.content).toContain(PHONE);
+
+    // Full resume: notify + status bar sync.
+    await enableCmd.handler("", { ui: harness.ui });
+    expect(harness.notifications.at(-1)?.message).toContain("整体恢复");
+    expect(harness.statuses.at(-1)?.status).toContain("[ON]");
+
+    res = (await runContext(harness, `again2 ${PHONE}`)) as { messages: Array<{ content: string }> };
+    expect(res.messages[0]!.content).not.toContain(PHONE);
+
+    // Commands never write to the session.
+    expect(harness.sentMessages).toHaveLength(0);
+    expect(harness.sentUserMessages).toHaveLength(0);
+    expect(harness.appendedEntries).toHaveLength(0);
+  });
+
+  it("per-category disable skips only that category; enable restores it", async () => {
+    const harness = await bootActive();
+    const disableCmd = harness.commands.get("vibeguard:disable")!;
+    const enableCmd = harness.commands.get("vibeguard:enable")!;
+    const text = `${PHONE} supersecret`;
+
+    let res = (await runContext(harness, text)) as { messages: Array<{ content: string }> };
+    expect(res.messages[0]!.content).not.toContain(PHONE);
+    expect(res.messages[0]!.content).not.toContain("supersecret");
+
+    // Lowercase input must normalize to API_KEY like config categories.
+    await disableCmd.handler("api_key", { ui: harness.ui });
+    expect(harness.notifications.at(-1)?.message).toContain("API_KEY");
+
+    res = (await runContext(harness, text)) as { messages: Array<{ content: string }> };
+    expect(res.messages[0]!.content).not.toContain(PHONE); // CHINA_PHONE still redacted
+    expect(res.messages[0]!.content).toContain("supersecret"); // API_KEY now plaintext
+
+    await enableCmd.handler("API_KEY", { ui: harness.ui });
+    res = (await runContext(harness, text)) as { messages: Array<{ content: string }> };
+    expect(res.messages[0]!.content).not.toContain("supersecret");
+  });
+
+  it("restores historical placeholders while suspended (tool args + assistant output)", async () => {
+    const harness = await bootActive();
+
+    // Create a mapping while fully active.
+    const res = (await runContext(harness, `call ${PHONE} now`)) as { messages: Array<{ content: string }> };
+    const redacted = res.messages[0]!.content as string;
+    const placeholder = PLACEHOLDER_RE.exec(redacted)?.[0];
+    expect(placeholder).toBeTruthy();
+
+    // Global suspend.
+    const disableCmd = harness.commands.get("vibeguard:disable")!;
+    await disableCmd.handler("", { ui: harness.ui });
+
+    // tool_call restore keeps working: placeholder → original before execution.
+    const holder = { toolName: "bash", input: { command: `echo ${placeholder}` } };
+    await harness.dispatch("tool_call", holder, { ui: harness.ui });
+    expect(holder.input.command).toContain(PHONE);
+    expect(holder.input.command).not.toContain(placeholder!);
+
+    // message_end restore keeps working: assistant output placeholder → original.
+    const assistantMsg = {
+      role: "assistant",
+      content: [{ type: "text", text: `the number is ${placeholder}` }],
+    };
+    const msgEnd = (await harness.dispatch("message_end", { message: assistantMsg }, { ui: harness.ui })) as {
+      message: { content: Array<{ text: string }> };
+    };
+    expect(msgEnd.message.content[0]!.text).toContain(PHONE);
+    expect(msgEnd.message.content[0]!.text).not.toContain(placeholder!);
+  });
+
+  it("warns on unknown categories and lists the available ones", async () => {
+    const harness = await bootActive();
+    const disableCmd = harness.commands.get("vibeguard:disable")!;
+    await disableCmd.handler("NOPE", { ui: harness.ui });
+    const note = harness.notifications.at(-1)?.message ?? "";
+    expect(note).toContain("未知类别 NOPE");
+    expect(note).toContain("API_KEY");
+    expect(note).toContain("CHINA_PHONE");
+    expect(harness.notifications.at(-1)?.level).toBe("warning");
+  });
+
+  it("warns when the plugin is not enabled", async () => {
+    const disabledDir = await makeConfigDir({ enabled: false });
+    const harness = makeHarness();
+    vibeguardExtension(harness.api);
+    await harness.dispatch("session_start", {}, { cwd: disabledDir, ui: harness.ui });
+
+    const disableCmd = harness.commands.get("vibeguard:disable")!;
+    await disableCmd.handler("", { ui: harness.ui });
+    expect(harness.notifications.at(-1)?.level).toBe("warning");
+    expect(harness.notifications.at(-1)?.message).toContain("未启用");
+  });
+
+  it("status command reports active and suspended states", async () => {
+    const harness = await bootActive();
+    const statusCmd = harness.commands.get("vibeguard:status")!;
+
+    await statusCmd.handler("", { ui: harness.ui });
+    expect(harness.notifications.at(-1)?.message).toContain("全部规则生效中");
+
+    const disableCmd = harness.commands.get("vibeguard:disable")!;
+    await disableCmd.handler("CHINA_PHONE", { ui: harness.ui });
+    await statusCmd.handler("", { ui: harness.ui });
+    expect(harness.notifications.at(-1)?.message).toContain("挂起类别：CHINA_PHONE");
+    expect(harness.statuses.at(-1)?.status).toContain("[OFF:CHINA_PHONE]");
+  });
+
+  it("list modal reflects the suspension state", async () => {
+    const harness = await bootActive();
+    await runContext(harness, `call ${PHONE} now`);
+
+    const disableCmd = harness.commands.get("vibeguard:disable")!;
+    await disableCmd.handler("", { ui: harness.ui });
+
+    const listCmd = harness.commands.get("vibeguard:list")!;
+    await listCmd.handler("", { ui: harness.ui });
+    expect(harness.components).toHaveLength(1);
+    const text = (harness.components[0]!.render(120) as string[]).join("\n");
+    expect(text).toContain("整体挂起");
+  });
+
+  it("category picker toggles global and per-category suspension, applied on close", async () => {
+    const harness = await bootActive();
+    const pickerCmd = harness.commands.get("vibeguard:categories")!;
+    await pickerCmd.handler("", { ui: harness.ui });
+    expect(harness.components).toHaveLength(1);
+    const modal = harness.components[0]!;
+
+    const initial = (modal.render(120) as string[]).join("\n");
+    expect(initial).toContain("VibeGuard 挂起管理");
+    expect(initial).toContain("CHINA_PHONE");
+    expect(initial).toContain("API_KEY");
+
+    // Row 0 = global: Space toggles global suspension on.
+    modal.handleInput(" ");
+    const afterGlobal = (modal.render(120) as string[]).join("\n");
+    expect(afterGlobal).toContain("整体挂起（新内容不再脱敏");
+
+    // New content is no longer redacted.
+    let res = (await runContext(harness, `call ${PHONE}`)) as { messages: Array<{ content: string }> };
+    expect(res.messages[0]!.content).toContain(PHONE);
+
+    // Toggle global back off, then move to CHINA_PHONE (rows: global, API_KEY, CHINA_PHONE).
+    modal.handleInput(" ");
+    modal.handleInput("j");
+    modal.handleInput("j");
+    modal.handleInput("\r"); // Enter toggles CHINA_PHONE
+    const afterCat = (modal.render(120) as string[]).join("\n");
+    expect(afterCat).toContain("CHINA_PHONE（已挂起）");
+
+    // Per-category suspension: phone plaintext, API_KEY still redacted.
+    res = (await runContext(harness, `call ${PHONE} supersecret`)) as { messages: Array<{ content: string }> };
+    expect(res.messages[0]!.content).toContain(PHONE);
+    expect(res.messages[0]!.content).not.toContain("supersecret");
+
+    // Closing the modal keeps the applied state.
+    modal.handleInput("q");
+    const statusCmd = harness.commands.get("vibeguard:status")!;
+    await statusCmd.handler("", { ui: harness.ui });
+    expect(harness.notifications.at(-1)?.message).toContain("挂起类别：CHINA_PHONE");
+    expect(harness.notifications.at(-1)?.message).not.toContain("整体挂起");
+
+    // The picker only renders to the local TUI — never touches the session.
+    expect(harness.sentMessages).toHaveLength(0);
+    expect(harness.sentUserMessages).toHaveLength(0);
+    expect(harness.appendedEntries).toHaveLength(0);
+  });
+
+  it("resets suspension on a new session_start (config.enabled semantics)", async () => {
+    const harness = await bootActive();
+    const disableCmd = harness.commands.get("vibeguard:disable")!;
+    await disableCmd.handler("", { ui: harness.ui });
+    expect(harness.statuses.at(-1)?.status).toContain("[OFF]");
+
+    // Same extension instance starts a fresh session: suspension is reset.
+    await harness.dispatch("session_start", {}, { cwd: dir, ui: harness.ui });
+
+    const res = (await runContext(harness, `call ${PHONE}`)) as { messages: Array<{ content: string }> };
+    expect(res.messages[0]!.content).not.toContain(PHONE);
+
+    const statusCmd = harness.commands.get("vibeguard:status")!;
+    await statusCmd.handler("", { ui: harness.ui });
+    expect(harness.notifications.at(-1)?.message).toContain("全部规则生效中");
   });
 });
