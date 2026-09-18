@@ -34,10 +34,15 @@ import {
 import {
   createSandboxedBashOps,
   extractBlockedWritePath,
+  extractDeniedWritePathFromOutput,
+  hasSandboxWriteDenialText,
   initializeSandbox,
   sandboxManagerFactory,
   updateSandboxConfig,
   resolveAllowances,
+  sandboxWriteDenialNotice,
+  type BlockedWrite,
+  type SandboxWriteDenialNoticeOptions,
   type SessionAllowances,
   supportsNodeEnvProxy,
 } from "./sandbox-runtime.ts";
@@ -146,6 +151,16 @@ export default function (pi: ExtensionAPI) {
   const blockedSandboxResult = (reason: string): AgentToolResult<Record<string, never>> => ({
     content: [{ type: "text", text: `Error: ${reason}` }],
     details: {},
+  });
+
+  // Keep the original command output and append the sandbox attribution as its
+  // own block so agents (and tool display) still see the raw failure.
+  const withSandboxWriteDenialNotice = (
+    result: Awaited<ReturnType<typeof localBash.execute>>,
+    options: SandboxWriteDenialNoticeOptions,
+  ): Awaited<ReturnType<typeof localBash.execute>> => ({
+    ...result,
+    content: [...result.content, { type: "text", text: sandboxWriteDenialNotice(options) }],
   });
 
   const resolvedProfileTrust = (ctx?: ExtensionContext): boolean => {
@@ -437,9 +452,17 @@ export default function (pi: ExtensionAPI) {
       onUpdate: Parameters<typeof localBash.execute>[3],
       ctx: Parameters<typeof localBash.execute>[4],
     ) {
-      const runBash = () => {
+      // Blocked writes the violation monitor reported for the most recent exec.
+      // Reset per execution so a retry never sees the previous attempt's events.
+      let lastBlockedWrites: BlockedWrite[] = [];
+      // Canonical paths already granted and retried within this tool call; a
+      // second failure on the same path must not trigger another retry.
+      const retriedPaths = new Set<string>();
+
+      const runBash = async (): Promise<Awaited<ReturnType<typeof localBash.execute>>> => {
+        lastBlockedWrites = [];
         const profileFailure = profileBlockReason();
-        if (profileFailure) return Promise.resolve(blockedSandboxResult(profileFailure));
+        if (profileFailure) return blockedSandboxResult(profileFailure);
         if (!sandboxEnabled || !sandboxInitialized) {
           return localBash.execute(id, params, signal, onUpdate, ctx);
         }
@@ -448,11 +471,9 @@ export default function (pi: ExtensionAPI) {
           config = resolveSandboxConfig(ctx.cwd);
         } catch (error) {
           recordProfileStartupFailure(error, ctx);
-          return Promise.resolve(
-            blockedSandboxResult(
-              profileBlockReason() ??
-                profileScopedReason("sandbox configuration could not be loaded."),
-            ),
+          return blockedSandboxResult(
+            profileBlockReason() ??
+              profileScopedReason("sandbox configuration could not be loaded."),
           );
         }
         return createBashToolDefinition(localCwd, {
@@ -460,78 +481,135 @@ export default function (pi: ExtensionAPI) {
             sandboxManager,
             userShellPath,
             config.network?.sshProxy !== false,
+            ({ blockedWrites }) => {
+              lastBlockedWrites = blockedWrites;
+            },
           ),
           shellPath: userShellPath,
         }).execute(id, params, signal, onUpdate, ctx);
       };
 
-      let result: Awaited<ReturnType<typeof localBash.execute>>;
-      try {
-        result = await runBash();
-      } catch (error) {
-        if (!(error instanceof Error) || !error.message.includes("Operation not permitted")) {
-          throw error;
+      // Post-process each execution and recurse on retries, so every attempt's
+      // blocked writes converge into either a granted retry or an explained
+      // failure instead of a bare kernel error.
+      const runBashWithDenialHandling = async (): Promise<
+        Awaited<ReturnType<typeof localBash.execute>>
+      > => {
+        let result: Awaited<ReturnType<typeof localBash.execute>>;
+        try {
+          result = await runBash();
+        } catch (error) {
+          if (!(error instanceof Error)) throw error;
+          // pi's bash tool throws on every nonzero exit with the command output
+          // as the message. A sandbox write denial in that output must become a
+          // result so the denial handling below can attribute it and offer the
+          // permission prompt; every other failure keeps pi's native behavior.
+          if (!hasSandboxWriteDenialText(error.message)) throw error;
+          result = { content: [{ type: "text", text: error.message }], details: {} };
         }
-        result = {
-          content: [
-            {
-              type: "text",
-              text: `Error: Command failed with OS-level sandbox restriction: ${error.message}`,
-            },
-          ],
-          details: {},
-        };
-      }
 
-      if (sandboxEnabled && sandboxInitialized && ctx?.hasUI) {
+        if (!sandboxEnabled || !sandboxInitialized) return result;
         const output = result.content
           .filter((content) => content.type === "text")
           .map((content) => content.text)
           .join("\n");
-        const blockedPath = extractBlockedWritePath(output);
-
-        if (blockedPath) {
-          const path = canonicalizePath(blockedPath);
-          let config: SandboxConfig;
-          try {
-            config = resolveSandboxConfig(ctx.cwd);
-          } catch (error) {
-            recordProfileStartupFailure(error, ctx);
-            return blockedSandboxResult(
-              profileBlockReason() ??
-                profileScopedReason("sandbox configuration could not be loaded."),
-            );
+        const blockedWrites = lastBlockedWrites;
+        // The violation monitor is primary; when it is unavailable (kernels
+        // without seccomp user notification, e.g. WSL2) recover the path from
+        // the output's own denial text, upstream's macOS shape first.
+        const outputExtractedPath =
+          blockedWrites.length === 0
+            ? (extractBlockedWritePath(output) ?? extractDeniedWritePathFromOutput(output))
+            : null;
+        if (blockedWrites.length === 0 && outputExtractedPath === null) {
+          // Degraded mode with an unrecognized denial format: attribute it to
+          // the sandbox without a path, so the agent never misreads EROFS.
+          if (hasSandboxWriteDenialText(output)) {
+            return withSandboxWriteDenialNotice(result, {});
           }
+          return result;
+        }
+
+        let config: SandboxConfig;
+        try {
+          config = resolveSandboxConfig(ctx.cwd);
+        } catch (error) {
+          recordProfileStartupFailure(error, ctx);
+          return blockedSandboxResult(
+            profileBlockReason() ??
+              profileScopedReason("sandbox configuration could not be loaded."),
+          );
+        }
+        const denyWrite = config.filesystem?.denyWrite ?? [];
+        const pathIsDeniedByConfig = (path: string) => matchesPattern(path, denyWrite);
+        // denyWrite paths are never prompted; pick the first promptable one
+        // and let the notice name the explicitly denied ones.
+        const promptablePath =
+          blockedWrites.length > 0
+            ? blockedWrites.find((write) => !pathIsDeniedByConfig(write.path))?.path
+            : (outputExtractedPath ?? undefined);
+
+        const denialNoticeOptions: SandboxWriteDenialNoticeOptions = {
+          blockedWrites: blockedWrites.length > 0 ? blockedWrites : undefined,
+          outputExtractedPath: outputExtractedPath ?? undefined,
+        };
+
+        if (promptablePath !== undefined && ctx?.hasUI) {
+          const path = canonicalizePath(promptablePath);
           const writePermission = await resolveWritePermission({
             path,
             allowWrite: effectiveWritePaths(ctx.cwd),
-            denyWrite: config.filesystem?.denyWrite ?? [],
+            denyWrite,
             prompt: (path) =>
               promptWriteBlock(pi, ctx, path, config.permissionPromptTimeoutSeconds),
             saveWritePermission: (choice, value) => applyChoice(choice, "write", value, ctx.cwd),
           });
-          if (writePermission.action === "deny") {
-            return result;
-          }
-          if (writePermission.action === "allow") {
+          if (writePermission.action === "allow" || writePermission.action === "granted") {
+            // A path can only be retried once per tool call: on Linux, bwrap
+            // cannot mount write access for paths that do not exist yet, so a
+            // retry after granting a new file's path fails identically and
+            // would loop forever. Explain that instead of recursing again.
+            if (retriedPaths.has(path)) {
+              return withSandboxWriteDenialNotice(result, {
+                ...denialNoticeOptions,
+                allowedStillFailingPath: path,
+              });
+            }
+            retriedPaths.add(path);
             await refreshSandbox(ctx.cwd);
-            return runBash();
+            if (writePermission.action === "granted") {
+              onUpdate?.({
+                content: [
+                  {
+                    type: "text",
+                    text: `\n--- Write access granted for "${writePermission.value}", retrying ---\n`,
+                  },
+                ],
+                details: {},
+              });
+            }
+            return runBashWithDenialHandling();
           }
-          if (writePermission.action === "granted") {
-            onUpdate?.({
-              content: [
-                {
-                  type: "text",
-                  text: `\n--- Write access granted for "${writePermission.value}", retrying ---\n`,
-                },
-              ],
-              details: {},
+          if (writePermission.action === "deny") {
+            return withSandboxWriteDenialNotice(result, {
+              ...denialNoticeOptions,
+              allDeniedByConfig: true,
             });
-            return runBash();
           }
+          return withSandboxWriteDenialNotice(result, {
+            ...denialNoticeOptions,
+            promptDeclinedPath: path,
+          });
         }
-      }
-      return result;
+
+        return withSandboxWriteDenialNotice(result, {
+          ...denialNoticeOptions,
+          allDeniedByConfig:
+            blockedWrites.length > 0 && promptablePath === undefined ? true : undefined,
+        });
+      };
+
+      return runBashWithDenialHandling();
     },
   };
   pi.registerTool(bashTool);

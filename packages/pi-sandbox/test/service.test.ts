@@ -1,11 +1,11 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ISandboxManager } from "@xzzpig/sandbox-runtime";
 
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, test } from "node:test";
 
-import type { ISandboxManager } from "@xzzpig/sandbox-runtime";
 import assert from "node:assert/strict";
 
 import registerSandbox from "../src/extension.ts";
@@ -126,12 +126,7 @@ function createProbe(
   const { pi, handlers } = createMockPi();
   registerSandbox(pi);
   const sessionId = `session-${path.basename(root)}`;
-  const ctx = headlessContext(
-    cwd,
-    sessionId,
-    options.statuses ?? [],
-    options.mode ?? "print",
-  );
+  const ctx = headlessContext(cwd, sessionId, options.statuses ?? [], options.mode ?? "print");
   return { root, cwd, agentDir, handlers, ctx, sessionId };
 }
 

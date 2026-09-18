@@ -1,11 +1,11 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ISandboxManager } from "@xzzpig/sandbox-runtime";
 
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, test } from "node:test";
 
-import type { ISandboxManager } from "@xzzpig/sandbox-runtime";
 import assert from "node:assert/strict";
 
 import registerSandbox from "../src/extension.ts";

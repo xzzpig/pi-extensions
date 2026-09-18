@@ -13,10 +13,15 @@ import { DEFAULT_CONFIG, mergeConfigLayers, mergeProfileLayers } from "../src/co
 import { canonicalizePath } from "../src/policy.ts";
 import {
   buildRuntimeConfig,
+  collectBlockedWritePaths,
   createSandboxedBashOps,
   extractBlockedWritePath,
+  extractDeniedWritePathFromOutput,
+  hasSandboxWriteDenialText,
   resolveAllowances,
+  sandboxWriteDenialNotice,
   supportsNodeEnvProxy,
+  type SandboxCommandOutcome,
 } from "../src/sandbox-runtime.ts";
 
 function shellQuote(value: string): string {
@@ -392,4 +397,165 @@ test("buildRuntimeConfig passes network.disabled through to the runtime config",
   // Default config leaves the flag unset, preserving today's behavior.
   const enabled = buildRuntimeConfig(DEFAULT_CONFIG);
   assert.equal(enabled.network?.disabled, undefined);
+});
+
+test("collectBlockedWritePaths parses monitor violations within the time window", () => {
+  const queries: string[] = [];
+  const now = Date.now();
+  const manager = {
+    getSandboxViolationStore: () => ({
+      getViolationsForCommand: (command: string) => {
+        queries.push(command);
+        return [
+          // Before the window: a leftover from an earlier identical command.
+          { line: "deny open /var/log/old", command, timestamp: new Date(now - 1) },
+          { line: "deny mkdir /var/tmp/my dir", command, timestamp: new Date(now) },
+          // Duplicated inside the window: deduplicated by path.
+          { line: "deny open /etc/hosts", command, timestamp: new Date(now + 1) },
+          { line: "deny open /etc/hosts", command, timestamp: new Date(now + 2) },
+          { line: "deny open /etc/passwd", command, timestamp: new Date(now + 3) },
+          // Not a violation line: dropped rather than guessed.
+          { line: "allow open /etc/hosts", command, timestamp: new Date(now + 4) },
+        ];
+      },
+    }),
+  };
+
+  assert.deepEqual(collectBlockedWritePaths(manager, "npm install", now), [
+    { syscall: "mkdir", path: "/var/tmp/my dir" },
+    { syscall: "open", path: "/etc/hosts" },
+    { syscall: "open", path: "/etc/passwd" },
+  ]);
+  assert.deepEqual(queries, ["npm install"]);
+});
+
+test("createSandboxedBashOps reports monitor violations for the executed command", async (t) => {
+  const { cwd } = createExecTestContext(t);
+  // exec samples its start time after this test line, so violations must be
+  // stamped in the future to land inside the collection window.
+  const violationTime = new Date(Date.now() + 60_000);
+  mock.method(SandboxManager, "getSandboxViolationStore", () => ({
+    getViolationsForCommand: (command: string) =>
+      command === "echo blocked-write"
+        ? [{ line: "deny open /etc/hosts", command, timestamp: violationTime }]
+        : [],
+  }));
+
+  const outcomes: SandboxCommandOutcome[] = [];
+  const ops = createSandboxedBashOps(SandboxManager, undefined, false, (outcome) =>
+    outcomes.push(outcome),
+  );
+  const { exitCode } = await ops.exec("echo blocked-write", cwd, { onData: () => {} });
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(outcomes, [
+    { command: "echo blocked-write", blockedWrites: [{ syscall: "open", path: "/etc/hosts" }] },
+  ]);
+});
+
+test("createSandboxedBashOps reports an empty outcome without violations", async (t) => {
+  const { cwd } = createExecTestContext(t);
+  mock.method(SandboxManager, "getSandboxViolationStore", () => ({
+    getViolationsForCommand: () => [],
+  }));
+
+  const outcomes: SandboxCommandOutcome[] = [];
+  const ops = createSandboxedBashOps(SandboxManager, undefined, false, (outcome) =>
+    outcomes.push(outcome),
+  );
+  const { exitCode } = await ops.exec("exit 0", cwd, { onData: () => {} });
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(outcomes, [{ command: "exit 0", blockedWrites: [] }]);
+});
+
+test("createSandboxedBashOps skips violation collection without a callback", async (t) => {
+  const { cwd } = createExecTestContext(t);
+  mock.method(SandboxManager, "getSandboxViolationStore", () => {
+    throw new Error("store must not be queried without a callback");
+  });
+
+  assert.deepEqual(
+    await createSandboxedBashOps(SandboxManager, undefined, false).exec("exit 0", cwd, {
+      onData: () => {},
+    }),
+    { exitCode: 0 },
+  );
+});
+
+test("sandboxWriteDenialNotice attributes blocked writes to the sandbox", () => {
+  const fallback = sandboxWriteDenialNotice({});
+  assert.match(fallback, /OS-level sandbox, not by the filesystem/);
+  assert.match(fallback, /Do not diagnose this as a broken or read-only disk/);
+  assert.match(fallback, /The write target is outside this session's allowWrite paths\./);
+  assert.match(fallback, /sandbox-allow write <path>/);
+
+  const listed = sandboxWriteDenialNotice({
+    blockedWrites: [
+      { syscall: "open", path: "/etc/hosts" },
+      { syscall: "mkdir", path: "/var/tmp/a b" },
+    ],
+  });
+  assert.match(listed, /Blocked writes:/);
+  assert.match(listed, /deny open \/etc\/hosts/);
+  assert.match(listed, /deny mkdir \/var\/tmp\/a b/);
+
+  const extracted = sandboxWriteDenialNotice({ outputExtractedPath: "/private/file" });
+  assert.match(extracted, /Blocked path: "\/private\/file"\./);
+
+  const declined = sandboxWriteDenialNotice({ promptDeclinedPath: "/etc/hosts" });
+  assert.match(declined, /dismissed or timed out/);
+  assert.match(declined, /do not retry the same write unprompted/);
+
+  const configDenied = sandboxWriteDenialNotice({
+    blockedWrites: [{ syscall: "open", path: "/etc/hosts" }],
+    allDeniedByConfig: true,
+  });
+  assert.match(configDenied, /explicitly denied by the sandbox's denyWrite config/);
+  assert.match(configDenied, /run \/sandbox to see the configuration/);
+
+  const stillFailing = sandboxWriteDenialNotice({ allowedStillFailingPath: "/var/tmp/new.txt" });
+  assert.match(stillFailing, /was allowed for this session but the write still fails/);
+  assert.match(stillFailing, /paths that already exist/);
+  assert.match(stillFailing, /"\/sandbox-allow write \/var\/tmp"/);
+});
+
+test("hasSandboxWriteDenialText matches only OS denial text", () => {
+  assert.equal(hasSandboxWriteDenialText("bash: line 1: /x: Read-only file system"), true);
+  assert.equal(hasSandboxWriteDenialText("Error: EROFS: read-only filesystem, open '/x'"), true);
+  assert.equal(hasSandboxWriteDenialText("tee: /x: Operation not permitted"), true);
+  assert.equal(hasSandboxWriteDenialText("cat: /x: Permission denied"), false);
+  assert.equal(hasSandboxWriteDenialText("cat: /x: No such file or directory"), false);
+  assert.equal(hasSandboxWriteDenialText("all good"), false);
+});
+
+test("extractDeniedWritePathFromOutput recovers blocked paths in degraded mode", () => {
+  // bash redirection (the reported Linux/WSL2 EROFS case)
+  assert.equal(
+    extractDeniedWritePathFromOutput("bash: line 1: /var/tmp/x.txt: Read-only file system"),
+    "/var/tmp/x.txt",
+  );
+  assert.equal(
+    extractDeniedWritePathFromOutput("tee: /etc/hosts: Read-only file system"),
+    "/etc/hosts",
+  );
+  assert.equal(
+    extractDeniedWritePathFromOutput("zsh:1: read-only file system: /etc/hosts"),
+    "/etc/hosts",
+  );
+  assert.equal(
+    extractDeniedWritePathFromOutput("sh: 1: cannot create /etc/hosts: Read-only file system"),
+    "/etc/hosts",
+  );
+  assert.equal(
+    extractDeniedWritePathFromOutput("touch: cannot touch '/etc/hosts': Read-only file system"),
+    "/etc/hosts",
+  );
+  assert.equal(
+    extractDeniedWritePathFromOutput("Error: EROFS: read-only filesystem, open '/project/new.txt'"),
+    "/project/new.txt",
+  );
+  // Non-denial errors stay untouched
+  assert.equal(extractDeniedWritePathFromOutput("cat: /x: Permission denied"), null);
+  assert.equal(extractDeniedWritePathFromOutput("cat: /x: No such file or directory"), null);
 });

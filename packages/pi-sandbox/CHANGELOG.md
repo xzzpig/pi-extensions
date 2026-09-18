@@ -5,6 +5,58 @@ This fork tracks [`carderne/pi-sandbox`](https://github.com/carderne/pi-sandbox)
 via git subtree; entries below describe only fork-specific deviations from
 upstream.
 
+## 0.6.2
+
+### Added
+
+- **Sandbox write denials are now attributed to the sandbox instead of looking
+  like filesystem failures** (openspec change `sandbox-write-denial-awareness`,
+  capability `sandbox-write-denial-diagnostics`). On Linux, bwrap's read-only
+  root mount makes blocked writes surface as the kernel's `EROFS: Read-only
+  file system` error, which agents previously saw verbatim and misdiagnosed as
+  a broken or read-only disk. Three progressive layers now handle this:
+  - **Violation monitor (primary).** `initializeSandbox` enables the runtime's
+    seccomp USER_NOTIF violation monitor on Linux; every blocked write-intent
+    syscall is reported with its kernel-resolved path and correlated to the
+    exact command via the new `onCompleted` callback of
+    `createSandboxedBashOps` / `collectBlockedWritePaths`. On kernels without
+    seccomp user notification (every WSL2 kernel returns `EBUSY` for
+    `SECCOMP_FILTER_FLAG_NEW_LISTENER`, verified with a minimal probe) the
+    monitor degrades silently, as upstream intends.
+  - **Degraded output parsing.** When no violations are recorded, the blocked
+    path is recovered from the command's own denial text
+    (`extractDeniedWritePathFromOutput`: bash/sh redirection, zsh, dash, GNU
+    coreutils, and Node `EROFS` shapes), plus upstream's existing
+    `extractBlockedWritePath` for macOS. On WSL2 this is the active channel.
+  - **Text fallback.** Output that names an OS denial without an identifiable
+    path still gets a path-free attribution notice
+    (`hasSandboxWriteDenialText`).
+  All layers append an agent-facing notice via `sandboxWriteDenialNotice`
+  stating that the error comes from the OS-level sandbox (not the filesystem)
+  with the blocked paths and how to proceed, and reuse the existing
+  interactive allow-and-retry flow (`resolveWritePermission` →
+  `refreshSandbox` → re-run) when a promptable path is identified. e2e-verified
+  behaviors: the headless notice, the TUI `📝 Write blocked` dialog, allow →
+  auto-retry success, and Escape → "stays blocked" guidance that the agent
+  follows (no unprompted retries).
+- **Retry loop guard.** Allowing a not-yet-existing file's path cannot help on
+  Linux (bwrap skips write binds for non-existent paths), which previously
+  meant an allow → retry → fail loop. Each path is retried at most once per
+  tool call; a repeated failure returns a notice explaining that the sandbox
+  can only mount write access for existing paths and suggesting the parent
+  directory (`allowedStillFailingPath`).
+- `denyWrite` hits never prompt and are explained as explicit config denials;
+  headless (no-UI) sessions get the attribution notice without prompts; the
+  `!cmd` (user bash) output channel stays untouched.
+
+### Changed
+
+- `src/extension.ts` bash tool post-processing now also treats thrown failures
+  as results when the message carries an OS denial (pi's bash tool throws on
+  every nonzero exit with the output as the message — the upstream catch only
+  matched macOS's `Operation not permitted`, so Linux denials bypassed all
+  handling). Non-denial failures keep pi's native error behavior.
+
 ## 0.6.1
 
 ### Changed
