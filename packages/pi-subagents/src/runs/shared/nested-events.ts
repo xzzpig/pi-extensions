@@ -20,8 +20,8 @@ import { isSafeNestedPathId, sanitizeNestedPath, type NestedPathEntry } from "./
 import { writeAtomicJson } from "../../shared/atomic-json.ts";
 import { sanitizeProcessTerminal } from "../background/process-terminal.ts";
 import { THINKING_LEVELS } from "../../shared/model-info.ts";
-import { validateSandboxProfileName } from "../../shared/sandbox-profile.ts";
-import { validatePermissionProfileName } from "../../shared/permission-profile.ts";
+import { validateSandboxProfileNameOptional } from "../../shared/sandbox-profile.ts";
+import { validatePermissionProfileNameOptional } from "../../shared/permission-profile.ts";
 
 export const NESTED_EVENTS_DIR = path.join(TEMP_ROOT_DIR, "nested-subagent-events");
 const ROUTE_FILE = "route.json";
@@ -305,22 +305,6 @@ function sanitizeState(value: unknown, fallback: NestedRunState): NestedRunState
 		: fallback;
 }
 
-function sandboxProfileValue(value: unknown): string | undefined {
-	try {
-		return validateSandboxProfileName(value);
-	} catch {
-		return undefined;
-	}
-}
-
-function permissionProfileValue(value: unknown): string | undefined {
-	try {
-		return validatePermissionProfileName(value);
-	} catch {
-		return undefined;
-	}
-}
-
 function sanitizeStep(input: unknown, depth: number): NestedStepSummary | undefined {
 	if (!input || typeof input !== "object") return undefined;
 	const raw = input as Record<string, unknown>;
@@ -331,8 +315,8 @@ function sanitizeStep(input: unknown, depth: number): NestedStepSummary | undefi
 		: "pending";
 	const model = stringValue(raw.model);
 	const thinking = THINKING_LEVELS.find((level) => level === raw.thinking);
-	const sandbox = sandboxProfileValue(raw.sandbox);
-	const permissionProfile = permissionProfileValue(raw.permissionProfile);
+	const sandbox = validateSandboxProfileNameOptional(raw.sandbox);
+	const permissionProfile = validatePermissionProfileNameOptional(raw.permissionProfile);
 	return {
 		agent,
 		status,
@@ -373,8 +357,8 @@ export function sanitizeSummary(input: unknown, depth = 0): NestedRunSummary | u
 		: undefined;
 	const totalTokens = sanitizeTokenUsage(raw.totalTokens);
 	const totalCost = sanitizeCost(raw.totalCost);
-	const sandbox = sandboxProfileValue(raw.sandbox);
-	const permissionProfile = permissionProfileValue(raw.permissionProfile);
+	const sandbox = validateSandboxProfileNameOptional(raw.sandbox);
+	const permissionProfile = validatePermissionProfileNameOptional(raw.permissionProfile);
 	return {
 		id: raw.id,
 		parentRunId: raw.parentRunId,
@@ -1025,7 +1009,7 @@ export function hasLiveNestedDescendants(children: NestedRunSummary[] | undefine
 }
 
 export function nestedSummaryFromAsyncStatus(status: AsyncStatus, asyncDir: string, fallback: { id: string; parentRunId: string; parentStepIndex?: number; depth: number; path?: Array<{ runId: string; stepIndex?: number; agent?: string }>; mode?: SubagentRunMode; ts: number }): NestedRunSummary {
-	const sandbox = sandboxProfileValue(status.sandbox);
+	const sandbox = validateSandboxProfileNameOptional(status.sandbox);
 	return {
 		id: status.runId || fallback.id,
 		parentRunId: fallback.parentRunId,
@@ -1070,7 +1054,7 @@ export function nestedSummaryFromAsyncStatus(status: AsyncStatus, asyncDir: stri
 		...(status.sessionFile ? { sessionFile: status.sessionFile } : {}),
 		...(status.steps?.length ? {
 			steps: status.steps.map((step, index) => {
-				const stepSandbox = sandboxProfileValue(step.sandbox);
+				const stepSandbox = validateSandboxProfileNameOptional(step.sandbox);
 				return {
 					agent: step.agent,
 					...(step.sessionName ? { sessionName: step.sessionName } : {}),

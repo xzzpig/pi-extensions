@@ -364,4 +364,3 @@ export function shouldArmPostCompactReminder(goal: Pick<GoalPolicyRecordLike, "s
 export function shouldInjectPostCompactReminder(args: { pending: boolean; goal: Pick<GoalPolicyRecordLike, "sisyphus"> | null }): boolean {
 	return args.pending && !!args.goal;
 }
-

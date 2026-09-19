@@ -40,3 +40,17 @@ export function validatePermissionProfileName(
 	}
 	return value;
 }
+
+/**
+ * [fork] Validate an optional permission-profile selector: like
+ * {@link validatePermissionProfileName} but returns `undefined` instead of
+ * throwing when the value is absent or invalid. Stored/status readers use this
+ * to tolerate corrupt or legacy payloads without failing the whole report.
+ */
+export function validatePermissionProfileNameOptional(value: unknown): string | undefined {
+	try {
+		return validatePermissionProfileName(value);
+	} catch {
+		return undefined;
+	}
+}

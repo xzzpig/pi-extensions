@@ -8,10 +8,10 @@ import {
   type BashCommand,
   collectCommands,
   collectSalvagedCommands,
-  type ParseProgram,
 } from "./command-enumeration";
-import { getParser, type TSNode } from "./parser";
+import { getParser } from "./parser";
 import { withSalvagedRoots } from "./unresolved-salvage";
+import { makeParseProgram } from "./wrapper-parse";
 
 export type { BashCommand, BashExternalPath, BashPathRuleCandidate };
 
@@ -62,8 +62,7 @@ export class BashProgram {
     if (!tree) return new BashProgram(command, [], [], []);
 
     try {
-      const parseProgram: ParseProgram = (source) =>
-        parseCommandUnits(source, parser, parseProgram);
+      const parseProgram = makeParseProgram(parser);
       return withSalvagedRoots(tree.rootNode, parser, (salvaged) => {
         const { externalAccesses, ruleCandidates } = new BashPathResolver(
           normalizer,
@@ -144,36 +143,5 @@ export class BashProgram {
    */
   pathRuleCandidates(): BashPathRuleCandidate[] {
     return [...this.resolvedRuleCandidates];
-  }
-}
-
-/**
- * Parse a bash source string (an opaque wrapper payload) into command units,
- * sharing the caller's parser instance and recursing on nested payloads.
- *
- * The parser is stateless (`parse` is a pure function of its input), so
- * re-entrant use from inside the enumeration walk is safe: the walk is
- * synchronous and the inner parse fully completes before the walk continues.
- * An unparseable payload contributes no units (the wrapper is then flagged
- * `payloadUnresolved` by the enumerator; a payload with no commands at all is
- * marked inert instead).
- *
- * Returns `null` when the source cannot be parsed — a missing tree or one
- * containing ERROR nodes — so the caller can fail closed; a clean parse of a
- * command-less payload returns an empty array (provably inert, not unknown).
- */
-function parseCommandUnits(
-  source: string,
-  parser: {
-    parse(input: string): { rootNode: TSNode; delete(): void } | null;
-  },
-  parseProgram: ParseProgram,
-): BashCommand[] | null {
-  const tree = parser.parse(source);
-  if (!tree || tree.rootNode.hasError) return null;
-  try {
-    return collectCommands(tree.rootNode, { parseProgram });
-  } finally {
-    tree.delete();
   }
 }

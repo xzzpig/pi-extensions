@@ -4,8 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 
+import { buildGoalAuditorPrompt } from "../extensions/goal-auditor.ts";
 import {
-	buildGoalAuditorPrompt,
 	GOAL_AUDITOR_RESULT_SCHEMA,
 	parseGoalAuditorStructuredResult,
 	resolveAuditorAgent,
@@ -13,7 +13,7 @@ import {
 	resolveAuditorTerminalTimeoutMs,
 	runGoalCompletionAuditor,
 	type GoalAuditorEvents,
-} from "../extensions/goal-auditor.ts";
+} from "../extensions/goal-auditor-delegation.ts";
 import {
 	goalSettingsPath,
 	loadGoalSettings,

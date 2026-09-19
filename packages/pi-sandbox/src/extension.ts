@@ -18,9 +18,6 @@ import {
   addReadPathToConfig,
   addWritePathToConfig,
   getConfigPaths,
-  listGlobalSandboxProfiles,
-  loadConfig,
-  SANDBOX_PROFILE_ENV,
   type SandboxConfig,
 } from "./config.ts";
 import {
@@ -31,18 +28,14 @@ import {
   matchesPattern,
   resolveWritePermission,
 } from "./policy.ts";
+import { listGlobalSandboxProfiles, loadConfig, SANDBOX_PROFILE_ENV } from "./profile-config.ts";
 import {
   createSandboxedBashOps,
   extractBlockedWritePath,
-  extractDeniedWritePathFromOutput,
-  hasSandboxWriteDenialText,
   initializeSandbox,
   sandboxManagerFactory,
   updateSandboxConfig,
   resolveAllowances,
-  sandboxWriteDenialNotice,
-  type BlockedWrite,
-  type SandboxWriteDenialNoticeOptions,
   type SessionAllowances,
   supportsNodeEnvProxy,
 } from "./sandbox-runtime.ts";
@@ -52,6 +45,13 @@ import {
   type SandboxService,
 } from "./service.ts";
 import { maybeDecorateBashForToolDisplay } from "./tool-display-decoration.ts";
+import {
+  extractDeniedWritePathFromOutput,
+  hasSandboxWriteDenialText,
+  sandboxWriteDenialNotice,
+  type BlockedWrite,
+  type SandboxWriteDenialNoticeOptions,
+} from "./write-denial.ts";
 
 const SANDBOX_STARTUP_ACK_PATH_ENV = "PI_SUBAGENT_SANDBOX_STARTUP_ACK_PATH";
 const SANDBOX_STARTUP_ACK_TOKEN_ENV = "PI_SUBAGENT_SANDBOX_STARTUP_ACK_TOKEN";

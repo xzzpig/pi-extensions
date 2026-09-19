@@ -138,7 +138,7 @@ function fixture(opts: { objective?: string; skipAuditor?: boolean; tasksEnabled
 	const sessionEntries = [
 		{ type: "custom", customType: "pi-goal-focus", data: goalFocusDetails(goal.id, "created") },
 	];
-	const cleanup = () => { rmSync(cwd, { recursive: true, force: true }); };
+	const cleanup = () => { try { rmSync(cwd, { recursive: true, force: true }); } catch {} };
 	return { cwd, goal: written, sessionEntries, cleanup };
 }
 
@@ -192,7 +192,7 @@ describe("five-tool handler integration", () => {
 			}
 			assert.ok(getActiveToolsCalls >= 1, "profile install at session_start calls getActiveTools once");
 		} finally {
-			rmSync(cwd, { recursive: true, force: true });
+			try { rmSync(cwd, { recursive: true, force: true }); } catch {}
 		}
 	});
 

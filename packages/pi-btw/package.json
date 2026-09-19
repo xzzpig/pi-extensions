@@ -1,6 +1,6 @@
 {
   "name": "@xzzpig/pi-btw",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "description": "A pi extension for parallel side conversations with /btw",
   "type": "module",
   "dependencies": {
@@ -28,7 +28,6 @@
   ],
   "files": [
     "extensions",
-    "skills",
     "docs",
     "README.md",
     "LICENSE"

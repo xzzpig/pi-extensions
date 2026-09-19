@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.1] — 2026-09-19
+
+### Changed
+
+- **Conflict-surface refactor, no behavior change.** The fork's bash wrapper-classification block moved from `src/access-intent/bash/command-enumeration.ts` to fork-only `src/access-intent/bash/wrapper-floors.ts` (substantive diff ~714+/186− → ~109+/23−); the profile-scope resolution inside `resolvePermissions` moved to fork-only `src/policy/profile-scope.ts`; the duplicated `parseCommandUnits` closure now lives once in fork-only `src/access-intent/bash/wrapper-parse.ts`; five upstream test files are byte-identical to upstream again with fork cases in `*.fork.test.ts` files; the zero-reference `src/denial-messages.ts` (a revived copy of an upstream-dissolved module) was deleted; ~1,500 lines of whitespace churn were reverted to upstream formatting.
+
 ## [Unreleased]
 
 ### Added

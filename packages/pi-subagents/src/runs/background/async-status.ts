@@ -25,8 +25,8 @@ import { formatWorkflowPreflightPlanSummary, formatWorkflowPreflightWarningSumma
 import { workflowGraphStageNodes } from "../shared/workflow-graph.ts";
 import { formatTimeoutRecoveryLines, projectTimeoutRecovery } from "../shared/mutation-evidence.ts";
 import { formatWorkflowChecklistText, projectWorkflowChecklist } from "../../workflows/workflow-checklist.ts";
-import { validateSandboxProfileName } from "../../shared/sandbox-profile.ts";
-import { validatePermissionProfileName } from "../../shared/permission-profile.ts";
+import { validateSandboxProfileNameOptional } from "../../shared/sandbox-profile.ts";
+import { validatePermissionProfileNameOptional } from "../../shared/permission-profile.ts";
 import type { RawDrainStatusObserver } from "../shared/readonly-drain-observation.ts";
 import { childWatchdogProgressForModel } from "../../watchdog/child-status.ts";
 
@@ -211,22 +211,6 @@ function isolateCorruptActiveRun(asyncDir: string, runId: string, error: unknown
 	console.error(`[pi-subagents] Skipping corrupt active async run '${runId}' at '${statusPath}': ${getErrorMessage(error)}; ${markerAction}.`);
 }
 
-function sandboxProfileValue(value: unknown): string | undefined {
-	try {
-		return validateSandboxProfileName(value);
-	} catch {
-		return undefined;
-	}
-}
-
-function permissionProfileValue(value: unknown): string | undefined {
-	try {
-		return validatePermissionProfileName(value);
-	} catch {
-		return undefined;
-	}
-}
-
 function isNotFoundError(error: unknown): boolean {
 	return typeof error === "object"
 		&& error !== null
@@ -351,8 +335,8 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string 
 		const stepActivityState = step.activityState;
 		const stepLastActivityAt = step.lastActivityAt;
 		const timeoutRecovery = projectTimeoutRecovery(step.timeoutRecovery);
-		const sandbox = sandboxProfileValue(step.sandbox);
-		const permissionProfile = permissionProfileValue(step.permissionProfile);
+		const sandbox = validateSandboxProfileNameOptional(step.sandbox);
+		const permissionProfile = validatePermissionProfileNameOptional(step.permissionProfile);
 		return {
 			index,
 			childId: asyncStatusChildIdentity(step, index),
@@ -423,8 +407,8 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string 
 		};
 	});
 	attachRootChildrenToSteps(status.runId || path.basename(asyncDir), summarizedSteps, nestedChildren);
-	const sandbox = sandboxProfileValue(status.sandbox);
-	const permissionProfile = permissionProfileValue(status.permissionProfile);
+	const sandbox = validateSandboxProfileNameOptional(status.sandbox);
+	const permissionProfile = validatePermissionProfileNameOptional(status.permissionProfile);
 	return {
 		id: status.runId || path.basename(asyncDir),
 		asyncDir,

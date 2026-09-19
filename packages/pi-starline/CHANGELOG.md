@@ -5,6 +5,16 @@ This fork tracks [`Andy8647/pi-starline`](https://github.com/Andy8647/pi-starlin
 via git subtree; entries below describe only fork-specific deviations from
 upstream.
 
+## [0.4.1] — 2026-09-19 (fork release)
+
+### Changed
+
+- **Conflict-surface refactor, no behavior change.** `package-lock.json` was restored to npm's native tab indentation and now carries the missing `@xzzpig/pi-mouse-events` devDependency entry, instead of a 5,069-line whole-file reindentation.
+
+### Added
+
+- `mouse/api-consumer.ts` rejects an API object whose contract `version` is not `1`, so a future contract major cannot surface a shape-mismatched API. The contract test now pins the slot-dispatch semantics (priority order, consume-on-first-handled, skip-throwing, fall-through) against the real implementation via the new `@xzzpig/pi-mouse-events/test-support` export.
+
 ## [0.4.0] — 2026-09-13 (fork release)
 
 ### Changed
@@ -45,8 +55,6 @@ upstream.
   delete) now rides `ctx.ui.onTerminalInput`, and the selection and
   external-editor hints are derived at render time instead of being refreshed
   from a viewport-input patch.
-
-## 0.1.0
 
 ## [0.2.0] — 2026-09-05 (fork release)
 

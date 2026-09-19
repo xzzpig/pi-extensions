@@ -298,10 +298,10 @@ export function makeHandler(overrides?: {
           current: vi.fn().mockReturnValue({
             ...DEFAULT_EXTENSION_CONFIG,
             ...(overrides?.shellTools === undefined
-              ? null
+              ? {}
               : { shellTools: overrides.shellTools }),
             ...(overrides?.wrapperFloors === undefined
-              ? null
+              ? {}
               : { wrapperFloors: overrides.wrapperFloors }),
           }),
         })
@@ -359,13 +359,13 @@ export function makeHandler(overrides?: {
 
   const events = makeEvents();
   const toolRegistry =
-    overrides?.tools === undefined
-      ? makeToolRegistry(overrides?.toolRegistry)
-      : makeToolRegistry({
+    overrides?.tools !== undefined
+      ? makeToolRegistry({
           getAll: vi
             .fn()
             .mockReturnValue(overrides.tools.map((name) => ({ name }))),
-        });
+        })
+      : makeToolRegistry(overrides?.toolRegistry);
 
   const recorder = new SessionRules();
   const pipeline = new ToolCallGatePipeline(resolver, session);

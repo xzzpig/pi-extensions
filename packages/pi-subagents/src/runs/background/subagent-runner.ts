@@ -141,8 +141,8 @@ import { attachContractProjections, isAgentContract } from "../shared/agent-cont
 import { waitForImportedAsyncRoot } from "./chain-root-attachment.ts";
 import { appendRunnerStepsToStatus, consumeChainAppendRequests, countPendingChainAppendRequests, statusStepDescription } from "./chain-append.ts";
 import { asyncStatusChildIdentity } from "../shared/child-identity.ts";
-import { validateSandboxProfileName } from "../../shared/sandbox-profile.ts";
-import { validatePermissionProfileName } from "../../shared/permission-profile.ts";
+import { validateSandboxProfileNameOptional } from "../../shared/sandbox-profile.ts";
+import { validatePermissionProfileNameOptional } from "../../shared/permission-profile.ts";
 import { initialToolBudgetState, toolBudgetState } from "../shared/tool-budget.ts";
 import { toolTimeoutCallKey } from "../shared/tool-timeout.ts";
 import { usageBudgetExceededMessage, usageBudgetState } from "../shared/usage-budget.ts";
@@ -297,21 +297,13 @@ interface StepResult {
 function commonSandboxProfile(steps: readonly RunnerStatusStep[]): string | undefined {
 	const profile = steps[0]?.sandbox;
 	if (!profile || !steps.every((step) => step.sandbox === profile)) return undefined;
-	try {
-		return validateSandboxProfileName(profile);
-	} catch {
-		return undefined;
-	}
+	return validateSandboxProfileNameOptional(profile);
 }
 
 function commonPermissionProfile(steps: readonly RunnerStatusStep[]): string | undefined {
 	const profile = steps[0]?.permissionProfile;
 	if (!profile || !steps.every((step) => step.permissionProfile === profile)) return undefined;
-	try {
-		return validatePermissionProfileName(profile);
-	} catch {
-		return undefined;
-	}
+	return validatePermissionProfileNameOptional(profile);
 }
 
 function persistStepArtifacts(input: {

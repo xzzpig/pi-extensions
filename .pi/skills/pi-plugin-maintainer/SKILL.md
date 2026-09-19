@@ -155,5 +155,9 @@ need coordinated versions.
 This skill is the workflow — do not invoke skill scripts directly. Do not
 create a package whose directory does not start with `pi-` or whose
 `package.json` `name` is not `@xzzpig/pi-*`. Do not
-edit upstream-derived files without following the upstream subtree skill. Do
-not add credentials to package manifests, metadata, or packed artifacts.
+edit upstream-derived files without following the upstream subtree skill —
+including its fork-divergence discipline (二开): fork logic belongs in
+fork-only files with minimal upstream seams, upstream files stay
+byte-stable (no reformatting, no hand-edited lockfiles), and every
+divergence cluster is recorded in the subtree `notes`. Do not add
+credentials to package manifests, metadata, or packed artifacts.

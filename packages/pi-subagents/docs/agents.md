@@ -346,7 +346,7 @@ Field notes:
 | `extensions` | Omitted means a background child loads the parent's ambient extensions; empty means no ambient extensions; list values load exactly those extensions. Foreground children never load ambient extensions, so for them only listed values apply. |
 | `subagentOnlyExtensions` | Extension paths loaded only in this agent's child sessions. Tools registered there are unavailable to the main agent unless also installed through normal Pi extension configuration. |
 | `sandbox` | Optional named `pi-sandbox` profile for a native Pi child. It must be a non-empty safe name defined in the user's global `<agentDir>/sandbox.json`; it is a selector only, never an inline network or filesystem policy. |
-| `permission-profile` | Optional named permission profile for a native Pi child. The name must be a non-empty safe identifier defined in the global `pi-permission-system` config's `profiles` registry; only the validated name is passed to the child. See below. |
+| `permission-profile` | Optional named permission profile for a native Pi child. The name must be a non-empty safe identifier defined in the global `pi-permission-system` config's `profiles` registry; only the validated name is passed to the child. See [Permission profiles](fork-extensions.md#permission-profiles). |
 | `model` | Default model. Bare ids prefer the current provider when possible, then unique registry matches. |
 | `thinking` | Appended as a `:level` suffix at runtime unless a suffix is already present. |
 | `systemPromptMode` | `replace` by default; `append` keeps Pi's base prompt. |
@@ -368,131 +368,9 @@ Field notes:
 | `completionGuard` | Set `false` only for non-implementation agents that may mention implementation words while using mutation-capable tools such as `bash`. |
 | `interactive` | Parsed for compatibility but not currently enforced. |
 | `maxSubagentDepth` | Tightens nested delegation for this agent's children. |
-| `injectToContext` | Advertise this agent in the parent system prompt at session start so the main agent can select it without calling `{ action: "list" }` first. See [Context injection](#context-injection). |
+| `injectToContext` | Advertise this agent in the parent system prompt at session start so the main agent can select it without calling `{ action: "list" }` first. See [Context injection](fork-extensions.md#context-injection). |
 | `memory` | Opt-in role-specific persistent memory. See below. |
 
-### Sandbox profiles
-
-Use `sandbox: <profile-name>` only for a native Pi child. The profile is resolved
-from the global `pi-sandbox` configuration, never from an agent file or a project
-profile registry:
-
-```yaml
----
-name: security-reviewer
-description: Review changes with a constrained filesystem and no network
-sandbox: reviewer-strict
-extensions: ./review-tools.ts
----
-
-Review the requested change.
-```
-
-`pi-subagents` validates the scalar name and passes only that name to the child.
-It automatically resolves and injects the installed `pi-sandbox` extension and a
-startup guard even when `extensions` is an explicit allowlist; an explicit empty
-allowlist does not remove these required runtime extensions. The guard requires
-`pi-sandbox` to acknowledge successful profile initialization before the child
-can enter its first model turn. The launch fails before the model's first turn when the package or manifest is missing, a capability ceiling denies child
-extensions, the profile cannot be loaded, or sandbox initialization fails. A
-blocked child publishes that reason through its startup diagnostics, so the
-caller sees the profile error (and the available profile names) instead of a
-generic empty-output message; a startup block is never recorded as a model
-failure and never excludes the model from later runs.
-
-The field is rejected for `external-cli` and `external-job` runners because they
-do not host a Pi child extension. It also cannot be an object, `false`, an empty
-value, or an inline allow/deny policy. Define the actual network and filesystem
-rules in global `pi-sandbox` `profiles` instead.
-
-A profile chosen by a project-scoped agent or project override is used only when
-the host marks that project trusted. Otherwise the launch reports an actionable
-trust error. In a headless child, accesses outside the profile's preconfigured
-network/read/write rules are blocked; pi-sandbox does not use Permission System
-or supervisor forwarding to ask the parent for an approval. See
-[`pi-sandbox`'s README](https://github.com/xzzpig/pi-extensions/tree/main/packages/pi-sandbox#named-profiles-for-subagents)
-for profile inheritance and merge rules.
-
-### Permission profiles
-
-Use `permission-profile: <name>` to select a named policy profile from the
-**global-only** `profiles` registry in `pi-permission-system`'s config
-(`<agentDir>/extensions/pi-permission-system/config.json`). It is a selector
-only — the actual rules (tool scalars, `bash`/`mcp`/`skill`/`external_directory`
-pattern maps, `'*'` fallback) live in that registry and always resolve from the
-child's own global config:
-
-```yaml
----
-name: reviewer
-description: Review changes without write access
-permission-profile: reviewer
----
-Review the requested change and report findings.
-```
-
-`pi-subagents` validates the scalar name (same grammar as sandbox profiles),
-passes only that name to the child via the transient
-`PI_SUBAGENT_PERMISSION_PROFILE` environment variable, and injects the
-installed `pi-permission-system` extension into the child launch even when
-`extensions` is an explicit allowlist, so the child's permission system applies
-the selected profile. The env channel carries a bare validated name — raw
-policy is never transmitted — and the rules are always read from the child's
-own global config, so the profile means the same policy regardless of which
-host launches the agent. Selection precedence inside the permission system is
-env > project agent file > global agent file.
-
-The launch fails closed when a profile is declared but `pi-permission-system`
-is not installed, when a capability ceiling denies child extensions, or when
-the runner is not a native Pi child (the field is rejected for `external-cli`
-and `external-job` runners). At runtime, selecting an unknown profile or an
-empty ruleset clamps that agent's `allow` rules to `ask` with an explicit
-`Permission profile '<name>' could not be resolved` diagnostic — it never
-silently degrades to the unselected baseline. An agent without the field keeps
-its pre-change behavior exactly.
-
-The profile merges between the project config and the agent's own `permission:`
-block: patterns the profile does not mention keep the lower scopes' rules
-(global denies survive), and `permission:` overrides the profile per pattern.
-A profile selected by a **project** agent file participates only when the host
-marks that project trusted.
-
-## Context injection
-
-By default the parent agent learns which agents exist only by calling `subagent({ action: "list" })`. Context injection pre-declares selected agents in the parent system prompt through a compact `<available_subagents>` block, so routing decisions can happen without a discovery round trip.
-
-Two sources contribute, and the union is advertised:
-
-1. Agent files that opt in with `injectToContext: true` in their frontmatter.
-2. The `subagents.injectAgents` setting, which lists agent names (canonical names or aliases; builtins allowed):
-
-```json
-{
-  "subagents": {
-    "injectAgents": ["worker", "reviewer", "security-reviewer"]
-  }
-}
-```
-
-Rendered block shape:
-
-```text
-<available_subagents>
-The following pre-declared subagents are available.
-Launch them with the subagent tool when a task matches their description.
-
-- security-reviewer: Security review specialist
-- worker: Implementation work, including approved oracle handoffs.
-</available_subagents>
-```
-
-Semantics and guarantees:
-
-- **Snapshot per session.** The list resolves once at session start (and on reload) and stays byte-identical for every turn, so provider prompt caching is never invalidated mid-session. Edits to agent files or settings take effect in a new session, not the current one; `{ action: "list" }` remains the runtime source of truth.
-- **Only executable agents are advertised.** Disabled agents and agents restricted by the session capability ceiling are never injected.
-- **Children never see it.** Spawned child sessions do not load the parent injection; fanout children can still call `{ action: "list" }`.
-- **Unknown setting names are ignored** and reported by `/subagents-doctor` instead of failing startup.
-- The block is appended only when it is not already present, so forked or resumed sessions never duplicate it.
 ### Required host extensions
 
 Hosts can import `registerRequiredChildExtensions` from `pi-subagents/required-child-extensions` and register `{ sessionId, extensions: [{ id, path }] }`. Paths resolve to existing files and are canonicalized into an immutable launch snapshot; bounded safe IDs appear in evidence instead of paths. One registration is allowed per parent session until its idempotent `dispose()` runs, normally on `session_shutdown`.

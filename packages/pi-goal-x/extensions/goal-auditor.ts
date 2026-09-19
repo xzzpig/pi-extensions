@@ -1,184 +1,43 @@
-import { randomUUID } from "node:crypto";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { createExtensionRuntime, type ExtensionContext, type ResourceLoader } from "@earendil-works/pi-coding-agent";
-import { resolveSubagentLaunchContract } from "@xzzpig/pi-subagents/preflight";
-import {
-	SUBAGENT_DELEGATION_CANCEL_EVENT,
-	SUBAGENT_DELEGATION_REQUEST_EVENT,
-	SUBAGENT_DELEGATION_RESPONSE_EVENT,
-	SUBAGENT_DELEGATION_STARTED_EVENT,
-	SUBAGENT_DELEGATION_UPDATE_EVENT,
-	type SubagentDelegationResponse,
-	type SubagentDelegationThinking,
-	type SubagentDelegationUpdate,
-	type SubagentDelegationUsage,
-} from "@xzzpig/pi-subagents/delegation";
 import type { GoalRecord, GoalTask, GoalTaskList } from "./goal-record.ts";
 import { countTaskSubtree } from "./goal-task-count.ts";
-import {
-	DEFAULT_AUDITOR_AGENT,
-	DEFAULT_AUDITOR_TIMEOUT_MS,
-	loadGoalSettings,
-	type GoalSettings,
-	type ThinkingLevel,
-} from "./goal-settings.ts";
-import {
-	REPORT_AUDITOR_PROGRESS_PROTOCOL_PREFIX,
-	REPORT_AUDITOR_PROGRESS_TOOL_NAME,
-} from "./goal-auditor-progress.ts";
+import type { GoalSettings } from "./goal-settings.ts";
 import { statusLabel } from "./goal-core.ts";
 
+/**
+ * Fork-only re-exports. Upstream runs the completion auditor in an in-process
+ * agent session; this fork delegates it to a pi-subagents child agent, and that
+ * delegation executor lives in `./goal-auditor-delegation.ts`. These bindings
+ * keep this module's export surface stable for the upstream-derived consumers
+ * (goal-completion.ts, goal.ts, goal-state.ts) and the experiments.
+ */
+export {
+	parseGoalAuditorStructuredResult,
+	runGoalCompletionAuditor,
+	type GoalAuditorResult,
+	type GoalCompletionAuditorArgs,
+} from "./goal-auditor-delegation.ts";
+
 export interface AuditorProgress {
+	/** Current tool being executed by the auditor, if any */
 	currentTool?: string;
+	/** Arguments passed to the current tool (truncated for display) */
 	currentToolArgs?: string;
+	/** When the current tool started (ms since epoch) */
 	currentToolStartedAt?: number;
+	/** Recent text output lines from the auditor's assistant messages */
 	recentOutput: string[];
+	/** Phase of the audit */
 	phase: "running" | "tool_executing" | "producing_report" | "thinking" | "done";
+	/** Elapsed ms since audit started */
 	elapsedMs: number;
+	/** Current step label shown to the user (e.g. "Inspecting files...") */
 	label?: string;
+	/** Completion percentage from 0 to 100 */
 	percentage?: number;
 }
 
 export type AuditorProgressCallback = (progress: AuditorProgress) => void;
-
-export interface GoalAuditorEvents {
-	on(event: string, handler: (data: unknown) => void): (() => void) | void;
-	emit(event: string, data: unknown): void;
-}
-
-export interface GoalAuditorStructuredResult {
-	verdict: "approved" | "disapproved";
-	report: string;
-	findings: string[];
-}
-
-export interface GoalAuditorResult {
-	approved: boolean;
-	disapproved: boolean;
-	output: string;
-	findings?: string[];
-	model?: string;
-	thinkingLevel?: ThinkingLevel;
-	error?: string;
-	cancelled?: boolean;
-	runId?: string;
-	requestId?: string;
-	/**
-	 * Child session usage from the terminal delegation response, when pi-subagents
-	 * reported one. Presentation/accounting only: it never changes the verdict, and
-	 * the caller decides whether it lands on a tool result or the goal ledger.
-	 */
-	usage?: SubagentDelegationUsage;
-}
-
-export const GOAL_AUDITOR_RESULT_SCHEMA = {
-	type: "object",
-	properties: {
-		verdict: { enum: ["approved", "disapproved"] },
-		report: { type: "string" },
-		findings: { type: "array", items: { type: "string" } },
-	},
-	required: ["verdict", "report", "findings"],
-	additionalProperties: false,
-} as const;
-
-const START_HANDSHAKE_TIMEOUT_MS = 5_000;
-// Built-in 30-minute audit wall-clock cap; the auditorTimeoutMs setting
-// (resolved via resolveAuditorTerminalTimeoutMs) overrides this default.
-const TERMINAL_TIMEOUT_MS = DEFAULT_AUDITOR_TIMEOUT_MS;
-const CANCELLATION_TIMEOUT_MS = 5_000;
-const EXTRA_AGENT_DIRS_ENV = "PI_SUBAGENT_EXTRA_AGENT_DIRS";
-const GOAL_X_PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const DEFAULT_AUDITOR_SOURCE_PATH = path.join(GOAL_X_PACKAGE_ROOT, "agents", "goal-auditor.md");
-const DEFAULT_AUDITOR_PROGRESS_EXTENSION_PATH = path.join(GOAL_X_PACKAGE_ROOT, "extensions", "goal-auditor-progress.ts");
-const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-
-let standaloneAuditorAgentDir: string | undefined;
-
-function appendStandaloneAgentDir(agentDir: string): void {
-	const existing = (process.env[EXTRA_AGENT_DIRS_ENV] ?? "")
-		.split(path.delimiter)
-		.map((entry) => entry.trim())
-		.filter(Boolean);
-	const normalized = path.resolve(agentDir);
-	if (existing.some((entry) => path.resolve(entry) === normalized)) return;
-	process.env[EXTRA_AGENT_DIRS_ENV] = [...existing, normalized].join(path.delimiter);
-}
-
-/**
- * Bare `pi -e .../goal.ts` loads an extension but does not register the
- * surrounding package with pi-subagents' package discovery. Make the default
- * auditor available through pi-subagents' existing extra-agent-dir mechanism.
- * The copied definition rewrites its child-only extension to an absolute path,
- * because child Pi processes run in the audited workspace rather than here.
- */
-function ensureStandaloneDefaultAuditorAgent(): { directory?: string; error?: string } {
-	try {
-		if (standaloneAuditorAgentDir && fs.existsSync(path.join(standaloneAuditorAgentDir, "goal-auditor.md"))) {
-			appendStandaloneAgentDir(standaloneAuditorAgentDir);
-			return { directory: standaloneAuditorAgentDir };
-		}
-		const source = fs.readFileSync(DEFAULT_AUDITOR_SOURCE_PATH, "utf-8");
-		if (!fs.existsSync(DEFAULT_AUDITOR_PROGRESS_EXTENSION_PATH)) {
-			return { error: `Default goal-auditor progress extension is missing at ${DEFAULT_AUDITOR_PROGRESS_EXTENSION_PATH}.` };
-		}
-		const extensionLine = /^subagentOnlyExtensions:\s*.*$/m;
-		if (!extensionLine.test(source)) {
-			return { error: `Default goal-auditor definition at ${DEFAULT_AUDITOR_SOURCE_PATH} does not declare subagentOnlyExtensions.` };
-		}
-		const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-goal-x-auditor-"));
-		const portableSource = source.replace(
-			extensionLine,
-			`subagentOnlyExtensions: ${JSON.stringify(DEFAULT_AUDITOR_PROGRESS_EXTENSION_PATH)}`,
-		);
-		fs.writeFileSync(path.join(directory, "goal-auditor.md"), portableSource, { encoding: "utf-8", mode: 0o600 });
-		standaloneAuditorAgentDir = directory;
-		appendStandaloneAgentDir(directory);
-		return { directory };
-	} catch (error) {
-		return { error: `Could not prepare the standalone default goal-auditor: ${error instanceof Error ? error.message : String(error)}` };
-	}
-}
-
-function shouldPrepareStandaloneDefaultAuditor(
-	settings: GoalSettings,
-	result: Awaited<ReturnType<typeof resolveSubagentLaunchContract>>,
-): boolean {
-	if (resolveAuditorAgent(settings) !== DEFAULT_AUDITOR_AGENT) return false;
-	if (result.ok === false) return result.code === "missing_agent";
-	// Pi resolves CLI extension paths against the child workspace cwd. Package
-	// agent frontmatter is intentionally package-relative, so materialize the
-	// default definition with its provider path made absolute before dispatch.
-	return result.contract.agent.source === "package";
-}
-
-function auditorLaunchContractInput(args: GoalCompletionAuditorArgs, settings: GoalSettings, overrides: ReturnType<typeof resolveAuditorDelegationOverrides>) {
-	return {
-		agent: resolveAuditorAgent(settings),
-		cwd: args.ctx.cwd,
-		context: "fresh" as const,
-		...(overrides.model ? { model: overrides.model } : {}),
-		...(overrides.thinking ? { thinking: overrides.thinking } : {}),
-		...(args.ctx.model ? { parentModel: { provider: args.ctx.model.provider, id: args.ctx.model.id } } : {}),
-		...(typeof args.ctx.modelRegistry?.getAvailable === "function" ? { availableModels: args.ctx.modelRegistry.getAvailable() } : {}),
-		projectTrusted: args.ctx.isProjectTrusted?.() === true,
-		...(args.ctx.isProjectTrusted?.() === true ? { trustedProjectCwd: args.ctx.cwd } : {}),
-		outputSchema: GOAL_AUDITOR_RESULT_SCHEMA,
-		artifacts: true,
-	};
-}
-
-function asNonEmptyString(value: unknown): string | undefined {
-	return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function asThinkingLevel(value: unknown): ThinkingLevel | undefined {
-	const text = asNonEmptyString(value);
-	return text && THINKING_LEVELS.has(text as ThinkingLevel) ? text as ThinkingLevel : undefined;
-}
 
 function renderAuditorTaskTree(tasks: GoalTask[], indent: number): string[] {
 	const prefix = "  ".repeat(indent);
@@ -186,7 +45,9 @@ function renderAuditorTaskTree(tasks: GoalTask[], indent: number): string[] {
 	for (const task of tasks) {
 		const marker = task.status === "complete" ? "[x]" : task.status === "skipped" ? "[~]" : "[ ]";
 		lines.push(`${prefix}${marker} ${task.id}: ${escapePromptPayload(task.title)}`);
-		if (task.subtasks && task.subtasks.length > 0) lines.push(...renderAuditorTaskTree(task.subtasks, indent + 1));
+		if (task.subtasks && task.subtasks.length > 0) {
+			lines.push(...renderAuditorTaskTree(task.subtasks, indent + 1));
+		}
 	}
 	return lines;
 }
@@ -196,10 +57,17 @@ function taskSummaryBlock(taskList?: GoalTaskList | null): string {
 	const { total, complete, skipped, pending } = countTaskSubtree(taskList.tasks);
 	const lines: string[] = [`Tasks: ${complete}/${total} complete${skipped > 0 ? `, ${skipped} skipped` : ""}`];
 	lines.push(...renderAuditorTaskTree(taskList.tasks, 0));
-	if (taskList.blockCompletion && pending > 0) lines[0] = `${lines[0]} | TASK GATE: pending tasks block completion`;
+	const gate = taskList.blockCompletion && pending > 0 ? " | TASK GATE: pending tasks block completion" : "";
+	lines[0] = lines[0]! + gate;
 	return lines.join("\n");
 }
 
+/**
+ * Escape operator/model-controlled payloads before interpolating them between
+ * XML-ish delimiters in the auditor prompt, so a payload containing
+ * `</objective>` (or other delimiter text) cannot close the block early and
+ * have the remainder read as instructions. Entities stay human-readable.
+ */
 function escapePromptPayload(value: string): string {
 	return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
@@ -258,11 +126,14 @@ function minimalGoalMetadata(goal: GoalRecord): string {
 		goal.tokenBudget ? `Budget: ${goal.tokenBudget} tokens (${goal.usage.tokensUsed} used)` : undefined,
 	].filter(Boolean).join("\n");
 }
+
 export function buildGoalAuditorPrompt(args: {
 	goal: GoalRecord;
 	detailedSummary: string;
 	completionSummary?: string | null;
 	settings?: GoalSettings;
+	/** P1-6: parent-rendered evidence (ledger tail + turn trail) so the audit
+	 * starts warm instead of re-deriving what the parent session already holds. */
 	warmContext?: string | null;
 	/**
 	 * Machine-collected workspace change manifest (already rendered body text,
@@ -347,41 +218,6 @@ export function buildGoalAuditorPrompt(args: {
 	].join("\n");
 }
 
-export function resolveAuditorAgent(settings: GoalSettings | undefined): string {
-	return settings?.auditorAgent?.trim() || DEFAULT_AUDITOR_AGENT;
-}
-
-/**
- * Resolve the effective completion-audit wall-clock cap. The layered
- * `auditorTimeoutMs` setting wins (the settings parser guarantees a
- * timer-safe positive integer); anything else falls back to the built-in
- * 30-minute default. Handshake/cancellation guards are intentionally not
- * reachable from settings.
- */
-export function resolveAuditorTerminalTimeoutMs(settings: GoalSettings | undefined): number {
-	return settings?.auditorTimeoutMs ?? TERMINAL_TIMEOUT_MS;
-}
-
-	export function resolveAuditorDelegationOverrides(settings: GoalSettings): {
-	model?: string;
-	thinking?: SubagentDelegationThinking;
-	error?: string;
-} {
-	if (settings.provider && !settings.model) {
-		return {
-			error: `Provider-only auditor configuration is refused; select an explicit model for provider: ${settings.provider}`,
-		};
-	}
-	const model = settings.provider && settings.model
-		? `${settings.provider}/${settings.model}`
-		: settings.model;
-	const thinking = asThinkingLevel(settings.thinkingLevel);
-	return {
-		...(model ? { model } : {}),
-		...(thinking ? { thinking } : {}),
-	};
-}
-
 export function makeAuditorResourceLoader(systemPrompt = [
 	"You are a read-only completion auditor running in an isolated pi agent session.",
 	"Inspect the repository and decide whether the claimed goal completion is genuinely satisfied.",
@@ -397,7 +233,7 @@ export function makeAuditorResourceLoader(systemPrompt = [
 		getSystemPromptSource: () => undefined,
 		getAppendSystemPrompt: () => [],
 		getAppendSystemPromptSources: () => [],
-		extendResources: () => {},
+	extendResources: () => {},
 		reload: async () => {},
 	};
 }
@@ -427,487 +263,4 @@ export function resolveAuditorSessionModelOptions(ctx: ExtensionContext): {
 		return { modelRegistry: ctx.modelRegistry, modelRuntime: runtime };
 	}
 	return { modelRegistry: ctx.modelRegistry };
-}
-
-
-export function parseGoalAuditorStructuredResult(value: unknown): { value?: GoalAuditorStructuredResult; error?: string } {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return { error: "Delegated auditor did not return a JSON object." };
-	const record = value as Record<string, unknown>;
-	const keys = Object.keys(record);
-	if (keys.some((key) => key !== "verdict" && key !== "report" && key !== "findings")) {
-		return { error: "Delegated auditor result contains unsupported fields." };
-	}
-	if (record.verdict !== "approved" && record.verdict !== "disapproved") {
-		return { error: "Delegated auditor result has an invalid verdict." };
-	}
-	if (typeof record.report !== "string") return { error: "Delegated auditor result is missing a string report." };
-	if (!Array.isArray(record.findings) || record.findings.some((finding) => typeof finding !== "string")) {
-		return { error: "Delegated auditor result is missing a string findings array." };
-	}
-	return {
-		value: {
-			verdict: record.verdict,
-			report: record.report,
-			findings: record.findings,
-		},
-	};
-}
-
-function formatAuditOutput(report: string, findings: string[]): string {
-	const cleanReport = report.trim();
-	const cleanFindings = findings.map((finding) => finding.trim()).filter(Boolean);
-	if (cleanFindings.length === 0) return cleanReport;
-	return [cleanReport, cleanReport ? "" : undefined, "Findings:", ...cleanFindings.map((finding) => `- ${finding}`)]
-		.filter((line): line is string => line !== undefined)
-		.join("\n");
-}
-
-function matchingIdentity(value: unknown, identity: { requestId: string; ownerRunId: string; nodeId: string }): boolean {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-	const candidate = value as Partial<{ requestId: unknown; ownerRunId: unknown; nodeId: unknown }>;
-	return candidate.requestId === identity.requestId
-		&& candidate.ownerRunId === identity.ownerRunId
-		&& candidate.nodeId === identity.nodeId;
-}
-
-const DELEGATION_USAGE_COUNTERS = ["input", "output", "cacheRead", "cacheWrite", "cost", "turns"] as const;
-
-/**
- * Validate the delegation terminal usage the way other event payloads are
- * validated: untrusted event data must not enter accounting with NaN, negative,
- * or missing counters. Returns the received object untouched so callers observe
- * exactly what pi-subagents reported.
- */
-function delegationUsage(value: unknown): SubagentDelegationUsage | undefined {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-	const record = value as Record<string, unknown>;
-	for (const key of DELEGATION_USAGE_COUNTERS) {
-		const counter = record[key];
-		if (typeof counter !== "number" || !Number.isFinite(counter) || counter < 0) return undefined;
-	}
-	for (const key of ["toolCalls", "durationMs"] as const) {
-		const counter = record[key];
-		if (counter !== undefined && (typeof counter !== "number" || !Number.isFinite(counter) || counter < 0)) return undefined;
-	}
-	return value as SubagentDelegationUsage;
-}
-
-function progressDetails(value: unknown): { label?: string; percentage?: number } {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return {};
-	const record = value as Record<string, unknown>;
-	const label = asNonEmptyString(record.label);
-	const percentage = typeof record.percentage === "number" && Number.isFinite(record.percentage)
-		? Math.max(0, Math.min(100, record.percentage))
-		: undefined;
-	return {
-		...(label ? { label } : {}),
-		...(percentage !== undefined ? { percentage } : {}),
-	};
-}
-
-function parseProgressDetails(serialized: string | undefined): { label?: string; percentage?: number } {
-	if (!serialized) return {};
-	try {
-		return progressDetails(JSON.parse(serialized));
-	} catch {
-		return {};
-	}
-}
-
-function outputLines(update: SubagentDelegationUpdate): string[] {
-	if (Array.isArray(update.recentOutputLines)) {
-		return update.recentOutputLines.filter((line) => typeof line === "string" && line.trim());
-	}
-	if (typeof update.recentOutput === "string" && update.recentOutput.trim()) {
-		return update.recentOutput.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-	}
-	return [];
-}
-
-function isProgressProtocolLine(line: string): boolean {
-	return line.trim().startsWith(REPORT_AUDITOR_PROGRESS_PROTOCOL_PREFIX);
-}
-
-function progressDetailsFromOutput(update: SubagentDelegationUpdate): { label?: string; percentage?: number } {
-	const lines = outputLines(update);
-	for (let index = lines.length - 1; index >= 0; index--) {
-		const line = lines[index];
-		if (line === undefined) continue;
-		const text = line.trim();
-		if (text.startsWith(REPORT_AUDITOR_PROGRESS_PROTOCOL_PREFIX)) {
-			const parsed = parseProgressDetails(text.slice(REPORT_AUDITOR_PROGRESS_PROTOCOL_PREFIX.length));
-			if (parsed.label !== undefined || parsed.percentage !== undefined) return parsed;
-			continue;
-		}
-		const legacy = text.match(/^Progress reported:\s*(.*)\s+\((-?\d+(?:\.\d+)?)%\)$/);
-		if (legacy) {
-			const parsed = progressDetails({ label: legacy[1], percentage: Number(legacy[2]) });
-			if (parsed.label !== undefined || parsed.percentage !== undefined) return parsed;
-		}
-	}
-	return {};
-}
-
-function progressDetailsFromUpdate(update: SubagentDelegationUpdate): { label?: string; percentage?: number } {
-	// Tool arguments are display previews and therefore cannot authorize or
-	// carry structured progress. The child-only provider emits the bounded,
-	// versioned record in its tool-result text instead.
-	return progressDetailsFromOutput(update);
-}
-
-function recentLines(update: SubagentDelegationUpdate): string[] | undefined {
-	const lines = outputLines(update)
-		.filter((line) => !isProgressProtocolLine(line))
-		.slice(-8);
-	return lines.length > 0 ? lines : undefined;
-}
-
-function safeProgress(callback: AuditorProgressCallback | undefined, progress: AuditorProgress): void {
-	try {
-		callback?.({ ...progress, recentOutput: [...progress.recentOutput] });
-	} catch {
-		// Progress reporting is presentation-only and cannot affect the verdict.
-	}
-}
-
-function responseError(response: SubagentDelegationResponse): string {
-	if (response.status === "cancelled") return "Auditor aborted.";
-	const detail = typeof response.error === "string" && response.error.trim() ? `: ${response.error.trim()}` : "";
-	return `Goal auditor delegation ${response.status}${detail}`;
-}
-
-export interface GoalCompletionAuditorArgs {
-	ctx: ExtensionContext;
-	events?: GoalAuditorEvents;
-	goal: GoalRecord;
-	detailedSummary: string;
-	completionSummary?: string | null;
-	settings?: GoalSettings;
-	warmContext?: string | null;
-	/**
-	 * Rendered workspace change manifest body (see `renderChangeManifestBody`).
-	 * Absent when collection is off, the cwd is not a git repository, or capture
-	 * failed, in which case audit input is unchanged from before this feature.
-	 */
-	changeManifest?: string | null;
-	signal?: AbortSignal;
-	onProgress?: AuditorProgressCallback;
-	/** Test-only identity/time controls. Production callers use generated values. */
-	requestId?: string;
-	nodeId?: string;
-	timeouts?: { startedMs?: number; terminalMs?: number; cancellationMs?: number };
-	/** Test-only: bypass launch preflight when exercising event lifecycle in isolation. */
-	skipPreflight?: boolean;
-}
-
-export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs): Promise<GoalAuditorResult> {
-	const settings = args.settings ?? loadGoalSettings(args.ctx.cwd);
-	const overrides = resolveAuditorDelegationOverrides(settings);
-	if (overrides.error) {
-		return { approved: false, disapproved: true, output: "", error: overrides.error };
-	}
-	// One resolved value feeds BOTH the delegation request timeoutMs (runner-side
-	// kill deadline) and the local terminal timer, so the two can never drift.
-	const terminalTimeoutMs = args.timeouts?.terminalMs ?? resolveAuditorTerminalTimeoutMs(settings);
-	if (!args.events) {
-		return {
-			approved: false,
-			disapproved: true,
-			output: "",
-			error: "pi-subagents extension is not loaded or does not expose the structured delegation event bridge.",
-		};
-	}
-
-	const events = args.events;
-	if (!args.skipPreflight) {
-		let preflight: Awaited<ReturnType<typeof resolveSubagentLaunchContract>>;
-		try {
-			const input = auditorLaunchContractInput(args, settings, overrides);
-			preflight = await resolveSubagentLaunchContract(input);
-			if (shouldPrepareStandaloneDefaultAuditor(settings, preflight)) {
-				const standalone = ensureStandaloneDefaultAuditorAgent();
-				if (standalone.error) {
-					return {
-						approved: false,
-						disapproved: true,
-						output: "",
-						error: `Goal auditor preflight failed: ${standalone.error}`,
-					};
-				}
-				preflight = await resolveSubagentLaunchContract(input);
-			}
-		} catch (error) {
-			return {
-				approved: false,
-				disapproved: true,
-				output: "",
-				error: `Goal auditor preflight failed: ${error instanceof Error ? error.message : String(error)}`,
-			};
-		}
-		if (!preflight.ok) {
-			return {
-				approved: false,
-				disapproved: true,
-				output: "",
-				error: `Goal auditor preflight failed: ${preflight.message}`,
-			};
-		}
-		if (!preflight.contract.tools.effectiveAllowlist.includes(REPORT_AUDITOR_PROGRESS_TOOL_NAME)) {
-			return {
-				approved: false,
-				disapproved: true,
-				output: "",
-				error: `Goal auditor preflight failed: agent '${preflight.contract.agent.name}' must retain the required ${REPORT_AUDITOR_PROGRESS_TOOL_NAME} tool.`,
-			};
-		}
-		if (!preflight.contract.tools.effectiveAllowlist.includes("structured_output")) {
-			return {
-				approved: false,
-				disapproved: true,
-				output: "",
-				error: "Goal auditor preflight failed: structured_output is unavailable.",
-			};
-		}
-	}
-	const requestId = args.requestId ?? randomUUID();
-	const ownerRunId = args.goal.id;
-	const nodeId = args.nodeId ?? `goal-completion:${args.goal.id}:${args.goal.revision ?? 0}`;
-	const identity = { requestId, ownerRunId, nodeId };
-	const startedAt = Date.now();
-	const progress: AuditorProgress = {
-		recentOutput: [],
-		phase: "running",
-		elapsedMs: 0,
-	};
-	const request = {
-		...identity,
-		agent: resolveAuditorAgent(settings),
-		task: buildGoalAuditorPrompt({
-			goal: args.goal,
-			detailedSummary: args.detailedSummary,
-			completionSummary: args.completionSummary,
-			settings,
-			warmContext: args.warmContext,
-			changeManifest: args.changeManifest,
-		}),
-		context: "fresh" as const,
-		cwd: args.ctx.cwd,
-		...(overrides.model ? { model: overrides.model } : {}),
-		...(overrides.thinking ? { thinking: overrides.thinking } : {}),
-		timeoutMs: terminalTimeoutMs,
-		artifacts: true,
-		result: { kind: "structured" as const, schema: GOAL_AUDITOR_RESULT_SCHEMA },
-	};
-	return new Promise<GoalAuditorResult>((resolve) => {
-		let settled = false;
-		let started = false;
-		let startedTimer: ReturnType<typeof setTimeout> | undefined;
-		let terminalTimer: ReturnType<typeof setTimeout> | undefined;
-		let cancellationTimer: ReturnType<typeof setTimeout> | undefined;
-		let cancellationReason: "user_abort" | "terminal_timeout" | undefined;
-		let terminalUsage: SubagentDelegationUsage | undefined;
-		const unsubscribes: Array<() => void> = [];
-		const subscribe = (event: string, handler: (data: unknown) => void): void => {
-			const unsubscribe = events.on(event, handler);
-			if (typeof unsubscribe === "function") unsubscribes.push(unsubscribe);
-		};
-		function cancellationResult(
-			reason: "user_abort" | "terminal_timeout",
-			acknowledged = false,
-		): GoalAuditorResult {
-			if (reason === "user_abort") {
-				return {
-					approved: false,
-					disapproved: true,
-					output: "",
-					error: "Auditor aborted.",
-					cancelled: true,
-				};
-			}
-			return {
-				approved: false,
-				disapproved: true,
-				output: "",
-				error: acknowledged
-					? "Goal auditor delegation did not return a terminal response before its timeout and was cancelled."
-					: "Goal auditor delegation did not return a terminal response before its timeout and did not acknowledge cancellation.",
-			};
-		}
-		function cancelAttempt(reason: "user_abort" | "terminal_timeout"): void {
-			if (settled || cancellationReason) return;
-			cancellationReason = reason;
-			try {
-				events.emit(SUBAGENT_DELEGATION_CANCEL_EVENT, identity);
-			} catch (error) {
-				finish({
-					approved: false,
-					disapproved: true,
-					output: "",
-					error: `Could not cancel goal auditor delegation: ${error instanceof Error ? error.message : String(error)}`,
-				});
-				return;
-			}
-			if (settled) return;
-			cancellationTimer = setTimeout(() => finish(cancellationResult(reason)), args.timeouts?.cancellationMs ?? CANCELLATION_TIMEOUT_MS);
-			cancellationTimer.unref?.();
-		}
-		const onAbort = () => cancelAttempt("user_abort");
-		const cleanup = () => {
-			if (startedTimer) clearTimeout(startedTimer);
-			if (terminalTimer) clearTimeout(terminalTimer);
-			if (cancellationTimer) clearTimeout(cancellationTimer);
-			args.signal?.removeEventListener("abort", onAbort);
-			for (const unsubscribe of unsubscribes) unsubscribe();
-		};
-		const finish = (result: GoalAuditorResult) => {
-			if (settled) return;
-			settled = true;
-			cleanup();
-			progress.phase = "done";
-			progress.label = "Audit complete.";
-			progress.percentage = 100;
-			progress.elapsedMs = Date.now() - startedAt;
-			if (result.output.trim()) progress.recentOutput = result.output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-8);
-			safeProgress(args.onProgress, progress);
-			const usage = result.usage ?? terminalUsage;
-			resolve({ ...result, ...(usage ? { usage } : {}), requestId });
-		};
-		const armTerminalTimeout = () => {
-			if (terminalTimer) return;
-			terminalTimer = setTimeout(() => {
-				cancelAttempt("terminal_timeout");
-			}, terminalTimeoutMs);
-			terminalTimer.unref?.();
-		};
-
-		subscribe(SUBAGENT_DELEGATION_STARTED_EVENT, (value) => {
-			if (!matchingIdentity(value, identity)) return;
-			if (started) return;
-			started = true;
-			if (startedTimer) clearTimeout(startedTimer);
-			progress.elapsedMs = Date.now() - startedAt;
-			safeProgress(args.onProgress, progress);
-			armTerminalTimeout();
-		});
-		subscribe(SUBAGENT_DELEGATION_UPDATE_EVENT, (value) => {
-			if (!matchingIdentity(value, identity)) return;
-			const update = value as SubagentDelegationUpdate;
-			if (!started) {
-				started = true;
-				if (startedTimer) clearTimeout(startedTimer);
-				armTerminalTimeout();
-			}
-			const reported = progressDetailsFromUpdate(update);
-			const output = recentLines(update);
-			if (typeof update.currentTool === "string") {
-				progress.currentTool = update.currentTool;
-				progress.currentToolArgs = update.currentToolArgs;
-				progress.currentToolStartedAt = Date.now();
-				progress.phase = "tool_executing";
-			}
-			if (output) {
-				progress.recentOutput = output;
-				if (update.currentTool === undefined) {
-					progress.currentTool = undefined;
-					progress.currentToolArgs = undefined;
-					progress.currentToolStartedAt = undefined;
-					progress.phase = "producing_report";
-				}
-			}
-			if (reported.label) progress.label = reported.label;
-			if (reported.percentage !== undefined) progress.percentage = reported.percentage;
-			if (typeof update.durationMs === "number" && update.durationMs >= 0) progress.elapsedMs = update.durationMs;
-			else progress.elapsedMs = Date.now() - startedAt;
-			safeProgress(args.onProgress, progress);
-		});
-		subscribe(SUBAGENT_DELEGATION_RESPONSE_EVENT, (value) => {
-			if (!matchingIdentity(value, identity)) return;
-			const response = value as SubagentDelegationResponse;
-			if (response.status !== "invalid_request") terminalUsage = delegationUsage(response.usage);
-			if (cancellationReason) {
-				finish(cancellationResult(cancellationReason, true));
-				return;
-			}
-			if (response.status === "invalid_request") {
-				finish({
-					approved: false,
-					disapproved: true,
-					output: "",
-					error: response.error?.trim() || "Goal auditor delegation request was rejected as invalid.",
-				});
-				return;
-			}
-			if (response.status !== "completed") {
-				finish({
-					approved: false,
-					disapproved: true,
-					output: "",
-					model: response.model,
-					thinkingLevel: asThinkingLevel(response.thinking),
-					error: responseError(response),
-					cancelled: response.status === "cancelled",
-					runId: response.runId,
-				});
-				return;
-			}
-			if (response.result?.kind !== "structured") {
-				finish({
-					approved: false,
-					disapproved: true,
-					output: "",
-					model: response.model,
-					thinkingLevel: asThinkingLevel(response.thinking),
-					error: "Delegated auditor did not return the required structured verdict.",
-					runId: response.runId,
-				});
-				return;
-			}
-			const parsed = parseGoalAuditorStructuredResult(response.result.value);
-			if (!parsed.value) {
-				finish({
-					approved: false,
-					disapproved: true,
-					output: "",
-					model: response.model,
-					thinkingLevel: asThinkingLevel(response.thinking),
-					error: parsed.error,
-					runId: response.runId,
-				});
-				return;
-			}
-			const structured = parsed.value;
-			finish({
-				approved: structured.verdict === "approved",
-				disapproved: structured.verdict === "disapproved",
-				output: formatAuditOutput(structured.report, structured.findings),
-				findings: structured.findings,
-				model: response.model,
-				thinkingLevel: asThinkingLevel(response.thinking),
-				runId: response.runId,
-			});
-		});
-
-		startedTimer = setTimeout(() => {
-			finish({
-				approved: false,
-				disapproved: true,
-				output: "",
-				error: "pi-subagents extension is not loaded or did not acknowledge the structured goal-auditor request.",
-			});
-		}, args.timeouts?.startedMs ?? START_HANDSHAKE_TIMEOUT_MS);
-		startedTimer.unref?.();
-		args.signal?.addEventListener("abort", onAbort, { once: true });
-		safeProgress(args.onProgress, progress);
-		try {
-			if (args.signal?.aborted) cancelAttempt("user_abort");
-			events.emit(SUBAGENT_DELEGATION_REQUEST_EVENT, request);
-		} catch (error) {
-			finish({
-				approved: false,
-				disapproved: true,
-				output: "",
-				error: `Could not start goal auditor delegation: ${error instanceof Error ? error.message : String(error)}`,
-			});
-		}
-	});
 }

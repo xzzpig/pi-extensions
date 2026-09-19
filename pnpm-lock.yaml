@@ -343,7 +343,7 @@ importers:
   packages/pi-thinking-collapse:
     dependencies:
       '@xzzpig/pi-mouse-events':
-        specifier: 0.1.1
+        specifier: workspace:*
         version: link:../pi-mouse-events
     devDependencies:
       '@earendil-works/pi-coding-agent':

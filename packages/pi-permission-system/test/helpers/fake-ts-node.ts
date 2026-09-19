@@ -29,7 +29,7 @@ export function makeTSNode(
     childCount: children.length,
     isNamed: true,
     hasError: false,
-		previousSibling: null,
+    previousSibling: null,
     child: (i) => children[i] ?? null,
   };
 }

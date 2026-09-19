@@ -5,6 +5,12 @@ This fork tracks [`carderne/pi-sandbox`](https://github.com/carderne/pi-sandbox)
 via git subtree; entries below describe only fork-specific deviations from
 upstream.
 
+## 0.6.3
+
+### Changed
+
+- **Conflict-surface refactor, no behavior change.** The write-denial attribution block moved to fork-only `src/write-denial.ts`; the sandbox-profile layer moved to fork-only `src/profile-config.ts` (`src/config.ts` is byte-identical to upstream again apart from fork type fields); the denyWrite existence check now reuses `pathEntryLstatExists` from `@xzzpig/sandbox-runtime` instead of a local copy; fork tests moved out of the upstream test files into `test/profiles-config.test.ts`, `test/write-denial.test.ts` and `test/policy-fork.test.ts`; `packageManager` aligned with the monorepo's pnpm.
+
 ## 0.6.2
 
 ### Added

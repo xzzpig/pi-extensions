@@ -83,3 +83,37 @@ export default function registerSandboxProfileGuard(pi: ExtensionAPI): void {
 		return undefined;
 	});
 }
+
+export type ProjectScopedProfileKind = "sandbox" | "permission";
+
+/**
+ * [fork] Shared project-trust gate for project-scoped sandbox/permission
+ * profile selections. Returns the error message to surface when the selection
+ * is not permitted under the current project-trust state, or undefined when
+ * the launch may proceed. The messages are byte-identical to the original
+ * preflight and executor copies that this helper replaces.
+ */
+export function projectScopedProfileTrustError(options: {
+	kind: ProjectScopedProfileKind;
+	agentName: string;
+	profileName: string;
+	/** True when the selection is project-scoped (agent source or override scope). */
+	projectScoped: boolean;
+	/** Resolved trusted project cwd, or undefined when the project is not trusted. */
+	trustedCwd: string | undefined;
+	/** cwd that must match the trusted project cwd, already in comparison form. */
+	effectiveCwd: string;
+	/** "preflight" compares raw cwds; "executor" resolves the child cwd and says "child cwd". */
+	messageStyle: "preflight" | "executor";
+}): string | undefined {
+	if (!options.projectScoped) return undefined;
+	const label = options.kind === "sandbox" ? "sandbox profile" : "permission profile";
+	if (options.trustedCwd === undefined) {
+		return `Agent '${options.agentName}' selects ${label} '${options.profileName}' from project scope, but the project is not trusted. Trust the project and retry.`;
+	}
+	if (options.trustedCwd === options.effectiveCwd) return undefined;
+	if (options.messageStyle === "executor") {
+		return `Agent '${options.agentName}' selects ${label} '${options.profileName}' from project scope, but child cwd '${options.effectiveCwd}' does not match the trusted project cwd '${options.trustedCwd}'. Launch from the trusted project cwd and retry.`;
+	}
+	return `Agent '${options.agentName}' selects ${label} '${options.profileName}' from project scope, but cwd '${options.effectiveCwd}' does not match trusted project cwd '${options.trustedCwd}'. Launch from the trusted project cwd and retry.`;
+}

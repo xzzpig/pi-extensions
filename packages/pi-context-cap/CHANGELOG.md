@@ -1,6 +1,8 @@
 # Changelog
 
-## 0.1.2
+## 0.1.3
+
+- The `--context-cap` / `--context-cap-reserve` CLI flags now use the same strict token parser as the config file: suffix strings like `"200k"` are rejected with a warning (`--context-cap "200k" must be a positive token count; ignoring it`) instead of being silently truncated to 200. The `/context-cap <tokens>` command path keeps its original (upstream) parsing.
 
 - Fixed a spurious `compaction failed` error when pi's native auto-compaction won a race with the guard. `ctx.compact()` aborts the running agent before compacting, and that run-end moment lets pi's own auto-compaction check fire; with the default window-derived budget the two thresholds are identical (`contextWindow - 16384`), so pi could compact first and leave the manual pass nothing to do (`Nothing to compact (session too small)` / `Already compacted`).
 - Compaction failures are now classified by outcome instead of error text: if a compaction entry appeared on the session branch since the trigger, the failure is reported as info (`context was already compacted; nothing to do`) rather than an error, is not counted towards the two-failure disable, and the 20k retry guard is reset so the guard keeps working as the context regrows. pi continues the run itself in this case, so no follow-up resume prompt is sent.

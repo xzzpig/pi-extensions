@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.1
+
+### Changed
+
+- **Conflict-surface refactor, no behavior change.** The Mapping View and Category Picker UI moved to fork-only `mapping-view.ts` and `category-picker.ts` (`index.ts` keeps imports and command registrations, halving its diff); the suspension skip-threading through `redactText`/`redactDeep`/`redactMessageContent` was replaced by a call-site `filterPatternSet` in fork-only `suspension-filter.ts`, leaving the redaction engine byte-identical to upstream; the upstream standalone `test-engine.ts` script is no longer type-checked.
+
 ## 0.2.0
 
 - **Session-scoped temporary suspension** (global or per rule category):

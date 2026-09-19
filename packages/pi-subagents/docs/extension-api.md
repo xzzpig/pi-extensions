@@ -192,41 +192,6 @@ The installed owner applies the existing runtime-agent validation, collision che
 
 This contract is process-local. It does not register agents in child sessions or other Pi processes, and it does not change package discovery or package resolution.
 
-## Agent discovery from independent extensions
-
-An extension that wants to offer the same agent list the subagent launcher uses
-— a session role picker, for example — can call the exported discovery helper
-instead of re-implementing agent loading:
-
-```typescript
-import { discoverAgentsWithRuntime } from "pi-subagents/agents";
-
-const result = discoverAgentsWithRuntime(pi, cwd, "both");
-for (const agent of result.agents) {
-  // agent.name, agent.description, agent.aliases, agent.source,
-  // agent.sandbox, agent.permissionProfile, agent.override?.scope, agent.disabled
-}
-result.agentDiagnostics; // loader problems, per source
-result.projectAgentsDir; // where project agents came from
-```
-
-The result is the merged view: builtin, package, user, and project agent files
-plus anything registered at runtime through the contract above. With nothing
-registered, it is exactly `discoverAgents(cwd, scope)`.
-
-`scope` is `"user" | "project" | "both"`. Pass the caller's `cwd` so project
-layering resolves against the right tree, and pass the caller's `ExtensionAPI`
-because the runtime registry is keyed on it.
-
-Two notes for consumers of an optional dependency:
-
-- Treat the module as optional. A package that is not installed cannot be
-  imported, so load it dynamically and report the failure rather than failing
-  extension load.
-- `agent.source === "project"` (or `agent.override?.scope === "project"`) means
-  the definition comes from the current project. Gate such an agent behind the
-  host's project-trust decision before adopting it for anything.
-
 ## External jobs in FleetView
 
 Use `pi-subagents/external-runs` to publish display-only current-session jobs owned by another extension:
@@ -311,26 +276,6 @@ Boundaries:
 - It is side-effect-free for launch state: it does not create child sessions, temp prompt files, structured-output runtimes, tool-diagnostic files, or run artifacts.
 - Some host-owned facts, such as exact fork snapshots, nested async roots, and live model registries, can only be proven by the Pi host; those appear as `host_required` diagnostics instead of silently pretending to be exact.
 - Preflight reads the extension config, so `defaultSubagentContext: "fresh"` or `"fork"` affects omitted context in the same way as execution. Explicit `context` still wins.
-
-## Agent ejection API
-
-Use `@xzzpig/pi-subagents/agent-management` when an extension needs to make a bundled agent editable without parsing model-facing management output:
-
-```ts
-import { ejectAgentDefinition } from "@xzzpig/pi-subagents/agent-management";
-
-const result = ejectAgentDefinition({
-  cwd: ctx.cwd,
-  agent: "reviewer",
-  scope: "project",
-  projectTrusted: ctx.isProjectTrusted(),
-});
-
-if (!result.ok) throw new Error(result.message);
-console.log(result.targetPath, result.verification.launchPreflighted);
-```
-
-The operation never overwrites an existing agent, chain, or conflicting file. Package-relative tool, extension, and skill paths are normalized before writing. After rediscovery, it validates copied skills and the static child launch tool plan; if that check fails, it removes only the new file created by that call and returns `preflight_failed`. Host-dependent checks such as the live model registry and actual child process startup remain the responsibility of the caller's normal launch preflight/execution path.
 
 ## Structured delegation API
 

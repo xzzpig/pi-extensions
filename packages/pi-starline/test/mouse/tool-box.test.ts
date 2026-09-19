@@ -406,7 +406,7 @@ function makeInstallScene(options?: {
 	return { scene, prototype, throughCalls, renders, relayout };
 }
 
-describe("installMouse clickToExpandTools", () => {
+describe("installMouseFeaturesOn clickToExpandTools", () => {
 	const originalKeybindings = getKeybindings();
 	let dispose: (() => void) | undefined;
 

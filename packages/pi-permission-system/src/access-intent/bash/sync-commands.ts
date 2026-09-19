@@ -1,11 +1,11 @@
 import {
   type BashCommand,
   collectCommands,
-  type ParseProgram,
   collectSalvagedCommands,
 } from "./command-enumeration";
 import { getWarmBashParser } from "./parser";
 import { withSalvagedRoots } from "./unresolved-salvage";
+import { makeParseProgram } from "./wrapper-parse";
 
 /**
  * Synchronously enumerate the command-pattern units of a bash command using the
@@ -28,17 +28,7 @@ export function parseBashCommandsSync(command: string): BashCommand[] | null {
   const tree = parser.parse(command);
   if (!tree) return [];
   try {
-    const parseProgram: ParseProgram = (source) => {
-      const payloadTree = parser.parse(source);
-      // `null` = unparseable (fail-closed); an empty array is a clean parse of
-      // a command-less payload (provably inert).
-      if (!payloadTree || payloadTree.rootNode.hasError) return null;
-      try {
-        return collectCommands(payloadTree.rootNode, { parseProgram });
-      } finally {
-        payloadTree.delete();
-      }
-    };
+    const parseProgram = makeParseProgram(parser);
     return withSalvagedRoots(tree.rootNode, parser, (salvaged) => [
       ...collectCommands(tree.rootNode, { parseProgram }),
       ...salvaged.flatMap(collectSalvagedCommands),

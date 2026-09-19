@@ -26,6 +26,7 @@ import { processTerminalCandidatePath, processTerminalPath } from "../runs/backg
 import { resultFilePath } from "../runs/background/result-files.ts";
 import { nestedResultsPath } from "../runs/shared/nested-events.ts";
 import { normalizeExtensionBindings, type ExtensionBindings } from "../runs/shared/extension-bindings.ts";
+import { projectScopedProfileTrustError } from "../runs/shared/sandbox-profile-guard.ts";
 import { resolveRequiredChildExtensions } from "../shared/required-child-extensions.ts";
 
 // v3: the contract reports the resolved Intercom bridge state and binds its
@@ -352,21 +353,26 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 	const trustedProjectCwd = input.projectTrusted === true
 		? path.resolve(input.trustedProjectCwd ?? effectiveCwd)
 		: undefined;
-	if (agent.sandbox && (agent.source === "project" || agent.override?.scope === "project") && input.projectTrusted !== true) {
-		const message = `Agent '${agent.name}' selects sandbox profile '${agent.sandbox}' from project scope, but the project is not trusted. Trust the project and retry.`;
-		return { ok: false, code: "untrusted_project", message, diagnostics: [{ code: "untrusted_project", severity: "error", message }] };
-	}
-	if (agent.permissionProfile && (agent.source === "project" || agent.override?.scope === "project") && input.projectTrusted !== true) {
-		const message = `Agent '${agent.name}' selects permission profile '${agent.permissionProfile}' from project scope, but the project is not trusted. Trust the project and retry.`;
-		return { ok: false, code: "untrusted_project", message, diagnostics: [{ code: "untrusted_project", severity: "error", message }] };
-	}
-	if (agent.sandbox && (agent.source === "project" || agent.override?.scope === "project") && trustedProjectCwd !== effectiveCwd) {
-		const message = `Agent '${agent.name}' selects sandbox profile '${agent.sandbox}' from project scope, but cwd '${effectiveCwd}' does not match trusted project cwd '${trustedProjectCwd}'. Launch from the trusted project cwd and retry.`;
-		return { ok: false, code: "untrusted_project", message, diagnostics: [{ code: "untrusted_project", severity: "error", message }] };
-	}
-	if (agent.permissionProfile && (agent.source === "project" || agent.override?.scope === "project") && trustedProjectCwd !== effectiveCwd) {
-		const message = `Agent '${agent.name}' selects permission profile '${agent.permissionProfile}' from project scope, but cwd '${effectiveCwd}' does not match trusted project cwd '${trustedProjectCwd}'. Launch from the trusted project cwd and retry.`;
-		return { ok: false, code: "untrusted_project", message, diagnostics: [{ code: "untrusted_project", severity: "error", message }] };
+	const projectScoped = agent.source === "project" || agent.override?.scope === "project";
+	const profileTrustError = projectScopedProfileTrustError({
+		kind: "sandbox",
+		agentName: agent.name,
+		profileName: agent.sandbox ?? "",
+		projectScoped: Boolean(agent.sandbox) && projectScoped,
+		trustedCwd: trustedProjectCwd,
+		effectiveCwd,
+		messageStyle: "preflight",
+	}) ?? projectScopedProfileTrustError({
+		kind: "permission",
+		agentName: agent.name,
+		profileName: agent.permissionProfile ?? "",
+		projectScoped: Boolean(agent.permissionProfile) && projectScoped,
+		trustedCwd: trustedProjectCwd,
+		effectiveCwd,
+		messageStyle: "preflight",
+	});
+	if (profileTrustError) {
+		return { ok: false, code: "untrusted_project", message: profileTrustError, diagnostics: [{ code: "untrusted_project", severity: "error", message: profileTrustError }] };
 	}
 	if (agent.sandbox && (agent.runner?.type === "external-cli" || agent.runner?.type === "external-job")) {
 		const message = `Agent '${agent.name}' requests sandbox profile '${agent.sandbox}', but runner.type='${agent.runner.type}' cannot load the native pi-sandbox extension.`;

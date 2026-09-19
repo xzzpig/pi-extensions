@@ -12,7 +12,7 @@ import {
   type MappingSnapshotSource,
   maskOriginal,
   parseCategoryFromPlaceholder,
-} from "../index.ts";
+} from "../mapping-view.ts";
 
 // Build placeholder strings programmatically instead of writing them as
 // literals: complete placeholder-shaped literals are unreliable inside a

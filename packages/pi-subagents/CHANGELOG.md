@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.15.1] - 2026-09-19
+
+### Changed
+
+- **Conflict-surface refactor, no behavior change.** The agent-eject implementation moved to fork-only `src/agents/agent-eject.ts`; the sandbox/permission-profile resolution and launch-env construction moved to fork-only `src/runs/shared/profile-extensions.ts` and `profile-launch-env.ts` (all error messages byte-identical); profile-name validation and project-trust error copies were deduplicated into the fork-only shared modules; fork test blocks moved out of five upstream test files (now byte-identical to upstream) into `test/unit/fork-*.test.ts`; fork documentation chapters moved to `docs/fork-extensions.md`.
+
 ## [0.15.0] - 2026-09-17
 
 ### Changed

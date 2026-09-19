@@ -1,6 +1,7 @@
 import { createHttpProxyServer } from './http-proxy.js'
 import { createSocksProxyServer } from './socks-proxy.js'
 import type { SocksProxyWrapper } from './socks-proxy.js'
+import { isNetworkDisabled } from './fork-network.js'
 import { createMuxProxyServer, type MuxProxyServer } from './mux-proxy.js'
 import { listenInRange } from './listen-in-range.js'
 import { SentinelRegistry } from './credential-sentinel.js'
@@ -1385,15 +1386,10 @@ function createManager(legacySingleton: boolean): ISandboxManager {
     // same flag, so a per-call override that re-enables restrictions cannot
     // route through a proxy that was never started — hosts would be hard-
     // blocked instead. Call reset() + initialize() to toggle globally.
-    //
-    // Precedence mirrors fsDisabled below: when a caller passes a per-call
-    // network override at all, its `disabled` (defaulting to false) wins
-    // outright; a global disabled=true must not leak through an overriding
-    // block that omits the key.
-    const networkDisabled =
-      customConfig?.network !== undefined
-        ? (customConfig.network.disabled ?? false)
-        : (config?.network.disabled ?? false)
+    const networkDisabled = isNetworkDisabled(
+      customConfig?.network,
+      config?.network,
+    )
 
     // Network RESTRICTION is needed whenever network config is specified
     // and not disabled. This includes empty allowedDomains which means
@@ -1545,10 +1541,10 @@ function createManager(legacySingleton: boolean): ISandboxManager {
         config?.network?.allowedDomains !== undefined
       // Same precedence as wrapWithSandbox(): a per-call network override
       // owns its disabled key outright.
-      const networkDisabled =
-        customConfig?.network !== undefined
-          ? (customConfig.network.disabled ?? false)
-          : (config?.network.disabled ?? false)
+      const networkDisabled = isNetworkDisabled(
+        customConfig?.network,
+        config?.network,
+      )
       if (hasNetworkConfig && !networkDisabled) {
         if (!(await waitForNetworkInitialization()) || !managerContext) {
           throw new Error(

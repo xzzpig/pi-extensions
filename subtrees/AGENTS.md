@@ -19,9 +19,21 @@ The non-example fields are:
 | `upstreamCommit` | Exact 40-character commit recorded at synchronization.                                                                                           |
 | `squash`         | Whether subtree history is synchronized with squash commits.                                                                                     |
 | `lastSyncedAt`   | ISO timestamp for the local record.                                                                                                              |
+| `notes`          | Optional free-text fork-divergence record (see below).                                                                                           |
 
 [`template.json.example`](template.json.example) shows the shape without
 pretending that an upstream repository has been imported.
+
+The `notes` field is the authoritative description of the fork's divergence
+from upstream: each divergence cluster with its fork-only module layout, the
+upstream-file seams it leaves behind, every "re-apply on each future sync"
+instruction, known failing tests with their baseline, and deliberate
+non-changes (accepted debt). Keep it current on **every** fork change — not
+only on syncs — so the next synchronization (or agent) can distinguish a
+necessary adaptation from a droppable difference without archaeology. The
+conflict-minimization rules the notes should reflect are defined in the
+[Pi Upstream Subtree skill](../.pi/skills/pi-upstream-subtree/SKILL.md)
+("Fork divergence discipline").
 
 The metadata's `upstreamCommit` always identifies a commit in `source`. When
 `upstreamPath` is set, its subtree trailer records a derived split commit; use

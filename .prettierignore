@@ -1,5 +1,6 @@
 node_modules
 .direnv
+.zcode
 dist
 coverage
 pnpm-lock.yaml
@@ -44,6 +45,9 @@ packages/pi-starline
 
 # Upstream-derived subtree with upstream's own formatting; check the package via its own toolchain.
 packages/pi-vibeguard
+
+# Upstream-derived subtree with upstream's own formatting (tabs); check the package via its own toolchain.
+packages/pi-context-cap
 
 # /dev/null device files bind-mounted into the repo root by the host
 # environment; unreadable and not part of the repository.

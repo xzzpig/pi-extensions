@@ -264,11 +264,7 @@ test("golden: legacy paused+autoContinue:true record stays paused through markdo
 		assert.equal(parsed.status, "paused", "parsed legacy record must stay paused");
 		assert.equal(parsed.autoContinue, true, "autoContinue flag survives as data");
 	} finally {
-		try {
-			rmSync(cwd, { recursive: true, force: true });
-		} catch {
-			// Temp fixture cleanup is best effort; a failed cleanup must not mask its assertions.
-		}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
 	}
 });
 

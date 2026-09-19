@@ -31,6 +31,7 @@ import { applyWatchdogLaunchRules } from "../../watchdog/rules.ts";
 import { childWatchdogProgressForModel } from "../../watchdog/child-status.ts";
 import { normalizeParentModel, resolveEffectiveSubagentModel, resolveModelOrigin, resolveModelSelection, type ModelOrigin, type ParentModel } from "../shared/model-resolution.ts";
 import { getHostBuiltinToolNames } from "../shared/child-tool-plan.ts";
+import { projectScopedProfileTrustError } from "../shared/sandbox-profile-guard.ts";
 import { projectChainOutputSchemas, resolveEffectiveOutputSchema } from "../shared/child-launch-plan.ts";
 import { formatRetainedChildren, listRetainedChildren } from "../background/retained-children.ts";
 import { resolveModelScopesForAgent, type ModelScopeConfig } from "../shared/model-scope.ts";
@@ -562,23 +563,27 @@ function trustedProjectCwd(ctx: ExtensionContext): string | undefined {
 }
 
 function sandboxProfileTrustError(agent: AgentConfig, ctx: ExtensionContext, childCwd: string): string | undefined {
-	if (!agent.sandbox || (agent.source !== "project" && agent.override?.scope !== "project")) return undefined;
-	const trustedCwd = trustedProjectCwd(ctx);
-	if (trustedCwd && trustedCwd === path.resolve(childCwd)) return undefined;
-	if (!trustedCwd) {
-		return `Agent '${agent.name}' selects sandbox profile '${agent.sandbox}' from project scope, but the project is not trusted. Trust the project and retry.`;
-	}
-	return `Agent '${agent.name}' selects sandbox profile '${agent.sandbox}' from project scope, but child cwd '${path.resolve(childCwd)}' does not match the trusted project cwd '${trustedCwd}'. Launch from the trusted project cwd and retry.`;
+	return projectScopedProfileTrustError({
+		kind: "sandbox",
+		agentName: agent.name,
+		profileName: agent.sandbox ?? "",
+		projectScoped: Boolean(agent.sandbox) && (agent.source === "project" || agent.override?.scope === "project"),
+		trustedCwd: trustedProjectCwd(ctx),
+		effectiveCwd: path.resolve(childCwd),
+		messageStyle: "executor",
+	});
 }
 
 function permissionProfileTrustError(agent: AgentConfig, ctx: ExtensionContext, childCwd: string): string | undefined {
-	if (!agent.permissionProfile || (agent.source !== "project" && agent.override?.scope !== "project")) return undefined;
-	const trustedCwd = trustedProjectCwd(ctx);
-	if (trustedCwd && trustedCwd === path.resolve(childCwd)) return undefined;
-	if (!trustedCwd) {
-		return `Agent '${agent.name}' selects permission profile '${agent.permissionProfile}' from project scope, but the project is not trusted. Trust the project and retry.`;
-	}
-	return `Agent '${agent.name}' selects permission profile '${agent.permissionProfile}' from project scope, but child cwd '${path.resolve(childCwd)}' does not match the trusted project cwd '${trustedCwd}'. Launch from the trusted project cwd and retry.`;
+	return projectScopedProfileTrustError({
+		kind: "permission",
+		agentName: agent.name,
+		profileName: agent.permissionProfile ?? "",
+		projectScoped: Boolean(agent.permissionProfile) && (agent.source === "project" || agent.override?.scope === "project"),
+		trustedCwd: trustedProjectCwd(ctx),
+		effectiveCwd: path.resolve(childCwd),
+		messageStyle: "executor",
+	});
 }
 
 export function removeForegroundControlIfIdle(state: SubagentState, runId: string, trackRetainedNestedRoute?: (rootRunId: string) => void): boolean {

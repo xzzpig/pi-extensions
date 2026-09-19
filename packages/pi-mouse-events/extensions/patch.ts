@@ -36,6 +36,10 @@ import {
   type MouseHandlerRegistrationOptions,
 } from "../api.ts";
 import { dispatchMouseEvent } from "./dispatch.ts";
+import {
+  runCopyHandlersInPriorityOrder,
+  runMouseHandlersInPriorityOrder,
+} from "./test-support.ts";
 import { isPatchable, type MouseReceiver } from "./receiver.ts";
 import { parseMouseEventWith } from "./parse.ts";
 
@@ -83,12 +87,6 @@ interface PatchCore {
   mouseHandlers: MouseHandlerEntry[];
   copyHandlers: CopyHandlerEntry[];
   nextHandlerId: number;
-}
-
-function sorted<T extends { priority: number; id: number }>(
-  entries: readonly T[],
-): T[] {
-  return [...entries].sort((a, b) => b.priority - a.priority || a.id - b.id);
 }
 
 /**
@@ -181,23 +179,11 @@ export function installMousePatches(
     const dispatched = outcome.dispatched;
 
     // 2) Registered handlers, when no component took the event.
-    if (!handled) {
-      for (const entry of sorted(core.mouseHandlers)) {
-        let result: { handled?: boolean } | undefined | void;
-        try {
-          result = entry.handler({
-            event: { ...event, handled: false, dispatched: undefined },
-            tui: receiver as unknown as TUI,
-          });
-        } catch (error) {
-          console.error("[pi-mouse-events] mouse handler error:", error);
-          continue;
-        }
-        if (result?.handled) {
-          handled = true;
-          break;
-        }
-      }
+    if (
+      !handled &&
+      runMouseHandlersInPriorityOrder(core.mouseHandlers, event, receiver)
+    ) {
+      handled = true;
     }
 
     emit({ ...event, handled, dispatched });
@@ -218,16 +204,7 @@ export function installMousePatches(
       ...args: unknown[]
     ): unknown {
       live = this as unknown as MouseReceiver;
-      for (const entry of sorted(core.copyHandlers)) {
-        let result: { handled?: boolean } | undefined | void;
-        try {
-          result = entry.handler({ tui: this as unknown as TUI });
-        } catch (error) {
-          console.error("[pi-mouse-events] copy handler error:", error);
-          continue;
-        }
-        if (result?.handled) return true;
-      }
+      if (runCopyHandlersInPriorityOrder(core.copyHandlers, this)) return true;
       return Reflect.apply(originalCopy!, this, args);
     };
     target.copyActiveSelectionToClipboard = patchedCopy;

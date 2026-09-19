@@ -861,7 +861,10 @@ function pushReadDenyDirMounts(
  * files that already exist on the host (including symlinks) while still
  * dropping genuinely absent paths.
  */
-function pathEntryLstatExists(p: string): boolean {
+// [fork] Exported for the pi-sandbox fork, which judges user-configured
+// denyWrite paths with the same lstat semantics (a dangling symlink counts
+// as an existing, still-protected entry).
+export function pathEntryLstatExists(p: string): boolean {
   try {
     fs.lstatSync(p)
     return true

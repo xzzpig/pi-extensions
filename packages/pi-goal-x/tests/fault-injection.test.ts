@@ -34,7 +34,7 @@ function tempCwd(): string {
 }
 
 function cleanup(cwd: string): void {
-	try { fs.rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
+	try { fs.rmSync(cwd, { recursive: true, force: true }); } catch {}
 }
 
 function invalidateAll(): void {

@@ -1,6 +1,6 @@
 {
   "name": "@xzzpig/pi-vibeguard",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Pi extension that replaces sensitive strings with placeholders before LLM requests (inspired by VibeGuard), with local /vibeguard:list and /vibeguard:stats mapping viewers and session-scoped temporary suspension (/vibeguard:disable|enable|status|categories).",
   "type": "module",
   "license": "MIT",
@@ -20,6 +20,9 @@
   ],
   "files": [
     "index.ts",
+    "mapping-view.ts",
+    "category-picker.ts",
+    "suspension-filter.ts",
     "README.md",
     "CHANGELOG.md",
     "vibeguard.config.json.example",

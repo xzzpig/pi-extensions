@@ -13,7 +13,9 @@
   },
   "include": [
     "index.ts",
-    "tests/**/*.ts",
-    "test-engine.ts"
+    "mapping-view.ts",
+    "category-picker.ts",
+    "suspension-filter.ts",
+    "tests/**/*.ts"
   ]
 }

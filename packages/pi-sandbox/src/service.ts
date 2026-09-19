@@ -1,4 +1,4 @@
-import { listGlobalSandboxProfiles } from "./config.ts";
+import { listGlobalSandboxProfiles } from "./profile-config.ts";
 
 /**
  * Outcome of selecting or clearing the session sandbox profile.

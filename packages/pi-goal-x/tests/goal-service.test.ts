@@ -85,7 +85,7 @@ function fixture() {
 	const { ref, log } = makeRef(written);
 	const service = new GoalService(ref);
 	const cleanup = () => {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
+		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
 	};
 	return { cwd, written, ref, log, service, cleanup };
 }

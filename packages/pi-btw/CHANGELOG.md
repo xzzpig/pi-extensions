@@ -4,6 +4,13 @@ All notable changes to the `@xzzpig/pi-btw` fork are documented here. This
 fork tracks [`dbachelder/pi-btw`](https://github.com/dbachelder/pi-btw) via git
 subtree; entries below describe only fork-specific deviations from upstream.
 
+## 0.8.1
+
+### Changed
+
+- **Conflict-surface refactor, no behavior change.** Fork-only cleanup of `extensions/btw.ts`: dead `removeTranscriptTurn` import removed, in-code SAFETY annotations removed. The transcript overlay now caches rendered lines per state-mutation version and width, so streaming frames no longer re-run the full markdown render of the whole thread (output is unchanged).
+- The npm package no longer ships the deregistered `skills/` directory, and the stale `package-lock.json` (pinned to an old `@xzzpig/pi-components`, unparseable with `catalog:` devDependencies) was deleted; this pnpm monorepo never reads it.
+
 ## 0.8.0
 
 ### Changed

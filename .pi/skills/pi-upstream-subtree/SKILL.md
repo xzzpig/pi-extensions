@@ -1,6 +1,6 @@
 ---
 name: pi-upstream-subtree
-description: Add and maintain Pi plugins derived from upstream repositories with git subtree, structured metadata, conflict handling, and auditable synchronization. Use when importing, updating, splitting, or pushing an upstream-derived pi-* package.
+description: Add and maintain Pi plugins derived from upstream repositories with git subtree, structured metadata, conflict handling, fork-divergence conflict-minimization discipline, and auditable synchronization. Use when importing, updating, splitting, pushing, or writing fork code (二开) inside an upstream-derived pi-* package.
 compatibility: Requires a clean Git worktree, direnv/Nix environment, Node.js 24, pnpm 11, and git-subtree.
 ---
 
@@ -120,6 +120,94 @@ jq --arg n "@xzzpig/${name}" '.name = $n' "packages/${name}/package.json" \
 
 Keep the scope OUT of `subtrees/*.json` records: the schema validates `name`
 against the unscoped `pi-*` pattern and rejects `@xzzpig/pi-*` there.
+
+## Fork divergence discipline (二开分歧纪律)
+
+Every fork edit lands in one of two places: a **fork-only new file** (zero
+conflict surface on future `git subtree pull --squash` syncs) or an **edit
+inside an upstream file** (a recurring cost, re-paid by hand on every sync).
+Choose the first whenever mechanically possible, and keep the second as small
+as the feature allows. Apply these rules while writing fork code AND re-audit
+them after every sync — formatting drift, lockfile churn, and stale shims
+accumulate quietly.
+
+### Prefer fork-only files with a minimal upstream seam
+
+- New logic (helpers, parsers, UI modals, commands, runners, guard
+  functions) goes into a fork-only module. The upstream file keeps only an
+  import plus the smallest possible call site (the "seam"). Repo-proven
+  shapes: `runtime-discovery.ts` (upstream file reduced to one replaced
+  line), `pi-sandbox/src/tool-display-decoration.ts` (3-line seam),
+  `agent-eject.ts` (upstream file exports 3 private helpers, `handleEject`
+  delegates).
+- Never leave a large fork block inside an upstream file — not even a
+  contiguous appended region. On the next sync, upstream edits near the
+  region collide with it. Extract it (fork module + seam) instead of
+  baking it in.
+- When an upstream function needs fork behavior, prefer exactly one of:
+  - a parameter/hook with a default value that keeps upstream call sites
+    and behavior byte-stable;
+  - pre-processing at a single fork-owned call site instead of threading
+    new parameters through an upstream call chain — signature and call-site
+    edits are the hunks git merges worst;
+  - a fork-only pure function the upstream file calls once.
+- To cross a package boundary, export the helper from the dependency fork
+  (one `export` keyword on a fork-added or stable symbol) instead of copying
+  the implementation; copies drift silently.
+
+### Keep upstream files byte-stable
+
+- Never reformat an upstream file. Tab style, quote style, import order,
+  line wrapping, and trailing newlines all stay exactly as upstream wrote
+  them, even when they look wrong. Fork-only files may use any style; add
+  the subtree prefix to root `.prettierignore` when upstream formatting is
+  not prettier-clean, and never point a formatter at upstream files.
+- After each sync, audit the diff for gratuitous noise before adapting:
+  compare per-file `git diff --numstat` against `git diff -w --numstat`
+  (whitespace-ignoring). Files whose only change is whitespace are restored
+  byte-identical with `git show <upstreamCommit>:<path>`; mixed files are
+  rebuilt from upstream bytes plus the substantive lines. A growing raw
+  diff with a stable `-w` diff is pure conflict surface.
+- Do not hand-edit `package-lock.json`. It is unconsumed in this pnpm
+  monorepo: restore upstream bytes after each sync, regenerate it
+  mechanically (`npm install --package-lock-only`) when it must track
+  package.json, or delete it and expect it to resurrect on the next pull —
+  record the choice in the record's `notes`.
+- Comment-only insertions (`SAFETY:`, lint-ignore notes) are upstream edits
+  too. Keep them on fork-written lines or in fork-only files; never
+  annotate upstream-original lines.
+- Before adding a "new" fork file, check it is not a copy of something
+  upstream later moved, renamed, or deleted — a zero-reference fork file
+  (often a revived upstream module) is pure dead weight; delete it.
+- Deleting an upstream file (e.g. a package-local lockfile or workspace
+  file) is a modify/delete conflict on every future pull. Do it only when
+  required (e.g. pnpm pack), and record the recurring `git rm` step in the
+  `notes`.
+
+### Prefer fork-only test and doc files
+
+- Fork behavior tests live in fork-only test files (runners discover tests
+  by glob; a new file is free). Upstream test files keep only assertion
+  changes to genuinely upstream cases — and those must be re-reviewed on
+  every sync.
+- Docs follow the same split: fork chapters live in fork-only docs; the
+  upstream doc keeps only irreducible inline edits (package renames, field
+  lists).
+- One fork-only helper beats N scattered copies: the same validation
+  try/catch or trust-check duplicated across upstream files is N conflict
+  points for one edit.
+
+### Record and re-audit
+
+- Keep `subtrees/<name>.json` `notes` current on every fork change, not
+  just on syncs: each divergence cluster, which fork-only module holds it,
+  every "re-apply on each future sync" instruction, the seam locations,
+  known failing tests with their baseline, and deliberate non-changes
+  (accepted debt, e.g. lint findings intentionally left unfixed). Sync-time
+  agents read these notes; a missing or stale note turns the next sync into
+  archaeology and risks discarding a necessary adaptation.
+- After every sync and before the follow-up commit, re-run the whitespace
+  audit above and fix noise while the diff is fresh.
 
 ## Add an upstream plugin
 
@@ -369,6 +457,14 @@ jq -e --arg n "@xzzpig/${name}" '.name == $n' "packages/${name}/package.json"
 pnpm --filter "@xzzpig/${name}" run typecheck 2>/dev/null || true
 pnpm exec prettier --check .
 direnv reload
+
+# Fork-divergence audit (see "Fork divergence discipline"): for every
+# upstream file the fork touches, the raw numstat must equal the whitespace-
+# ignoring numstat. raw > -w means formatting noise — restore those lines to
+# upstream bytes before committing, not after the next sync collides on them.
+h=$(git hash-object -w "packages/${name}/<modified-upstream-file>")
+git diff --numstat "${commit}:<upstream-path>" "$h"
+git diff --numstat -w "${commit}:<upstream-path>" "$h"
 ```
 
 For a successful `git subtree pull`, verify its second parent before a later

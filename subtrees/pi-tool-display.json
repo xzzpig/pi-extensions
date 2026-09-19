@@ -9,5 +9,5 @@
   "upstreamCommit": "91cef7580078371f8dc49a8607222807ad6a424d",
   "squash": true,
   "lastSyncedAt": "2026-08-09T02:30:00.000Z",
-  "notes": "Forked from MasuRii/pi-tool-display; local bashLivePreviewMode (tail live preview for running bash commands) feature intentionally diverges from upstream."
+  "notes": "Forked from MasuRii/pi-tool-display; local bashLivePreviewMode (tail live preview for running bash commands) feature intentionally diverges from upstream. The fork also adds a kind:'bash' tool-display adapter so pi-sandbox's decorated bash tool renders natively (renderBashDisplayResult extracted in tool-overrides.ts, serving both the built-in override path and the adapter; the promptGuidelines-copying registration-test assertions match upstream createBuiltinToolDisplay behavior), plus type-publishing build (rollup.dts.config.mjs, exports types -> dist/public.d.ts via prepack). 2026-09-19: tail/head preview unified — upstream formatTruncationHint gained an optional label param and buildPreviewText an optional take:'head'|'tail' param (defaults keep upstream behavior byte-stable); the fork-only formatEarlierLinesHint/buildTailPreviewText copies were removed and the unreachable empty-lines branch dropped."
 }

@@ -21,3 +21,17 @@ export function validateSandboxProfileName(value: unknown, label = "sandbox prof
 	}
 	return value;
 }
+
+/**
+ * [fork] Validate an optional sandbox profile selector: like
+ * {@link validateSandboxProfileName} but returns `undefined` instead of
+ * throwing when the value is absent or invalid. Stored/status readers use this
+ * to tolerate corrupt or legacy payloads without failing the whole report.
+ */
+export function validateSandboxProfileNameOptional(value: unknown): string | undefined {
+	try {
+		return validateSandboxProfileName(value);
+	} catch {
+		return undefined;
+	}
+}

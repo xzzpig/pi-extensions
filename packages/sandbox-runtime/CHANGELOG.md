@@ -5,6 +5,12 @@ This fork tracks [`carderne/sandbox-runtime`](https://github.com/carderne/sandbo
 (itself derived from Anthropic's sandbox-runtime) via git subtree; entries below
 describe only fork-specific deviations from upstream.
 
+## 0.0.73
+
+### Changed
+
+- **Conflict-surface refactor, no behavior change.** `pathEntryLstatExists` is now exported (also re-exported from the package root) for the pi-sandbox fork, whose duplicate `pathEntryExists` was removed; the network-disabled precedence logic consolidated into fork-only `src/sandbox/fork-network.ts` (`isNetworkDisabled`); the protectNonexistentFiles tests moved from `test/sandbox/mandatory-deny-paths.test.ts` (byte-identical to upstream again) to fork-only `test/sandbox/protect-nonexistent-files.test.ts`.
+
 ## 0.0.72
 
 ### Changed

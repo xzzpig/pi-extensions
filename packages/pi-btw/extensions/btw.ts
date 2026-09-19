@@ -6,7 +6,6 @@ import {
   findLatestEntry,
   finishTurn,
   hasStreamingTranscriptEntry,
-  removeTranscriptTurn,
   renderTranscriptLines,
   type ToolComponentLookup,
   type TranscriptEntry,
@@ -465,8 +464,6 @@ function buildBtwSeedState(
             return [];
           }
 
-          // SAFETY: entry is object-checked above; fields are re-validated
-          // immediately below (role: string, content: array) before any use.
           const message = entry as unknown as Partial<Message> & { role?: string; customType?: string; content?: unknown };
           if (typeof message.role !== "string" || !Array.isArray(message.content)) {
             return [];
@@ -568,15 +565,51 @@ function createEmptyTranscriptState(): BtwTranscriptState {
   return createTranscriptState();
 }
 
+// The overlay caches rendered transcript lines across frames. The shared
+// library mutates entries IN PLACE (upsertText rewrites text on the latest
+// entry; finishTurn flips streaming=false across the whole finished turn), so
+// identity checks cannot detect changes — every mutation must bump this
+// version through the wrappers below.
+let transcriptVersion = 0;
+
+function bumpTranscriptVersion(): void {
+  transcriptVersion++;
+}
+
+const mutAppendEntry: typeof appendEntry = (...args) => {
+  bumpTranscriptVersion();
+  return appendEntry(...args);
+};
+const mutEnsureTurn: typeof ensureTurn = (...args) => {
+  bumpTranscriptVersion();
+  return ensureTurn(...args);
+};
+const mutFinishTurn: typeof finishTurn = (...args) => {
+  bumpTranscriptVersion();
+  return finishTurn(...args);
+};
+const mutEnsureToolCall: typeof ensureToolCall = (...args) => {
+  bumpTranscriptVersion();
+  return ensureToolCall(...args);
+};
+const mutUpsertText: typeof upsertText = (...args) => {
+  bumpTranscriptVersion();
+  return upsertText(...args);
+};
+const mutUpsertToolResult: typeof upsertToolResult = (...args) => {
+  bumpTranscriptVersion();
+  return upsertToolResult(...args);
+};
+
 function ensureTranscriptTurnForUserMessage(state: BtwTranscriptState): number {
   if (state.currentTurnId !== null) {
     const currentAssistant = findLatestEntry(state, state.currentTurnId, "assistant-text");
     if (currentAssistant && !currentAssistant.streaming) {
-      finishTurn(state, state.currentTurnId);
+      mutFinishTurn(state, state.currentTurnId);
     }
   }
 
-  return ensureTurn(state);
+  return mutEnsureTurn(state);
 }
 
 function extractMessageText(message: { content?: string | AssistantMessage["content"] | UserMessage["content"] }): string {
@@ -601,10 +634,11 @@ function upsertUserMessageEntry(state: BtwTranscriptState, turnId: number, text:
   const existing = findLatestEntry(state, turnId, "user-message");
   if (existing) {
     existing.text = text;
+    bumpTranscriptVersion();
     return;
   }
 
-  appendEntry(state, { type: "user-message", turnId, text });
+  mutAppendEntry(state, { type: "user-message", turnId, text });
 }
 
 function applyAssistantMessageToTranscript(
@@ -618,18 +652,18 @@ function applyAssistantMessageToTranscript(
   const answer = extractMessageText(assistantMessage);
 
   if (thinking) {
-    upsertText(state, turnId, "thinking", thinking, streaming);
+    mutUpsertText(state, turnId, "thinking", thinking, streaming);
   }
 
   if (answer) {
-    upsertText(state, turnId, "assistant-text", answer, streaming);
+    mutUpsertText(state, turnId, "assistant-text", answer, streaming);
   }
 }
 
 function applyTranscriptEvent(state: BtwTranscriptState, event: AgentSessionEvent): void {
   switch (event.type) {
     case "turn_start": {
-      ensureTurn(state);
+      mutEnsureTurn(state);
       return;
     }
     case "message_start": {
@@ -640,7 +674,7 @@ function applyTranscriptEvent(state: BtwTranscriptState, event: AgentSessionEven
       }
 
       if (event.message.role === "assistant") {
-        const turnId = ensureTurn(state);
+        const turnId = mutEnsureTurn(state);
         applyAssistantMessageToTranscript(state, turnId, event.message, true);
       }
       return;
@@ -650,7 +684,7 @@ function applyTranscriptEvent(state: BtwTranscriptState, event: AgentSessionEven
         return;
       }
 
-      const turnId = ensureTurn(state);
+      const turnId = mutEnsureTurn(state);
       applyAssistantMessageToTranscript(state, turnId, event.message, true);
       return;
     }
@@ -662,28 +696,28 @@ function applyTranscriptEvent(state: BtwTranscriptState, event: AgentSessionEven
       }
 
       if (event.message.role === "assistant") {
-        const turnId = ensureTurn(state);
+        const turnId = mutEnsureTurn(state);
         applyAssistantMessageToTranscript(state, turnId, event.message, false);
       }
       return;
     }
     case "tool_execution_start": {
-      const turnId = ensureTurn(state);
-      ensureToolCall(state, turnId, event.toolCallId, event.toolName, event.args);
+      const turnId = mutEnsureTurn(state);
+      mutEnsureToolCall(state, turnId, event.toolCallId, event.toolName, event.args);
       state.toolComponents.handleStart(event.toolCallId, event.toolName, event.args);
       return;
     }
     case "tool_execution_update": {
-      const turnId = state.toolCalls.get(event.toolCallId)?.turnId ?? ensureTurn(state);
+      const turnId = state.toolCalls.get(event.toolCallId)?.turnId ?? mutEnsureTurn(state);
       const result = toToolResultPayload(event.partialResult);
-      upsertToolResult(state, turnId, event.toolCallId, event.toolName, result, false, true);
+      mutUpsertToolResult(state, turnId, event.toolCallId, event.toolName, result, false, true);
       state.toolComponents.handleUpdate(event.toolCallId, event.toolName, result);
       return;
     }
     case "tool_execution_end": {
-      const turnId = state.toolCalls.get(event.toolCallId)?.turnId ?? ensureTurn(state);
+      const turnId = state.toolCalls.get(event.toolCallId)?.turnId ?? mutEnsureTurn(state);
       const result = toToolResultPayload(event.result);
-      upsertToolResult(state, turnId, event.toolCallId, event.toolName, result, event.isError, false);
+      mutUpsertToolResult(state, turnId, event.toolCallId, event.toolName, result, event.isError, false);
       state.toolComponents.handleEnd(event.toolCallId, event.toolName, result, event.isError);
       return;
     }
@@ -691,7 +725,7 @@ function applyTranscriptEvent(state: BtwTranscriptState, event: AgentSessionEven
       const stopReason = event.message.role === "assistant" ? event.message.stopReason : "stop";
       const outcome: BtwTurnOutcome =
         stopReason === "aborted" ? "aborted" : stopReason === "error" ? "failed" : "completed";
-      finishTurn(state, undefined, outcome);
+      mutFinishTurn(state, undefined, outcome);
       return;
     }
     default:
@@ -700,19 +734,19 @@ function applyTranscriptEvent(state: BtwTranscriptState, event: AgentSessionEven
 }
 
 function appendPersistedTranscriptTurn(state: BtwTranscriptState, details: BtwDetails): void {
-  const turnId = ensureTurn(state);
+  const turnId = mutEnsureTurn(state);
   upsertUserMessageEntry(state, turnId, details.question);
   if (details.thinking) {
-    upsertText(state, turnId, "thinking", details.thinking, false);
+    mutUpsertText(state, turnId, "thinking", details.thinking, false);
   }
-  upsertText(state, turnId, "assistant-text", details.answer, false);
-  finishTurn(state, turnId);
+  mutUpsertText(state, turnId, "assistant-text", details.answer, false);
+  mutFinishTurn(state, turnId);
 }
 
 function setTranscriptFailure(state: BtwTranscriptState, message: string): void {
-  const turnId = state.currentTurnId ?? state.lastTurnId ?? ensureTurn(state);
-  upsertText(state, turnId, "assistant-text", `❌ ${message}`, false);
-  finishTurn(state, turnId, "failed");
+  const turnId = state.currentTurnId ?? state.lastTurnId ?? mutEnsureTurn(state);
+  mutUpsertText(state, turnId, "assistant-text", `❌ ${message}`, false);
+  mutFinishTurn(state, turnId, "failed");
 }
 
 function getCompletedExchangeCount(entries: BtwTranscript): number {
@@ -872,6 +906,7 @@ class BtwOverlayComponent extends Container implements Focusable {
   private readonly summaryText: Text;
   private readonly hintsText: Text;
   private readonly readTranscriptEntries: () => BtwTranscript;
+  private readonly getTranscriptVersion: () => number;
   private readonly readToolComponents: () => ToolComponentLookup;
   private readonly getStatus: () => string | null;
   private readonly getMode: () => BtwThreadMode;
@@ -885,6 +920,7 @@ class BtwOverlayComponent extends Container implements Focusable {
   private transcriptScrollOffset = 0;
   private transcriptViewportHeight = 8;
   private followTranscript = true;
+  private transcriptRenderCache: { version: number; width: number; lines: string[] } | null = null;
   private ownsMouseReporting = false;
   private _focused = false;
   private modeTextValue = "";
@@ -906,6 +942,7 @@ class BtwOverlayComponent extends Container implements Focusable {
     theme: ExtensionContext["ui"]["theme"],
     keybindings: KeybindingsManager,
     readTranscriptEntries: () => BtwTranscript,
+    getTranscriptVersion: () => number,
     readToolComponents: () => ToolComponentLookup,
     getStatus: () => string | null,
     getMode: () => BtwThreadMode,
@@ -919,6 +956,7 @@ class BtwOverlayComponent extends Container implements Focusable {
     this.tui = tui;
     this.theme = theme;
     this.readTranscriptEntries = readTranscriptEntries;
+    this.getTranscriptVersion = getTranscriptVersion;
     this.readToolComponents = readToolComponents;
     this.getStatus = getStatus;
     this.getMode = getMode;
@@ -1125,21 +1163,32 @@ class BtwOverlayComponent extends Container implements Focusable {
   override render(width: number): string[] {
     const dialogWidth = Math.max(24, width);
     const innerWidth = Math.max(22, dialogWidth - 2);
-    // Rebuild the transcript blocks on every render: user/assistant messages
+    // Rebuild the transcript blocks only when the transcript changed (version
+    // bumped by any state mutation) or the width moved: user/assistant messages
     // go through the main-window components (markdown-aware), tool blocks stay
     // textual. Component output is already wrapped to innerWidth, so the extra
-    // wrap below only guards long tool-result lines.
-    const transcriptLines = this.wrapTranscript(
-      renderTranscriptLines(this.readTranscriptEntries(), {
-        width: innerWidth,
-        theme: this.theme,
-        emptyText: "No BTW thread yet. Ask a side question to start one.",
-        assistantLabel: "Assistant",
-        thinkingLabel: "Thinking",
-        toolComponents: this.readToolComponents(),
-      }),
-      innerWidth,
-    );
+    // wrap below only guards long tool-result lines. Without the cache every
+    // streaming frame would re-run the full markdown render for the whole
+    // transcript.
+    const transcriptVersion = this.getTranscriptVersion();
+    const cached = this.transcriptRenderCache;
+    let transcriptLines: string[];
+    if (cached && cached.version === transcriptVersion && cached.width === innerWidth) {
+      transcriptLines = cached.lines;
+    } else {
+      transcriptLines = this.wrapTranscript(
+        renderTranscriptLines(this.readTranscriptEntries(), {
+          width: innerWidth,
+          theme: this.theme,
+          emptyText: "No BTW thread yet. Ask a side question to start one.",
+          assistantLabel: "Assistant",
+          thinkingLabel: "Thinking",
+          toolComponents: this.readToolComponents(),
+        }),
+        innerWidth,
+      );
+      this.transcriptRenderCache = { version: transcriptVersion, width: innerWidth, lines: transcriptLines };
+    }
     const dialogHeight = this.getDialogHeight();
     const chromeHeight = BTW_OVERLAY_CHROME_LINES;
     const transcriptHeight = Math.max(6, dialogHeight - chromeHeight);
@@ -1661,6 +1710,7 @@ export default function (pi: ExtensionAPI) {
             theme,
             keybindings,
             () => transcriptState.entries,
+            () => transcriptVersion,
             () => transcriptState.toolComponents,
             () => overlayStatus,
             () => pendingMode,
@@ -1948,6 +1998,7 @@ export default function (pi: ExtensionAPI) {
     pendingThread = [];
     pendingMode = mode;
     transcriptState = createEmptyTranscriptState();
+    bumpTranscriptVersion();
     setOverlayDraft("");
     setOverlayStatus(null, ctx);
     if (persist) {
@@ -1965,6 +2016,7 @@ export default function (pi: ExtensionAPI) {
     btwModelOverride = null;
     btwThinkingOverride = null;
     transcriptState = createEmptyTranscriptState();
+    bumpTranscriptVersion();
     overlayDraft = "";
     lastUiContext = ctx;
     overlayStatus = null;
@@ -1974,9 +2026,6 @@ export default function (pi: ExtensionAPI) {
 
     for (let i = 0; i < branch.length; i++) {
       if (isCustomEntry(branch[i], BTW_MODEL_OVERRIDE_TYPE)) {
-        // SAFETY: isCustomEntry guarantees { type: "custom", customType, data? };
-        // data's concrete shape is written only by this extension's own
-        // session-append calls and is re-validated via details?.action below.
         const details = (branch[i] as unknown as { data?: BtwModelOverrideDetails }).data;
         if (details?.action === "set") {
           const resolved = ctx.modelRegistry.find(details.provider, details.id);
@@ -1992,8 +2041,6 @@ export default function (pi: ExtensionAPI) {
       }
 
       if (isCustomEntry(branch[i], BTW_THINKING_OVERRIDE_TYPE)) {
-        // SAFETY: isCustomEntry guarantees the custom-entry envelope; data is
-        // extension-written and discriminated by details?.action below.
         const details = (branch[i] as unknown as { data?: BtwThinkingOverrideDetails }).data;
         btwThinkingOverride =
           details?.action === "set"
@@ -2005,8 +2052,6 @@ export default function (pi: ExtensionAPI) {
 
       if (isCustomEntry(branch[i], BTW_RESET_TYPE)) {
         lastResetIndex = i;
-        // SAFETY: isCustomEntry guarantees the custom-entry envelope; data is
-        // extension-written and defaults defensively via details?.mode ?? below.
         const details = (branch[i] as unknown as { data?: BtwResetDetails }).data;
         pendingMode = details?.mode ?? "contextual";
       }
@@ -2017,8 +2062,6 @@ export default function (pi: ExtensionAPI) {
         continue;
       }
 
-      // SAFETY: isCustomEntry guarantees the custom-entry envelope; data is
-      // extension-written and re-validated via details?.question/answer below.
       const details = (entry as unknown as { data?: BtwDetails }).data;
       if (!details?.question || !details.answer) {
         continue;
@@ -2151,7 +2194,7 @@ export default function (pi: ExtensionAPI) {
       }
       if (response.stopReason === "aborted") {
         const abortedTurnId = transcriptState.currentTurnId ?? transcriptState.lastTurnId;
-        if (abortedTurnId !== null) finishTurn(transcriptState, abortedTurnId, "aborted");
+        if (abortedTurnId !== null) mutFinishTurn(transcriptState, abortedTurnId, "aborted");
         setOverlayStatus("⏹ Aborted. Press Esc again to dismiss the BTW overlay.", ctx);
         return;
       }

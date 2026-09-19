@@ -2,6 +2,12 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.7.5] — 2026-09-19 (fork release)
+
+### Changed
+
+- **Conflict-surface refactor, no behavior change.** The pi-subagents delegation executor moved to fork-only `extensions/goal-auditor-delegation.ts` (`extensions/goal-auditor.ts` keeps prompt building and re-exports, cutting its diff from ~672+/248− to ~57+/280−); `extensions/goal-policy.ts` and `tests/goal-layered-settings.test.ts` are byte-identical to upstream again; the post-compact reminder tests dropped during the v0.31.5 API gap were restored; `package-lock.json` was restored to upstream bytes (unconsumed by this pnpm monorepo).
+
 ## [0.7.4] — 2026-09-18 (fork release)
 
 ### Changed

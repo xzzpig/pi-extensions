@@ -16,3 +16,6 @@ coverage/
 # pi-subagents runtime artifacts (child run dirs created during delegation).
 .pi-subagents/
 .pi/subagents/
+
+# Local build/pack output and analysis reports (owner-managed, never committed).
+artifacts/

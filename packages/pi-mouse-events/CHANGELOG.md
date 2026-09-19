@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.1.2] — 2026-09-19
+
+### Added
+
+- **`pi-mouse-events/test-support` subpath export.** The slot-dispatch contract
+  — registered handlers run in priority order (higher first, ties by
+  registration order), the first `{ handled: true }` consumes and stops the
+  chain, a throwing handler is skipped, none handled falls through — is now
+  reachable as pure functions (`runMouseHandlersInPriorityOrder`,
+  `runCopyHandlersInPriorityOrder`, `dispatchMouseEvent`) that the runtime
+  patches themselves call, so consumer-side test shims (pi-starline) can pin
+  these semantics against the real implementation instead of re-deriving them.
+
 ## [0.1.1] — 2026-09-06
 
 ### Fixed

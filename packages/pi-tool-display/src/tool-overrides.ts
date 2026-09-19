@@ -385,62 +385,47 @@ function formatExpandHint(theme: RenderTheme): string {
   return theme.fg("muted", " • Ctrl+O to expand");
 }
 
-function formatTruncationHint(remaining: number, expanded: boolean, theme: RenderTheme): string {
+function formatTruncationHint(remaining: number, expanded: boolean, theme: RenderTheme, label = "more"): string {
   if (remaining <= 0) {
     return "";
   }
   const hint = expanded ? "" : " • Ctrl+O to expand";
-  return `\n${theme.fg("muted", `... (${remaining} more ${pluralize(remaining, "line")}${hint})`)}`;
+  return `\n${theme.fg("muted", `... (${remaining} ${label} ${pluralize(remaining, "line")}${hint})`)}`;
 }
 
+/**
+ * Preview of `lines` capped to `maxLines`. The default `take: "head"` shows
+ * the first lines and hints at the trailing remainder; `take: "tail"` shows
+ * the last lines (live partial bash output) and hints at the lines omitted
+ * from the head, so long running commands keep the most recent output
+ * visible while streaming.
+ */
 function buildPreviewText(
   lines: string[],
   maxLines: number,
   theme: RenderTheme,
   expanded: boolean,
+  take: "head" | "tail" = "head",
 ): string {
   if (lines.length === 0) {
     return theme.fg("muted", "↳ (no output)");
   }
 
-  const { shown, remaining } = previewLines(lines, maxLines);
+  let shown: string[];
+  let remaining: number;
+  let label = "more";
+  if (take === "tail") {
+    const limit = Math.max(0, maxLines);
+    shown = lines.slice(-limit);
+    remaining = Math.max(0, lines.length - shown.length);
+    label = "earlier";
+  } else {
+    ({ shown, remaining } = previewLines(lines, maxLines));
+  }
   let text = shown
     .map((line) => theme.fg("toolOutput", sanitizeAnsiForThemedOutput(line)))
     .join("\n");
-  text += formatTruncationHint(remaining, expanded, theme);
-  return text;
-}
-
-function formatEarlierLinesHint(omitted: number, expanded: boolean, theme: RenderTheme): string {
-  if (omitted <= 0) {
-    return "";
-  }
-  const hint = expanded ? "" : " • Ctrl+O to expand";
-  return `\n${theme.fg("muted", `... (${omitted} earlier ${pluralize(omitted, "line")}${hint})`)}`;
-}
-
-/**
- * Tail-style preview: shows the last `maxLines` lines, with a hint for the
- * lines omitted from the head. Used for live partial bash output so long
- * running commands keep the most recent output visible while streaming.
- */
-function buildTailPreviewText(
-  lines: string[],
-  maxLines: number,
-  theme: RenderTheme,
-  expanded: boolean,
-): string {
-  if (lines.length === 0) {
-    return theme.fg("muted", "↳ (no output)");
-  }
-
-  const limit = Math.max(0, maxLines);
-  const shown = lines.slice(-limit);
-  const omitted = Math.max(0, lines.length - shown.length);
-  let text = shown
-    .map((line) => theme.fg("toolOutput", sanitizeAnsiForThemedOutput(line)))
-    .join("\n");
-  text += formatEarlierLinesHint(omitted, expanded, theme);
+  text += formatTruncationHint(remaining, expanded, theme, label);
   return text;
 }
 
@@ -1080,7 +1065,7 @@ function renderBashLivePreview(
     return textResult("");
   }
   if (config.bashLivePreviewMode === "tail") {
-    let text = buildTailPreviewText(prepared.lines, prepared.maxLines, theme, options.expanded);
+    let text = buildPreviewText(prepared.lines, prepared.maxLines, theme, options.expanded, "tail");
     if (config.showTruncationHints) {
       text += formatBashTruncationHints(details, theme);
     }

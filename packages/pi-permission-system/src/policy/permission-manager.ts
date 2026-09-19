@@ -11,16 +11,22 @@ import {
   getProjectAgentsDir,
   getProjectConfigPath,
 } from "#src/config/config-paths";
-import { normalizeFlatPermissionValue } from "#src/config/config-loader";
-import { normalizeFlatConfig } from "./normalize";
-import { readPermissionProfileEnv } from "../permission-profile";
-import { type PathFlavor, posixPathFlavor } from "#src/path/path-flavor";
 import {
   FilePolicyLoader,
   type PolicyLoader,
   type PolicyLoaderOptions,
   type ResolvedPolicyPaths,
 } from "#src/config/policy-loader";
+import { type PathFlavor, posixPathFlavor } from "#src/path/path-flavor";
+import type {
+  FlatPermissionConfig,
+  PermissionCheckResult,
+  PermissionState,
+} from "#src/types";
+import { isPermissionState } from "#src/types";
+import { readPermissionProfileEnv } from "../permission-profile";
+import { normalizeFlatConfig } from "./normalize";
+import { resolveProfileScope } from "./profile-scope";
 import type { Rule, RuleOrigin, Ruleset } from "./rule";
 import {
   evaluate,
@@ -36,13 +42,6 @@ import {
   synthesizeBaseline,
   synthesizeDefaults,
 } from "./synthesize";
-import type {
-  FlatPermissionConfig,
-  PermissionCheckResult,
-  PermissionState,
-  ScopeConfig,
-} from "../types";
-import { isPermissionState } from "../types";
 
 const SPECIAL_PERMISSION_KEYS = new Set(["external_directory", "path"]);
 
@@ -249,33 +248,16 @@ export class PermissionManager implements ScopedPermissionManager {
     const agentConfig = this.loader.loadAgentConfig(agentName);
     const projectAgentConfig = this.loader.loadProjectAgentConfig(agentName);
 
-    // Resolve the selected profile. The launcher env wins — it carries the
-    // validated selection of the effective agent definition, which also
-    // covers runtime-defined agents with no frontmatter file — then the
-    // project agent file, then the global agent file (the same precedence the
-    // scopes themselves have).
-    const profileName =
-      envProfileName ??
-      projectAgentConfig.profileName ??
-      agentConfig.profileName;
-
-    let profileScope: ScopeConfig | undefined;
-    let invalidProfileName: string | undefined;
-    if (profileName) {
-      const profile = globalConfig.profiles?.[profileName];
-      const permission = normalizeFlatPermissionValue(profile?.permission);
-      // Unknown name or an empty ruleset fails this scope closed: the agent
-      // must never silently run without the intended policy (an unknown name
-      // must not degrade to the unselected baseline, and an empty profile is
-      // an operator mistake, not an intent to inherit everything).
-      profileScope =
-        permission !== undefined && Object.keys(permission).length > 0
-          ? { permission }
-          : { invalid: true };
-      if (profileScope.invalid === true) {
-        invalidProfileName = profileName;
-      }
-    }
+    // Resolve the selected profile into its own scope (inserted between the
+    // project and agent scopes below): launcher env wins, then the project
+    // agent file, then the global agent file; an unknown name or an empty
+    // ruleset fails the scope closed. See `resolveProfileScope`.
+    const { profileScope, invalidProfileName } = resolveProfileScope({
+      envProfileName,
+      projectAgentProfileName: projectAgentConfig.profileName,
+      agentProfileName: agentConfig.profileName,
+      profiles: globalConfig.profiles,
+    });
 
     // Merge permission objects across scopes (lowest → highest precedence),
     // building a parallel origin map that tracks which scope contributed each

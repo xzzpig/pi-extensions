@@ -34,7 +34,7 @@ export interface LoadedConfig {
   warnings: string[];
 }
 
-function parseTokens(raw: unknown): number | null {
+export function parseTokens(raw: unknown): number | null {
   // Strict positive-integer parse: reject floats and suffix strings ("200k")
   // instead of silently truncating them to a wrong value.
   if (typeof raw === "number") {

@@ -16,4 +16,10 @@ export default [
     external,
     plugins: [dts({ tsconfig: "./tsconfig.json" })],
   },
+  {
+    input: "extensions/test-support.ts",
+    output: { file: "dist/test-support.d.ts", format: "es" },
+    external,
+    plugins: [dts({ tsconfig: "./tsconfig.json" })],
+  },
 ];

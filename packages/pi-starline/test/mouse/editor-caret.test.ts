@@ -478,7 +478,7 @@ function rowContaining(lines: readonly string[], needle: string): number {
  * arrangement `interactive-mode.js` builds, laid out by pi-tui itself.
  *
  * The prototype carries every capability `capabilities.ts` lists, so
- * `installMouse` installs all six features and the two shared patches really do
+ * `installMouseFeaturesOn` installs all six features and the two shared patches really do
  * hold two behaviours each.
  */
 function makeScene(draft: string, config = makeConfig()) {
