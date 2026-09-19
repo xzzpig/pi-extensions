@@ -34,8 +34,8 @@ test("two concurrent processes editing different keys never lose an update", asy
 		]);
 
 		const final = JSON.parse(fs.readFileSync(globalFile, "utf8"));
-		assert.equal(final.provider, `provider-${ITERATIONS - 1}`, "writer A's final value present");
-		assert.equal(final.model, `model-${ITERATIONS - 1}`, "writer B's final value present — no lost update");
+		assert.equal(final.auditor?.provider, `provider-${ITERATIONS - 1}`, "writer A's final value present");
+		assert.equal(final.auditor?.model, `model-${ITERATIONS - 1}`, "writer B's final value present — no lost update");
 		assert.ok(!fs.existsSync(`${globalFile}.lock`), "lock released");
 	} finally {
 		fs.rmSync(dir, { recursive: true, force: true });

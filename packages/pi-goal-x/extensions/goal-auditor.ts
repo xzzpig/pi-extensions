@@ -1,7 +1,7 @@
 import { createExtensionRuntime, type ExtensionContext, type ResourceLoader } from "@earendil-works/pi-coding-agent";
 import type { GoalRecord, GoalTask, GoalTaskList } from "./goal-record.ts";
 import { countTaskSubtree } from "./goal-task-count.ts";
-import type { GoalSettings } from "./goal-settings.ts";
+import type { GoalAuditorSettings, GoalSettings } from "./goal-settings.ts";
 import { statusLabel } from "./goal-core.ts";
 
 /**
@@ -127,6 +127,47 @@ function minimalGoalMetadata(goal: GoalRecord): string {
 	].filter(Boolean).join("\n");
 }
 
+/**
+ * Operator-configurable audit prompt sections (settings `auditor.*`). Every
+ * block is absent when its setting is unset, so an unconfigured project gets a
+ * byte-for-byte identical prompt. All operator payloads are escaped before
+ * interpolation.
+ */
+function operatorAuditPromptBlocks(auditor: GoalAuditorSettings | undefined): string[] {
+	return [
+		...(auditor?.checklistExtra?.length ? [
+			"",
+			"Additional audit checks required by operator configuration:",
+			...auditor.checklistExtra.map((item, index) => `${index + 1}. ${escapePromptPayload(item)}`),
+		] : []),
+		...(auditor?.evidenceRequests?.length ? [
+			"",
+			"Evidence the operator asks you to collect (use your read-only tools; the results are evidence to cross-check, not proof by themselves):",
+			...auditor.evidenceRequests.map((item, index) => `${index + 1}. ${escapePromptPayload(item)}`),
+		] : []),
+		...(auditor?.strictness === "strict" ? [
+			"",
+			"Audit posture (operator): strict — approve only when every explicit requirement is proven with inspectable evidence; when decisive evidence is missing, disapprove and name the gap.",
+		] : []),
+		...(auditor?.strictness === "lenient" ? [
+			"",
+			"Audit posture (operator): lenient — approve when the user-facing value the objective asked for is delivered and no explicit requirement is missing; record polish-level gaps as findings instead of rejecting.",
+		] : []),
+		...(auditor?.instructions ? [
+			"",
+			"Operator audit instructions (project configuration, in addition to the checklist above):",
+			"<operator_instructions>",
+			escapePromptPayload(auditor.instructions),
+			"</operator_instructions>",
+		] : []),
+		...(auditor?.reportFormat ? [
+			"",
+			"Report format requirements (operator):",
+			escapePromptPayload(auditor.reportFormat),
+		] : []),
+	];
+}
+
 export function buildGoalAuditorPrompt(args: {
 	goal: GoalRecord;
 	detailedSummary: string;
@@ -143,6 +184,26 @@ export function buildGoalAuditorPrompt(args: {
 	 */
 	changeManifest?: string | null;
 }): string {
+	const auditor = args.settings?.auditor;
+	// The default checklist stays byte-for-byte identical to the pre-0.8.0
+	// prompt; `auditor.checklist` replaces it wholesale (the protocol tail
+	// below is never part of it and always remains).
+	const baseChecklist = [
+		"1. Extract the real success criteria from the objective, including quality and reader outcomes.",
+		"2. Inspect artifacts or command output that can prove or disprove those criteria. Treat the executor claim as an untrusted assertion and cross-check it with actual file/shell evidence — a claim alone is never proof.",
+		...(!args.settings?.disableContracts && args.goal.verificationContract?.trim()
+			? ["3. Verify every item in the verification contract. If any item is missing or weakly addressed, disapprove."]
+			: []),
+		"4. Explain missing or weak evidence, especially scaffold-versus-final quality gaps.",
+		// Conditional on purpose: with no manifest this prompt must stay
+		// byte-for-byte identical to the pre-manifest behavior.
+		...(args.changeManifest?.trim()
+			? ["5. Cross-check the workspace change manifest entries against the actual repository content: machine-collected evidence is not proof and never substitutes for verification."]
+			: []),
+	];
+	const checklistLines = auditor?.checklist !== undefined
+		? auditor.checklist.map((item, index) => `${index + 1}. ${escapePromptPayload(item)}`)
+		: baseChecklist;
 	return [
 		"You are the independent completion auditor for pi-goal-x.",
 		"The executor claims the goal is complete. Decide whether the user's objective is actually satisfied.",
@@ -200,17 +261,8 @@ export function buildGoalAuditorPrompt(args: {
 		] : []),
 		"",
 		"Audit checklist:",
-		"1. Extract the real success criteria from the objective, including quality and reader outcomes.",
-		"2. Inspect artifacts or command output that can prove or disprove those criteria. Treat the executor claim as an untrusted assertion and cross-check it with actual file/shell evidence — a claim alone is never proof.",
-		...(!args.settings?.disableContracts && args.goal.verificationContract?.trim()
-			? ["3. Verify every item in the verification contract. If any item is missing or weakly addressed, disapprove."]
-			: []),
-		"4. Explain missing or weak evidence, especially scaffold-versus-final quality gaps.",
-		// Conditional on purpose: with no manifest this prompt must stay
-		// byte-for-byte identical to the pre-manifest behavior.
-		...(args.changeManifest?.trim()
-			? ["5. Cross-check the workspace change manifest entries against the actual repository content: machine-collected evidence is not proof and never substitutes for verification."]
-			: []),
+		...checklistLines,
+		...operatorAuditPromptBlocks(auditor),
 		"",
 		"Progress reporting:",
 		"Use report_auditor_progress at natural phase boundaries so the parent dashboard can show progress.",

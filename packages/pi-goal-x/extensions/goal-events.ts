@@ -17,6 +17,7 @@ import { latestAuditorResultForGoal, readGoalLedger, goalRuntimeEvents, invalida
 import { shouldArmPostCompactReminder, shouldInjectPostCompactReminder } from "./goal-policy.ts";
 import { formatTokenValue } from "./goal-core.ts";
 import { loadGoalSettings, invalidateGoalSettingsCache, DEFAULT_CHANGE_MANIFEST_DEPTH } from "./goal-settings.ts";
+import { disposeDefaultGoalAuditor, registerDefaultGoalAuditor } from "./goal-auditor-registration.ts";
 import { createBaselineCaptureState, maybeCaptureBaseline, deleteChangeBaseline } from "./goal-change-baseline.ts";
 import { budgetLine, budgetRemaining } from "./goal-accounting.ts";
 import { asRecord, nowIso, type AssistantMessageLike, type GoalRecord } from "./goal-record.ts";
@@ -115,8 +116,8 @@ export function registerGoalEvents(core: GoalCore): void {
 			await maybeCaptureBaseline(baselineCapture, {
 				ctx,
 				goalId: baselineGoal.id,
-				mode: manifestSettings.changeManifest ?? "auto",
-				depth: manifestSettings.changeManifestDepth ?? DEFAULT_CHANGE_MANIFEST_DEPTH,
+				mode: manifestSettings.auditor?.changeManifest ?? "auto",
+				depth: manifestSettings.auditor?.changeManifestDepth ?? DEFAULT_CHANGE_MANIFEST_DEPTH,
 				reason: "turn_start",
 			});
 		}
@@ -294,6 +295,15 @@ export function registerGoalEvents(core: GoalCore): void {
 		invalidateGoalSettingsCache();
 		invalidateGoalPoolCache();
 		invalidateGoalLedgerCache();
+		// Fork: register the default goal-auditor with the installed pi-subagents
+		// owner (replaces the package agent markdown). Skipped when a configured
+		// goal-auditor exists; settings auditor.* definition tier merges in.
+		// Registration failure is intentionally silent here — pi-subagents being
+		// absent or broken is surfaced with the same actionable message when an
+		// audit actually runs.
+		await registerDefaultGoalAuditor(core.pi, ctx.cwd, {
+			isProjectTrusted: () => ctx.isProjectTrusted?.() === true,
+		});
 		core.goalService.flushTurn(ctx); // P1-3: persist any buffered transaction before reload
 		await core.loadState(ctx);
 		core.installGoalTools();
@@ -585,6 +595,7 @@ export function registerGoalEvents(core: GoalCore): void {
 		core.clearContinuationState();
 		core.terminalInputUnsubscribe?.();
 		core.terminalInputUnsubscribe = null;
+		disposeDefaultGoalAuditor();
 		if (core.state.goal) core.persist(ctx);
 	});
 }

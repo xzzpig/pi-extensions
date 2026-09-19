@@ -3,7 +3,7 @@
  * explicit immediate-creation escape hatch.
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -15,10 +15,10 @@ import { parseGoalFile } from "../extensions/storage/goal-files.ts";
 
 const CURATED_COMMANDS = [
 	"goal", "sisyphus", "goal-direct", "sisyphus-direct", "goal-tweak", "goal-pause", "goal-resume",
-	"goal-clear", "goal-list", "goal-status", "goal-subagent-eject", "goal-refresh", "goal-recovery", "goal-focus", "goal-unfocus", "goal-settings", "goal-cancel",
+	"goal-clear", "goal-list", "goal-status", "goal-refresh", "goal-recovery", "goal-focus", "goal-unfocus", "goal-settings", "goal-cancel",
 ];
 
-const REMOVED_COMMANDS = ["goals", "goals-set", "sisyphus-set", "goal-abort", "goal-audit"];
+const REMOVED_COMMANDS = ["goals", "goals-set", "sisyphus-set", "goal-abort", "goal-audit", "goal-subagent-eject"];
 
 function createHarness(cwd: string) {
 	const handlers = new Map<string, Function>();
@@ -67,31 +67,7 @@ function createHarness(cwd: string) {
 	return { handlers, commands, ctx, notifications, messages, tools, core, getActiveTools: () => [...activeTools] };
 }
 
-function installGoalAuditorPackage(agentDir: string): void {
-	const packageRoot = path.resolve(path.dirname(new URL("../package.json", import.meta.url).pathname));
-	const target = path.join(agentDir, "npm", "node_modules", "@xzzpig", "pi-goal-x");
-	mkdirSync(path.dirname(target), { recursive: true });
-	symlinkSync(packageRoot, target, "dir");
-}
-
-async function withEjectFixture(
-	run: (fixture: { cwd: string; agentDir: string; harness: ReturnType<typeof createHarness> }) => Promise<void>,
-): Promise<void> {
-	const cwd = mkdtempSync(path.join(tmpdir(), "goal-eject-command-"));
-	const agentDir = path.join(cwd, "agent-home");
-	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
-	process.env.PI_CODING_AGENT_DIR = agentDir;
-	try {
-		installGoalAuditorPackage(agentDir);
-		await run({ cwd, agentDir, harness: createHarness(cwd) });
-	} finally {
-		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
-		rmSync(cwd, { recursive: true, force: true });
-	}
-}
-
-test("exactly the seventeen curated commands are registered; legacy commands are absent", () => {
+test("exactly the sixteen curated commands are registered; legacy commands are absent", () => {
 	const cwd = mkdtempSync(path.join(tmpdir(), "goal-palette-"));
 	try {
 		const h = createHarness(cwd);
@@ -107,71 +83,11 @@ test("exactly the seventeen curated commands are registered; legacy commands are
 	}
 });
 
-test("/goal-subagent-eject writes a portable global agent without changing goal state", { concurrency: false }, async () => {
-	await withEjectFixture(async ({ cwd, agentDir, harness }) => {
-		const goalBefore = harness.core.state.goal;
-		await harness.commands.get("goal-subagent-eject")!.handler("global", harness.ctx);
-		const targetPath = path.join(agentDir, "agents", "goal-auditor.md");
-		assert.equal(existsSync(targetPath), true);
-		assert.match(readFileSync(targetPath, "utf8"), /^subagentOnlyExtensions: \/.+goal-auditor-progress\.ts$/m);
-		assert.ok(harness.notifications.some((message) => message.includes("Ejected agent 'goal-auditor' from package to user scope")));
-		assert.equal(harness.core.state.goal, goalBefore);
-		assert.equal(activeGoalFiles(cwd).length, 0);
-	});
-});
-
-test("/goal-subagent-eject selects trusted project scope interactively and cancellation is a no-op", { concurrency: false }, async () => {
-	await withEjectFixture(async ({ cwd, harness }) => {
-		mkdirSync(path.join(cwd, ".pi"), { recursive: true });
-		(harness.ctx as any).hasUI = true;
-		(harness.ctx as any).isProjectTrusted = () => true;
-		const ui = harness.ctx.ui as any;
-		ui.select = async (_title: string, options: string[]) => {
-			assert.deepEqual(options, ["Global", "Project"]);
-			return "Project";
-		};
-		await harness.commands.get("goal-subagent-eject")!.handler("", harness.ctx);
-		assert.equal(existsSync(path.join(cwd, ".pi", "agents", "goal-auditor.md")), true);
-
-		const cancelDir = path.join(cwd, "cancel-project");
-		mkdirSync(path.join(cancelDir, ".pi"), { recursive: true });
-		(harness.ctx as any).cwd = cancelDir;
-		ui.select = async () => undefined;
-		await harness.commands.get("goal-subagent-eject")!.handler("", harness.ctx);
-		assert.equal(existsSync(path.join(cancelDir, ".pi", "agents", "goal-auditor.md")), false);
-	});
-});
-
-test("/goal-subagent-eject refuses untrusted project scope without writing", { concurrency: false }, async () => {
-	await withEjectFixture(async ({ cwd, harness }) => {
-		mkdirSync(path.join(cwd, ".pi"), { recursive: true });
-		(harness.ctx as any).isProjectTrusted = () => false;
-		await harness.commands.get("goal-subagent-eject")!.handler("project", harness.ctx);
-		assert.ok(harness.notifications.some((message) => message.includes("requires a trusted project")));
-		assert.equal(existsSync(path.join(cwd, ".pi", "agents", "goal-auditor.md")), false);
-	});
-});
-
 function activeGoalFiles(cwd: string): string[] {
 	const goalsDirectory = path.join(cwd, ".pi", "goals");
 	if (!existsSync(goalsDirectory)) return [];
 	return readdirSync(goalsDirectory).filter((name) => name.startsWith("active_goal_"));
 }
-
-test("/goal-subagent-eject requires an explicit scope in headless mode without mutating goal state", async () => {
-	const cwd = mkdtempSync(path.join(tmpdir(), "goal-eject-headless-"));
-	try {
-		const h = createHarness(cwd);
-		const goalBefore = h.core.state.goal;
-		await h.commands.get("goal-subagent-eject")!.handler("", h.ctx);
-		await h.commands.get("goal-subagent-eject")!.handler("workspace", h.ctx);
-		assert.equal(h.notifications.filter((message) => message.includes("Usage: /goal-subagent-eject global|project")).length, 2);
-		assert.equal(h.core.state.goal, goalBefore);
-		assert.equal(existsSync(path.join(cwd, ".pi", "agents", "goal-auditor.md")), false);
-	} finally {
-		rmSync(cwd, { recursive: true, force: true });
-	}
-});
 
 test("/goal <objective> starts guided drafting without creating a goal", async () => {
 	const cwd = mkdtempSync(path.join(tmpdir(), "goal-palette-create-"));

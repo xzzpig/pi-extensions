@@ -61,17 +61,6 @@ export interface GoalRefreshState {
 	settings: string;
 }
 
-const AGENT_MANAGEMENT_MODULE = "@xzzpig/pi-subagents/agent-management";
-
-interface AgentManagementApi {
-	ejectAgentDefinition(input: {
-		cwd: string;
-		agent: string;
-		scope: "user" | "project";
-		projectTrusted?: boolean;
-	}): { ok: boolean; message: string };
-}
-
 /**
  * Pure diff of a goal-refresh cycle (before invalidation vs after re-read).
  * Unit-testable without the command harness; the command renders the changes.
@@ -213,48 +202,6 @@ export function registerGoalCommands(core: GoalCore): void {
 			return;
 		}
 		ctx.ui.notify(`Goal unfocused for this session. It remains open in .pi/goals: ${current.id}`, "info");
-	}
-
-	async function ejectGoalAuditorCommand(rawArgs: string, ctx: ExtensionContext): Promise<void> {
-		const requestedScope = rawArgs.trim().toLowerCase();
-		let scope: "user" | "project" | undefined;
-		if (requestedScope === "global") scope = "user";
-		else if (requestedScope === "project") scope = "project";
-		else if (requestedScope) {
-			ctx.ui.notify("Usage: /goal-subagent-eject global|project", "warning");
-			return;
-		} else if (!ctx.hasUI) {
-			ctx.ui.notify("Usage: /goal-subagent-eject global|project", "warning");
-			return;
-		} else {
-			core.enterGoalModal();
-			try {
-				const selected = await ctx.ui.select("Eject goal auditor", ["Global", "Project"]);
-				if (selected === "Global") scope = "user";
-				else if (selected === "Project") scope = "project";
-				else return;
-			} finally {
-				core.exitGoalModal();
-			}
-		}
-		if (scope === "project" && (typeof ctx.isProjectTrusted !== "function" || !ctx.isProjectTrusted())) {
-			ctx.ui.notify("Project scope ejection requires a trusted project.", "warning");
-			return;
-		}
-		let ejected: { ok: boolean; message: string };
-		try {
-			const management = await import(AGENT_MANAGEMENT_MODULE) as AgentManagementApi;
-			ejected = management.ejectAgentDefinition({
-				cwd: ctx.cwd,
-				agent: "goal-auditor",
-				scope,
-				...(scope === "project" ? { projectTrusted: true } : {}),
-			});
-		} catch (error) {
-			ctx.ui.notify(`Unable to load pi-subagents agent-management API: ${error instanceof Error ? error.message : String(error)}`, "error");
-			return;
-		}
-		ctx.ui.notify(ejected.message, ejected.ok ? "info" : "error");
 	}
 
 	function handleDirectGoalSet(rawObjective: string, ctx: ExtensionContext, mode: GoalMode): void {
@@ -454,16 +401,18 @@ export function registerGoalCommands(core: GoalCore): void {
 		{ key: "maxAutonomousRuns", label: "autonomous run allowance", section: "Goal behavior", kind: "positiveInteger" },
 		{ key: "stallTimeoutMinutes", label: "stall timeout (minutes)", section: "Goal behavior", kind: "positiveInteger" },
 		{ key: "objectiveMaxChars", label: "max objective length (0 = none)", section: "Goal behavior", kind: "positiveInteger" },
-		{ key: "changeManifest", label: "change manifest", section: "Goal behavior", kind: "enum", choices: ["auto", "off"] },
-		{ key: "changeManifestDepth", label: "change manifest scan depth", section: "Goal behavior", kind: "positiveInteger" },
 		{ key: "disableTasks", label: "disableTasks", section: "Task tracking", kind: "boolean" },
 		{ key: "subtaskDepth", label: "subtaskDepth", section: "Task tracking", kind: "positiveInteger" },
-		{ key: "disabled", label: "auditor disabled", section: "Completion auditor", kind: "boolean" },
-		{ key: "auditorAgent", label: "auditor agent", section: "Completion auditor", kind: "agentName" },
-		{ key: "auditorTimeoutMs", label: "auditor timeout (ms)", section: "Completion auditor", kind: "positiveInteger" },
-		{ key: "provider", label: "provider", section: "Completion auditor", kind: "modelSelector" },
-		{ key: "model", label: "model", section: "Completion auditor", kind: "modelSelector" },
-		{ key: "thinkingLevel", label: "thinking_level", section: "Completion auditor", kind: "thinking" },
+		{ key: "auditorDisabled", label: "auditor disabled", section: "Completion auditor", kind: "boolean", path: ["auditor", "disabled"] },
+		{ key: "auditorAgent", label: "auditor agent", section: "Completion auditor", kind: "agentName", path: ["auditor", "agent"] },
+		{ key: "auditorTimeoutMs", label: "auditor timeout (ms)", section: "Completion auditor", kind: "positiveInteger", path: ["auditor", "timeoutMs"] },
+		{ key: "auditorProvider", label: "provider", section: "Completion auditor", kind: "modelSelector", path: ["auditor"] },
+		{ key: "auditorModel", label: "model", section: "Completion auditor", kind: "modelSelector", path: ["auditor"] },
+		{ key: "auditorThinkingLevel", label: "thinking_level", section: "Completion auditor", kind: "thinking", path: ["auditor", "thinkingLevel"] },
+		{ key: "auditorChangeManifest", label: "change manifest", section: "Completion auditor", kind: "enum", choices: ["auto", "off"], path: ["auditor", "changeManifest"] },
+		{ key: "auditorChangeManifestDepth", label: "change manifest scan depth", section: "Completion auditor", kind: "positiveInteger", path: ["auditor", "changeManifestDepth"] },
+		{ key: "auditorWarmContext", label: "auditor warm context", section: "Completion auditor", kind: "boolean", path: ["auditor", "warmContext"] },
+		{ key: "auditorStrictness", label: "auditor strictness", section: "Completion auditor", kind: "enum", choices: ["balanced", "strict", "lenient"], path: ["auditor", "strictness"] },
 		// Issue #26: opt-in blocker Oracle. Disabled by default; provider/model
 		// must BOTH be set explicitly — the executor model is never used silently.
 		{ key: "oracleEnabled", label: "oracle enabled", section: "Blocker Oracle", kind: "boolean", path: ["oracle", "enabled"] },
@@ -474,17 +423,20 @@ export function registerGoalCommands(core: GoalCore): void {
 	];
 
 	function settingsValue(config: GoalSettings, key: keyof GoalSettings | string): string {
-		if (key === "strictExecutionContract" || key === "disabled" || key === "disableTasks" || key === "disableContracts" || key === "autoSelectSingleGoal" || key === "auditorProjectResources" || key === "hideUnfocusedBanner") {
+		if (key === "strictExecutionContract" || key === "disableTasks" || key === "disableContracts" || key === "autoSelectSingleGoal" || key === "auditorProjectResources" || key === "hideUnfocusedBanner") {
 			return config[key] === true ? "true" : "false";
 		}
-		if (key === "auditorAgent") return config.auditorAgent ?? DEFAULT_AUDITOR_AGENT;
-		if (key === "auditorTimeoutMs") return config.auditorTimeoutMs !== undefined ? String(config.auditorTimeoutMs) : String(DEFAULT_AUDITOR_TIMEOUT_MS);
+		if (key === "auditorDisabled") return config.auditor?.disabled === true ? "true" : "false";
+		if (key === "auditorAgent") return config.auditor?.agent ?? DEFAULT_AUDITOR_AGENT;
+		if (key === "auditorTimeoutMs") return config.auditor?.timeoutMs !== undefined ? String(config.auditor.timeoutMs) : String(DEFAULT_AUDITOR_TIMEOUT_MS);
+		if (key === "auditorChangeManifest") return config.auditor?.changeManifest ?? "auto";
+		if (key === "auditorChangeManifestDepth") return config.auditor?.changeManifestDepth !== undefined ? String(config.auditor.changeManifestDepth) : String(DEFAULT_CHANGE_MANIFEST_DEPTH);
+		if (key === "auditorWarmContext") return config.auditor?.warmContext === false ? "false" : "true";
+		if (key === "auditorStrictness") return config.auditor?.strictness ?? "balanced";
 		if (key === "subtaskDepth") return config.subtaskDepth !== undefined ? String(config.subtaskDepth) : "1";
 		if (key === "maxAutonomousRuns") return config.maxAutonomousRuns === 0 ? "0 (disabled)" : String(config.maxAutonomousRuns ?? "unlimited (default)");
 		if (key === "stallTimeoutMinutes") return config.stallTimeoutMinutes !== undefined ? String(config.stallTimeoutMinutes) : "0";
 		if (key === "objectiveMaxChars") return config.objectiveMaxChars !== undefined ? String(config.objectiveMaxChars) : "0";
-		if (key === "changeManifest") return config.changeManifest ?? "auto";
-		if (key === "changeManifestDepth") return config.changeManifestDepth !== undefined ? String(config.changeManifestDepth) : String(DEFAULT_CHANGE_MANIFEST_DEPTH);
 		if (key === "keybindings") return config.keybindings ? `${config.keybindings.dashboard.toggleExpand}, ${config.keybindings.dashboard.scrollUp}, ${config.keybindings.dashboard.scrollDown}` : "(default)";
 		const value = (config as Record<string, unknown>)[key];
 		return typeof value === "string" ? value : "(default)";
@@ -651,7 +603,8 @@ export function registerGoalCommands(core: GoalCore): void {
 				}
 
 				if (row.kind === "positiveInteger") {
-					const min = row.path ? 1 : ((row.key === "stallTimeoutMinutes" || row.key === "objectiveMaxChars" || row.key === "changeManifestDepth" || row.key === "maxAutonomousRuns") ? 0 : 1);
+					const allowsZero = row.key === "auditorChangeManifestDepth" || (!row.path && (row.key === "stallTimeoutMinutes" || row.key === "objectiveMaxChars" || row.key === "changeManifestDepth" || row.key === "maxAutonomousRuns"));
+					const min = allowsZero ? 0 : 1;
 					const actions = [`Set ${scope} override...`];
 					if (hasLocalOverride) actions.push(inheritLabel);
 					actions.push("Cancel");
@@ -716,13 +669,16 @@ export function registerGoalCommands(core: GoalCore): void {
 				}
 
 				// modelSelector rows (provider, model): searchable model picker with
-				// explicit inherit/default handling. Auditor rows apply provider+model
-				// at the flat paths; the Oracle row writes oracle.provider/oracle.model.
-				const oraclePair = row.path?.[0] === "oracle";
-				const pairPrefix = oraclePair ? ["oracle"] : [];
-				const configuredBase = oraclePair
+				// explicit inherit/default handling. Auditor rows write
+				// auditor.provider/auditor.model; the Oracle row writes
+				// oracle.provider/oracle.model.
+				const pairRoot = row.path?.[0] === "oracle" ? "oracle" : row.path?.[0] === "auditor" ? "auditor" : undefined;
+				const pairPrefix = pairRoot ? [pairRoot] : [];
+				const configuredBase = pairRoot === "oracle"
 					? [snapshot.value.oracle?.provider, snapshot.value.oracle?.model].filter(Boolean).join("/")
-					: configuredAuditorModelKey(snapshot.value as GoalSettings);
+					: pairRoot === "auditor"
+						? configuredAuditorModelKey(snapshot.value.auditor ?? {})
+						: undefined;
 				const configured = configuredBase || undefined;
 				const session = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
 				const choices = buildAuditorModelChoices(ctx.modelRegistry.getAvailable(), configured, session);
@@ -735,7 +691,7 @@ export function registerGoalCommands(core: GoalCore): void {
 				if (!choice) continue;
 				if (choice.kind === "default") {
 					for (const key of ["provider", "model"] as const) {
-						if (localLayer[key] !== undefined) applyMutation(scope, { op: "unset", path: [...pairPrefix, key] });
+						if (valueAtPath(localLayer, [...pairPrefix, key]) !== undefined) applyMutation(scope, { op: "unset", path: [...pairPrefix, key] });
 					}
 					continue;
 				}
@@ -775,7 +731,7 @@ export function registerGoalCommands(core: GoalCore): void {
 	async function offerClearRollback(ctx: ExtensionContext, goalId: string): Promise<void> {
 		try {
 			const settings = loadGoalSettings(ctx.cwd);
-			if ((settings.changeManifest ?? "auto") === "off") return;
+			if ((settings.auditor?.changeManifest ?? "auto") === "off") return;
 			const baseline = readChangeBaseline(ctx, goalId);
 			if (!baseline) return;
 			const plan = planRollback(await computeChangeDelta(baseline));
@@ -932,12 +888,6 @@ export function registerGoalCommands(core: GoalCore): void {
 		description: "Show the unified goal dashboard (read-only). Append \"verbose\" for full detail or \"health\" for storage/runtime checks.",
 		handler: async (rawArgs, ctx) => {
 			await showGoalStatus(rawArgs ?? "", ctx);
-		},
-	});
-	pi.registerCommand("goal-subagent-eject", {
-		description: "Eject the default completion-auditor agent to global or project scope for customization.",
-		handler: async (rawArgs, ctx) => {
-			await ejectGoalAuditorCommand(rawArgs ?? "", ctx);
 		},
 	});
 	pi.registerCommand("goal-refresh", {

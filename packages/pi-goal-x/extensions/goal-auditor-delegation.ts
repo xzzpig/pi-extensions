@@ -4,17 +4,16 @@
 // `./goal-auditor.ts` so the upstream-derived prompt/resource helpers there
 // stay diffable against upstream:
 //   - the structured verdict contract (GOAL_AUDITOR_RESULT_SCHEMA and parsing),
-//   - launch preflight plus standalone default-auditor preparation,
+//   - launch preflight (the default goal-auditor agent is registered at
+//     runtime by `./goal-auditor-registration.ts`, so no standalone
+//     definition materialization is needed here),
 //   - the delegation event lifecycle (request/started/update/response/cancel),
 //   - progress parsing for the child-only report_auditor_progress provider,
 //   - terminal child-session usage capture.
 import { randomUUID } from "node:crypto";
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { resolveSubagentLaunchContract } from "@xzzpig/pi-subagents/preflight";
+import { discoverAgentsWithRuntime } from "@xzzpig/pi-subagents/agents";
 import {
 	SUBAGENT_DELEGATION_CANCEL_EVENT,
 	SUBAGENT_DELEGATION_REQUEST_EVENT,
@@ -86,74 +85,11 @@ export const GOAL_AUDITOR_RESULT_SCHEMA = {
 } as const;
 
 const START_HANDSHAKE_TIMEOUT_MS = 5_000;
-// Built-in 30-minute audit wall-clock cap; the auditorTimeoutMs setting
+// Built-in 30-minute audit wall-clock cap; the auditor.timeoutMs setting
 // (resolved via resolveAuditorTerminalTimeoutMs) overrides this default.
 const TERMINAL_TIMEOUT_MS = DEFAULT_AUDITOR_TIMEOUT_MS;
 const CANCELLATION_TIMEOUT_MS = 5_000;
-const EXTRA_AGENT_DIRS_ENV = "PI_SUBAGENT_EXTRA_AGENT_DIRS";
-const GOAL_X_PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const DEFAULT_AUDITOR_SOURCE_PATH = path.join(GOAL_X_PACKAGE_ROOT, "agents", "goal-auditor.md");
-const DEFAULT_AUDITOR_PROGRESS_EXTENSION_PATH = path.join(GOAL_X_PACKAGE_ROOT, "extensions", "goal-auditor-progress.ts");
 const THINKING_LEVELS = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
-
-let standaloneAuditorAgentDir: string | undefined;
-
-function appendStandaloneAgentDir(agentDir: string): void {
-	const existing = (process.env[EXTRA_AGENT_DIRS_ENV] ?? "")
-		.split(path.delimiter)
-		.map((entry) => entry.trim())
-		.filter(Boolean);
-	const normalized = path.resolve(agentDir);
-	if (existing.some((entry) => path.resolve(entry) === normalized)) return;
-	process.env[EXTRA_AGENT_DIRS_ENV] = [...existing, normalized].join(path.delimiter);
-}
-
-/**
- * Bare `pi -e .../goal.ts` loads an extension but does not register the
- * surrounding package with pi-subagents' package discovery. Make the default
- * auditor available through pi-subagents' existing extra-agent-dir mechanism.
- * The copied definition rewrites its child-only extension to an absolute path,
- * because child Pi processes run in the audited workspace rather than here.
- */
-function ensureStandaloneDefaultAuditorAgent(): { directory?: string; error?: string } {
-	try {
-		if (standaloneAuditorAgentDir && fs.existsSync(path.join(standaloneAuditorAgentDir, "goal-auditor.md"))) {
-			appendStandaloneAgentDir(standaloneAuditorAgentDir);
-			return { directory: standaloneAuditorAgentDir };
-		}
-		const source = fs.readFileSync(DEFAULT_AUDITOR_SOURCE_PATH, "utf-8");
-		if (!fs.existsSync(DEFAULT_AUDITOR_PROGRESS_EXTENSION_PATH)) {
-			return { error: `Default goal-auditor progress extension is missing at ${DEFAULT_AUDITOR_PROGRESS_EXTENSION_PATH}.` };
-		}
-		const extensionLine = /^subagentOnlyExtensions:\s*.*$/m;
-		if (!extensionLine.test(source)) {
-			return { error: `Default goal-auditor definition at ${DEFAULT_AUDITOR_SOURCE_PATH} does not declare subagentOnlyExtensions.` };
-		}
-		const directory = fs.mkdtempSync(path.join(os.tmpdir(), "pi-goal-x-auditor-"));
-		const portableSource = source.replace(
-			extensionLine,
-			`subagentOnlyExtensions: ${JSON.stringify(DEFAULT_AUDITOR_PROGRESS_EXTENSION_PATH)}`,
-		);
-		fs.writeFileSync(path.join(directory, "goal-auditor.md"), portableSource, { encoding: "utf-8", mode: 0o600 });
-		standaloneAuditorAgentDir = directory;
-		appendStandaloneAgentDir(directory);
-		return { directory };
-	} catch (error) {
-		return { error: `Could not prepare the standalone default goal-auditor: ${error instanceof Error ? error.message : String(error)}` };
-	}
-}
-
-function shouldPrepareStandaloneDefaultAuditor(
-	settings: GoalSettings,
-	result: Awaited<ReturnType<typeof resolveSubagentLaunchContract>>,
-): boolean {
-	if (resolveAuditorAgent(settings) !== DEFAULT_AUDITOR_AGENT) return false;
-	if (result.ok === false) return result.code === "missing_agent";
-	// Pi resolves CLI extension paths against the child workspace cwd. Package
-	// agent frontmatter is intentionally package-relative, so materialize the
-	// default definition with its provider path made absolute before dispatch.
-	return result.contract.agent.source === "package";
-}
 
 function auditorLaunchContractInput(args: GoalCompletionAuditorArgs, settings: GoalSettings, overrides: ReturnType<typeof resolveAuditorDelegationOverrides>) {
 	return {
@@ -181,18 +117,18 @@ function asThinkingLevel(value: unknown): ThinkingLevel | undefined {
 }
 
 export function resolveAuditorAgent(settings: GoalSettings | undefined): string {
-	return settings?.auditorAgent?.trim() || DEFAULT_AUDITOR_AGENT;
+	return settings?.auditor?.agent?.trim() || DEFAULT_AUDITOR_AGENT;
 }
 
 /**
  * Resolve the effective completion-audit wall-clock cap. The layered
- * `auditorTimeoutMs` setting wins (the settings parser guarantees a
+ * `auditor.timeoutMs` setting wins (the settings parser guarantees a
  * timer-safe positive integer); anything else falls back to the built-in
  * 30-minute default. Handshake/cancellation guards are intentionally not
  * reachable from settings.
  */
 export function resolveAuditorTerminalTimeoutMs(settings: GoalSettings | undefined): number {
-	return settings?.auditorTimeoutMs ?? TERMINAL_TIMEOUT_MS;
+	return settings?.auditor?.timeoutMs ?? TERMINAL_TIMEOUT_MS;
 }
 
 export function resolveAuditorDelegationOverrides(settings: GoalSettings): {
@@ -200,15 +136,16 @@ export function resolveAuditorDelegationOverrides(settings: GoalSettings): {
 	thinking?: SubagentDelegationThinking;
 	error?: string;
 } {
-	if (settings.provider && !settings.model) {
+	const auditor = settings.auditor;
+	if (auditor?.provider && !auditor.model) {
 		return {
-			error: `Provider-only auditor configuration is refused; select an explicit model for provider: ${settings.provider}`,
+			error: `Provider-only auditor configuration is refused; select an explicit model for provider: ${auditor.provider}`,
 		};
 	}
-	const model = settings.provider && settings.model
-		? `${settings.provider}/${settings.model}`
-		: settings.model;
-	const thinking = asThinkingLevel(settings.thinkingLevel);
+	const model = auditor?.provider && auditor.model
+		? `${auditor.provider}/${auditor.model}`
+		: auditor?.model;
+	const thinking = asThinkingLevel(auditor?.thinkingLevel);
 	return {
 		...(model ? { model } : {}),
 		...(thinking ? { thinking } : {}),
@@ -364,6 +301,12 @@ function responseError(response: SubagentDelegationResponse): string {
 export interface GoalCompletionAuditorArgs {
 	ctx: ExtensionContext;
 	events?: GoalAuditorEvents;
+	/**
+	 * The pi-goal-x ExtensionAPI. Required for the runtime-aware preflight
+	 * fallback: the default auditor is registered at session_start through the
+	 * runtime agent registry, which file-only discovery cannot see.
+	 */
+	pi?: ExtensionAPI;
 	goal: GoalRecord;
 	detailedSummary: string;
 	completionSummary?: string | null;
@@ -409,18 +352,6 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 		try {
 			const input = auditorLaunchContractInput(args, settings, overrides);
 			preflight = await resolveSubagentLaunchContract(input);
-			if (shouldPrepareStandaloneDefaultAuditor(settings, preflight)) {
-				const standalone = ensureStandaloneDefaultAuditorAgent();
-				if (standalone.error) {
-					return {
-						approved: false,
-						disapproved: true,
-						output: "",
-						error: `Goal auditor preflight failed: ${standalone.error}`,
-					};
-				}
-				preflight = await resolveSubagentLaunchContract(input);
-			}
 		} catch (error) {
 			return {
 				approved: false,
@@ -429,28 +360,66 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 				error: `Goal auditor preflight failed: ${error instanceof Error ? error.message : String(error)}`,
 			};
 		}
-		if (!preflight.ok) {
+		if (preflight.ok) {
+			if (!preflight.contract.tools.effectiveAllowlist.includes(REPORT_AUDITOR_PROGRESS_TOOL_NAME)) {
+				return {
+					approved: false,
+					disapproved: true,
+					output: "",
+					error: `Goal auditor preflight failed: agent '${preflight.contract.agent.name}' must retain the required ${REPORT_AUDITOR_PROGRESS_TOOL_NAME} tool.`,
+				};
+			}
+			if (!preflight.contract.tools.effectiveAllowlist.includes("structured_output")) {
+				return {
+					approved: false,
+					disapproved: true,
+					output: "",
+					error: "Goal auditor preflight failed: structured_output is unavailable.",
+				};
+			}
+		} else if (preflight.code === "missing_agent" && args.pi) {
+			// The default auditor is registered at session_start through the
+			// pi-subagents runtime agent registry, which this file-only launch
+			// contract cannot see. Resolve through the runtime-aware merged view
+			// (the same view the delegation executor starts) and validate the
+			// protocol tools on that definition. structured_output is guaranteed
+			// by the structured delegation request shape below.
+			const auditorAgent = resolveAuditorAgent(settings);
+			// SAFETY: pi-goal-x and pi-subagents resolve @earendil-works/pi-coding-agent
+			// to different node_modules dist copies whose ExtensionAPI `on` overloads
+			// are nominally incompatible, but both sides hold the SAME extension API
+			// object at runtime; the pi-subagents runtime registry is keyed by object
+			// identity (WeakMap), so a structural cast preserves it.
+			const runtimeView = discoverAgentsWithRuntime(
+				args.pi as unknown as Parameters<typeof discoverAgentsWithRuntime>[0],
+				args.ctx.cwd,
+				"both",
+			);
+			const runtimeAgent = runtimeView.agents.find((agent) => agent.name === auditorAgent);
+			if (!runtimeAgent) {
+				return {
+					approved: false,
+					disapproved: true,
+					output: "",
+					error: `Goal auditor preflight failed: ${preflight.message}`,
+				};
+			}
+			const excludedTools = new Set(runtimeAgent.excludeTools ?? []);
+			const effectiveAllowlist = (runtimeAgent.tools ?? []).filter((tool) => !excludedTools.has(tool));
+			if (!effectiveAllowlist.includes(REPORT_AUDITOR_PROGRESS_TOOL_NAME)) {
+				return {
+					approved: false,
+					disapproved: true,
+					output: "",
+					error: `Goal auditor preflight failed: agent '${auditorAgent}' must retain the required ${REPORT_AUDITOR_PROGRESS_TOOL_NAME} tool.`,
+				};
+			}
+		} else {
 			return {
 				approved: false,
 				disapproved: true,
 				output: "",
 				error: `Goal auditor preflight failed: ${preflight.message}`,
-			};
-		}
-		if (!preflight.contract.tools.effectiveAllowlist.includes(REPORT_AUDITOR_PROGRESS_TOOL_NAME)) {
-			return {
-				approved: false,
-				disapproved: true,
-				output: "",
-				error: `Goal auditor preflight failed: agent '${preflight.contract.agent.name}' must retain the required ${REPORT_AUDITOR_PROGRESS_TOOL_NAME} tool.`,
-			};
-		}
-		if (!preflight.contract.tools.effectiveAllowlist.includes("structured_output")) {
-			return {
-				approved: false,
-				disapproved: true,
-				output: "",
-				error: "Goal auditor preflight failed: structured_output is unavailable.",
 			};
 		}
 	}

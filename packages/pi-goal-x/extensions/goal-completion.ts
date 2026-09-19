@@ -100,9 +100,10 @@ export async function runGoalCompletionFlow(core: GoalCore, ctx: ExtensionContex
 		// Ledger append failure should not block completion
 	}
 	const settings = loadGoalSettings(ctx.cwd);
-	const auditorLabel = settings.provider || settings.model || settings.thinkingLevel
-		? `${settings.auditorAgent ?? "goal-auditor"} (${settings.provider ?? "default"}/${settings.model ?? "default"}${settings.thinkingLevel ? `:${settings.thinkingLevel}` : ""})`
-		: (settings.auditorAgent ?? "goal-auditor");
+	const auditorSettings = settings.auditor;
+	const auditorLabel = auditorSettings?.provider || auditorSettings?.model || auditorSettings?.thinkingLevel
+		? `${auditorSettings?.agent ?? "goal-auditor"} (${auditorSettings?.provider ?? "default"}/${auditorSettings?.model ?? "default"}${auditorSettings?.thinkingLevel ? `:${auditorSettings.thinkingLevel}` : ""})`
+		: (auditorSettings?.agent ?? "goal-auditor");
 
 /**
  * Single transaction for every successful completion commit — audit-approved,
@@ -184,9 +185,9 @@ if (auditTarget.skipAuditor) {
 			type: "audit_skipped",
 			goalId: auditTarget.id,
 			reason: "disabled",
-			provider: settings.provider,
-			model: settings.model,
-			thinkingLevel: settings.thinkingLevel,
+			provider: auditorSettings?.provider,
+			model: auditorSettings?.model,
+			thinkingLevel: auditorSettings?.thinkingLevel,
 			at: nowIso(),
 		}]);
 	} catch {
@@ -199,10 +200,10 @@ if (auditTarget.skipAuditor) {
 	});
 }
 
-// settings.disabled is an explicit user-owned setting: completion skips
+// settings.auditor.disabled is an explicit user-owned setting: completion skips
 // the auditor, records audit_skipped, and proceeds through the normal
 // deferred-completion path. No model-side bypass flag is required.
-if (settings.disabled === true) {
+if (auditorSettings?.disabled === true) {
 	core.auditMessages.enqueue(ctx, {
 		customType: GOAL_AUDIT_ENTRY,
 		content: `Goal completed — auditor disabled in settings.`,
@@ -214,9 +215,9 @@ if (settings.disabled === true) {
 			type: "audit_skipped",
 			goalId: auditTarget.id,
 			reason: "disabled",
-			provider: settings.provider,
-			model: settings.model,
-			thinkingLevel: settings.thinkingLevel,
+			provider: auditorSettings?.provider,
+			model: auditorSettings?.model,
+			thinkingLevel: auditorSettings?.thinkingLevel,
 			at: nowIso(),
 		}]);
 	} catch {
@@ -248,9 +249,9 @@ if (settings.disabled === true) {
 		core.goalService.appendEvents(ctx, [{
 			type: "audit_started",
 			goalId: auditTarget.id,
-			provider: settings.provider,
-			model: settings.model,
-			thinkingLevel: settings.thinkingLevel,
+			provider: auditorSettings?.provider,
+			model: auditorSettings?.model,
+			thinkingLevel: auditorSettings?.thinkingLevel,
 			at: nowIso(),
 		}]);
 	} catch {
@@ -284,8 +285,9 @@ if (settings.disabled === true) {
 
 	// P1-6: warm start — seed the auditor with the parent-rendered ledger tail
 	// (recent lifecycle + task evidence) so it does not re-derive session facts.
+	// auditor.warmContext: false skips the injection entirely.
 	const ledger = goalRuntimeEvents(ctx, auditTarget.id);
-	const warmTail = latestEventsForGoal(ledger, auditTarget.id, 8);
+	const warmTail = settings.auditor?.warmContext === false ? [] : latestEventsForGoal(ledger, auditTarget.id, 8);
 	const warmContext = warmTail.length > 0
 		? `Recent goal events (from the shared ledger):\n${warmTail.map((e) => `- ${e.at} ${e.type}${"taskId" in e ? ` (task ${e.taskId})` : ""}${"evidence" in e && e.evidence ? ` evidence: ${e.evidence}` : ""}`).join("\n")}`
 		: null;
@@ -303,6 +305,7 @@ if (settings.disabled === true) {
 		auditor = await (core.dependencies.runCompletionAuditor ?? runGoalCompletionAuditor)({
 			ctx,
 			events: core.pi.events,
+			pi: core.pi,
 			goal: auditTarget,
 			detailedSummary: detailedSummary(auditTarget),
 			completionSummary: completionSummary?.trim() || undefined,
@@ -397,9 +400,9 @@ if (settings.disabled === true) {
 					type: "audit_skipped",
 					goalId: auditTarget.id,
 					reason: "user_aborted",
-					provider: settings.provider,
-					model: settings.model,
-					thinkingLevel: settings.thinkingLevel,
+					provider: auditorSettings?.provider,
+					model: auditorSettings?.model,
+					thinkingLevel: auditorSettings?.thinkingLevel,
 					at: nowIso(),
 				}]);
 			} catch {
@@ -466,6 +469,9 @@ if (settings.disabled === true) {
 			auditorUsageLine(auditUsage),
 			"",
 			auditor.output || "Auditor produced no approval marker.",
+			// Operator-configured closing note (settings auditor.feedbackNotes):
+			// fixed guidance the executor receives alongside every rejection.
+			...(settings.auditor?.feedbackNotes ? ["", "Operator note:", settings.auditor.feedbackNotes] : []),
 		].filter((line): line is string => line !== undefined).join("\n");
 		core.auditMessages.enqueue(ctx, {
 			customType: GOAL_AUDIT_ENTRY,

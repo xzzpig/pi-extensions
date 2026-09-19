@@ -302,7 +302,7 @@ test("no baseline, an empty window, or collection off never asks", { skip }, asy
 		const { goal, sessionEntries } = seedGoal(collectionOff);
 		await seedBaseline(collectionOff, goal.id);
 		collectionOff.write("mod.txt", "a\nb\n");
-		saveGoalSettingsFileConfig(collectionOff.dir, { changeManifest: "off" });
+		saveGoalSettingsFileConfig(collectionOff.dir, { auditor: { changeManifest: "off" } });
 		invalidateGoalSettingsCache();
 		let asked = 0;
 		const h = createHarness({

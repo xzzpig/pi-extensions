@@ -160,8 +160,8 @@ export async function startGoalDrafting(core: GoalCore, ctx: ExtensionContext, m
 	// value. Confirming a tweak must never silently re-enable or disable the
 	// auditor the user chose when the goal was created.
 	const auditorEnabled = mode === "tweak"
-		? !(targetGoal?.skipAuditor ?? loadGoalSettings(ctx.cwd).disabled)
-		: !loadGoalSettings(ctx.cwd).disabled;
+		? !(targetGoal?.skipAuditor ?? (loadGoalSettings(ctx.cwd).auditor?.disabled === true))
+		: loadGoalSettings(ctx.cwd).auditor?.disabled !== true;
 	activeDrafts.set(core, { mode, originalTopic: trimmed, targetGoalId: targetGoal?.id, startedAt, auditorEnabled });
 	core.goalDraftActive = true;
 	draftSessionEntry(core, { version: 1, mode, seed: trimmed, targetGoalId: targetGoal?.id, startedAt, auditorEnabled });

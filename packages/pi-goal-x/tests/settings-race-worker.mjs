@@ -13,6 +13,6 @@ for (let i = 0; i < iterations; i += 1) {
 		scope: "global",
 		cwd: process.cwd(),
 		env: { PI_GOAL_GLOBAL_SETTINGS_FILE: globalFile },
-		mutation: { op: "set", path: [key], value: `${key}-${i}` },
+		mutation: { op: "set", path: ["auditor", key], value: `${key}-${i}` },
 	});
 }

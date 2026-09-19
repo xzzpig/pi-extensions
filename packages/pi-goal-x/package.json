@@ -1,6 +1,6 @@
 {
   "name": "@xzzpig/pi-goal-x",
-  "version": "0.7.5",
+  "version": "0.8.0",
   "description": "Goal mode extension for pi: durable long-running objectives, a constant six-tool surface, structured tasks, independent completion audit, Sisyphus mode, auto-continue, and a status overlay.",
   "license": "MIT",
   "author": "pi-goal-x contributors",
@@ -30,7 +30,6 @@
     "url": "https://github.com/tmonk/pi-goal-x/issues"
   },
   "files": [
-    "agents",
     "extensions",
     "scripts/recover-session-checkpoints.mjs",
     "README.md",
@@ -50,11 +49,6 @@
     "extensions": [
       "extensions/goal.ts"
     ],
-    "subagents": {
-      "agents": [
-        "./agents"
-      ]
-    },
     "image": "https://github.com/tmonk/pi-goal-x/raw/main/pi-goal-x.png"
   },
   "scripts": {

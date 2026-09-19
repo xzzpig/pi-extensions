@@ -2,6 +2,66 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.8.0] — 2026-09-19 (fork release)
+
+### Changed
+
+- **Completion audits are customized through the nested `auditor` settings
+  group instead of agent markdown overrides.** New prompt-injection fields
+  (read per audit, effective immediately): `auditor.instructions`,
+  `auditor.checklist` (replaces the built-in checklist),
+  `auditor.checklistExtra`, `auditor.evidenceRequests`,
+  `auditor.strictness` (`balanced`/`strict`/`lenient` posture preset),
+  `auditor.reportFormat`, and `auditor.feedbackNotes` (fixed note appended to
+  rejection feedback). New request-tier fields: `auditor.warmContext` toggle
+  plus migrated `auditor.agent`/`provider`/`model`/`thinkingLevel`/`timeoutMs`/
+  `disabled`/`changeManifest`/`changeManifestDepth`. All operator payloads are
+  escaped, the injection order is fixed, and with everything unset the audit
+  prompt stays byte-for-byte identical.
+
+- **The default `goal-auditor` agent is registered at runtime** with the
+  installed pi-subagents owner via the `pi-subagents:runtime-agent-register:v1`
+  contract (`extensions/goal-auditor-registration.ts`), replacing the package
+  `agents/goal-auditor.md`. The definition tier of the settings group
+  (`systemPromptExtra`, `extensions`, `subagentOnlyExtensions`, `skills`,
+  `skillPath`, `tools`, `excludeTools`, `mcpDirectTools`, `defaultReads`,
+  `inheritProjectContext`, `inheritSkills`, and the fork's `sandbox` /
+  `permissionProfile` profile selectors) merges into the registered
+  definition at session start (new session or /reload to apply). The
+  child-only progress provider, the protocol tools, and the verdict contract
+  stay code-owned: configuration can no longer break the five-stage step
+  feedback or the preflight fail-closed guards. Registration is skipped when a
+  configured `goal-auditor` agent already exists, so pre-0.8.0 ejected
+  markdown files keep working.
+
+- **The audit preflight resolves runtime-registered agents.** The
+  `resolveSubagentLaunchContract` fail-fast check uses file-only discovery,
+  which cannot see the session-start runtime registration; the audit now falls
+  back to the runtime-aware merged view (`discoverAgentsWithRuntime`) when the
+  file view reports `missing_agent` and the ExtensionAPI is available, so bare
+  `pi -e` audits start normally instead of failing with `Unknown agent:
+  goal-auditor`. The fallback still fails closed when the runtime view also
+  lacks the agent or the effective allowlist loses `report_auditor_progress`.
+
+### Removed
+
+- **`/goal-subagent-eject`** — runtime registration plus the `auditor`
+  settings group replace whole-file ejection. Previously ejected
+  `goal-auditor.md` files keep working (registration is skipped for them);
+  delete the file to return to the code-owned default, or point
+  `auditor.agent` at a custom definition.
+- The package `agents/goal-auditor.md` and the standalone
+  `PI_SUBAGENT_EXTRA_AGENT_DIRS` materialization used by bare `pi -e` runs
+  (runtime registration covers that mode).
+
+### Migration
+
+- Flat settings keys `auditorAgent`, `auditorTimeoutMs`, `provider`, `model`,
+  `thinkingLevel`, `disabled`, `changeManifest`, and `changeManifestDepth`
+  parse as deprecated aliases of their `auditor.*` leaves; the nested spelling
+  wins within the same file. `/goal-settings` and `saveGoalSettingsFileConfig`
+  write the nested form.
+
 ## [0.7.5] — 2026-09-19 (fork release)
 
 ### Changed

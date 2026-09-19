@@ -87,12 +87,12 @@ describe("layering matrix", () => {
 		withTempDir((dir) => {
 			const env = { PI_GOAL_GLOBAL_SETTINGS_FILE: path.join(dir, "g.json") };
 			writeJson(path.join(dir, "g.json"), { disableTasks: true, objectiveMaxChars: 5000, provider: "globalprov" });
-			writeJson(path.join(dir, ".pi", "pi-goal-x-settings.json"), { disableTasks: false, objectiveMaxChars: 0, provider: "projprov" });
+			writeJson(path.join(dir, ".pi", "pi-goal-x-settings.json"), { disableTasks: false, objectiveMaxChars: 0, auditor: { provider: "projprov" } });
 			invalidateGoalSettingsCache();
 			const s = loadGoalSettings(dir, env);
 			assert.equal(s.disableTasks, false, "explicit project false overrides global true");
 			assert.equal(s.objectiveMaxChars, 0, "explicit project zero overrides global positive");
-			assert.equal(s.provider, "projprov");
+			assert.equal(s.auditor?.provider, "projprov");
 		});
 	});
 
@@ -169,11 +169,11 @@ describe("diagnostics", () => {
 	it("invalid values are diagnosed without erasing sibling keys", () => {
 		withTempDir((dir) => {
 			const env = { PI_GOAL_GLOBAL_SETTINGS_FILE: path.join(dir, "nonexistent-g.json") };
-			writeJson(path.join(dir, ".pi", "pi-goal-x-settings.json"), { subtaskDepth: -3, provider: "ok" });
+			writeJson(path.join(dir, ".pi", "pi-goal-x-settings.json"), { subtaskDepth: -3, auditor: { provider: "ok" } });
 			invalidateGoalSettingsCache();
 			const snap = loadSettingsSnapshot(dir, env);
 			assert.equal(snap.project.status, "invalid");
-			assert.equal(snap.value.provider, "ok");
+			assert.equal(snap.value.auditor?.provider, "ok");
 			assert.ok(snap.diagnostics.some((d) => d.code === "invalid_value" && d.settingPath === "subtaskDepth"));
 		});
 	});
@@ -220,8 +220,8 @@ describe("scoped mutation", () => {
 			writeJson(target, {});
 			fs.writeFileSync(`${target}.lock`, JSON.stringify({ pid: 999_999_999, startedAt: new Date(Date.now() - 60_000).toISOString() }), "utf8");
 			invalidateGoalSettingsCache();
-			mutateSettingsLayer({ scope: "global", cwd: dir, env, mutation: { op: "set", path: ["model"], value: "m" } });
-			assert.equal(readSettingsLayer(target, "global").layer.model, "m");
+			mutateSettingsLayer({ scope: "global", cwd: dir, env, mutation: { op: "set", path: ["auditor", "model"], value: "m" } });
+			assert.equal(readSettingsLayer(target, "global").layer.auditor?.model, "m");
 		});
 	});
 
@@ -229,22 +229,22 @@ describe("scoped mutation", () => {
 		withTempDir((dir) => {
 			const env = { PI_GOAL_GLOBAL_SETTINGS_FILE: path.join(dir, "g.json") };
 			const target = scopeTarget(dir, "global");
-			writeJson(target, { provider: "keep" });
+			writeJson(target, { auditor: { provider: "keep" } });
 			invalidateGoalSettingsCache();
 			// Make the directory read-only AFTER the original file exists so the
 			// temp-file creation fails; the original must remain intact.
 			fs.chmodSync(dir, 0o555);
 			try {
 				assert.throws(() =>
-					mutateSettingsLayer({ scope: "global", cwd: dir, env, mutation: { op: "set", path: ["provider"], value: "changed" } }),
+					mutateSettingsLayer({ scope: "global", cwd: dir, env, mutation: { op: "set", path: ["auditor", "provider"], value: "changed" } }),
 				);
 			} finally {
 				fs.chmodSync(dir, 0o755);
 			}
 			invalidateGoalSettingsCache();
 			const layer = readSettingsLayer(target, "global").layer;
-			assert.equal(layer.provider, "keep", "original preserved after failed write");
-			assert.equal(typeof JSON.parse(fs.readFileSync(target, "utf8")).provider, "string");
+			assert.equal(layer.auditor?.provider, "keep", "original preserved after failed write");
+			assert.equal(typeof JSON.parse(fs.readFileSync(target, "utf8")).auditor.provider, "string");
 		});
 	});
 
@@ -257,7 +257,7 @@ describe("scoped mutation", () => {
 			fs.symlinkSync(real, link);
 			invalidateGoalSettingsCache();
 			assert.throws(
-				() => mutateSettingsLayer({ scope: "global", cwd: dir, env, mutation: { op: "set", path: ["model"], value: "m" } }),
+				() => mutateSettingsLayer({ scope: "global", cwd: dir, env, mutation: { op: "set", path: ["auditor", "model"], value: "m" } }),
 				/symlink/i,
 			);
 		});
@@ -271,10 +271,10 @@ describe("scoped mutation", () => {
 			invalidateGoalSettingsCache();
 			const before = loadSettingsSnapshot(dir, env);
 			assert.notEqual(before.global.fingerprint, before.project.fingerprint);
-			writeJson(path.join(dir, "g.json"), { model: "two" });
+			writeJson(path.join(dir, "g.json"), { auditor: { model: "two" } });
 			invalidateGoalSettingsCache();
 			const after = loadSettingsSnapshot(dir, env);
-			assert.equal(after.value.model, "two");
+			assert.equal(after.value.auditor?.model, "two");
 			assert.equal(after.project.fingerprint, before.project.fingerprint, "untouched layer keeps its fingerprint");
 		});
 	});

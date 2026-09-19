@@ -75,16 +75,16 @@ test("parseGoalSettings: autoSelectSingleGoal accepted as bool or string; explic
 	assert.deepEqual(parseGoalSettings({ autoSelectSingleGoal: "false" }), { autoSelectSingleGoal: false });
 });
 
-test("parseGoalSettings: auditorAgent accepts a non-empty agent name", () => {
-	assert.deepEqual(parseGoalSettings({ auditorAgent: "project-auditor" }), { auditorAgent: "project-auditor" });
+test("parseGoalSettings: auditorAgent accepts a non-empty agent name (legacy alias of auditor.agent)", () => {
+	assert.deepEqual(parseGoalSettings({ auditorAgent: "project-auditor" }), { auditor: { agent: "project-auditor" } });
 	assert.deepEqual(parseGoalSettings({ auditorAgent: "  " }), {});
 	assert.deepEqual(parseGoalSettings({ auditorAgent: 42 }), {});
 });
 
 test("parseGoalSettings: auditorTimeoutMs accepts positive integer milliseconds", () => {
-	assert.deepEqual(parseGoalSettings({ auditorTimeoutMs: 3_600_000 }), { auditorTimeoutMs: 3_600_000 });
-	assert.deepEqual(parseGoalSettings({ auditorTimeoutMs: "7200000" }), { auditorTimeoutMs: 7200000 });
-	assert.deepEqual(parseGoalSettings({ auditorTimeoutMs: MAX_AUDITOR_TIMEOUT_MS }), { auditorTimeoutMs: MAX_AUDITOR_TIMEOUT_MS }, "the Node timer ceiling itself is valid");
+	assert.deepEqual(parseGoalSettings({ auditorTimeoutMs: 3_600_000 }), { auditor: { timeoutMs: 3_600_000 } });
+	assert.deepEqual(parseGoalSettings({ auditorTimeoutMs: "7200000" }), { auditor: { timeoutMs: 7200000 } });
+	assert.deepEqual(parseGoalSettings({ auditorTimeoutMs: MAX_AUDITOR_TIMEOUT_MS }), { auditor: { timeoutMs: MAX_AUDITOR_TIMEOUT_MS } }, "the Node timer ceiling itself is valid");
 });
 
 test("parseGoalSettings: auditorTimeoutMs rejects zero, negatives, non-integers, and above the timer ceiling", () => {
@@ -104,16 +104,16 @@ test("parseGoalSettings: auditorTimeoutMs diagnostics name the valid range", () 
 
 test("saveGoalSettingsFileConfig: auditorTimeoutMs persists and clears", () => {
 	withTempDir((dir) => {
-		saveGoalSettingsFileConfig(dir, { auditorTimeoutMs: 7_200_000 });
+		saveGoalSettingsFileConfig(dir, { auditor: { timeoutMs: 7_200_000 } });
 		const loaded = loadGoalSettingsFileConfig(dir);
-		assert.equal(loaded.auditorTimeoutMs, 7_200_000, "persisted value round-trips");
+		assert.equal(loaded.auditor?.timeoutMs, 7_200_000, "persisted value round-trips");
 		saveGoalSettingsFileConfig(dir, {});
-		assert.equal(loadGoalSettingsFileConfig(dir).auditorTimeoutMs, undefined, "cleared when omitted");
+		assert.equal(loadGoalSettingsFileConfig(dir).auditor?.timeoutMs, undefined, "cleared when omitted");
 		// Isolation: `env` picks the global settings path, so an isolated one is
 		// required for the "unset" assertions. Without it the test would read the
 		// real ~/.pi/agent/pi-goal-x-settings.json of whoever runs the suite.
 		assert.equal(
-			loadGoalSettings(dir, { PI_GOAL_GLOBAL_SETTINGS_FILE: path.join(dir, "no-global.json") }).auditorTimeoutMs,
+			loadGoalSettings(dir, { PI_GOAL_GLOBAL_SETTINGS_FILE: path.join(dir, "no-global.json") }).auditor?.timeoutMs,
 			undefined,
 			"unset resolves to the phantom default (auditor applies 30 minutes)",
 		);
@@ -264,7 +264,7 @@ test("loadGoalSettings: no file, no env vars -> defaults false", () => {
 		assert.equal(result.disableTasks, false);
 		assert.equal(result.disableContracts, false);
 		assert.equal(result.autoSelectSingleGoal, false, "autoSelectSingleGoal defaults to false");
-		assert.equal(result.auditorAgent, DEFAULT_AUDITOR_AGENT, "auditorAgent resolves to the package default");
+		assert.equal(result.auditor?.agent, DEFAULT_AUDITOR_AGENT, "auditor.agent resolves to the package default");
 	});
 });
 
@@ -345,18 +345,18 @@ test("parseGoalSettings: objectiveMaxChars accepted as number or string, 0 allow
 
 // ── changeManifest / changeManifestDepth (change manifest settings) ──────
 
-test("parseGoalSettings: changeManifest accepts auto/off only", () => {
-	assert.deepEqual(parseGoalSettings({ changeManifest: "auto" }), { changeManifest: "auto" });
-	assert.deepEqual(parseGoalSettings({ changeManifest: "off" }), { changeManifest: "off" });
+test("parseGoalSettings: changeManifest accepts auto/off only (legacy alias of auditor.changeManifest)", () => {
+	assert.deepEqual(parseGoalSettings({ changeManifest: "auto" }), { auditor: { changeManifest: "auto" } });
+	assert.deepEqual(parseGoalSettings({ changeManifest: "off" }), { auditor: { changeManifest: "off" } });
 	assert.deepEqual(parseGoalSettings({ changeManifest: "OFF" }), {}, "values are case-sensitive");
 	assert.deepEqual(parseGoalSettings({ changeManifest: true }), {}, "booleans rejected");
 	assert.deepEqual(parseGoalSettings({ changeManifest: "sometimes" }), {}, "unknown mode rejected");
 });
 
-test("parseGoalSettings: changeManifestDepth accepts integer >= 0 (0 = no downward scan)", () => {
-	assert.deepEqual(parseGoalSettings({ changeManifestDepth: 0 }), { changeManifestDepth: 0 });
-	assert.deepEqual(parseGoalSettings({ changeManifestDepth: 2 }), { changeManifestDepth: 2 });
-	assert.deepEqual(parseGoalSettings({ changeManifestDepth: "3" }), { changeManifestDepth: 3 });
+test("parseGoalSettings: changeManifestDepth accepts integer >= 0 (legacy alias of auditor.changeManifestDepth)", () => {
+	assert.deepEqual(parseGoalSettings({ changeManifestDepth: 0 }), { auditor: { changeManifestDepth: 0 } });
+	assert.deepEqual(parseGoalSettings({ changeManifestDepth: 2 }), { auditor: { changeManifestDepth: 2 } });
+	assert.deepEqual(parseGoalSettings({ changeManifestDepth: "3" }), { auditor: { changeManifestDepth: 3 } });
 	assert.deepEqual(parseGoalSettings({ changeManifestDepth: -1 }), {}, "negative rejected");
 	assert.deepEqual(parseGoalSettings({ changeManifestDepth: 1.5 }), {}, "non-integer rejected");
 });
@@ -459,16 +459,16 @@ test("effectiveSettingsReport: objectiveMaxChars row shows the effective value a
 
 test("saveGoalSettingsFileConfig: changeManifest / changeManifestDepth persist (including 0) and clear", () => {
 	withTempDir((dir) => {
-		saveGoalSettingsFileConfig(dir, { changeManifest: "off", changeManifestDepth: 3 });
+		saveGoalSettingsFileConfig(dir, { auditor: { changeManifest: "off", changeManifestDepth: 3 } });
 		const loaded = loadGoalSettingsFileConfig(dir);
-		assert.equal(loaded.changeManifest, "off", "enum value round-trips");
-		assert.equal(loaded.changeManifestDepth, 3, "depth round-trips");
-		saveGoalSettingsFileConfig(dir, { changeManifest: "off", changeManifestDepth: 0 });
-		assert.equal(loadGoalSettingsFileConfig(dir).changeManifestDepth, 0, "0 (no downward scan) persists explicitly");
+		assert.equal(loaded.auditor?.changeManifest, "off", "enum value round-trips");
+		assert.equal(loaded.auditor?.changeManifestDepth, 3, "depth round-trips");
+		saveGoalSettingsFileConfig(dir, { auditor: { changeManifest: "off", changeManifestDepth: 0 } });
+		assert.equal(loadGoalSettingsFileConfig(dir).auditor?.changeManifestDepth, 0, "0 (no downward scan) persists explicitly");
 		saveGoalSettingsFileConfig(dir, {});
 		const cleared = loadGoalSettingsFileConfig(dir);
-		assert.equal(cleared.changeManifest, undefined, "cleared when omitted");
-		assert.equal(cleared.changeManifestDepth, undefined, "cleared when omitted");
+		assert.equal(cleared.auditor?.changeManifest, undefined, "cleared when omitted");
+		assert.equal(cleared.auditor?.changeManifestDepth, undefined, "cleared when omitted");
 	});
 });
 
@@ -476,11 +476,11 @@ test("effectiveSettingsReport: change manifest rows show effective values with d
 	withTempDir((dir) => {
 		const unset = effectiveSettingsReport(dir, { PI_GOAL_GLOBAL_SETTINGS_FILE: path.join(dir, "no-global.json") });
 		assert.ok(
-			unset.some((l) => l.startsWith("  change manifest: auto (default)")),
+			unset.some((l) => l.startsWith("  auditor change manifest: auto (default)")),
 			"unset changeManifest reports the auto default",
 		);
 		assert.ok(
-			unset.some((l) => l.startsWith("  change manifest scan depth: 1 (default)")),
+			unset.some((l) => l.startsWith("  auditor change manifest scan depth: 1 (default)")),
 			"unset changeManifestDepth reports the depth-1 default",
 		);
 	});
@@ -489,21 +489,21 @@ test("effectiveSettingsReport: change manifest rows show effective values with d
 		fs.mkdirSync(path.dirname(configPath), { recursive: true });
 		fs.writeFileSync(configPath, JSON.stringify({ changeManifest: "off", changeManifestDepth: 0 }), "utf8");
 		const configured = effectiveSettingsReport(dir, {});
-		assert.ok(configured.some((l) => l.startsWith("  change manifest: off (project)")));
-		assert.ok(configured.some((l) => l.startsWith("  change manifest scan depth: 0 (project)")));
+		assert.ok(configured.some((l) => l.startsWith("  auditor change manifest: off (project)")));
+		assert.ok(configured.some((l) => l.startsWith("  auditor change manifest scan depth: 0 (project)")));
 	});
 });
 
 test("saveGoalSettingsFileConfig: auditor agent round-trips and deprecated resources are reported", () => {
 	withTempDir((dir) => {
 		saveGoalSettingsFileConfig(dir, {
-			auditorAgent: "project-auditor",
+			auditor: { agent: "project-auditor" },
 			auditorProjectResources: true,
 		});
 		const loaded = loadGoalSettingsFileConfig(dir);
-		assert.equal(loaded.auditorAgent, "project-auditor");
+		assert.equal(loaded.auditor?.agent, "project-auditor");
 		assert.equal(loaded.auditorProjectResources, true);
-		assert.equal(loadGoalSettings(dir, {}).auditorAgent, "project-auditor");
+		assert.equal(loadGoalSettings(dir, {}).auditor?.agent, "project-auditor");
 		const report = effectiveSettingsReport(dir, {});
 		assert.ok(report.some((line) => line.includes("auditor agent: project-auditor (project)")));
 		assert.ok(report.some((line) => line.includes(AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE)));
