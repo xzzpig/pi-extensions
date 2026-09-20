@@ -15,6 +15,10 @@
     "node": ">=24.18.0 <25",
     "pnpm": ">=11.13.1 <12"
   },
+  "scripts": {
+    "publish:all": "bash scripts/publish-all.sh",
+    "publish:check": "bash scripts/publish-all.sh --dry-run"
+  },
   "devDependencies": {
     "prettier": "3.6.2"
   }

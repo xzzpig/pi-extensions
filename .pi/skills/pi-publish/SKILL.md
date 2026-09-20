@@ -95,6 +95,20 @@ Or publish directly from the package (pnpm publish runs `prepack` first):
 pnpm --filter @xzzpig/<name> publish --registry https://registry.npmjs.org
 ```
 
+To release every package that has a newer local version than the registry (the
+usual case for a multi-package release), use the repo script instead — it
+auto-discovers packages under `packages/`, skips versions already on npm,
+publishes in `workspace:` dependency order, and syncs `versions.json`:
+
+```bash
+pnpm run publish:check   # dry run: show the plan
+pnpm run publish:all     # publish (needs an interactive TTY for 2FA)
+```
+
+The underlying script also accepts flags, e.g.
+`pnpm run publish:all --only pi-notify,pi-btw` or
+`pnpm run publish:all --include sandbox-runtime` (use `--` before `--otp`).
+
 ### 6. Verify the published version
 
 ```bash
