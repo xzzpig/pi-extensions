@@ -1,67 +1,67 @@
 {
-  "name": "@xzzpig/pi-starline",
-  "version": "0.4.1",
-  "description": "A Starship-inspired statusline and Opencode-style TUI for Pi.",
-  "type": "module",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Andy8647/pi-starline.git"
-  },
-  "homepage": "https://github.com/Andy8647/pi-starline#readme",
-  "bugs": {
-    "url": "https://github.com/Andy8647/pi-starline/issues"
-  },
-  "keywords": [
-    "pi-package",
-    "pi-extension",
-    "pi-theme",
-    "starship",
-    "tui"
-  ],
-  "files": [
-    "extensions"
-  ],
-  "scripts": {
-    "lint": "biome check .",
-    "typecheck": "tsc --noEmit",
-    "test": "vitest run",
-    "pi:dev": "${PI_BIN:-/opt/homebrew/bin/pi} --no-extensions -e ./extensions/starline/index.ts",
-    "pi:install-local": "${PI_BIN:-/opt/homebrew/bin/pi} install ./ -l",
-    "fmt": "biome format --write .",
-    "fmt:check": "biome format --check .",
-    "verify": "npm run lint && npm run typecheck && npm run test",
-    "pack:check": "npm pack --dry-run",
-    "prepublishOnly": "npm run verify && npm run pack:check"
-  },
-  "peerDependencies": {
-    "@earendil-works/pi-ai": ">=0.84.4",
-    "@earendil-works/pi-coding-agent": ">=0.84.4",
-    "@earendil-works/pi-tui": ">=0.84.4",
-    "@xzzpig/pi-mouse-events": ">=0.1.0 <2"
-  },
-  "pi": {
-    "extensions": [
-      "./extensions"
-    ],
-    "image": "https://raw.githubusercontent.com/Andy8647/pi-starline/main/assets/starline.png"
-  },
-  "publishConfig": {
-    "access": "public"
-  },
-  "devDependencies": {
-    "@biomejs/biome": "^2.5.0",
-    "@earendil-works/pi-ai": "^0.84.4",
-    "@earendil-works/pi-coding-agent": "^0.84.4",
-    "@earendil-works/pi-tui": "^0.84.4",
-    "@types/node": "^26.0.0",
-    "typescript": "^7.0.2",
-    "vitest": "^4.1.8",
-    "@xzzpig/pi-mouse-events": "workspace:*"
-  },
-  "peerDependenciesMeta": {
-    "@xzzpig/pi-mouse-events": {
-      "optional": true
-    }
-  }
+	"name": "@xzzpig/pi-starline",
+	"version": "0.4.1",
+	"description": "A Starship-inspired statusline and Opencode-style TUI for Pi.",
+	"type": "module",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/Andy8647/pi-starline.git"
+	},
+	"homepage": "https://github.com/Andy8647/pi-starline#readme",
+	"bugs": {
+		"url": "https://github.com/Andy8647/pi-starline/issues"
+	},
+	"keywords": [
+		"pi-package",
+		"pi-extension",
+		"pi-theme",
+		"starship",
+		"tui"
+	],
+	"files": [
+		"extensions"
+	],
+	"scripts": {
+		"lint": "biome check .",
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run",
+		"pi:dev": "${PI_BIN:-/opt/homebrew/bin/pi} --no-extensions -e ./extensions/starline/index.ts",
+		"pi:install-local": "${PI_BIN:-/opt/homebrew/bin/pi} install ./ -l",
+		"fmt": "biome format --write .",
+		"fmt:check": "biome format --check .",
+		"verify": "npm run lint && npm run typecheck && npm run test",
+		"pack:check": "npm pack --dry-run",
+		"prepublishOnly": "npm run verify && npm run pack:check"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-ai": ">=0.84.4",
+		"@earendil-works/pi-coding-agent": ">=0.84.4",
+		"@earendil-works/pi-tui": ">=0.84.4",
+		"@xzzpig/pi-mouse-events": ">=0.1.0 <2"
+	},
+	"pi": {
+		"extensions": [
+			"./extensions"
+		],
+		"image": "https://raw.githubusercontent.com/Andy8647/pi-starline/main/assets/starline.png"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.5.0",
+		"@earendil-works/pi-ai": "^0.84.4",
+		"@earendil-works/pi-coding-agent": "^0.84.4",
+		"@earendil-works/pi-tui": "^0.84.4",
+		"@types/node": "^26.0.0",
+		"typescript": "^7.0.2",
+		"vitest": "^4.1.8",
+		"@xzzpig/pi-mouse-events": "workspace:*"
+	},
+	"peerDependenciesMeta": {
+		"@xzzpig/pi-mouse-events": {
+			"optional": true
+		}
+	}
 }

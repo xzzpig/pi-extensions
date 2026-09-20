@@ -11,10 +11,10 @@
  */
 import { MOUSE_EVENT_CHANNEL, MOUSE_EVENTS_API_KEY } from "@xzzpig/pi-mouse-events/api";
 import {
+	type CopyHandlerEntryLike,
+	type MouseHandlerEntryLike,
 	runCopyHandlersInPriorityOrder,
 	runMouseHandlersInPriorityOrder,
-	type MouseHandlerEntryLike,
-	type CopyHandlerEntryLike,
 } from "@xzzpig/pi-mouse-events/test-support";
 import { describe, expect, it } from "vitest";
 import { getMouseEventsApi } from "../../extensions/starline/mouse/api-consumer";
@@ -69,9 +69,28 @@ describe("the pi-mouse-events slot-dispatch semantics", () => {
 	it("runs handlers in priority order and consumes on the first handled:true", () => {
 		const calls: string[] = [];
 		const entries: MouseHandlerEntryLike[] = [
-			{ id: 2, priority: 5, handler: () => { calls.push("later"); } },
-			{ id: 1, priority: 9, handler: () => { calls.push("first"); return { handled: true }; } },
-			{ id: 0, priority: 1, handler: () => { calls.push("never"); } },
+			{
+				id: 2,
+				priority: 5,
+				handler: () => {
+					calls.push("later");
+				},
+			},
+			{
+				id: 1,
+				priority: 9,
+				handler: () => {
+					calls.push("first");
+					return { handled: true };
+				},
+			},
+			{
+				id: 0,
+				priority: 1,
+				handler: () => {
+					calls.push("never");
+				},
+			},
 		];
 		expect(runMouseHandlersInPriorityOrder(entries, baseEvent, {})).toBe(true);
 		expect(calls).toEqual(["first"]);
@@ -80,8 +99,20 @@ describe("the pi-mouse-events slot-dispatch semantics", () => {
 	it("breaks priority ties by registration order (lowest id first)", () => {
 		const calls: string[] = [];
 		const entries: MouseHandlerEntryLike[] = [
-			{ id: 7, priority: 3, handler: () => { calls.push("second"); } },
-			{ id: 2, priority: 3, handler: () => { calls.push("first"); } },
+			{
+				id: 7,
+				priority: 3,
+				handler: () => {
+					calls.push("second");
+				},
+			},
+			{
+				id: 2,
+				priority: 3,
+				handler: () => {
+					calls.push("first");
+				},
+			},
 		];
 		expect(runMouseHandlersInPriorityOrder(entries, baseEvent, {})).toBe(false);
 		expect(calls).toEqual(["first", "second"]);
@@ -90,8 +121,21 @@ describe("the pi-mouse-events slot-dispatch semantics", () => {
 	it("skips a throwing handler and keeps dispatching", () => {
 		const calls: string[] = [];
 		const entries: MouseHandlerEntryLike[] = [
-			{ id: 1, priority: 9, handler: () => { throw new Error("boom"); } },
-			{ id: 2, priority: 1, handler: () => { calls.push("reached"); return { handled: true }; } },
+			{
+				id: 1,
+				priority: 9,
+				handler: () => {
+					throw new Error("boom");
+				},
+			},
+			{
+				id: 2,
+				priority: 1,
+				handler: () => {
+					calls.push("reached");
+					return { handled: true };
+				},
+			},
 		];
 		expect(runMouseHandlersInPriorityOrder(entries, baseEvent, {})).toBe(true);
 		expect(calls).toEqual(["reached"]);
@@ -100,7 +144,13 @@ describe("the pi-mouse-events slot-dispatch semantics", () => {
 	it("hands the event the handler sees an unhandled copy without a dispatch target", () => {
 		let seen: { handled: boolean; dispatched?: unknown } | undefined;
 		const entries: MouseHandlerEntryLike[] = [
-			{ id: 1, priority: 0, handler: ({ event }) => { seen = event; } },
+			{
+				id: 1,
+				priority: 0,
+				handler: ({ event }) => {
+					seen = event;
+				},
+			},
 		];
 		runMouseHandlersInPriorityOrder(entries, baseEvent, {});
 		expect(seen?.handled).toBe(false);
@@ -110,8 +160,21 @@ describe("the pi-mouse-events slot-dispatch semantics", () => {
 	it("runs copy handlers in priority order and consumes on the first handled:true", () => {
 		const calls: string[] = [];
 		const entries: CopyHandlerEntryLike[] = [
-			{ id: 2, priority: 1, handler: () => { calls.push("later"); } },
-			{ id: 1, priority: 9, handler: () => { calls.push("first"); return { handled: true }; } },
+			{
+				id: 2,
+				priority: 1,
+				handler: () => {
+					calls.push("later");
+				},
+			},
+			{
+				id: 1,
+				priority: 9,
+				handler: () => {
+					calls.push("first");
+					return { handled: true };
+				},
+			},
 		];
 		expect(runCopyHandlersInPriorityOrder(entries, {})).toBe(true);
 		expect(calls).toEqual(["first"]);
