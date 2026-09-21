@@ -12,6 +12,7 @@ import {
 	SUBAGENT_DELEGATION_UPDATE_EVENT,
 } from "@xzzpig/pi-subagents/delegation";
 import goalExtension from "../extensions/goal.ts";
+import { runGoalCompletionAuditor, type GoalCompletionAuditorArgs } from "../extensions/goal-auditor.ts";
 import { REPORT_AUDITOR_PROGRESS_PROTOCOL_PREFIX } from "../extensions/goal-auditor-progress.ts";
 import { createGoal, goalFocusDetails } from "../extensions/goal-record.ts";
 import { writeActiveGoalFile } from "../extensions/storage/goal-files.ts";
@@ -168,39 +169,43 @@ test("D-01/D-07/I-05/I-07: approved structured delegation commits through the ex
 	}
 });
 
-test("D-10/I-09: delegated Escape cancel can continue working without a skip ledger event", async () => {
+test("D-10/I-09: Escape parks the audit and continue reuses the SAME subagent to a verdict", async () => {
 	const cwd = mkdtempSync(path.join(tmpdir(), "goal-delegated-cancel-continue-"));
 	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
 	try {
 		const harness = createHarness(cwd);
 		(harness.ctx as any).hasUI = true;
-		(harness.ctx.ui as any).custom = async () => "continue_working";
+		(harness.ctx.ui as any).custom = async () => "continue_audit";
 		let started: (() => void) | undefined;
 		const startedPromise = new Promise<void>((resolve) => { started = resolve; });
 		let requestIdentity: { requestId: string; ownerRunId: string; nodeId: string } | undefined;
+		let cancels = 0;
 		harness.events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (value) => {
 			requestIdentity = value as typeof requestIdentity;
 			harness.events.emit(SUBAGENT_DELEGATION_STARTED_EVENT, requestIdentity);
 			started?.();
 		});
-		harness.events.on("prompt-template:subagent:cancel", (value) => {
-			const cancel = value as { requestId: string; ownerRunId: string; nodeId: string };
-			assert.equal(cancel.requestId, requestIdentity?.requestId);
-			assert.equal(cancel.ownerRunId, requestIdentity?.ownerRunId);
-			assert.equal(cancel.nodeId, requestIdentity?.nodeId);
-			harness.events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, { ...cancel, status: "cancelled" });
-		});
+		harness.events.on("prompt-template:subagent:cancel", () => { cancels++; });
 		await start(harness);
 		const updateGoal = harness.tools.get("update_goal")!;
 		const pending = (updateGoal.execute as any)("complete-cancel-continue", { status: "complete" }, new AbortController().signal, undefined, harness.ctx);
 		await startedPromise;
 		harness.core.abortAudit(harness.ctx);
+		// The user chose to continue: the SAME attempt's terminal verdict arrives.
+		harness.events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+			...requestIdentity,
+			status: "completed",
+			model: "fixture/auditor",
+			result: { kind: "structured", value: { verdict: "approved", report: "Verified.", findings: [] } },
+		});
 		const result = await pending;
 
-		assert.equal(harness.core.state.goal?.status, "active");
-		assert.match(result.content[0]?.text ?? "", /goal remains active/);
+		assert.equal(cancels, 0, "continue must not cancel the parked child");
+		assert.equal(harness.core.state.goal?.status, "complete", "the resumed audit's approval completes the goal");
+		assert.equal(result.terminate, true);
 		const events = ledgerEvents(cwd);
-		assert.deepEqual(events.map((entry) => entry.type), ["completion_requested", "audit_started"]);
+		assert.deepEqual(events.map((entry) => entry.type), ["completion_requested", "audit_started", "audit_result"], "no skip event; the verdict is recorded once");
+		assert.equal(events.find((entry) => entry.type === "audit_result")?.verdict, "approved");
 	} finally {
 		rmSync(cwd, { recursive: true, force: true });
 	}
@@ -390,8 +395,8 @@ test("usage: a delegation without usage leaves the completion result unchanged",
 	}
 });
 
-test("usage: the aborted-audit branches (continue working / Escape bypass) keep the child usage", async () => {
-	for (const choice of ["continue_working", "complete_without_audit"] as const) {
+test("usage: the aborted-audit branches (continue audit / Escape bypass) keep the child usage", async () => {
+	for (const choice of ["continue_audit", "complete_without_audit"] as const) {
 		const cwd = mkdtempSync(path.join(tmpdir(), `goal-delegated-usage-${choice}-`));
 		mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
 		try {
@@ -401,8 +406,10 @@ test("usage: the aborted-audit branches (continue working / Escape bypass) keep 
 			(harness.ctx.ui as any).custom = async () => choice;
 			let release: (() => void) | undefined;
 			const started = new Promise<void>((resolve) => { release = resolve; });
+			let requestIdentity: { requestId: string; ownerRunId: string; nodeId: string } | undefined;
 			harness.events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (value) => {
-				harness.events.emit(SUBAGENT_DELEGATION_STARTED_EVENT, value as { requestId: string; ownerRunId: string; nodeId: string });
+				requestIdentity = value as typeof requestIdentity;
+				harness.events.emit(SUBAGENT_DELEGATION_STARTED_EVENT, requestIdentity);
 				release?.();
 			});
 			harness.events.on("prompt-template:subagent:cancel", (value) => {
@@ -417,9 +424,18 @@ test("usage: the aborted-audit branches (continue working / Escape bypass) keep 
 			const pending = (updateGoal.execute as any)(`complete-${choice}`, { status: "complete" }, new AbortController().signal, undefined, harness.ctx);
 			await started;
 			harness.core.abortAudit(harness.ctx);
+			if (choice === "continue_audit") {
+				// Continue audit: the SAME attempt reports its terminal spend + verdict.
+				harness.events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+					...requestIdentity,
+					status: "completed",
+					usage: CHILD_USAGE,
+					result: { kind: "structured", value: { verdict: "approved", report: "Verified.", findings: [] } },
+				});
+			}
 			const result = await pending;
 
-			assert.deepEqual(result.usage, EXPECTED_TOOL_USAGE, `${choice} must still report the aborted child's spend`);
+			assert.deepEqual(result.usage, EXPECTED_TOOL_USAGE, `${choice} must still report the child's spend`);
 		} finally {
 			rmSync(cwd, { recursive: true, force: true });
 		}
@@ -568,7 +584,7 @@ test("usage: both focused-cancel returns keep the auditor usage", async () => {
 			(harness.ctx as any).hasUI = true;
 			(harness.ctx.ui as any).custom = async () => {
 				harness.core.assignFocusedGoalId(null);
-				return "continue_working";
+				return "continue_audit";
 			};
 			let release: (() => void) | undefined;
 			const started = new Promise<void>((resolve) => { release = resolve; });
@@ -592,5 +608,118 @@ test("usage: both focused-cancel returns keep the auditor usage", async () => {
 		} finally {
 			rmSync(cwd, { recursive: true, force: true });
 		}
+	}
+});
+
+// ── Escape park edge cases: already-settled child, terminal timeout, re-Esc ──
+
+test("Escape bypass after the parked child already finished records no verdict", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-delegated-parked-finished-bypass-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		const harness = createHarness(cwd);
+		(harness.ctx as any).hasUI = true;
+		(harness.ctx.ui as any).custom = async () => "complete_without_audit";
+		let started: (() => void) | undefined;
+		const startedPromise = new Promise<void>((resolve) => { started = resolve; });
+		let requestIdentity: { requestId: string; ownerRunId: string; nodeId: string } | undefined;
+		let cancels = 0;
+		harness.events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (value) => {
+			requestIdentity = value as typeof requestIdentity;
+			harness.events.emit(SUBAGENT_DELEGATION_STARTED_EVENT, requestIdentity);
+			started?.();
+		});
+		harness.events.on("prompt-template:subagent:cancel", () => { cancels++; });
+		await start(harness);
+		const updateGoal = harness.tools.get("update_goal")!;
+		const pending = (updateGoal.execute as any)("complete-parked-finished-bypass", { status: "complete" }, new AbortController().signal, undefined, harness.ctx);
+		await startedPromise;
+		harness.core.abortAudit(harness.ctx);
+		// The child actually finished while the dialog was open.
+		harness.events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+			...requestIdentity,
+			status: "completed",
+			model: "fixture/auditor",
+			result: { kind: "structured", value: { verdict: "approved", report: "Verified.", findings: [] } },
+		});
+		await pending;
+
+		assert.equal(cancels, 0, "an already-settled parked attempt is not cancelled again");
+		assert.equal(harness.core.state.goal?.status, "complete", "bypass completes the goal");
+		const events = ledgerEvents(cwd);
+		assert.ok(events.some((entry) => entry.type === "audit_skipped"), "bypass records audit_skipped");
+		assert.equal(events.filter((entry) => entry.type === "audit_result").length, 0, "the parked verdict is never recorded as a result");
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("Escape park that outlives the terminal timeout fails closed", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-delegated-park-timeout-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		const harness = createHarness(cwd);
+		harness.core.dependencies.runCompletionAuditor = (args: GoalCompletionAuditorArgs) => runGoalCompletionAuditor({ ...args, timeouts: { terminalMs: 50, cancellationMs: 50 } });
+		(harness.ctx as any).hasUI = true;
+		(harness.ctx.ui as any).custom = async () => "continue_audit";
+		let started: (() => void) | undefined;
+		const startedPromise = new Promise<void>((resolve) => { started = resolve; });
+		harness.events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (value) => {
+			harness.events.emit(SUBAGENT_DELEGATION_STARTED_EVENT, value as { requestId: string; ownerRunId: string; nodeId: string });
+			started?.();
+		});
+		harness.events.on("prompt-template:subagent:cancel", (value) => {
+			harness.events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, { ...(value as object), status: "cancelled" });
+		});
+		await start(harness);
+		const updateGoal = harness.tools.get("update_goal")!;
+		const pending = (updateGoal.execute as any)("complete-park-timeout", { status: "complete" }, new AbortController().signal, undefined, harness.ctx);
+		await startedPromise;
+		harness.core.abortAudit(harness.ctx);
+		const result = await pending;
+
+		assert.equal(harness.core.state.goal?.status, "active", "a timed-out parked audit must not complete the goal");
+		assert.match(result.content[0]?.text ?? "", /did not return a terminal response/, "the timeout error is surfaced");
+		assert.equal(ledgerEvents(cwd).some((entry) => entry.type === "audit_skipped"), false, "timeout must not skip the audit");
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
+	}
+});
+
+test("Escape during the resumed audit is inert (no second cancel)", async () => {
+	const cwd = mkdtempSync(path.join(tmpdir(), "goal-delegated-resume-reesc-"));
+	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
+	try {
+		const harness = createHarness(cwd);
+		(harness.ctx as any).hasUI = true;
+		(harness.ctx.ui as any).custom = async () => "continue_audit";
+		let started: (() => void) | undefined;
+		const startedPromise = new Promise<void>((resolve) => { started = resolve; });
+		let requestIdentity: { requestId: string; ownerRunId: string; nodeId: string } | undefined;
+		let cancels = 0;
+		harness.events.on(SUBAGENT_DELEGATION_REQUEST_EVENT, (value) => {
+			requestIdentity = value as typeof requestIdentity;
+			harness.events.emit(SUBAGENT_DELEGATION_STARTED_EVENT, requestIdentity);
+			started?.();
+		});
+		harness.events.on("prompt-template:subagent:cancel", () => { cancels++; });
+		await start(harness);
+		const updateGoal = harness.tools.get("update_goal")!;
+		const pending = (updateGoal.execute as any)("complete-resume-reesc", { status: "complete" }, new AbortController().signal, undefined, harness.ctx);
+		await startedPromise;
+		harness.core.abortAudit(harness.ctx); // park
+		harness.core.abortAudit(harness.ctx); // during the resumed audit — inert
+		harness.events.emit(SUBAGENT_DELEGATION_RESPONSE_EVENT, {
+			...requestIdentity,
+			status: "completed",
+			model: "fixture/auditor",
+			result: { kind: "structured", value: { verdict: "approved", report: "Verified.", findings: [] } },
+		});
+		await pending;
+
+		assert.equal(cancels, 0, "a second Escape must not cancel the resumed audit");
+		assert.equal(harness.core.state.goal?.status, "complete", "the resumed audit still runs to its verdict");
+	} finally {
+		rmSync(cwd, { recursive: true, force: true });
 	}
 });

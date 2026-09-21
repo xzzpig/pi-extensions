@@ -14,6 +14,7 @@ import { statusLabel } from "./goal-core.ts";
 export {
 	parseGoalAuditorStructuredResult,
 	runGoalCompletionAuditor,
+	appendAuditUsageEntry,
 	type GoalAuditorResult,
 	type GoalCompletionAuditorArgs,
 } from "./goal-auditor-delegation.ts";

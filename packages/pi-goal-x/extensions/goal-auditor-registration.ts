@@ -168,7 +168,29 @@ export async function resolveDefaultAuditorAvailability(
 	}
 }
 
-let activeRegistration: { dispose(): void } | undefined;
+interface ActiveAuditorRegistration {
+	name: string;
+	definition: RuntimeAgentDefinition;
+	dispose(): void;
+}
+
+let activeRegistration: ActiveAuditorRegistration | undefined;
+
+/**
+ * The default auditor this module handed to the installed pi-subagents owner
+ * in this process, or undefined while nothing is registered.
+ *
+ * The pi-subagents runtime registry is keyed by the *owner's* ExtensionAPI
+ * object identity (a WeakMap), and the registering listener stores entries
+ * under its own api object rather than the caller's, so a successful
+ * `registerAgentViaEvents` call does not imply the caller can read the entry
+ * back through `discoverAgentsWithRuntime`. This accessor is the authoritative
+ * local record, which is what the launch preflight must trust.
+ */
+export function getDefaultGoalAuditorRegistration(): { name: string; definition: RuntimeAgentDefinition } | undefined {
+	if (!activeRegistration) return undefined;
+	return { name: activeRegistration.name, definition: activeRegistration.definition };
+}
 
 /** Release the runtime registration (session shutdown, reload, re-registration). */
 export function disposeDefaultGoalAuditor(): void {
@@ -202,7 +224,12 @@ export async function registerDefaultGoalAuditor(
 	const settings = loadGoalSettings(cwd);
 	const definition = mergeAuditorDefinition(DEFAULT_AUDITOR_DEFINITION, settings.auditor);
 	try {
-		activeRegistration = registerAgentViaEvents({ pi, name: DEFAULT_AUDITOR_AGENT, definition });
+		const registration = registerAgentViaEvents({ pi, name: DEFAULT_AUDITOR_AGENT, definition });
+		activeRegistration = {
+			name: DEFAULT_AUDITOR_AGENT,
+			definition,
+			dispose: () => registration.dispose(),
+		};
 		return { registered: true, definition };
 	} catch (error) {
 		activeRegistration = undefined;

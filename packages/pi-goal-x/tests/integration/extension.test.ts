@@ -873,7 +873,7 @@ describe("confirmation and audit UX (follow-up Stage 2)", () => {
 		try {
 			const h = createHarness({
 				cwd: f.cwd, sessionEntries: f.sessionEntries, hasUI: true,
-				uiCustom: async () => "continue_working",
+				uiCustom: async () => "continue_audit",
 				runCompletionAuditor: async ({ signal }: any) => {
 					auditorStartedResolve?.();
 					await new Promise<void>((resolve) => {

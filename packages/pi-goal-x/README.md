@@ -76,7 +76,16 @@ The review runs as a fresh foreground `goal-auditor` child through
 the installed pi-subagents owner at runtime (session start), so the audit
 wiring — the child-only progress provider behind the five-stage dashboard, the
 read-only tool allowlist, and the structured verdict contract — is code-owned
-and cannot be broken by configuration. The Goal-X widget retains the five-stage
+and cannot be broken by configuration. Because pi-subagents keys its runtime
+registry by the *owning* extension's API identity, the launch preflight
+validates against Goal-X's own record of the registration it handed over
+rather than querying another extension's registry; delegation itself resolves
+the agent under the owner's key. A configured `goal-auditor` (for example a
+pre-0.8.0 ejected markdown file) shadows the runtime registration and keeps
+working through ordinary discovery. If the audit cannot resolve an auditor, it
+fails closed before any review starts and the error names the cause — a
+missing registration, an `auditor.agent` naming a different agent, or a tool
+allowlist that dropped `report_auditor_progress`. The Goal-X widget retains the five-stage
 summary and result card; use `/subagents-fleet` (or the pi-subagents
 Fleet/transcript view) for the child’s detailed messages, thinking, tool
 activity, retries, and terminal result. Goal-X no longer opens or stores a
@@ -381,7 +390,7 @@ The auditor examines:
 
 An approved goal is archived as complete, and the archive path is reported. Review feedback is added to any goal that requires further work, and the dashboard shows the changes-required result before returning to the normal view.
 
-Press `Esc` to stop an active audit (completing without audit is recorded explicitly and never presented as independently approved).
+Press `Esc` to interrupt an active audit. The auditor subagent is **parked**, not killed: a dialog asks whether to complete without audit or continue. **Continue audit** resumes the same auditor subagent in place until it delivers its verdict (approved → the goal completes; disapproved → the goal stays open with the rejection note). **Mark complete without audit** cancels the parked child at that point and records the bypass explicitly — it is never presented as independently approved. If you change goal focus while the dialog is open, the parked audit is cancelled so it does not keep running unattended.
 
 ## Goal storage
 

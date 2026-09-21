@@ -4,14 +4,16 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
 
-import { RUNTIME_AGENT_REGISTER_EVENT, type RuntimeAgentDefinition, registerAgent } from "@xzzpig/pi-subagents/agents";
+import { RUNTIME_AGENT_REGISTER_EVENT, type RuntimeAgentDefinition } from "@xzzpig/pi-subagents/agents";
 import { resolveSubagentLaunchContract } from "@xzzpig/pi-subagents/preflight";
 import {
 	DEFAULT_AUDITOR_DEFINITION,
 	disposeDefaultGoalAuditor,
+	getDefaultGoalAuditorRegistration,
 	mergeAuditorDefinition,
 	registerDefaultGoalAuditor,
 } from "../extensions/goal-auditor-registration.ts";
+import { invalidateGoalSettingsCache } from "../extensions/goal-settings.ts";
 import registerGoalAuditorProgress, {
 	REPORT_AUDITOR_PROGRESS_PROTOCOL_PREFIX,
 	REPORT_AUDITOR_PROGRESS_TOOL_NAME,
@@ -271,21 +273,24 @@ Auditor body.
 	assert.match(result.error ?? "", /Goal auditor preflight failed/);
 });
 
-test("D-11/I-21: runtime-registered default auditor passes the audit preflight through the runtime-aware fallback", async () => {
+test("D-11/I-21: runtime-registered default auditor passes the audit preflight through the local registration record", async () => {
 	// Phase D proved the amended spec's core bare -e scenario was broken: the
 	// audit preflight resolved the agent through file-only discovery, which
 	// cannot see the session_start runtime registration, so audits died with
-	// 'Unknown agent: goal-auditor'. The runtime-aware fallback must let a
-	// runtime-registered definition through while the file view reports
-	// missing_agent, and the delegation executor (runtime-aware) launches it.
+	// 'Unknown agent: goal-auditor'. The runtime registry is keyed by the OWNING
+	// extension's api identity, so the preflight must trust this process's own
+	// registration record while the file view reports missing_agent; the
+	// delegation executor (which runs inside pi-subagents, under the owning key)
+	// launches it.
 	const project = path.join(tempDir, "runtime-registered-project");
 	fs.mkdirSync(project, { recursive: true });
-	const fakePi = { on: () => () => {}, registerTool: () => {} };
-	const registration = registerAgent({
-		pi: fakePi as never,
-		name: "goal-auditor",
-		definition: mergeAuditorDefinition(DEFAULT_AUDITOR_DEFINITION, {}) as RuntimeAgentDefinition,
+	const bus = createBus();
+	const owner = installFakeOwner(bus);
+	const registration = await registerDefaultGoalAuditor({ events: bus } as any, project, {
+		resolveLaunchContract: (async () => ({ ok: false as const, code: "missing_agent" as const, message: "Unknown agent: goal-auditor" })) as any,
 	});
+	assert.equal(registration.registered, true, "the runtime registration must succeed for the free name");
+	assert.deepEqual(owner.names, ["goal-auditor"]);
 	try {
 		const events = createBus();
 		let dispatched = false;
@@ -311,7 +316,6 @@ test("D-11/I-21: runtime-registered default auditor passes the audit preflight t
 		});
 		const result = await runGoalCompletionAuditor({
 			ctx: { cwd: project } as any,
-			pi: fakePi as never,
 			events,
 			goal: createGoal({ objective: "Verify runtime-registered preflight fallback", autoContinue: true, sisyphus: false }),
 			detailedSummary: "Goal: runtime preflight fallback",
@@ -321,18 +325,16 @@ test("D-11/I-21: runtime-registered default auditor passes the audit preflight t
 		assert.equal(result.approved, true, `unexpected result: ${result.error}`);
 		assert.match(result.output, /Runtime definition reachable\./);
 	} finally {
-		registration.dispose();
+		disposeDefaultGoalAuditor();
 	}
 });
 
-test("D-11: audit fails closed when the runtime registry also lacks the agent", async () => {
+test("D-11: audit fails closed when no configured agent and no runtime registration exist", async () => {
 	const project = path.join(tempDir, "unknown-agent-project");
 	fs.mkdirSync(project, { recursive: true });
-	const fakePi = { on: () => () => {}, registerTool: () => {} };
 	let dispatched = false;
 	const result = await runGoalCompletionAuditor({
 		ctx: { cwd: project } as any,
-		pi: fakePi as never,
 		events: {
 			on: () => () => {},
 			emit: (event) => {
@@ -345,25 +347,28 @@ test("D-11: audit fails closed when the runtime registry also lacks the agent", 
 	assert.equal(dispatched, false);
 	assert.match(result.error ?? "", /Goal auditor preflight failed/);
 	assert.match(result.error ?? "", /goal-auditor/);
+	assert.match(result.error ?? "", /neither a configured agent nor an active runtime registration/);
 });
 
 test("D-11/I-20: runtime fallback enforcement retains the protocol progress tool", async () => {
 	const project = path.join(tempDir, "stripped-tools-project");
-	fs.mkdirSync(project, { recursive: true });
-	const fakePi = { on: () => () => {}, registerTool: () => {} };
-	const registration = registerAgent({
-		pi: fakePi as never,
-		name: "goal-auditor",
-		definition: mergeAuditorDefinition(DEFAULT_AUDITOR_DEFINITION, {
-			tools: ["read", "grep"],
-			excludeTools: [REPORT_AUDITOR_PROGRESS_TOOL_NAME],
-		}) as RuntimeAgentDefinition,
+	fs.mkdirSync(path.join(project, ".pi"), { recursive: true });
+	fs.writeFileSync(
+		path.join(project, ".pi", "pi-goal-x-settings.json"),
+		JSON.stringify({ auditor: { tools: ["read", "grep"], excludeTools: [REPORT_AUDITOR_PROGRESS_TOOL_NAME] } }),
+		"utf8",
+	);
+	invalidateGoalSettingsCache();
+	const bus = createBus();
+	installFakeOwner(bus);
+	const registration = await registerDefaultGoalAuditor({ events: bus } as any, project, {
+		resolveLaunchContract: (async () => ({ ok: false as const, code: "missing_agent" as const, message: "Unknown agent: goal-auditor" })) as any,
 	});
+	assert.equal(registration.registered, true);
 	try {
 		let dispatched = false;
 		const result = await runGoalCompletionAuditor({
 			ctx: { cwd: project } as any,
-			pi: fakePi as never,
 			events: {
 				on: () => () => {},
 				emit: (event) => {
@@ -376,8 +381,98 @@ test("D-11/I-20: runtime fallback enforcement retains the protocol progress tool
 		assert.equal(dispatched, false, "auditor with the progress tool excluded must fail closed");
 		assert.match(result.error ?? "", /must retain the required report_auditor_progress tool/);
 	} finally {
-		registration.dispose();
+		disposeDefaultGoalAuditor();
+		invalidateGoalSettingsCache();
 	}
+});
+
+test("D-11: a runtime registration never substitutes for a different configured auditor name", async () => {
+	// Fail-closed matrix (3): `auditor.agent` may name ANY agent. The local
+	// registration record only ever describes the default goal-auditor, so it
+	// must never validate a differently-named auditor.
+	const project = path.join(tempDir, "name-mismatch-project");
+	fs.mkdirSync(path.join(project, ".pi"), { recursive: true });
+	fs.writeFileSync(
+		path.join(project, ".pi", "pi-goal-x-settings.json"),
+		JSON.stringify({ auditor: { agent: "other-auditor" } }),
+		"utf8",
+	);
+	invalidateGoalSettingsCache();
+	const bus = createBus();
+	installFakeOwner(bus);
+	const registration = await registerDefaultGoalAuditor({ events: bus } as any, project, {
+		resolveLaunchContract: (async () => ({ ok: false as const, code: "missing_agent" as const, message: "Unknown agent: goal-auditor" })) as any,
+	});
+	assert.equal(registration.registered, true, "the default name is free, so the local record exists");
+	try {
+		let dispatched = false;
+		const result = await runGoalCompletionAuditor({
+			ctx: { cwd: project } as any,
+			events: {
+				on: () => () => {},
+				emit: (event) => {
+					if (event === "prompt-template:subagent:request") dispatched = true;
+				},
+			},
+			goal: createGoal({ objective: "Verify auditor name mismatch fails closed", autoContinue: true, sisyphus: false }),
+			detailedSummary: "Goal: name mismatch",
+		});
+		assert.equal(dispatched, false, "a differently named auditor must not be validated by the goal-auditor record");
+		assert.match(result.error ?? "", /auditor\.agent resolves to 'other-auditor'/);
+		assert.match(result.error ?? "", /the active runtime registration is 'goal-auditor'/);
+	} finally {
+		disposeDefaultGoalAuditor();
+		invalidateGoalSettingsCache();
+	}
+});
+
+test("D-11: a configured goal-auditor shadows the local registration and still audits through discovery", async () => {
+	// Fail-closed matrix (2): when a configured `goal-auditor` already exists,
+	// registration is skipped (registering would collide at discovery time) and
+	// the audit must resolve through the ordinary file path instead.
+	const project = path.join(tempDir, "shadowed-audit-project");
+	fs.mkdirSync(path.join(project, ".pi", "agents"), { recursive: true });
+	fs.writeFileSync(
+		path.join(project, ".pi", "agents", "goal-auditor.md"),
+		`---
+name: goal-auditor
+description: Project override auditor
+tools: read, grep, find, ls, bash, ${REPORT_AUDITOR_PROGRESS_TOOL_NAME}
+---
+
+Use the project configuration.
+`,
+		"utf8",
+	);
+	invalidateGoalSettingsCache();
+	const bus = createBus();
+	const owner = installFakeOwner(bus);
+	const registration = await registerDefaultGoalAuditor({ events: bus } as any, project);
+	assert.equal(registration.registered, false);
+	assert.equal(registration.reason, "shadowed");
+	assert.deepEqual(owner.names, [], "a configured name is never double-registered at runtime");
+	assert.equal(getDefaultGoalAuditorRegistration(), undefined, "no local record exists for a shadowed name");
+	const events = createBus();
+	let dispatched = false;
+	events.on("prompt-template:subagent:request", (value) => {
+		dispatched = true;
+		const request = value as { requestId: string; ownerRunId: string; nodeId: string };
+		events.emit("prompt-template:subagent:response", {
+			...request,
+			status: "completed",
+			model: "mock/auditor",
+			result: { kind: "structured", value: { verdict: "approved", report: "Configured agent reachable.", findings: [] } },
+		});
+	});
+	const result = await runGoalCompletionAuditor({
+		ctx: { cwd: project, modelRegistry: { getAvailable: () => [{ provider: "mock", id: "auditor" }] } } as any,
+		events,
+		goal: createGoal({ objective: "Verify configured auditor path", autoContinue: true, sisyphus: false }),
+		detailedSummary: "Goal: configured auditor",
+	});
+	assert.equal(dispatched, true, `the configured auditor must dispatch: ${result.error}`);
+	assert.equal(result.approved, true, `unexpected result: ${result.error}`);
+	assert.match(result.output, /Configured agent reachable\./);
 });
 
 test("D-05: child-only progress provider registers the required progress tool", async () => {

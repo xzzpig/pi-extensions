@@ -8,23 +8,23 @@ import type { MockExtensionContext } from "./tui-test-utils.ts";
 
 // ── Headless (hasUI = false) path — existing tests preserved ────────────
 
-test("showEscapeDialog returns continue_working in headless context", async () => {
+test("showEscapeDialog returns continue_audit in headless context", async () => {
 	const ctx = { hasUI: false } as any;
 	const result = await showEscapeDialog(ctx, "Test objective");
-	assert.equal(result, "continue_working");
+	assert.equal(result, "continue_audit");
 });
 
-test("showEscapeDialog returns continue_working for empty objective", async () => {
+test("showEscapeDialog returns continue_audit for empty objective", async () => {
 	const ctx = { hasUI: false } as any;
 	const result = await showEscapeDialog(ctx, "");
-	assert.equal(result, "continue_working");
+	assert.equal(result, "continue_audit");
 });
 
-test("showEscapeDialog returns continue_working for long objective", async () => {
+test("showEscapeDialog returns continue_audit for long objective", async () => {
 	const ctx = { hasUI: false } as any;
 	const longObjective = "A".repeat(500);
 	const result = await showEscapeDialog(ctx, longObjective);
-	assert.equal(result, "continue_working");
+	assert.equal(result, "continue_audit");
 });
 
 // ── TUI rendering path (hasUI = true) — crash reproduction ──────────────
@@ -86,7 +86,7 @@ test("escape dialog component renders correct structure and content", async () =
 	// Content
 	assert.ok(text.includes("Audit interrupted by Escape"), "Shows header");
 	assert.ok(text.includes("Mark complete without audit"), "Shows complete option");
-	assert.ok(text.includes("Continue working"), "Shows continue option");
+	assert.ok(text.includes("Continue audit"), "Shows continue option");
 	assert.ok(text.includes("Test objective"), "Shows objective");
 	assert.ok(text.includes("Enter to select"), "Shows footer instructions");
 
@@ -95,7 +95,7 @@ test("escape dialog component renders correct structure and content", async () =
 	assert.ok(text.includes("Esc"), "Shows escape hint");
 });
 
-test("escape dialog handleInput: escape returns continue_working", async () => {
+test("escape dialog handleInput: escape returns continue_audit", async () => {
 	const ctx = createMockExtensionContext();
 	const promise = showEscapeDialog(ctx, "Test objective");
 
@@ -121,9 +121,9 @@ test("escape dialog handleInput: escape returns continue_working", async () => {
 	component.handleInput!("\u001b[B"); // down arrow
 	assert.ok(tuiState.requestRenderCalls > beforeDown, "Down triggers re-render");
 
-	// Escape returns continue_working
+	// Escape returns continue_audit
 	component.handleInput!("\u001b"); // escape
-	assert.equal(doneValue, "continue_working", "Escape returns continue_working");
+	assert.equal(doneValue, "continue_audit", "Escape returns continue_audit");
 });
 
 test("escape dialog handleInput: enter selects focused option", async () => {
@@ -134,7 +134,7 @@ test("escape dialog handleInput: enter selects focused option", async () => {
 	const { tui } = createMockTUI();
 	const theme = createMockTheme();
 
-	// Default selected index = 1 (Continue working)
+	// Default selected index = 1 (Continue audit)
 	let doneValue: string | undefined;
 	const component = record.factory(
 		tui,
@@ -144,7 +144,7 @@ test("escape dialog handleInput: enter selects focused option", async () => {
 	) as Component;
 
 	component.handleInput!("\r"); // enter
-	assert.equal(doneValue, "continue_working", "Default enter selects continue_working");
+	assert.equal(doneValue, "continue_audit", "Default enter selects continue_audit");
 });
 
 test("escape dialog handleInput: up + enter selects complete_without_audit", async () => {
@@ -191,7 +191,7 @@ test("escape dialog handleInput: navigation wraps around", async () => {
 	// Up from 0 wraps to 1
 	component.handleInput!("\u001b[A"); // up arrow
 	component.handleInput!("\r"); // enter
-	assert.equal(doneValue, "continue_working", "Navigation wraps around correctly");
+	assert.equal(doneValue, "continue_audit", "Navigation wraps around correctly");
 
 	// Test that down from index 1 wraps to index 0
 	doneValue = undefined;

@@ -11,9 +11,8 @@
 //   - progress parsing for the child-only report_auditor_progress provider,
 //   - terminal child-session usage capture.
 import { randomUUID } from "node:crypto";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { resolveSubagentLaunchContract } from "@xzzpig/pi-subagents/preflight";
-import { discoverAgentsWithRuntime } from "@xzzpig/pi-subagents/agents";
 import {
 	SUBAGENT_DELEGATION_CANCEL_EVENT,
 	SUBAGENT_DELEGATION_REQUEST_EVENT,
@@ -25,7 +24,8 @@ import {
 	type SubagentDelegationUpdate,
 	type SubagentDelegationUsage,
 } from "@xzzpig/pi-subagents/delegation";
-import type { GoalRecord } from "./goal-record.ts";
+import { nowIso, type GoalRecord } from "./goal-record.ts";
+import type { GoalCore } from "./goal-state.ts";
 import {
 	DEFAULT_AUDITOR_AGENT,
 	DEFAULT_AUDITOR_TIMEOUT_MS,
@@ -33,6 +33,7 @@ import {
 	type GoalSettings,
 	type ThinkingLevel,
 } from "./goal-settings.ts";
+import { getDefaultGoalAuditorRegistration } from "./goal-auditor-registration.ts";
 import {
 	REPORT_AUDITOR_PROGRESS_PROTOCOL_PREFIX,
 	REPORT_AUDITOR_PROGRESS_TOOL_NAME,
@@ -66,11 +67,34 @@ export interface GoalAuditorResult {
 	runId?: string;
 	requestId?: string;
 	/**
+	 * True when Escape parked the audit: the delegated child is still running,
+	 * its event listeners are still attached, and `session` can resume or cancel
+	 * the SAME attempt. Terminal fields (output/findings/usage) are absent here;
+	 * they arrive with the result `resume()`/`cancel()` settle with.
+	 */
+	interrupted?: boolean;
+	/** Present exactly when `interrupted` is true; the caller decides the outcome. */
+	session?: GoalAuditorSessionHandle;
+	/**
 	 * Child session usage from the terminal delegation response, when pi-subagents
 	 * reported one. Presentation/accounting only: it never changes the verdict, and
 	 * the caller decides whether it lands on a tool result or the goal ledger.
 	 */
 	usage?: SubagentDelegationUsage;
+}
+
+/**
+ * Handle to a parked (Escape-interrupted) audit delegation. The child is NOT
+ * cancelled by Escape: it keeps running and its terminal response is captured.
+ * `resume()` keeps waiting on that SAME attempt; `cancel()` sends the delegation
+ * cancel now. Both settle with the attempt's terminal result (verdict or
+ * cancellation), which carries the child usage for accounting.
+ */
+export interface GoalAuditorSessionHandle {
+	/** Continue watching the parked attempt; resolves with its terminal audit result. */
+	resume(): Promise<GoalAuditorResult>;
+	/** Kill the parked attempt (sends the delegation cancel); resolves when settled. */
+	cancel(): Promise<GoalAuditorResult>;
 }
 
 export const GOAL_AUDITOR_RESULT_SCHEMA = {
@@ -173,6 +197,33 @@ export function parseGoalAuditorStructuredResult(value: unknown): { value?: Goal
 			findings: record.findings,
 		},
 	};
+}
+
+/**
+ * Record the auditor child's spend as its own ledger entry (goal.usage.tokensUsed
+ * stays parent-turn-only, so the token budget never changes). Best-effort by
+ * construction: a ledger append failure must not block completion. Exactly one
+ * call per completion attempt — the three Escape flows (continue, bypass, focus
+ * lost) are mutually exclusive, so the entry is never duplicated.
+ */
+export function appendAuditUsageEntry(core: GoalCore, ctx: ExtensionContext, goalId: string, usage: SubagentDelegationUsage | undefined): void {
+	if (!usage) return;
+	try {
+		core.goalService.appendEvents(ctx, [{
+			type: "audit_usage",
+			goalId,
+			tokens: usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
+			inputTokens: usage.input,
+			outputTokens: usage.output,
+			cacheReadTokens: usage.cacheRead,
+			cacheWriteTokens: usage.cacheWrite,
+			costUsd: usage.cost,
+			turns: usage.turns,
+			at: nowIso(),
+		}]);
+	} catch {
+		// Ledger append failure should not block completion
+	}
 }
 
 function formatAuditOutput(report: string, findings: string[]): string {
@@ -301,12 +352,6 @@ function responseError(response: SubagentDelegationResponse): string {
 export interface GoalCompletionAuditorArgs {
 	ctx: ExtensionContext;
 	events?: GoalAuditorEvents;
-	/**
-	 * The pi-goal-x ExtensionAPI. Required for the runtime-aware preflight
-	 * fallback: the default auditor is registered at session_start through the
-	 * runtime agent registry, which file-only discovery cannot see.
-	 */
-	pi?: ExtensionAPI;
 	goal: GoalRecord;
 	detailedSummary: string;
 	completionSummary?: string | null;
@@ -319,6 +364,13 @@ export interface GoalCompletionAuditorArgs {
 	 */
 	changeManifest?: string | null;
 	signal?: AbortSignal;
+	/**
+	 * Park the audit on abort instead of cancelling: Escape keeps the delegated
+	 * child alive and hands the caller an `interrupted` result + session handle,
+	 * so "continue audit" can resume the SAME subagent. Off by default so
+	 * existing callers (and test stubs) keep the current cancel-on-abort path.
+	 */
+	parkOnAbort?: boolean;
 	onProgress?: AuditorProgressCallback;
 	/** Test-only identity/time controls. Production callers use generated values. */
 	requestId?: string;
@@ -377,35 +429,35 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 					error: "Goal auditor preflight failed: structured_output is unavailable.",
 				};
 			}
-		} else if (preflight.code === "missing_agent" && args.pi) {
-			// The default auditor is registered at session_start through the
-			// pi-subagents runtime agent registry, which this file-only launch
-			// contract cannot see. Resolve through the runtime-aware merged view
-			// (the same view the delegation executor starts) and validate the
-			// protocol tools on that definition. structured_output is guaranteed
-			// by the structured delegation request shape below.
+		} else if (preflight.code === "missing_agent") {
+			// The default auditor is registered with the installed pi-subagents
+			// owner at session_start. That owner stores registrations under ITS OWN
+			// ExtensionAPI identity (the runtime registry is a per-owner WeakMap),
+			// so a registry query issued from this extension can never observe our
+			// own registration. Trust the local record of what this process
+			// registered instead, and enforce the protocol tool on the definition
+			// that was actually handed to the owner. structured_output is
+			// guaranteed by the structured delegation request shape below.
 			const auditorAgent = resolveAuditorAgent(settings);
-			// SAFETY: pi-goal-x and pi-subagents resolve @earendil-works/pi-coding-agent
-			// to different node_modules dist copies whose ExtensionAPI `on` overloads
-			// are nominally incompatible, but both sides hold the SAME extension API
-			// object at runtime; the pi-subagents runtime registry is keyed by object
-			// identity (WeakMap), so a structural cast preserves it.
-			const runtimeView = discoverAgentsWithRuntime(
-				args.pi as unknown as Parameters<typeof discoverAgentsWithRuntime>[0],
-				args.ctx.cwd,
-				"both",
-			);
-			const runtimeAgent = runtimeView.agents.find((agent) => agent.name === auditorAgent);
-			if (!runtimeAgent) {
+			const registered = getDefaultGoalAuditorRegistration();
+			if (!registered) {
 				return {
 					approved: false,
 					disapproved: true,
 					output: "",
-					error: `Goal auditor preflight failed: ${preflight.message}`,
+					error: `Goal auditor preflight failed: '${auditorAgent}' is neither a configured agent nor an active runtime registration. Load the pi-subagents extension (which owns runtime agent registration) or define the auditor explicitly, then retry.\n\n${preflight.message}`,
 				};
 			}
-			const excludedTools = new Set(runtimeAgent.excludeTools ?? []);
-			const effectiveAllowlist = (runtimeAgent.tools ?? []).filter((tool) => !excludedTools.has(tool));
+			if (registered.name !== auditorAgent) {
+				return {
+					approved: false,
+					disapproved: true,
+					output: "",
+					error: `Goal auditor preflight failed: auditor.agent resolves to '${auditorAgent}', but the active runtime registration is '${registered.name}'. A runtime registration never substitutes for a different configured agent.\n\n${preflight.message}`,
+				};
+			}
+			const excludedTools = new Set(registered.definition.excludeTools ?? []);
+			const effectiveAllowlist = (registered.definition.tools ?? []).filter((tool) => !excludedTools.has(tool));
 			if (!effectiveAllowlist.includes(REPORT_AUDITOR_PROGRESS_TOOL_NAME)) {
 				return {
 					approved: false,
@@ -460,6 +512,11 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 		let cancellationTimer: ReturnType<typeof setTimeout> | undefined;
 		let cancellationReason: "user_abort" | "terminal_timeout" | undefined;
 		let terminalUsage: SubagentDelegationUsage | undefined;
+		// Escape park: the child keeps running and the listeners stay attached; the
+		// caller settles the interrupted result and decides via the session handle.
+		let parked = false;
+		let parkPromise: Promise<GoalAuditorResult> | undefined;
+		let parkResolve: ((result: GoalAuditorResult) => void) | undefined;
 		const unsubscribes: Array<() => void> = [];
 		const subscribe = (event: string, handler: (data: unknown) => void): void => {
 			const unsubscribe = events.on(event, handler);
@@ -505,7 +562,52 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 			cancellationTimer = setTimeout(() => finish(cancellationResult(reason)), args.timeouts?.cancellationMs ?? CANCELLATION_TIMEOUT_MS);
 			cancellationTimer.unref?.();
 		}
-		const onAbort = () => cancelAttempt("user_abort");
+		const onAbort = () => {
+			if (args.parkOnAbort) park();
+			else cancelAttempt("user_abort");
+		};
+		/**
+		 * Park the audit on Escape: keep the delegated child running and the event
+		 * listeners/timers attached, and settle the caller's promise with an
+		 * `interrupted` result + session handle. The flow asks the user and then
+		 * resumes the SAME attempt or cancels it after all.
+		 */
+		function park(): void {
+			if (settled || parked) return;
+			parked = true;
+			parkPromise = new Promise<GoalAuditorResult>((resolveParked) => {
+				parkResolve = resolveParked;
+			});
+			const session: GoalAuditorSessionHandle = {
+				resume: () => {
+					// The flow re-arms the audit display before resuming; from here on
+					// progress updates flow again until the attempt settles.
+					parked = false;
+					return parkPromise!;
+				},
+				cancel: () => {
+					cancelAttempt("user_abort");
+					return parkPromise!;
+				},
+			};
+			resolve({
+				approved: false,
+				disapproved: true,
+				output: "",
+				error: "Auditor aborted.",
+				cancelled: true,
+				interrupted: true,
+				session,
+				requestId,
+			});
+		}
+		// Progress reporting pauses while parked: the flow clears auditProgress for
+		// the Escape dialog, and resume() re-arms the display. Suppressing updates
+		// keeps the hidden dashboard from churning underneath the dialog.
+		const reportProgress = (p: AuditorProgress) => {
+			if (parked) return;
+			safeProgress(args.onProgress, p);
+		};
 		const cleanup = () => {
 			if (startedTimer) clearTimeout(startedTimer);
 			if (terminalTimer) clearTimeout(terminalTimer);
@@ -522,9 +624,18 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 			progress.percentage = 100;
 			progress.elapsedMs = Date.now() - startedAt;
 			if (result.output.trim()) progress.recentOutput = result.output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-8);
-			safeProgress(args.onProgress, progress);
+			reportProgress(progress);
 			const usage = result.usage ?? terminalUsage;
-			resolve({ ...result, ...(usage ? { usage } : {}), requestId });
+			const final = { ...result, ...(usage ? { usage } : {}), requestId };
+			if (parkResolve) {
+				// Parked by Escape: the child's terminal result (verdict, failure, or
+				// cancellation confirmation) is handed to the parked session handle.
+				const resolveParked = parkResolve;
+				parkResolve = undefined;
+				resolveParked(final);
+				return;
+			}
+			resolve(final);
 		};
 		const armTerminalTimeout = () => {
 			if (terminalTimer) return;
@@ -540,7 +651,7 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 			started = true;
 			if (startedTimer) clearTimeout(startedTimer);
 			progress.elapsedMs = Date.now() - startedAt;
-			safeProgress(args.onProgress, progress);
+			reportProgress(progress);
 			armTerminalTimeout();
 		});
 		subscribe(SUBAGENT_DELEGATION_UPDATE_EVENT, (value) => {
@@ -572,7 +683,7 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 			if (reported.percentage !== undefined) progress.percentage = reported.percentage;
 			if (typeof update.durationMs === "number" && update.durationMs >= 0) progress.elapsedMs = update.durationMs;
 			else progress.elapsedMs = Date.now() - startedAt;
-			safeProgress(args.onProgress, progress);
+			reportProgress(progress);
 		});
 		subscribe(SUBAGENT_DELEGATION_RESPONSE_EVENT, (value) => {
 			if (!matchingIdentity(value, identity)) return;
@@ -651,9 +762,12 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 		}, args.timeouts?.startedMs ?? START_HANDSHAKE_TIMEOUT_MS);
 		startedTimer.unref?.();
 		args.signal?.addEventListener("abort", onAbort, { once: true });
-		safeProgress(args.onProgress, progress);
+		reportProgress(progress);
 		try {
-			if (args.signal?.aborted) cancelAttempt("user_abort");
+			if (args.signal?.aborted) {
+				if (args.parkOnAbort) park();
+				else cancelAttempt("user_abort");
+			}
 			events.emit(SUBAGENT_DELEGATION_REQUEST_EVENT, request);
 		} catch (error) {
 			finish({

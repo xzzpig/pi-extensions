@@ -7,14 +7,14 @@ import { borderedLine, dialogInnerWidth, horizontalRule } from "./dialog-scaffol
 /**
  * Result of the Escape dialog during audit.
  */
-export type EscapeDialogResult = "complete_without_audit" | "continue_working";
+export type EscapeDialogResult = "complete_without_audit" | "continue_audit";
 
 /**
  * Show a TUI confirmation dialog when the user presses Escape during a completion audit.
  *
  * Presents two choices:
  *   - Mark complete without audit (skips auditor, marks goal complete immediately)
- *   - Continue working (returns to agent, goal stays active)
+ *   - Continue audit (resumes the SAME auditor subagent until it delivers its verdict)
  *
  * Returns the user's choice. Escape or Enter on a focused option submits the selection.
  */
@@ -24,7 +24,7 @@ export async function showEscapeDialog(
 ): Promise<EscapeDialogResult> {
 	if (!ctx.hasUI) {
 		// Fallback for headless/RPC mode — return "continue" as the safe default
-		return "continue_working";
+		return "continue_audit";
 	}
 
 	return await ctx.ui.custom<EscapeDialogResult>(
@@ -35,7 +35,7 @@ export async function showEscapeDialog(
 			// write output that snaps a scrolled-up user back to the terminal bottom.
 			ctx.ui.setWorkingVisible(false);
 
-			let selectedIndex = 1; // Default: "Continue working" (index 1)
+			let selectedIndex = 1; // Default: "Continue audit" (index 1)
 			let cancelled = false;
 
 			const OPTIONS: Array<{ label: string; value: EscapeDialogResult; description: string }> = [
@@ -45,9 +45,9 @@ export async function showEscapeDialog(
 					description: "Bypass the auditor and mark the goal complete now.",
 				},
 				{
-					label: "Continue working",
-					value: "continue_working",
-					description: "Resume work on the goal. It stays active; the audit will not run this turn.",
+					label: "Continue audit",
+					value: "continue_audit",
+					description: "Resume this audit with the same auditor subagent until it delivers its verdict.",
 				},
 			];
 
@@ -100,7 +100,7 @@ export async function showEscapeDialog(
 
 					// ── Footer ───────────────────────────────────────────────
 					lines.push(accent(`├${horizLine}┤`));
-					const footerText = dim("Enter to select  ·  ↑↓ to navigate  ·  Esc = continue working");
+					const footerText = dim("Enter to select  ·  ↑↓ to navigate  ·  Esc = continue audit");
 						const truncFooter = truncateToWidth(footerText, innerWidth - 2, "…");
 					lines.push(line(p + truncFooter));
 					lines.push(accent(`└${horizLine}┘`));
@@ -126,7 +126,7 @@ export async function showEscapeDialog(
 					}
 					if (matchesKey(data, "escape")) {
 						cancelled = true;
-						done("continue_working");
+						done("continue_audit");
 						return;
 					}
 				},

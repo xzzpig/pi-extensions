@@ -2,6 +2,50 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.8.1] — 2026-09-20 (fork release)
+
+### Changed
+
+- **Esc during a completion audit parks the audit and “continue” reuses the
+  SAME auditor subagent** instead of killing it and later starting a fresh one.
+  Esc no longer sends the delegation cancel immediately: the child keeps
+  running and its event listeners stay attached while the Escape dialog asks
+  whether to finish the audit or complete without it. Choosing **Continue
+  audit** resumes the same attempt to its verdict (approved → completes;
+  disapproved → rejection card); choosing **Mark complete without audit**
+  cancels the child at that point and records `audit_skipped`. If focus moves
+  on while the dialog is open (e.g. `/goal-unfocus`), the parked child is
+  cancelled so no orphan keeps running. The terminal-timeout cap still bounds
+  a parked audit, and an already-finished parked child is never double-
+  cancelled. Usage accounting (`audit_usage` ledger + tool-result usage) is
+  preserved on every Escape path: continue, bypass, and focus-lost. The
+  non-parkable dependency-stub path (old “continue working” behavior) is
+  kept as a fallback.
+
+### Fixed
+
+- **Completion audits no longer fail with `Unknown agent: goal-auditor` when
+  the default auditor is runtime-registered.** 0.8.0 resolved the registered
+  agent through a runtime-registry query issued from Goal-X's own
+  ExtensionAPI, but pi-subagents keys that registry (a WeakMap) by the
+  *owning* extension's API identity: the registering listener stores the entry
+  under its own object, so a query from another extension can never observe
+  its own registration. With the packaged `goal-auditor.md` intentionally
+  removed, every default-config audit died at the launch preflight, so
+  `update_goal(complete)` could not be independently reviewed at all.
+  The preflight now trusts Goal-X's own record of the registration it handed
+  to the pi-subagents owner — name plus the merged definition — instead of
+  querying a registry keyed by another object. Delegation itself was never
+  broken: pi-subagents resolves the agent under the key it registered, so the
+  same attempt still launches.
+- **The audit preflight fails closed with actionable diagnostics.** Only a
+  live registration whose name matches the selected `auditor.agent` (and whose
+  effective allowlist retains `report_auditor_progress`) is accepted. A
+  missing registration, a differently named `auditor.agent`, and a stripped
+  protocol tool each fail closed with a message naming the cause and the
+  remedy; a configured `goal-auditor` (e.g. a pre-0.8.0 ejected file) shadows
+  the runtime registration and keeps auditing through ordinary discovery.
+
 ## [0.8.0] — 2026-09-19 (fork release)
 
 ### Changed
