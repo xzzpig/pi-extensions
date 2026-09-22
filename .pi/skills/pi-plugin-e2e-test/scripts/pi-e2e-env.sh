@@ -9,6 +9,14 @@
 # stop    exit pi (C-d) and kill the tmux session
 set -euo pipefail
 
+# tmux sessions must live in /tmp so they survive across sandboxed bash
+# commands (server dies with its PID namespace when started inside the
+# sandbox; a host server with socket in /tmp is reachable from sandboxed
+# clients). See the pi-tmux-tmp-server skill. Force /tmp here so the
+# wrapper and the host server always agree on the socket path.
+TMUX_TMPDIR=/tmp
+export TMUX_TMPDIR
+
 usage() {
   cat <<'EOF'
 Usage:

@@ -1,7 +1,7 @@
 ---
 name: pi-plugin-e2e-test
 description: Run a pi plugin against a real pi runtime in an isolated throwaway environment. This skill should be used when a pi-* package needs real-runtime validation before release (extension loading, slash commands, model turns, dialogs, session persistence), when unit tests pass but live TUI behavior is unproven, or when asked to "实际测试" / "真机测试" / "跑一遍" a plugin using pi and tmux.
-compatibility: Requires the repository root with direnv loaded, pi CLI on PATH, tmux, and a working pi model credential for model turns.
+compatibility: Requires the repository root with direnv loaded, pi CLI on PATH, tmux, a working pi model credential for model turns, and — for Level 2 — a running tmux server in /tmp (see the pi-tmux-tmp-server skill).
 ---
 
 # Pi Plugin E2E Test
@@ -68,7 +68,18 @@ registration errors, and load failures surface here in seconds and cheaply.
 ## Level 2 — tmux interactive TUI test
 
 Slash commands, dialogs, widgets, and lifecycle flows need the real TUI.
-Use the bundled wrapper so launch, inspection, and teardown are
+
+Prerequisite — tmux server in /tmp: this level drives the real TUI through
+a persistent tmux server whose socket lives in `/tmp` (a server started
+inside a sandboxed command dies with its PID namespace, so it must live on
+the host). Follow the `pi-tmux-tmp-server` skill first: verify the server is
+running and connectable (`TMUX_TMPDIR=/tmp tmux ls`, or its bundled
+`tmux-tmp-check.sh`). If it is not, do NOT start it from inside the sandbox —
+hand the user the start commands from that skill and ask via the `ask_user`
+tool whether to continue. Only proceed once the check passes.
+
+The bundled wrapper forces `TMUX_TMPDIR=/tmp` internally, so the commands
+below need no prefix. Use the wrapper so launch, inspection, and teardown are
 deterministic (paths relative to this skill directory):
 
 ```bash
