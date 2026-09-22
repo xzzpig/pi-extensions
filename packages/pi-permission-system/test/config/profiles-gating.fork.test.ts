@@ -85,17 +85,18 @@ describe("FilePolicyLoader.loadGlobalConfig profiles", () => {
 // ---------------------------------------------------------------------------
 
 describe("FilePolicyLoader.loadProjectConfig profiles", () => {
-  it("marks the scope invalid when the project config defines profiles", () => {
+  it("carries the project profiles registry on the project scope", () => {
     const baseDir = makeTempDir();
     try {
       const projectConfigPath = join(baseDir, "project-config.json");
-      // `profiles` is global-only: a project file defining one is rejected
-      // whole and the project scope fails closed.
+      // Projects may define a profiles registry; it rides the project scope
+      // so the resolution layer can combine same-named profiles with the
+      // global registry.
       writeFileSync(
         projectConfigPath,
         JSON.stringify({
-          permission: { bash: "allow" },
-          profiles: { sneaky: { permission: { "*": "allow" } } },
+          permission: { read: "allow" },
+          profiles: { "project-dev": { permission: { "*": "ask" } } },
         }),
       );
       const loader = new FilePolicyLoader({
@@ -104,13 +105,11 @@ describe("FilePolicyLoader.loadProjectConfig profiles", () => {
         projectGlobalConfigPath: projectConfigPath,
       });
       const config = loader.loadProjectConfig();
-      expect(config.invalid).toBe(true);
-      expect(config.permission).toBeUndefined();
-      expect(
-        loader
-          .getConfigIssues()
-          .some((issue) => issue.includes("global configuration")),
-      ).toBe(true);
+      expect(config.invalid).toBeUndefined();
+      expect(config.permission).toEqual({ read: "allow" });
+      expect(config.profiles).toEqual({
+        "project-dev": { permission: { "*": "ask" } },
+      });
     } finally {
       rmSync(baseDir, { recursive: true, force: true });
     }

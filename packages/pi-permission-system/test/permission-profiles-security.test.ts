@@ -69,7 +69,7 @@ describe("profile selection trust gate", () => {
       trusted.configureForCwd(harness.cwd);
       const trustedResult = trusted.check(readCheck("worker"));
       expect(trustedResult.state).toBe("deny");
-      expect(trustedResult.origin).toBe("profile");
+      expect(trustedResult.origin).toBe("profile-global");
     } finally {
       harness.cleanup();
     }
@@ -185,7 +185,7 @@ describe("profile rules under yoloMode", () => {
       agentName: "worker",
     });
     expect(deny.state).toBe("deny");
-    expect(deny.origin).toBe("profile");
+    expect(deny.origin).toBe("profile-global");
   });
 
   it("keeps profile rules yolo-free on display surfaces", () => {
@@ -193,7 +193,7 @@ describe("profile rules under yoloMode", () => {
     const rules = manager.getComposedConfigRules("worker");
     const readRule = rules.find((rule) => rule.surface === "read" && rule.pattern === "*");
     expect(readRule?.action).toBe("ask");
-    expect(readRule?.origin).toBe("profile");
+    expect(readRule?.origin).toBe("profile-global");
   });
 });
 

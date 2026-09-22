@@ -38,6 +38,13 @@ export interface SandboxConfigLoadOptions {
   profileName?: string;
   /** Project config is included on the profile path only after affirmative trust. */
   projectTrusted?: boolean;
+  /**
+   * Receives non-fatal notices produced while loading (currently the «project
+   * profiles not applied» warning for an untrusted project). The loader stays a
+   * pure function over its inputs: the caller owns delivery (UI notification,
+   * stderr, startup diagnostics).
+   */
+  onWarning?: (message: string) => void;
 }
 
 export const SANDBOX_PROFILE_ENV = "PI_SUBAGENT_SANDBOX_PROFILE";
@@ -266,6 +273,143 @@ function mergeProfileConfig(
   };
 }
 
+/**
+ * [fork] Merge a same-named trusted project profile onto its global profile.
+ *
+ * The global profile is the baseline the project layer refines, so the merge
+ * follows the same conventions a profile uses against its inherited config —
+ * but only for the fields the project profile actually mentions:
+ *
+ * - top-level scalars and allow arrays (allowRead/allowWrite/allowedDomains/
+ *   allowUnixSockets/allowMachLookup) take the project's value;
+ * - deny arrays (denyRead/denyWrite/deniedDomains) are unioned, so a global
+ *   deny can never be dropped or cleared by a project layer, and a project's
+ *   empty array is a no-op rather than a clear;
+ * - restricted booleans keep preserveRestrictedBoolean semantics: a project
+ *   layer may only stay relaxed when the global profile already relaxes it;
+ * - protectNonexistentFiles cannot be lowered, and a literal denyWrite entry
+ *   keeps it on;
+ * - inheritGlobalConfig: false in either layer stays false, so a project layer
+ *   can narrow the inherited baseline but never widen it back.
+ *
+ * Unmentioned fields stay undefined instead of materializing empty arrays: the
+ * merged profile is applied onto the inherited config afterwards, where an
+ * absent field keeps the inherited value while an empty allow array would
+ * replace it with nothing.
+ */
+export function mergeProfileObjects(
+  globalProfile: SandboxProfileConfig,
+  projectProfile: SandboxProfileConfig,
+  profileName: string,
+): SandboxProfileConfig {
+  const merged = mergeObjects(
+    globalProfile as SandboxConfig,
+    projectProfile,
+  ) as SandboxProfileConfig;
+
+  const globalNetwork = globalProfile.network;
+  const projectNetwork = projectProfile.network;
+  if (projectNetwork) {
+    const network = merged.network as Partial<NetworkConfig>;
+    network.allowedDomains = replaceConfiguredArray(
+      globalNetwork?.allowedDomains,
+      projectNetwork.allowedDomains,
+    );
+    network.allowUnixSockets = replaceConfiguredArray(
+      globalNetwork?.allowUnixSockets,
+      projectNetwork.allowUnixSockets,
+    );
+    network.allowMachLookup = replaceConfiguredArray(
+      globalNetwork?.allowMachLookup,
+      projectNetwork.allowMachLookup,
+    );
+    network.deniedDomains = unionConfiguredArrays(
+      globalNetwork?.deniedDomains,
+      projectNetwork.deniedDomains,
+    );
+    network.strictAllowlist =
+      globalNetwork?.strictAllowlist === true || projectNetwork.strictAllowlist === true
+        ? true
+        : network.strictAllowlist;
+    network.allowAllUnixSockets = preserveRestrictedBoolean(
+      globalNetwork?.allowAllUnixSockets,
+      projectNetwork.allowAllUnixSockets,
+      "network.allowAllUnixSockets",
+      profileName,
+    );
+    network.allowLocalBinding = preserveRestrictedBoolean(
+      globalNetwork?.allowLocalBinding,
+      projectNetwork.allowLocalBinding,
+      "network.allowLocalBinding",
+      profileName,
+    );
+    network.allowUnauthenticatedSocksProxy = preserveRestrictedBoolean(
+      globalNetwork?.allowUnauthenticatedSocksProxy,
+      projectNetwork.allowUnauthenticatedSocksProxy,
+      "network.allowUnauthenticatedSocksProxy",
+      profileName,
+    );
+  }
+
+  const globalFilesystem = globalProfile.filesystem;
+  const projectFilesystem = projectProfile.filesystem;
+  if (projectFilesystem) {
+    const filesystem = merged.filesystem as Partial<FilesystemConfig>;
+    filesystem.allowRead = replaceConfiguredArray(
+      globalFilesystem?.allowRead,
+      projectFilesystem.allowRead,
+    );
+    filesystem.allowWrite = replaceConfiguredArray(
+      globalFilesystem?.allowWrite,
+      projectFilesystem.allowWrite,
+    );
+    filesystem.denyRead = unionConfiguredArrays(
+      globalFilesystem?.denyRead,
+      projectFilesystem.denyRead,
+    );
+    filesystem.denyWrite = unionConfiguredArrays(
+      globalFilesystem?.denyWrite,
+      projectFilesystem.denyWrite,
+    );
+    filesystem.protectNonexistentFiles = preserveProtectNonexistentFiles(
+      globalFilesystem?.protectNonexistentFiles,
+      projectFilesystem.protectNonexistentFiles,
+      profileName,
+    );
+    // A literal denyWrite entry is a hard child boundary; keep it enforced
+    // even before the path exists (same rule as a single-profile load).
+    if (hasLiteralDenyWrite(filesystem.denyWrite)) {
+      filesystem.protectNonexistentFiles = true;
+    }
+  }
+
+  for (const field of [
+    "allowBrowserProcess",
+    "enableWeakerNestedSandbox",
+    "enableWeakerNetworkIsolation",
+  ] as const) {
+    const value = preserveRestrictedBoolean(
+      globalProfile[field],
+      projectProfile[field],
+      field,
+      profileName,
+    );
+    if (value !== undefined) merged[field] = value;
+  }
+
+  // inheritGlobalConfig governs the merged profile's relation to the inherited
+  // baseline, not a profile field: narrowing (false) is sticky in both
+  // directions, and a project layer cannot opt back into the global baseline
+  // when the global profile opted out of it.
+  const inheritGlobalConfig =
+    globalProfile.inheritGlobalConfig === false || projectProfile.inheritGlobalConfig === false
+      ? false
+      : (projectProfile.inheritGlobalConfig ?? globalProfile.inheritGlobalConfig);
+  if (inheritGlobalConfig !== undefined) merged.inheritGlobalConfig = inheritGlobalConfig;
+
+  return merged;
+}
+
 function configWithoutProfiles(config: SandboxConfigFile): SandboxConfigOverride {
   const { profiles: _profiles, ...withoutProfiles } = config;
   return withoutProfiles;
@@ -447,23 +591,122 @@ function availableProfileNames(profiles: Record<string, SandboxProfileConfig>): 
     : "(none)";
 }
 
+/**
+ * Read a config file's `profiles` registry, rejecting a malformed one.
+ * `undefined` means the file defines no registry at all (an empty object is a
+ * registry that defines no profile).
+ */
+function profileRegistry(
+  config: SandboxConfigFile,
+  label: string,
+): Record<string, unknown> | undefined {
+  const profiles = config.profiles;
+  if (profiles === undefined) return undefined;
+  if (typeof profiles !== "object" || profiles === null || Array.isArray(profiles)) {
+    throw new Error(`${label} 'profiles' must be an object mapping profile names to definitions.`);
+  }
+  return profiles as Record<string, unknown>;
+}
+
+/**
+ * Tolerant registry read for an untrusted project.
+ *
+ * An untrusted project's registry is ignored for resolution, so a malformed one
+ * must not turn an ignored definition into a launch failure: it degrades to
+ * "no profiles" here, and the strict read happens only once the project is
+ * trusted.
+ */
+function untrustedProfileRegistry(config: SandboxConfigFile): Record<string, unknown> {
+  try {
+    return profileRegistry(config, "Project sandbox configuration") ?? {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * The «N project profiles not applied» warning for an untrusted project.
+ *
+ * A trusted project's registry participates in resolution, so nothing is
+ * skipped and no warning applies. An untrusted project's registry is never
+ * applied — operator ownership of the profile library is what makes a profile a
+ * trustworthy policy object — and this names how many definitions were skipped
+ * so the ignore is visible instead of silently changing the effective policy.
+ */
+export function untrustedProjectProfilesWarning(
+  projectConfig: SandboxConfigFile,
+  projectTrusted: boolean | undefined,
+): string | undefined {
+  // Only an explicitly untrusted project warns: `undefined` means the caller
+  // never evaluated trust (no profile selected), and warning there would report
+  // a skip that was not a decision.
+  if (projectTrusted !== false) return undefined;
+  const count = Object.keys(untrustedProfileRegistry(projectConfig)).length;
+  if (count === 0) return undefined;
+  return `Project defines ${count} sandbox profile${count === 1 ? "" : "s"} that ${count === 1 ? "was" : "were"} not applied (project is not trusted).`;
+}
+
+/**
+ * [fork] Resolve a selected profile name against the global registry and,
+ * when the project is trusted, the project registry.
+ *
+ * A same-named project profile is merged onto the global one with
+ * {@link mergeProfileObjects} so the project layer refines the global profile
+ * without weakening its deny boundary. A project-only name resolves directly
+ * when trusted.
+ *
+ * When the project is untrusted its registry never contributes to the result.
+ * A name that stays unresolvable then fails closed, and when the name is
+ * actually defined only in the ignored project registry the diagnostic says so
+ * — a plain "not defined" would hide the trust cause behind an apparently
+ * broken profile (project-sandbox-profiles: untrusted projects are ignored, but
+ * a project-only selection still must not run unconstrained).
+ */
 function resolveProfile(
   globalConfig: SandboxConfigFile,
+  projectConfig: SandboxConfigFile,
   profileName: string,
+  projectTrusted: boolean,
 ): SandboxProfileConfig {
-  const profiles = globalConfig.profiles;
-  if (!profiles || typeof profiles !== "object" || Array.isArray(profiles)) {
+  const globalProfiles = profileRegistry(globalConfig, "Global sandbox configuration");
+  const rawGlobal = globalProfiles?.[profileName];
+  const globalProfile =
+    rawGlobal === undefined ? undefined : validateProfileConfig(rawGlobal, profileName);
+  const globalNames = availableProfileNames(
+    (globalProfiles ?? {}) as Record<string, SandboxProfileConfig>,
+  );
+
+  if (!projectTrusted) {
+    const ignoredProfiles = untrustedProfileRegistry(projectConfig);
+    if (globalProfile === undefined && ignoredProfiles[profileName] !== undefined) {
+      throw new Error(
+        `Sandbox profile '${profileName}' is defined only in the project sandbox configuration, which is not trusted. Trust the project or define the profile in the global sandbox configuration.`,
+      );
+    }
+    if (globalProfile !== undefined) return globalProfile;
     throw new Error(
-      `Sandbox profile '${profileName}' is not defined in the global sandbox configuration. Add it to the global 'profiles' map. Available profiles: (none).`,
+      `Sandbox profile '${profileName}' is not defined in the global sandbox configuration. Add it to the global 'profiles' map. Available profiles: ${globalNames}.`,
     );
   }
-  const rawProfile = profiles[profileName];
-  if (rawProfile === undefined) {
-    throw new Error(
-      `Sandbox profile '${profileName}' is not defined in the global sandbox configuration. Add it to the global 'profiles' map. Available profiles: ${availableProfileNames(profiles)}.`,
-    );
+
+  const projectProfiles = profileRegistry(projectConfig, "Project sandbox configuration");
+  const rawProject = projectProfiles?.[profileName];
+  const projectProfile =
+    rawProject === undefined ? undefined : validateProfileConfig(rawProject, profileName);
+
+  if (globalProfile !== undefined && projectProfile !== undefined) {
+    return mergeProfileObjects(globalProfile, projectProfile, profileName);
   }
-  return validateProfileConfig(rawProfile, profileName);
+  if (globalProfile !== undefined) return globalProfile;
+  if (projectProfile !== undefined) return projectProfile;
+
+  const available = availableProfileNames({
+    ...globalProfiles,
+    ...projectProfiles,
+  } as Record<string, SandboxProfileConfig>);
+  throw new Error(
+    `Sandbox profile '${profileName}' is not defined in the global or project sandbox configuration. Add it to a 'profiles' map. Available profiles: ${available}.`,
+  );
 }
 
 export function mergeProfileLayers(
@@ -476,7 +719,7 @@ export function mergeProfileLayers(
   const name = validateSandboxProfileName(profileName);
   validateHardDenyConfig(globalConfig, "Global sandbox configuration");
   if (projectTrusted) validateHardDenyConfig(projectConfig, "Project sandbox configuration");
-  const profile = resolveProfile(globalConfig, name);
+  const profile = resolveProfile(globalConfig, projectConfig, name, projectTrusted);
   const baseGlobal =
     profile.inheritGlobalConfig === false
       ? globalHardDenyConfig(globalConfig)
@@ -529,29 +772,41 @@ function readJsonConfigResult(
 }
 
 /**
- * Names of the profiles the global configuration defines.
+ * Names of the profiles available for selection in `cwd`.
  *
- * Profiles are operator-owned and global-only: a project may not define,
- * override, or remove one, so this deliberately reads only the global file. A
- * name that fails the shared profile-name grammar is skipped rather than
- * reported, so every returned name is safe to use as a selector and a malformed
- * registry entry can never reach a launch site.
+ * The global registry is operator-owned and is always listed. A trusted
+ * project's registry is added on top so a session-launch picker can offer the
+ * names that will actually resolve; an untrusted project's registry is not
+ * listed because it can never resolve. A name failing the shared profile-name
+ * grammar is skipped rather than reported, so every returned name is safe to use
+ * as a selector and a malformed registry entry can never reach a launch site.
  */
-export function listGlobalSandboxProfiles(cwd: string): string[] {
-  const { globalPath } = getConfigPaths(cwd);
-  const { config } = readJsonConfigResult(globalPath, false);
-  const profiles = config.profiles;
-  if (profiles === undefined || typeof profiles !== "object" || Array.isArray(profiles)) return [];
-  return Object.keys(profiles)
-    .filter((name) => {
-      try {
-        validateSandboxProfileName(name);
-        return true;
-      } catch {
-        return false;
-      }
-    })
-    .sort((left, right) => left.localeCompare(right));
+export function listGlobalSandboxProfiles(
+  cwd: string,
+  options: { projectTrusted?: boolean } = {},
+): string[] {
+  const { globalPath, projectPath } = getConfigPaths(cwd);
+  const { config: globalConfig } = readJsonConfigResult(globalPath, false);
+  const names = new Set(validProfileNames(globalConfig.profiles));
+  if (options.projectTrusted === true) {
+    const { config: projectConfig } = readJsonConfigResult(projectPath, false);
+    for (const name of validProfileNames(projectConfig.profiles)) names.add(name);
+  }
+  return [...names].sort((left, right) => left.localeCompare(right));
+}
+
+/** Selectable names in a registry, skipping entries that cannot be selected. */
+function validProfileNames(profiles: unknown): string[] {
+  if (profiles === undefined || profiles === null || typeof profiles !== "object") return [];
+  if (Array.isArray(profiles)) return [];
+  return Object.keys(profiles).filter((name) => {
+    try {
+      validateSandboxProfileName(name);
+      return true;
+    } catch {
+      return false;
+    }
+  });
 }
 
 export function loadConfig(cwd: string, options: SandboxConfigLoadOptions = {}): SandboxConfig {
@@ -573,6 +828,13 @@ export function loadConfig(cwd: string, options: SandboxConfigLoadOptions = {}):
 
   const globalRead = readJsonConfigResult(globalPath, true);
   const projectRead = readJsonConfigResult(projectPath, true);
+  const projectTrusted = options.projectTrusted;
+  // A project may define a profiles registry; it is ignored while the project
+  // is untrusted (profiles stay operator-owned) and participates once the
+  // project is affirmatively trusted. The skip is reported, never thrown: an
+  // unfixed definition must not turn every launch into a failure.
+  const projectProfileWarning = untrustedProjectProfilesWarning(projectRead.config, projectTrusted);
+  if (projectProfileWarning !== undefined) options.onWarning?.(projectProfileWarning);
   if (profileName === undefined)
     return mergeConfigLayers(DEFAULT_CONFIG, globalRead.config, projectRead.config);
 
@@ -582,13 +844,8 @@ export function loadConfig(cwd: string, options: SandboxConfigLoadOptions = {}):
       `Cannot load sandbox profile '${profileName}' because global configuration '${globalPath}' is invalid: ${globalRead.error.message}`,
     );
   }
-  const projectTrusted = options.projectTrusted === true;
-  if (projectTrusted && projectRead.config.profiles !== undefined) {
-    throw new Error(
-      `Project sandbox configuration '${projectPath}' must not define profiles; profiles are available only from '${globalPath}'.`,
-    );
-  }
-  if (projectTrusted && projectRead.error) {
+  const projectIncluded = projectTrusted === true;
+  if (projectIncluded && projectRead.error) {
     throw new Error(
       `Cannot load sandbox profile '${profileName}' because project configuration '${projectPath}' is invalid: ${projectRead.error.message}`,
     );
@@ -599,7 +856,7 @@ export function loadConfig(cwd: string, options: SandboxConfigLoadOptions = {}):
       globalRead.config,
       projectRead.config,
       profileName,
-      projectTrusted,
+      projectIncluded,
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

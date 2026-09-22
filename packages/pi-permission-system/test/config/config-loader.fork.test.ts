@@ -23,31 +23,26 @@ describe("validateUnifiedConfig profile gating", () => {
     });
   });
 
-  it("rejects a profiles registry with allowProfiles false (project config)", () => {
-    const result = validateUnifiedConfig(
-      {
-        permission: { "*": "ask" },
-        profiles: { reviewer: { permission: { "*": "ask" } } },
-      },
-      { allowProfiles: false },
-    );
-    expect(result.config).toEqual({});
-    expect(result.issues).toHaveLength(1);
-    expect(result.issues[0]).toContain("'profiles' key is only supported in the global configuration");
+  it("accepts a profiles registry in a project-shaped config", () => {
+    const result = validateUnifiedConfig({
+      permission: { "*": "ask" },
+      profiles: { reviewer: { permission: { "*": "ask" } } },
+    });
+    expect(result.issues).toEqual([]);
+    expect(result.config.profiles?.reviewer?.permission).toEqual({
+      "*": "ask",
+    });
   });
 
   it("accepts a project config without a profiles registry", () => {
-    const result = validateUnifiedConfig(
-      { permission: { bash: "deny" } },
-      { allowProfiles: false },
-    );
+    const result = validateUnifiedConfig({ permission: { bash: "deny" } });
     expect(result.issues).toEqual([]);
     expect(result.config.permission).toEqual({ bash: "deny" });
   });
 
-  it("rejects non-object parsed values with allowProfiles false without crashing", () => {
+  it("rejects non-object parsed values without crashing", () => {
     for (const parsed of [null, "string", 42, ["profiles"]]) {
-      const result = validateUnifiedConfig(parsed, { allowProfiles: false });
+      const result = validateUnifiedConfig(parsed);
       expect(result.config).toEqual({});
       expect(result.issues.length).toBeGreaterThan(0);
     }
@@ -115,7 +110,7 @@ describe("loadAndMergeConfigs profiles gating", () => {
     });
   });
 
-  it("rejects a project config that defines profiles and fails the project scope", () => {
+  it("carries a project profiles registry into the project and merged configs", () => {
     const globalDir = join(agentDir, "extensions", "pi-permission-system");
     mkdirSync(globalDir, { recursive: true });
     writeFileSync(
@@ -128,18 +123,17 @@ describe("loadAndMergeConfigs profiles gating", () => {
       join(projectDir, "config.json"),
       JSON.stringify({
         permission: { bash: "allow" },
-        profiles: { sneaky: { permission: { "*": "allow" } } },
+        profiles: { "project-dev": { permission: { read: "allow" } } },
       }),
     );
 
     const result = loadAndMergeConfigs(agentDir, cwd, extensionRoot);
-    expect(result.issues.some((issue) => issue.includes("profiles"))).toBe(
-      true,
-    );
-    // The rejected project contributes no rules: global `bash: deny` survives
-    // and the project's `bash: allow` never lands in the merged config.
-    expect(result.merged.permission).toEqual({ "*": "ask", bash: "deny" });
-    expect(result.project).toEqual({});
+    expect(result.issues).toEqual([]);
+    // Project config is read whole: its permission merges normally and its
+    // profiles registry rides the project scope for resolution.
+    expect(result.project.profiles).toEqual({
+      "project-dev": { permission: { read: "allow" } },
+    });
   });
 });
 

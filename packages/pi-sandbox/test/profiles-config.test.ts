@@ -10,6 +10,7 @@ import {
   loadConfig,
   mergeConfigLayers,
   mergeProfileLayers,
+  mergeProfileObjects,
   validateSandboxProfileName,
 } from "../src/profile-config.ts";
 
@@ -166,6 +167,114 @@ test("loadConfig defaults selected profiles to global-only project trust", () =>
 
     assert.equal(untrusted.filesystem?.denyWrite?.includes("project.secret"), false);
     assert.equal(trusted.filesystem?.denyWrite?.includes("project.secret"), true);
+  } finally {
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig warns instead of throwing when an untrusted project defines profiles", () => {
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = mkdtempSync(join(tmpdir(), "pi-sandbox-project-profiles-"));
+  const agentDir = join(root, "agent");
+  const cwd = join(root, "project");
+  try {
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, "sandbox.json"), JSON.stringify({ profiles: { strict: {} } }));
+    writeFileSync(
+      join(cwd, ".pi", "sandbox.json"),
+      JSON.stringify({
+        profiles: {
+          "project-dev": { filesystem: { allowWrite: ["build/"] } },
+          extra: { filesystem: { allowWrite: ["out/"] } },
+        },
+      }),
+    );
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+
+    const warnings: string[] = [];
+    // Untrusted: the project registry is ignored and the skip is reported
+    // rather than thrown (an ignored definition must not fail every launch).
+    const untrusted = loadConfig(cwd, {
+      profileName: "strict",
+      projectTrusted: false,
+      onWarning: (message) => warnings.push(message),
+    });
+    assert.ok(untrusted.filesystem);
+    assert.deepEqual(warnings, [
+      "Project defines 2 sandbox profiles that were not applied (project is not trusted).",
+    ]);
+
+    // Trusted: the same registry participates, so nothing is skipped.
+    const trustedWarnings: string[] = [];
+    loadConfig(cwd, {
+      profileName: "strict",
+      projectTrusted: true,
+      onWarning: (message) => trustedWarnings.push(message),
+    });
+    assert.deepEqual(trustedWarnings, []);
+  } finally {
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig warns for an untrusted project with no profile selected", () => {
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = mkdtempSync(join(tmpdir(), "pi-sandbox-project-profiles-none-"));
+  const agentDir = join(root, "agent");
+  const cwd = join(root, "project");
+  try {
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, "sandbox.json"), JSON.stringify({ profiles: { strict: {} } }));
+    writeFileSync(
+      join(cwd, ".pi", "sandbox.json"),
+      JSON.stringify({ profiles: { "project-dev": {} } }),
+    );
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+
+    const warnings: string[] = [];
+    loadConfig(cwd, { projectTrusted: false, onWarning: (message) => warnings.push(message) });
+    assert.deepEqual(warnings, [
+      "Project defines 1 sandbox profile that was not applied (project is not trusted).",
+    ]);
+  } finally {
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig resolves a trusted project-only profile for a stamped name", () => {
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const root = mkdtempSync(join(tmpdir(), "pi-sandbox-project-only-"));
+  const agentDir = join(root, "agent");
+  const cwd = join(root, "project");
+  try {
+    mkdirSync(join(cwd, ".pi"), { recursive: true });
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, "sandbox.json"), JSON.stringify({ profiles: {} }));
+    writeFileSync(
+      join(cwd, ".pi", "sandbox.json"),
+      JSON.stringify({
+        profiles: { "project-dev": { filesystem: { allowWrite: ["build/"] } } },
+      }),
+    );
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+
+    const trusted = loadConfig(cwd, { profileName: "project-dev", projectTrusted: true });
+    assert.deepEqual(trusted.filesystem?.allowWrite, ["build/"]);
+
+    // Untrusted: the same name resolves nowhere and fails closed with the
+    // trust-aware diagnostic.
+    assert.throws(
+      () => loadConfig(cwd, { profileName: "project-dev", projectTrusted: false }),
+      /defined only in the project sandbox configuration, which is not trusted/,
+    );
   } finally {
     if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
@@ -332,6 +441,238 @@ test("profiles cannot weaken inherited protection for nonexistent denied write t
       ),
     /cannot disable 'filesystem\.protectNonexistentFiles'/,
   );
+});
+
+test("mergeProfileObjects replaces allow arrays and unions deny arrays", () => {
+  const merged = mergeProfileObjects(
+    {
+      filesystem: {
+        allowWrite: ["/tmp"],
+        denyWrite: ["/secrets", "*.env"],
+        allowRead: ["~/.config"],
+      },
+    },
+    {
+      filesystem: {
+        allowWrite: ["build/"],
+        denyRead: ["/private"],
+      },
+    },
+    "dev",
+  );
+
+  // allow arrays: the project layer replaces the global value.
+  assert.deepEqual(merged.filesystem?.allowWrite, ["build/"]);
+  assert.deepEqual(merged.filesystem?.allowRead, ["~/.config"]);
+  // deny arrays: unioned, so the global deny survives.
+  assert.deepEqual(merged.filesystem?.denyWrite, ["/secrets", "*.env"]);
+  assert.deepEqual(merged.filesystem?.denyRead, ["/private"]);
+});
+
+test("mergeProfileObjects cannot clear a global deny with an empty project array", () => {
+  const merged = mergeProfileObjects(
+    { filesystem: { denyWrite: ["/secrets"], denyRead: ["/private"] } },
+    { filesystem: { denyWrite: [], denyRead: [] } },
+    "dev",
+  );
+  assert.deepEqual(merged.filesystem?.denyWrite, ["/secrets"]);
+  assert.deepEqual(merged.filesystem?.denyRead, ["/private"]);
+});
+
+test("mergeProfileObjects unions deniedDomains and replaces allow lists", () => {
+  const merged = mergeProfileObjects(
+    {
+      network: {
+        allowedDomains: ["npmjs.org"],
+        deniedDomains: ["evil.example.com"],
+        allowUnixSockets: ["/var/run/docker.sock"],
+      },
+    },
+    {
+      network: {
+        allowedDomains: ["internal.example.com"],
+        deniedDomains: [],
+      },
+    },
+    "dev",
+  );
+  assert.deepEqual(merged.network?.allowedDomains, ["internal.example.com"]);
+  assert.deepEqual(merged.network?.deniedDomains, ["evil.example.com"]);
+  assert.deepEqual(merged.network?.allowUnixSockets, ["/var/run/docker.sock"]);
+});
+
+test("mergeProfileObjects clamps restricted booleans to the global profile baseline", () => {
+  // The global profile does not relax these, so the project layer may not.
+  assert.throws(
+    () => mergeProfileObjects({}, { allowBrowserProcess: true }, "dev"),
+    /Sandbox profile 'dev' cannot enable 'allowBrowserProcess'/,
+  );
+  assert.throws(
+    () =>
+      mergeProfileObjects(
+        {},
+        { enableWeakerNestedSandbox: true, enableWeakerNetworkIsolation: true },
+        "dev",
+      ),
+    /cannot enable 'enableWeakerNestedSandbox'/,
+  );
+  assert.throws(
+    () => mergeProfileObjects({}, { network: { allowLocalBinding: true } }, "dev"),
+    /cannot enable 'network.allowLocalBinding'/,
+  );
+  assert.throws(
+    () =>
+      mergeProfileObjects(
+        {},
+        { network: { allowAllUnixSockets: true, allowUnauthenticatedSocksProxy: true } },
+        "dev",
+      ),
+    /cannot enable 'network.allowAllUnixSockets'/,
+  );
+
+  // A global profile that already relaxes them keeps them relaxed.
+  const relaxed = mergeProfileObjects(
+    { allowBrowserProcess: true },
+    { allowBrowserProcess: true },
+    "dev",
+  );
+  assert.equal(relaxed.allowBrowserProcess, true);
+});
+
+test("mergeProfileObjects cannot lower protectNonexistentFiles", () => {
+  assert.throws(
+    () =>
+      mergeProfileObjects(
+        { filesystem: { protectNonexistentFiles: true } },
+        { filesystem: { protectNonexistentFiles: false } },
+        "dev",
+      ),
+    /cannot disable 'filesystem\.protectNonexistentFiles'/,
+  );
+
+  // A project's literal denyWrite entry keeps the pre-creation hard boundary.
+  const literalDeny = mergeProfileObjects(
+    {},
+    { filesystem: { denyWrite: ["future-secret.env"] } },
+    "dev",
+  );
+  assert.equal(literalDeny.filesystem?.protectNonexistentFiles, true);
+});
+
+test("mergeProfileObjects keeps inheritGlobalConfig narrowing sticky", () => {
+  assert.equal(
+    mergeProfileObjects({ inheritGlobalConfig: false }, {}, "dev").inheritGlobalConfig,
+    false,
+  );
+  assert.equal(
+    mergeProfileObjects({}, { inheritGlobalConfig: false }, "dev").inheritGlobalConfig,
+    false,
+  );
+  assert.equal(
+    mergeProfileObjects({ inheritGlobalConfig: true }, {}, "dev").inheritGlobalConfig,
+    true,
+  );
+});
+
+test("a trusted project-only profile resolves directly", () => {
+  const merged = mergeProfileLayers(
+    DEFAULT_CONFIG,
+    {},
+    {
+      profiles: {
+        "project-dev": {
+          network: { allowedDomains: ["internal.example.com"] },
+          filesystem: { allowWrite: ["build/"] },
+        },
+      },
+    },
+    "project-dev",
+    true,
+  );
+
+  assert.deepEqual(merged.network?.allowedDomains, ["internal.example.com"]);
+  assert.deepEqual(merged.filesystem?.allowWrite, ["build/"]);
+  // The inherited baseline's deny boundary is untouched.
+  assert.deepEqual(merged.filesystem?.denyWrite, DEFAULT_CONFIG.filesystem?.denyWrite);
+});
+
+test("a same-named trusted project profile merges onto the global profile", () => {
+  const merged = mergeProfileLayers(
+    DEFAULT_CONFIG,
+    {
+      profiles: {
+        dev: {
+          filesystem: { allowWrite: ["/tmp"], denyWrite: ["/secrets"] },
+          network: { allowedDomains: ["npmjs.org"], deniedDomains: ["evil.example.com"] },
+        },
+      },
+    },
+    {
+      profiles: {
+        dev: {
+          filesystem: { allowWrite: ["build/"] },
+          network: { allowedDomains: ["internal.example.com"] },
+        },
+      },
+    },
+    "dev",
+    true,
+  );
+
+  // Project allow arrays replace the global profile's values.
+  assert.deepEqual(merged.filesystem?.allowWrite, ["build/"]);
+  assert.deepEqual(merged.network?.allowedDomains, ["internal.example.com"]);
+  // Global profile denies survive the project layer.
+  assert.deepEqual(merged.filesystem?.denyWrite?.includes("/secrets"), true);
+  assert.deepEqual(merged.network?.deniedDomains, ["evil.example.com"]);
+});
+
+test("an untrusted project-only profile fails closed with a trust diagnostic", () => {
+  assert.throws(
+    () =>
+      mergeProfileLayers(
+        DEFAULT_CONFIG,
+        {},
+        { profiles: { "project-dev": { filesystem: { allowWrite: ["build/"] } } } },
+        "project-dev",
+        false,
+      ),
+    /defined only in the project sandbox configuration, which is not trusted/,
+  );
+});
+
+test("an untrusted project's same-named profile is ignored, not merged", () => {
+  const merged = mergeProfileLayers(
+    DEFAULT_CONFIG,
+    {
+      profiles: {
+        dev: { filesystem: { allowWrite: ["/tmp"], denyWrite: ["/secrets"] } },
+      },
+    },
+    {
+      profiles: {
+        dev: { filesystem: { allowWrite: ["build/"], denyWrite: [] } },
+      },
+    },
+    "dev",
+    false,
+  );
+
+  // The project layer never contributed: the global profile's own values hold.
+  assert.deepEqual(merged.filesystem?.allowWrite, ["/tmp"]);
+  assert.deepEqual(merged.filesystem?.denyWrite?.includes("/secrets"), true);
+});
+
+test("an untrusted project's malformed registry does not fail a global-name launch", () => {
+  const merged = mergeProfileLayers(
+    DEFAULT_CONFIG,
+    { profiles: { dev: { filesystem: { allowWrite: ["/tmp"] } } } },
+    { profiles: "not-a-registry" as unknown as Record<string, never> },
+    "dev",
+    false,
+  );
+
+  assert.deepEqual(merged.filesystem?.allowWrite, ["/tmp"]);
 });
 
 test("selected profiles reject malformed hard-deny layers instead of dropping them", () => {

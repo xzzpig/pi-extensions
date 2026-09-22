@@ -8,8 +8,8 @@ files stay byte-identical to upstream.
 ## Sandbox profiles
 
 Use `sandbox: <profile-name>` only for a native Pi child. The profile is resolved
-from the global `pi-sandbox` configuration, never from an agent file or a project
-profile registry:
+from the global `pi-sandbox` configuration and, when the project is trusted,
+from the project `.pi/sandbox.json` registry — never from an agent file:
 
 ```yaml
 ---
@@ -37,24 +37,28 @@ failure and never excludes the model from later runs.
 The field is rejected for `external-cli` and `external-job` runners because they
 do not host a Pi child extension. It also cannot be an object, `false`, an empty
 value, or an inline allow/deny policy. Define the actual network and filesystem
-rules in global `pi-sandbox` `profiles` instead.
+rules in `pi-sandbox` `profiles` (global, or trusted project) instead.
 
 A profile chosen by a project-scoped agent or project override is used only when
 the host marks that project trusted. Otherwise the launch reports an actionable
-trust error. In a headless child, accesses outside the profile's preconfigured
-network/read/write rules are blocked; pi-sandbox does not use Permission System
-or supervisor forwarding to ask the parent for an approval. See
+trust error. A project's own profile definitions likewise participate only for a
+trusted project; an untrusted project's `profiles` registry is ignored with a
+warning and never fails the launch. In a headless child, accesses outside the
+profile's preconfigured network/read/write rules are blocked; pi-sandbox does not
+use Permission System or supervisor forwarding to ask the parent for an approval.
+See
 [`pi-sandbox`'s README](https://github.com/xzzpig/pi-extensions/tree/main/packages/pi-sandbox#named-profiles-for-subagents)
 for profile inheritance and merge rules.
 
 ## Permission profiles
 
 Use `permission-profile: <name>` to select a named policy profile from the
-**global-only** `profiles` registry in `pi-permission-system`'s config
-(`<agentDir>/extensions/pi-permission-system/config.json`). It is a selector
-only — the actual rules (tool scalars, `bash`/`mcp`/`skill`/`external_directory`
-pattern maps, `'*'` fallback) live in that registry and always resolve from the
-child's own global config:
+`profiles` registry in `pi-permission-system`'s config — the global file
+(`<agentDir>/extensions/pi-permission-system/config.json`) and, when the project
+is trusted, the project file (`<cwd>/.pi/extensions/pi-permission-system/config.json`).
+It is a selector only — the actual rules (tool scalars, `bash`/`mcp`/`skill`/`external_directory`
+pattern maps, `'*'` fallback) live in those registries and always resolve from the
+child's own configuration:
 
 ```yaml
 ---
@@ -72,8 +76,8 @@ installed `pi-permission-system` extension into the child launch even when
 `extensions` is an explicit allowlist, so the child's permission system applies
 the selected profile. The env channel carries a bare validated name — raw
 policy is never transmitted — and the rules are always read from the child's
-own global config, so the profile means the same policy regardless of which
-host launches the agent. Selection precedence inside the permission system is
+own config, so the profile means the same policy regardless of which host
+launches the agent. Selection precedence inside the permission system is
 env > project agent file > global agent file.
 
 The launch fails closed when a profile is declared but `pi-permission-system`
@@ -88,8 +92,12 @@ its pre-change behavior exactly.
 The profile merges between the project config and the agent's own `permission:`
 block: patterns the profile does not mention keep the lower scopes' rules
 (global denies survive), and `permission:` overrides the profile per pattern.
-A profile selected by a **project** agent file participates only when the host
-marks that project trusted.
+A same-named global and trusted-project profile merge per pattern (origins
+`profile-global` / `profile-project`), so a global denial the project profile
+does not mention survives. A profile selected by a **project** agent file
+participates only when the host marks that project trusted; a project's
+profile definitions are likewise applied only for a trusted project, and an
+untrusted project's registry is ignored with a warning.
 
 ## Context injection
 

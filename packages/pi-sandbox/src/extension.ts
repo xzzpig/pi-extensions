@@ -173,11 +173,49 @@ export default function (pi: ExtensionAPI) {
     return ctx ? ctx.isProjectTrusted() : profileProjectTrusted;
   };
 
+  // Non-fatal profile notices (#project-profiles) are reported once per
+  // message: an untrusted project's registry is skipped on every config
+  // resolution, but the notice describes the session's policy, not each call.
+  const reportedProfileWarnings = new Set<string>();
+  let profileWarningContext: ExtensionContext | undefined;
+
+  /**
+   * Surface a non-fatal profile notice.
+   *
+   * A warning never blocks or fails a session. It goes to stderr, to the UI
+   * when a session has one, and — for a headless child — into the startup
+   * diagnostics file the launcher hands it, so the skipped project profiles are
+   * visible instead of a silent change of effective policy. The record carries
+   * `warnings` but no `reason`: the launcher's startup-diagnostic reader
+   * requires a reason, so a skipped profile can never be attributed as a
+   * startup refusal, and a recorded failure keeps the file (it is the
+   * authoritative record).
+   */
+  const reportProfileWarning = (warning: string): void => {
+    if (reportedProfileWarnings.has(warning)) return;
+    reportedProfileWarnings.add(warning);
+    writeSandboxDiagnostic(warning);
+    const target = profileWarningContext ?? lastStatusContext;
+    if (target) notifySafely(target, warning, "warning");
+    if (!startupDiagnosticsPath || !selectedSandboxProfile || profileStartupError) return;
+    try {
+      mkdirSync(dirname(startupDiagnosticsPath), { recursive: true, mode: 0o700 });
+      writeFileSync(
+        startupDiagnosticsPath,
+        JSON.stringify({ version: 1, profile: selectedSandboxProfile, warnings: [warning] }),
+        { mode: 0o600 },
+      );
+    } catch {
+      // The stderr diagnostic above remains the fallback channel.
+    }
+  };
+
   const resolveSandboxConfig = (cwd: string): SandboxConfig => {
     if (!selectedSandboxProfile) return loadConfig(cwd);
     return loadConfig(cwd, {
       profileName: selectedSandboxProfile,
       projectTrusted: profileProjectTrusted,
+      onWarning: reportProfileWarning,
     });
   };
 
@@ -247,7 +285,11 @@ export default function (pi: ExtensionAPI) {
         try {
           // Validate before touching state: a rejected selection must leave the
           // session exactly as it was.
-          loadConfig(localCwd, { profileName, projectTrusted: profileProjectTrusted });
+          loadConfig(localCwd, {
+            profileName,
+            projectTrusted: profileProjectTrusted,
+            onWarning: reportProfileWarning,
+          });
         } catch (error) {
           return { ok: false, message: error instanceof Error ? error.message : String(error) };
         }
@@ -280,7 +322,8 @@ export default function (pi: ExtensionAPI) {
       return { ok: true };
     },
     getProfile: () => selectedSandboxProfile,
-    listProfiles: () => listGlobalSandboxProfiles(localCwd),
+    listProfiles: () =>
+      listGlobalSandboxProfiles(localCwd, { projectTrusted: profileProjectTrusted }),
   };
 
   async function applyChoice(
@@ -789,6 +832,9 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", async (_event, ctx) => {
     disposeSandboxService?.();
+    // Non-fatal profile notices surface through this session's UI (dedup means
+    // the first config resolution wins).
+    profileWarningContext = ctx;
     // Publishing the service is optional: a host that exposes no session
     // identity must not lose sandbox enforcement because of it.
     try {

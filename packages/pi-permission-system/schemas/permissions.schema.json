@@ -537,9 +537,9 @@
 					}
 				},
 				"additionalProperties": false,
-				"description": "One named permission profile (global config only)."
+				"description": "One named permission profile (global or project config)."
 			},
-			"description": "Named permission profiles. Only defined in the global configuration; a project config that defines profiles is rejected."
+			"description": "Named permission profiles. The global and project configs may each define a registry; same-named project entries combine with the global ones at resolution time."
 		}
 	},
 	"additionalProperties": false,

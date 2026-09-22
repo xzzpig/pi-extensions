@@ -32,7 +32,7 @@ See [migration/0644-project-trust-gating.md](migration/0644-project-trust-gating
 
 1. Global config file
 2. Project config file
-3. Profile (a named ruleset from the global config's `profiles` registry)
+3. Profile (a named ruleset from the global `profiles` registry, plus a trusted project's same-named merge)
 4. Global agent frontmatter
 5. Project agent frontmatter
 
@@ -42,11 +42,11 @@ Scalar fields (`debugLog`, `permissionReviewLog`, `yoloMode`, `doublePressToConf
 
 ## Named Permission Profiles
 
-A **named permission profile** is a reusable ruleset stored in the global config file under the `profiles` key. Agents select one by name — never by inline policy — so per-agent hardening stays a single, auditable reference.
+A **named permission profile** is a reusable ruleset stored under the `profiles` key. Agents select one by name — never by inline policy — so per-agent hardening stays a single, auditable reference.
 
-### The registry is global-only
+### Registry locations
 
-`profiles` may be defined **only** in the global config file (`<agentDir>/extensions/pi-permission-system/config.json`). A project config that defines `profiles` is rejected by the schema, which marks the project scope invalid and fails closed: the project cannot define, override, or remove profile names. This keeps profile definitions an operator-level surface.
+`profiles` may be defined in the global config file (`<agentDir>/extensions/pi-permission-system/config.json`), the operator-owned baseline, and — when the project is trusted — in the project config file (`<cwd>/.pi/extensions/pi-permission-system/config.json`). A project's profile definitions participate only after Pi has marked that project trusted; an untrusted project's definitions are ignored and a warning is recorded (see [Trust gate](#trust-gate)), they never fail the project scope.
 
 ```jsonc
 // global config
@@ -58,6 +58,21 @@ A **named permission profile** is a reusable ruleset stored in the global config
     },
     "locked-down": {
       "permission": { "*": "deny", "read": "allow", "mcp": { "*": "ask" } }
+    }
+  }
+}
+```
+
+```jsonc
+// project config (trusted project)
+{
+  "profiles": {
+    "reviewer": {
+      // same name as the global profile: the two merge per pattern
+      "permission": { "bash": { "git push *": "deny" } }
+    },
+    "project-only": {
+      "permission": { "write": "ask" }
     }
   }
 }
@@ -78,19 +93,34 @@ permission-profile: reviewer
 Review the change.
 ```
 
-Selection precedence, highest first: **env variable > project agent file > global agent file** — the same order the scopes themselves have. The env channel carries only a validated name; the rules always come from the child's own global config, so a profile means the same policy no matter which host launches the agent. The name must match `^[A-Za-z0-9][A-Za-z0-9_-]*$`, be at most 128 characters, and must not be empty, a path, or the literal `false`.
+Selection precedence, highest first: **env variable > project agent file > global agent file** — the same order the scopes themselves have. The env channel carries only a validated name. The name must match `^[A-Za-z0-9][A-Za-z0-9_-]*$`, be at most 128 characters, and must not be empty, a path, or the literal `false`.
+
+### Same-name project profiles (merge)
+
+When both the global and a trusted project config define a profile with the same name, the two rulesets **merge per pattern** rather than shadowing each other:
+
+- A pattern the project profile mentions is overridden by the project entry (surface-shallow, just like two config layers);
+- A pattern only the global profile mentions keeps the global entry, so a global denial cannot be silently dropped by a project profile that does not mention it;
+- The two layers keep their own origins `profile-global` / `profile-project`, so the review log can tell which profile layer produced a decision.
+
+A trust-gated project-only profile name resolves directly when the project is trusted; on an untrusted project it is treated as unknown on the definition side (see next section).
 
 ### Merge position
 
-The selected profile's rules merge **between the project config and the agent frontmatter**: patterns it does not mention keep the lower scopes' rules (including global denies — a profile cannot silently drop an inherited denial), and the agent's own `permission:` block overrides the profile per pattern. Each rule keeps its own origin, so the review log can say whether a decision came from `profile` or from another scope.
+The selected profile's rules merge **between the project config and the agent frontmatter**: patterns it does not mention keep the lower scopes' rules (including global denies — a profile cannot silently drop an inherited denial), and the agent's own `permission:` block overrides the profile per pattern. Each rule keeps its own origin, so the review log can say whether a decision came from `profile-global`, `profile-project`, or another scope.
 
 ### Fail-closed on selection problems
 
-Selecting a profile that does not exist in the global registry, or one whose ruleset is empty, fails this scope closed: `allow` rules (including ones inherited from lower scopes) are clamped to `ask` until the definition or the selection is corrected. The configuration issues list reports both the generic fail-closed notice and a specific `Permission profile '<name>' could not be resolved (unknown name or empty ruleset); this agent's 'allow' rules are clamped to 'ask'.` message — an unknown profile never silently degrades to the unselected baseline.
+Selecting a profile that does not exist in either registry (global or, when trusted, project), or one whose merged ruleset is empty, fails this scope closed: `allow` rules (including ones inherited from lower scopes) are clamped to `ask` until the definition or the selection is corrected. The configuration issues list reports both the generic fail-closed notice and a specific `Permission profile '<name>' could not be resolved (unknown name or empty ruleset); this agent's 'allow' rules are clamped to 'ask'.` message — an unknown profile never silently degrades to the unselected baseline.
 
 ### Trust gate
 
-A profile selection made by a **project** agent file (or a project-scoped override) participates only when the host marks that project trusted. On an untrusted project the selection is ignored and recorded (the existing project-trust skip notice), so an untrusted repository cannot route a subagent into a different policy profile than the operator chose.
+Two trust decisions apply at the definition side:
+
+- **Project profile definitions** participate only after Pi has marked that project trusted. On an untrusted project, a `profiles` registry in the project config is ignored and a warning is recorded (`N project profile(s) not applied`) — it never fails the project scope, and the global registry alone governs selection.
+- A profile selection made by a **project** agent file (or a project-scoped override) participates only when the host marks that project trusted (existing behavior unchanged). On an untrusted project the selection is ignored and recorded (the existing project-trust skip notice), so an untrusted repository cannot route a subagent into a different policy profile than the operator chose.
+
+Both decisions inherit from the platform's ancestor walk, so launching from any subdirectory of a trusted project applies the project profiles without a separate decision.
 
 ### `yoloMode` combination
 
@@ -126,7 +156,8 @@ This clamp is deny-preserving and, like `yoloMode`, applied at composition; when
   // Ordered names of registered live-authority chain links (empty = none)
   "authorizerChain": [],
 
-  // Named permission profiles (global-only registry)
+  // Named permission profiles (global registry; a trusted project may add
+  // same-named entries, which merge per pattern)
   "profiles": {
     "reviewer": {
       "permission": {

@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] — 2026-09-22
+
+### Changed
+
+- **Project configuration may now define permission profiles** (OpenSpec change
+  `add-project-scoped-profiles`). Previously a `profiles` key in the project
+  config (`<cwd>/.pi/extensions/pi-permission-system/config.json`) rejected the
+  whole file with "The 'profiles' key is only supported in the global
+  configuration"; now the key is accepted. A trusted project's registry joins
+  profile resolution: a same-named global and trusted-project profile merge per
+  pattern (origins `profile-global` / `profile-project`), and a project-only
+  name resolves when the project is trusted. An untrusted project's registry is
+  ignored with an "N permission profile(s) not applied (project is not
+  trusted)" warning and never fails the project scope — the global registry
+  alone governs selection.
+
 ## [1.1.1] — 2026-09-19
 
 ### Changed

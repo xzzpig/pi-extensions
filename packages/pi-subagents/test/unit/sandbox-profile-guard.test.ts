@@ -2,11 +2,13 @@ import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, test } from "node:test";
+import { afterEach, describe, it, test } from "node:test";
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import registerSandboxProfileGuard from "../../src/runs/shared/sandbox-profile-guard.ts";
+import registerSandboxProfileGuard, {
+	projectScopedProfileTrustError,
+} from "../../src/runs/shared/sandbox-profile-guard.ts";
 
 const originalProfile = process.env.PI_SUBAGENT_SANDBOX_PROFILE;
 const originalAckPath = process.env.PI_SUBAGENT_SANDBOX_STARTUP_ACK_PATH;
@@ -69,4 +71,131 @@ test("profile launch guard blocks the first model turn until pi-sandbox acknowle
 	}), "utf-8");
 	assert.equal(input!({ text: "Task: review" }, headlessContext()), undefined);
 	assert.equal(process.exitCode, 0);
+});
+
+// u-3.3: the selection-side guard (projectScopedProfileTrustError) coexists with
+// the new definition side — it still decides whether a project-declared agent may
+// select a profile, independent of whether the profile name resolves in the
+// project registry. Both kinds (sandbox/permission) and both message styles
+// (preflight/executor) must give the same trusted-pass / untrusted-refuse verdict
+// that they did before the change.
+describe("projectScopedProfileTrustError coexistence", () => {
+	const common = {
+		agentName: "reviewer",
+		profileName: "reviewer-strict",
+		projectScoped: true,
+		messageStyle: "preflight" as const,
+	};
+
+	it("lets a project-scoped sandbox selection pass in a trusted project at the project cwd", () => {
+		assert.equal(
+			projectScopedProfileTrustError({
+				...common,
+				kind: "sandbox",
+				trustedCwd: "/work/app",
+				effectiveCwd: "/work/app",
+			}),
+			undefined,
+		);
+	});
+
+	it("refuses a project-scoped sandbox selection when the project is not trusted", () => {
+		const error = projectScopedProfileTrustError({
+			...common,
+			kind: "sandbox",
+			trustedCwd: undefined,
+			effectiveCwd: "/work/app",
+		});
+		assert.match(error ?? "", /project is not trusted/);
+	});
+
+	it("refuses a project-scoped sandbox selection when the child cwd differs from the trusted project cwd", () => {
+		const error = projectScopedProfileTrustError({
+			...common,
+			kind: "sandbox",
+			trustedCwd: "/work/app",
+			effectiveCwd: "/other/child",
+		});
+		assert.match(error ?? "", /does not match trusted project cwd/);
+	});
+
+	it("lets a project-scoped permission selection pass in a trusted project at the project cwd", () => {
+		assert.equal(
+			projectScopedProfileTrustError({
+				...common,
+				kind: "permission",
+				trustedCwd: "/work/app",
+				effectiveCwd: "/work/app",
+			}),
+			undefined,
+		);
+	});
+
+	it("refuses a project-scoped permission selection when the project is not trusted", () => {
+		const error = projectScopedProfileTrustError({
+			...common,
+			kind: "permission",
+			trustedCwd: undefined,
+			effectiveCwd: "/work/app",
+		});
+		assert.match(error ?? "", /project is not trusted/);
+	});
+
+	it("uses the executor message style (child cwd) for executor-side refusals", () => {
+		const error = projectScopedProfileTrustError({
+			...common,
+			kind: "permission",
+			messageStyle: "executor",
+			trustedCwd: "/work/app",
+			effectiveCwd: "/other/child",
+		});
+		assert.match(error ?? "", /child cwd/);
+		assert.match(error ?? "", /does not match the trusted project cwd/);
+	});
+
+	it("never blocks a selection that is not project-scoped", () => {
+		for (const kind of ["sandbox", "permission"] as const) {
+			for (const messageStyle of ["preflight", "executor"] as const) {
+				assert.equal(
+					projectScopedProfileTrustError({
+						...common,
+						kind,
+						messageStyle,
+						projectScoped: false,
+						trustedCwd: undefined,
+						effectiveCwd: "/work/app",
+					}),
+					undefined,
+				);
+			}
+		}
+	});
+
+	it("passes executor-side project-scoped selections in a trusted project at the child cwd", () => {
+		for (const kind of ["sandbox", "permission"] as const) {
+			assert.equal(
+				projectScopedProfileTrustError({
+					...common,
+					kind,
+					messageStyle: "executor",
+					trustedCwd: "/work/app",
+					effectiveCwd: "/work/app",
+				}),
+				undefined,
+			);
+		}
+	});
+
+	it("refuses executor-side project-scoped selections when the project is not trusted", () => {
+		for (const kind of ["sandbox", "permission"] as const) {
+			const error = projectScopedProfileTrustError({
+				...common,
+				kind,
+				messageStyle: "executor",
+				trustedCwd: undefined,
+				effectiveCwd: "/work/app",
+			});
+			assert.match(error ?? "", /project is not trusted/);
+		}
+	});
 });

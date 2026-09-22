@@ -138,6 +138,29 @@ describe("resolvePiLaunchToolPlan with sandbox profiles", () => {
 		assert.equal(session.processEnv?.PI_SUBAGENT_SANDBOX_PROJECT_TRUSTED, "0");
 	});
 
+	it("extends trusted project configuration to a child inside the trusted project tree (subdirectory inheritance)", () => {
+		const { agentDir, projectDir } = createFixture();
+		const sandboxEntry = installSandboxExtension(agentDir);
+		const childCwd = path.join(projectDir, "packages", "svc");
+		fs.mkdirSync(childCwd, { recursive: true });
+		const { session } = buildInProcessChildLaunch(childLaunch({
+			host: "runner",
+			extensions: [sandboxEntry],
+			cwd: childCwd,
+			sandbox: "reviewer-strict",
+			projectTrusted: true,
+			trustedProjectCwd: projectDir,
+		}));
+
+		// Platform trust is ancestor-inheriting (findNearestTrustEntry walks up
+		// from the child cwd): a child launched inside the trusted project tree —
+		// a subdirectory included — is trusted the same as a child at the project
+		// root. This must match what the child's own ctx.isProjectTrusted()
+		// returns for that cwd, which is the channel the permission side uses, so
+		// both definition sides conclude the same project state.
+		assert.equal(session.processEnv?.PI_SUBAGENT_SANDBOX_PROJECT_TRUSTED, "1");
+	});
+
 	it("fails closed when a profile needs pi-sandbox but no package is installed", () => {
 		const { agentDir } = createFixture();
 		process.env.PI_CODING_AGENT_DIR = agentDir;

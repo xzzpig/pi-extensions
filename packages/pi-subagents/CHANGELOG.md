@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.16.0] - 2026-09-22
+
+### Changed
+
+- **A child in a subdirectory of a trusted project inherits the sandbox trust
+  stamp** (OpenSpec change `add-project-scoped-profiles`). The launcher's
+  `PI_SUBAGENT_SANDBOX_PROJECT_TRUSTED` emission (`hasTrustedProfileProjectCwd`)
+  now treats a child cwd equal to or a descendant of the parent session's
+  trusted project cwd as trusted, matching the platform's
+  `findNearestTrustEntry` ancestor semantics, so a project's sandbox-profile
+  definitions apply from any subdirectory of a trusted project root instead of
+  only from the exact root cwd. The selection-side `projectScopedProfileTrustError`
+  guard keeps its exact-cwd matching unchanged.
+
 ## [0.15.1] - 2026-09-19
 
 ### Changed

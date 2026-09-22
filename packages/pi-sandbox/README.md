@@ -120,10 +120,13 @@ A native `pi-subagents` child can select one named policy from its agent frontma
 sandbox: reviewer-strict
 ```
 
-Define that name only in the global agent configuration, `<agentDir>/sandbox.json`
-(`~/.pi/agent/sandbox.json` by default). Project `.pi/sandbox.json` files may
-supply ordinary sandbox settings, but must not add, replace, or remove entries
-from `profiles`.
+Profiles may be defined in the global agent configuration, `<agentDir>/sandbox.json`
+(`~/.pi/agent/sandbox.json` by default), and — when the project is trusted — in
+the project configuration, `<cwd>/.pi/sandbox.json`. A trusted project may add
+new profile names and may merge same-named entries onto the global profile (see
+[Same-name project profiles](#same-name-project-profiles)). An untrusted
+project's `profiles` registry is ignored and a warning is reported; it never
+fails the launch or changes the effective policy.
 
 ```json
 {
@@ -158,6 +161,26 @@ untrusted project cannot supply a profile selector or change the effective
 profile policy. `pi-subagents` passes that trust decision to its child; a direct
 headless child without it uses global-only profile resolution.
 
+#### Same-name project profiles
+
+When a trusted project defines a profile with the same name as a global profile,
+the project definition merges onto the global one instead of replacing it. The
+project may replace `allowedDomains`, `allowRead`, and `allowWrite`, while
+`deniedDomains`, `denyRead`, and `denyWrite` are unioned with the global profile's
+lists — a project profile can never drop or clear a global hard denial.
+Sensitive relaxations (`allowAllUnixSockets`, `allowLocalBinding`,
+`allowUnauthenticatedSocksProxy`, `allowBrowserProcess`,
+`enableWeakerNestedSandbox`, `enableWeakerNetworkIsolation`, and
+`filesystem.protectNonexistentFiles`) cannot be enabled by the project layer
+unless the global profile already enables them, mirroring the same rule global
+profiles follow against the inherited baseline. `inheritGlobalConfig` governs
+only the profile-to-baseline relationship and does not participate in the
+profile-to-profile merge. A profile name defined only in a trusted project
+resolves directly; the same name on an untrusted project fails closed exactly
+like an undefined global name (the diagnostic says the profile is defined only
+in the project configuration, which is not trusted). The definition-side warning
+about an ignored project registry never changes the launch's exit code.
+
 Profile children are preauthorized, not interactive: an unlisted domain, read,
 or write is blocked when the child has no UI. Permission prompts are not
 forwarded to the parent session and session allowances are never persisted from
@@ -169,8 +192,8 @@ first model turn instead of falling back to unsandboxed execution.
 #### Selecting a profile for the current session
 
 An in-process extension can select a profile for the session it is running in
-through the published `SandboxService`, using the same names and the same global
-registry a child launch resolves:
+through the published `SandboxService`, using the same names and the same
+registry a child launch resolves (global, plus a trusted project's registry):
 
 ```ts
 import { getSandboxService } from "@xzzpig/pi-sandbox";
@@ -180,13 +203,14 @@ if (service) {
   const result = await service.setProfile("reviewer-strict");
   if (!result.ok) notify(result.message);
   else if (result.message) notify(result.message); // selected, but not enabled
-  service.listProfiles(); // global registry, sorted
+  service.listProfiles(); // global + trusted project registry, sorted
   service.getProfile(); // current selection
 }
 ```
 
 Only the name crosses the boundary: the caller never supplies sandbox policy.
-`setProfile` validates the name against the global registry before changing
+`setProfile` validates the name against the global registry (and, when the
+project is trusted, the project registry) before changing
 anything, so a rejected request leaves the session exactly as it was. Selecting a
 profile does **not** switch the sandbox on — the sandbox toggle stays under user
 control (`Alt+S`, `/sandbox-enable`, `--no-sandbox`). When the sandbox is

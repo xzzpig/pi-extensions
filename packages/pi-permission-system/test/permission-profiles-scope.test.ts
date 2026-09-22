@@ -56,10 +56,10 @@ describe("profile scope merge position", () => {
     },
   });
 
-  it("applies profile rules with origin 'profile'", () => {
+  it("applies profile rules with origin 'profile-global'", () => {
     const read = manager.check({ ...readCheck(), agentName: "worker" });
     expect(read.state).toBe("allow");
-    expect(read.origin).toBe("profile");
+    expect(read.origin).toBe("profile-global");
 
     // The profile does not mention `write`: the global deny survives with its
     // own origin (a profile cannot silently drop an inherited deny).
@@ -75,7 +75,7 @@ describe("profile scope merge position", () => {
 
     const fetch = manager.check({ ...bashCheck("git fetch"), agentName: "worker" });
     expect(fetch.state).toBe("ask");
-    expect(fetch.origin).toBe("profile");
+    expect(fetch.origin).toBe("profile-global");
   });
 
   it("keeps a global deny the profile does not mention", () => {
@@ -96,7 +96,7 @@ describe("profile scope merge position", () => {
       agentName: "worker",
     });
     expect(skill.state).toBe("deny");
-    expect(skill.origin).toBe("profile");
+    expect(skill.origin).toBe("profile-global");
   });
 });
 
@@ -114,7 +114,7 @@ describe("profile selection precedence", () => {
     });
     const read = manager.check({ ...readCheck(), agentName: "worker" });
     expect(read.state).toBe("allow");
-    expect(read.origin).toBe("profile");
+    expect(read.origin).toBe("profile-global");
   });
 
   it("prefers the launcher env over both agent files", () => {
@@ -132,7 +132,7 @@ describe("profile selection precedence", () => {
     });
     const read = manager.check({ ...readCheck(), agentName: "worker" });
     expect(read.state).toBe("deny");
-    expect(read.origin).toBe("profile");
+    expect(read.origin).toBe("profile-global");
   });
 
   it("applies the profile to the requester's agent name (cross-session 0008)", () => {
@@ -149,7 +149,54 @@ describe("profile selection precedence", () => {
     // requester's agent name — the requester's profile rules apply.
     const read = manager.check({ ...readCheck(), agentName: "child" });
     expect(read.state).toBe("deny");
-    expect(read.origin).toBe("profile");
+    expect(read.origin).toBe("profile-global");
+  });
+});
+
+describe("project-scoped profile two-layer merge", () => {
+  const manager = createInMemoryManager({
+    global: {
+      permission: { read: "allow", write: "deny" },
+      profiles: {
+        dev: {
+          permission: {
+            read: "allow",
+            write: "deny",
+            bash: { "git *": "ask" },
+          },
+        },
+      },
+    },
+    project: {
+      // Same-named project profile: overrides `read` per pattern, leaves
+      // `write` deny and `bash` untouched.
+      profiles: { dev: { permission: { read: "ask" } } },
+    },
+    agent: { worker: { profileName: "dev" } },
+  });
+
+  it("attributes each pattern to its own two-layer origin", () => {
+    const rules = manager.getComposedConfigRules("worker");
+    const originOf = (surface: string, pattern = "*") =>
+      rules.find((rule) => rule.surface === surface && rule.pattern === pattern)
+        ?.origin;
+    // The same-named project profile overrides this pattern.
+    expect(originOf("read")).toBe("profile-project");
+    // Patterns the project profile does not mention keep the global layer.
+    expect(originOf("write")).toBe("profile-global");
+    expect(originOf("bash", "git *")).toBe("profile-global");
+  });
+
+  it("applies the project pattern override at runtime", () => {
+    const read = manager.check({ ...readCheck(), agentName: "worker" });
+    expect(read.state).toBe("ask");
+    expect(read.origin).toBe("profile-project");
+  });
+
+  it("keeps the global same-named profile deny the project does not mention", () => {
+    const write = manager.check({ ...writeCheck(), agentName: "worker" });
+    expect(write.state).toBe("deny");
+    expect(write.origin).toBe("profile-global");
   });
 });
 
@@ -205,6 +252,173 @@ describe("profile fail-closed", () => {
   });
 });
 
+describe("project-scoped profile selection end-to-end (trusted / untrusted)", () => {
+  it("resolves a project-only profile name when the project is trusted", () => {
+    const manager = createInMemoryManager({
+      global: { permission: { read: "allow" } },
+      project: {
+        profiles: { "project-dev": { permission: { read: "ask" } } },
+      },
+      agent: { worker: { profileName: "project-dev" } },
+    });
+    // Trusted by default (no configureForCwd): the project-only name resolves.
+    const read = manager.check({ ...readCheck(), agentName: "worker" });
+    expect(read.state).toBe("ask");
+    expect(read.origin).toBe("profile-project");
+    expect(manager.getConfigIssues("worker")).toEqual([]);
+  });
+
+  it("degrades a same-named selection to the global profile when untrusted", () => {
+    const manager = createInMemoryManager({
+      global: {
+        permission: { read: "allow", write: "deny" },
+        profiles: {
+          dev: { permission: { read: "allow", write: "deny" } },
+        },
+      },
+      project: {
+        profiles: { dev: { permission: { read: "ask" } } },
+      },
+      agent: { worker: { profileName: "dev" } },
+    });
+    manager.configureForCwd(undefined); // untrusted
+
+    const read = manager.check({ ...readCheck(), agentName: "worker" });
+    // The project layer is withheld: global dev profile governs read=allow.
+    expect(read.state).toBe("allow");
+    expect(read.origin).toBe("profile-global");
+
+    const issues = manager.getConfigIssues("worker");
+    expect(
+      issues.some((issue) =>
+        issue.includes(
+          "Project defines 1 permission profile that was not applied (project is not trusted).",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("fails closed on a project-only name when the project is untrusted", () => {
+    const manager = createInMemoryManager({
+      global: { permission: { read: "allow" } },
+      project: {
+        profiles: { "project-dev": { permission: { read: "ask" } } },
+      },
+      agent: { worker: { profileName: "project-dev" } },
+    });
+    manager.configureForCwd(undefined); // untrusted
+
+    const read = manager.check({ ...readCheck(), agentName: "worker" });
+    // Unknown name (project layer withheld) ⇒ allow is floored to ask.
+    expect(read.state).toBe("ask");
+    expect(read.origin).toBe("fail-closed");
+
+    const issues = manager.getConfigIssues("worker");
+    expect(
+      issues.some((issue) =>
+        issue.includes(
+          "Permission profile 'project-dev' could not be resolved",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      issues.some((issue) =>
+        issue.includes(
+          "Project defines 1 permission profile that was not applied (project is not trusted).",
+        ),
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("untrusted project profiles warning via getConfigIssues", () => {
+  // projectTrusted=false forces resolveProfileScopes to treat the project
+  // registry as empty and emit the «N not applied» warning; the manager path
+  // reaches it through ResolvedPermissions.warnings → getConfigIssues.
+  function untrustedManager() {
+    const manager = createInMemoryManager({
+      global: {
+        permission: { read: "allow" },
+        profiles: { dev: { permission: { read: "allow" } } },
+      },
+      project: {
+        profiles: {
+          dev: { permission: { read: "ask" } },
+          extra: { permission: { write: "deny" } },
+        },
+      },
+      agent: { worker: { profileName: "dev" } },
+    });
+    manager.configureForCwd(undefined);
+    return manager;
+  }
+
+  it("reports the project profile count with singular/plural wording", () => {
+    const issues = untrustedManager().getConfigIssues("worker");
+    expect(
+      issues.some((issue) =>
+        issue.includes(
+          "Project defines 2 permission profiles that were not applied (project is not trusted).",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("reports a single project profile in the singular", () => {
+    const manager = createInMemoryManager({
+      global: { profiles: { dev: { permission: { read: "allow" } } } },
+      project: { profiles: { dev: { permission: { read: "ask" } } } },
+      agent: { worker: { profileName: "dev" } },
+    });
+    manager.configureForCwd(undefined);
+    const issues = manager.getConfigIssues("worker");
+    expect(
+      issues.some((issue) =>
+        issue.includes(
+          "Project defines 1 permission profile that was not applied (project is not trusted).",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("is silent for a trusted project with the same registry", () => {
+    const manager = createInMemoryManager({
+      global: { profiles: { dev: { permission: { read: "allow" } } } },
+      project: { profiles: { dev: { permission: { read: "ask" } } } },
+      agent: { worker: { profileName: "dev" } },
+    });
+    manager.configureForCwd("/trusted/project");
+    const issues = manager.getConfigIssues("worker");
+    expect(
+      issues.some((issue) => issue.includes("not applied (project is not trusted)")),
+    ).toBe(false);
+  });
+
+  it("is silent when the trusted default applies (no configureForCwd)", () => {
+    const manager = createInMemoryManager({
+      global: { profiles: { dev: { permission: { read: "allow" } } } },
+      project: { profiles: { dev: { permission: { read: "ask" } } } },
+      agent: { worker: { profileName: "dev" } },
+    });
+    const issues = manager.getConfigIssues("worker");
+    expect(
+      issues.some((issue) => issue.includes("not applied (project is not trusted)")),
+    ).toBe(false);
+  });
+
+  it("is silent for an untrusted project whose registry is empty", () => {
+    const manager = createInMemoryManager({
+      global: { profiles: { dev: { permission: { read: "allow" } } } },
+      agent: { worker: { profileName: "dev" } },
+    });
+    manager.configureForCwd(undefined);
+    const issues = manager.getConfigIssues("worker");
+    expect(
+      issues.some((issue) => issue.includes("not applied (project is not trusted)")),
+    ).toBe(false);
+  });
+});
+
 /**
  * Launcher env selection lifetime (agent-role R7).
  *
@@ -247,7 +461,7 @@ describe("launcher env selection lifetime", () => {
 
     const read = manager.check(readCheck());
     expect(read.state).toBe("ask");
-    expect(read.origin).toBe("profile");
+    expect(read.origin).toBe("profile-global");
   });
 
   it("keeps a child that declared no profile unselected", () => {

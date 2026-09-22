@@ -26,7 +26,7 @@ import type {
 import { isPermissionState } from "#src/types";
 import { readPermissionProfileEnv } from "../permission-profile";
 import { normalizeFlatConfig } from "./normalize";
-import { resolveProfileScope } from "./profile-scope";
+import { resolveProfileScopes } from "./profile-scope";
 import type { Rule, RuleOrigin, Ruleset } from "./rule";
 import {
   evaluate,
@@ -74,6 +74,12 @@ type ResolvedPermissions = {
    * actionable: the operator sees exactly which selection is broken.
    */
   invalidProfileName?: string;
+  /**
+   * Operator warnings surfaced while resolving the profile scopes — currently
+   * the «N project profiles not applied (project untrusted)» notice. Rendered
+   * by {@link getConfigIssues} alongside the fail-closed diagnostics.
+   */
+  warnings: readonly string[];
 };
 
 /**
@@ -137,6 +143,15 @@ export class PermissionManager implements ScopedPermissionManager {
   private readonly isYoloEnabled: () => boolean;
   private loader: PolicyLoader;
   /**
+   * Whether the current project cwd is trusted (project scope loaded).
+   * Derived from `configureForCwd`: `undefined`/`null`/`""` cwd means the
+   * project scope is withheld, so a project-defined profiles registry is
+   * ignored and its existence is surfaced as a warning (#644 / project
+   * profiles spec). Defaults to true for test managers that never call
+   * `configureForCwd`.
+   */
+  private projectTrusted = true;
+  /**
    * Env selection captured for a child session, or undefined while the
    * selection is still read live from the process environment.
    *
@@ -194,6 +209,7 @@ export class PermissionManager implements ScopedPermissionManager {
    * built with explicit paths), only the cache is cleared.
    */
   configureForCwd(cwd: string | undefined | null): void {
+    this.projectTrusted = cwd !== undefined && cwd !== null && cwd !== "";
     if (this.agentDir !== undefined) {
       this.loader = new FilePolicyLoader(
         derivePolicyLoaderOptions(this.agentDir, cwd),
@@ -204,7 +220,7 @@ export class PermissionManager implements ScopedPermissionManager {
 
   getConfigIssues(agentName?: string): string[] {
     // Trigger a load/resolve to ensure issues are collected.
-    const { failClosedScopes, invalidProfileName } =
+    const { failClosedScopes, invalidProfileName, warnings } =
       this.resolvePermissions(agentName);
     const issues = [...this.loader.getConfigIssues()];
     if (failClosedScopes.length > 0) {
@@ -221,6 +237,7 @@ export class PermissionManager implements ScopedPermissionManager {
           `clamped to 'ask'. Fix the profile definition or the selection.`,
       );
     }
+    issues.push(...warnings);
     return issues;
   }
 
@@ -248,26 +265,32 @@ export class PermissionManager implements ScopedPermissionManager {
     const agentConfig = this.loader.loadAgentConfig(agentName);
     const projectAgentConfig = this.loader.loadProjectAgentConfig(agentName);
 
-    // Resolve the selected profile into its own scope (inserted between the
-    // project and agent scopes below): launcher env wins, then the project
-    // agent file, then the global agent file; an unknown name or an empty
-    // ruleset fails the scope closed. See `resolveProfileScope`.
-    const { profileScope, invalidProfileName } = resolveProfileScope({
-      envProfileName,
-      projectAgentProfileName: projectAgentConfig.profileName,
-      agentProfileName: agentConfig.profileName,
-      profiles: globalConfig.profiles,
-    });
+    // Resolve the selected profile into its ordered scope layers (inserted
+    // between the project and agent scopes below): launcher env wins, then the
+    // project agent file, then the global agent file; an unknown name or an
+    // empty ruleset fails the scope closed. A trusted project's same-named
+    // profile adds a second layer above the global one. See
+    // `resolveProfileScopes`.
+    const { scopes: profileScopes, invalidProfileName, warnings } =
+      resolveProfileScopes({
+        envProfileName,
+        projectAgentProfileName: projectAgentConfig.profileName,
+        agentProfileName: agentConfig.profileName,
+        profiles: globalConfig.profiles,
+        projectProfiles: projectConfig.profiles,
+        projectTrusted: this.projectTrusted,
+      });
 
     // Merge permission objects across scopes (lowest → highest precedence),
     // building a parallel origin map that tracks which scope contributed each
-    // (surface, pattern) entry. The profile sits between project and agent:
-    // patterns it does not mention keep the lower scopes' rules (including
-    // global denies), and the agent frontmatter overrides it per pattern.
+    // (surface, pattern) entry. The profile layers sit between project and
+    // agent: patterns they do not mention keep the lower scopes' rules
+    // (including global denies), and the agent frontmatter overrides them per
+    // pattern.
     const { mergedPermission, origins } = mergeScopesWithOrigins([
       ["global", globalConfig],
       ["project", projectConfig],
-      ...(profileScope ? [["profile", profileScope] as const] : []),
+      ...profileScopes,
       ["agent", agentConfig],
       ["project-agent", projectAgentConfig],
     ]);
@@ -309,7 +332,7 @@ export class PermissionManager implements ScopedPermissionManager {
     // higher scope meant to tighten policy cannot silently fail open (#646).
     // Global is excluded — nothing more permissive is inherited when it fails.
     const failClosedScopes: RuleOrigin[] = [];
-    if (profileScope?.invalid === true) failClosedScopes.push("profile");
+    if (invalidProfileName !== undefined) failClosedScopes.push("profile");
     if (projectConfig.invalid === true) failClosedScopes.push("project");
     if (agentConfig.invalid === true) failClosedScopes.push("agent");
     if (projectAgentConfig.invalid === true)
@@ -324,6 +347,7 @@ export class PermissionManager implements ScopedPermissionManager {
       composedRules: effectiveRules,
       failClosedScopes,
       invalidProfileName,
+      warnings,
     };
     this.resolvedPermissionsCache.set(cacheKey, { stamp, value });
     return value;

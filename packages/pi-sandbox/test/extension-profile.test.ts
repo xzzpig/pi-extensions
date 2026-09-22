@@ -338,3 +338,112 @@ test("an in-process child does not set the host exit code when its profile fails
   assert.deepEqual(input!({ text: "Task: inspect" }, ctx), { action: "handled" });
   assert.notEqual(process.exitCode, 1);
 });
+
+// u-3.1 trust consistency: when no launcher trust stamp is present, the sandbox
+// definition side resolves project trust from the platform (ctx.isProjectTrusted()),
+// which is the exact channel the permission side uses — so both packages must
+// conclude the same trusted/untrusted state for the same project.
+test("a host session trusts the project profile when ctx.isProjectTrusted() is true (permission-equivalent channel)", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-profile-host-trusted-"));
+  roots.push(root);
+  const agentDir = path.join(root, "agent");
+  const cwd = path.join(root, "project");
+  const projectOnlyPath = path.join(cwd, "project-only");
+  fs.mkdirSync(path.join(cwd, ".pi"), { recursive: true });
+  fs.mkdirSync(agentDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(agentDir, "sandbox.json"),
+    JSON.stringify({
+      profiles: {
+        dev: {
+          inheritGlobalConfig: false,
+          network: { allowedDomains: [] },
+          filesystem: { allowRead: [cwd], allowWrite: [] },
+        },
+      },
+    }),
+  );
+  fs.writeFileSync(
+    path.join(cwd, ".pi", "sandbox.json"),
+    JSON.stringify({
+      profiles: {
+        dev: { filesystem: { allowRead: [projectOnlyPath] } },
+      },
+    }),
+  );
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  process.env.PI_SUBAGENT_SANDBOX_PROFILE = "dev";
+  // No launcher trust stamp: the host session resolves trust from the platform
+  // (ctx.isProjectTrusted()), exactly the channel the permission side uses.
+  delete process.env.PI_SUBAGENT_SANDBOX_PROJECT_TRUSTED;
+
+  let initializedConfig: { filesystem?: { allowRead?: string[] } } | undefined;
+  const sandboxStub = makeSandboxStub();
+  sandboxStub.initialize = async (config) => {
+    initializedConfig = config;
+  };
+
+  const { pi, handlers } = createMockPi();
+  registerSandbox(pi as never);
+  const ctx = { ...headlessContext(cwd), isProjectTrusted: () => true };
+  const sessionStart = handlers.get("session_start")?.[0];
+  assert.ok(sessionStart);
+  await sessionStart!({ reason: "startup" }, ctx);
+
+  // Trusted conclusion: the same-named project profile participates in the
+  // merge (its allowRead replaces the global profile's), matching the permission
+  // side's configureForCwd(cwd) conclusion for the same project.
+  assert.ok(initializedConfig?.filesystem?.allowRead?.includes(projectOnlyPath));
+});
+
+test("a host session ignores the project profile when ctx.isProjectTrusted() is false (permission-equivalent channel)", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-sandbox-profile-host-untrusted-"));
+  roots.push(root);
+  const agentDir = path.join(root, "agent");
+  const cwd = path.join(root, "project");
+  const projectOnlyPath = path.join(cwd, "project-only");
+  fs.mkdirSync(path.join(cwd, ".pi"), { recursive: true });
+  fs.mkdirSync(agentDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(agentDir, "sandbox.json"),
+    JSON.stringify({
+      profiles: {
+        dev: {
+          inheritGlobalConfig: false,
+          network: { allowedDomains: [] },
+          filesystem: { allowRead: [cwd], allowWrite: [] },
+        },
+      },
+    }),
+  );
+  fs.writeFileSync(
+    path.join(cwd, ".pi", "sandbox.json"),
+    JSON.stringify({
+      profiles: {
+        dev: { filesystem: { allowRead: [projectOnlyPath] } },
+      },
+    }),
+  );
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  process.env.PI_SUBAGENT_SANDBOX_PROFILE = "dev";
+  delete process.env.PI_SUBAGENT_SANDBOX_PROJECT_TRUSTED;
+
+  let initializedConfig: { filesystem?: { allowRead?: string[] } } | undefined;
+  const sandboxStub = makeSandboxStub();
+  sandboxStub.initialize = async (config) => {
+    initializedConfig = config;
+  };
+
+  const { pi, handlers } = createMockPi();
+  registerSandbox(pi as never);
+  const ctx = { ...headlessContext(cwd), isProjectTrusted: () => false };
+  const sessionStart = handlers.get("session_start")?.[0];
+  assert.ok(sessionStart);
+  await sessionStart!({ reason: "startup" }, ctx);
+
+  // Untrusted conclusion: the project's same-named profile is ignored and the
+  // global profile's own rules hold (project-only path absent), matching the
+  // permission side's configureForCwd(undefined) conclusion for the same project.
+  assert.equal(initializedConfig?.filesystem?.allowRead?.includes(projectOnlyPath), false);
+  assert.ok(initializedConfig?.filesystem?.allowRead?.includes(cwd));
+});

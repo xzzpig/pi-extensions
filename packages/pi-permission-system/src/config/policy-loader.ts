@@ -234,17 +234,16 @@ export class FilePolicyLoader implements PolicyLoader {
       return this.projectGlobalConfigCache.value;
     }
 
-    const { config, issues } = loadUnifiedConfig(this.projectGlobalConfigPath, {
-      // A project file that defines `profiles` is rejected whole, marking the
-      // project scope invalid so its allows are clamped to ask (fail closed).
-      allowProfiles: false,
-    });
+    const { config, issues } = loadUnifiedConfig(this.projectGlobalConfigPath);
     this.accumulateConfigIssues(issues);
 
-    // A present-but-rejected file yields issues (parse error or schema
+    // A present-but-invalid file yields issues (parse error or schema
     // rejection); an absent file yields none. Fail closed on the former.
     const value: ScopeConfig = {
       permission: config.permission,
+      // Project scopes can now carry a profiles registry too: the resolution
+      // layer combines same-named project/global profiles at resolve time.
+      ...(config.profiles !== undefined ? { profiles: config.profiles } : {}),
       ...(issues.length > 0 ? { invalid: true } : {}),
     };
 

@@ -5,6 +5,23 @@ This fork tracks [`carderne/pi-sandbox`](https://github.com/carderne/pi-sandbox)
 via git subtree; entries below describe only fork-specific deviations from
 upstream.
 
+## 0.7.0
+
+### Changed
+
+- **Project configuration may now define sandbox profiles** (OpenSpec change
+  `add-project-scoped-profiles`). Previously a `profiles` key in a project's
+  `.pi/sandbox.json` rejected the whole project config with "Project sandbox
+  configuration ... must not define profiles"; now a trusted project's registry
+  joins profile resolution, a same-named global and trusted-project profile
+  merge (allow arrays replaced, deny arrays unioned so a global hard denial can
+  never be weakened, sensitive relaxations still clamped), and a project-only
+  name resolves when the project is trusted. An untrusted project's registry is
+  ignored with an "N sandbox profile(s) not applied (project is not trusted)"
+  warning that never changes the process exit code; selecting a project-only
+  profile name on an untrusted project still fails closed with a trust error.
+  `listGlobalSandboxProfiles` reports the merged global + trusted-project view.
+
 ## 0.6.3
 
 ### Changed

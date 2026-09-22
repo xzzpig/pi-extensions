@@ -5,6 +5,10 @@ import type { ShellToolsConfig } from "#src/config/config-schema";
 import type { SessionConfigStore } from "#src/config/config-store";
 import type { PermissionSystemExtensionConfig } from "#src/config/extension-config";
 import type { ExtensionPaths } from "#src/config/extension-paths";
+import {
+  countProjectConfigProfiles,
+  untrustedProjectProfilesWarning,
+} from "#src/config/project-profile-probe";
 import type { SkillPromptEntry } from "#src/exposure/skill-prompt-sanitizer";
 import {
   ToolSurfaceBaseline,
@@ -222,13 +226,40 @@ export class PermissionSession implements ToolCallGateInputs {
    * Reload merged config from disk; optionally update the stored runtime
    * context. When `projectTrusted` is `false`, the project scope is withheld
    * so an untrusted project's runtime config is not merged (#644).
+   *
+   * Fork (project-permission-profiles): an untrusted project's profiles
+   * registry is never applied — the loader withholds the project cwd, so
+   * `resolveProfileScopes` cannot see the registry and its warnings stay
+   * dormant on the manager path. This cwd-held peek counts the registry and
+   * surfaces the same «N profiles not applied» notice via the UI-notify
+   * channel (spec: getConfigIssues / UI 通知通道).
    */
   refreshConfig(
     ctx: ExtensionContext | undefined,
     projectTrusted: boolean,
   ): void {
     this.configStore.refresh(ctx, projectTrusted);
+    const warning =
+      !projectTrusted && ctx?.cwd
+        ? (() => {
+            const count = countProjectConfigProfiles(ctx.cwd);
+            return count > 0 ? untrustedProjectProfilesWarning(count) : undefined;
+          })()
+        : undefined;
+    if (warning && warning !== this.lastProjectProfileWarning) {
+      this.lastProjectProfileWarning = warning;
+      ctx?.ui.notify(warning, "warning");
+    } else if (!warning) {
+      this.lastProjectProfileWarning = null;
+    }
   }
+
+  /**
+   * The untrusted-project profiles notice last surfaced via
+   * `refreshConfig`, so a repeated reload in the same untrusted project does
+   * not spam the UI (same dedup shape as `ConfigStore.lastConfigWarning`).
+   */
+  private lastProjectProfileWarning: string | null = null;
 
   /** Write the resolved config path set to the review and debug logs. */
   logResolvedConfigPaths(): void {

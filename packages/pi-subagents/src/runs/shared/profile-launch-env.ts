@@ -30,7 +30,8 @@ export interface ProfileLaunchEnvInput {
 	permissionProfile?: string;
 	/** Parent-authoritative trust state for profile-aware project config merging. */
 	projectTrusted?: boolean;
-	/** Exact trusted parent cwd; profile project config applies only when the child cwd matches it. */
+	/** Trusted project cwd; profile project config applies when the child cwd is within it
+	 *  (equal or a subdirectory), mirroring the platform's ancestor-inheriting trust decisions. */
 	trustedProjectCwd?: string;
 	host: "parent" | "runner";
 }
@@ -48,7 +49,14 @@ export interface ProfileLaunchEnv {
 
 function hasTrustedProfileProjectCwd(input: Pick<ProfileLaunchEnvInput, "cwd" | "projectTrusted" | "trustedProjectCwd">): boolean {
 	if (input.projectTrusted !== true || !input.cwd || !input.trustedProjectCwd) return false;
-	return path.resolve(input.cwd) === path.resolve(input.trustedProjectCwd);
+	// Platform trust is ancestor-inheriting (findNearestTrustEntry walks up from
+	// the child cwd): a child launched anywhere inside the trusted project tree —
+	// the project root or any subdirectory — inherits the trust decision observed
+	// at the trusted project cwd, so its project config participates without a
+	// separate trust decision (spec: 子目录启动继承信任).
+	const trusted = path.resolve(input.trustedProjectCwd);
+	const child = path.resolve(input.cwd);
+	return child === trusted || child.startsWith(`${trusted}${path.sep}`);
 }
 
 export function buildProfileLaunchEnv(input: ProfileLaunchEnvInput, toolPlan: Pick<PiLaunchToolPlan, "sandboxExtension">): ProfileLaunchEnv {

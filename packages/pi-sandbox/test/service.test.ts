@@ -200,13 +200,53 @@ test("clears the selected profile", async () => {
   assert.equal(service.getProfile(), undefined);
 });
 
-test("lists only profiles the global configuration defines", () => {
+test("lists only profiles the global configuration defines by default", () => {
   const probe = createProbe({
     profiles: { strict: STRICT_PROFILE, loose: STRICT_PROFILE },
     projectProfiles: { "project-only": STRICT_PROFILE },
   });
 
+  // No trust evaluated, or explicitly untrusted: project names stay out.
   assert.deepEqual(listGlobalSandboxProfiles(probe.cwd), ["loose", "strict"]);
+  assert.deepEqual(listGlobalSandboxProfiles(probe.cwd, { projectTrusted: false }), [
+    "loose",
+    "strict",
+  ]);
+});
+
+test("lists a trusted project's profile names alongside the global ones", () => {
+  const probe = createProbe({
+    profiles: { strict: STRICT_PROFILE, loose: STRICT_PROFILE },
+    projectProfiles: { "project-only": STRICT_PROFILE, another: STRICT_PROFILE },
+  });
+
+  assert.deepEqual(listGlobalSandboxProfiles(probe.cwd, { projectTrusted: true }), [
+    "another",
+    "loose",
+    "project-only",
+    "strict",
+  ]);
+});
+
+test("deduplicates a project profile that shares a global profile name", () => {
+  const probe = createProbe({
+    profiles: { strict: STRICT_PROFILE },
+    projectProfiles: { strict: STRICT_PROFILE },
+  });
+
+  assert.deepEqual(listGlobalSandboxProfiles(probe.cwd, { projectTrusted: true }), ["strict"]);
+});
+
+test("skips project profile names that fail the selector grammar", () => {
+  const probe = createProbe({
+    profiles: { strict: STRICT_PROFILE },
+    projectProfiles: { "../escape": STRICT_PROFILE, "valid-name": STRICT_PROFILE },
+  });
+
+  assert.deepEqual(listGlobalSandboxProfiles(probe.cwd, { projectTrusted: true }), [
+    "strict",
+    "valid-name",
+  ]);
 });
 
 test("scopes the service per session and disposes it on shutdown", async () => {

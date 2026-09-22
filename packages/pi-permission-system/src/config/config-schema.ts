@@ -346,13 +346,13 @@ export const profileEntrySchema = z
     }),
   })
   .meta({
-    description: "One named permission profile (global config only).",
+    description: "One named permission profile (global or project config).",
   });
 
 /**
- * The named-profile registry: global config only, keyed by safe profile names.
- * A project config containing `profiles` is rejected by the loader
- * (`allowProfiles: false`) and fails the project scope closed.
+ * The named-profile registry, keyed by safe profile names. Both the global
+ * and the project config may define one; a same-named project profile
+ * combines with the global registry at resolution time.
  */
 export const profilesSchema = z
   .record(
@@ -370,7 +370,7 @@ export const profilesSchema = z
   )
   .meta({
     description:
-      "Named permission profiles. Only defined in the global configuration; a project config that defines profiles is rejected.",
+      "Named permission profiles. The global and project configs may each define a registry; same-named project entries combine with the global ones at resolution time.",
   });
 
 /**
@@ -506,7 +506,7 @@ export type FlatPermissionConfig = z.infer<typeof permissionSchema>;
 /** The `shellTools` map: tool name → shell-alias argument mapping. */
 export type ShellToolsConfig = z.infer<typeof shellToolsSchema>;
 
-/** One named permission profile (global config only). */
+/** One named permission profile (global or project config). */
 export type ProfilePermissionConfig = z.infer<typeof profileEntrySchema>;
 
 /** The raw config file shape after validation (all fields optional). */

@@ -33,6 +33,18 @@ function installSandboxExtension(agentDir: string): string {
 	return entryPath;
 }
 
+function installPermissionSystemExtension(agentDir: string): string {
+	const extensionRoot = path.join(agentDir, "extensions", "pi-permission-system");
+	const entryPath = path.join(extensionRoot, "src", "index.ts");
+	fs.mkdirSync(path.dirname(entryPath), { recursive: true });
+	fs.writeFileSync(path.join(extensionRoot, "package.json"), JSON.stringify({
+		name: "@xzzpig/pi-permission-system",
+		pi: { extensions: ["./src/index.ts"] },
+	}));
+	fs.writeFileSync(entryPath, "export default () => {};", "utf-8");
+	return entryPath;
+}
+
 describe("public launch contract preflight", () => {
 	beforeEach(() => {
 		tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-preflight-"));
@@ -121,6 +133,48 @@ Review carefully.
 		if (!result.ok) {
 			assert.equal(result.code, "untrusted_project");
 			assert.match(result.message, /does not match trusted project cwd/);
+		}
+	});
+
+	it("binds a permission profile into preflight provenance for a trusted project-scoped selector", async () => {
+		const cwd = path.join(tempDir, "permission-profile-repo");
+		fs.mkdirSync(cwd, { recursive: true });
+		installPermissionSystemExtension(process.env.PI_CODING_AGENT_DIR!);
+		writeAgent(path.join(cwd, ".pi", "agents", "reviewer.md"), `---
+name: reviewer
+description: Permission-scoped reviewer
+permission-profile: reviewer-strict
+---
+Review carefully.
+`);
+
+		const result = await resolveSubagentLaunchContract({
+			agent: "reviewer",
+			cwd,
+			task: "Review the change",
+			projectTrusted: true,
+		});
+		assert.equal(result.ok, true);
+		if (!result.ok) return;
+		assert.equal(result.contract.permissionProfile, "reviewer-strict");
+	});
+
+	it("fails preflight for an untrusted project-scoped permission selector", async () => {
+		const cwd = path.join(tempDir, "permission-untrusted-repo");
+		fs.mkdirSync(cwd, { recursive: true });
+		writeAgent(path.join(cwd, ".pi", "agents", "reviewer.md"), `---
+name: reviewer
+description: Permission-scoped reviewer
+permission-profile: reviewer-strict
+---
+Review carefully.
+`);
+
+		const result = await resolveSubagentLaunchContract({ agent: "reviewer", cwd, task: "Review" });
+		assert.equal(result.ok, false);
+		if (!result.ok) {
+			assert.equal(result.code, "untrusted_project");
+			assert.match(result.message, /permission profile.*project is not trusted/);
 		}
 	});
 });
