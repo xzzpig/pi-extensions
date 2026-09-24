@@ -30,7 +30,7 @@ const ALL = [
 ];
 
 const ALL_FEATURES = [
-	"clickToExpandTools",
+	"clickToToggleExpandable",
 	"editorBufferCopy",
 	"editorClickToCaret",
 	"editorWheelScroll",
@@ -107,7 +107,7 @@ describe("enabledFeatures", () => {
 		// until some unrelated frame arrived.
 		const features = featuresWith(ALL.filter((name) => name !== "requestRender"));
 		expect(features.has("selectionHint")).toBe(true);
-		expect(features.has("clickToExpandTools")).toBe(false);
+		expect(features.has("clickToToggleExpandable")).toBe(false);
 		expect(features.has("editorWheelScroll")).toBe(false);
 		expect(features.has("editorClickToCaret")).toBe(false);
 		// The copy features call through to Pi's own copy on the fall-through
@@ -120,7 +120,7 @@ describe("enabledFeatures", () => {
 		// expanding a tool box behind it, scrolling a draft behind it, moving a
 		// caret behind it, or reading a dialog's rows as a selection.
 		const features = featuresWith(ALL.filter((name) => name !== "hasOverlay"));
-		expect(features.has("clickToExpandTools")).toBe(false);
+		expect(features.has("clickToToggleExpandable")).toBe(false);
 		expect(features.has("editorWheelScroll")).toBe(false);
 		expect(features.has("editorClickToCaret")).toBe(false);
 		expect(features.has("editorBufferCopy")).toBe(false);

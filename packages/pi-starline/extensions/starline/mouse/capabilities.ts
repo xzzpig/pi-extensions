@@ -29,7 +29,7 @@ export type MouseCapability = MouseReceiverCapabilities | "copySlot";
 
 export type MouseFeature =
 	| "selectionHint"
-	| "clickToExpandTools"
+	| "clickToToggleExpandable"
 	| "editorWheelScroll"
 	| "editorClickToCaret"
 	| "editorBufferCopy"
@@ -77,7 +77,7 @@ const REQUIREMENTS: Record<MouseFeature, readonly MouseCapability[]> = {
 	// whatever tool box happens to sit behind it — and `requestRender`, because
 	// consuming the press means Pi never reaches its own repaint for that
 	// event.
-	clickToExpandTools: ["hasOverlay", "requestRender"],
+	clickToToggleExpandable: ["hasOverlay", "requestRender"],
 	// Same shape as click-to-expand: the notch arrives through the handler
 	// slot, `hasOverlay` keeps a notch aimed at a dialog from scrolling the
 	// draft hidden behind it, and consuming the notch means `requestRender` is
@@ -113,7 +113,7 @@ const REQUIREMENTS: Record<MouseFeature, readonly MouseCapability[]> = {
 	],
 };
 
-function isCallable(receiver: object, name: string): boolean {
+function isCallable<T extends object>(receiver: T, name: string): boolean {
 	try {
 		return typeof (receiver as Record<string, unknown>)[name] === "function";
 	} catch {
@@ -122,7 +122,7 @@ function isCallable(receiver: object, name: string): boolean {
 	}
 }
 
-export function probeCapabilities(receiver: object): ReadonlySet<MouseCapability> {
+export function probeCapabilities<T extends object>(receiver: T): ReadonlySet<MouseCapability> {
 	const found = new Set<MouseCapability>();
 	for (const capability of CAPABILITIES) {
 		if (capability === "copySlot") continue;

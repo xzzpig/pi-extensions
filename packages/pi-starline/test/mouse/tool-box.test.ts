@@ -352,20 +352,20 @@ const DRAG = 32;
 const WHEEL_UP = 64;
 const RIGHT_BUTTON = 2;
 
-function makeConfig(clickToExpandTools: boolean): () => PolishedTuiConfig {
+function makeConfig(clickToToggleExpandable: boolean): () => PolishedTuiConfig {
 	return () =>
 		({
 			mouse: {
 				enabled: true,
 				wheelRouting: true,
 				copyNotice: true,
-				clickToExpandTools,
+				clickToToggleExpandable,
 			},
 		}) as PolishedTuiConfig;
 }
 
 /**
- * A prototype carrying everything `clickToExpandTools` is gated on, plus a
+ * A prototype carrying everything `clickToToggleExpandable` is gated on, plus a
  * real layout to resolve against. `handleSelectionMouseEvent` records that it
  * was reached, which is how "the press still starts a selection" is asserted.
  */
@@ -406,7 +406,7 @@ function makeInstallScene(options?: {
 	return { scene, prototype, throughCalls, renders, relayout };
 }
 
-describe("installMouseFeaturesOn clickToExpandTools", () => {
+describe("installMouseFeaturesOn clickToToggleExpandable", () => {
 	const originalKeybindings = getKeybindings();
 	let dispose: (() => void) | undefined;
 

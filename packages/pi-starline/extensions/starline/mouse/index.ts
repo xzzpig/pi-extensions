@@ -21,7 +21,7 @@
  *   located and how the live editor is reached; the scroll itself is
  *   `editor-scroll.ts`.
  *
- * `clickToExpandTools` → `addMouseHandler`
+ * `clickToToggleExpandable` → `addMouseHandler`
  * - A left-button press anywhere on an expandable component records the
  *   candidate; when the button is released on the same cell with no motion in
  *   between — a plain click — that one component is toggled and the release
@@ -89,8 +89,9 @@ import { activeEditor, pointerOverEditor } from "./editor-mouse";
 import { scrollEditorBy } from "./editor-scroll";
 import { editorVisualRowCount } from "./editor-text-cursor";
 import { type BoxLike, scrollContentLinesFor } from "./hit-test";
+import { keyTextFor } from "./key-text";
 import { externalEditorName, selectionHintText } from "./selection-state";
-import { type ExpandTarget, expandKeyText, expandTargetAt, keyTextFor } from "./tool-box";
+import { type ExpandTarget, expandKeyText, expandTargetAt } from "./tool-box";
 import { cleanTranscriptRows } from "./transcript-copy";
 
 /** Pi's interrupt chord — refused by the range-delete branch, never consumed. */
@@ -664,7 +665,7 @@ function expandClickTarget(
 	deps: InstallMouseDeps,
 ): ExpandTarget | undefined {
 	try {
-		if (!deps.getConfig().mouse.clickToExpandTools) return undefined;
+		if (!deps.getConfig().mouse.clickToToggleExpandable) return undefined;
 		// Pi resolves no scroll view while an overlay is up, so neither does this
 		// — a click on a dialog must not reach the transcript behind it.
 		if (receiver.hasOverlay?.()) return undefined;
@@ -806,7 +807,7 @@ export function installMouseFeaturesOn(
 		api.addMouseHandler(
 			({ event, tui }) => {
 				const receiver = bindReceiver(tui);
-				if (!receiver || !featureOn("clickToExpandTools")) {
+				if (!receiver || !featureOn("clickToToggleExpandable")) {
 					expandPress = undefined;
 					return undefined;
 				}

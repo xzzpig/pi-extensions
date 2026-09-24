@@ -43,7 +43,7 @@ function makeConfig(): () => PolishedTuiConfig {
 				wheelRouting: true,
 				copyNotice: true,
 				enabled: true,
-				clickToExpandTools: true,
+				clickToToggleExpandable: true,
 				transcriptCleanCopy: true,
 			},
 		}) as PolishedTuiConfig;

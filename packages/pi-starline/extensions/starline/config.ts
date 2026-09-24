@@ -109,8 +109,8 @@ export type MouseConfig = {
 	wheelRouting: boolean;
 	/** Show a "copied to clipboard" notice for a copy Starline itself performs. */
 	copyNotice: boolean;
-	/** Clicking a tool box's `ctrl+o to expand` hint expands that one box. */
-	clickToExpandTools: boolean;
+	/** Click any collapsible box (a tool box, a custom message, an expandable text) to expand or collapse it. */
+	clickToToggleExpandable: boolean;
 	/** Copy transcript selections without the painted rails, rules and frames. */
 	transcriptCleanCopy: boolean;
 };
@@ -119,7 +119,10 @@ const FIXED_EDITOR_KEY_MAP: Record<string, keyof MouseConfig> = {
 	enabled: "enabled",
 	mouseScroll: "wheelRouting",
 	copyNotice: "copyNotice",
-	clickToExpandTools: "clickToExpandTools",
+	// The 0.2.x-era name for click-to-toggle; Pi 0.86.0 owns the click itself
+	// for tool boxes, but the fork keeps the general collapsible-box toggle,
+	// so the old value is carried to the renamed key instead of being dropped.
+	clickToExpandTools: "clickToToggleExpandable",
 };
 
 /**
@@ -418,7 +421,7 @@ export const defaultConfig: PolishedTuiConfig = {
 		enabled: true,
 		wheelRouting: true,
 		copyNotice: true,
-		clickToExpandTools: true,
+		clickToToggleExpandable: true,
 		transcriptCleanCopy: true,
 	},
 };
@@ -838,10 +841,14 @@ function normalizeMouseConfig(record: Record<string, unknown>): MouseConfig {
 				: defaultConfig.mouse.wheelRouting,
 		copyNotice:
 			typeof record.copyNotice === "boolean" ? record.copyNotice : defaultConfig.mouse.copyNotice,
-		clickToExpandTools:
-			typeof record.clickToExpandTools === "boolean"
-				? record.clickToExpandTools
-				: defaultConfig.mouse.clickToExpandTools,
+		clickToToggleExpandable:
+			// The new key wins outright; a config carrying the pre-rename
+			// mouse.clickToExpandTools value is honoured as a fallback.
+			typeof record.clickToToggleExpandable === "boolean"
+				? record.clickToToggleExpandable
+				: typeof record.clickToExpandTools === "boolean"
+					? record.clickToExpandTools
+					: defaultConfig.mouse.clickToToggleExpandable,
 		transcriptCleanCopy:
 			typeof record.transcriptCleanCopy === "boolean"
 				? record.transcriptCleanCopy
@@ -1306,8 +1313,8 @@ export function saveMousePatch(patch: Partial<MouseConfig>, path = configPath): 
 			...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
 			...(patch.wheelRouting !== undefined ? { wheelRouting: patch.wheelRouting } : {}),
 			...(patch.copyNotice !== undefined ? { copyNotice: patch.copyNotice } : {}),
-			...(patch.clickToExpandTools !== undefined
-				? { clickToExpandTools: patch.clickToExpandTools }
+			...(patch.clickToToggleExpandable !== undefined
+				? { clickToToggleExpandable: patch.clickToToggleExpandable }
 				: {}),
 			...(patch.transcriptCleanCopy !== undefined
 				? { transcriptCleanCopy: patch.transcriptCleanCopy }

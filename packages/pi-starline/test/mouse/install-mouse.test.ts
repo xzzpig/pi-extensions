@@ -128,7 +128,6 @@ function makeConfig(copyNotice: boolean, transcriptCleanCopy = true): () => Poli
 				transcriptCleanCopy,
 				enabled: true,
 				wheelRouting: true,
-				clickToExpandTools: true,
 			},
 		}) as PolishedTuiConfig;
 }

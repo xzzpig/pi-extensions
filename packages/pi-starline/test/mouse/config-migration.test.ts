@@ -22,7 +22,7 @@ describe("migrateFixedEditorKeys", () => {
 			enabled: true,
 			wheelRouting: true,
 			copyNotice: false,
-			clickToExpandTools: false,
+			clickToToggleExpandable: false,
 		});
 	});
 
@@ -35,9 +35,9 @@ describe("migrateFixedEditorKeys", () => {
 	it("lets an existing mouse key win over the old one it would migrate", () => {
 		const { config } = migrateFixedEditorKeys({
 			fixedEditor: { clickToExpandTools: false },
-			mouse: { clickToExpandTools: true },
+			mouse: { clickToToggleExpandable: true },
 		});
-		expect((config.mouse as Record<string, unknown>).clickToExpandTools).toBe(true);
+		expect((config.mouse as Record<string, unknown>).clickToToggleExpandable).toBe(true);
 	});
 
 	it("ignores an unknown key inside the old block", () => {

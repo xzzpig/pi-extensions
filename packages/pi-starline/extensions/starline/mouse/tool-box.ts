@@ -86,10 +86,10 @@
  * same click a row above or below behaves normally.
  */
 
-import { keyText } from "@earendil-works/pi-coding-agent";
-import { getKeybindings, stripTerminalSequences } from "@earendil-works/pi-tui";
+import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { createComponentTree, isComponentLike, isExpandableComponent } from "./component-tree";
 import { type BoxLike, boxesAt, scrollContentLinesFor, scrollContentOrigin } from "./hit-test";
+import { keyTextFor } from "./key-text";
 
 /** The slice of a Pi message component this module calls. */
 export type ExpandableComponent = { setExpanded(expanded: boolean): void };
@@ -198,47 +198,6 @@ function handlesMouse(component: unknown): boolean {
  */
 export function expandKeyText(): string {
 	return keyTextFor(KEYBINDING);
-}
-
-/**
- * `keyText(keybinding)` with the registry fallback, shared by every feature
- * that quotes a key on screen. See `expandKeyText` for why the primary route
- * is pi-coding-agent's own function rather than this repo's registry.
- */
-export function keyTextFor(keybinding: string): string {
-	try {
-		const rendered = keyText(keybinding as never);
-		if (typeof rendered === "string" && rendered.length > 0) return rendered;
-	} catch {
-		// A Pi build that has moved this function is one where quoting the key
-		// simply shows nothing; it is never a reason to break a mouse feature.
-	}
-	return fallbackKeyText(keybinding);
-}
-
-/**
- * `keyText` re-derived from pi-tui's registry: keys joined with "/", `alt`
- * shown as `option` on macOS, matching `formatKeyText` in
- * `keybinding-hints.js`.
- */
-function fallbackKeyText(keybinding: string): string {
-	try {
-		const bound: unknown = getKeybindings().getKeys(keybinding as never);
-		if (!Array.isArray(bound) || bound.length === 0) return "";
-		const keys = bound.filter((key): key is string => typeof key === "string");
-		return keys
-			.map((key: string) =>
-				key
-					.split("+")
-					.map((part) =>
-						process.platform === "darwin" && part.toLowerCase() === "alt" ? "option" : part,
-					)
-					.join("+"),
-			)
-			.join("/");
-	} catch {
-		return "";
-	}
 }
 
 /** The innermost scroll view whose box contains the screen cell. */
