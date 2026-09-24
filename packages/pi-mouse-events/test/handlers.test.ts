@@ -264,24 +264,40 @@ describe("event-bus handle", () => {
     expect(emitted).toHaveLength(0);
   });
 
-  it("throws a stale bus error straight through — emission is never swallowed", () => {
-    // Deliberate fail-fast: pi's runtime invalidates a session's extension
-    // runtime on replacement, and a throw reaching the input loop surfaces
-    // the contract violation instead of silently dropping events. The entry
-    // point's refreshBus is what keeps the happy path working.
-    const { api } = install();
+  it("drops the event when the bus goes stale instead of crashing the process", () => {
+    // Regression: pi invalidates a session's extension runtime as soon as that
+    // session is replaced, but the replacement's extension factories (and thus
+    // `refreshBus`) only run after the old runtime is gone. This input
+    // wrapper is process-wide and the input path stays live across that
+    // window, so a mouse report — or any later one — used to reach the dead
+    // handle and throw from inside the input callback, which pi surfaces as an
+    // uncaughtException and exits. Nothing can consume such an event yet, so it
+    // is dropped; the next `refreshBus` restores emission.
+    const { api, predecessor } = install();
     const receiver = makeReceiver();
-    api.refreshBus({
+    const stale = {
       events: {
         emit: () => {
           throw new Error("This extension ctx is stale.");
         },
       },
-    } as never);
+    } as never;
+    api.refreshBus(stale);
 
-    expect(() => input(receiver, "\x1b[<0;3;6M")).toThrow(
-      "This extension ctx is stale.",
-    );
+    expect(() => input(receiver, "\x1b[<0;3;6M")).not.toThrow();
+    // The event still fell through to the built-in handling; only the bus
+    // emission is skipped.
+    expect(predecessor).toHaveBeenCalledTimes(1);
+
+    // A dead handle is not retried on every subsequent event either.
+    expect(() => input(receiver, "\x1b[<0;3;6M")).not.toThrow();
+
+    // The entry point's refreshBus clears the refusal, so emission resumes.
+    const fresh = makePi();
+    api.refreshBus(fresh.pi);
+    input(receiver, "\x1b[<0;3;6M");
+    expect(fresh.emitted).toHaveLength(1);
+    expect(fresh.emitted[0]?.channel).toBe(MOUSE_EVENT_CHANNEL);
   });
 });
 

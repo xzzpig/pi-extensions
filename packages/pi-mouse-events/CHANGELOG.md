@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.1.3] — 2026-09-24
+
+### Fixed
+
+- **Mouse events can no longer crash pi during a session replacement.** pi
+  disposes the old session — invalidating its extension runtime — _before_ it
+  builds the replacement runtime, and only that build re-runs extension
+  factories. The 0.1.1 fix moved the bus handle on each factory run, but the
+  prototype input wrapper is process-wide and the input path stays live across
+  that gap, so a mouse report delivered between invalidation and the next
+  factory run still reached the dead handle. Because the call happens inside
+  an input callback, the throw surfaced as an `uncaughtException` that
+  terminated pi (`pi exiting due to uncaughtException: Error: This extension
+ctx is stale after session replacement or reload`, via
+  `patchedViewportInput`). Emission now drops the event when the bus refuses
+  it and remembers the refusal instead of retrying it, so dispatch, handler
+  slots, and the built-in fall-through are untouched. There is no live bus to
+  reach for in that window (`refreshBus` runs before `session_start`), and
+  emission resumes with the next factory run — verified against pi 0.85.1 in
+  a real TUI: 80 wheel reports during a widened replacement window, no crash,
+  and bus events observed again afterwards.
+
 ## [0.1.2] — 2026-09-19
 
 ### Added

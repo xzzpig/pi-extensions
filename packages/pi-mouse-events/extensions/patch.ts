@@ -131,17 +131,39 @@ export function installMousePatches(
   // state without waiting for a mouse event.
   let live: MouseReceiver | undefined;
 
-  // The event-bus handle for emission. pi invalidates a session's extension
-  // runtime the moment that session is replaced — `pi.events.emit` on a stale
-  // handle throws — and the patches here outlive sessions, so the handle is
-  // refreshed by the entry point on every factory run (one per session).
-  // Deliberately no guard: emission uses whatever handle is current, and a
-  // throw is a real contract violation that propagates.
+  // The event-bus handle for emission, plus whether pi has already refused it.
+  // pi invalidates a session's extension runtime the moment that session is
+  // replaced — `pi.events.emit` on a stale handle throws — and the patches
+  // here outlive sessions, so the handle is refreshed by the entry point on
+  // every factory run (one per session).
   let bus: ExtensionAPI | undefined = pi;
+  let busInvalid = false;
 
   const emit = (event: MouseDispatchEvent): void => {
-    // The bus wraps handlers against throwing; emit is fire and forget.
-    bus!.events.emit(MOUSE_EVENT_CHANNEL, event);
+    // Session replacement leaves a window in which the previous runtime is
+    // already invalidated while the replacement's factories have not run yet:
+    // pi disposes the old session first and only then builds the new runtime,
+    // which re-runs extension factories (`refreshBus`). This wrapper is
+    // process-wide and the input path stays live throughout, so a mouse report
+    // delivered in that window reached the dead handle — and because the call
+    // sits inside an input callback, the throw surfaced as an
+    // uncaughtException that terminated pi (a later event would fail the same
+    // way, since nothing could clear the dead handle).
+    //
+    // No live bus exists to reach for in that window: the replacement session
+    // has no runtime yet, and `refreshBus` runs before `session_start`. The
+    // event is therefore dropped — it is observability, no consumer can act on
+    // it before the next factory run, and dropping it keeps dispatch itself
+    // intact: components and handlers have already run, and the built-in
+    // fall-through is unaffected. A refusal is remembered rather than retried,
+    // and an invalid handle is replaced by the next `refreshBus`.
+    if (busInvalid || !bus) return;
+    try {
+      // The bus wraps handlers against throwing; emit is fire and forget.
+      bus.events.emit(MOUSE_EVENT_CHANNEL, event);
+    } catch {
+      busInvalid = true;
+    }
   };
 
   const target = prototype as Record<string, unknown>;
@@ -163,11 +185,18 @@ export function installMousePatches(
     data: string,
     ...rest: unknown[]
   ): { consume: boolean } | undefined {
+    // SAFETY: the wrapper is installed on TuiAltScreen.prototype and is always
+    // invoked as a method of a TuiAltScreen instance, so `this` is the
+    // renderer whose state `MouseReceiver` describes.
     const receiver = this as unknown as MouseReceiver;
     live = receiver;
     const event = parseMouseEventWith(receiver, data);
     if (!event) {
       // Keystrokes, focus reports, paste — nothing to do with the mouse.
+      // Forwarding to the method this wrapper replaced on a shared prototype:
+      // a direct call or `.apply` would dispatch through a possibly shadowed
+      // own `apply`, changing the semantics of every keystroke path.
+      // pi-lens-ignore: no-reflect-apply
       return Reflect.apply(originalViewportInput, this, [data, ...rest]) as
         | { consume: boolean }
         | undefined;
@@ -188,6 +217,7 @@ export function installMousePatches(
 
     emit({ ...event, handled, dispatched });
     if (handled) return { consume: true };
+    // pi-lens-ignore: no-reflect-apply
     return Reflect.apply(originalViewportInput, this, [data, ...rest]) as
       | { consume: boolean }
       | undefined;
@@ -203,8 +233,13 @@ export function installMousePatches(
       this: unknown,
       ...args: unknown[]
     ): unknown {
+      // SAFETY: as above — copyActiveSelectionToClipboard is a TuiAltScreen
+      // method, so `this` is the live renderer.
       live = this as unknown as MouseReceiver;
       if (runCopyHandlersInPriorityOrder(core.copyHandlers, this)) return true;
+      // Same forwarding as above; the original is async, so the promise it
+      // returns is passed through untouched.
+      // pi-lens-ignore: no-reflect-apply
       return Reflect.apply(originalCopy!, this, args);
     };
     target.copyActiveSelectionToClipboard = patchedCopy;
@@ -218,6 +253,7 @@ export function installMousePatches(
       },
       refreshBus(next) {
         bus = next;
+        busInvalid = false;
       },
       addMouseHandler(handler, options) {
         const id = core.nextHandlerId++;
@@ -263,6 +299,7 @@ export function installMousePatches(
       core.copyHandlers = [];
       live = undefined;
       bus = undefined;
+      busInvalid = false;
     },
   };
 }

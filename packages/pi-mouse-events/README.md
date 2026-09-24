@@ -28,7 +28,12 @@ extension, and adds an integration surface PR did not have.
   (`/new`, fork, switch, reload) and drops that session's bus subscriptions,
   so subscribe from a `session_start` handler — pi re-runs extension
   factories on every session replacement, which is also how this extension
-  keeps its own emission pointed at the live session's bus.
+  keeps its own emission pointed at the live session's bus. That replacement
+  is not instantaneous, and the input path stays live throughout it, so a
+  mouse event arriving before the replacement's runtime exists has no bus to
+  reach: it is dispatched as usual but its bus emission is dropped rather
+  than allowed to throw out of the input loop and terminate pi. Emission
+  resumes with the next factory run.
 - **Handler slots** — `getMouseEventsApi()` returns a process-global API
   (v1 contract):
   - `addMouseHandler(handler, { priority })` — runs when no component handled
