@@ -66,7 +66,6 @@ Only use "approved" when every explicit requirement is genuinely satisfied.`,
 	inheritSkills: false,
 	defaultContext: "fresh",
 	acceptanceRole: "read-only",
-	completionGuard: false,
 };
 
 /**

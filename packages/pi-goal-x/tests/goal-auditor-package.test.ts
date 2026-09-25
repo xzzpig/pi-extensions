@@ -103,7 +103,6 @@ test("D-05/D-12: default auditor definition keeps the audit wiring code-owned", 
 	assert.equal(DEFAULT_AUDITOR_DEFINITION.inheritSkills, false);
 	assert.equal(DEFAULT_AUDITOR_DEFINITION.defaultContext, "fresh");
 	assert.equal(DEFAULT_AUDITOR_DEFINITION.acceptanceRole, "read-only");
-	assert.equal(DEFAULT_AUDITOR_DEFINITION.completionGuard, false);
 	assert.equal(DEFAULT_AUDITOR_DEFINITION.subagentOnlyExtensions?.length, 1);
 	assert.ok(
 		DEFAULT_AUDITOR_DEFINITION.subagentOnlyExtensions?.[0]?.endsWith(path.join("extensions", "goal-auditor-progress.ts")),
