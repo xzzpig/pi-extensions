@@ -197,7 +197,7 @@ const BTW_CONTINUE_THREAD_USER_TEXT = "[The following is a separate side convers
 const BTW_CONTINUE_THREAD_ASSISTANT_TEXT = "Understood, continuing our side conversation.";
 
 type SessionThinkingLevel = "off" | AiThinkingLevel;
-type BtwThreadMode = "contextual" | "tangent";
+type BtwThreadMode = "contextual" | "tangent" | "readonly";
 type SessionModel = NonNullable<ExtensionCommandContext["model"]>;
 /**
  * Loose model reference parsed from `/btw:model <provider> <id> <api>` and persisted to
@@ -442,6 +442,17 @@ function formatModelRef(model: Pick<SessionModel, "provider" | "id" | "api">): s
   return `${model.provider}/${model.id} (${model.api})`;
 }
 
+/**
+ * Tool surfaces keyed by BTW mode. Read-only mode exposes only pi's built-in
+ * read-only tools so the child session cannot mutate the workspace; every other
+ * mode matches pi's default coding-agent toolset (read/bash/edit/write).
+ */
+const BTW_TOOLS_BY_MODE: Record<BtwThreadMode, readonly string[]> = {
+  contextual: ["read", "bash", "edit", "write"],
+  tangent: ["read", "bash", "edit", "write"],
+  readonly: ["read", "grep", "find", "ls"],
+};
+
 function buildBtwSeedState(
   ctx: ExtensionCommandContext,
   thread: BtwDetails[],
@@ -450,7 +461,7 @@ function buildBtwSeedState(
 ): { messages: Message[]; sideThreadStartIndex: number } {
   const messages: Message[] = [];
 
-  if (mode === "contextual") {
+  if (mode === "contextual" || mode === "readonly") {
     try {
       messages.push(
         ...(buildSessionContext(ctx.sessionManager.getEntries(), ctx.sessionManager.getLeafId()).messages as Message[]).filter(
@@ -881,7 +892,7 @@ function canRenderBtwOverlay(ctx: ExtensionContext | ExtensionCommandContext): b
 
 function notifyInlineQuestionRequired(
   ctx: ExtensionCommandContext,
-  command: "/btw" | "/btw:tangent" | "/btw:new",
+  command: "/btw" | "/btw:tangent" | "/btw:new" | "/btw:ask",
 ): void {
   notify(ctx, `${command} cannot open its composer outside Pi's TUI. Pass the question inline instead.`, "warning");
 }
@@ -896,7 +907,13 @@ function notify(ctx: ExtensionContext | ExtensionCommandContext, message: string
 const BTW_OVERLAY_CHROME_LINES = 9;
 
 function getOverlayTitle(mode: BtwThreadMode): string {
-  return mode === "tangent" ? "BTW tangent" : "BTW";
+  if (mode === "tangent") {
+    return "BTW tangent";
+  }
+  if (mode === "readonly") {
+    return "BTW ask · read-only";
+  }
+  return "BTW";
 }
 
 class BtwOverlayComponent extends Container implements Focusable {
@@ -1630,22 +1647,25 @@ export default function (pi: ExtensionAPI) {
     }
 
     const modelRuntimeOptions = await createBtwModelRuntimeOptions(ctx, settings.model);
+    const sessionManager = SessionManager.inMemory();
+    const { messages: seedMessages, sideThreadStartIndex } = buildBtwSeedState(ctx, pendingThread, mode, settings.model);
+
+    // The session manager is the source of provider context. Seed it before
+    // creating the AgentSession so its initial context includes these messages.
+    for (const message of seedMessages) {
+      sessionManager.appendMessage(message);
+    }
 
     const sessionOptions: CreateAgentSessionOptions = {
-      sessionManager: SessionManager.inMemory(),
+      sessionManager,
       model: settings.model,
       thinkingLevel: settings.thinkingLevel,
-      // Match pi's default coding-agent toolset (read/bash/edit/write).
-      tools: ["read", "bash", "edit", "write"],
+      // Read-only mode narrows this to pi's built-in read-only toolset.
+      tools: [...BTW_TOOLS_BY_MODE[mode]],
       resourceLoader: createBtwResourceLoader(ctx),
       ...modelRuntimeOptions,
     };
     const { session } = await createAgentSession(sessionOptions);
-
-    const { messages: seedMessages, sideThreadStartIndex } = buildBtwSeedState(ctx, pendingThread, mode, settings.model);
-    if (seedMessages.length > 0) {
-      session.agent.state.messages = seedMessages as typeof session.state.messages;
-    }
 
     return { session, mode, subscriptions: new Set(), sideThreadStartIndex, promptQueue: Promise.resolve() };
   }
@@ -1815,6 +1835,29 @@ export default function (pi: ExtensionAPI) {
       return true;
     }
 
+    if (name === "btw:ask") {
+      const { question, save } = parseBtwArgs(trimmedArgs);
+      if (!question && !canRenderBtwOverlay(ctx)) {
+        notifyInlineQuestionRequired(ctx, "/btw:ask");
+        return true;
+      }
+
+      // Read-only mode is a distinct capability boundary, so switching into it
+      // resets the thread and lets ensureBtwSession recreate the child session.
+      if (pendingMode !== "readonly") {
+        await resetThread(ctx, true, "readonly");
+      }
+
+      if (!question) {
+        await ensureBtwSession(ctx, "readonly");
+        await ensureOverlay(ctx);
+        return true;
+      }
+
+      await runBtw(ctx, question, save, "readonly");
+      return true;
+    }
+
     if (name === "btw:new") {
       const { question, save } = parseBtwArgs(trimmedArgs);
       if (!question && !canRenderBtwOverlay(ctx)) {
@@ -1951,7 +1994,7 @@ export default function (pi: ExtensionAPI) {
 
   function parseOverlayBtwCommand(value: string): { name: string; args: string } | null {
     const trimmed = value.trim();
-    const match = trimmed.match(/^\/(btw:(?:new|tangent|clear|inject|summarize|model|thinking))(?:\s+(.*))?$/);
+    const match = trimmed.match(/^\/(btw:(?:new|ask|tangent|clear|inject|summarize|model|thinking))(?:\s+(.*))?$/);
     if (!match) {
       return null;
     }
@@ -2434,10 +2477,24 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  pi.registerCommand("side", {
+    description: "Alias for /btw: continue a side conversation in a focused BTW modal.",
+    handler: async (args, ctx) => {
+      await dispatchBtwCommand("btw", args, ctx);
+    },
+  });
+
   pi.registerCommand("btw:tangent", {
     description: "Start or continue a contextless BTW tangent in the focused BTW modal.",
     handler: async (args, ctx) => {
       await dispatchBtwCommand("btw:tangent", args, ctx);
+    },
+  });
+
+  pi.registerCommand("btw:ask", {
+    description: "Ask a read-only side question: inherits main-session context but exposes only read/grep/find/ls tools.",
+    handler: async (args, ctx) => {
+      await dispatchBtwCommand("btw:ask", args, ctx);
     },
   });
 

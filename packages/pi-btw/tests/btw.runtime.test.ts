@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, RegisteredCommand } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -19,7 +22,17 @@ const {
 } = vi.hoisted(() => ({
   promptStreamMock: vi.fn(),
   createAgentSessionMock: vi.fn(),
-  sessionManagerInMemoryMock: vi.fn(() => ({ type: "in-memory-session" })),
+  sessionManagerInMemoryMock: vi.fn(() => {
+    const messages: any[] = [];
+    return {
+      type: "in-memory-session",
+      appendMessage: vi.fn((message: any) => {
+        messages.push(structuredClone(message));
+        return `entry-${messages.length}`;
+      }),
+      buildSessionContext: vi.fn(() => ({ messages: messages.map((message) => structuredClone(message)) })),
+    };
+  }),
   modelRuntimeExport: {} as { create: ReturnType<typeof vi.fn> },
   modelRuntimeCreateMock: vi.fn(),
   modelRuntimeRecords: [] as Array<{
@@ -362,8 +375,10 @@ function buildMockSystemPrompt(options: any): string {
 
 function createMockAgentSession(options: any) {
   const listeners = new Set<(event: any) => void>();
-  let seedMessages: any[] = [];
-  let stateMessages: any[] = [];
+  const seedMessages: any[] = (options.sessionManager?.buildSessionContext?.().messages ?? []).map((message: any) =>
+    structuredClone(message),
+  );
+  let stateMessages: any[] = seedMessages.map((message: any) => structuredClone(message));
   let isStreaming = false;
 
   const emit = (event: any) => {
@@ -387,11 +402,6 @@ function createMockAgentSession(options: any) {
       state: {
         get messages() {
           return stateMessages;
-        },
-        set messages(messages: any[]) {
-          seedMessages = messages.map((message) => structuredClone(message));
-          stateMessages = seedMessages.map((message) => structuredClone(message));
-          record.seedMessages = seedMessages;
         },
       },
     },
@@ -915,6 +925,23 @@ describe("btw runtime behavior", () => {
     expect(subSession.prompt).toHaveBeenCalledWith("first question", { source: "extension" });
   });
 
+  it("treats /side as an alias for /btw on the same contextual sub-session", async () => {
+    const harness = createHarness();
+
+    await harness.runSessionStart();
+    await harness.command("side", "first question");
+    await harness.command("btw", "follow-up question");
+
+    expect(createAgentSessionMock).toHaveBeenCalledTimes(1);
+    const options = createAgentSessionMock.mock.calls[0][0];
+    expect(options.tools).toEqual(["read", "bash", "edit", "write"]);
+
+    const subSession = subSessionRecords[0]?.session;
+    expect(subSession.prompt).toHaveBeenNthCalledWith(1, "first question", { source: "extension" });
+    expect(subSession.prompt).toHaveBeenNthCalledWith(2, "follow-up question", { source: "extension" });
+    expect(getCustomEntries(harness.entries, "btw-thread-entry")).toHaveLength(2);
+  });
+
   it("accepts configured keyless auth for normal BTW prompts", async () => {
     const harness = createHarness();
     harness.setAuthResolver(() => ({ ok: true }));
@@ -1264,7 +1291,6 @@ describe("btw runtime behavior", () => {
     const record = subSessionRecords[0];
     const seedTexts = record.seedMessages.map((message) => (message.content[0] as any)?.text ?? "");
     const promptTexts = record.promptCalls[0].context.messages.map((message) => (message.content[0] as any)?.text ?? "");
-
     expect(seedTexts).toEqual(["main session task", "main session answer", CONTEXTUAL_BTW_BOUNDARY_PROMPT]);
     expect(promptTexts).toEqual([
       "main session task",
@@ -1273,6 +1299,9 @@ describe("btw runtime behavior", () => {
       "contextual start",
     ]);
     expect(seedTexts).not.toContain("saved btw note");
+    expect(record.options.sessionManager.appendMessage).toHaveBeenCalledTimes(3);
+    expect(promptTexts).toContain("main session task");
+    expect(promptTexts).toContain("main session answer");
   });
 
   it("keeps the contextual boundary prompt to one message across BTW follow-ups", async () => {
@@ -1324,6 +1353,184 @@ describe("btw runtime behavior", () => {
     expect(tangentRecord.seedMessages.map((message) => (message.content[0] as any)?.text ?? "")).not.toContain(
       CONTEXTUAL_BTW_BOUNDARY_PROMPT,
     );
+    expect(
+      tangentRecord.promptCalls[0].context.messages.map((message) => (message.content[0] as any)?.text ?? ""),
+    ).not.toContain("main session task");
+  });
+
+  it("/btw:ask creates a read-only sub-session with only pi's read-only tools", async () => {
+    const harness = createHarness();
+
+    await harness.runSessionStart();
+    await harness.command("btw:ask", "read-only question");
+
+    expect(createAgentSessionMock).toHaveBeenCalledTimes(1);
+    const options = createAgentSessionMock.mock.calls[0][0];
+    expect(options.tools).toEqual(["read", "grep", "find", "ls"]);
+    expect(options.tools).not.toContain("bash");
+    expect(options.tools).not.toContain("edit");
+    expect(options.tools).not.toContain("write");
+
+    const record = subSessionRecords[0];
+    expect(record.session.getActiveToolNames()).toEqual(["read", "grep", "find", "ls"]);
+    expect(record.session.prompt).toHaveBeenCalledWith("read-only question", { source: "extension" });
+
+    const overlay = harness.latestOverlayComponent();
+    expect(overlay["modeText"].text).toContain("read-only");
+    expect(getCustomEntries(harness.entries, "btw-thread-reset").at(-1)?.data).toMatchObject({ mode: "readonly" });
+  });
+
+  it("/btw:ask seeds the read-only sub-session with main-session context like /btw", async () => {
+    // Pre-seed a read-only reset so /btw:ask continues the thread instead of
+    // resetting; the trailing main-session message is what buildBtwSeedState copies.
+    const harness = createHarness([
+      { type: "custom", customType: "btw-thread-reset", data: { timestamp: 1, mode: "readonly" } } as SessionEntry,
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "text", text: "main session task" }],
+        timestamp: Date.now(),
+      } as SessionEntry,
+    ]);
+
+    await harness.runSessionStart();
+    await harness.command("btw:ask", "read-only question");
+
+    const record = subSessionRecords[0];
+    expect(record.options.tools).toEqual(["read", "grep", "find", "ls"]);
+    expect(record.seedMessages.map((message) => (message.content[0] as any)?.text ?? "")).toContain("main session task");
+    expect(record.promptCalls[0].context.messages.map((message) => (message.content[0] as any)?.text ?? "")).toContain(
+      "main session task",
+    );
+  });
+
+  it("keeps the read-only tool surface for modal follow-ups in one /btw:ask thread", async () => {
+    const harness = createHarness();
+    promptStreamMock
+      .mockImplementationOnce(() => streamAnswer("First answer"))
+      .mockImplementationOnce(() => streamAnswer("Second answer"));
+
+    await harness.runSessionStart();
+    await harness.command("btw:ask", "first read-only question");
+
+    const overlay = harness.latestOverlayComponent();
+    overlay.input.onSubmit?.("follow-up read-only question");
+    await flushAsyncWork();
+
+    expect(createAgentSessionMock).toHaveBeenCalledTimes(1);
+    const record = subSessionRecords[0];
+    expect(record.options.tools).toEqual(["read", "grep", "find", "ls"]);
+    expect(record.session.getActiveToolNames()).toEqual(["read", "grep", "find", "ls"]);
+    expect(record.session.prompt).toHaveBeenLastCalledWith("follow-up read-only question", { source: "extension" });
+    expect(getCustomEntries(harness.entries, "btw-thread-entry")).toHaveLength(2);
+  });
+
+  it("disposes and recreates the sub-session when switching between contextual, read-only, and tangent modes", async () => {
+    const harness = createHarness();
+    promptStreamMock.mockImplementation(() => streamAnswer("mode answer"));
+
+    await harness.runSessionStart();
+    await harness.command("btw", "contextual start");
+    await harness.command("btw:ask", "read-only start");
+    await harness.command("btw", "contextual again");
+    await harness.command("btw:tangent", "tangent start");
+
+    expect(createAgentSessionMock).toHaveBeenCalledTimes(4);
+    const records = subSessionRecords.slice(0, 4);
+    expect(records.map((record) => record.options.tools)).toEqual([
+      ["read", "bash", "edit", "write"],
+      ["read", "grep", "find", "ls"],
+      ["read", "bash", "edit", "write"],
+      ["read", "bash", "edit", "write"],
+    ]);
+
+    for (const record of records.slice(0, 3)) {
+      expect(record.session.abort).toHaveBeenCalledTimes(1);
+      expect(record.session.dispose).toHaveBeenCalledTimes(1);
+    }
+    expect(records[3].session.dispose).not.toHaveBeenCalled();
+
+    const overlay = harness.latestOverlayComponent();
+    expect(overlay["modeText"].text).toContain("BTW tangent");
+    const resets = getCustomEntries(harness.entries, "btw-thread-reset");
+    expect(resets.map((entry) => (entry.data as any)?.mode)).toEqual(["readonly", "contextual", "tangent"]);
+  });
+
+  it("persists the read-only mode and restores it across a reload", async () => {
+    const firstHarness = createHarness();
+    promptStreamMock.mockImplementation(() => streamAnswer("read-only answer"));
+
+    await firstHarness.runSessionStart();
+    await firstHarness.command("btw:ask", "read-only question");
+
+    expect(getCustomEntries(firstHarness.entries, "btw-thread-reset").at(-1)?.data).toMatchObject({ mode: "readonly" });
+
+    const restoredHarness = createHarness(firstHarness.entries);
+    await restoredHarness.runEvent("session_start");
+    await restoredHarness.command("btw:ask", "");
+
+    const overlay = restoredHarness.latestOverlayComponent();
+    expect(overlay["modeText"].text).toContain("read-only");
+    expect(transcriptText(overlay)).toContain("read-only question");
+    expect(createAgentSessionMock.mock.calls.at(-1)?.[0].tools).toEqual(["read", "grep", "find", "ls"]);
+    expect(getCustomEntries(restoredHarness.entries, "btw-thread-reset")).toHaveLength(1);
+  });
+
+  it("supports --save on /btw:ask while keeping the read-only tool surface", async () => {
+    const harness = createHarness();
+    promptStreamMock.mockImplementation(() => streamAnswer("Saved answer"));
+
+    await harness.runSessionStart();
+    await harness.command("btw:ask", "--save saved read-only question");
+
+    expect(harness.sentMessages).toHaveLength(1);
+    expect(harness.sentMessages[0]).toEqual({
+      message: expect.objectContaining({
+        customType: "btw-note",
+        content: "**Question**\n\nsaved read-only question\n\n**Answer**\n\nSaved answer",
+      }),
+      options: undefined,
+    });
+    expect(subSessionRecords[0].options.tools).toEqual(["read", "grep", "find", "ls"]);
+    expect(getCustomEntries(harness.entries, "btw-thread-entry")).toHaveLength(1);
+  });
+
+  it("opens a read-only composer from a composer-only /btw:ask", async () => {
+    const harness = createHarness();
+
+    await harness.runSessionStart();
+    await harness.command("btw:ask", "");
+
+    expect(harness.overlays).toHaveLength(1);
+    const overlay = harness.latestOverlayComponent();
+    expect(overlay["modeText"].text).toContain("read-only");
+    expect(createAgentSessionMock.mock.calls.at(-1)?.[0].tools).toEqual(["read", "grep", "find", "ls"]);
+    const resets = getCustomEntries(harness.entries, "btw-thread-reset");
+    expect(resets).toHaveLength(1);
+    expect(resets.at(-1)?.data).toMatchObject({ mode: "readonly" });
+  });
+
+  it("in-modal /btw:ask reuses command semantics and switches the thread to read-only", async () => {
+    const harness = createHarness();
+    promptStreamMock
+      .mockImplementationOnce(() => streamAnswer("First answer"))
+      .mockImplementationOnce(() => streamAnswer("Read-only answer"));
+
+    await harness.runSessionStart();
+    await harness.command("btw", "first question");
+
+    const overlay = harness.latestOverlayComponent();
+    overlay.input.onSubmit?.("/btw:ask read-only follow-up");
+    await flushAsyncWork();
+
+    const resets = getCustomEntries(harness.entries, "btw-thread-reset");
+    expect(resets).toHaveLength(1);
+    expect(resets.at(-1)?.data).toMatchObject({ mode: "readonly" });
+    expect(subSessionRecords.at(-1)?.options.tools).toEqual(["read", "grep", "find", "ls"]);
+    expect(overlay["modeText"].text).toContain("read-only");
+    const transcript = transcriptText(overlay);
+    expect(transcript).toContain("read-only follow-up");
+    expect(transcript).not.toContain("first question");
   });
 
   it("preserves BTW overlay recoverability after agent prompt failure", async () => {
@@ -2509,14 +2716,25 @@ describe("btw runtime behavior", () => {
   });
 
   it("/btw:new appends a reset marker, disposes the old sub-session, clears prior hidden thread state, stays contextual, and reopens a fresh thread", async () => {
-    const harness = createHarness();
+    const harness = createHarness([
+      {
+        id: "leaf",
+        type: "message",
+        role: "user",
+        content: [{ type: "text", text: "main session task" }],
+        timestamp: Date.now(),
+      } as SessionEntry,
+    ]);
     promptStreamMock
       .mockImplementationOnce((_record: unknown, _text: string, context: StreamContext) => {
-        expect(context.messages.map((message) => (message.content[0] as any)?.text ?? "")).toContain("first question");
+        const texts = context.messages.map((message) => (message.content[0] as any)?.text ?? "");
+        expect(texts).toContain("main session task");
+        expect(texts).toContain("first question");
         return streamAnswer("First answer");
       })
       .mockImplementationOnce((_record: unknown, _text: string, context: StreamContext) => {
         const texts = context.messages.map((message) => (message.content[0] as any)?.text ?? "");
+        expect(texts).toContain("main session task");
         expect(texts).not.toContain("first question");
         expect(texts).not.toContain("First answer");
         expect(texts).toContain("replacement question");
@@ -3191,3 +3409,52 @@ describe("configurable BTW focus shortcuts", () => {
   });
 });
 
+describe("Pi SessionManager context integration", () => {
+  it("initializes AgentSession messages from the child SessionManager", async () => {
+    const {
+      createAgentSession: createActualAgentSession,
+      createExtensionRuntime,
+      SessionManager: ActualSessionManager,
+    } = await vi.importActual<typeof import("@earendil-works/pi-coding-agent")>("@earendil-works/pi-coding-agent");
+    const agentDir = await mkdtemp(join(tmpdir(), "pi-btw-agent-test-"));
+    const sessionManager = ActualSessionManager.inMemory(process.cwd());
+    const seedMessage = {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "inherited main-session context" }],
+      timestamp: Date.now(),
+    };
+    sessionManager.appendMessage(seedMessage);
+
+    const runtime = createExtensionRuntime();
+    const resourceLoader = {
+      getExtensions: () => ({ extensions: [], errors: [], runtime }),
+      getSkills: () => ({ skills: [], diagnostics: [] }),
+      getPrompts: () => ({ prompts: [], diagnostics: [] }),
+      getThemes: () => ({ themes: [], diagnostics: [] }),
+      getAgentsFiles: () => ({ agentsFiles: [] }),
+      getSystemPrompt: () => "",
+      getSystemPromptSource: () => undefined,
+      getAppendSystemPrompt: () => [],
+      getAppendSystemPromptSources: () => [],
+      extendResources: () => {},
+      reload: async () => {},
+    };
+
+    let disposeSession: (() => void | Promise<void>) | undefined;
+    try {
+      const { session } = await createActualAgentSession({
+        agentDir,
+        sessionManager,
+        resourceLoader: resourceLoader as any,
+        tools: [],
+        noTools: "all",
+      });
+      disposeSession = () => session.dispose();
+
+      expect(session.state.messages).toEqual([seedMessage]);
+    } finally {
+      await disposeSession?.();
+      await rm(agentDir, { recursive: true, force: true });
+    }
+  });
+});

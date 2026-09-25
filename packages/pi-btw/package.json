@@ -1,6 +1,6 @@
 {
   "name": "@xzzpig/pi-btw",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "A pi extension for parallel side conversations with /btw",
   "type": "module",
   "dependencies": {
@@ -52,6 +52,7 @@
     "@earendil-works/pi-tui": ">=0.83.0 <1"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "0.83.0",
     "@earendil-works/pi-coding-agent": "catalog:",
     "@earendil-works/pi-tui": "catalog:",
     "@types/node": "catalog:",
