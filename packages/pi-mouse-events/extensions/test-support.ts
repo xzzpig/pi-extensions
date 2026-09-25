@@ -12,7 +12,6 @@
  */
 
 import type { CopyHandler, MouseDispatchEvent, MouseHandler } from "../api.ts";
-import { dispatchMouseEvent } from "./dispatch.ts";
 
 export interface MouseHandlerEntryLike {
   id: number;
@@ -46,7 +45,7 @@ export function runMouseHandlersInPriorityOrder(
     let result: { handled?: boolean } | undefined | void;
     try {
       result = entry.handler({
-        event: { ...event, handled: false, dispatched: undefined },
+        event: { ...event, handled: false },
         tui: tui as never,
       });
     } catch (error) {
@@ -80,5 +79,3 @@ export function runCopyHandlersInPriorityOrder(
   }
   return false;
 }
-
-export { dispatchMouseEvent };

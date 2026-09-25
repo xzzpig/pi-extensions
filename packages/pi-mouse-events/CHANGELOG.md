@@ -1,5 +1,66 @@
 # Changelog
 
+## [0.2.0] — 2026-09-24
+
+### Breaking
+
+- **The `onMouse` component hook is gone; component clicks are Pi's native
+  `handleMouse`.** Pi-tui 0.85.0 made `Component.handleMouse` and
+  `MouseRegion` public, and the renderer dispatches them itself, so this
+  package's own component-dispatch layer (`extensions/dispatch.ts`, the
+  `Component` module augmentation, the overlay/layout target resolution it
+  needed) was a second, competing contract for the same job. It is removed:
+  a component that wants its own clicks implements `handleMouse`, and
+  `MouseRegion` is what makes a whole block clickable. Nothing in this repo's
+  packages implemented `onMouse`, so no consumer loses behavior — the hook was
+  already unused.
+- **Contract version 2, under a new key.** `MouseEventsApi.version` is `2` and
+  the API is published at `Symbol.for("pi-mouse-events.api.v2")` instead of
+  `…api.v1`. `api.ts` promises that fields are not removed or reshaped within
+  a major version, and `MouseDispatchEvent.dispatched` — the component a
+  dispatch consumed — no longer exists, so the key advances with the shape:
+  a consumer reading the old key gets `undefined` and its existing
+  `version` check reports "unavailable" rather than half-reading a new shape.
+- **Pi 0.86.0 or newer.** The peer range is now `>=0.86.0 <0.88` (was
+  `>=0.84.2 <0.85`) for both `@earendil-works/pi-coding-agent` and
+  `@earendil-works/pi-tui`. Pi 0.84.x/0.85.x cannot satisfy the peer range and
+  lack the component gesture state the restore path below relies on.
+
+### Added
+
+- **Pi's gesture and selection state is restored after a consumed release.**
+  The click protocol this package serves never consumes the press (Pi's
+  selection machinery anchors on it) but does consume the release — and the
+  release branch is where Pi clears the state its press branch armed. Without
+  the restore, a consumed release left `selectionPressActive` / `selectionAnchor`
+  (and the component gesture fields) stale, so the next motion report looked
+  like a drag and a selection survived that the user never made. Both reset
+  methods are called when present, with a direct field reset as the backstop
+  for a build that renamed them. Measured in a real TUI: with the fix a
+  consumed release leaves `selectionPressActive=false` / `selectionAnchor=undefined`,
+  matching the no-extension baseline. A consumer that consumes releases —
+  pi-starline's transcript click routing is the one in this repo — gets this
+  without any change of its own: the restore happens in the patch layer, below
+  the handler that returned `{ handled: true }`.
+- **`clearComponentMouseGesture` and `clearTextSelection` are pinned by the
+  contract tests**, so a pi-tui release that moves them goes red here instead
+  of silently leaving gestures unrestored.
+
+### Changed
+
+- **`addMouseHandler` runs on every parsed mouse event** rather than only when
+  no component took it (there is no component dispatch to take it first), and
+  the bus payload's `handled` reports only this extension's decision: an event
+  it left unconsumed continues into Pi's built-ins — including the
+  component-level `handleMouse` dispatch — which this package does not
+  observe. `handled: false` therefore never means "nothing handled it".
+- `hitTest`, `parseMouseEvent`, `isMouseSequence`, `addCopyHandler`,
+  `liveReceiver`, and `refreshBus` are unchanged.
+- The README now documents the two-layer model (native `handleMouse`/
+  `MouseRegion` for a component's own box, `addMouseHandler` for decisions
+  that must see every event) instead of presenting `onMouse` as the
+  component-side entry point.
+
 ## [0.1.3] — 2026-09-24
 
 ### Fixed

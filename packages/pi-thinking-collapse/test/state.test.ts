@@ -27,6 +27,24 @@ function like(component: AssistantMessageComponent): AssistantMessageLike {
   return component as unknown as AssistantMessageLike;
 }
 
+/**
+ * Pi's per-run thinking visibility overrides, written by the renderer's own
+ * `MouseRegion` click handler (`set(runIndex, !hidden)`). A TS-private field
+ * that exists at runtime — the state the native click path owns, which this
+ * package's removed click handler used to duplicate.
+ */
+function overridesOf(
+  component: AssistantMessageComponent,
+): Map<number, boolean> {
+  // SAFETY: `AssistantMessageComponent` stores this as a plain instance field
+  // (TS `private` is erased in the compiled output), as pi-tui >= 0.85 does.
+  return (
+    component as unknown as {
+      thinkingVisibilityOverrides: Map<number, boolean>;
+    }
+  ).thinkingVisibilityOverrides;
+}
+
 function stripped(component: AssistantMessageComponent, width = 80): string[] {
   return component.render(width).map(stripTerminalSequences);
 }
@@ -75,37 +93,7 @@ describe("thinking collapse state machine", () => {
     expect(lines).toContain("done");
   });
 
-  test("click toggle pins a message expanded and back", () => {
-    const message = assistantMessage("checking files", "done");
-    const component = new AssistantMessageComponent(
-      undefined,
-      false,
-      getMarkdownTheme(),
-    );
-    component.updateContent(message as never, true);
-    component.updateContent(message as never, false);
-
-    expect(controller.toggle(like(component))).toBe(true);
-    expect(stripped(component).join("\n")).toContain("checking files");
-
-    expect(controller.toggle(like(component))).toBe(true);
-    expect(stripped(component).join("\n")).not.toContain("checking files");
-  });
-
-  test("click is ignored while the message is still streaming", () => {
-    const message = assistantMessage("checking files", "done");
-    const component = new AssistantMessageComponent(
-      undefined,
-      false,
-      getMarkdownTheme(),
-    );
-    component.updateContent(message as never, true);
-
-    expect(controller.toggle(like(component))).toBe(false);
-    expect(stripped(component).join("\n")).toContain("checking files");
-  });
-
-  test("global hide (ctrl+t) wins over streaming and pins", () => {
+  test("global hide (ctrl+t) wins over streaming", () => {
     const message = assistantMessage("checking files", "done");
     const component = new AssistantMessageComponent(
       undefined,
@@ -119,9 +107,6 @@ describe("thinking collapse state machine", () => {
     expect(like(component).hideThinkingBlock).toBe(true);
     expect(stripped(component).join("\n")).not.toContain("checking files");
 
-    // Click cannot override the global toggle either.
-    expect(controller.toggle(like(component))).toBe(false);
-
     // Clearing the global toggle restores auto behavior: collapsed when done.
     component.setHideThinkingBlock(false);
     component.updateContent(message as never, false);
@@ -132,38 +117,10 @@ describe("thinking collapse state machine", () => {
     expect(stripped(component).join("\n")).toContain("checking files");
   });
 
-  test("pins survive a session rebuild keyed by the message object", () => {
+  test("a rebuilt message component defaults to collapsed", () => {
     const message = assistantMessage("checking files", "done");
-    const first = new AssistantMessageComponent(
-      undefined,
-      false,
-      getMarkdownTheme(),
-    );
-    first.updateContent(message as never, true);
-    first.updateContent(message as never, false);
-    expect(controller.toggle(like(first))).toBe(true);
-    expect(stripped(first).join("\n")).toContain("checking files");
 
     // Session rebuild constructs a fresh component from the persisted message.
-    const rebuilt = new AssistantMessageComponent(
-      message as never,
-      false,
-      getMarkdownTheme(),
-    );
-    expect(stripped(rebuilt).join("\n")).toContain("checking files");
-    expect(like(rebuilt).hideThinkingBlock).toBe(false);
-  });
-
-  test("an unpinned rebuild defaults to collapsed", () => {
-    const message = assistantMessage("checking files", "done");
-    const first = new AssistantMessageComponent(
-      undefined,
-      false,
-      getMarkdownTheme(),
-    );
-    first.updateContent(message as never, true);
-    first.updateContent(message as never, false);
-
     const rebuilt = new AssistantMessageComponent(
       message as never,
       false,
@@ -190,21 +147,38 @@ describe("thinking collapse state machine", () => {
     expect(lines).not.toContain(COLLAPSED_AFFORDANCE_LABEL);
   });
 
-  test("thinking children are recorded for click hit-testing", () => {
+  test("Pi's own click toggle still works, and auto-collapse does not clobber it", () => {
+    // Clicking a thinking block is Pi's feature: the renderer wraps the block
+    // in a `MouseRegion` whose handler flips a per-run entry in the
+    // component's own `thinkingVisibilityOverrides` map, and that map takes
+    // precedence over the global `hideThinkingBlock` flag this package
+    // writes. Removing this package's competing click handler must leave the
+    // native path intact — and the automatic collapse must not undo it.
     const message = assistantMessage("checking files", "done");
     const component = new AssistantMessageComponent(
       undefined,
       false,
       getMarkdownTheme(),
     );
-    component.updateContent(message as never, false);
 
-    const refs = controller.thinkingChildrenOf(like(component));
-    expect(refs).toBeDefined();
-    expect(refs!.length).toBe(1);
-    expect(refs![0]).toBe(
-      (component as unknown as { contentContainer: { children: unknown[] } })
-        .contentContainer.children[1],
-    );
+    component.updateContent(message as never, false);
+    expect(stripped(component).join("\n")).not.toContain("checking files");
+
+    // Pi's click: unhide run 0, then re-render — exactly what the
+    // `MouseRegion` handler does with `set(runIndex, !hidden)`.
+    overridesOf(component).set(0, false);
+    component.updateContent(message as never, false);
+    expect(stripped(component).join("\n")).toContain("checking files");
+
+    // A later automatic pass respects that choice: the effective flag stays
+    // collapsed, yet the per-run override wins in Pi's own read
+    // (`overrides.get(runIndex) ?? hideThinkingBlock`).
+    expect(like(component).hideThinkingBlock).toBe(true);
+    expect(stripped(component).join("\n")).toContain("checking files");
+
+    // `ctrl+t` still wins over everything: Pi's global toggle clears the
+    // per-run overrides and hides the text again.
+    component.setHideThinkingBlock(true);
+    expect(stripped(component).join("\n")).not.toContain("checking files");
   });
 });

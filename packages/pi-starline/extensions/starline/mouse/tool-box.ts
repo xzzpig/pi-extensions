@@ -45,12 +45,11 @@
  * skill/branch/compaction summaries), so an expanded box used to have no
  * clickable way back at all without `pi-toolbox`'s collapse anchor.
  *
- * ## A component that handles the mouse keeps its clicks
- *
- * If any component on the clicked row's path implements `onMouse`, resolution
- * declines. The layout folds the whole transcript into one box, so
- * `pi-mouse-events` dispatch can never deliver an event to such a component —
- * bowing out here is the only way its `onMouse` can mean what it says.
+ * Ownership is decided by resolution alone: a click is taken over iff it
+ * resolves to an expandable component (one with `setExpanded`). A component
+ * that handles the mouse itself — Pi's own tool boxes wrapped in a core
+ * `MouseRegion` included — is simply not expandable by this predicate, so it
+ * falls through to Pi's native handling instead of being fought over.
  *
  * ## Why resolution goes through the component tree
  *
@@ -165,15 +164,6 @@ export function expandedStateOf(component: object): boolean | undefined {
 	return undefined;
 }
 
-/** Whether the component declares its own mouse handling (`onMouse`). */
-function handlesMouse(component: unknown): boolean {
-	return (
-		typeof component === "object" &&
-		component !== null &&
-		typeof (component as { onMouse?: unknown }).onMouse === "function"
-	);
-}
-
 /**
  * The keys spelled the way the hint on screen spells them.
  *
@@ -249,14 +239,6 @@ export function expandTargetAt(
 
 	const tree = createComponentTree(origin.component, origin.rect.width, lines);
 	const path = tree.pathAt(row);
-
-	// A component anywhere on the path that handles the mouse itself owns this
-	// click. The layout folds the transcript into one box, so `pi-mouse-events`
-	// dispatch can never deliver an event to it — the only way its `onMouse`
-	// can mean what it says is for this module to bow out.
-	for (const span of path) {
-		if (handlesMouse(span.component)) return undefined;
-	}
 
 	for (let index = path.length - 1; index >= 0; index--) {
 		const span = path[index];

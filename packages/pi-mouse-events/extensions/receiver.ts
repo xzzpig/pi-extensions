@@ -81,10 +81,45 @@ export interface MouseReceiver {
   ): OverlayLayoutResult;
   parseWheelEvent?(data: string): ParsedWheelEvent | undefined;
   parseSgrMouseEvent?(data: string): ParsedSgrMouseEvent | undefined;
+  /**
+   * Pi's own gesture reset (pi-tui >= 0.85): clears the press target, press
+   * point, motion flag, and capture. Called after this extension consumes a
+   * release, because Pi's release branch — the normal caller — never ran.
+   */
+  clearComponentMouseGesture?(): void;
+  /**
+   * Pi's own selection reset: clears the press flag, anchor, focus,
+   * granularity, initial range, pressed URL, and drag flag, and stops the
+   * selection auto-scroll timer.
+   */
+  clearTextSelection?(): void;
+  /**
+   * Selection/gesture fields `restoreCoreGesture` writes as a backstop for a
+   * build where the reset methods above have moved or been renamed. Declared
+   * as the loose shape the backstop needs — writing an absent field is a
+   * no-op, which is the intended behavior.
+   */
+  mouseCapture?: unknown;
+  mousePressTarget?: unknown;
+  mousePressPoint?: unknown;
+  mousePressMoved?: unknown;
+  selectionPressActive?: unknown;
+  selectionAnchor?: unknown;
+  selectionFocus?: unknown;
+  selectionDragged?: unknown;
+  pressedUrl?: unknown;
 }
 
-/** Whether `name` on the prototype chain is a replaceable function. */
-export function isPatchable(prototype: object, name: string): boolean {
+/**
+ * Whether `name` on the prototype chain is a replaceable function. The
+ * generic keeps class prototypes (`TuiAltScreen.prototype`) assignable, which
+ * a `Record<string, unknown>` parameter would reject for want of an index
+ * signature.
+ */
+export function isPatchable<T extends object>(
+  prototype: T,
+  name: string,
+): boolean {
   try {
     let current: object | null = prototype;
     while (current) {

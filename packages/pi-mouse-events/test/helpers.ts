@@ -17,12 +17,9 @@ import {
   TuiAltScreen,
   VStack,
 } from "@earendil-works/pi-tui";
+import type { TuiMouseEvent } from "@earendil-works/pi-tui";
 import { renderLayoutFrame } from "@earendil-works/pi-tui/dist/layout.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type {
-  ComponentMouseEventResult,
-  ComponentMouseEventWithTarget,
-} from "../api.ts";
 import type {
   LayoutBoxLike,
   MouseReceiver,
@@ -32,32 +29,38 @@ import type {
 export const WIDTH = 40;
 export const HEIGHT = 12;
 
-/** A component that records mouse events and optionally handles them. */
+/**
+ * A component with known geometry, used as a mouse target in the layout.
+ *
+ * It does NOT override `handleMouse`: this extension never dispatches to
+ * components (Pi's fullscreen renderer does, through the built-in path), so
+ * the fixture only has to be a distinguishable box. `decline` records that a
+ * click arrived through Pi's own path without changing the component's
+ * return type — `Container.handleMouse` returns `TuiMouseDispatchResult`,
+ * which carries a `target` a plain override cannot fabricate.
+ */
 export class MouseComponent extends Container {
-  readonly events: ComponentMouseEventWithTarget[] = [];
+  readonly events: { x: number; y: number }[] = [];
 
-  constructor(
-    lines: readonly string[],
-    private readonly handle?: (
-      event: ComponentMouseEventWithTarget,
-    ) => ComponentMouseEventResult | undefined,
-  ) {
+  constructor(lines: readonly string[]) {
     super();
     if (lines.length > 0) this.addChild(new Text(lines.join("\n"), 0, 0));
   }
 
-  onMouse(
-    event: ComponentMouseEventWithTarget,
-  ): ComponentMouseEventResult | undefined {
-    this.events.push(event);
-    // Same default as pi-tui PR #8037's test component: handle unless told to decline.
-    return this.handle ? this.handle(event) : { handled: true };
+  override handleMouse(event: TuiMouseEvent): undefined {
+    // Recording only: this extension never dispatches to components, so the
+    // fixture just observes that Pi's own path arrived. Claiming the event
+    // would need a `target` `Container.handleMouse` returns and a plain
+    // override cannot fabricate.
+    this.events.push({ x: event.x, y: event.y });
+    return undefined;
   }
 }
 
 export type ReceiverStub = MouseReceiver & {
   overlayStack: OverlayStackEntryLike[];
   currentLayout: { root: LayoutBoxLike } | undefined;
+  renderedOverlayLayouts: unknown[];
   terminal: { columns: number; rows: number; write: (data: string) => void };
 };
 
@@ -70,6 +73,10 @@ export function makeReceiver(): ReceiverWithWrites {
   const instance = Object.create(TuiAltScreen.prototype) as ReceiverWithWrites;
   instance.overlayStack = [];
   instance.currentLayout = undefined;
+  // A class field on pi-tui >= 0.85 that the real constructor always sets;
+  // `Object.create` skips constructors, and the overlay dispatch reads its
+  // length. Without it every mouse event throws inside the renderer.
+  instance.renderedOverlayLayouts = [];
   instance.terminal = {
     columns: WIDTH,
     rows: HEIGHT,

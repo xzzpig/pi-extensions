@@ -133,6 +133,27 @@ describe("mergeConfig", () => {
 		});
 	});
 
+	it("carries a mouse-era clickToExpandTools value over to the new key", () => {
+		// D5: a config written before the rename under the mouse namespace keeps
+		// its value — the new key simply wins when both are present.
+		expect(mergeConfig({ mouse: { clickToExpandTools: false } }).mouse).toEqual({
+			enabled: true,
+			wheelRouting: true,
+			copyNotice: true,
+			clickToToggleExpandable: false,
+			transcriptCleanCopy: true,
+		});
+		expect(
+			mergeConfig({ mouse: { clickToToggleExpandable: true, clickToExpandTools: false } }).mouse,
+		).toEqual({
+			enabled: true,
+			wheelRouting: true,
+			copyNotice: true,
+			clickToToggleExpandable: true,
+			transcriptCleanCopy: true,
+		});
+	});
+
 	it("normalizes invalid mouse values", () => {
 		expect(mergeConfig({ mouse: { enabled: "yes" } }).mouse).toEqual({
 			enabled: true,

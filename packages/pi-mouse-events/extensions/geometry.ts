@@ -34,11 +34,7 @@
  * scrollable component.
  */
 
-import type {
-  ComponentMouseEventResult,
-  ComponentMouseEventWithTarget,
-  MouseTarget,
-} from "../api.ts";
+import type { MouseTarget } from "../api.ts";
 import type {
   LayoutBoxLike,
   MouseReceiver,
@@ -182,23 +178,12 @@ export function layoutBoxAt(
   return best;
 }
 
-export function hasOnMouse(component: unknown): component is {
-  onMouse: (
-    event: ComponentMouseEventWithTarget,
-  ) => ComponentMouseEventResult | undefined;
-} {
-  return (
-    typeof component === "object" &&
-    component !== null &&
-    typeof (component as { onMouse?: unknown }).onMouse === "function"
-  );
-}
-
 /**
  * `hitTest`'s answer: the frontmost visible overlay containing the point,
- * else the deepest layout box. Unlike the dispatch, no `onMouse` filter —
- * this answers "what is under the pointer", which is the question a consumer
- * asks before deciding anything of its own.
+ * else the deepest layout box. The answer is whatever is there — no method on
+ * the component is required, because the question is "what is under the
+ * pointer", which is what a consumer asks before deciding anything of its
+ * own.
  */
 export function hitTestReceiver(
   receiver: MouseReceiver,

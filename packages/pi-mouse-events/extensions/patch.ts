@@ -11,12 +11,19 @@
  *
  * Two methods are wrapped, and nothing else:
  *
- * - `handleViewportInput` — mouse events are dispatched to components
- *   (`dispatch.ts`), then to registered handlers, then fall through to the
- *   original method, whose built-in scrollbar, selection, and viewport
- *   behavior runs exactly as before for anything nobody handled. Non-mouse
- *   data (every keystroke, focus reports) passes through untouched — this
- *   patch is invisible to the keyboard path.
+ * - `handleViewportInput` — mouse events are parsed and handed to the
+ *   registered handlers, then fall through to the original method, whose
+ *   built-in scrollbar, selection, viewport, and component-level
+ *   `handleMouse` behavior runs exactly as before for anything nobody
+ *   handled. Non-mouse data (every keystroke, focus reports) passes through
+ *   untouched — this patch is invisible to the keyboard path.
+ *
+ * A handler that consumes a *release* while the preceding press went
+ * through to the built-ins leaves the renderer's own gesture and selection
+ * state mid-gesture: the press branch is where Pi arms the state, and the
+ * release branch — skipped because the event never reached it — is where Pi
+ * clears it. The wrapper therefore restores that state after a consuming
+ * release that did not consume its own press (see `restoreCoreGesture`).
  * - `copyActiveSelectionToClipboard` — registered handlers run first and may
  *   answer the copy themselves; otherwise the original method runs. Installed
  *   only when the method exists (pi-tui gained it in 0.84.3).
@@ -26,16 +33,14 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { TUI } from "@earendil-works/pi-tui";
 import {
   MOUSE_EVENT_CHANNEL,
   type CopyHandler,
-  type CopyHandlerContext,
   type MouseDispatchEvent,
   type MouseHandler,
   type MouseHandlerRegistrationOptions,
 } from "../api.ts";
-import { dispatchMouseEvent } from "./dispatch.ts";
+import { restoreCoreGesture } from "./restore.ts";
 import {
   runCopyHandlersInPriorityOrder,
   runMouseHandlersInPriorityOrder,
@@ -95,9 +100,9 @@ interface PatchCore {
  * the input entry point itself cannot be replaced — there is no mouse
  * dispatch without it.
  */
-export function installMousePatches(
+export function installMousePatches<T extends object>(
   pi: ExtensionAPI,
-  prototype: object,
+  prototype: T,
 ): InstalledPatches | undefined {
   if (!isPatchable(prototype, "handleViewportInput")) {
     console.warn(
@@ -130,6 +135,12 @@ export function installMousePatches(
   // render-time consumers (hints, footer metadata) need to read renderer
   // state without waiting for a mouse event.
   let live: MouseReceiver | undefined;
+
+  // Whether the press of the gesture in progress was consumed by a handler.
+  // Written on each press, read on its release; a press that was never
+  // parsed as one leaves the previous value, which only matters for a
+  // release that follows no press at all.
+  let consumedPress = false;
 
   // The event-bus handle for emission, plus whether pi has already refused it.
   // pi invalidates a session's extension runtime the moment that session is
@@ -171,9 +182,11 @@ export function installMousePatches(
   // Hoisted so the dispose closure below can restore whichever wrappers were
   // installed: the copy wrapper only exists when its method did.
   let originalCopy:
-    | ((this: unknown, ...args: unknown[]) => unknown)
+    | ((this: unknown, ...args: unknown[]) => Promise<boolean>)
     | undefined;
-  let patchedCopy: ((this: unknown, ...args: unknown[]) => unknown) | undefined;
+  let patchedCopy:
+    | ((this: unknown, ...args: unknown[]) => Promise<boolean> | boolean)
+    | undefined;
 
   const originalViewportInput = target.handleViewportInput as (
     this: unknown,
@@ -202,21 +215,29 @@ export function installMousePatches(
         | undefined;
     }
 
-    // 1) Components that opted in.
-    const outcome = dispatchMouseEvent(receiver, event);
-    let handled = outcome.handled;
-    const dispatched = outcome.dispatched;
+    // Registered handlers, and nothing else: a component's own mouse handling
+    // is Pi's native `handleMouse`, dispatched by the built-in path this
+    // wrapper falls through to when no handler consumes the event.
+    //
+    // The press/release pair is tracked because a consuming *release* whose
+    // press went to the built-ins leaves Pi's own gesture and selection state
+    // armed: arming happens in the press branch, clearing in the release
+    // branch, and the consuming release never reaches the latter. A press
+    // this extension consumed armed nothing, and an unhandled release is
+    // cleared by the built-ins itself, so only the mixed case is restored.
+    const handled = runMouseHandlersInPriorityOrder(
+      core.mouseHandlers,
+      event,
+      receiver,
+    );
+    const pressWasConsumed = consumedPress;
+    if (!event.release) consumedPress = handled;
 
-    // 2) Registered handlers, when no component took the event.
-    if (
-      !handled &&
-      runMouseHandlersInPriorityOrder(core.mouseHandlers, event, receiver)
-    ) {
-      handled = true;
+    emit({ ...event, handled });
+    if (handled) {
+      if (event.release && !pressWasConsumed) restoreCoreGesture(receiver);
+      return { consume: true };
     }
-
-    emit({ ...event, handled, dispatched });
-    if (handled) return { consume: true };
     // pi-lens-ignore: no-reflect-apply
     return Reflect.apply(originalViewportInput, this, [data, ...rest]) as
       | { consume: boolean }
@@ -228,11 +249,11 @@ export function installMousePatches(
     originalCopy = target.copyActiveSelectionToClipboard as (
       this: unknown,
       ...args: unknown[]
-    ) => unknown;
+    ) => Promise<boolean>;
     patchedCopy = function patchedCopy(
       this: unknown,
       ...args: unknown[]
-    ): unknown {
+    ): Promise<boolean> | boolean {
       // SAFETY: as above — copyActiveSelectionToClipboard is a TuiAltScreen
       // method, so `this` is the live renderer.
       live = this as unknown as MouseReceiver;

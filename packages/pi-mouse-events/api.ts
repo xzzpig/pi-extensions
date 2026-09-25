@@ -10,28 +10,13 @@
  * extension module isolation, where each extension gets a fresh copy of every
  * non-Pi package it imports.
  *
- * ## The onMouse hook
+ * ## Component-level mouse handling
  *
- * Any component rendered by the fullscreen TUI — an overlay shown through
- * `ctx.ui.custom({ overlay: true })`, or a component docked in the layout
- * tree — may implement the optional `onMouse` method declared below. When a
- * mouse event (a wheel notch, a button press, a release, or a motion report)
- * arrives, the extension dispatches it *before* the built-in scrollbar,
- * selection, and viewport handling:
- *
- * 1. visible overlays, frontmost first, each overlay whose box contains the
- *    pointer;
- * 2. then the layout tree, the deepest box containing the pointer.
- *
- * Returning `{ handled: true }` consumes the event — the built-in handling
- * does not run for it. Returning anything else (or nothing) lets the event
- * fall through, first to the remaining candidates, then to the built-ins, so
- * a component that ignores a wheel notch leaves transcript scrolling intact.
- *
- * `row` and `col` on a dispatched event are relative to the component's own
- * box. For components inside a scrolled transcript that box is the *content*
- * box, so `row` is a content row, not a screen row — exactly what "which of
- * my lines was clicked" means for a scrollable component.
+ * Components handle their own mouse events through Pi's native
+ * `Component.handleMouse` (pi-tui >= 0.85), which the fullscreen renderer
+ * dispatches itself. This extension does not duplicate that path: it exists
+ * for what `handleMouse` cannot reach — global handlers in front of Pi's
+ * built-ins, the copy slot, the observation channel, and pointer queries.
  *
  * ## The global event channel
  *
@@ -54,6 +39,11 @@
  * Note that `pi.on(event, …)` cannot carry custom event names: the runner
  * only dispatches its built-in event set, which is why the bus channel is the
  * integration point.
+ *
+ * The bus reports what this extension's own handlers decided. Anything they
+ * leave unconsumed continues into Pi's built-in handling (and, there, into
+ * component-level `handleMouse` dispatch), which this extension does not
+ * observe — so `handled: false` on the bus never means "nothing handled it".
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -63,13 +53,12 @@ import type { TUI } from "@earendil-works/pi-tui";
 export const MOUSE_EVENT_CHANNEL = "pi-mouse-events:mouse";
 
 /**
- * A mouse event delivered to a component's `onMouse` handler (fullscreen TUI
- * only).
+ * A parsed mouse event, as handed to a registered handler or emitted on the
+ * bus (fullscreen TUI only).
  *
- * Coordinates are 0-based: `x`/`y` are terminal screen coordinates, `row`/`col`
- * are relative to the component's own box (row 0 = the component's first
- * rendered line). `row`/`col` are present on dispatched events; the raw
- * screen-space event is what handlers and bus listeners see.
+ * Coordinates are 0-based terminal screen coordinates. A component's own
+ * box-relative coordinates are what `hitTest` answers with; this event is
+ * raw screen space.
  */
 export interface ComponentMouseEvent {
   /**
@@ -87,14 +76,6 @@ export interface ComponentMouseEvent {
   wheel?: -1 | 1;
 }
 
-/** A dispatched mouse event: the screen-space event plus box-relative coordinates. */
-export interface ComponentMouseEventWithTarget extends ComponentMouseEvent {
-  /** Row relative to the receiving component's box (0 = first rendered line). */
-  row: number;
-  /** Column relative to the receiving component's box. */
-  col: number;
-}
-
 export interface ComponentMouseEventResult {
   /**
    * True if the component or handler consumed the event. Handled events skip
@@ -104,13 +85,13 @@ export interface ComponentMouseEventResult {
   handled: boolean;
 }
 
-/** Where a dispatched or hit-tested component was found. */
+/** Where a hit-tested component was found. */
 export type MouseTargetSource = "overlay" | "layout";
 
 /**
- * A component under the pointer, as answered by `hitTest` or carried in a
- * dispatch payload. `row`/`col` are relative to the component's box (for
- * scrolled components, relative to the content box).
+ * A component under the pointer, as answered by `hitTest`. `row`/`col` are
+ * relative to the component's box (for scrolled components, relative to the
+ * content box).
  */
 export interface MouseTarget {
   readonly component: unknown;
@@ -122,20 +103,22 @@ export interface MouseTarget {
 /** The classification of a parsed mouse event, as carried on the bus. */
 export type MouseEventKind = "wheel" | "down" | "up" | "motion";
 
-/** The bus payload: the parsed event plus the outcome of the dispatch. */
+/** The bus payload: the parsed event plus this extension's outcome. */
 export interface MouseDispatchEvent extends ComponentMouseEvent {
   readonly kind: MouseEventKind;
-  /** True when a component or handler consumed the event. */
+  /**
+   * True when one of this extension's handlers consumed the event, so Pi's
+   * built-in handling never ran for it. `false` means only that no handler
+   * claimed it — the built-ins may still have acted on it.
+   */
   readonly handled: boolean;
-  /** The component that consumed the event, when one did. */
-  readonly dispatched?: MouseTarget;
 }
 
 /** The argument of a registered mouse handler. */
 export interface MouseHandlerContext {
   readonly event: MouseDispatchEvent;
   /**
-   * The live fullscreen renderer the event dispatched into. Typed as `TUI`;
+   * The live fullscreen renderer that parsed the event. Typed as `TUI`;
    * internals of `TuiAltScreen` (`currentLayout`, `wheelScrollLines`, …) are
    * reachable through a structural cast, exactly as pi-tui's own consumers
    * reach them.
@@ -165,17 +148,24 @@ export interface MouseHandlerRegistrationOptions {
 /**
  * The runtime API the extension publishes once it is loaded.
  *
- * `v1` is the contract version: fields and methods below will not be removed
+ * `v2` is the contract version: fields and methods below will not be removed
  * or reshaped within the same major version.
+ *
+ * v2 removed the component-side hook this package used to declare, along with
+ * the payload field that named the component consuming an event:
+ * component-level mouse handling is Pi's native `handleMouse`, and the bus
+ * payload no longer names a consumption that no longer happens.
  */
 export interface MouseEventsApi {
-  readonly version: 1;
+  readonly version: 2;
   readonly eventChannel: typeof MOUSE_EVENT_CHANNEL;
 
   /**
-   * Register a handler that runs on every parsed mouse event after component
-   * dispatch missed and before the built-in scrollbar, selection, and
-   * viewport handling. Returning `{ handled: true }` consumes the event.
+   * Register a handler that runs on every parsed mouse event, before the
+   * built-in scrollbar, selection, and viewport handling. Returning
+   * `{ handled: true }` consumes the event: the built-ins do not run for it.
+   * Returning anything else lets the event continue to the remaining
+   * handlers and then through to the built-ins unchanged.
    */
   addMouseHandler(
     handler: MouseHandler,
@@ -195,8 +185,8 @@ export interface MouseEventsApi {
   /**
    * The component under a screen cell, queried against the live renderer:
    * the frontmost visible overlay containing the point, else the deepest
-   * layout box. Unlike dispatch, this does not require the component to
-   * implement `onMouse`.
+   * layout box. The answer is whatever is there — no method on the component
+   * is required.
    */
   hitTest(tui: TUI, x: number, y: number): MouseTarget | undefined;
 
@@ -240,9 +230,14 @@ export interface MouseEventsApi {
   refreshBus(pi: ExtensionAPI): void;
 }
 
-/** The process-global key the extension publishes its API under. */
+/**
+ * The process-global key the extension publishes its API under. The version
+ * in the key names the shape, not compatibility with the previous key: a
+ * consumer that imports an older copy of this package reads the old key and
+ * gets `undefined`, which its own `version` check turns into "unavailable".
+ */
 export const MOUSE_EVENTS_API_KEY: unique symbol = Symbol.for(
-  "pi-mouse-events.api.v1",
+  "pi-mouse-events.api.v2",
 );
 
 /**
@@ -254,24 +249,4 @@ export function getMouseEventsApi(): MouseEventsApi | undefined {
   return (globalThis as Record<symbol, unknown>)[MOUSE_EVENTS_API_KEY] as
     | MouseEventsApi
     | undefined;
-}
-
-/**
- * The optional component hook this extension dispatches. Declared here so
- * consumers that import this module get it on every `Component`; the
- * dispatch itself duck-types, so the method works regardless of the
- * consumer's pi-tui types.
- */
-declare module "@earendil-works/pi-tui" {
-  interface Component {
-    /**
-     * Optional handler for mouse events on the component's own box
-     * (fullscreen TUI only), dispatched before the built-in scrollbar,
-     * selection, and viewport handling. Return `{ handled: true }` to
-     * consume the event.
-     */
-    onMouse?(
-      event: ComponentMouseEventWithTarget,
-    ): ComponentMouseEventResult | undefined;
-  }
 }

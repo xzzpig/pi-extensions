@@ -303,24 +303,28 @@ describe("expandTargetAt", () => {
 		expect(expandTargetAt(lookup, 4, screenY("state shut"))).toBeUndefined();
 	});
 
-	it("leaves a click alone when a component on the row's path handles the mouse", () => {
-		// The target itself declares `onMouse`: the layout folds the transcript
-		// into one box, so dispatch can never hand it the event, and the only
-		// way its handler can mean what it says is for this rule to bow out.
+	it("resolves the expandable ancestor even when a deeper component on the row's path handles the mouse", () => {
+		// D1 deleted the bow-out predicate: resolution is by `setExpanded`
+		// alone, and the walk passes through a leaf that handles its own mouse
+		// to the tool box above it — the fork owns tool rows on 0.86+ too.
+		const nested = makeScene();
+		nested.tool.addChild(new MouseAwareComponent());
+		const nestedLookup = lookupFor(nested);
+
+		const target = expandTargetAt(nestedLookup.lookup, 4, nestedLookup.screenY("clicks are mine"));
+		expect(target?.component).toBe(nested.tool);
+		expect(target?.expanded).toBe(true);
+	});
+
+	it("leaves a click alone when nothing on the row's path is expandable", () => {
+		// The leaf declares `onMouse` but no `setExpanded`, and neither does any
+		// ancestor: there is nothing to toggle, so the resolution returns
+		// nothing and the click stays a selection.
 		const direct = makeScene();
 		direct.chat.addChild(new MouseAwareComponent());
 		const directLookup = lookupFor(direct);
 		expect(
 			expandTargetAt(directLookup.lookup, 4, directLookup.screenY("clicks are mine")),
-		).toBeUndefined();
-
-		// The same guard for a child *deeper* than the expandable target: the
-		// box would be toggled, but the row belongs to the child.
-		const nested = makeScene();
-		nested.tool.addChild(new MouseAwareComponent());
-		const nestedLookup = lookupFor(nested);
-		expect(
-			expandTargetAt(nestedLookup.lookup, 4, nestedLookup.screenY("clicks are mine")),
 		).toBeUndefined();
 	});
 
@@ -690,6 +694,25 @@ describe("installMouseFeaturesOn clickToToggleExpandable", () => {
 		release(scene, y);
 
 		expect(scene.scene.tool.expanded).toBe(false);
+		expect(scene.throughCalls).toHaveLength(2);
+	});
+
+	it("leaves a thinking-style row to Pi: nothing on the path is expandable", () => {
+		// The thinking block's visible form is a `Markdown` with no `setExpanded`
+		// anywhere on its path — the case `AssistantMessageComponent` models
+		// (the transcript's own plain rows stand in for it here). Resolution
+		// finds nothing, so press and release both reach Pi untouched, leaving
+		// the click to Pi's native MouseRegion toggle.
+		const scene = makeInstallScene();
+		install(scene);
+		const y = scene.relayout()("first message");
+
+		press(scene, y);
+		release(scene, y);
+
+		expect(scene.scene.tool.expanded).toBe(false);
+		// Both events arrived at Pi's selection handling — the fork consumed
+		// neither, so Pi's own release-click toggle still decides.
 		expect(scene.throughCalls).toHaveLength(2);
 	});
 });

@@ -67,7 +67,7 @@ function install(
 	const mouseHandlers: CapturedHandlers["mouseHandlers"] = [];
 	const copyHandlers: CapturedHandlers["copyHandlers"] = [];
 	const api = {
-		version: 1,
+		version: 2,
 		eventChannel: "pi-mouse-events:mouse",
 		copySlotAvailable: true,
 		liveReceiver: () => receiver,

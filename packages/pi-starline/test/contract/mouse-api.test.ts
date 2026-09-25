@@ -22,7 +22,7 @@ import { getMouseEventsApi } from "../../extensions/starline/mouse/api-consumer"
 describe("the pi-mouse-events API contract", () => {
 	it("reads the same Symbol.for key the package publishes under", () => {
 		// Publish through the package's own key, read through Starline's.
-		const api = { version: 1, eventChannel: MOUSE_EVENT_CHANNEL };
+		const api = { version: 2, eventChannel: MOUSE_EVENT_CHANNEL };
 		(globalThis as Record<symbol, unknown>)[MOUSE_EVENTS_API_KEY] = api;
 		try {
 			expect(getMouseEventsApi()).toBe(api);
@@ -38,7 +38,7 @@ describe("the pi-mouse-events API contract", () => {
 
 	it("rejects an API object from a different contract major", () => {
 		(globalThis as Record<symbol, unknown>)[MOUSE_EVENTS_API_KEY] = {
-			version: 2,
+			version: 1,
 			eventChannel: MOUSE_EVENT_CHANNEL,
 		};
 		try {

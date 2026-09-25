@@ -22,7 +22,7 @@ import type { MouseEventsApi } from "@xzzpig/pi-mouse-events/api";
  * MUST match `MOUSE_EVENTS_API_KEY` in `@xzzpig/pi-mouse-events/api` — the
  * contract test above is what keeps that true.
  */
-const MOUSE_EVENTS_API_KEY = Symbol.for("pi-mouse-events.api.v1");
+const MOUSE_EVENTS_API_KEY = Symbol.for("pi-mouse-events.api.v2");
 
 export function getMouseEventsApi(): MouseEventsApi | undefined {
 	const candidate = (globalThis as Record<symbol, unknown>)[MOUSE_EVENTS_API_KEY] as
@@ -31,7 +31,7 @@ export function getMouseEventsApi(): MouseEventsApi | undefined {
 	// The symbol key pins the contract name, not its shape: reject an object
 	// from a different contract major so callers never dereference a
 	// mismatched surface (the key is only bumped together with the version).
-	if (!candidate || candidate.version !== 1) {
+	if (!candidate || candidate.version !== 2) {
 		return undefined;
 	}
 	return candidate;

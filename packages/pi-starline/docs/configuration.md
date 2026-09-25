@@ -210,7 +210,7 @@ Default config values — copy this and change any value you want:
 		"enabled": true,
 		"wheelRouting": true,
 		"copyNotice": true,
-		"clickToExpandTools": true,
+		"clickToToggleExpandable": true,
 		"transcriptCleanCopy": true
 	}
 }
@@ -457,7 +457,7 @@ guessing would be silently pasting the wrong thing.
 		"enabled": true,
 		"wheelRouting": true,
 		"copyNotice": true,
-		"clickToExpandTools": true,
+		"clickToToggleExpandable": true,
 		"transcriptCleanCopy": true
 	}
 }
@@ -468,7 +468,7 @@ guessing would be silently pasting the wrong thing.
 - `enabled` — master switch for every mouse feature below. On by default.
 - `wheelRouting` — routes the mouse wheel to scroll the transcript instead of leaving it to the terminal.
 - `copyNotice` — shows a "Copied to clipboard" flash for a copy **Starline** performs, such as a clean copy. Pi confirms its own copy-on-release with its own flash regardless of this setting.
-- `clickToExpandTools` — clicking an expandable component anywhere in its rows toggles just that one, instead of `ctrl+o` expanding every box in the transcript. Tool boxes, bash boxes, skill blocks, branch summaries, compaction summaries and custom entries/messages all count; the direction comes from the `… ctrl+o to expand` / `… to collapse` hint row when one is on screen and from the component's own state otherwise, so a box with no hint left once expanded still closes on a click. Only a plain click toggles — press and release on the same cell, no drag in between — so dragging across a box still selects and copies its text, a double-click still word-selects, and a click on a link still opens the link. The hint row follows whatever key you have bound to `app.tools.expand`. One thing worth knowing before it surprises you:
+^- `clickToToggleExpandable` — clicking an expandable component anywhere in its rows toggles just that one, instead of `ctrl+o` expanding every box in the transcript. Tool boxes, bash boxes, skill blocks, branch summaries, compaction summaries and custom entries/messages all count; the direction comes from the `… ctrl+o to expand` / `… to collapse` hint row when one is on screen and from the component's own state otherwise, so a box with no hint left once expanded still closes on a click. Only a plain click toggles — press and release on the same cell, no drag in between — so dragging across a box still selects and copies its text, a double-click still word-selects, and a click on a link still opens the link. The hint row follows whatever key you have bound to `app.tools.expand`. One thing worth knowing before it surprises you:
   - **A box whose output contains the literal text `(ctrl+o to expand)` makes that line clickable too** — printing this page, say, or `cat`-ing a file that documents the keybinding. Pi draws a box's output and its hint the same way, so they cannot be told apart without matching theme colours. Clicking such a line toggles the box it is already inside; nothing else happens.
 
 ## Editor cursor

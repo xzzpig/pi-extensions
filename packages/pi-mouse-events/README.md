@@ -3,26 +3,15 @@
 Mouse event dispatch for [Pi](https://github.com/earendil-works/pi)'s
 fullscreen TUI. Pi's renderer swallows every mouse report (wheel notches and
 SGR clicks) in its own viewport listener before extensions can observe them,
-which is why extension UI cannot scroll or click in fullscreen mode — the
-same problem [pi-tui PR #8037](https://github.com/earendil-works/pi/pull/8037)
-proposed to fix in core. This package implements that proposal as an
-extension, and adds an integration surface PR did not have.
+which is why extension UI cannot scroll or click in fullscreen mode. This
+package opens that path and adds an integration surface around it.
 
 ## What it does
 
-- **`Component.onMouse`** — any component in the fullscreen TUI may implement
-  an optional `onMouse(event)` method. Mouse events are dispatched to it
-  before Pi's built-in scrollbar, selection, and viewport handling:
-  frontmost visible overlay first, then the deepest layout box containing the
-  pointer. Return `{ handled: true }` to consume the event; return nothing to
-  let it fall through to the built-ins, so a component that ignores a wheel
-  notch leaves transcript scrolling intact. The hook is duck-typed — no
-  registration — and this package declares the TypeScript augmentation for
-  pi-tui's `Component` interface.
 - **Global mouse events** — every parsed mouse event is emitted on the shared
   extension event bus under `pi-mouse-events:mouse` (`MOUSE_EVENT_CHANNEL`)
-  after the dispatch decision, with `kind`, screen coordinates, `handled`,
-  and the component that consumed it. Listen with `pi.events.on` (`pi.on`
+  after the handler decision, with `kind`, screen coordinates, and `handled`.
+  Listen with `pi.events.on` (`pi.on`
   cannot carry custom event names). **The bus is session-scoped**: pi
   invalidates a session's extension runtime when the session is replaced
   (`/new`, fork, switch, reload) and drops that session's bus subscriptions,
@@ -31,18 +20,22 @@ extension, and adds an integration surface PR did not have.
   keeps its own emission pointed at the live session's bus. That replacement
   is not instantaneous, and the input path stays live throughout it, so a
   mouse event arriving before the replacement's runtime exists has no bus to
-  reach: it is dispatched as usual but its bus emission is dropped rather
-  than allowed to throw out of the input loop and terminate pi. Emission
+  reach: it is handed to the handlers as usual but its bus emission is dropped
+  rather than allowed to throw out of the input loop and terminate pi. Emission
   resumes with the next factory run.
 - **Handler slots** — `getMouseEventsApi()` returns a process-global API
-  (v1 contract):
-  - `addMouseHandler(handler, { priority })` — runs when no component handled
-    the event, before the built-ins; `{ handled: true }` consumes it.
+  (v2 contract):
+  - `addMouseHandler(handler, { priority })` — runs on every parsed mouse
+    event, before Pi's built-ins; `{ handled: true }` consumes it, anything
+    else lets it through to the built-ins unchanged. This is the only way to
+    see a mouse event _before_ Pi acts on it: `ctx.ui.onTerminalInput` cannot
+    (the alt-screen registers its viewport listener first and consumes every
+    mouse report).
   - `addCopyHandler(handler)` — runs in front of
     `TuiAltScreen.copyActiveSelectionToClipboard` (Pi's copy key, default
     ctrl+x); `{ handled: true }` answers the copy yourself.
   - `hitTest(tui, x, y)` — the component under a screen cell, overlay or
-    layout, no `onMouse` required.
+    layout, whatever it is.
   - `parseMouseEvent(data)` / `isMouseSequence(data)` — the same SGR and
     legacy X10 parsing pi-tui applies.
   - `liveReceiver()` — the renderer instance the input wrapper last ran
@@ -54,10 +47,25 @@ extension, and adds an integration surface PR did not have.
   works across Pi's per-extension module isolation whether or not your
   extension declares this package as a dependency.
 
+## Component-level clicks are Pi's own API
+
+Components that want to handle their own clicks implement Pi's native
+`handleMouse` (pi-tui ≥ 0.85); the fullscreen renderer dispatches to it, and
+wrapping a component in `MouseRegion` is what makes a whole block clickable.
+This package deliberately does not duplicate that path — an earlier version
+shipped a competing `onMouse` hook, removed in 0.2.0 so there is one contract
+instead of two.
+
+The two layers compose in the obvious order: `handleMouse`/`MouseRegion` for
+a component's own box, `addMouseHandler` for decisions that need to see every
+event (global click routing, hit-testing the transcript, consuming a release
+after looking at the layout).
+
 ## Example
 
 ```ts
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { MouseRegion } from "@earendil-works/pi-tui";
 import {
   getMouseEventsApi,
   MOUSE_EVENT_CHANNEL,
@@ -65,23 +73,29 @@ import {
 } from "@xzzpig/pi-mouse-events/api";
 
 export default function (pi: ExtensionAPI) {
-  // 1. A custom overlay that scrolls with the wheel.
+  // 1. A custom overlay whose whole block toggles on a click — Pi's own
+  //    component API, no registration needed.
+  let open = false;
   pi.on("session_start", async (_event, ctx) => {
     await ctx.ui.custom(
-      (tui, theme) => ({
-        render: (width) => lines,
-        invalidate: () => {},
-        onMouse(event) {
-          if (event.wheel === undefined) return undefined;
-          scrollBy(event.wheel);
-          return { handled: true };
-        },
-      }),
+      (tui, theme) =>
+        new MouseRegion(
+          {
+            render: (width) => (open ? detailLines(width) : ["[closed]"]),
+            invalidate: () => {},
+          },
+          (event) => {
+            if (event.type !== "click" || event.button !== "left")
+              return undefined;
+            open = !open;
+            return { handled: true, render: true };
+          },
+        ),
       { overlay: true },
     );
   });
 
-  // 2. Intercept every click in the transcript.
+  // 2. Observe every mouse event without affecting it.
   pi.events.on(MOUSE_EVENT_CHANNEL, (data) => {
     const event = data as {
       kind: string;
@@ -91,10 +105,11 @@ export default function (pi: ExtensionAPI) {
     };
   });
 
-  // 3. Consume clicks before the built-in selection handling.
+  // 3. Decide before Pi's built-in selection handling, and optionally
+  //    consume — the only layer that can.
   const api: MouseEventsApi | undefined = getMouseEventsApi();
   api?.addMouseHandler(({ event, tui }) => {
-    if (event.kind !== "down") return undefined;
+    if (event.release) return undefined;
     const target = api.hitTest(tui, event.x, event.y);
     // … decide, act, and consume or pass.
     return undefined;
@@ -106,22 +121,35 @@ export default function (pi: ExtensionAPI) {
 
 - Fullscreen mode only (`TuiAltScreen`): pi-tui's regular (non-fullscreen)
   mode never enables mouse tracking, so there is nothing to dispatch there.
+- The bus reports what this extension's handlers decided. An event they left
+  unconsumed continues into Pi's built-in handling — including the
+  component-level `handleMouse` dispatch — and this extension does not
+  observe what happens there, so `handled: false` never means "nothing
+  handled it".
+- A handler that consumes a _release_ while its press went through to Pi
+  leaves Pi mid-gesture: the press branch arms Pi's gesture and selection
+  state and the release branch clears it, so the skipped branch is what this
+  extension restores (`clearComponentMouseGesture` + `clearTextSelection`,
+  with a direct field reset as the backstop) before returning `consume`.
+  Consuming a release therefore costs Pi nothing beyond the click itself.
 - Overlay geometry is resolved lazily per event against the running
   renderer's own `resolveOverlayLayout`, and overlays are ordered by
-  `focusOrder` descending (paint order) — a deliberate deviation from PR
-  #8037's stack reversal.
-- While an overlay has keyboard focus, mouse events still dispatch through
-  `onMouse` first (PR semantics); only unhandled events defer to the
-  overlay's `handleInput`.
+  `focusOrder` descending (paint order).
 - `addCopyHandler` requires `copyActiveSelectionToClipboard`
   (pi-tui ≥ 0.84.3); `api.copySlotAvailable` reports whether it installed on
   the running build. It covers the copy-key path only — Pi's copy-on-select
   release uses a different method and is not intercepted.
-- The input dispatch needs `handleViewportInput`, `parseWheelEvent`,
-  `parseSgrMouseEvent`, `overlayStack`, `currentLayout`, and
-  `resolveOverlayLayout` on the running pi-tui 0.84.x build; the contract
-  tests pin this surface and everything degrades to a warning if a future
-  build moves it.
+- The input path needs `handleViewportInput`, `parseWheelEvent`,
+  `parseSgrMouseEvent`, `overlayStack`, `currentLayout`,
+  `resolveOverlayLayout`, `clearComponentMouseGesture`, and
+  `clearTextSelection` on the running build; the contract tests pin this
+  surface and everything degrades to a warning if a future build moves it.
+
+## Requirements
+
+Pi 0.86.0 or newer (`@earendil-works/pi-coding-agent` and
+`@earendil-works/pi-tui`), where the renderer carries the component mouse
+gesture state this extension restores and `MouseRegion` is public.
 
 ## Install
 

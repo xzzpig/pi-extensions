@@ -14,6 +14,7 @@ import {
   makePi,
   makeReceiver,
   MouseComponent,
+  type ReceiverStub,
 } from "./helpers.ts";
 
 type TuiAltScreenPrototype = {
@@ -68,11 +69,10 @@ afterEach(() => {
 });
 
 describe("mouse handler slot", () => {
-  it("runs when no component handled the event, and consumes on { handled: true }", () => {
+  it("runs on every parsed mouse event and consumes on { handled: true }", () => {
     const { api, predecessor } = install();
     const receiver = makeReceiver();
-    const target = new MouseComponent(["target"], () => undefined);
-    layoutWithTarget(receiver, target, { rows: 6 });
+    layoutWithTarget(receiver, new MouseComponent(["target"]), { rows: 6 });
     const handler = vi.fn((_context: unknown) => ({ handled: true }));
     api.addMouseHandler(handler);
 
@@ -92,28 +92,28 @@ describe("mouse handler slot", () => {
     expect(predecessor).not.toHaveBeenCalled();
   });
 
-  it("does not run when a component already handled the event", () => {
-    const { api } = install();
+  it("runs ahead of the built-in path, where component handling lives", () => {
+    const { api, predecessor } = install();
     const receiver = makeReceiver();
-    const target = new MouseComponent(["target"]); // handles everything
+    const target = new MouseComponent(["target"]);
     layoutWithTarget(receiver, target, { rows: 6 });
     const handler = vi.fn(() => undefined);
     api.addMouseHandler(handler);
 
     input(receiver, "\x1b[<64;1;6M");
 
-    expect(target.events).toHaveLength(1);
-    expect(handler).not.toHaveBeenCalled();
+    // The slot ran and declined, so the event continued to the built-ins.
+    // The component never sees it: this extension does not dispatch to
+    // components — Pi's own `handleMouse` path does, one layer down.
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(target.events).toHaveLength(0);
+    expect(predecessor).toHaveBeenCalledTimes(1);
   });
 
   it("orders by priority descending, then registration order", () => {
     const { api } = install();
     const receiver = makeReceiver();
-    layoutWithTarget(
-      receiver,
-      new MouseComponent(["target"], () => undefined),
-      { rows: 6 },
-    );
+    layoutWithTarget(receiver, new MouseComponent(["target"]), { rows: 6 });
     const calls: string[] = [];
     api.addMouseHandler(() => {
       calls.push("registered-first");
@@ -141,11 +141,7 @@ describe("mouse handler slot", () => {
   it("a handler error does not take the dispatch down", () => {
     const { api, predecessor } = install();
     const receiver = makeReceiver();
-    layoutWithTarget(
-      receiver,
-      new MouseComponent(["target"], () => undefined),
-      { rows: 6 },
-    );
+    layoutWithTarget(receiver, new MouseComponent(["target"]), { rows: 6 });
     const consoleError = vi
       .spyOn(console, "error")
       .mockImplementation(() => {});
@@ -165,11 +161,7 @@ describe("mouse handler slot", () => {
   it("unsubscribe removes the handler", () => {
     const { api } = install();
     const receiver = makeReceiver();
-    layoutWithTarget(
-      receiver,
-      new MouseComponent(["target"], () => undefined),
-      { rows: 6 },
-    );
+    layoutWithTarget(receiver, new MouseComponent(["target"]), { rows: 6 });
     const handler = vi.fn(() => ({ handled: true }));
     const unsubscribe = api.addMouseHandler(handler);
     unsubscribe();
@@ -183,36 +175,20 @@ describe("mouse handler slot", () => {
   it("emits the dispatch outcome on the bus", () => {
     const { api } = install();
     const receiver = makeReceiver();
-    // A declining target: nothing consumes the press, so the bus sees the
-    // unhandled outcome.
-    layoutWithTarget(
-      receiver,
-      new MouseComponent(["target"], () => undefined),
-      { rows: 6 },
-    );
+    layoutWithTarget(receiver, new MouseComponent(["target"]), { rows: 6 });
 
-    // Unhandled press: handled false, no dispatched component.
+    // Declined: the bus reports it as unhandled, and the built-ins went on to
+    // act on it. The bus only ever reports this extension's own outcome.
     input(receiver, "\x1b[<0;3;6M");
     const unhandled = lastEvent();
     expect(unhandled).toMatchObject({ kind: "down", handled: false });
-    expect(unhandled.dispatched).toBeUndefined();
 
-    // Handler-consumed event carries no dispatched component — the slot ate
-    // it, not a component.
+    // Consumed: the slot ate it, so the built-ins never ran for it.
     const unsubscribe = api.addMouseHandler(() => ({ handled: true }));
     input(receiver, "\x1b[<0;3;6M");
     const handled = lastEvent();
-    expect(handled.handled).toBe(true);
-    expect(handled.dispatched).toBeUndefined();
+    expect(handled).toMatchObject({ kind: "down", handled: true });
     unsubscribe();
-
-    // Component-handled event names the component.
-    const target = new MouseComponent(["target"]);
-    layoutWithTarget(receiver, target, { rows: 6 });
-    input(receiver, "\x1b[<0;3;6M");
-    const byComponent = lastEvent();
-    expect(byComponent.dispatched?.component).toBe(target);
-    expect(byComponent.dispatched?.source).toBe("layout");
   });
 });
 
@@ -352,5 +328,87 @@ describe("copy handler slot", () => {
       prototype.copyActiveSelectionToClipboard = original;
       warn.mockRestore();
     }
+  });
+});
+
+describe("gesture restore after a consumed release", () => {
+  /** A receiver whose Pi-side reset methods are observable. */
+  function receiverWithResets() {
+    const receiver = makeReceiver();
+    const clearComponentMouseGesture = vi.fn();
+    const clearTextSelection = vi.fn();
+    receiver.clearComponentMouseGesture = clearComponentMouseGesture;
+    receiver.clearTextSelection = clearTextSelection;
+    return { receiver, clearComponentMouseGesture, clearTextSelection };
+  }
+
+  it("restores Pi's state when the release is consumed and its press was not", () => {
+    const { api } = install();
+    const { receiver, clearComponentMouseGesture, clearTextSelection } =
+      receiverWithResets();
+    // The click protocol: the press goes through to Pi (so its selection
+    // machinery anchors on it), the release is consumed.
+    api.addMouseHandler(({ event }) =>
+      event.release ? { handled: true } : undefined,
+    );
+
+    input(receiver, "\x1b[<0;3;6M");
+    expect(clearComponentMouseGesture).not.toHaveBeenCalled();
+
+    input(receiver, "\x1b[<0;3;6m");
+    expect(clearComponentMouseGesture).toHaveBeenCalledTimes(1);
+    expect(clearTextSelection).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves Pi's state alone when the press was consumed too", () => {
+    const { api } = install();
+    const { receiver, clearComponentMouseGesture } = receiverWithResets();
+    // Both halves consumed: Pi never armed anything, so there is nothing to
+    // restore — and a reset here would clobber a gesture of its own.
+    api.addMouseHandler(() => ({ handled: true }));
+
+    input(receiver, "\x1b[<0;3;6M");
+    input(receiver, "\x1b[<0;3;6m");
+
+    expect(clearComponentMouseGesture).not.toHaveBeenCalled();
+  });
+
+  it("leaves Pi's state alone when the release falls through", () => {
+    const { api } = install();
+    const { receiver, clearComponentMouseGesture } = receiverWithResets();
+    // The built-in release branch is what normally clears the state; running
+    // the restore as well would reset a selection Pi is still finishing.
+    api.addMouseHandler(({ event }) =>
+      event.release ? undefined : { handled: true },
+    );
+
+    input(receiver, "\x1b[<0;3;6M");
+    input(receiver, "\x1b[<0;3;6m");
+
+    expect(clearComponentMouseGesture).not.toHaveBeenCalled();
+  });
+
+  it("resets the fields directly when Pi's reset methods are absent", () => {
+    const { api } = install();
+    const receiver = makeReceiver() as ReceiverStub & {
+      selectionPressActive?: unknown;
+      selectionAnchor?: unknown;
+      mousePressTarget?: unknown;
+    };
+    // An older or renamed build: no reset methods, so the backstop writes the
+    // fields both resets would have cleared.
+    receiver.selectionPressActive = true;
+    receiver.selectionAnchor = { row: 1, col: 1 };
+    receiver.mousePressTarget = { component: {} };
+    api.addMouseHandler(({ event }) =>
+      event.release ? { handled: true } : undefined,
+    );
+
+    input(receiver, "\x1b[<0;3;6M");
+    input(receiver, "\x1b[<0;3;6m");
+
+    expect(receiver.selectionPressActive).toBe(false);
+    expect(receiver.selectionAnchor).toBeUndefined();
+    expect(receiver.mousePressTarget).toBeUndefined();
   });
 });

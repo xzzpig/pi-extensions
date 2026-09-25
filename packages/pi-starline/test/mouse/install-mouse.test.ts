@@ -34,7 +34,7 @@ function makeFakeApi(receiver: unknown, copySlot = true): FakeApi {
 	const mouseHandlers: FakeApi["mouseHandlers"] = [];
 	const copyHandlers: FakeApi["copyHandlers"] = [];
 	const api = {
-		version: 1,
+		version: 2,
 		eventChannel: "pi-mouse-events:mouse",
 		copySlotAvailable: copySlot,
 		liveReceiver: () => receiver,

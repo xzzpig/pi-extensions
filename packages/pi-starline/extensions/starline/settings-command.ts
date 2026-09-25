@@ -468,6 +468,15 @@ function buildItems(
 				currentValue: featureValue(config.mouse.copyNotice),
 				values: featureStateValues,
 			});
+			items.push({
+				id: "mouseClickToToggleExpandable",
+				label: "Click to toggle expandable",
+				description:
+					"Click any collapsible component (tool boxes, bash boxes, skill/summary blocks, " +
+					"custom entries/messages) to expand or collapse just that one.",
+				currentValue: featureValue(config.mouse.clickToToggleExpandable),
+				values: featureStateValues,
+			});
 		}
 		return items;
 	}
@@ -820,6 +829,14 @@ export function registerStarlineSettingsCommand(pi: ExtensionAPI, deps: Settings
 									settingsList.updateValue(id, newValue);
 									deps.requestRender();
 									ctx.ui.notify(`Copy notice: ${newValue}`, "info");
+									tui.requestRender();
+									return;
+								}
+								if (id === "mouseClickToToggleExpandable" && isFeatureState(newValue)) {
+									deps.setMouseConfig({ clickToToggleExpandable: newValue === "enabled" }, ctx);
+									settingsList.updateValue(id, newValue);
+									deps.requestRender();
+									ctx.ui.notify(`Click to toggle expandable: ${newValue}`, "info");
 									tui.requestRender();
 									return;
 								}

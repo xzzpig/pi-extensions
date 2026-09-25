@@ -1,7 +1,7 @@
 /**
- * The pi-tui contract: the internals this dispatch depends on, pinned against
- * the installed package so an upgrade that moves them goes red here instead
- * of silently disabling mouse events for users.
+ * The pi-tui contract: the internals this extension depends on, pinned
+ * against the installed package so an upgrade that moves them goes red here
+ * instead of silently disabling mouse events for users.
  *
  * The prototype has no `#`-private fields today — TypeScript `private` is
  * erased — which is the fact the whole approach rests on. The source pins
@@ -30,9 +30,14 @@ const READ_METHODS = [
   "flash",
   "hasOverlay",
   "requestRender",
+  // Called after this extension consumes a release whose press reached Pi:
+  // arming happens in the press branch, clearing in the release branch, so
+  // the skipped release branch leaves Pi mid-gesture unless restored.
+  "clearComponentMouseGesture",
+  "clearTextSelection",
 ];
 
-describe("pi-tui 0.84.x contract", () => {
+describe("pi-tui contract", () => {
   it("exposes every method the dispatch patches or calls as a replaceable function", () => {
     for (const name of [...PATCHED_METHODS, ...READ_METHODS]) {
       expect(isPatchable(TuiAltScreen.prototype, name), name).toBe(true);

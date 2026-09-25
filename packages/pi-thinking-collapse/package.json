@@ -1,7 +1,7 @@
 {
   "name": "@xzzpig/pi-thinking-collapse",
-  "version": "0.1.0",
-  "description": "Auto-collapse thinking blocks after the model finishes, keep them visible while streaming, and toggle them per message with a mouse click.",
+  "version": "0.2.0",
+  "description": "Auto-collapse thinking blocks after the model finishes and keep them visible while streaming.",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -14,7 +14,6 @@
     "pi-extension",
     "pi-tui",
     "thinking",
-    "mouse",
     "tui"
   ],
   "files": [
@@ -22,6 +21,7 @@
     "src",
     "dist",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "package.json"
   ],
@@ -35,18 +35,14 @@
     "build:types": "rollup -c rollup.dts.config.mjs",
     "test": "vitest run"
   },
-  "dependencies": {
-    "@xzzpig/pi-mouse-events": "workspace:*"
-  },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.84.2 <0.85",
-    "@earendil-works/pi-tui": ">=0.84.2 <0.85"
+    "@earendil-works/pi-coding-agent": ">=0.86.0 <0.88",
+    "@earendil-works/pi-tui": ">=0.86.0 <0.88"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.84.4",
-    "@earendil-works/pi-tui": "^0.84.4",
+    "@earendil-works/pi-coding-agent": "^0.87.1",
+    "@earendil-works/pi-tui": "^0.87.1",
     "@types/node": "catalog:",
-    "@xzzpig/pi-mouse-events": "workspace:*",
     "rollup": "^4.62.2",
     "rollup-plugin-dts": "^6.4.1",
     "typescript": "catalog:",

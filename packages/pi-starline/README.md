@@ -176,7 +176,7 @@ Settings live in `~/.pi/agent/starline.json`. The file is optional — anything 
 {
 	"footerStyle": "pill",
 	"colors": { "gitBranch": "bold purple" },
-	"mouse": { "clickToExpandTools": false }
+	"mouse": { "clickToToggleExpandable": false }
 }
 ```
 

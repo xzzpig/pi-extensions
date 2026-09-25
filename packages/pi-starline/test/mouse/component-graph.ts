@@ -193,10 +193,11 @@ export class StatelessExpandableComponent implements Component {
 }
 
 /**
- * A component that handles the mouse itself. The layout folds the transcript
- * into one box, so `pi-mouse-events` dispatch can never deliver an event to
- * it — which is exactly why the expand rule must bow out when one appears on
- * a clicked row's path.
+ * A component that handles the mouse itself, but exposes no `setExpanded`.
+ * Resolution is by `setExpanded` alone (D1 deleted the bow-out predicate), so
+ * a leaf like this is skipped as a non-target and the walk continues past it
+ * to the nearest expandable ancestor — which is what the expansion tests for
+ * the nested case below pin down.
  */
 export class MouseAwareComponent implements Component {
 	invalidate(): void {}

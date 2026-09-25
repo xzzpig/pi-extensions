@@ -6,37 +6,35 @@ out of the way once the answer lands.
 - **Visible while streaming** — thinking content stays expanded during
   `message_update`, so you can watch the model reason.
 - **Auto-collapsed on completion** — when the assistant message ends
-  (`message_end`), the thinking block collapses to a single label: `Thinking…
-(click to expand)`, which doubles as a click affordance.
-- **Click to toggle per message** — clicking the collapsed label expands
-  that message's thinking; clicking the expanded thinking area collapses it
-  again. The click protocol follows `pi-starline`'s click-to-expand tool
-  boxes: the press is never consumed (selection anchors still work), the
-  toggle happens on release on the same cell without motion.
-- **`ctrl+t` still wins** — Pi's global thinking toggle keeps overriding the
-  auto-collapse behavior, and the collapsed label text is preserved for
-  extension-level `setHiddenThinkingLabel` customization.
-
-Requires the `@xzzpig/pi-mouse-events` extension for the mouse part; without
-it the auto-collapse behavior still works and the plugin degrades gracefully.
+  (`message_end`), the thinking block collapses to a single label, keeping the
+  transcript readable without losing the thinking text.
+- **`ctrl+t` still wins** — Pi's global thinking toggle overrides the
+  auto-collapse behavior, and a custom collapsed label set through
+  `setHiddenThinkingLabel` is preserved.
+- **Clicking a block is Pi's own behavior** — since Pi 0.85 the renderer wraps
+  each thinking block in a `MouseRegion`, so a click toggles that block's
+  visibility natively. This package used to implement its own click handler;
+  that duplicate was removed in 0.2.0. It registers no mouse handling and has
+  no companion-extension requirement.
 
 ## Install
 
 ```bash
 pi install npm:@xzzpig/pi-thinking-collapse
-pi install npm:@xzzpig/pi-mouse-events
 ```
 
 ## How it works
 
 The plugin patches `AssistantMessageComponent.prototype` (reload-safe, via a
-`Symbol.for` registry): `updateContent` computes an effective collapse flag
-per message — streaming forces expanded, completion defaults to collapsed,
-an explicit click pins the choice, and the global `hideThinkingBlock` flag
-from `ctrl+t` / settings wins over everything. Mouse handling is registered
-through `pi-mouse-events`' `addMouseHandler`, resolving the clicked row to
-the owning message component and its thinking rows through the layout tree
-and a rendered component walk.
+`Symbol.for` registry): `updateContent` computes an effective collapse flag per
+message — the global `hideThinkingBlock` flag from `ctrl+t` / settings wins,
+streaming forces expanded, and completion defaults to collapsed. Pi's own
+per-run click override (`thinkingVisibilityOverrides`, keyed by thinking-run
+index) is read by the renderer before that flag, so a click on a block is
+honored even while the automatic behavior keeps running.
+
+The two layers are independent: this package owns _when_ a block collapses on
+its own, Pi owns _the user's click_ on a specific block.
 
 ## Compatibility
 
@@ -49,6 +47,6 @@ and a rendered component walk.
 ## Development
 
 ```bash
-pnpm --filter pi-thinking-collapse run typecheck
-pnpm --filter pi-thinking-collapse test
+pnpm --filter @xzzpig/pi-thinking-collapse run typecheck
+pnpm --filter @xzzpig/pi-thinking-collapse test
 ```

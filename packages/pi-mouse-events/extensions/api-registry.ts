@@ -2,7 +2,7 @@
  * The published `MouseEventsApi` and its process-global slot.
  *
  * The API object is written once at extension load, under
- * `Symbol.for("pi-mouse-events.api.v1")`, and never removed — the Symbol is
+ * `Symbol.for("pi-mouse-events.api.v2")`, and never removed — the Symbol is
  * process-global by spec, so a consumer that imported its own fresh copy of
  * this package still reaches the same slot. The consumer-side accessor lives
  * in `../api` (import-safe, reads but never writes).
@@ -31,10 +31,12 @@ export function createMouseEventsApi(
   patches: InstalledPatches,
 ): MouseEventsApi {
   return {
-    version: 1,
+    version: 2,
     eventChannel: MOUSE_EVENT_CHANNEL,
     copySlotAvailable: patches.state.copySlotAvailable,
     liveReceiver() {
+      // SAFETY: the patch state returns the `this` of the wrapper it installed
+      // on TuiAltScreen.prototype, which is a live TuiAltScreen (a TUI).
       return patches.state.liveReceiver() as unknown as TUI | undefined;
     },
     refreshBus(pi) {
@@ -53,6 +55,8 @@ export function createMouseEventsApi(
       return patches.state.addCopyHandler(handler, options);
     },
     hitTest(tui: TUI, x: number, y: number) {
+      // SAFETY: TUI is the public surface of the fullscreen renderer;
+      // MouseReceiver names the pi-tui internals this package reads off it.
       return hitTestReceiver(tui as unknown as MouseReceiver, x, y);
     },
     parseMouseEvent(data: string): MouseDispatchEvent | undefined {

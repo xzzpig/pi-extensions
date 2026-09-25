@@ -43,7 +43,7 @@ describe("extension entry", () => {
 
     const api = getMouseEventsApi();
     expect(api).toBeDefined();
-    expect(api?.version).toBe(1);
+    expect(api?.version).toBe(2);
     expect(api?.eventChannel).toBe(MOUSE_EVENT_CHANNEL);
     expect(api?.copySlotAvailable).toBe(true);
     expect(prototype.handleViewportInput).not.toBe(originalViewportInput);

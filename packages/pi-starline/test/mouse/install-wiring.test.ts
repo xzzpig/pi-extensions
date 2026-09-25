@@ -35,7 +35,7 @@ import starline from "../../extensions/starline/index";
 type MouseHandler = (context: { event?: unknown; tui: unknown }) => unknown;
 type CopyHandler = (context: { tui: unknown }) => unknown;
 
-const MOUSE_EVENTS_API_KEY = Symbol.for("pi-mouse-events.api.v1");
+const MOUSE_EVENTS_API_KEY = Symbol.for("pi-mouse-events.api.v2");
 
 type PublishedApi = {
 	mouseHandlers: MouseHandler[];
@@ -53,7 +53,7 @@ type PublishedApi = {
 function publishFakeApi(copySlot = true): PublishedApi {
 	const published: PublishedApi = { mouseHandlers: [], copyHandlers: [], live: undefined };
 	(globalThis as Record<symbol, unknown>)[MOUSE_EVENTS_API_KEY] = {
-		version: 1,
+		version: 2,
 		eventChannel: "pi-mouse-events:mouse",
 		copySlotAvailable: copySlot,
 		liveReceiver: () => published.live,

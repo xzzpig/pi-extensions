@@ -12,10 +12,12 @@ import {
 } from "./helpers.ts";
 
 describe("hitTest", () => {
-  it("answers the deepest layout component without an onMouse filter", () => {
+  it("answers the deepest layout component, whatever it is", () => {
     const receiver = makeReceiver();
-    const target = new MouseComponent(["target"]); // would qualify anyway…
-    const plain = { render: () => ["plain"], invalidate: () => {} }; // …this one would not
+    const target = new MouseComponent(["target"]);
+    // No mouse method at all — hitTest answers "what is under the pointer"
+    // and never filters on what the component can do.
+    const plain = { render: () => ["plain"], invalidate: () => {} };
     receiver.currentLayout = {
       root: {
         component: plain,

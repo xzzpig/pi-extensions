@@ -5,6 +5,19 @@ This fork tracks [`Andy8647/pi-starline`](https://github.com/Andy8647/pi-starlin
 via git subtree; entries below describe only fork-specific deviations from
 upstream.
 
+## [0.5.0] — 2026-09-25 (fork release)
+
+### Changed
+
+- **Synced upstream v0.3.5 → v0.3.7** (upstream minor releases → fork minor bump). Upstream v0.3.6 fixes the user-message render patch to run `markdownTransformers`; upstream v0.3.7 removes `clickToExpandTools` because Pi 0.86.0+ toggles tool boxes natively. The fork keeps the feature, renamed to **`mouse.clickToToggleExpandable`** (default `on`), covering any collapsible box (tool boxes, bash boxes, skill/summary blocks, custom entries/messages). Old configs are migrated: a `fixedEditor`-era or `mouse`-era `clickToExpandTools` value carries over to the new key, and the new key wins when both are present.
+- **Deleted the `handlesMouse()` bow-out predicate** (D1). It duck-typed `onMouse`, which never appears on real rows — the component-tree walk cannot descend into pi-tui's `MouseRegion` (singular `child`, not `children`), so the predicate never fired and the fork always resolved tool rows anyway. Resolution now decides by `setExpanded` capability alone: a row whose path reaches a set-expanded component toggles it, and a row with none (thinking blocks, plain messages) is left to Pi's native click handling.
+- **Raised the Pi runtime floor to `@earendil-works/pi-tui`/`pi-coding-agent`/`pi-ai` `>=0.86.0 <0.88`** and consumes the `@xzzpig/pi-mouse-events` v2 contract (`pi-mouse-events.api.v2` key, `version: 2`). BREAKING: pi 0.84.x/0.85.x are no longer supported.
+- `/starline` settings now shows the renamed **Click to toggle expandable** toggle and persists it under the new key.
+
+### Added
+
+- `mouse/index.ts` reads the new `clickToToggleExpandable` key in the feature gate and press guard; `config.ts` carries the rename through `MouseConfig`, `FIXED_EDITOR_KEY_MAP`, `defaultConfig`, `normalizeMouseConfig` (with old-key fallback) and `saveMousePatch`.
+
 ## [0.4.1] — 2026-09-19 (fork release)
 
 ### Changed

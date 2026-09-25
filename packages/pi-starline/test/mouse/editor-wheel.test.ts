@@ -192,7 +192,7 @@ function install(receiver: object, wheelRouting = true) {
 	const mouseHandlers: RegisteredHandler[] = [];
 	const copyHandlers: Array<(context: { tui: unknown }) => unknown> = [];
 	const api = {
-		version: 1,
+		version: 2,
 		eventChannel: "pi-mouse-events:mouse",
 		copySlotAvailable: true,
 		addMouseHandler(handler: RegisteredHandler) {

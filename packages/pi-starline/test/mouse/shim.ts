@@ -106,7 +106,7 @@ export function installMouseShim(
 	const inputListeners: Array<(data: string) => unknown> = [];
 
 	const api = {
-		version: 1,
+		version: 2,
 		eventChannel: "pi-mouse-events:mouse",
 		copySlotAvailable: true,
 		// The fixture prototype is the receiver throughout, so the live
