@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import { SessionTurnPrep } from "#src/handlers/session-turn-prep";
 
-import { makeCtx } from "#test/helpers/handler-fixtures";
+import {
+  makeConfigIssueReporter,
+  makeCtx,
+} from "#test/helpers/handler-fixtures";
 import { makeRealSession } from "#test/helpers/session-fixtures";
 
 // ── helpers ────────────────────────────────────────────────────────────────
@@ -11,7 +14,13 @@ function makeTurnPrep() {
   const { session, forwarding, configStore } = makeRealSession();
   const warmParser = vi.fn();
   const announcer = { announceReady: vi.fn() };
-  const turnPrep = new SessionTurnPrep(session, warmParser, announcer);
+  const configIssues = makeConfigIssueReporter();
+  const turnPrep = new SessionTurnPrep(
+    session,
+    warmParser,
+    announcer,
+    configIssues,
+  );
   return {
     turnPrep,
     session,
@@ -19,6 +28,7 @@ function makeTurnPrep() {
     configStore,
     warmParser,
     announcer,
+    configIssues,
   };
 }
 
@@ -43,7 +53,7 @@ describe("SessionTurnPrep.prepare", () => {
     const ctx = makeCtx();
     const { turnPrep, configStore } = makeTurnPrep();
     turnPrep.prepare(ctx);
-    expect(configStore.refresh).toHaveBeenCalledWith(ctx, true);
+    expect(configStore.refresh).toHaveBeenCalledWith(ctx.cwd, true);
   });
 
   it("withholds the project scope when the project is untrusted", () => {
@@ -52,7 +62,7 @@ describe("SessionTurnPrep.prepare", () => {
     });
     const { turnPrep, configStore } = makeTurnPrep();
     turnPrep.prepare(ctx);
-    expect(configStore.refresh).toHaveBeenCalledWith(ctx, false);
+    expect(configStore.refresh).toHaveBeenCalledWith(ctx.cwd, false);
   });
 
   it("announces the node as ready, on the same ctx", () => {
@@ -73,6 +83,30 @@ describe("SessionTurnPrep.prepare", () => {
     });
     turnPrep.prepare(makeCtx());
     expect(order).toEqual(["refreshConfig", "announceReady"]);
+  });
+
+  describe("config issues", () => {
+    it("reports them each turn, so one created mid-session is shown", () => {
+      const { turnPrep, configIssues } = makeTurnPrep();
+      turnPrep.prepare(makeCtx());
+      expect(configIssues.report).toHaveBeenCalledOnce();
+    });
+
+    it("reports after the refresh and before the ready announcement", () => {
+      const order: string[] = [];
+      const { turnPrep, session, announcer, configIssues } = makeTurnPrep();
+      vi.spyOn(session, "refreshConfig").mockImplementation(() => {
+        order.push("refreshConfig");
+      });
+      configIssues.report.mockImplementation(() => {
+        order.push("report");
+      });
+      announcer.announceReady.mockImplementation(() => {
+        order.push("announceReady");
+      });
+      turnPrep.prepare(makeCtx());
+      expect(order).toEqual(["refreshConfig", "report", "announceReady"]);
+    });
   });
 
   it("delegates the once-per-session guard to the announcer", () => {

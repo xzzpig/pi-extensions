@@ -94,6 +94,16 @@ export function makeCtx(
   } as unknown as ExtensionContext;
 }
 
+/**
+ * A `ConfigIssueReporting` double for the two handlers that drive it.
+ *
+ * Unannotated return type so callers keep full `vi.fn()` access on `report`
+ * (for `mockImplementation` in the call-order tests).
+ */
+export function makeConfigIssueReporter() {
+  return { report: vi.fn<() => void>() };
+}
+
 export function makeToolCallEvent(
   toolName: string,
   extraFields: Record<string, unknown> = {},

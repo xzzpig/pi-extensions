@@ -155,6 +155,41 @@ describe("createPermissionSystemLogger", () => {
       });
     });
 
+    test("masks a secret inside an inline-shell payload", () => {
+      const logger = makeLogger();
+
+      logger.review("permission_request.waiting", {
+        toolName: "bash",
+        command: "bash -c 'TOKEN=sk-secret-value deploy'",
+      });
+
+      const written = readFileSync(reviewLogPath, "utf8");
+      expect(written).not.toContain("sk-secret-value");
+      expect(JSON.parse(written.trim())).toMatchObject({
+        command: "bash -c 'TOKEN=[redacted] deploy'",
+      });
+    });
+
+    test("reports the same secret consistently under both keys of one record", () => {
+      const logger = makeLogger();
+
+      // The enumerator sets `executedUnit` to a wrapper's unquoted payload, so
+      // the two keys carry the same secret from the same tool call. Before the
+      // payload was re-parsed, `executedUnit` masked it and `command` did not.
+      logger.review("permission_request.waiting", {
+        toolName: "bash",
+        command: "bash -c 'TOKEN=sk-secret-value deploy'",
+        executedUnit: "TOKEN=sk-secret-value deploy",
+      });
+
+      expect(
+        JSON.parse(readFileSync(reviewLogPath, "utf8").trim()),
+      ).toMatchObject({
+        command: "bash -c 'TOKEN=[redacted] deploy'",
+        executedUnit: "TOKEN=[redacted] deploy",
+      });
+    });
+
     test("masks a command in the debug log too, which the width bound does not touch", () => {
       config.debugLog = true;
       const logger = makeLogger();

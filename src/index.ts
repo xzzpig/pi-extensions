@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getAgentDir, getPackageDir } from "@earendil-works/pi-coding-agent";
 import { warmBashParser } from "#src/access-intent/bash/parser";
 import { buildResolvedIntentFromMatchValues } from "#src/access-intent/input-normalizer";
+import { AskDialogQueue } from "#src/authority/ask-dialog-queue";
 import { AuthorizerChainAudit } from "#src/authority/authorizer-chain-audit";
 import {
   AuthorizerRegistry,
@@ -33,6 +34,7 @@ import {
 import { SubagentDetection } from "#src/authority/subagent-detection";
 import { subscribeSubagentLifecycle } from "#src/authority/subagent-lifecycle-events";
 import { getSubagentSessionRegistry } from "#src/authority/subagent-registry";
+import { ConfigIssueReporter } from "#src/config/config-issue-reporter";
 import { registerPermissionSystemCommand } from "#src/config/config-modal";
 import { getGlobalConfigPath } from "#src/config/config-paths";
 import { ConfigStore } from "#src/config/config-store";
@@ -131,6 +133,11 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
 
   const prompter = new PermissionPrompter({ logger });
 
+  // One queue per factory invocation, so it is rebuilt with the session rather
+  // than outliving it: the host holds a single inline dialog slot, and a second
+  // presentation there strands the first ask's promise (#965).
+  const askDialogQueue = new AskDialogQueue();
+
   // The filesystem half of the serving announcement. `servingRegistry` reaches
   // an in-process child through `globalThis`; a child in its own process shares
   // nothing but this directory, so the served session publishes a heartbeat
@@ -148,6 +155,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
   const authorizerSelection = new AuthorizerSelection({
     detection: subagentDetection,
     events: pi.events,
+    dialogs: askDialogQueue,
     getPromptPreferences: () => ({
       doublePressToConfirm: configStore.current().doublePressToConfirm,
       budget: resolveRenderBudget(configStore.current()),
@@ -236,8 +244,10 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
   // refresh() must run after `session` is assigned: a debug-write IO failure
   // triggers the logger's notify sink — `session.notify(m)` — which no-ops
   // on the null context but requires `session` to be bound.
-  // No ctx/trust decision exists at factory init, so withhold the project
-  // scope (fail closed); session_start reloads with the real trust decision.
+  // No cwd or trust decision exists at factory init, so there is no project
+  // scope to withhold from (fail closed); session_start reloads with the real
+  // cwd and trust decision. This load reports nothing to the operator: it
+  // cannot, and it used to consume the warning by pretending it had (#933).
   configStore.refresh(undefined, false);
 
   const configPath = getGlobalConfigPath(agentDir);
@@ -305,12 +315,20 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
   };
 
   const audit = new DecisionAudit();
+  // Reads the store's issue list and tells the operator what is new, through
+  // the logger's warn sink rather than a ctx parameter — which is what the
+  // factory-time priming refresh lacked, so every config issue already on disk
+  // was recorded as delivered and never shown (#933). Driven at session_start
+  // and on every turn; the latch keeps an unchanged issue quiet.
+  const configIssueReporter = new ConfigIssueReporter(configStore, logger);
   const lifecycle = new SessionLifecycleHandler(
     session,
     resolver,
     serviceLifecycle,
     logger,
     audit,
+    configIssueReporter,
+    askDialogQueue,
   );
   const turnPrep = new SessionTurnPrep(
     session,
@@ -318,6 +336,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
       void warmBashParser();
     },
     serviceLifecycle,
+    configIssueReporter,
   );
   const agentPrep = new AgentPrepHandler(
     turnPrep,

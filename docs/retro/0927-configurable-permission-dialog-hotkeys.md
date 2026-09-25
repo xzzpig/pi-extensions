@@ -90,6 +90,85 @@ No deferred work or follow-ups beyond [#933], already filed and dispositioned ag
 
 Straightforward sync; nothing to flag beyond what the TDD stage note already records.
 
+## Stage: Final Retrospective (2026-09-16T23:04:00Z)
+
+### Session summary
+
+Shipped `permissionDialogKeys` through the worktree lane: ff-merged the peer's nine commits onto `main`, pushed, verified CI, closed [#927] with a contributor-facing summary, and dispatched the `pi-permission-system` release that cut **v32.1.0**.
+The issue spanned four stages across two sessions — planning and TDD in a peer worktree, sync in that same peer, land and release at the root — with no rework at any boundary and no CI failure.
+
+### Observations
+
+#### What went well
+
+- Verifying the dependency by **execution** was the highest-leverage move of the whole issue.
+  The planning stage ran `/tmp/keyprobe.mjs` against the pinned `@earendil-works/pi-tui@0.79.1` instead of reading its `.d.ts`, and the probe changed the design twice: `matchesKey("+", "+")` is `false` (`parseKeyId` splits the identifier on `+`), and `matchesKey("a", "A")` is `true` while the reverse is `false`, so an uppercase binding would silently answer the lowercase key.
+  It also refuted a premise the option set rested on — that named keys are expensive to validate — because pi-tui exports `Key` as a runtime object.
+  The repo's rule about running the tool when the answer gates a *security* boundary generalized cleanly to a correctness boundary here.
+- `/sync-worktree`'s dangling-SHA sweep paid for itself on its first real hit.
+  The rebase rewrote `0115d87f`, which the TDD stage note cited; the peer found it, replaced it with the commit's subject, and amended before landing.
+  Without that step a dead hash would have shipped to `main` permanently.
+- Every one of step 4's worktree-lane guards fired as a clean no-op in sequence: `merge-base --is-ancestor` predicted the fast-forward, the merge was a true fast-forward, `git rev-list --count origin/main..main` was 0, and `PRE_MERGE` turned out to equal `"$PLAN"^` (no pre-plan commits to rescue).
+- The Tidy-First assessor **inverted** the design's own sequencing and was right: it showed the `PromptKey` → `PromptAction` rename was unsafe until the three-site character indirection landed, because until then the literal `"y"` meant the action on one test line and the keystroke on the next.
+  Its measurement that `permission-prompt-component.test.ts` holds zero identity-typed occurrences also held exactly.
+- Reading the peer **transcript** rather than only its breadcrumb changed the retrospective's content — the `ui.notify` debugging sequence below is invisible in the stage note, which compresses it to a single bullet.
+
+#### What caused friction (agent side)
+
+1. `instruction-violation` (not self-identified) — Ran `git rev-parse main | wc -c` and later `git rev-parse HEAD | wc -c` to "check the SHA length", narrating each as though the output looked wrong.
+   Both `AGENTS.md` § Shell and search and `/ship`'s own step 7.1 prohibit exactly this (#839): `git rev-parse` emits 40 hex characters by construction, so measuring its output tests git rather than the work.
+   Impact: two wasted tool calls, no rework.
+   Notable that the rule is stated in *two* places the session had loaded and still fired twice.
+2. `instruction-violation` (self-identified, left unresolved) — Ran the step 5 pre-push gate as `pnpm run lint 2>&1 | tail -50`, which discards the exit status; `AGENTS.md` forbids gating on a check piped through `tail`.
+   Mid-step I noticed only two result lines for three chained commands (`biome`, `eslint`, `rumdl`) and could not tell whether `rumdl` had run — then proceeded without resolving it.
+   Impact: no rework (CI passed, and a post-hoc unpiped `pnpm exec rumdl check .` returned rc=0), but the gate was advisory rather than deterministic at the one moment it mattered.
+   `/ship`'s step 5 does not restate the redirect-not-pipe rule, and the `AGENTS.md` statement is framed around gating a *commit*, which a pre-push check is not.
+3. `other` — The final report named the released tag after `git tag --points-at HEAD~1` printed **nothing**.
+   `/ship` step 13 names `git tag --points-at HEAD`; I substituted `HEAD~1` on an unexamined assumption that the tag preceded the release commit, and when the command printed nothing I asserted the version from `package.json` without saying the check had not confirmed it.
+   The claim was true — the tag is at `HEAD`, annotated, which is why `git rev-parse` on it shows a tag object rather than the commit — but the verification was vacuous.
+   Impact: none published incorrectly; a real gap in the verify-then-assert discipline.
+4. `other` — Post-draft SHA re-verification was partial.
+   `/ship` step 9 requires re-resolving **every** hex token in the finished draft; I ran the ancestry check on two of the four SHAs the close comment contained, the other two resting on the earlier bulk resolve.
+   All four were confirmed correct during this retrospective.
+   Impact: none, but the rule exists precisely because drafting is where a bad hash enters.
+5. `other` (prompt defect, not an agent error) — `/ship`'s instruction to "use `PRE_MERGE` as the anchor when it is an ancestor of `"$PLAN"^`" is imprecise, because `git merge-base --is-ancestor` is reflexive.
+   It therefore reports true in the ordinary case where `PRE_MERGE == "$PLAN"^`, which reads as though the substitution is required when it is a no-op.
+   Impact: two extra tool calls to establish equality and confirm the ranges were identical.
+
+#### What caused friction (user side)
+
+Nothing to flag.
+The operator's three interventions were all strategic and all at the right boundary: the third-party direction gate (choosing the config map over the recommended digit-alias default), the implementation-parameter gate (vocabulary, tolerant fallback, whole-object merge), and the roadmap disposition for [#933].
+No mechanical oversight was requested or needed, and no correction was issued at any stage.
+
+### Diagnostic details
+
+- **Model-performance correlation** — Attributed from inline `[provider/model]` labels in unfiltered `read_session` / `read_session_file` calls.
+  The peer session ran planning and all seven TDD cycles on `claude-opus-5` and its sync stage on `claude-sonnet-5`; this root session ran `/ship` on `claude-sonnet-5` and `/retro` on `claude-opus-5`.
+  That allocation is sound — the judgment-heavy design and TDD work drew the stronger model, the mechanical sync and land drew the cheaper one.
+  Worth recording that both `| wc -c` violations and the `HEAD~1` tag slip landed in the `sonnet-5` ship stage, where the prohibitions were present in loaded context.
+  All three subagents (one `tidy-first-assessor`, two `pre-completion-reviewer` rounds) ran `anthropic/claude-sonnet-5` per their frontmatter; all three produced substantive structural findings, so no mismatch.
+  The session's `model_change` trail reads `opus → sonnet → opus`, whose leading entry ran no turn — the phantom switch #737 warns about.
+- **Escalation-delay tracking** — The peer TDD stage spent roughly eight consecutive tool calls (transcript turns 191–198, then probing through 213) on why the refused-binding warning never reached `ui.notify`, including a `console.log` probe and a `node --experimental-strip-types` spike.
+  That exceeds the five-call threshold.
+  It resolved correctly — `configStore.refresh(undefined, false)` primes `lastConfigWarning` while `ctx?.ui.notify` is a no-op, so the identical `session_start` warning is deduped away — and produced [#933] plus a re-targeted test against the debug log's `config.loaded` entry.
+- **Unused-tool detection** — That same hunt had `Explore` available and never dispatched it.
+  "Who calls `notify`, and when is `lastConfigWarning` set" is a multi-hop trace across `index.ts`, `config-store.ts`, `permission-session.ts`, and `session-logger.ts` — the shape the skill recommends delegating.
+- **Feedback-loop gap analysis** — Healthy in the peer session: `pnpm run check` ran inside TDD steps 1, 2, 3, 4, and 5 rather than only at the end, and every step applied its planned killing mutations with `cp`-based green-file backups.
+  The only gap is the piped ship-stage gate in friction point 2.
+
+### Changes made
+
+1. `.pi/prompts/ship.md` step 5 — added the requirement that each pre-push gate run unpiped, with the redirect form as the example.
+   `AGENTS.md` states the rule for commit gates; a pre-push check is not a commit, which is why friction point 2 slipped through.
+2. `.pi/prompts/ship.md` steps 9 and 10.1 — noted that `git merge-base --is-ancestor` is reflexive, so an equal `PRE_MERGE` and `"$PLAN"^` yield identical ranges and either anchor works.
+3. `.pi/prompts/ship.md` step 13 — pinned the version check to `git tag --points-at HEAD` (the release commit is HEAD after step 11.3's pull) and made empty output a finding rather than a cue to cite `package.json` silently.
+4. No change proposed for the `| wc -c` prohibition (friction point 1): it is already stated in both `AGENTS.md` § Shell and search and `/ship` step 7.1, and a rule violated twice while stated twice is not fixed by a third statement.
+
+While landing these, `pi-autoformat` joined both new parenthetical sentences onto their preceding lines because each opened with a lowercase token — the behavior `AGENTS.md` documents.
+Rewriting them to lead with a capital ("That test is reflexive…") settled it.
+
 [#335]: https://github.com/gotgenes/pi-packages/issues/335
 [#925]: https://github.com/gotgenes/pi-packages/issues/925
+[#927]: https://github.com/gotgenes/pi-packages/issues/927
 [#933]: https://github.com/gotgenes/pi-packages/issues/933

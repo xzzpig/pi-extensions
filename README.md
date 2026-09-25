@@ -20,8 +20,8 @@ Permission enforcement extension for the [Pi](https://pi.mariozechner.at/) codin
 - **Protects sensitive file patterns** — cross-cutting `path` rules deny `.env`, `~/.ssh/*`, etc. across all tools and bash at once, matching both the path as referenced and its symlink-resolved form so a deny cannot be evaded through a symlink alias
 - **Guards external paths** — prompts before file tools or bash commands reach outside `cwd`
 - **Fails closed** — an internal gate error blocks the tool (with a `gate_error` review-log entry and a matching `permissions:decision` broadcast), and a bash command the parser could not resolve, in whole or in part — or an indirection wrapper that hides the gated command (`bash -c`/`eval`, `sudo`, `env`, `xargs`, `find -exec`, …) — prompts (`ask`) rather than passing silently, unless the wrapped command is a pure reader whose direction is provable whatever it is fed (`xargs grep -l foo`); where a partial parse failure's own region re-parses cleanly on its own, the commands and paths it holds are recovered and gated rather than merely prompted for
-- **Forwards prompts from subagents** — `ask` policies work even in non-UI execution contexts
-- **Broadcasts UI prompt events** — `permissions:ui_prompt` fires only when the permission system is about to invoke the active user-facing permission UI, and every prompt it announces — including one forwarded up from a subagent — is answered by a `permissions:decision` on the same bus
+- **Forwards prompts from subagents** — `ask` policies work even in non-UI execution contexts, and a forwarded prompt queues behind whatever dialog is already open instead of replacing it
+- **Broadcasts UI prompt events** — `permissions:ui_prompt` fires only when the permission system is about to invoke the active user-facing permission UI (for a queued ask, when its turn comes rather than when it was raised), and every prompt it announces — including one forwarded up from a subagent — is answered by a `permissions:decision` on the same bus
 - **Native [`@gotgenes/pi-subagents`](https://github.com/gotgenes/pi-subagents) integration** — in-process child sessions register with the permission system automatically, enabling per-agent policy enforcement and `ask`-state forwarding to the parent UI without configuration
 
 ## Install
@@ -183,6 +183,11 @@ Hardening the gates against bypass, fail-closed corrections (breaking ones inclu
 - _Model judgment in the core._
   This package makes no LLM call and holds no model config; model-assisted judging attaches as a chain link over the authorizer seam instead.
   A link decides nothing until you name it in `authorizerChain`, and its `allow` on an excluded surface is downgraded to `defer`.
+- _Supporting a non-Pi host._
+  Built and validated against Pi's extension API and no other: a fork that loads Pi extensions — [Oh My Pi](https://github.com/can1357/oh-my-pi) among them — diverges in payload shape, tool vocabulary, and approval authority, on its own release schedule.
+  Input that violates a contract this package already reads is hardened against anyway, because defensive normalization is correct whoever sent it.
+  Modeling a foreign host's semantics is not, because a guarantee that cannot be executed against is worse than a declined one.
+  This one is conditional rather than permanent — the architecture doc names the five conditions that would make a second host a goal.
 
 The [architecture doc](https://github.com/gotgenes/pi-packages/blob/main/packages/pi-permission-system/docs/architecture/architecture.md#scope-and-non-goals) carries the full inventory, with the decision record behind each entry.
 
@@ -194,6 +199,7 @@ The companion question — whether a capability model replaces the actor-keyed s
 **Where adjacent requests belong.**
 True isolation of a permitted action → an agent sandbox, which this package's scope decisions are exported to rather than duplicated in.
 Model-assisted judging of an `ask` → a chain link over the authorizer seam; [@gotgenes/pi-permission-model-judge](https://www.npmjs.com/package/@gotgenes/pi-permission-model-judge) is the first-party one, and judges mistyped paths.
+A non-Pi host's own payload shapes and tool formats → that host's Pi-compatibility layer, where one fix reaches every Pi extension at once instead of one.
 Approve-and-steer, edit diffs, and risk explanations → a downstream package over the `permissions:decision` event and the presentation seams.
 
 ## Documentation

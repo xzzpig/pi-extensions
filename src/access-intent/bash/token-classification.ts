@@ -52,7 +52,7 @@ import type { PathFlavor } from "#src/path/path-flavor";
  * Accepts tokens that unambiguously look like filesystem paths:
  * - Absolute paths (starting with `/`)
  * - Home-relative paths (starting with `~/`)
- * - Parent-traversal paths (containing `..`)
+ * - Parent-traversal paths (carrying a whole `..` segment)
  * - Windows drive-letter absolute paths (`C:/…` or `C:\…`)
  *
  * Returns the raw token string if it qualifies, or `null` to skip.
@@ -62,7 +62,7 @@ export function classifyTokenAsPathCandidate(token: string): string | null {
 
   if (token.startsWith("/")) return token;
   if (token.startsWith("~/")) return token;
-  if (token.includes("..")) return token;
+  if (hasParentTraversal(token)) return token;
   if (WINDOWS_DRIVE_PATH_PATTERN.test(token)) return token;
 
   return null;
@@ -85,7 +85,8 @@ export function classifyTokenAsPathCandidate(token: string): string | null {
  * and order-independent, and covers the backslash-only form (`D:\…`) which the POSIX
  * flavor's `hasPathSeparator` cannot reach.
  *
- * Does NOT require the strict "must start with `/` or `~/` or contain `..`"
+ * Does NOT require the strict "must start with `/` or `~/` or carry a whole
+ * `..` segment"
  * gate that the external-directory classifier uses.
  *
  * Returns the raw token string if it qualifies, or `null` to skip.
@@ -98,7 +99,7 @@ export function classifyTokenAsRuleCandidate(
 
   if (token.startsWith(".")) return token;
   if (flavor.hasPathSeparator(token)) return token; // ~/ paths, relative paths with /, and win32 dir\file
-  if (token.includes("..")) return token; // bare ".." (no slash)
+  if (hasParentTraversal(token)) return token; // a backslash `..` segment on POSIX
   if (WINDOWS_DRIVE_PATH_PATTERN.test(token)) return token; // backslash-only drive form
 
   return null;
@@ -130,6 +131,23 @@ export function classifyBareTokenCandidate(token: string): string | null {
 }
 
 // ── Private rejection predicate ────────────────────────────────────────────
+
+/**
+ * A `..` standing as a whole path segment: exactly `..`, or a `..` bounded by
+ * a separator (`/` or `\`) or a token edge on both sides. A `..` inside a
+ * segment is not a traversal: a git revision range (`HEAD..origin/main`,
+ * `v1..v2`, `a...b`) never names a parent directory, so it must not reach the
+ * external-directory guard. A real file whose name carries `..` is still
+ * reached through the resolver's existence probe (#645).
+ *
+ * The backslash counts on every flavor: the strict classifier takes no flavor,
+ * and Git Bash hands a `\` to Windows file APIs as a separator.
+ */
+const PARENT_TRAVERSAL_SEGMENT_PATTERN = /(^|[/\\])\.\.($|[/\\])/;
+
+function hasParentTraversal(token: string): boolean {
+  return PARENT_TRAVERSAL_SEGMENT_PATTERN.test(token);
+}
 
 /**
  * Windows drive-letter absolute path: a single ASCII letter, a colon, then a

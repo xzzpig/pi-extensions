@@ -53,7 +53,7 @@ The assessor found nothing preparatory; its one considered candidate (a `scriptF
 
 - [#886] — should an interpreter's inline script floor to `ask` like `bash -c`?
   Filed because #863 removes the last accidental signal that an interpreter payload is opaque, even though it removes no real protection.
-  Disposition recorded against Phase 15 as deferred to a later phase (commit `1f5b983c`): it adds prompts in the opposite direction from this phase's cause, and Steps 4 and 6 change its calculus before it is worth scheduling.
+  Disposition recorded against Phase 15 as deferred to a later phase (commit `docs(pi-permission-system): disposition #886 against Phase 15`): it adds prompts in the opposite direction from this phase's cause, and Steps 4 and 6 change its calculus before it is worth scheduling.
 
 ## Stage: Strategic review (2026-09-07T04:18:01Z)
 
@@ -84,7 +84,7 @@ The outcome is [#892] (the sandbox ADR, folded into Step 6 and moved first), [#8
 - **Candidate cause:** the bash path projection infers a shell command's filesystem effects from its text and uses the inference as a security boundary; the problem is undecidable in general, each fix adds a table row that "rots silently" (ADR 0009's own words), and the unrecoverable failure (a dropped operand) is the one no corpus can measure.
 - **Sequencing call:** [#892] opens *before* this issue's implementation.
   Step 6 folds it in, is scoped up from "export + launcher" to "decision record + manifest compiler + `bash` override + Linux webhook backend + macOS re-run backend + fallback prompt", and lands ahead of Steps 1–5 and 7, each of which is re-evaluated once the record exists.
-  Recorded in the roadmap's sweep list and Track C (commit `42458eb0`).
+  Recorded in the roadmap's sweep list and Track C (commit `docs(pi-permission-system): disposition #892 against Phase 15 — fold into Step 6, first`).
 - **What this plan becomes:** not implemented as written.
   Its Change A (a consumed flag argument is searched for hosted executions) is a genuine ADR 0009 guarantee violation and may land alone; its Change B (interpreter rows) amends the ADR 0009 bound the record would rather freeze.
   [#863] and [#859] close against the sandbox, or [#859] lands as its one-regex fix.
@@ -199,3 +199,198 @@ The fourth proposal — a `/plan-issue` direction-gate option for a triage entry
 It remains the change that would have addressed the largest cost in this issue, and is recorded here rather than filed.
 
 [#895]: https://github.com/gotgenes/pi-packages/issues/895
+
+## Stage: Planning \(re-plan after reopen\) (2026-09-20T17:27:32Z)
+
+### Session summary
+
+Re-planned #863 against current `main` after [#945] landed the original plan's Change A in a wider form, rewriting `docs/plans/0863-interpreter-inline-script-role.md` in place as a single-change plan.
+Re-measured the whole blast radius at `c8d96d30` over a 7937-command corpus with a disposable vitest spike against the real collector and both classifiers, and re-verified every interpreter flag row by running today's binaries.
+The re-measurement found a defect the 2026-09-06 draft had asserted away, which became a new Phase 15 step ([#957]).
+
+### Observations
+
+- **The prior plan's `--eval=` claim was wrong, and only execution showed it.**
+  The draft reasoned from the branch structure that the `=`-embedded spelling was covered free, because `inline-value` pushes a token only for `script-file`.
+  Measured: `node --eval=//x` projects nothing, and `node --eval='// x'` projects `// x`.
+  The flag branch is guarded on `child.type === "word"`, and quoting the value makes the argument a `concatenation` that never reaches the flag table at all.
+  The generalizable form: a claim about which branch a token takes is a claim about the **parse**, and `tree-sitter-bash`'s node type is not derivable from the source text by inspection.
+- **That gap is pre-existing, not interpreter-specific, and already recorded.**
+  `grep --regexp='/etc/passwd' f.txt` leaks the pattern at HEAD today.
+  ADR 0009 § "What the projection deliberately omits" already names the mechanism (`rg -g'!docs'`) and explicitly declines "widening flag detection to quoted tokens" on the `sd '-old' '-new' file.txt` objection.
+  I filed [#957] before finding that passage, then corrected the framing in a follow-up comment rather than leaving the issue claiming an unrecorded gap.
+  The declination priced the naive lever (drop the type guard); the narrow lever — classify any node type, act only on *recognized* directives — preserves `regular-flag` fall-through and does not pay that cost.
+  Operator adopted [#957] as a Phase 15 step after [#859]; the roadmap entry says outright that the amendment is the step's substance and the code is ten lines.
+- **The old plan's own outcome metric cannot observe this fix.**
+  `measure-path-false-positives.mjs` reads the *asks that actually fired*, so it depends on the operator's policy.
+  It reports `2026-05 12 / 2026-06 6 / 2026-07 4 / 2026-08 6` and has **no 2026-09 row at all** — zero bash `external_directory` asks this month.
+  The roadmap step's `Outcome:` bullet currently promises that metric reads 0, which it already does for an unrelated reason; step 3 of the new plan corrects it to the collector-level figure (219 → 18 interpreter nodes contributing a non-path `path` candidate).
+- **No permanent instrument, by operator decision.**
+  The repo's `scripts/measure-*.mjs` cannot import TypeScript and therefore transcribe the rules they measure; for this change that would mean copying six `PatternCommandConfig`s and both classifiers.
+  The plan inlines the disposable vitest spike's source instead, so the numbers stay falsifiable without a second copy of the table rotting in `scripts/`.
+- **Tidy First: nothing recommended.**
+  The assessor confirmed the config-constant region and both test files already carry the shape this change needs, and declined a shared `scriptFlagsConfig(...)` factory for `NODE_CONFIG`/`BUN_CONFIG` as the wrong abstraction — the two maps are identical by coincidence of spelling, and the separate objects record that they are separate parsers.
+  It also caught that the design summary's line count for `token-collection.ts` was stale (795 vs. 811), a `#945` artifact.
+- **Third-party issue, but the direction was already settled.**
+  `kuoruan` filed it; the operator's 2026-09-18 reopening comment states the direction and that the plan stands.
+  The gate this session ran therefore covered only what changed since — which turned out to be two real decisions, not zero.
+
+#### Deferred tidyings
+
+None new.
+The assessor's one rejection (`scriptFlagsConfig(...)` factory) is a judgment about new code rather than existing debt, and the plan tells the implementing session not to introduce it.
+
+### Follow-ups filed
+
+- [#957] — a pattern-first command's quoted `--flag='value'` bypasses the flag table and projects the value.
+  Adopted as a Phase 15 step, after [#859] and ahead of [#609], with the ADR 0009 declination recorded on the step.
+
+[#609]: https://github.com/gotgenes/pi-packages/issues/609
+[#957]: https://github.com/gotgenes/pi-packages/issues/957
+
+## Stage: Implementation — TDD (2026-09-20T17:49:16Z)
+
+### Session summary
+
+Executed all three TDD steps: the interpreter rows in `PATTERN_FIRST_COMMANDS` (`fix:`), the ADR 0009 amendment (`docs:`), and the roadmap/module-tree/compat-doc updates (`docs:`).
+Test count went 4540 → 4570 (+30) in `pi-permission-system`; all four gates green from the repo root (`check`, `lint`, `test`, `fallow dead-code`).
+Pre-completion reviewer returned **WARN** with no defect found — its single finding is that it could not re-derive the corpus measurement under its read-only mandate.
+
+### Observations
+
+- **All five predicted killing mutations behaved as planned, and two produced extra reds worth having.**
+  Deleting `["node", NODE_CONFIG]` reddened 12 (all `node`; `bun`/`python3`/`perl`/`ruby` stayed green).
+  Removing `patternPositionals: 0` reddened `node build.js /tmp/x` **and**, unpredicted, the `#957` pin — with the budget back at 1, the leaked `--eval=// x` token is spent as the pattern positional.
+  That is useful: it means the pin has two independent ways to fail, which is what makes it not vacuous.
+  Extending the `inline-value` push to `script` reddened `node --eval=//x` and left the spaced `node --eval "// x"` green, plus three pre-existing `#823` cases, since the mutation is on the shared branch.
+  Re-stamping hosted tokens with the enclosing effect reddened exactly two: my new attribution case and [#945]'s own.
+- **A sixth mutation was added for the `#957` pin, because the plan's five did not cover it.**
+  Deleting `child.type === "word"` from the flag branch — the narrow fix [#957] proposes — reddens the pin and one `#823` case.
+  Worth generalizing: a test that pins an *unfixed* gap has no Red step of its own when the gap already exists, so its discriminating mutation is the future fix, not a break of the code just written.
+- **Two spellings were asserted as current-behavior pins rather than omitted.**
+  `node --eval='// x'` still projects `["--eval=// x", "// x"]` ([#957]) and `perl -pe 's|a|b|' f.txt` still projects `["s|a|b|", "f.txt"]`.
+  Both carry a comment naming why; when either closes, the test fails and points at its issue instead of silently over-asserting the gap as intended.
+- **Deviation: the health-metric baseline row was not edited.**
+  The plan said "Interpreter script-role commands in `token-collection.ts` moves off its `0` baseline".
+  The `package-pi-permission-system` skill says a dated `Baseline (<date>)` column is a fixed phase-open snapshot recomputed at phase close, not a per-step value — so the row is unchanged and the current reading (6) went into the recompute-command line instead, alongside the `bun` the plan required.
+  The reviewer saw the deviation stated and passed the documentation check.
+- **Deviation: the roadmap step's `Outcome:` was rewritten, as the plan directed.**
+  It promised `measure-path-false-positives.mjs`'s monthly non-path column would read 0; that metric counts asks that actually *fired*, and it has no 2026-09 row at all.
+  Replaced with the collector-level figure, and the `Outcome:` now says explicitly why the monthly column is the wrong instrument here.
+- **The `Edit` tool mangled em-dashes twice, into the literal string `erence2`.**
+  Caught both times by reading the region back after the edit rather than trusting the write.
+  Both regions were repaired with a Python `str.replace`, and the remaining prose edits were written through Python with an `@M@` placeholder instead of the literal character.
+  A `grep -n 'erence'` over each touched file confirmed the repair.
+- **Pre-completion reviewer: WARN, no defect.**
+  It re-ran every flag row against the installed binaries itself (including `node -p t.js`'s source-evaluation behavior and `ruby -E` vs `perl -E`), mechanically re-derived that `positionalsSeen < 0` is unreachable so a zero budget cannot skip a positional, confirmed both residual pins execute with the literal arrays claimed, and rendered the Mermaid charts.
+  Its WARN is that it did not re-run the 7937-command corpus spike, which its read-only mandate excludes — disclosed rather than reported as verified.
+
+[#945]: https://github.com/gotgenes/pi-packages/issues/945
+
+## Stage: Sync (worktree) (2026-09-20T19:10:14Z)
+
+### Session summary
+
+Pre-push checks pass clean from the worktree root (`pnpm run lint`: no issues in 1220 files; `pnpm fallow dead-code`: 0 issues, 366 entry points).
+The plan's `**Release:**` marker is `ship independently` — nothing downstream needs to land in the same release.
+Two follow-up issues were filed during planning and are already dispositioned against Phase 15 on `main` (not part of this branch's diff): [#957] (quoted `--flag='value'`, adopted after [#859]) and the pre-existing [#886] (interpreter payload floor-to-`ask`, deferred).
+
+**Peer session transcript:** `/Users/chris/.pi/agent/sessions/--Users-chris-development-pi-pi-packages-worktrees-issue-863--/2026-09-20T17-02-16-317Z_01a0bfc4-bafc-7092-a300-a686dffe99b0.jsonl` — read with `read_session_file({ path: "..." })` for message-level verification at land/retro time.
+
+### Observations
+
+No deferred work beyond what the plan's Non-Goals already name ([#957], [#886], [#609]'s `TokenRole` absorption, the interpreter cluster residual).
+Pre-completion reviewer returned WARN at the TDD stage (disclosed limitation of its read-only mandate, not a defect); no action needed before this sync.
+
+## Stage: Final Retrospective (2026-09-20T20:32:42Z)
+
+### Session summary
+
+Shipped #863 for real on its second lifecycle: the interpreter rows landed in `PATTERN_FIRST_COMMANDS`, ADR 0009 gained its fourth in-scope edit, and `pi-permission-system` released v33.0.5.
+The first pass, retrospected in this same file on 2026-09-07, closed the issue `not_planned` against the sandbox-first re-sequencing; the operator reopened it on 2026-09-18 after revising that call.
+This entry covers the re-plan, TDD, sync, and ship stages of the second pass, and its dominant finding is a previously unseen failure mode of the `Edit` tool's em-dash emission that reached committed source past every gate.
+
+### Observations
+
+#### What went well
+
+- **The corruption was caught by a check written for something else entirely.**
+  `/sync-worktree`'s dangling-SHA scan greps the retro file for hex tokens and tests each against `main`.
+  Its `grep -oE '[0-9a-f]{7,40}'` tripped over bytes that were neither hex nor visible, which is the only reason anyone looked.
+  A scan added for rebase-invalidated SHA citations paid off on an unrelated defect class: an argument for keeping cheap checks in the pipeline even when their stated cause is narrow.
+- **A test that pins an unfixed gap has no Red step of its own, so its discriminating mutation is the future fix.**
+  The plan predicted five killing mutations; the TDD session added a sixth for the [#957] residual pin, deleting `child.type === "word"` from the flag branch, which is exactly the narrow fix [#957] proposes.
+  Generalizable past this issue: a current-behavior pin is vacuous unless you can name the change that reddens it.
+- **Two predicted mutations produced unpredicted extra reds that strengthened the suite.**
+  Removing `patternPositionals: 0` reddened the [#957] pin as well as `node build.js /tmp/x`, so that pin now has two independent ways to fail.
+- **Both subagents ran read-only and still produced falsifiable evidence rather than opinion.**
+  The `pre-completion-reviewer` re-ran every interpreter flag against the installed binary, mechanically established that `positionalsSeen < 0` is unreachable, and disclosed the one figure it could not re-derive instead of restating it as verified.
+  The `tidy-first-assessor` returned an empty recommendation for the second time on this issue, and caught a stale line count in the design summary on the way.
+- **The operator's reopening comment did work the re-plan would otherwise have repeated.**
+  It stated what had changed, what still held from the strategic review, and that the plan's direction stood, so the re-plan session's direction gate covered only the genuinely new decisions.
+
+#### What caused friction (agent side)
+
+- `other` (peer TDD and sync sessions) — the `Edit` tool emitted an em-dash as an invisible `\x0c` form-feed followed by the literal text `erence2`, and an ellipsis as `\x0c` plus `erence6`.
+  The sync session counted them on eight lines of an already-committed `token-collection.ts`.
+  `pnpm run check`, Biome, ESLint, `rumdl`, and 4570 passing tests were all green with the bytes in the tree.
+  Measured during this retrospective, the reason is narrower and more useful than "no gate catches it": Biome's `lint/suspicious/noIrregularWhitespace` **does** catch a form feed in code position, and did not fire only because every occurrence sat inside a doc comment.
+  A probe file with the byte between `y` and `=` is flagged as an error; the same byte inside a `/** */` comment is clean, and `tsc --noEmit` exits 0 on both.
+  `rumdl` is clean on the markdown equivalent.
+  So the blind spot is precisely comment and prose text, which is also the only place authored em-dashes appear.
+  The sharp edge is the repair: replacing the visible `erence2` text left the form-feed byte behind, so the confirming `grep -n 'erence2'` reported clean on a file that was still corrupt.
+  Impact: roughly 14 consecutive tool calls in the sync session to diagnose at byte level (`xxd`), strip, and fold the fix back into its origin commit behind a backup tag and a scripted `--fixup`/`--autosquash` rebase.
+  The existing rule in `markdown-conventions` names only the bare-newline form, and its detection recipe cannot see this one.
+- `other` (ship session) — `/ship` step 9's anchor grep, `--grep="docs: plan .*(#863)"`, does not match a `docs: re-plan …` subject, so it resolved the abandoned 2026-09-06 plan commit instead of the 2026-09-20 one.
+  The resulting range ran to roughly 300 commits across dozens of unrelated issues.
+  Impact: self-caught on the next call from the obviously wrong range size, then 4 tool calls to re-derive the correct 7-commit range; no wrong artifact was published.
+- `instruction-violation` (ship session, self-identified) — ran `echo ===` inside an `A; B` chain.
+  `AGENTS.md` § Shell names this exact case, its exact cause (zsh `equals` expansion), and its exact fix (`echo ---`).
+  Impact: the command aborted and discarded the second half of the chain; one retry call.
+- `instruction-violation` (ship session, self-identified, minor) — the `/ship` prompt forbids re-checking a pushed SHA's shape "in prose or in reasoning", and the ship session's reasoning twice narrated doing so before declining.
+  Impact: none beyond the narration, with no extra tool call.
+  Recorded because the 2026-09-07 retrospective in this same file logged the `| wc -c` form of it, making this the second appearance on one issue.
+- `instruction-violation` (peer sessions, self-identified, recurring) — duplicate `[#N]:` link-reference definitions were added to this retro file and then removed, once in the TDD stage and once in the sync stage.
+  `markdown-conventions` already states the rule precisely.
+  Impact: roughly four tool calls across the two sessions.
+  Salience rather than a documentation gap.
+
+#### What caused friction (user side)
+
+Nothing to flag.
+The reopening comment was unusually complete, the `**Release:** ship independently` marker meant the ship needed no release gate, and no operator round trip was required at any stage.
+The observation worth carrying forward is comparative: this issue's first pass spent a full planning session before the strategic question arrived, and its second pass ran clean precisely because that question had already been answered and written down.
+
+### Diagnostic details
+
+- **Model-performance correlation** — the re-plan and TDD stages ran on `anthropic/claude-opus-5`, `/sync-worktree` and `/ship` on `anthropic/claude-sonnet-5`, and this retrospective on `anthropic/claude-opus-5`.
+  Both subagents (`tidy-first-assessor`, `pre-completion-reviewer`) ran on `anthropic/claude-sonnet-5`, attributed from their own task transcripts rather than from their agent definitions.
+  No mismatch to flag, and one point in the other direction: the sonnet-5 reviewer did the most mechanically rigorous work in the issue, executing five language binaries and proving an unreachable branch by hand, and the sonnet-5 sync session diagnosed a byte-level corruption nobody had seen before and executed a non-interactive fixup rebase correctly.
+- **Escalation-delay tracking** — the form-feed diagnosis ran about 14 consecutive tool calls on one problem, over the five-call threshold.
+  A subagent was not the missing piece; one fact was, namely that the residue is a control byte rather than merely wrong text.
+  That is what a written rule can supply, which is why the change below is a rule rather than a process adjustment.
+- **Feedback-loop gap analysis** — no cadence gap: gates ran per TDD step, again at `/sync-worktree` step 2, again after the rebase, and again at `/ship` step 5 on the merged tree.
+  The gap is coverage instead, since no gate in the repository inspects tracked files for control characters, and all four that ran were green on a corrupt tree.
+
+### Changes made
+
+1. `.pi/prompts/ship.md` — widened the plan-commit anchor grep at all three sites (the argument-derivation note, step 9, step 10.1) from `docs: plan` to `docs: \(re-\)\?plan`, with one clause at step 9 naming why.
+   Verified against both a re-planned issue (#863 resolves the 2026-09-20 re-plan) and an ordinary one (#933 still resolves its plan).
+2. `.pi/skills/markdown-conventions/SKILL.md` — recorded the control-byte form of the em-dash corruption in § Non-ASCII in authored prose: the `\x0c` plus `erence2`/`erence6` signature, the `git grep -lI` detection, the fact that repairing the visible text leaves the byte, the comment-versus-code gate asymmetry, and the placeholder workaround.
+   Also noted that `pi-autoformat` rejoins a bare-newline split before the existing `rg --multiline` scan can see it, so the damage survives as a missing word rather than a split line.
+3. `.pi/skills/edit-tool/SKILL.md` — extended the existing non-ASCII clause with the control-byte form and a pointer to `markdown-conventions`, so a source-file edit session meets the rule at its own trigger.
+4. Filed [#960] — a pre-commit gate rejecting stray control characters in tracked files, with the measured gate-coverage table as its evidence.
+   Repo-scoped (`scope:repo`), so `roadmap-fit` exits at its first step with no package phase to disposition against.
+
+Two observations were recorded without a documentation change.
+The duplicate `[#N]:` link-definition churn is already stated precisely in `markdown-conventions`, so it is a salience problem that more text would not fix.
+The `PRE_MERGE` re-anchor in `/ship` step 9 worked as designed: it surfaced two pre-plan commits, which proved to be [#957] roadmap dispositions that correctly do not belong in this issue's close comment.
+
+#### Demonstrated in the writing of this retro
+
+Landing change 2 reproduced the defect it documents.
+The `Edit` call that added the rule emitted both of its em-dashes as bare newlines, `pi-autoformat` rejoined the lines, and the result read "on a still-corrupt file verify with" — a missing word, not a visible break.
+The existing `rg -n --multiline ' \n [a-z]'` recipe reported nothing, because the rejoin had already happened.
+Both sentences were repaired through the placeholder technique the rule recommends, which is the only method that worked on the first attempt in either session.
+
+[#960]: https://github.com/gotgenes/pi-packages/issues/960

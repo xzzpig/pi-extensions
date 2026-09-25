@@ -59,6 +59,57 @@ export function classifyWrapperWords(
   return undefined;
 }
 
+/**
+ * Index within `words` of the inline-shell payload — the inner program a shell or
+ * `eval` runs — or `-1` when the unit carries none.
+ *
+ * Indirection layers are peeled first, so `sudo bash -c '…'` answers the
+ * payload's index rather than `-1`. That is not a convenience:
+ * {@link executedUnitOf} peels them too, so a consumer that did not would mask a
+ * secret under `executedUnit` and write it verbatim under `command` — the
+ * inconsistency #923 reports, reintroduced one wrapper layer up.
+ *
+ * The index names the payload's *position*, which a vacant one still has
+ * (`bash -c`), so each caller decides for itself what reading past the end of
+ * `words` is worth.
+ */
+export function inlineShellPayloadIndex(words: readonly CommandWord[]): number {
+  let base = 0;
+  let current = words;
+
+  for (let depth = 0; depth < MAX_UNWRAP_DEPTH; depth++) {
+    const direct = directPayloadIndex(current);
+    if (direct !== -1) return base + direct;
+    if (classifyWrapperWords(current) !== "indirection") return -1;
+
+    const start = innerCommandIndex(current);
+    if (start === -1 || start >= current.length) return -1;
+    const end = execTerminatorIndex(current, start);
+    base += start;
+    current = current.slice(start, end);
+  }
+  return -1;
+}
+
+/**
+ * The payload index of a unit that is *already* the shell or `eval` running it.
+ *
+ * `eval` takes its program as the first argument (no `-c`, so the flag scan
+ * answers -1 and the index falls out as 1); a shell takes it after the `-c`
+ * cluster. Any other command name carries no inline program at all, which is
+ * what keeps an interpreter (`python3 -c`, `node -e`) out: its payload is
+ * another language, not shell.
+ */
+function directPayloadIndex(words: readonly CommandWord[]): number {
+  const commandName = wrapperName(words);
+  if (commandName === undefined) return -1;
+  const isShell = SHELL_WRAPPER_NAMES.has(commandName);
+  if (commandName !== "eval" && !isShell) return -1;
+  const flagIndex = shortFlagCIndex(words.slice(1).map((word) => word.text));
+  if (isShell && flagIndex === -1) return -1;
+  return flagIndex + 2;
+}
+
 // ── Wrapper vocabulary ───────────────────────────────────────────────────────
 
 /**
@@ -201,13 +252,16 @@ function nothingNew(text: string | null, unitText: string): string | null {
   return text.startsWith("-") ? null : text;
 }
 
-/** The inline-shell payload argument, unquoted; `null` when absent. */
+/**
+ * The inline-shell payload argument, unquoted; `null` when absent.
+ *
+ * Reads the **direct** index: {@link unwrapIndirection} has already peeled every
+ * wrapper layer by the time it reaches its opaque branch, so peeling again would
+ * look past a shell that is itself an outer wrapper's payload.
+ */
 function opaquePayload(words: readonly CommandWord[]): string | null {
-  const args = words.slice(1);
-  // `eval` takes its program as the first argument (no `-c`, so the index is
-  // -1); a shell takes it after the `-c` cluster.
-  const flagIndex = shortFlagCIndex(args.map((word) => word.text));
-  const payload = args[flagIndex + 1] as CommandWord | undefined;
+  const index = directPayloadIndex(words);
+  const payload = index === -1 ? undefined : words.at(index);
   return payload === undefined ? null : unquote(payload.text);
 }
 

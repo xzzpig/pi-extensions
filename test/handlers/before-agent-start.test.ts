@@ -71,9 +71,12 @@ function makeSetup(opts?: {
   // A real SessionTurnPrep over the same session: the tool-filtering and
   // prompt-sanitization assertions below read state an activated session owns,
   // so a `{ prepare: vi.fn() }` double would quietly change what they exercise.
-  const turnPrep = new SessionTurnPrep(session, warmParser, {
-    announceReady: vi.fn(),
-  });
+  const turnPrep = new SessionTurnPrep(
+    session,
+    warmParser,
+    { announceReady: vi.fn() },
+    { report: vi.fn() },
+  );
   const handler = new AgentPrepHandler(
     turnPrep,
     session,
@@ -374,6 +377,17 @@ describe("AgentPrepHandler.handle", () => {
 
     expect(result.systemPrompt).toContain("- Use read to examine files.");
     expect(result.systemPrompt).not.toContain("Use bash for file operations.");
+  });
+
+  it("carries the rules another extension added to the prompt options", async () => {
+    const { handler } = makeSetup();
+
+    const result = await handler.handle(
+      makeEvent(undefined, { promptGuidelines: ["An extension's rule"] }),
+      makeCtx(),
+    );
+
+    expect(result.systemPrompt).toContain("- An extension's rule");
   });
 
   it("keeps the wire system prompt stable across the tool-listing drift between turns", async () => {

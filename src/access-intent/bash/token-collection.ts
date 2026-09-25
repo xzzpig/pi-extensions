@@ -4,14 +4,31 @@ import { proveCommandEffect } from "./command-effects";
 import { EXECUTION_HOST_TYPES, forEachExecutionIn } from "./nested-execution";
 import {
   ARG_NODE_TYPES,
+  hasComputedPart,
   resolveNodeText,
   SKIP_SUBTREE_TYPES,
 } from "./node-text";
 import type { TSNode } from "./parser";
-import { redirectEffectForDestination } from "./redirect-analysis";
+import {
+  redirectEffectForDestination,
+  redirectTargetIndex,
+} from "./redirect-analysis";
 
 /**
- * A collected path-candidate token paired with the effect its position proved.
+ * What a collected token is, as the collector that produced it established.
+ *
+ * The role decides candidacy and the effect decides direction; both are
+ * stamped at the same site and never re-derived downstream.
+ */
+export type TokenRole =
+  /** An operand of unknown path-hood: shape and the existence probe decide. */
+  | "operand"
+  /** A redirect's own target, which the syntax proves names a file. */
+  | "redirect-destination";
+
+/**
+ * A collected path-candidate token paired with the effect its position proved
+ * and the role its collector gave it.
  *
  * The pairing is made where the token is *produced*, never by mapping a whole
  * result: a nested execution's tokens carry their own command's attribution
@@ -20,6 +37,7 @@ import { redirectEffectForDestination } from "./redirect-analysis";
 export interface PathToken {
   readonly token: string;
   readonly effect: TokenEffect;
+  readonly role: TokenRole;
 }
 
 // ── Public surface ─────────────────────────────────────────────────────────
@@ -36,10 +54,11 @@ export interface PathToken {
  * {@link SKIP_SUBTREE_TYPES} check: `heredoc_body` is in both sets, and the
  * host reading is the one that must win.
  *
- * For commands in `PATTERN_FIRST_COMMANDS`, uses position-based
- * argument skipping to avoid collecting inline patterns/scripts
- * as path candidates. For all other commands, collects all
- * arguments generically.
+ * For commands in `PATTERN_FIRST_COMMANDS`, uses position- and role-based
+ * argument skipping to avoid collecting inline patterns/scripts as path
+ * candidates — a leading pattern positional for a matching tool, a
+ * `script`-role flag's argument for an interpreter. For all other commands,
+ * collects all arguments generically.
  */
 export function collectPathCandidateTokens(node: TSNode): PathToken[] {
   if (node.type === "command") return collectCommandTokens(node);
@@ -107,17 +126,30 @@ export function collectCommandTokens(node: TSNode): PathToken[] {
  * in front of it is. A destination the operator names as a file descriptor
  * (`2>&1`) contributes no token at all.
  *
+ * The redirect's own target carries the `redirect-destination` role when the
+ * syntax proves it names a file, so the projection admits it whether or not
+ * the file exists yet (#609). Every other child is an `operand`: a word the
+ * grammar appends after the target belongs to the redirected command (#977).
+ *
  * Reading the redirect node itself belongs to `redirect-analysis.ts`, which
  * the command enumerator consults for the same fact (#803).
  */
 export function collectRedirectTokens(node: TSNode): PathToken[] {
+  const target = redirectTargetIndex(node);
   const tokens: PathToken[] = [];
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
     if (!child) continue;
     if (ARG_NODE_TYPES.has(child.type)) {
       const effect = redirectEffectForDestination(node, child);
-      if (effect) tokens.push({ token: resolveNodeText(child), effect });
+      if (effect) {
+        const token = resolveNodeText(child);
+        const role: TokenRole =
+          i === target && provesTarget(effect, child, token)
+            ? "redirect-destination"
+            : "operand";
+        tokens.push({ token, effect, role });
+      }
     }
     tokens.push(...collectHostedExecutionTokens(child));
   }
@@ -125,11 +157,32 @@ export function collectRedirectTokens(node: TSNode): PathToken[] {
 }
 
 /**
+ * Whether a redirect's target is proven to name this literal file.
+ *
+ * The operator must have proved an effect: a redirect the parse could not
+ * resolve proves nothing (#814). The value must be literal: a computed one
+ * names a file only running the command decides (ADR 0009's computed-path
+ * residual). And it must be non-empty, since bash refuses `> ""` rather than
+ * writing anything.
+ */
+function provesTarget(
+  effect: TokenEffect,
+  destination: TSNode,
+  token: string,
+): boolean {
+  return (
+    effect.source === "syntax" && !hasComputedPart(destination) && token !== ""
+  );
+}
+
+/**
  * Collect the path-candidate tokens of every command nested inside `node`'s
  * execution contexts, reading none of the host subtree's own text.
  *
  * This is what lets a heredoc body contribute its substitution's operands while
- * its prose stays out of the path surface entirely.
+ * its prose stays out of the path surface entirely, and an argument node
+ * contribute its quoted substitution's operands while its own text is judged
+ * by whatever role its walker gave it (#945).
  *
  * `node` may be a context outright (`> $(cmd)`) or merely contain one
  * (`> ${DIR}/$(cmd)`), so the traversal is the root-inclusive
@@ -201,7 +254,11 @@ function collectStatementOperandTokens(
       tokens.push(...collectPathCandidateTokens(child));
       continue;
     }
-    tokens.push({ token: resolveNodeText(child), effect: UNPROVEN_EFFECT });
+    tokens.push({
+      token: resolveNodeText(child),
+      effect: UNPROVEN_EFFECT,
+      role: "operand",
+    });
     tokens.push(...collectHostedExecutionTokens(child));
   }
   return tokens;
@@ -320,7 +377,9 @@ function collectEmbeddedOptionValues(
     if (!ARG_NODE_TYPES.has(child.type)) continue;
 
     const value = OPTION_VALUE_PATTERN.exec(resolveNodeText(child))?.[1];
-    if (value !== undefined) values.push({ token: value, effect });
+    if (value !== undefined) {
+      values.push({ token: value, effect, role: "operand" });
+    }
   }
   return values;
 }
@@ -331,7 +390,7 @@ function embeddedOptionValueToken(
   effect: TokenEffect,
 ): PathToken[] {
   const value = OPTION_VALUE_PATTERN.exec(text)?.[1];
-  return value === undefined ? [] : [{ token: value, effect }];
+  return value === undefined ? [] : [{ token: value, effect, role: "operand" }];
 }
 
 /**
@@ -497,19 +556,124 @@ const SD_CONFIG: PatternCommandConfig = {
 };
 
 /**
- * Commands whose first N positional arguments are inline patterns/scripts,
- * not filesystem paths. The map stores per-command flag configuration so
- * the walker can correctly identify which arguments are consumed by flags
- * vs. which are positional.
+ * An interpreter takes its inline script from a flag and never from a leading
+ * positional, so `patternPositionals: 0` — `node build.js /tmp/x` names two
+ * real operands and no script.
+ *
+ * Verified by execution on macOS, 2026-09-20, node v26.9.0: `node -e`,
+ * `node --eval`, `node --eval='…'`, `node -p '1+1'` — `2`, and
+ * `node --print '2+2'` — `4` all run their argument as the program.
+ * `node -p t.js` evaluates `t.js` as *source* rather than running the file
+ * (`[eval]:1 / t.js / ^`), so `-p` consumes its argument unconditionally.
+ */
+const NODE_CONFIG: PatternCommandConfig = {
+  flags: new Map<string, PatternFlagRole>([
+    ["-e", "script"],
+    ["--eval", "script"],
+    ["-p", "script"],
+    ["--print", "script"],
+  ]),
+  patternPositionals: 0,
+};
+
+/**
+ * `bun` asserts the same four spellings as `node` and gets its own object
+ * rather than sharing one, because the table's rule is a shared *parser* and
+ * not a shared spelling — the two are different binaries (#823).
+ *
+ * Verified by execution, bun 1.4.2: `bun -e`, `bun --eval`, `bun -p '1+1'`
+ * — `2`, `bun --print '3+3'` — `6`; `bun -p` with no value errors
+ * `The argument '-p' requires a value but none was supplied.`, so it consumes
+ * unconditionally.
+ */
+const BUN_CONFIG: PatternCommandConfig = {
+  flags: new Map<string, PatternFlagRole>([
+    ["-e", "script"],
+    ["--eval", "script"],
+    ["-p", "script"],
+    ["--print", "script"],
+  ]),
+  patternPositionals: 0,
+};
+
+/**
+ * `python` and `python3` share one object because they are the same
+ * interpreter family: every implementation either name reaches is a
+ * CPython-compatible front end where `-c` takes the following argument.
+ *
+ * Verified by execution, python3 3.14.7: `python3 -c 'print("PC-OK")'`, and
+ * `python3 -cu 'print("x")'` raises from `File "<string>", line 1` — the
+ * glued `u` is evaluated as the script, which is the getopt semantics the
+ * existing glued-value rule already models. No `python` binary exists on the
+ * authoring host, so its row rests on the family argument rather than a run.
+ */
+const PYTHON_CONFIG: PatternCommandConfig = {
+  flags: new Map<string, PatternFlagRole>([["-c", "script"]]),
+  patternPositionals: 0,
+};
+
+/**
+ * Verified by execution, perl 5.34.1: `perl -e 'print "PE-OK\n"'` and
+ * `perl -E 'say "PE2-OK"'`; `perl -e` with nothing after it errors
+ * `No code specified for -e.`, so both consume unconditionally.
+ *
+ * `-p` and `-n` are deliberately absent. They take no argument of their own,
+ * and the cluster spelling that carries the script (`perl -pe 's|a|b|'`) is
+ * looked up as `-p` by the glued rule's `text.slice(0, 2)` — so listing `-p`
+ * would consume the following word on the *separated* spelling too and drop a
+ * real operand, the direction ADR 0009 forbids.
+ */
+const PERL_CONFIG: PatternCommandConfig = {
+  flags: new Map<string, PatternFlagRole>([
+    ["-e", "script"],
+    ["-E", "script"],
+  ]),
+  patternPositionals: 0,
+};
+
+/**
+ * Verified by execution, ruby 4.0.7: `ruby -e 'puts "RE-OK"'`.
+ *
+ * `-E` is deliberately **not** listed, though `perl` lists it: on `ruby` it is
+ * `--encoding`, not a script flag. `ruby -E utf-8 -e 'puts "RE2-OK"'` runs,
+ * proving `-E` consumed `utf-8` and left the script to `-e`. Leaving it
+ * unlisted over-surfaces `utf-8` as a token that names nothing, which the
+ * existence probe discards — the recoverable direction.
+ */
+const RUBY_CONFIG: PatternCommandConfig = {
+  flags: new Map<string, PatternFlagRole>([["-e", "script"]]),
+  patternPositionals: 0,
+};
+
+/**
+ * Commands whose leading positional arguments are inline patterns/scripts
+ * rather than filesystem paths, and commands whose inline script arrives
+ * through a flag. The map stores per-command flag configuration so the walker
+ * can identify which arguments a flag consumes and which are positional.
+ *
+ * Two classes share the table because they share the question. A pattern-first
+ * *matching* tool (`sed`, `grep`, `rg`) leads with a pattern and skips one or
+ * two positionals; an **interpreter** (`node`, `bun`, `python`, `perl`,
+ * `ruby`) leads with nothing and skips none, so its script can only ever
+ * arrive through a `script`-role flag and a script *file* stays an operand
+ * (#863).
  *
  * Names share a configuration object only when they share a *parser*, which is
  * narrower than being aliases: `egrep`/`fgrep` are the same binary as `grep`
  * here, and `nawk` is one-true-awk like `awk` — but `gawk` has its own config,
  * because it is the only one of the three that certainly means GNU awk and so
  * the only one whose long options certainly consume (#823).
+ * `node` and `bun` split for the same reason from the other direction: they
+ * assert identical spellings and are different binaries.
  */
 const PATTERN_FIRST_COMMANDS: ReadonlyMap<string, PatternCommandConfig> =
   new Map([
+    ["node", NODE_CONFIG],
+    ["bun", BUN_CONFIG],
+    ["python", PYTHON_CONFIG],
+    ["python3", PYTHON_CONFIG],
+    ["perl", PERL_CONFIG],
+    ["ruby", RUBY_CONFIG],
     ["sed", SED_CONFIG],
     ["awk", AWK_CONFIG],
     ["gawk", GAWK_CONFIG],
@@ -617,6 +781,15 @@ function collectPatternCommandTokens(
     const isArgNode = ARG_NODE_TYPES.has(child.type);
     const text = resolveNodeText(child);
 
+    // An argument is read for its text below, and its text alone — but a
+    // quoted substitution sitting there really runs, and its own operands are
+    // candidates wherever it sits (ADR 0009's positional invariance). The
+    // unquoted spelling reaches the nested command through the `!isArgNode`
+    // recursions below; the quoted one parses as a `string` and would
+    // otherwise stop here, whichever role the argument turns out to have
+    // (#945).
+    if (isArgNode) tokens.push(...collectHostedExecutionTokens(child));
+
     // Handle the argument a previous flag consumed. The consumption discharges
     // on whatever node type follows, not only on an ARG_NODE_TYPES one: a bare
     // number (`-A 3`), an expansion (`-A $N`), and a substitution
@@ -662,47 +835,69 @@ function collectPatternCommandTokens(
     }
 
     // Flag detection (only before "--" end-of-flags marker).
-    if (
-      !pastEndOfFlags &&
-      child.type === "word" &&
-      text.startsWith("-") &&
-      text.length > 1
-    ) {
+    //
+    // A quoted flag value (`grep --regexp='/etc/passwd'`, `awk -F':'`) makes
+    // the argument a `concatenation`, so a recognized flag is acted on in that
+    // shape too. An unrecognized one is not, and neither is a token quoted
+    // whole (`sd '-old' '-new' file.txt`): reading either as a flag would stop
+    // a quoted `-`-leading *pattern* from spending its positional and drop the
+    // real operand, where leaving it positional only over-surfaces (#957).
+    if (!pastEndOfFlags && text.startsWith("-") && text.length > 1) {
       const directive = classifyPatternCommandFlag(text, config);
-      switch (directive.kind) {
-        case "end-of-flags":
-          pastEndOfFlags = true;
-          break;
-        case "consume-next":
-          pendingConsumption = directive.role;
-          if (suppliesScript(directive.role)) hasExplicitScript = true;
-          break;
-        case "inline-value":
-          if (directive.role === "script-file")
-            tokens.push({ token: directive.value, effect });
-          if (suppliesScript(directive.role)) hasExplicitScript = true;
-          break;
-        case "regular-flag":
-          // Unrecognized: fall back to the blind `--opt=value` split, which is
-          // safe precisely because the flag's role is unknown (#645).
-          tokens.push(...embeddedOptionValueToken(text, effect));
-          break;
+      if (
+        child.type === "word" ||
+        (directive.kind !== "regular-flag" && hasUnquotedLeadingDash(child))
+      ) {
+        switch (directive.kind) {
+          case "end-of-flags":
+            pastEndOfFlags = true;
+            break;
+          case "consume-next":
+            pendingConsumption = directive.role;
+            if (suppliesScript(directive.role)) hasExplicitScript = true;
+            break;
+          case "inline-value":
+            if (directive.role === "script-file")
+              tokens.push({
+                token: directive.value,
+                effect,
+                role: "operand",
+              });
+            if (suppliesScript(directive.role)) hasExplicitScript = true;
+            break;
+          case "regular-flag":
+            // Unrecognized: fall back to the blind `--opt=value` split, which is
+            // safe precisely because the flag's role is unknown (#645).
+            tokens.push(...embeddedOptionValueToken(text, effect));
+            break;
+        }
+        continue;
       }
-      continue;
     }
 
     // Positional argument.
     if (!hasExplicitScript && positionalsSeen < patternPositionals) {
       positionalsSeen++; // Skip: this is an inline pattern/script.
     } else {
-      tokens.push({ token: text, effect });
+      tokens.push({ token: text, effect, role: "operand" });
     }
-    // A quoted flag never reaches the flag branch above, so its embedded value
-    // is split here instead.
+    // A quoted token that did not act as a flag above has its embedded value
+    // split here instead.
     tokens.push(...embeddedOptionValueToken(text, effect));
   }
 
   return tokens;
+}
+
+/**
+ * Whether a `concatenation` argument begins with an unquoted `-`, as a flag
+ * carrying a quoted value does (`-F':'` is the word `-F` then `':'`). A token
+ * quoted whole is a `raw_string` or `string`, never a `concatenation`.
+ */
+function hasUnquotedLeadingDash(child: TSNode): boolean {
+  if (child.type !== "concatenation") return false;
+  const head = child.child(0);
+  return head?.type === "word" && head.text.startsWith("-");
 }
 
 /**
@@ -739,7 +934,10 @@ function dischargePendingConsumption(
 ): ConsumptionDischarge {
   switch (role) {
     case "script-file":
-      return { consumed: true, token: { token: text, effect } };
+      return {
+        consumed: true,
+        token: { token: text, effect, role: "operand" },
+      };
     case "script":
     case "value":
       return { consumed: true };
@@ -772,6 +970,13 @@ function collectGenericCommandTokens(
       continue;
     }
 
+    // Read for its text below — but a quoted substitution among these
+    // arguments really runs, and its own operands are candidates wherever it
+    // sits (ADR 0009's positional invariance, #945). The unquoted spelling
+    // reaches the nested command through the trailing recursion.
+    if (ARG_NODE_TYPES.has(child.type))
+      tokens.push(...collectHostedExecutionTokens(child));
+
     // If there was no explicit command_name node, the first word-like
     // child is the command name itself — skip it.
     if (!seenCommandName && ARG_NODE_TYPES.has(child.type)) {
@@ -781,7 +986,7 @@ function collectGenericCommandTokens(
 
     // Argument nodes: resolve their text and collect.
     if (ARG_NODE_TYPES.has(child.type)) {
-      tokens.push({ token: resolveNodeText(child), effect });
+      tokens.push({ token: resolveNodeText(child), effect, role: "operand" });
       continue;
     }
 

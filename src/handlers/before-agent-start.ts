@@ -24,10 +24,13 @@ interface BeforeAgentStartPayload {
    * wrote — including in a child, whose inherited identity carries none.
    * `customPrompt` says whether Pi wrote a preamble at all: under one, it
    * writes no tool surface, so there is nothing of Pi's to remove.
+   * `promptGuidelines` carries rules other extensions added, which removing
+   * Pi's own rules section would otherwise drop.
    */
   systemPromptOptions?: {
     customPrompt?: string;
     toolSnippets?: Record<string, string>;
+    promptGuidelines?: readonly string[];
   };
 }
 
@@ -109,6 +112,7 @@ export class AgentPrepHandler {
       allowedTools,
       toolSnippets: event.systemPromptOptions?.toolSnippets ?? {},
       guidelinesByTool: registered.guidelinesByTool,
+      promptGuidelines: event.systemPromptOptions?.promptGuidelines ?? [],
       // Pi's own `if (customPrompt)` test, so an empty string reads here the
       // way it reads there: as no custom prompt at all.
       piAuthoredPreamble: !event.systemPromptOptions?.customPrompt,

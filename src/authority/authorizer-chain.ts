@@ -44,7 +44,7 @@ export function composeAuthorizerChain(
         if (decision) {
           return decision;
         }
-        // `defer` \u2014 try the next link.
+        // `defer` — try the next link.
       }
       return terminal.authorize(details);
     },

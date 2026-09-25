@@ -384,6 +384,8 @@ Policy decisions that resolve without an active UI prompt, such as `policy_allow
 Non-UI child sessions also do not emit this event when they create a forwarded permission request; the parent UI session emits it immediately before showing the forwarded permission dialog.
 A forwarded request the parent's own recorded policy decides (a matching `allow` or `deny`) is answered without a prompt and emits no event; the event fires only when the parent is actually about to ask the human.
 The matching terminal `permissions:decision` is emitted in the parent session too, so a consumer that reacts to this event has a signal on the same bus telling it the prompt is over.
+Asks are presented one at a time: the host holds a single inline dialog slot, so a session that raises a second ask while one is still open queues it rather than mounting over the first.
+The event marks the moment the queued ask is presented, not the moment it was raised, which is what keeps "the user needs to respond now" true for a consumer that alerts on it.
 Forwarded prompts that do reach the human are not degraded: the parent emits the child's original `source` and the same `surface`/`value` display projection, plus a populated `forwarding` context identifying the requesting subagent.
 
 The payload is lean by design — `surface`/`value` are the normalized display projection a notification consumer reads, not a mirror of the internal review log.

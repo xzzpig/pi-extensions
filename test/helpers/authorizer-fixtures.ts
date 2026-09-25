@@ -9,6 +9,7 @@
  */
 
 import { afterEach, beforeEach, type Mock, vi } from "vitest";
+import { AskDialogQueue } from "#src/authority/ask-dialog-queue";
 import type { AuthorizerVerdict } from "#src/authority/authorizer";
 import type { UnregisteredLinkAuditor } from "#src/authority/authorizer-chain-audit";
 import { AuthorizerRegistry } from "#src/authority/authorizer-registry";
@@ -124,6 +125,7 @@ export function makeAuthorizerSelectionDeps(
       emit: vi.fn(),
       on: vi.fn().mockReturnValue(() => undefined),
     },
+    dialogs: overrides.dialogs ?? new AskDialogQueue(),
     getPromptPreferences:
       overrides.getPromptPreferences ?? (() => makePromptPreferences()),
     requestPermissionDecision:

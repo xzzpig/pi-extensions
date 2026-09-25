@@ -4,6 +4,7 @@ import { getParser, type TSNode } from "#src/access-intent/bash/parser";
 import {
   redirectEffectForDestination,
   redirectMayWriteFile,
+  redirectTargetIndex,
 } from "#src/access-intent/bash/redirect-analysis";
 import type { TokenEffect } from "#src/access-intent/effect";
 
@@ -275,5 +276,39 @@ describe("redirectMayWriteFile", () => {
     ])("answers true for %s (%s)", async (command) => {
       await expect(mayWrite(command)).resolves.toBe(true);
     });
+  });
+});
+
+describe("redirectTargetIndex", () => {
+  /** The text of the child `redirectTargetIndex` names, or `undefined`. */
+  function targetText(command: string): Promise<string | undefined> {
+    return withRedirect(command, "file_redirect", (redirect) => {
+      const index = redirectTargetIndex(redirect);
+      return index === undefined ? undefined : redirect.child(index)?.text;
+    });
+  }
+
+  it("names the destination of a plain redirect", async () => {
+    await expect(targetText("cat a > out.txt")).resolves.toBe("out.txt");
+  });
+
+  it("names the destination rather than the descriptor ahead of the operator", async () => {
+    await expect(targetText("pnpm x 2> err.log")).resolves.toBe("err.log");
+  });
+
+  it("names only the first destination when words follow it", async () => {
+    // tree-sitter-bash parses `f.txt` as a second destination; bash passes it
+    // to `grep` as an argument.
+    await expect(targetText("grep pat 2>/dev/null f.txt")).resolves.toBe(
+      "/dev/null",
+    );
+  });
+
+  it("names the duplicated descriptor of a duplication", async () => {
+    await expect(targetText("pnpm x 2>&1")).resolves.toBe("1");
+  });
+
+  it("names nothing for a redirect that closes a descriptor", async () => {
+    await expect(targetText("echo hi >&-")).resolves.toBeUndefined();
   });
 });

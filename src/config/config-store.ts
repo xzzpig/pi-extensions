@@ -6,11 +6,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, normalize } from "node:path";
-import type {
-  ExtensionCommandContext,
-  ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { DebugReviewLogger } from "#src/logging/session-logger";
+import type { ConfigIssueSource } from "./config-issue-reporter";
 import { loadAndMergeConfigs, loadUnifiedConfig } from "./config-loader";
 import {
   getGlobalConfigPath,
@@ -40,7 +38,7 @@ export interface ConfigReader {
  * coupling between the class and test doubles.
  */
 export interface SessionConfigStore extends ConfigReader {
-  refresh(ctx: ExtensionContext | undefined, projectTrusted: boolean): void;
+  refresh(cwd: string | undefined, projectTrusted: boolean): void;
   logResolvedPaths(cwd?: string): void;
 }
 
@@ -73,14 +71,17 @@ export interface ConfigStoreDeps {
  *
  * Replaces the three `(runtime, …)` config free functions
  * (`refreshExtensionConfig`, `saveExtensionConfig`, `logResolvedConfigPaths`)
- * with methods that privately own `config` and `lastConfigWarning`.
+ * with methods that privately own `config` and the issue list the last load
+ * produced.
  *
  * Implements {@link ConfigReader} so consumers that only read the current config
  * can depend on the narrow interface rather than the full class.
  */
-export class ConfigStore implements SessionConfigStore, CommandConfigStore {
+export class ConfigStore
+  implements SessionConfigStore, CommandConfigStore, ConfigIssueSource
+{
   private config: PermissionSystemExtensionConfig;
-  private lastConfigWarning: string | null = null;
+  private configIssues: readonly string[] = [];
 
   constructor(private readonly deps: ConfigStoreDeps) {
     this.config = { ...DEFAULT_EXTENSION_CONFIG };
@@ -92,15 +93,38 @@ export class ConfigStore implements SessionConfigStore, CommandConfigStore {
   }
 
   /**
+   * What is wrong with the config as of the last {@link refresh}.
+   *
+   * Every issue `loadAndMergeConfigs` collects: a legacy-file notice, a zod
+   * field violation, and the cross-cutting detectors (a permissive bash
+   * fallback, a deprecated preview cap, a refused dialog-key binding).
+   *
+   * This store answers; `ConfigIssueReporter` decides whether the operator has
+   * heard it yet (#933). Not to be confused with
+   * `PermissionResolver.getConfigIssues(agentName?)`, which answers for the
+   * *policy* files rather than the extension config.
+   */
+  getConfigIssues(): readonly string[] {
+    return this.configIssues;
+  }
+
+  /**
    * Reload merged config from disk.
    *
-   * If `ctx` is provided, uses it to derive the cwd and sync UI status.
+   * `cwd` scopes the project-level lookup; omit it when no session cwd is
+   * known yet (the factory-time priming load).
    * When `projectTrusted` is `false`, the project scope is withheld so an
    * untrusted repository's runtime config (`yoloMode`, `permissionReviewLog`,
    * …) cannot loosen the operator's global config (#644).
+   *
+   * Takes no `ExtensionContext` on purpose: a load that holds one acquires UI
+   * side effects it cannot honor when there is no session yet, which is how a
+   * config warning came to be recorded as delivered without being shown
+   * (#933). `PermissionSession.refreshConfig` syncs the status bar and
+   * `ConfigIssueReporter` tells the operator; this reads files and answers
+   * questions about them.
    */
-  refresh(ctx: ExtensionContext | undefined, projectTrusted: boolean): void {
-    const cwd = ctx?.cwd ?? null;
+  refresh(cwd: string | undefined, projectTrusted: boolean): void {
     const mergeResult = loadAndMergeConfigs(
       this.deps.agentDir,
       cwd ?? "",
@@ -110,19 +134,10 @@ export class ConfigStore implements SessionConfigStore, CommandConfigStore {
     const runtimeConfig = normalizePermissionSystemConfig(mergeResult.merged);
     this.config = runtimeConfig;
 
-    if (ctx?.hasUI) {
-      syncPermissionSystemStatus(ctx, runtimeConfig);
-    }
+    this.configIssues = mergeResult.issues;
 
     const warning =
       mergeResult.issues.length > 0 ? mergeResult.issues.join("\n") : undefined;
-
-    if (warning && warning !== this.lastConfigWarning) {
-      this.lastConfigWarning = warning;
-      ctx?.ui.notify(warning, "warning");
-    } else if (!warning) {
-      this.lastConfigWarning = null;
-    }
 
     this.deps.logger.debug("config.loaded", {
       warning: warning ?? null,
@@ -177,7 +192,6 @@ export class ConfigStore implements SessionConfigStore, CommandConfigStore {
 
     this.config = normalized;
     syncPermissionSystemStatus(ctx, normalized);
-    this.lastConfigWarning = null;
 
     this.deps.logger.debug("config.saved", {
       debugLog: normalized.debugLog,

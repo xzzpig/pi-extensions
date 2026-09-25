@@ -17,7 +17,14 @@ vi.mock("#src/session/active-agent", () => ({
 
 // ── Test helpers ───────────────────────────────────────────────────────────
 
-import type { DEFAULT_EXTENSION_CONFIG } from "#src/config/extension-config";
+import {
+  DEFAULT_EXTENSION_CONFIG as DEFAULT_EXTENSION_CONFIG_VALUE,
+  type PermissionSystemExtensionConfig,
+} from "#src/config/extension-config";
+import {
+  PERMISSION_SYSTEM_STATUS_KEY,
+  PERMISSION_SYSTEM_YOLO_STATUS_VALUE,
+} from "#src/config/status";
 import type { SkillPromptEntry } from "#src/exposure/skill-prompt-sanitizer";
 import { win32PathFlavor } from "#src/path/path-flavor";
 import type { PermissionSession } from "#src/session/permission-session";
@@ -342,14 +349,62 @@ describe("PermissionSession", () => {
       const { session, configStore } = createSession();
       const ctx = makeCtx();
       session.refreshConfig(ctx, true);
-      expect(configStore.refresh).toHaveBeenCalledWith(ctx, true);
+      expect(configStore.refresh).toHaveBeenCalledWith(ctx.cwd, true);
     });
 
     it("refreshConfig forwards projectTrusted=false when untrusted", () => {
       const { session, configStore } = createSession();
       const ctx = makeCtx();
       session.refreshConfig(ctx, false);
-      expect(configStore.refresh).toHaveBeenCalledWith(ctx, false);
+      expect(configStore.refresh).toHaveBeenCalledWith(ctx.cwd, false);
+    });
+
+    describe("status-bar sync", () => {
+      function yoloStore() {
+        return makeConfigStore({
+          current: vi
+            .fn<() => PermissionSystemExtensionConfig>()
+            .mockReturnValue({
+              ...DEFAULT_EXTENSION_CONFIG_VALUE,
+              yoloMode: true,
+            }),
+        });
+      }
+
+      it("syncs the status from the refreshed config when the ctx has a UI", () => {
+        const { session } = createSession({ configStore: yoloStore() });
+        const ctx = makeCtx({ hasUI: true });
+        session.refreshConfig(ctx, true);
+        expect(ctx.ui.setStatus).toHaveBeenCalledWith(
+          PERMISSION_SYSTEM_STATUS_KEY,
+          PERMISSION_SYSTEM_YOLO_STATUS_VALUE,
+        );
+      });
+
+      it("clears the status when the refreshed config leaves yolo off", () => {
+        const { session } = createSession();
+        const ctx = makeCtx({ hasUI: true });
+        session.refreshConfig(ctx, true);
+        expect(ctx.ui.setStatus).toHaveBeenCalledWith(
+          PERMISSION_SYSTEM_STATUS_KEY,
+          undefined,
+        );
+      });
+
+      it("does not sync the status when the ctx has no UI", () => {
+        const { session } = createSession({ configStore: yoloStore() });
+        const ctx = makeCtx({ hasUI: false });
+        session.refreshConfig(ctx, true);
+        expect(ctx.ui.setStatus).not.toHaveBeenCalled();
+      });
+
+      it("refreshes without a ctx and syncs nothing", () => {
+        const { session, configStore } = createSession();
+        expect(() => {
+          session.refreshConfig(undefined, false);
+        }).not.toThrow();
+        expect(configStore.refresh).toHaveBeenCalledWith(undefined, false);
+      });
     });
 
     it("logResolvedConfigPaths delegates to configStore.logResolvedPaths", () => {
@@ -359,7 +414,9 @@ describe("PermissionSession", () => {
     });
 
     it("config getter delegates to configStore.current()", () => {
-      const fakeConfig = { debugLog: true } as typeof DEFAULT_EXTENSION_CONFIG;
+      const fakeConfig = {
+        debugLog: true,
+      } as typeof DEFAULT_EXTENSION_CONFIG_VALUE;
       const configStore = makeConfigStore({
         current: vi.fn().mockReturnValue(fakeConfig),
       });

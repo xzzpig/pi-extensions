@@ -43,12 +43,12 @@ import {
 } from "#src/authority/subagent-lifecycle-events";
 import { getSubagentSessionRegistry } from "#src/authority/subagent-registry";
 import {
-  DEBUG_LOG_FILENAME,
   getGlobalConfigPath,
   getGlobalLogsDir,
   REVIEW_LOG_FILENAME,
 } from "#src/config/config-paths";
 import { DEFAULT_EXTENSION_CONFIG } from "#src/config/extension-config";
+import { SESSION_ENDED_REASON } from "#src/handlers/lifecycle";
 import piPermissionSystemExtension from "#src/index";
 import { getPermissionsService } from "#src/service";
 import {
@@ -209,18 +209,6 @@ function readReviewLog(): { event: string }[] {
     .split("\n")
     .filter((line) => line.trim())
     .map((line) => JSON.parse(line) as { event: string });
-}
-
-/** Read the debug-log entries written under the stubbed agent dir. */
-function readDebugLog(): Record<string, unknown>[] {
-  const path = join(getGlobalLogsDir(agentDir), DEBUG_LOG_FILENAME);
-  if (!existsSync(path)) {
-    return [];
-  }
-  return readFileSync(path, "utf8")
-    .split("\n")
-    .filter((line) => line.trim())
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
 /** Drive the registered `session_start` handler with a ctx. */
@@ -747,6 +735,38 @@ describe("shutdown teardown chain", () => {
       parentSessionId: "p-late",
     });
     expect(getSubagentSessionRegistry().has("late-child")).toBe(false);
+
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("answers an unanswered ask when the session ends", async () => {
+    writeGlobalConfig({ permission: { "*": "allow", demo: "ask" } });
+
+    const cwd = mkdtempSync(join(tmpdir(), "pi-perm-release-cwd-"));
+    const pi = makeFakePi({ toolNames: ["demo"] });
+    piPermissionSystemExtension(pi as unknown as ExtensionAPI);
+
+    // A human who never answers: the dialog stays open until the session ends.
+    const ctx = makeBaseCtx(cwd, "ui-session", {
+      select: () => new Promise<string | undefined>(() => undefined),
+    });
+    await fireSessionStart(pi, ctx);
+
+    const gated = pi.fire(
+      "tool_call",
+      { toolName: "demo", toolCallId: "demo-unanswered", input: {} },
+      ctx,
+    ) as Promise<{ block?: true; reason?: string }>;
+    await sleep(10);
+
+    await pi.fire("session_shutdown");
+
+    const result = await gated;
+    expect(result.block).toBe(true);
+    expect(result.reason).toContain(SESSION_ENDED_REASON);
+    // A user who was never asked denied nothing (#719): the refusal must not
+    // render through `renderUserDenial`.
+    expect(result.reason).not.toContain("The user denied");
 
     rmSync(cwd, { recursive: true, force: true });
   });
@@ -2137,11 +2157,17 @@ describe("configured permission-dialog hotkeys reach the inline dialog", () => {
     ctx: unknown;
     render: () => string[];
     press: (data: string) => void;
+    notified: string[];
   } {
     let component:
       | { render(width: number): string[]; handleInput(data: string): void }
       | undefined;
-    const base = makeBaseCtx(cwd, "tui-session") as {
+    const notified: string[] = [];
+    const base = makeBaseCtx(cwd, "tui-session", {
+      notify: (message: string): void => {
+        notified.push(message);
+      },
+    }) as {
       ui: Record<string, unknown>;
     };
     const ctx = {
@@ -2175,6 +2201,7 @@ describe("configured permission-dialog hotkeys reach the inline dialog", () => {
       press: (data) => {
         component?.handleInput(data);
       },
+      notified,
     };
   }
 
@@ -2233,17 +2260,15 @@ describe("configured permission-dialog hotkeys reach the inline dialog", () => {
     const pi = makeFakePi({ toolNames: ["demo", "quiet"] });
     piPermissionSystemExtension(pi as unknown as ExtensionAPI);
 
-    const { ctx, render, press } = makeTuiCtx(cwd);
+    const { ctx, render, press, notified } = makeTuiCtx(cwd);
     await fireSessionStart(pi, ctx);
 
+    // The operator is told, in the session that has a UI to tell (#933).
     expect(
-      readDebugLog().filter(
-        (entry) =>
-          entry.event === "config.loaded" &&
-          typeof entry.warning === "string" &&
-          entry.warning.includes('permissionDialogKeys.deny: "j"'),
-      ).length,
-    ).toBeGreaterThan(0);
+      notified.filter((message) =>
+        message.includes('permissionDialogKeys.deny: "j"'),
+      ),
+    ).toHaveLength(1);
 
     // The scope was not rejected: `*: allow` still allows, so a tool the config
     // does not name never prompts at all.
@@ -2267,5 +2292,91 @@ describe("configured permission-dialog hotkeys reach the inline dialog", () => {
     expect((await decision).block).toBe(true);
 
     rmSync(cwd, { recursive: true, force: true });
+  });
+
+  // #933: a config issue that exists before the session starts reached the
+  // debug log and nothing else, because the factory-time priming refresh
+  // recorded the warning as delivered while having no ctx to deliver it.
+  describe("a config issue present at session start", () => {
+    it("is shown by session_start alone, before the first turn", async () => {
+      // The shape `detectPermissiveBashFallback` exists to flag.
+      writeGlobalConfig({ permission: { "*": "allow" } });
+
+      const cwd = mkdtempSync(join(tmpdir(), "pi-perm-warn-start-cwd-"));
+      const pi = makeFakePi({ toolNames: ["demo"] });
+      piPermissionSystemExtension(pi as unknown as ExtensionAPI);
+
+      // No before_agent_start: that fires when the operator submits a prompt,
+      // so session_start must carry the warning on its own.
+      const { ctx, notified } = makeTuiCtx(cwd);
+      await fireSessionStart(pi, ctx);
+
+      expect(
+        notified.filter((message) =>
+          message.includes("bash commands silently inherit 'allow'"),
+        ),
+      ).toHaveLength(1);
+
+      rmSync(cwd, { recursive: true, force: true });
+    });
+
+    it("is shown once, however many turns follow", async () => {
+      // The shape `detectPermissiveBashFallback` exists to flag.
+      writeGlobalConfig({ permission: { "*": "allow" } });
+
+      const cwd = mkdtempSync(join(tmpdir(), "pi-perm-warn-cwd-"));
+      const pi = makeFakePi({ toolNames: ["demo"] });
+      piPermissionSystemExtension(pi as unknown as ExtensionAPI);
+
+      const { ctx, notified } = makeTuiCtx(cwd);
+      await fireSessionStart(pi, ctx);
+      await pi.fire(
+        "before_agent_start",
+        { systemPrompt: "", systemPromptOptions: { cwd } },
+        ctx,
+      );
+      await pi.fire(
+        "before_agent_start",
+        { systemPrompt: "", systemPromptOptions: { cwd } },
+        ctx,
+      );
+
+      expect(
+        notified.filter((message) =>
+          message.includes("bash commands silently inherit 'allow'"),
+        ),
+      ).toHaveLength(1);
+
+      rmSync(cwd, { recursive: true, force: true });
+    });
+
+    it("is shown on the next turn when it appears mid-session", async () => {
+      writeGlobalConfig({ permission: { "*": "ask" } });
+
+      const cwd = mkdtempSync(join(tmpdir(), "pi-perm-warn-mid-cwd-"));
+      const pi = makeFakePi({ toolNames: ["demo"] });
+      piPermissionSystemExtension(pi as unknown as ExtensionAPI);
+
+      const { ctx, notified } = makeTuiCtx(cwd);
+      await fireSessionStart(pi, ctx);
+      expect(notified).toEqual([]);
+
+      // The operator breaks their config while the session is live; it is
+      // re-read on every before_agent_start.
+      writeGlobalConfig({ permission: { "*": "allow" } });
+      await pi.fire(
+        "before_agent_start",
+        { systemPrompt: "", systemPromptOptions: { cwd } },
+        ctx,
+      );
+
+      expect(
+        notified.filter((message) =>
+          message.includes("bash commands silently inherit 'allow'"),
+        ),
+      ).toHaveLength(1);
+
+      rmSync(cwd, { recursive: true, force: true });
+    });
   });
 });

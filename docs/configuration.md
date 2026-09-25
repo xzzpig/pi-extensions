@@ -523,6 +523,46 @@ MCP permissions match against derived targets from tool input:
 
 > **Note:** Baseline discovery targets auto-allow when any explicit `mcp: allow` rule exists.
 
+In that example `mcp_status` and `mcp_list` allow discovery, `myServer:*` prompts for each of that server's tools, and `dangerousServer` denies every call to it — including `dangerousServer_wipe` and a `{"tool": "wipe", "server": "dangerousServer"}` call — because each rule is written **after** the `"*"` catch-all.
+
+#### How a call becomes targets
+
+One MCP call is looked up under several names, and a rule may name any of them.
+When the call carries no explicit `server`, the server is derived from the tool name against the servers in your MCP config, in this order — the first convention that matches settles the name:
+
+1. **Qualified** — `server:tool` splits directly.
+2. **Prefix** — the **longest** configured server that is the leading segment of `<server>_<tool>`.
+   This is the common case: the `mcp()` proxy carries names like `chrome_devtools_take_screenshot`, and aggregators expose `<server>_<tool>`.
+   `foo_bar_baz` belongs to `foo_bar`, never also to `foo`, and a prefix match settles the name — so `foo_bar_baz_github` derives `foo_bar` and not `github`.
+3. **Suffix** — a legacy name like `search_code_github`, which also derives the qualified forms.
+
+An explicit `server` argument skips derivation entirely.
+
+| Call                                                  | Targets                                                                                              |
+| ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `{"tool": "github_search_code"}`, `github` configured | `github_search_code`, `github`, `mcp_call`                                                           |
+| `{"tool": "search_code_github"}`, `github` configured | `github_search_code_github`, `github:search_code_github`, `github`, `search_code_github`, `mcp_call` |
+| `{"tool": "github:search_code"}`                      | `github_search_code`, `github:search_code`, `github`, `search_code`, `mcp_call`                      |
+| `{"tool": "search_code", "server": "github"}`         | `github_search_code`, `github:search_code`, `github`, `search_code`, `mcp_call`                      |
+
+Deriving a server from a name is a heuristic, and it can attach the wrong rule: with `git` configured, a `git_lab_issues` tool from a different server derives `git`.
+Longest-match only helps when both servers are configured.
+Where the distinction matters, pass an explicit `server` argument or use a qualified `server:tool` name.
+
+#### Which rule shape to write
+
+| Rule shape     | Matches                | Use it for                                                                                                                            |
+| -------------- | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `"myServer"`   | the bare-server target | **Server-level policy — the recommended form.** Fires for any call belonging to that server, whichever naming convention produced it. |
+| `"myServer_*"` | the tool-name target   | Tool-level policy for prefix-named tools.                                                                                             |
+| `"myServer:*"` | the qualified target   | Tool-level policy for qualified names and explicit-`server` calls.                                                                    |
+| `"*_myServer"` | the suffix targets     | Only when you have suffix-named tools.                                                                                                |
+
+**Rule position decides, not target order.**
+The last rule matching *any* of a call's targets wins, exactly as on every other surface — so put broad catch-alls first and specific overrides after.
+A `{"*": "allow", "github": "deny"}` config denies github calls; reversing the two lines makes the catch-all win instead.
+The target order above decides only which name the decision is reported under in the prompt and the review log, where the most specific matching name is shown.
+
 String shorthand grants broad MCP access — useful for per-agent overrides:
 
 ```yaml
@@ -699,7 +739,7 @@ Quoting is understood, so `ls "$HOME/x"` and `ls $HOME/x` are treated alike.
 
 What the bash projection resolves:
 
-- Absolute, home-relative (`~/`), parent-traversal (`../`), and separator-bearing tokens, plus redirect targets (`> out.txt`) and values embedded in long options (`--file=/tmp/patterns`).
+- Absolute, home-relative (`~/`), parent-traversal (`../`), and separator-bearing tokens, plus redirect targets (`> out.txt`, including a file the redirect creates) and values embedded in long options (`--file=/tmp/patterns`).
 - The plain shell variables `$HOME` / `${HOME}` and `$PWD` / `${PWD}`, so `$HOME/x` is gated exactly as `~/x` and the literal absolute spelling, whether or not the target exists.
 - Relative tokens, against the working directory produced by folding literal current-shell `cd` commands.
 - A bare token (`cat id_rsa`) when it names an existing filesystem entry.
@@ -819,6 +859,9 @@ A tool's identity establishes its direction, and on the bash surface a redirect 
 
 An access whose direction cannot be established consults **both** surfaces and takes the more restrictive answer.
 That is deliberate: an unproven access is never treated as the narrower one.
+
+A redirect's target reaches its surface whether or not the file exists yet, so a `path_write` pattern governs what a command may create through `>`, not only what it may overwrite.
+Only the redirect's literal target counts: a computed one (`> "$OUT"`) is not resolved, as for any other computed path.
 
 A redirect the parser could not make sense of is unproven for the same reason.
 The read-write open `<>` is the clearest case: `tree-sitter-bash` has no node for it, so neither half of the operator can be trusted to describe the whole, and its destination consults both surfaces rather than the one the surviving half would name.
@@ -1203,11 +1246,11 @@ permission:
 
 The extension integrates via Pi's lifecycle hooks:
 
-| Hook                 | Behavior                                                                                                                                                                  |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `before_agent_start` | Filters the active tool set (restrict-only), restates the `Available tools:` and `Guidelines:` sections at the end of the system prompt to match, and hides denied skills |
-| `tool_call`          | Enforces permissions for every tool invocation                                                                                                                            |
-| `input`              | Intercepts `/skill:<name>` requests and enforces skill policy                                                                                                             |
+| Hook                 | Behavior                                                                                                                                             |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `before_agent_start` | Filters the active tool set (restrict-only), restates the tool list and guidelines at the end of the system prompt to match, and hides denied skills |
+| `tool_call`          | Enforces permissions for every tool invocation                                                                                                       |
+| `input`              | Intercepts `/skill:<name>` requests and enforces skill policy                                                                                        |
 
 Additional behaviors:
 
@@ -1217,10 +1260,11 @@ Additional behaviors:
   A tool that stops being active for any other reason (another extension deactivating it, pi unregistering it) is not restored.
 - On the turn a tool is restored, it is callable immediately but its `Available tools:` line reappears one turn later: pi builds the prompt parts an extension receives before the extension runs, so the restored tool has no one-line description to render until it is already active
 - A tool is removed only when every value under its surface resolves to `deny`; a surface with any reachable `allow` or `ask` pattern stays available (see [Tool Surfaces](#tool-surfaces))
-- The `Available tools:` and `Guidelines:` sections are **relocated** rather than edited in place: the copies pi wrote are removed, and this session's own are rendered at the end of the system prompt, after pi's `Current working directory:` footer.
+- The tool list and guidelines are **relocated** rather than edited in place: the copies pi wrote are removed, and this session's own are rendered at the end of the system prompt, after the working directory pi states last.
+  They take the shape pi writes them in: `Available tools:` and `Guidelines:` sections after a `Current working directory:` footer through pi 0.85, and `<tools>` and `<rules>` sections after a `<cwd>` section from pi 0.86.
   Each session states its own tool surface, which is what keeps a subagent child's inherited prompt byte-identical to its parent's (see [ADR 0014](decisions/0014-tool-surface-is-node-local-prose.md)); the tool list moves to the end of the prompt for every session, whether or not anything is denied.
   Only the copies pi wrote are removed: a custom system prompt (`.pi/SYSTEM.md`, `~/.pi/agent/SYSTEM.md`, `--system-prompt`) keeps its own text untouched, sections and all, because pi writes no tool surface of its own under one — so a prompt that lists tools itself is shown alongside this session's block rather than replaced by it.
-- The rendered sections follow pi's own rules: a tool is listed only when pi supplied a one-line description for it, and the guideline bullets are the allowed tools' own contributions around pi's built-in ones
+- The rendered sections follow pi's own rules: a tool is listed only when pi supplied a one-line description for it, and the guideline bullets are the allowed tools' own contributions, then any rules another extension added to `systemPromptOptions.promptGuidelines`, around pi's built-in ones
 - The prompt is recomputed and returned on every turn but is stable across turns for a stable policy/agent, so the provider's prompt cache (tools + system prefix) is preserved rather than rewritten each turn.
   A policy change is an intentional cache transition, as a mid-session agent switch already is.
 - Extension-provided tools like `task`, `mcp`, and third-party tools are handled by exact registered name
@@ -1252,6 +1296,7 @@ The command is parsed, and a value is masked when it is bound to a sensitive nam
 KEY="sk-or-v1-…" curl https://x        →  KEY=[redacted] curl https://x
 env MY_KEY=… deploy                    →  env MY_KEY=[redacted] deploy
 curl -H "Authorization: Bearer sk-…"   →  curl -H "Authorization:[redacted]"
+bash -c 'TOKEN=sk-… deploy'            →  bash -c 'TOKEN=[redacted] deploy'
 ```
 
 The boundary is worth stating exactly, because it is easy to over-read:
@@ -1261,7 +1306,15 @@ The boundary is worth stating exactly, because it is easy to over-read:
 
 So `grep -r "sk-ant-…" .` and `deploy --token abc123` are both logged unredacted: the first binds the secret to nothing, and the second binds it to a flag rather than a name.
 The extension deliberately does not try to guess which parts of a command look secret-shaped — see [ADR 0010] for the measured reasoning.
-A command the parser could not fully resolve, and a secret inside an inline-shell payload (`bash -c '…'`) or a heredoc body, are masked only as far as the parse reached.
+A command the parser could not fully resolve is masked only as far as the parse reached.
+A secret inside a **heredoc body** (`cat > .env <<'EOF'` / `API_KEY=…` / `EOF`) is not masked at all: a heredoc body is literal data rather than shell, and re-parsing one as shell is how the log's own Python and TypeScript heredocs come to read as assignments — measured at six false positives and no true ones, so [ADR 0010] declines it.
+An **inline-shell payload** (`bash -c '…'`, `sh -c "…"`, `eval '…'`) *is* masked, because the package already knows that argument is shell — including one reached through a wrapper (`sudo bash -c '…'`, `xargs -I{} sh -c '…'`).
+An interpreter's payload (`python3 -c '…'`) is not, for the same reason a heredoc body is not.
+Where a payload is stitched together across quote boundaries (`bash -c 'TOKEN='"$SECRET"`), the whole argument is replaced rather than just the value, because no single offset maps the value back onto the command:
+
+```text
+bash -c 'TOKEN='"$SECRET"               →  bash -c [redacted]
+```
 
 Every value the **review** log writes is narrowed to `reviewLogFieldMaxWidth` (1000 characters by default) and marked with an ellipsis, so a single pathological command cannot put tens of kilobytes in one entry.
 This is a length bound, not redaction: it never inspects a value to decide what to hide, and it applies to every field alike.

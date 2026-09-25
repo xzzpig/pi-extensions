@@ -428,6 +428,40 @@ describe("describeBashPathGate", () => {
       expect(result.surface).toBe("path_write");
     });
   });
+
+  describe("a redirect's target that does not exist yet (#609)", () => {
+    it("asks on the write surface for a bare creating redirect", async () => {
+      const result = (await describeGate(
+        makeTcc({
+          input: { command: "cat x > newfile" },
+          cwd: "/test/project",
+        }),
+        makeResolver(makeCheckResult({ state: "ask", matchedPattern: "*" })),
+      )) as GateDescriptor;
+
+      expect(result.surface).toBe("path_write");
+      expect(result.input).toEqual({ path: "newfile" });
+    });
+
+    it("stays unrestricted when only the universal default matches", async () => {
+      const result = await describeGate(
+        makeTcc({
+          input: { command: "cat x > newfile" },
+          cwd: "/test/project",
+        }),
+        makeResolver(
+          makeCheckResult({
+            state: "ask",
+            matchedPattern: undefined,
+            source: "special",
+            origin: "builtin",
+          }),
+        ),
+      );
+
+      expect(result).toBeNull();
+    });
+  });
 });
 
 // Home-relative path characterization (#350) ──────────────────────────────

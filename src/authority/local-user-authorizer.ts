@@ -10,6 +10,7 @@ import {
 } from "#src/service/permission-events";
 import { buildUiPrompt } from "#src/service/permission-ui-prompt";
 import { provenDirectionOf } from "#src/session/approval-grant";
+import type { AskDialogAdmission } from "./ask-dialog-queue";
 import type { TerminalAuthorizer } from "./authorizer";
 import type {
   PermissionPromptDecision,
@@ -30,6 +31,8 @@ export interface LocalUserAuthorizerDeps {
   mode: ExtensionContext["mode"];
   /** Event bus used for the `permissions:ui_prompt` broadcast. */
   events: PermissionEventBus;
+  /** Serializes this session's dialogs so no ask replaces another (#965). */
+  dialogs: AskDialogAdmission;
   /** Read live at prompt time so a settings-modal toggle takes effect on the next prompt. */
   getPromptPreferences: () => PromptPreferences;
   /** Injected for testability; production callers pass the real function. */
@@ -45,6 +48,10 @@ export interface LocalUserAuthorizerDeps {
  * forwarded ask carries its provenance on `details.forwarding`, which this
  * class renders (populated `forwarding` context + "(Subagent)" title) so the
  * broadcast stays non-degraded (#292) without a second emission path.
+ *
+ * Every ask goes through the session's `AskDialogAdmission`, because the host
+ * holds one inline dialog slot: a second presentation mounts over the first and
+ * strands its promise (#965).
  */
 export class LocalUserAuthorizer implements TerminalAuthorizer {
   constructor(private readonly deps: LocalUserAuthorizerDeps) {}
@@ -52,8 +59,24 @@ export class LocalUserAuthorizer implements TerminalAuthorizer {
   authorize(
     details: PromptPermissionDetails,
   ): Promise<PermissionPromptDecision> {
-    const uiPrompt = buildUiPrompt(details);
-    emitUiPromptEvent(this.deps.events, uiPrompt);
+    return this.deps.dialogs.run(
+      () => this.present(details),
+      unansweredDecision,
+    );
+  }
+
+  /**
+   * Announce the imminent prompt, then show it.
+   *
+   * Both live inside the queued region: `permissions:ui_prompt` is documented
+   * as firing immediately before the user-facing UI is invoked, so an emit at
+   * admission would alert a notification consumer for a dialog that is still
+   * minutes of deliberation away.
+   */
+  private present(
+    details: PromptPermissionDetails,
+  ): Promise<PermissionPromptDecision> {
+    emitUiPromptEvent(this.deps.events, buildUiPrompt(details));
     return this.deps.requestPermissionDecision(
       {
         mode: this.deps.mode,
@@ -67,6 +90,25 @@ export class LocalUserAuthorizer implements TerminalAuthorizer {
       buildRequestOptions(details),
     );
   }
+}
+
+/**
+ * The answer an ask gets when the session released it before a human ruled.
+ *
+ * Mirrors `ParentAuthorizer`'s abandonment: `confirmationUnavailable` keeps it
+ * out of the "User denied" family, since a user who was never asked denied
+ * nothing (#719), and the agent-facing reason and the provenance record reuse
+ * one string so what the model is told and what the log attributes cannot
+ * drift (#726).
+ */
+function unansweredDecision(reason: string): PermissionPromptDecision {
+  return {
+    approved: false,
+    state: "denied",
+    confirmationUnavailable: true,
+    denialReason: reason,
+    decidedBy: { kind: "unavailable", reason },
+  };
 }
 
 /**

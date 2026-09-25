@@ -7,8 +7,47 @@ date: 2026-07-25
 
 ## Status
 
-Accepted, as amended 2026-09-15.
+Accepted, as amended 2026-09-15 and 2026-09-19.
 This decision states what the permission logs protect against and what they do not, so a report of the shape "the log contains a secret" can be triaged against a written contract rather than re-argued.
+
+### Amendment, 2026-09-19 — an inline-shell payload is masked; a heredoc body is not, and that is the decision
+
+The 2026-09-15 amendment's third residual named two uncovered contexts and tracked both as [#923].
+One is now closed and the other is **accepted rather than tracked**, which is the substance of this amendment.
+
+`command-redaction.ts` re-parses an **inline-shell payload** — the argument `classifyWrapperWords` already identifies as `"opaque-payload"`: `eval`'s first argument, and the argument after a `-c` short-flag cluster for `bash`/`sh`/`dash`/`zsh`/`ksh`.
+The payload's verbatim inner slice is parsed on its own and the recovered spans are shifted by the slice's start index, bounded at four nested layers.
+Because the slice excludes the payload's quotes, no span can reach one, so the masked payload stays quoted as it was written.
+Indirection layers are peeled first, so `sudo bash -c '…'` and `xargs -I{} sh -c '…'` are reached too — `executedUnit` peels them, so a payload query that did not would reintroduce the same inconsistency one wrapper layer up.
+That closes the internal inconsistency the residual named: `bash -c 'TOKEN=sk-secret deploy'` no longer reads masked under `executedUnit` and verbatim under `command` in the same record.
+
+One payload shape is masked **coarsely** rather than precisely.
+A payload whose program is stitched across quote boundaries (`bash -c 'TOKEN='"$SECRET"`, one `concatenation` node) has no constant offset mapping a span in the program back onto the command, so when its program binds a secret the whole argument is replaced rather than the value alone.
+That costs the command text for that argument and is the correct trade against writing the secret; it fires on none of the corpus's commands.
+An `ansi_c_string` payload (`bash -c $'…'`) is precise, since skipping the `$` leaves a single quote pair.
+
+A **heredoc body is declined**, interpolating or not, and the measurement is the argument rather than a preference.
+Measured over 8 056 unique command strings from a 13 MB review log (17 981 records):
+
+| Context                                            | Occurrences                  | Masks | False positives |
+| -------------------------------------------------- | ---------------------------- | ----- | --------------- |
+| Inline-shell payload                               | 48 units across 42 commands  | 0     | 0               |
+| Interpolating heredoc body (`<<EOF`)               | 3                            | 0     | 0               |
+| Non-interpolating heredoc body (`<<'EOF'`)         | 915                          | 6     | **6**           |
+| Herestring (`<<<`)                                 | 0                            | —     | —               |
+
+Three of the six are `key=lambda` / `key=len` inside embedded Python and one is `console.log("tokens:", …)` in TypeScript — the exact class this record measured at 10-versus-0 when it chose grammar anchoring over a raw-string scan.
+The rule would still match a parse node; what fails is that the *body* being re-parsed is not shell, so the anchor buys nothing.
+A quoted heredoc is where an agent writes source code to a file, and 915 of the corpus's 918 bodies are that form.
+Cost is the secondary argument: every heredoc body raises the masker from 0.050 ms to 0.123 ms per command against 0.061 ms for payloads alone.
+
+So a `.env` written by heredoc (`cat > .env <<'EOF'` / `API_KEY=…` / `EOF`) stays unmasked.
+That is a real leak this record declines to close, not an oversight: the remedy for a session that will handle credentials on the command line is `"permissionReviewLog": false`, as below.
+Reopening it needs a report of a real leak through that context — the same bar this record set for [#920], and the bar that report met.
+
+A **herestring** payload (`cmd <<< "TOKEN=sk-x"`) is a third residual, declined for want of any measured population.
+
+Across the whole corpus, **no command logs differently** than before this change: the payload rule has zero true positives there as well as zero false ones, so it is a consistency fix and forward protection rather than a remedy for a leak already written.
 
 ### Amendment, 2026-09-15 — the reopen condition was met, and the nominated remedy was wrong
 
@@ -43,7 +82,7 @@ Three residuals are accepted rather than hidden:
   Blanking the field instead would cost the command text on every heredoc-bearing entry, which is the main reason this log is read.
 - An **inline-shell payload** (`bash -c 'TOKEN=… deploy'`) and a **heredoc body** carry no assignment node, so neither is masked — and `executedUnit` re-parses to a real assignment, so one record can hold the same secret masked under one key and unmasked under another.
   Widening to them needs the wrapper analyzer, because blanket recursion into string nodes is exactly what re-admits the false-positive class above.
-  Tracked as [#923].
+  Superseded by the 2026-09-19 amendment above, which masks the payload and accepts the heredoc body as a residual.
 
 The report's second observation — that `chmod` is a no-op on Windows, so neither remedy was active there — is answered by this change rather than by a new mechanism: redaction does not depend on file modes.
 The reasoning against a per-session Windows warning, below, is unchanged.

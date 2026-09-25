@@ -468,11 +468,9 @@ export function detectDeprecatedPreviewCaps(
  * make a display preference a policy event. The decision keeps its default
  * letter, and the message names the entry, the reason, and the letter kept.
  *
- * Where that message surfaces is the caller's problem and is currently a narrow
- * one: `ConfigStore` dedupes against a warning recorded by a factory-time
- * refresh with no ctx to notify, so an issue already on disk reaches the debug
- * log alone. That predates this detector and swallows its two siblings the same
- * way (#933).
+ * Where that message surfaces is the caller's problem: `ConfigIssueReporter`
+ * warns it at session start and on any turn whose refresh first finds it,
+ * latched per issue so a persisting one is not repeated (#933).
  *
  * Pure, following {@link detectPermissiveBashFallback}: it takes the merged
  * config and returns a message; the caller owns pushing it onto the issue list.

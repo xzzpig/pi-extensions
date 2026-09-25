@@ -3,6 +3,7 @@ import type { DebugReviewLogger } from "#src/logging/session-logger";
 import type { AuthorizerLog, PermissionQuery } from "#src/service";
 import type { PermissionEventBus } from "#src/service/permission-events";
 import { ParentAuthorizer } from "./approval-escalator";
+import type { AskDialogAdmission } from "./ask-dialog-queue";
 import { DenyingAuthorizer } from "./denying-authorizer";
 import { getSessionId } from "./forwarder-context";
 import type { TargetServingLookup } from "./forwarding-liveness";
@@ -110,6 +111,13 @@ export interface AuthorizerSelectionDeps {
   detection: SubagentDetector;
   /** Event bus used by `LocalUserAuthorizer` for the `permissions:ui_prompt` broadcast. */
   events: PermissionEventBus;
+  /**
+   * The session's dialog queue, threaded into `LocalUserAuthorizer`.
+   *
+   * Shared rather than owned by the terminal, because a terminal is rebuilt on
+   * every activation and a per-activation queue would serialize nothing (#965).
+   */
+  dialogs: AskDialogAdmission;
   /** Read live at prompt time; threaded into `LocalUserAuthorizer`. */
   getPromptPreferences: () => PromptPreferences;
   /** Injected for testability; production callers pass the real function. */
@@ -147,6 +155,7 @@ export function selectAuthorizer(
           ui: ctx.ui,
           mode: ctx.mode,
           events: deps.events,
+          dialogs: deps.dialogs,
           getPromptPreferences: deps.getPromptPreferences,
           requestPermissionDecision: deps.requestPermissionDecision,
         }),

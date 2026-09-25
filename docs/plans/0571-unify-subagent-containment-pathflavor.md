@@ -140,7 +140,7 @@ This is a behavior-preserving refactor, so the sequence is cover-then-refactor (
 
 1. **Characterization tests** (`test:`)
    - Surface: `test/authority/subagent-context.test.ts`, "session dir detection" describe block.
-   - Add win32-flavor nested / equal / sibling-prefix / cross-root (different drive) cases and posix/​win32 `..`-in-session-dir cases, asserting the current behavior.
+   - Add win32-flavor nested / equal / sibling-prefix / cross-root (different drive) cases and posix/win32 `..`-in-session-dir cases, asserting the current behavior.
    - These pass green against the existing `isPathWithinDirectoryForSubagent` implementation — they lock the behavior before the swap.
    - Commit: `test(permission-system): pin subagent-context containment edge cases (#571)`.
 
