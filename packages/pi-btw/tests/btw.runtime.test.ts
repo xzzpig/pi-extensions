@@ -2156,15 +2156,17 @@ describe("btw runtime behavior", () => {
     await flushAsyncWork();
 
     const transcript = transcriptText(overlay);
-    expect(transcript).toContain("Inspecting package.json");
-    // Native read renderer shows the call row (tool name + path); output stays
-    // hidden while collapsed, matching Pi's main transcript default.
+    // pi 0.87 rendering (unconstrained-height render, as in this harness):
+    // thinking no longer renders in the completed assistant body, and the
+    // native tool component shows the call arguments plus the result body
+    // inline instead of a collapsed call row.
     expect(transcript).toContain("package.json");
-    expect(transcript).not.toContain("line 1");
+    expect(transcript).toContain("line 1");
+    expect(transcript).toContain("The package is pi-btw.");
     expect(transcript).toContain("────────────────");
     expect(transcript).toContain("second question");
     expect(transcript).toContain("Second answer");
-    expect(transcript.indexOf("second question")).toBeGreaterThan(transcript.indexOf("────────────────"));
+    expect(transcript.indexOf("second question")).toBeGreaterThan(transcript.indexOf("package.json"));
   });
 
   it("transcript inspection exposes streaming and failure state", async () => {

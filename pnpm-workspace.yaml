@@ -12,8 +12,8 @@ allowBuilds:
   tree-sitter-bash: true
 
 catalog:
-  "@earendil-works/pi-coding-agent": "0.83.0"
-  "@earendil-works/pi-tui": "0.83.0"
+  "@earendil-works/pi-coding-agent": "0.87.1"
+  "@earendil-works/pi-tui": "0.87.1"
   "@types/node": "24.12.4"
   "typescript": "5.9.3"
   "vitest": "4.1.8"

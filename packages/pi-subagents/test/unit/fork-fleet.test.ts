@@ -136,7 +136,11 @@ describe("native subagent fleet", () => {
 			// legacy rail (which carries no thinking entries at all).
 			assert.ok(await loadNativeTranscriptSupport(), "shared transcript module should load in this workspace");
 			const component = new SubagentFleetComponent(
-				{ terminal: { rows: 32, columns: 110 }, requestRender() {} } as never,
+				// Tall enough that the expanded transcript fits the inspector
+				// viewport: pi 0.87 renders tool calls with args and result
+				// expanded, and the detail pane auto-follows the bottom, so a
+				// short viewport scrolls the first thinking block above the fold.
+				{ terminal: { rows: 64, columns: 110 }, requestRender() {} } as never,
 				nativeTheme as never,
 				state,
 				() => {},
