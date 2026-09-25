@@ -77,8 +77,9 @@ jobs:
         if: env.DRY_RUN != 'true'
         uses: actions/download-artifact@v4
         with:
-          name: ranking-${{ env.RELEASE_TAG }}-${{ github.run_attempt }}
+          artifact-ids: ${{ needs.ranking.outputs.artifact_id }}
           path: assets
+          merge-multiple: true
       - name: Apply release ranking to package
         if: env.DRY_RUN != 'true'
         run: python3 scripts/update-ranking.py --release "$RELEASE_TAG"
@@ -131,7 +132,7 @@ jobs:
             console.log('Identical version already published; verifying without republishing.');
           }
           let verified = false;
-          for (let attempt = 0; attempt < 12; attempt++) {
+          for (let attempt = 0; attempt < 60; attempt++) {
             const published = await fetch(url);
             if (published.ok) {
               const metadata = await published.json();
@@ -141,20 +142,22 @@ jobs:
               verified = true;
               break;
             }
+            if (attempt % 12 === 0) console.log(`Waiting for published metadata (${attempt * 5}s elapsed)...`);
             await new Promise(resolve => setTimeout(resolve, 5000));
           }
-          assert(verified, 'Published metadata did not become available');
+          assert(verified, 'Published metadata did not become available within five minutes; retry verification before attempting another publish');
           if (isNewVersion) {
             let latestVerified = false;
-            for (let attempt = 0; attempt < 12; attempt++) {
+            for (let attempt = 0; attempt < 60; attempt++) {
               const latest = await fetch(`https://registry.npmjs.org/${pkg.name}/latest`);
               if (latest.ok && (await latest.json()).version === pkg.version) {
                 latestVerified = true;
                 break;
               }
+              if (attempt % 12 === 0) console.log(`Waiting for latest (${attempt * 5}s elapsed)...`);
               await new Promise(resolve => setTimeout(resolve, 5000));
             }
-            assert(latestVerified, 'latest did not become available for this release');
+            assert(latestVerified, 'latest did not become available within five minutes for this release');
           }
           NODE
       - name: Create GitHub release after registry verification
@@ -177,6 +180,8 @@ jobs:
 
   ranking:
     name: Prepare release ranking
+    outputs:
+      artifact_id: ${{ steps.ranking_artifact.outputs.artifact-id }}
     if: github.repository == 'tmonk/pi-goal-x'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -218,6 +223,7 @@ jobs:
           git commit -m "docs: update Pi ranking for $RELEASE_TAG"
           git push origin HEAD:main
       - name: Save release ranking for package
+        id: ranking_artifact
         if: env.DRY_RUN != 'true'
         uses: actions/upload-artifact@v4
         with:

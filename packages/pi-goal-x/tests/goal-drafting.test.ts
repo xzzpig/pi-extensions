@@ -350,12 +350,12 @@ test("an empty dialog adjustment keeps the plain continue message byte-identical
 		await h.commands.get("goal")!.handler("Build a tiny app", h.ctx);
 		const plain = runProposal(h, proposalParams(objective));
 		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: CONTINUE_ANSWER, wasCustom: false }], cancelled: false });
-		const plainText = (await plain).content[0].text.replace(/^Proposed objective:[\s\S]*?Independent auditor: [^\n]*\n\n/, "");
+		const plainText = (await plain).content[0].text.replace(/^Budget: [^\n]*\n\nProposed objective:[\s\S]*?Independent auditor: [^\n]*\n\n/, "");
 		assert.equal(plainText, "Goal draft refinement requested. The goal was not changed; ask what the user wants revised before proposing again.");
 		await h.commands.get("goal")!.handler("Build a tiny app", h.ctx);
 		const empty = runProposal(h, proposalParams(objective));
 		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: "", wasCustom: true }], cancelled: false });
-		const emptyText = (await empty).content[0].text.replace(/^Proposed objective:[\s\S]*?Independent auditor: [^\n]*\n\n/, "");
+		const emptyText = (await empty).content[0].text.replace(/^Budget: [^\n]*\n\nProposed objective:[\s\S]*?Independent auditor: [^\n]*\n\n/, "");
 		assert.equal(emptyText, plainText, "an empty editor submission is the pre-existing continue outcome");
 		assert.equal(activeGoalFiles(cwd).length, 0, "no goal was created");
 	} finally {

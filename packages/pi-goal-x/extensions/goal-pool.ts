@@ -90,7 +90,7 @@ export function buildGoalListText(pool: Map<string, GoalRecord>, focusedGoalId: 
 }
 
 export function buildUnfocusedOpenGoalsSummary(openGoalCount: number): string {
-	return `No goal is focused in this session. ${openGoalCount} open goal${openGoalCount === 1 ? "" : "s"} exist in .pi/goals. Use /goal-focus to choose the session focus before doing goal work.`;
+	return `No goal is focused in this session. ${openGoalCount} open goal${openGoalCount === 1 ? "" : "s"} exist in the goal pool. Use /goal-focus to choose the session focus before doing goal work.`;
 }
 
 export function mergeFocusedGoalWithDisk(args: { memoryGoal: GoalRecord; diskGoal: GoalRecord }): GoalRecord {

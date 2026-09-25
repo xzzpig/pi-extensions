@@ -124,7 +124,7 @@ function minimalGoalMetadata(goal: GoalRecord): string {
 		`Goal id: ${goal.id}`,
 		`Status: ${statusLabel(goal)}`,
 		`Mode: ${goal.sisyphus ? "sisyphus" : "regular"}`,
-		goal.tokenBudget ? `Budget: ${goal.tokenBudget} tokens (${goal.usage.tokensUsed} used)` : undefined,
+		goal.tokenBudget ? `Lifetime spending cap: ${goal.tokenBudget} tokens (${goal.usage.tokensUsed} cumulatively used; not context occupancy)` : undefined,
 	].filter(Boolean).join("\n");
 }
 
@@ -188,7 +188,9 @@ export function buildGoalAuditorPrompt(args: {
 	const auditor = args.settings?.auditor;
 	// The default checklist stays byte-for-byte identical to the pre-0.8.0
 	// prompt; `auditor.checklist` replaces it wholesale (the protocol tail
-	// below is never part of it and always remains).
+	// below is never part of it and always remains). Upstream 0.31.9 reworded
+	// its checklist and moved the verdict protocol to <approved/> markers; the
+	// fork keeps its own wording and structured_output protocol.
 	const baseChecklist = [
 		"1. Extract the real success criteria from the objective, including quality and reader outcomes.",
 		"2. Inspect artifacts or command output that can prove or disprove those criteria. Treat the executor claim as an untrusted assertion and cross-check it with actual file/shell evidence — a claim alone is never proof.",

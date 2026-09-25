@@ -9,7 +9,7 @@ import {
 import { loadGoalSettings } from "./goal-settings.ts";
 import { runGoalCompletionAuditor, appendAuditUsageEntry, type GoalAuditorResult } from "./goal-auditor.ts";
 import { nowIso, type GoalRecord } from "./goal-record.ts";
-import { latestEventsForGoal, goalRuntimeEvents } from "./goal-ledger.ts";
+import { latestEventsForGoal, latestAuditorResultForGoal, goalRuntimeEvents } from "./goal-ledger.ts";
 import { mergeGoalPromptFromDisk } from "./storage/goal-files.ts";
 import { renderGoalChangeManifest } from "./goal-change-delta.ts";
 import { deleteChangeBaseline } from "./goal-change-baseline.ts";
@@ -288,9 +288,11 @@ if (auditorSettings?.disabled === true) {
 	// auditor.warmContext: false skips the injection entirely.
 	const ledger = goalRuntimeEvents(ctx, auditTarget.id);
 	const warmTail = settings.auditor?.warmContext === false ? [] : latestEventsForGoal(ledger, auditTarget.id, 8);
-	const warmContext = warmTail.length > 0
+	const previousAudit = latestAuditorResultForGoal(ledger, auditTarget.id);
+	let warmContext = warmTail.length > 0
 		? `Recent goal events (from the shared ledger):\n${warmTail.map((e) => `- ${e.at} ${e.type}${"taskId" in e ? ` (task ${e.taskId})` : ""}${"evidence" in e && e.evidence ? ` evidence: ${e.evidence}` : ""}`).join("\n")}`
 		: null;
+	if (settings.auditor?.warmContext !== false && previousAudit?.verdict === "disapproved") warmContext = `${warmContext ?? ""}\nPrevious rejection (verify whether resolved): ${previousAudit.report.slice(0, 600)}`;
 
 	// Change manifest: a machine-collected index of what changed in this goal's
 	// execution window, so the fresh-context auditor can aim its inspection

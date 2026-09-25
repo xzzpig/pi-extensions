@@ -90,3 +90,18 @@ export function budgetLine(goal: BudgetLike): string | null {
 	const used = Math.floor(goal.usage.tokensUsed);
 	return `token budget: ${used}/${Math.floor(goal.tokenBudget ?? 0)} used, ${remaining} remaining`;
 }
+
+/** Agent-facing accounting must never read as current context occupancy. */
+export function modelBudgetLine(goal: BudgetLike): string | null {
+	const line = budgetLine(goal);
+	return line ? `Lifetime ${line} (spending cap, not context capacity)` : null;
+}
+
+export interface GoalContextUsage { tokens: number | null; contextWindow: number }
+
+/** A point-in-time observation; older retained observations are historical. */
+export function contextUsageLine(usage?: GoalContextUsage): string {
+	if (!usage || usage.tokens === null || !Number.isFinite(usage.tokens) || usage.tokens < 0
+		|| !Number.isFinite(usage.contextWindow) || usage.contextWindow <= 0) return "Context snapshot: unavailable";
+	return `Context snapshot: ${Math.round(usage.tokens)}/${Math.round(usage.contextWindow)} tokens (${Math.round(100 * usage.tokens / usage.contextWindow)}%)`;
+}

@@ -76,9 +76,16 @@ test("stale prompt points the agent at the right lifecycle path", () => {
 test("unfocused prompt keeps multi-goal focus human-owned", () => {
 	const prompt = unfocusedOpenGoalsPrompt(3);
 	assert.match(prompt, /^\[PI GOAL UNFOCUSED\]/);
-	assert.match(prompt, /3 open pi goals/);
+	assert.match(prompt, /3 open pi goals exist,/);
 	assert.match(prompt, /Do not choose or switch focus autonomously/);
 	assert.match(prompt, /\/goal-focus/);
+});
+
+test("unfocused prompt uses singular grammar for exactly one open goal", () => {
+	const prompt = unfocusedOpenGoalsPrompt(1);
+	assert.match(prompt, /1 open pi goal exists,/);
+	assert.doesNotMatch(prompt, /1 open pi goal exist,/);
+	assert.doesNotMatch(prompt, /1 open pi goals/);
 });
 
 test("taskListBlock renders correctly with mixed statuses", () => {

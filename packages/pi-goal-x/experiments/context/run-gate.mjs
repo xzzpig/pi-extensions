@@ -80,7 +80,10 @@ for (const fixtureId of expectedFixtureIds) {
 	}
 	if (captured.extensionSystem) failures.push(`${fixtureId}: goal state must not enter the system prefix`);
 	const liveState = captured.messages.filter(m => m.customType === "pi-goal-live-context");
-	if (liveState.length > 1 || (liveState.length && captured.messages.at(-1) !== liveState[0])) failures.push(`${fixtureId}: live state must occur once at the tail`);
+	const active = liveState[0]?.content?.includes("[PI GOAL ACTIVE goalId=");
+	const expectedTails = active ? 2 : 1;
+	if (liveState.length && (liveState.length !== expectedTails || liveState.some((m, i) => captured.messages.at(-expectedTails + i) !== m))) failures.push(`${fixtureId}: current policy and optional counters must occur once at the tail`);
+	if (active && !liveState[1]?.content?.startsWith("Goal snapshot:")) failures.push(`${fixtureId}: counters snapshot missing`);
 	const liveText = liveState[0]?.content ?? "";
 
 	// Required single-source markers on active-goal fixtures whose turn was

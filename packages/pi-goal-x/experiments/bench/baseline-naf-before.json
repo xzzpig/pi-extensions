@@ -456,8 +456,8 @@
       "p50": 0.6,
       "p95": 1.6,
       "max": 1.6,
-      "ops": 12,
-      "notes": "fs ops/case ~12; mean 0.8ms"
+      "ops": 35,
+      "notes": "Original timing reference: mean 0.8ms; operation-count reference refreshed to main 8b077aa (0.31.6): 35 ops after scheduler persistence; integration measured the same 35."
     },
     {
       "id": "B7.tool.get_goal",

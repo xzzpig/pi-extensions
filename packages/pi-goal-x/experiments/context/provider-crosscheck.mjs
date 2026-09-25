@@ -1,5 +1,7 @@
 /** Capture a real SDK provider payload before dispatch; no HTTP request is sent. */
 import assert from 'node:assert/strict';
+import * as piAI from '@earendil-works/pi-ai';
+import {stream as streamResponses} from '../../node_modules/@earendil-works/pi-ai/dist/api/openai-responses.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,6 +13,32 @@ import {runGoalCompletionAuditor} from '../../extensions/goal-auditor.ts';
 import {runBlockerOracle} from '../../extensions/goal-oracle.ts';
 
 const work=fs.mkdtempSync(path.join(os.tmpdir(),'goal-wire-check-'));
+// Exercise Responses caller compatibility resolution, not merely its converter.
+const registered=[];
+goalExtension({registerTool:tool=>registered.push(tool),registerCommand(){},on(){},getActiveTools:()=>[],setActiveTools(){},appendEntry(){},registerMessageRenderer(){}});
+const responseTools=registered.filter(tool=>['create_goal','get_goal','update_goal_task','propose_goal_draft'].includes(tool.name)).map(({name,description,parameters})=>({name,description,parameters}));
+assert.equal(responseTools.length,4);
+for(const supportsStrictMode of [undefined,false,true]) {
+ let payload;
+ const model={id:'fixture',name:'fixture',api:'openai-responses',provider:'opencode',baseUrl:'http://127.0.0.1:1/v1',reasoning:false,input:['text'],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:200000,maxTokens:128,...(supportsStrictMode === undefined ? {} : {compat:{supportsStrictMode}})};
+ await streamResponses(model,(piAI.normalizeContext ?? (context => context))({messages:[{role:'user',content:'Inspect optional schemas only',timestamp:0}],tools:responseTools}),{apiKey:'fixture-only',onPayload:value=>{payload=value;throw new Error('Intentional capture before transmission');}}).result();
+ assert.ok(payload);
+ for(const original of responseTools){
+  const wire=payload.tools.find(tool=>tool.name===original.name);
+  assert.deepEqual(wire.parameters,JSON.parse(JSON.stringify(original.parameters)));
+  assert.equal(wire.strict,supportsStrictMode === true ? false : undefined);
+  assert.equal(Object.hasOwn(wire,'strict'),supportsStrictMode === true);
+ }
+ const byName=Object.fromEntries(payload.tools.map(tool=>[tool.name,tool]));
+ assert.deepEqual(byName.create_goal.parameters.required,['objective']);
+ assert.equal(byName.create_goal.parameters.properties.token_budget.minimum,1);
+ assert.ok(!byName.get_goal.parameters.required?.includes('task_id'));
+ assert.ok(!byName.update_goal_task.parameters.required?.includes('updates'));
+ assert.ok(!byName.update_goal_task.parameters.required?.includes('task_id'));
+ assert.ok(!byName.propose_goal_draft.parameters.required?.includes('token_budget'));
+ assert.ok(byName.propose_goal_draft.parameters.properties.token_budget.anyOf.some(type=>type.type==='null'));
+}
+console.log('Responses compatibility: 3 real adapter payloads; no network requests sent (omitted strict remains an upstream concern).');
 let count=0;
 try {
  for (const id of ['active-regular-no-tasks','current-contracted-task','tasks-disabled','guided-drafting-question']) {
