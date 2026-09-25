@@ -1,4 +1,4 @@
-import type { Api, AuthResult, Model, ModelsRefreshOptions, ModelsRefreshResult, Provider } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessageEventStream, AuthResult, Context, Model, ModelsRefreshOptions, ModelsRefreshResult, SimpleStreamOptions, Provider } from "@earendil-works/pi-ai";
 import type { ModelRuntime } from "./model-runtime.ts";
 import type { AuthStatus, ProviderConfigInput } from "./provider-composer.ts";
 export type { ProviderConfigInput } from "./provider-composer.ts";
@@ -33,6 +33,7 @@ export declare class ModelRegistry {
     getProviderAuth(provider: string): Promise<AuthResult | undefined>;
     getApiKeyForProvider(provider: string): Promise<string | undefined>;
     isUsingOAuth(model: Model<Api>): boolean;
+    streamSimple(model: Model<Api>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream;
     registerProvider(provider: Provider): void;
     registerProvider(providerName: string, config: ProviderConfigInput): void;
     unregisterProvider(providerName: string): void;

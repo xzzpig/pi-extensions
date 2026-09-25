@@ -5,13 +5,19 @@ import { randomUUID } from "node:crypto";
 export const __piSubagentsTestShim = true;
 
 export function getMarkdownTheme() { return {}; }
-export function keyText(keybinding) { return keybinding === "app.tools.expand" ? "configured-expand-key" : ""; }
+export function keyText(_keybinding) { return ""; }
 export function initTheme() {}
 export function getLanguageFromPath(filePath) { return path.extname(String(filePath)).slice(1) || undefined; }
 export function highlightCode(source) { return String(source).split("\n"); }
 export function convertToLlm(value) { return value; }
 export function createReadOnlyTools() {
-	return ["read", "grep", "find", "ls"].map((name) => ({ name }));
+	// pi-agent-core 0.87 serializes tool declarations on Agent construction, so the
+	// stub tools must carry a JSON-serializable parameters schema.
+	return ["read", "grep", "find", "ls"].map((name) => ({
+		name,
+		description: `${name} tool (test shim)`,
+		parameters: { type: "object", properties: {}, additionalProperties: false },
+	}));
 }
 export function rawKeyHint(keys, label) { return `${keys} ${label}`; }
 export function keyHint(_binding, label) { return label; }

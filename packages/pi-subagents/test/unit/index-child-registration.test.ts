@@ -531,6 +531,89 @@ describe("subagent extension child mode", () => {
 		}
 	});
 
+	it("yields registered root bg_wait for an owned nested supervisor request", () => {
+		const script = String.raw`
+			import assert from "node:assert/strict";
+			import * as fs from "node:fs";
+			import * as path from "node:path";
+			import registerSubagentExtension from "./index.ts";
+			import { updateActiveRunIndex } from "./src/runs/background/active-run-index.ts";
+			import { ensureSupervisorChannelDir, resolveSupervisorChannelDir } from "./src/intercom/native-supervisor-channel.ts";
+			import { DIRS, INTERCOM_DETACH_REQUEST_EVENT } from "./src/shared/types.ts";
+
+			const handlers = new Map();
+			const eventHandlers = new Map();
+			const events = {
+				on(channel, handler) {
+					eventHandlers.set(channel, [...(eventHandlers.get(channel) ?? []), handler]);
+					return () => eventHandlers.set(channel, (eventHandlers.get(channel) ?? []).filter((candidate) => candidate !== handler));
+				},
+				emit(channel, payload) { for (const handler of eventHandlers.get(channel) ?? []) handler(payload); },
+			};
+			let bgWaitTool;
+			const fakePi = new Proxy({
+				events,
+				on(channel, handler) { handlers.set(channel, [...(handlers.get(channel) ?? []), handler]); },
+				registerTool(tool) { if (tool.name === "bg_wait") bgWaitTool = tool; },
+				registerCommand() {}, registerShortcut() {}, registerMessageRenderer() {}, sendMessage() {}, getSessionName() {},
+			}, { get(target, prop) { return prop in target ? target[prop] : () => undefined; } });
+
+			const runId = "workflow-root-" + crypto.randomUUID();
+			const requestId = "nested-request-" + crypto.randomUUID();
+			const runtimeSessionId = "owner-runtime-" + crypto.randomUUID();
+			const ownerSessionId = "owner-session-" + crypto.randomUUID();
+			const asyncDir = path.join(DIRS.async, runId);
+			const channelDir = resolveSupervisorChannelDir("nested-reviewer-run", "reviewer", 0);
+			const requestFile = path.join(channelDir, "requests", requestId + ".json");
+			const ctx = {
+				cwd: process.cwd(), hasUI: false,
+				sessionManager: {
+					getSessionId() { return ownerSessionId; },
+					getSessionFile() { return runtimeSessionId; },
+					getEntries() { return []; },
+				},
+				modelRegistry: { getAvailable() { return []; } },
+			};
+
+			try {
+				fs.mkdirSync(asyncDir, { recursive: true });
+				fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({
+					runId, sessionId: runtimeSessionId, mode: "workflow", state: "running",
+					startedAt: Date.now(), lastUpdate: Date.now(), cwd: process.cwd(), pid: process.pid,
+					steps: [{ agent: "worker", status: "running", index: 0 }],
+				}), "utf-8");
+				updateActiveRunIndex(asyncDir, "running");
+				registerSubagentExtension(fakePi);
+				for (const handler of handlers.get("session_start") ?? []) await handler({ reason: "startup" }, ctx);
+				if (!bgWaitTool) throw new Error("bg_wait tool not registered");
+
+				const startedAt = Date.now();
+				const waiting = bgWaitTool.execute("nested-supervisor", { id: runId, timeoutMs: 1500 }, new AbortController().signal, undefined, ctx);
+				await new Promise((resolve) => setTimeout(resolve, 25));
+				ensureSupervisorChannelDir(channelDir);
+				fs.writeFileSync(requestFile, JSON.stringify({
+					type: "subagent.supervisor.request", id: requestId, createdAt: Date.now(), expiresAt: Date.now() + 60_000,
+					reason: "need_decision", message: "Choose the safe path", expectsReply: true,
+					orchestratorSessionId: ownerSessionId, runId: "nested-reviewer-run", agent: "reviewer", childIndex: 0,
+				}), "utf-8");
+				events.emit(INTERCOM_DETACH_REQUEST_EVENT, { requestId, runId: "nested-reviewer-run", agent: "reviewer", childIndex: 0 });
+
+				const result = await waiting;
+				assert.equal(result.isError, undefined);
+				assert.deepEqual(result.details.wait, {
+					reason: "supervisor_request", timedOut: false, activeRunIds: [runId], activeProviderItems: [],
+				});
+				assert.equal(JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8")).state, "running");
+				assert.ok(Date.now() - startedAt < 1200, "bg_wait did not yield promptly");
+			} finally {
+				for (const handler of handlers.get("session_shutdown") ?? []) await handler();
+				fs.rmSync(asyncDir, { recursive: true, force: true });
+				fs.rmSync(channelDir, { recursive: true, force: true });
+			}
+		`;
+		execFileSync(process.execPath, ["--experimental-strip-types", "--import", "./test/support/register-loader.mjs", "--input-type=module", "--eval", script], { cwd: projectRoot, env: parentToolEnv(), stdio: "pipe" });
+	});
+
 	it("does not restore the async widget from tool results when asyncWidget is disabled", () => {
 		const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-async-widget-config-"));
 		try {
@@ -732,6 +815,7 @@ describe("subagent extension child mode", () => {
 		const script = String.raw`
 			import registerSubagentExtension from "./index.ts";
 			import { currentCompletionOwnerId } from "./src/shared/completion-owner.ts";
+			process.env.PI_SUBAGENT_PARENT_SESSION = "stale-legacy-root";
 			const completionOwnerId = currentCompletionOwnerId();
 			function createRuntime(sessionId) {
 				const eventListeners = new Map();
@@ -774,6 +858,7 @@ describe("subagent extension child mode", () => {
 			const first = createRuntime("independent-first");
 			registerSubagentExtension(first.pi);
 			for (const handler of first.handlers.get("session_start")) await handler({ reason: "startup" }, first.ctx);
+			if (process.env.PI_SUBAGENT_PARENT_SESSION !== undefined) throw new Error("first root retained a legacy parent identity");
 			first.events.emit("subagent:async-complete", {
 				id: "independent-baseline", agent: "worker", success: true, summary: "Baseline",
 				exitCode: 0, timestamp: Date.now(), sessionId: "independent-first", completionOwnerId,
@@ -783,6 +868,7 @@ describe("subagent extension child mode", () => {
 			const second = createRuntime("independent-second");
 			registerSubagentExtension(second.pi);
 			for (const handler of second.handlers.get("session_start")) await handler({ reason: "startup" }, second.ctx);
+			if (process.env.PI_SUBAGENT_PARENT_SESSION !== undefined) throw new Error("second root published a parent identity");
 
 			for (const handler of first.handlers.get("agent_end")) await handler({}, first.ctx);
 			first.events.emit("subagent:async-complete", {
@@ -794,8 +880,8 @@ describe("subagent extension child mode", () => {
 			}
 
 			for (const handler of first.handlers.get("session_shutdown")) await handler();
-			if (process.env.PI_SUBAGENT_PARENT_SESSION !== "independent-second") {
-				throw new Error("independent shutdown cleared another runtime's parent session identity");
+			if (process.env.PI_SUBAGENT_PARENT_SESSION !== undefined) {
+				throw new Error("independent shutdown restored a root parent session identity");
 			}
 			for (const handler of second.handlers.get("agent_end")) await handler({}, second.ctx);
 			second.events.emit("subagent:async-complete", {
@@ -807,8 +893,25 @@ describe("subagent extension child mode", () => {
 			}
 			for (const handler of second.handlers.get("session_shutdown")) await handler();
 			if (process.env.PI_SUBAGENT_PARENT_SESSION !== undefined) {
-				throw new Error("owning shutdown left its parent session identity active");
+				throw new Error("final shutdown left a root parent session identity active");
 			}
+
+			const reverseFirst = createRuntime("reverse-first");
+			const reverseSecond = createRuntime("reverse-second");
+			registerSubagentExtension(reverseFirst.pi);
+			registerSubagentExtension(reverseSecond.pi);
+			for (const handler of reverseFirst.handlers.get("session_start")) await handler({ reason: "startup" }, reverseFirst.ctx);
+			for (const handler of reverseSecond.handlers.get("session_start")) await handler({ reason: "startup" }, reverseSecond.ctx);
+			for (const handler of reverseSecond.handlers.get("session_shutdown")) await handler();
+			if (process.env.PI_SUBAGENT_PARENT_SESSION !== undefined) throw new Error("reverse shutdown restored a root identity");
+			for (const handler of reverseFirst.handlers.get("agent_end")) await handler({}, reverseFirst.ctx);
+			reverseFirst.events.emit("subagent:async-complete", {
+				id: "reverse-completion", agent: "worker", success: true, summary: "Done",
+				exitCode: 0, timestamp: Date.now(), sessionId: "reverse-first", completionOwnerId,
+			});
+			if ((reverseFirst.eventDeliveries.get("subagent:async-complete") ?? 0) === 0) throw new Error("reverse shutdown removed the surviving runtime subscription");
+			for (const handler of reverseFirst.handlers.get("session_shutdown")) await handler();
+			if (process.env.PI_SUBAGENT_PARENT_SESSION !== undefined) throw new Error("reverse final shutdown restored a root identity");
 		`;
 
 		execFileSync(
@@ -1020,7 +1123,7 @@ describe("subagent extension child mode", () => {
 			if (oldRuntime.sent.length !== 0) throw new Error("stale completion sent after runtime cleanup");
 			for (const handler of oldRuntime.handlers.get("session_shutdown")) await handler({ reason: "reload" });
 			if (eventListeners.get("subagent:async-complete")?.size !== oldListenerCount
-				|| process.env.PI_SUBAGENT_PARENT_SESSION !== "notify-reload-session") {
+				|| process.env.PI_SUBAGENT_PARENT_SESSION !== undefined) {
 				throw new Error("stale shutdown changed the replacement runtime");
 			}
 

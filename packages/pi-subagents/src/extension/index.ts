@@ -19,10 +19,10 @@ import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { keyText, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
-import { clearAgentDiscoveryCache, discoverAgents, discoverAgentsAll, type AgentConfig, type AgentScope } from "../agents/agents.ts";
+import { clearAgentDiscoveryCache, discoverAgentSnapshot, discoverAgents, discoverAgentsAll, type AgentConfig, type AgentScope } from "../agents/agents.ts";
 import { appendAdvertisedAgentPrompt, buildAdvertisedAgentPrompt } from "../agents/advertised-agent-prompt.ts";
 import { mergeAgentsForScope } from "../agents/agent-selection.ts";
-import { clearRuntimeAgentsForPi } from "../agents/runtime-agent-registry.ts";
+import { clearRuntimeAgentsForPi, listRuntimeAgentConfigs, mergeRuntimeAgents } from "../agents/runtime-agent-registry.ts";
 import { discoverAgentsWithRuntime } from "../agents/runtime-discovery.ts";
 import { registerRuntimeAgentEventListener } from "../agents/runtime-agent-events.ts";
 import { ensureAccessibleDir } from "../shared/accessible-dir.ts";
@@ -65,6 +65,7 @@ import { registerSubagentRpcBridge } from "./rpc.ts";
 import { clearSlashSnapshots, getSlashRenderableSnapshot, resolveSlashMessageDetails, restoreSlashFinalSnapshots, type SlashMessageDetails } from "../slash/slash-live-state.ts";
 import { resolveWaitToolConfig } from "../runs/background/subagent-wait.ts";
 import { registerWaitTool } from "../runs/background/wait-tool.ts";
+import { registerSubagentToolActivation } from "./tool-activation.ts";
 import { createWaitSubscriptionManager } from "../runs/background/wait-subscriptions.ts";
 import { drainOutstandingWork } from "../runs/background/auto-drain.ts";
 import registerSubagentNotify, { parseSubagentNotifyContent, type SubagentNotifyDetails } from "../runs/background/notify.ts";
@@ -514,7 +515,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		: undefined;
 	let executorScheduled: ((id: string, params: SubagentParamsLike, signal: AbortSignal, ctx: ExtensionContext) => Promise<AgentToolResult<Details>>) | undefined;
 	let goalTurnId = 0;
-	let parentSessionEnvValue: string | null = null;
 	let releaseHostSessionLiveness = () => {};
 	const scheduledStoreRoot = config.scheduledRuns?.storeRoot === undefined ? undefined : resolveScheduledStoreRoot(config.scheduledRuns.storeRoot);
 	const scheduledRunManager = createScheduledRunManager({
@@ -548,8 +548,24 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		if (scheduledRunManager.observedCompletionRunIds().size > 0) return true;
 		return missionObserverResultCandidateFiles(DIRS.results).length > 0;
 	};
-	const discoverAgentsForRuntime = (cwd: string, scope: AgentScope, preferredModelProvider?: string) =>
-		discoverAgentsWithRuntime(pi, cwd, scope, preferredModelProvider);
+	const discoverAgentsForRuntime = (cwd: string, scope: AgentScope, preferredModelProvider?: string) => {
+		if (listRuntimeAgentConfigs(pi).length === 0) return discoverAgents(cwd, scope, preferredModelProvider);
+		const snapshot = discoverAgentSnapshot(cwd, scope, preferredModelProvider, { includeChains: false });
+		const discovered = snapshot.effective;
+		const all = snapshot.all;
+		const configuredAgents: AgentConfig[] = [
+			...all.builtin,
+			...all.package,
+			...all.user,
+			...all.project,
+		];
+		const merged = mergeRuntimeAgents(pi, discovered, configuredAgents, { cwd, scope, preferredModelProvider });
+		if (discovered.maxThinking === undefined) return merged;
+		return {
+			...merged,
+			agents: merged.agents.map((agent) => agent.maxThinking === discovered.maxThinking ? agent : { ...agent, maxThinking: discovered.maxThinking }),
+		};
+	};
 	const { ensurePoller, refreshWidget, handleStarted, handleComplete, resetJobs, restoreActiveJobs, dispose: disposeAsyncJobTracker } = createAsyncJobTracker(pi, state, DIRS.async, {
 		widgetEnabled: asyncWidgetEnabled,
 		onJobTerminal: () => refreshResultDelivery(),
@@ -827,7 +843,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		if (systemPrompt !== event.systemPrompt) return { systemPrompt };
 	});
 
-	registerWaitTool(pi, state, waitToolConfig.enabled, waitSubscriptionManager, waitToolConfig.defaultTimeoutMs);
+	registerWaitTool(pi, state, waitToolConfig.enabled, waitSubscriptionManager, waitToolConfig.defaultTimeoutMs, undefined, supervisorChannel.hasPendingRequests);
 
 	pi.on("agent_end", async (_event, ctx) => {
 		if (!ctx.hasUI) await drainOutstandingWork({ state, events: pi.events, hasPendingSupervisorRequest: supervisorChannel.hasPendingRequests });
@@ -978,17 +994,10 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		};
 		const projectPaneOwnerRoot = path.resolve(ctx.cwd);
 		restoreHerdrProjectPaneSnapshots(state, [...new Set([...(state.herdrProjectPanes?.keys() ?? []), ...listHerdrProjectPaneRoots(projectPaneOwnerRoot), projectPaneOwnerRoot])]);
-		// Set PI_SUBAGENT_PARENT_SESSION for permission-system forwarding.
-		// Only set in the root session (the interactive UI session), not in a
-		// child host: the runner process inherits the parent's value through
-		// its environment at spawn time and must not overwrite it with a child
-		// session's identity.
+		// Root hosts may contain independent sessions, so a process-global parent
+		// identity is unsafe. Dedicated child runners retain their launch-owned value.
 		if (!process.env[SUBAGENT_CHILD_ENV]) {
-			const sessionId = ctx.sessionManager.getSessionId();
-			if (sessionId) {
-				process.env[SUBAGENT_PARENT_SESSION_ENV] = sessionId;
-				parentSessionEnvValue = sessionId;
-			}
+			delete process.env[SUBAGENT_PARENT_SESSION_ENV];
 		}
 		state.lastUiContext = ctx;
 		let phaseStartedAt = Date.now();
@@ -1065,7 +1074,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		cleanup() {
 			if (runtimeCleaned) return;
 			runtimeCleaned = true;
-			const shuttingDownParentSession = parentSessionEnvValue;
 			releaseHostSessionLiveness();
 			releaseHostSessionLiveness = () => {};
 			// Workflow continuations retain their launch context; abort them before
@@ -1113,10 +1121,6 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			state.supervisorOwnerSessionId = null;
 			state.statusProjectionSessionId = null;
 			state.parentSessionFile = null;
-			parentSessionEnvValue = null;
-			if (shuttingDownParentSession && process.env[SUBAGENT_PARENT_SESSION_ENV] === shuttingDownParentSession) {
-				delete process.env[SUBAGENT_PARENT_SESSION_ENV];
-			}
 			if (runtimeEntry.sessionManager && runtimeRegistry.bySessionManager.get(runtimeEntry.sessionManager) === runtimeEntry) {
 				runtimeRegistry.bySessionManager.delete(runtimeEntry.sessionManager);
 			}
@@ -1230,5 +1234,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	pi.on("session_start", (_event, ctx) => {
 		advertisedContext = { cwd: ctx.cwd, model: ctx.model };
 		refreshAdvertisedAgents();
+	});
+
+	registerSubagentToolActivation(pi, {
+		advertisedPrompt: () => buildAdvertisedAgentPrompt(advertisedAgents, resolveCurrentSubagentCapabilityCeiling(state.currentSessionId ?? undefined)),
 	});
 }

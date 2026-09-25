@@ -15,6 +15,27 @@ const theme = {
 	},
 };
 
+test("external-cli widget rows show their runner and elapsed time", () => {
+	const text = buildWidgetLines([{
+		asyncId: "external-widget",
+		asyncDir: "/tmp/external-widget",
+		status: "running",
+		mode: "single",
+		agents: ["worker"],
+		updatedAt: 6_100,
+		steps: [{
+			index: 0,
+			agent: "worker",
+			status: "running",
+			runner: { type: "external-cli" } as never,
+			externalProcess: { startedAt: 1_000, stdoutPath: "/tmp/stdout", stderrPath: "/tmp/stderr" },
+		}],
+	} as AsyncJobState], theme as never, 120, true).join("\n");
+	assert.match(text, /external-cli/);
+	assert.match(text, /5\.1s/);
+	assert.doesNotMatch(text, /0 tokens/);
+});
+
 function componentText(component: unknown): string {
 	if (typeof component !== "object" || component === null) return "";
 	if ("text" in component && typeof component.text === "string") return component.text;
@@ -359,7 +380,7 @@ test("collapsed async workflow widgets render compact lane rows while expanded w
 	assert.match(collapsed, /review · reviewer · queued/);
 	assert.match(collapsed, /gate · reviewer · queued/);
 	assert.doesNotMatch(collapsed, /bottleneck/);
-	assert.match(collapsed, /Press configured-expand-key for details/);
+	assert.match(collapsed, /Configure the expand key for details/);
 	assert.doesNotMatch(collapsed, /Fleet/);
 	assert.equal((collapsed.match(/1\/5 done · 1 active · 3 queued/g) ?? []).length, 1);
 	assert.doesNotMatch(collapsed, /Step \d\/\d|task:|workspace:|ref:|out(?:put)?:/i);
@@ -413,7 +434,7 @@ test("compact foreground workflow results use checklist phases instead of child 
 	assert.match(text, /1\/2 done · 1 active/);
 	assert.match(text, /✓ inventory/);
 	assert.match(text, /writers 1 active/);
-	assert.match(text, /Press configured-expand-key for live detail/);
+	assert.match(text, /Configure the expand key for live detail/);
 	assert.doesNotMatch(text, /Fleet/);
 	assert.doesNotMatch(text, /Step \d\/\d|task:|workspace:|ref:|out(?:put)?:/i);
 });
@@ -625,7 +646,7 @@ test("main-window renderer config caps only collapsed rich result rows", () => {
 	}, { expanded: false }, theme as any, undefined, { compactResultMaxLines: 3 }).render(120);
 
 	assert.equal(rendered.length, 3);
-	assert.match(rendered[2]!, /rows hidden/);
+	assert.match(rendered[2]!, /rows hidden · Configure the expand key to view them/);
 
 	const expanded = renderSubagentResult({
 		content: [{ type: "text", text: "done" }],

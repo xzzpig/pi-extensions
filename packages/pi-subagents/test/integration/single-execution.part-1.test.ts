@@ -97,6 +97,16 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(updates.length, count, "no trailing timer after settlement");
 	});
 
+	it("names the workflow child that has no agent", async () => {
+		const result = await makeExecutor([makeAgent("worker")]).execute("wf-missing-agent", {
+			workflowScript: `const [child] = await runs.all([{ key: "r1", task: "Review", async: false }]); return child.ok ? "ok" : child.error;`,
+			async: false,
+		}, undefined, undefined, makeMinimalCtx(tempDir));
+		const text = JSON.stringify(result.content);
+		assert.match(text, /Workflow child 'r1' has no agent\. Pass \{ key, agent, task \}\. Agents: worker/);
+		assert.doesNotMatch(text, /Provide exactly one mode/);
+	});
+
 	it("emits successful async workflow child settlements without provider turns", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		mockPi.onCall({ matchArgIncludes: "Child A", output: "A done" });
 		mockPi.onCall({ matchArgIncludes: "Child B", output: "B done" });
@@ -151,6 +161,17 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(result.sessionName, "echo: Say hello to the world");
 		assert.equal(result.progressSummary?.sessionName, "echo: Say hello to the world");
 		assert.equal(readCall().runtime?.sessionName, "echo: Say hello to the world");
+	});
+
+	it("addresses a nested child's supervisor by the parent child's intercom route, not its session name", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "ok" });
+		const parentChild = { intercomSessionName: "subagent-planner-run1-1" } as ChildRuntimeConfig;
+		const executor = makeExecutor([makeAgent("echo")], {}, false, undefined, true, new Map(), undefined, undefined, createEventBus(), undefined, parentChild);
+
+		const result = await executor.execute("nested-route", { agent: "echo", task: "Hi", intercomBridge: { mode: "always" } }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+
+		assert.equal(result.isError, undefined, result.content[0]?.text);
+		assert.equal(readCall().runtime?.orchestratorTarget, "subagent-planner-run1-1");
 	});
 
 	it("rejects invalid foreground cwd before spawning Pi", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -263,6 +284,96 @@ describe("single sync execution", { skip: !available ? "pi packages not availabl
 		assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
 		assert.match(result.content[0]?.text ?? "", /PROBE_OK/);
 		assert.equal(result.details.results[0]?.timedOut, undefined);
+	});
+
+	it("preserves a blocked foreground delegated tool attempt without an execution-start event", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const blockedMessage = "Tool budget hard limit reached after 1 tool call (hard 0). The 'bash' tool is blocked so you can finalize from the context you already have.";
+		mockPi.onCall({
+			steps: [
+				{ jsonl: [
+					// A still-pending earlier call must not be attributed as the blocked tool.
+					{ type: "tool_execution_start", toolCallId: "read-1", toolName: "read", args: { path: "notes.md" } },
+					{ type: "tool_result_end", message: { role: "toolResult", toolCallId: "bash-1", toolName: "bash", isError: true, content: [{ type: "text", text: blockedMessage }] } },
+					{ type: "tool_result_end", message: { role: "toolResult", toolCallId: "read-1", toolName: "read", isError: false, content: [{ type: "text", text: "ordinary notes" }] } },
+				] },
+				{ jsonl: [events.assistantMessage("I could not read the required canary because bash was blocked.")] },
+			],
+		});
+		const request: SubagentDelegationRequest = {
+			requestId: "delegated-tool-budget-blocked",
+			ownerRunId: "owner-1",
+			nodeId: "node-1",
+			agent: "bash-worker",
+			task: "Use bash to read the required canary.",
+			context: "fresh",
+			cwd: tempDir,
+			model: "mock/model",
+			toolBudget: { hard: 0, block: "*" },
+			result: { kind: "text" },
+		};
+		const result = await makeExecutor([makeAgent("bash-worker")]).executeDelegated(
+			request.requestId,
+			toSubagentDelegationExecutionParams(request),
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		const child = result.details?.results?.[0];
+		assert.equal(result.isError, undefined, result.content[0]?.text ?? "delegated execution failed");
+		assert.equal(child?.toolBudgetBlocked, true);
+		assert.equal(child?.toolBudget?.blockedTool, "bash");
+		assert.equal(child?.finalOutput, "I could not read the required canary because bash was blocked.");
+
+		mockPi.onCall({ output: "No tool needed." });
+		const normal = await makeExecutor([makeAgent("bash-worker")]).executeDelegated(
+			"delegated-no-tool",
+			toSubagentDelegationExecutionParams({ ...request, requestId: "delegated-no-tool", task: "Answer without tools." }),
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		assert.equal(normal.details?.results?.[0]?.toolBudgetBlocked, undefined);
+		assert.equal(normal.details?.results?.[0]?.finalOutput, "No tool needed.");
+	});
+
+	it("does not classify ordinary tool output that merely quotes the block message", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const quoted = `src/log.md:12:Tool budget hard limit reached after 1 tool call (hard 0). The 'bash' tool is blocked so you can finalize from the context you already have.`;
+		mockPi.onCall({
+			steps: [
+				{ jsonl: [
+					{ type: "tool_execution_start", toolCallId: "bash-1", toolName: "bash", args: { command: "grep -rn 'Tool budget hard limit reached' src/" } },
+					{ type: "tool_result_end", message: { role: "toolResult", toolCallId: "bash-1", toolName: "bash", isError: false, content: [{ type: "text", text: quoted }] } },
+					{ type: "tool_execution_end", toolName: "bash" },
+				] },
+				{ jsonl: [events.assistantMessage("The phrase appears in a log; nothing was blocked.")] },
+			],
+		});
+		const request: SubagentDelegationRequest = {
+			requestId: "delegated-tool-budget-quoted",
+			ownerRunId: "owner-1",
+			nodeId: "node-1",
+			agent: "bash-worker",
+			task: "Search the repository for budget log lines.",
+			context: "fresh",
+			cwd: tempDir,
+			model: "mock/model",
+			toolBudget: { hard: 5, block: "*" },
+			result: { kind: "text" },
+		};
+		const result = await makeExecutor([makeAgent("bash-worker")]).executeDelegated(
+			request.requestId,
+			toSubagentDelegationExecutionParams(request),
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		const child = result.details?.results?.[0];
+		assert.equal(result.isError, undefined, result.content[0]?.text ?? "delegated execution failed");
+		assert.equal(child?.toolBudgetBlocked, undefined);
+		assert.equal(child?.toolBudget?.outcome, "within-budget");
+		assert.equal(child?.finalOutput, "The phrase appears in a log; nothing was blocked.");
 	});
 
 	it("keeps public structured single-child calls foreground when async is disabled by default", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -537,7 +648,7 @@ Answer only from the supplied synthetic text.
 		const task = "Return the plain result.";
 		const agentPath = path.join(tempDir, ".pi", "agents", `${agentName}.md`);
 		fs.mkdirSync(path.dirname(agentPath), { recursive: true });
-		fs.writeFileSync(agentPath, `---\nname: ${agentName}\ndescription: Bridge override probe\ntools:\n  - read\ncompletionGuard: false\n---\nAnswer from the task only.\n`, "utf-8");
+		fs.writeFileSync(agentPath, `---\nname: ${agentName}\ndescription: Bridge override probe\ntools:\n  - read\n---\nAnswer from the task only.\n`, "utf-8");
 		const discovered = discoverAgents(tempDir).agents.find((agent) => agent.name === agentName);
 		assert.ok(discovered, "expected temporary agent definition to be discovered");
 		const intercomBridge = { mode: "off" as const };
@@ -577,7 +688,7 @@ Answer only from the supplied synthetic text.
 		const task = "Return the plain result.";
 		const agentPath = path.join(tempDir, ".pi", "agents", `${agentName}.md`);
 		fs.mkdirSync(path.dirname(agentPath), { recursive: true });
-		fs.writeFileSync(agentPath, `---\nname: ${agentName}\ndescription: Bridge template probe\ncompletionGuard: false\n---\nAnswer from the task only.\n`, "utf-8");
+		fs.writeFileSync(agentPath, `---\nname: ${agentName}\ndescription: Bridge template probe\n---\nAnswer from the task only.\n`, "utf-8");
 		const discovered = discoverAgents(tempDir).agents.find((agent) => agent.name === agentName);
 		assert.ok(discovered, "expected temporary agent definition to be discovered");
 		const instructionFile = path.join(tempDir, "custom-bridge.md");
@@ -631,38 +742,6 @@ Answer only from the supplied synthetic text.
 
 		assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
 		assert.doesNotMatch(readCallArgs().join("\n"), /This path is authoritative for this run/);
-	});
-
-	it("keeps escaped read-only delegate tasks from triggering the completion guard", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		mockPi.onCall({ output: "The exact user-facing response" });
-		const task = [
-			"This is a read-only skill compliance scenario, not an implementation assignment.",
-			"Read the supplied skill and write the exact user-facing response.",
-			"Do not edit files.",
-			"Use a scenario that discusses selection for an implementation task or closeout of an implementation assignment.",
-		].join("\\n");
-		const result = await makeExecutor([makeAgent("delegate", {
-			tools: ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor"],
-			inheritProjectContext: true,
-			systemPromptMode: "append",
-		})]).execute(
-			"workflow-read-only-delegate",
-			{
-				async: false,
-				acceptance: false,
-				preflight: { version: 1, coverage: "complete", lanes: [{ key: "main", mode: "review" }] },
-				workflowScript: `return runs.all([{ key: "main", agent: "delegate", task: ${JSON.stringify(task)} }]);`,
-			},
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-
-		assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
-		const child = (result.details as { results?: Array<{ exitCode?: number; error?: string; output?: string }> } | undefined)?.results?.[0];
-		assert.equal(child?.exitCode, 0);
-		assert.equal(child?.error, undefined);
-		assert.match(result.content[0]?.text ?? "", /The exact user-facing response/);
 	});
 
 	it("consumes one exact host-only workflow child permit before spawn", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -897,9 +976,11 @@ Answer only from the supplied synthetic text.
 		);
 
 		assert.equal(result.isError, true);
-		assert.match(result.content[0]?.text ?? "", /validation failed before child launch; no children launched/);
-		assert.match(result.content[0]?.text ?? "", /'a', 'b', 'c', 'owner', 'review', 'owner-fix'/);
-		assert.match(result.content[0]?.text ?? "", /minimum required: 6; configured: 5/);
+		const payload = JSON.parse(result.content[0]?.text ?? "null") as { ok?: boolean; errors?: Array<{ kind?: string; message?: string }> };
+		assert.equal(payload.ok, false);
+		assert.equal(payload.errors?.[0]?.kind, "spawn-budget");
+		assert.match(payload.errors?.[0]?.message ?? "", /'a', 'b', 'c', 'owner', 'review', 'owner-fix'/);
+		assert.match(payload.errors?.[0]?.message ?? "", /minimum required: 6; configured: 5/);
 		assert.equal(mockPi.callCount(), 0);
 		assert.deepEqual(fs.readdirSync(tempDir).sort(), before);
 	});
@@ -919,6 +1000,7 @@ Answer only from the supplied synthetic text.
 		);
 
 		assert.equal(result.isError, true);
+		assert.equal(result.details.mode, "management");
 		assert.deepEqual(JSON.parse(result.content[0]?.text ?? "null"), {
 			ok: false,
 			errors: [{ message: "runs.run key must be 1-128 characters using letters, numbers, '.', '_' or '-', and start with a letter or number.", line: 1, column: 17 }],
@@ -956,6 +1038,29 @@ Answer only from the supplied synthetic text.
 		assert.match(JSON.stringify(offlinePreflightValidation.errors ?? []), /preflight\.lanes\[0\]\.key/);
 		assert.equal(mockPi.callCount(), 0);
 		assert.deepEqual(fs.readdirSync(tempDir).sort(), before);
+	});
+
+	it("rejects malformed public async workflows before creating run state", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const executor = makeExecutor([makeAgent("echo")], {}, false, undefined, true, new Map(), undefined, undefined, createEventBus(), () => {
+			throw new Error("invalid workflows must not discover or launch agents");
+		});
+		const script = ["const value = 1;", "return (;"].join("\n");
+		const asyncDirsBefore = fs.existsSync(DIRS.async) ? fs.readdirSync(DIRS.async).sort() : [];
+		const callsBefore = mockPi.callCount();
+		const ctx = makeMinimalCtx(tempDir);
+		const validation = await executor.executePublic("malformed-validation", { action: "validate", workflowScript: script }, new AbortController().signal, undefined, ctx);
+		const result = await executor.executePublic("malformed-async", { workflowScript: script }, new AbortController().signal, undefined, ctx);
+
+		assert.equal(result.isError, true);
+		assert.equal(validation.details.mode, "management");
+		assert.equal(result.details.mode, "workflow");
+		assert.deepEqual(JSON.parse(result.content[0]?.text ?? "null"), JSON.parse(validation.content[0]?.text ?? "null"));
+		const payload = JSON.parse(result.content[0]?.text ?? "null") as { errors?: Array<{ line?: number; column?: number }> };
+		assert.deepEqual(payload.errors?.map(({ line, column }) => ({ line, column })), [{ line: 2, column: 9 }]);
+		assert.equal(mockPi.callCount(), callsBefore);
+		assert.equal(result.details.asyncId, undefined);
+		assert.equal(result.details.workflow?.receipt, undefined);
+		assert.deepEqual(fs.existsSync(DIRS.async) ? fs.readdirSync(DIRS.async).sort() : [], asyncDirsBefore);
 	});
 
 	it("rejects invalid public workflow acceptance defaults before mission or script work", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -1798,7 +1903,9 @@ Answer only from the supplied synthetic text.
 			await new Promise((resolve) => setTimeout(resolve, 20));
 		}
 		assert.equal(workflowResult.state, "complete");
-		assert.match(workflowResult.results?.[0]?.output ?? "", /Async: external/);
+		assert.equal(workflowResult.results?.[0]?.state, "running");
+		assert.equal(workflowResult.results?.[0]?.output, "");
+		assert.equal(workflowResult.results?.[0]?.success, undefined);
 		assert.equal(await waitForFileContent(markerPath, "started"), "started");
 		assert.equal(mockPi.callCount(), 0);
 
@@ -2821,7 +2928,7 @@ Answer only from the supplied synthetic text.
 		execFileSync("git", ["add", "base.txt"], { cwd: tempDir });
 		execFileSync("git", ["commit", "-m", "base"], { cwd: tempDir, stdio: "ignore" });
 		mockPi.onCall({ output: "isolated feature", writeFiles: [{ path: "feature.txt", content: "feature\n" }] });
-		const executor = makeExecutor([makeAgent("worker", { completionGuard: false })]);
+		const executor = makeExecutor([makeAgent("worker")]);
 
 		const result = await executor.execute(
 			"direct-worktree",
@@ -2895,28 +3002,6 @@ Answer only from the supplied synthetic text.
 		const sessionHeader = JSON.parse(fs.readFileSync(childSessionFile, "utf-8").split("\n", 1)[0]!) as { cwd?: string };
 		assert.ok(sessionHeader.cwd);
 		assert.equal(path.basename(sessionHeader.cwd), path.basename(callCwd));
-	});
-
-	it("rejects workflowScript implementation children under a read-only capability ceiling before spawn", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		mockPi.onCall({ output: "completed without edits" });
-		const executor = makeExecutor([makeAgent("worker")]);
-
-		const result = await executor.execute(
-			"workflow-readonly-implementation-contract",
-			{
-				async: false,
-				workflowScript: `return await runs.run("impl", { agent: "worker", task: "Implement the requested source fix" });`,
-				capabilityCeiling: { version: 1, allowedTools: ["read", "grep", "find", "ls", "contact_supervisor"], denyExtensions: true, sources: ["test"] },
-			},
-			new AbortController().signal,
-			undefined,
-			makeMinimalCtx(tempDir),
-		);
-
-		assert.equal(result.isError, true);
-		assert.match(result.content[0]?.text ?? "", /no mutation-capable tools/);
-		assert.doesNotMatch(result.content[0]?.text ?? "", /completed without making edits/);
-		assert.equal(mockPi.callCount(), 0);
 	});
 
 	it("stringifies workflow child results without object placeholders", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -3412,7 +3497,7 @@ Answer only from the supplied synthetic text.
 		const usefulReport = "# Review findings\n\nThe implementation loses the final report.";
 		const sharedOutput = path.join(tempDir, "review.md");
 		mockPi.onCall({ stdoutRaw: `${JSON.stringify(events.assistantMessage(usefulReport))}\n` });
-		const executor = makeExecutor([makeAgent("reviewer", { tools: ["read"], completionGuard: false })]);
+		const executor = makeExecutor([makeAgent("reviewer", { tools: ["read"] })]);
 
 		const result = await executor.execute(
 			"scripted-workflow-file-only-acceptance-collision",
@@ -3455,8 +3540,8 @@ Answer only from the supplied synthetic text.
 		});
 		mockPi.onCall({ output: "Read-only review completed.", matchArgIncludes: "Review the persisted implementation report without editing it" });
 		const executor = makeExecutor([
-			makeAgent("worker", { tools: ["read", "write"], completionGuard: false }),
-			makeAgent("reviewer", { tools: ["read"], completionGuard: false }),
+			makeAgent("worker", { tools: ["read", "write"] }),
+			makeAgent("reviewer", { tools: ["read"] }),
 		]);
 
 		const result = await executor.execute(
@@ -3523,7 +3608,7 @@ Answer only from the supplied synthetic text.
 		const sharedOutput = path.join(tempDir, "failed-review.md");
 		fs.writeFileSync(sharedOutput, "stale workflow output", "utf-8");
 		mockPi.onCall({ exitCode: 1, stderr: "review child failed before writing output" });
-		const executor = makeExecutor([makeAgent("reviewer", { completionGuard: false })]);
+		const executor = makeExecutor([makeAgent("reviewer")]);
 
 		const result = await executor.execute(
 			"scripted-workflow-missing-child-output-collision",
@@ -3646,12 +3731,12 @@ Answer only from the supplied synthetic text.
 		assert.deepEqual(result.details.workflow?.trace.filter((entry) => entry.state !== "started").map(({ state }) => state).sort(), ["completed", "failed"]);
 	});
 
-	it("reports keyed runs.all result access after siblings settle", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+	it("rejects keyed runs.all result access before launching children", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		mockPi.onCall({ output: "first child completed", matchArgIncludes: "First task" });
 		mockPi.onCall({ output: "second child completed", matchArgIncludes: "Second task" });
 		const executor = makeExecutor([makeAgent("echo")]);
 
-		const result = await executor.execute(
+		const result = await executor.executePublic(
 			"scripted-workflow-runs-all-keyed-result-access",
 			{
 				async: false,
@@ -3669,10 +3754,42 @@ Answer only from the supplied synthetic text.
 		);
 
 		assert.equal(result.isError, true);
-		assert.equal(mockPi.callCount(), 2);
-		assert.match(result.content[0]?.text ?? "", /runs\.all resolves to an ordered array, not a key map/);
-		assert.match(result.content[0]?.text ?? "", /Use results\[0\], array destructuring, or results\.map/);
-		assert.deepEqual(result.details.workflow?.trace.filter((entry) => entry.state === "completed").map(({ key }) => key).sort(), ["first", "second"]);
+		assert.equal(mockPi.callCount(), 0);
+		const payload = JSON.parse(result.content[0]?.text ?? "null") as { ok?: boolean; errors?: Array<{ message?: string }> };
+		assert.equal(payload.ok, false);
+		assert.match(payload.errors?.[0]?.message ?? "", /runs\.all returns an ordered array/);
+		assert.match(payload.errors?.[0]?.message ?? "", /'children\.first' is keyed access/);
+		assert.equal(result.details.workflow, undefined);
+	});
+
+	it("allows keyed access on a nested binding that shadows a runs.all result", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "first child completed", matchArgIncludes: "First task" });
+		const executor = makeExecutor([makeAgent("echo")]);
+
+		const result = await executor.executePublic(
+			"scripted-workflow-runs-all-shadowed-result-access",
+			{
+				async: false,
+				workflowScript: `
+					const children = await runs.all([
+						{ key: "first", agent: "echo", task: "First task" }
+					]);
+					let local;
+					{
+						const children = { first: { output: "shadowed" } };
+						local = children.first.output;
+					}
+					return { local, child: children[0].output };
+				`,
+			},
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		assert.equal(result.isError, undefined, result.content[0]?.text ?? "workflow failed");
+		assert.equal(mockPi.callCount(), 1);
+		assert.deepEqual(result.details.workflow?.value, { local: "shadowed", child: "first child completed" });
 	});
 
 	it("keeps array access working when runs.all child keys collide with array properties", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -3680,7 +3797,7 @@ Answer only from the supplied synthetic text.
 		mockPi.onCall({ output: "map child completed", matchArgIncludes: "Map task" });
 		const executor = makeExecutor([makeAgent("echo")]);
 
-		const result = await executor.execute(
+		const result = await executor.executePublic(
 			"scripted-workflow-runs-all-colliding-key-access",
 			{
 				async: false,
@@ -3826,6 +3943,116 @@ Answer only from the supplied synthetic text.
 		assert.equal(fs.readFileSync(markerPath, "utf-8"), "verified");
 		assert.equal(result.details.results[0]?.acceptance?.status, "verified");
 		assert.equal(result.details.results[0]?.acceptance?.verifyRuns[0]?.id, "gate");
+	});
+
+	it("bridges a typed gate's json stdout into the child's structuredOutput", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "Review complete. See report." });
+		const executor = makeExecutor([makeAgent("echo")]);
+		const gate = {
+			command: `${process.execPath} -e "process.stdout.write(JSON.stringify({ verdict: 'blocked', action: 'writer-fix' }))"`,
+			output: "json",
+			schema: { type: "object", properties: { verdict: { type: "string", enum: ["ok", "blocked"] } }, required: ["verdict"] },
+		};
+
+		const result = await executor.execute(
+			"typed-gate",
+			{ async: false, agent: "echo", task: "Review the report without edits", gate },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		assert.equal(result.isError, undefined, result.content[0]?.text ?? "typed gate failed");
+		const child = result.details.results[0];
+		assert.equal(child?.acceptance?.status, "verified");
+		assert.equal(child?.acceptance?.verifyRuns[0]?.status, "passed");
+		assert.deepEqual(child?.structuredOutput, { verdict: "blocked", action: "writer-fix" });
+	});
+
+	it("fails the run when a typed gate prints something other than schema-valid json", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		mockPi.onCall({ output: "Review complete." });
+		const executor = makeExecutor([makeAgent("echo")]);
+		const result = await executor.execute(
+			"typed-gate-invalid",
+			{ async: false, agent: "echo", task: "Review the report without edits", gate: { command: `${process.execPath} -e "process.stdout.write('WRITER-FIX report=r.md')"`, output: "json" } },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.text ?? "", /verification 'gate' failed: output: "json" stdout is not valid JSON/);
+		assert.equal(result.details.results[0]?.structuredOutput, undefined);
+	});
+
+	it("rejects a typed gate combined with outputSchema before launch, in both spellings", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const executor = makeExecutor([makeAgent("echo")]);
+		const shorthand = await executor.execute(
+			"typed-gate-conflict",
+			{ async: false, agent: "echo", task: "Review", gate: { command: "true", output: "json" }, outputSchema: { type: "object" } },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		assert.equal(shorthand.isError, true);
+		assert.match(shorthand.content[0]?.text ?? "", /gate\.output: .*cannot be combined with outputSchema/);
+
+		const explicit = await executor.execute(
+			"typed-verify-conflict",
+			{ async: false, agent: "echo", task: "Review", acceptance: { level: "verified", verify: [{ id: "v", command: "true", output: "json" }] }, outputSchema: { type: "object" } },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		assert.equal(explicit.isError, true);
+		assert.match(explicit.content[0]?.text ?? "", /acceptance\.verify: .*cannot be combined with outputSchema/);
+
+		const declared = makeExecutor([makeAgent("typed", { outputSchema: { type: "object" } })]);
+		const frontmatter = await declared.execute(
+			"typed-gate-agent-schema",
+			{ async: false, agent: "typed", task: "Review", gate: { command: "true", output: "json" } },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		assert.equal(frontmatter.isError, true);
+		assert.match(frontmatter.content[0]?.text ?? "", /gate\.output: .*cannot be combined with agent 'typed' outputSchema/);
+		assert.equal(mockPi.callCount(), 0);
+	});
+
+	it("preserves an explicitly bound staged index through a foreground launch", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const cwd = fs.mkdtempSync(path.join(tempDir, "preserved-index-"));
+		execFileSync("git", ["init", "-q"], { cwd });
+		fs.writeFileSync(path.join(cwd, "owned.txt"), "parent staged\n", "utf-8");
+		execFileSync("git", ["add", "owned.txt"], { cwd });
+		const before = execFileSync("git", ["write-tree"], { cwd, encoding: "utf-8" }).trim();
+		mockPi.onCall({ output: [
+			"review complete",
+			"```acceptance-report",
+			JSON.stringify({
+				criteriaSatisfied: [{ id: "criterion-1", status: "satisfied", evidence: "implemented" }],
+				changedFiles: [],
+				testsAddedOrUpdated: [],
+				commandsRun: [{ command: "npm test", result: "passed", summary: "passed" }],
+				validationOutput: ["tests passed"],
+				residualRisks: [],
+				noStagedFiles: false,
+			}),
+			"```",
+		].join("\n") });
+		const executor = makeExecutor([makeAgent("worker")]);
+
+		const result = await executor.execute(
+			"preserved-index",
+			{ async: false, agent: "worker", task: "Review the fix without edits", cwd, acceptance: { level: "checked", preserveStagedIndex: true } },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(cwd),
+		);
+
+		assert.equal(result.isError, undefined, result.content[0]?.text ?? "preserved index run failed");
+		assert.equal(result.details.results[0]?.acceptance?.status, "checked");
+		assert.equal(execFileSync("git", ["write-tree"], { cwd, encoding: "utf-8" }).trim(), before);
 	});
 
 	it("lets runs.all siblings settle when one verified gate fails", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {

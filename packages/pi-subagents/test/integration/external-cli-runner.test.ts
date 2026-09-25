@@ -107,7 +107,7 @@ async function waitForStatus(file: string, predicate: (status: AsyncStatus) => b
 
 function startRunner(configPath: string, cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<number | null> {
 	const repo = path.resolve(import.meta.dirname, "../..");
-	const child = spawn(process.execPath, [path.join(repo, "node_modules/jiti/lib/jiti-cli.mjs"), path.join(repo, "src/runs/background/subagent-runner.ts"), configPath], { cwd, env, stdio: "inherit", shell: false });
+	const child = spawn(process.execPath, [path.join(repo, "node_modules/jiti/lib/jiti-cli.mjs"), path.join(repo, "src/runs/background/subagent-runner-bootstrap.ts"), configPath], { cwd, env, stdio: "inherit", shell: false });
 	return trackProcess(child, new Promise<number | null>((resolve, reject) => {
 		child.once("error", reject);
 		child.once("close", resolve);
@@ -116,7 +116,7 @@ function startRunner(configPath: string, cwd: string, env: NodeJS.ProcessEnv = p
 
 function startRunnerWithStderr(configPath: string, cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<{ exitCode: number | null; stderr: string }> {
 	const repo = path.resolve(import.meta.dirname, "../..");
-	const child = spawn(process.execPath, [path.join(repo, "node_modules/jiti/lib/jiti-cli.mjs"), path.join(repo, "src/runs/background/subagent-runner.ts"), configPath], { cwd, env, stdio: ["ignore", "ignore", "pipe"] });
+	const child = spawn(process.execPath, [path.join(repo, "node_modules/jiti/lib/jiti-cli.mjs"), path.join(repo, "src/runs/background/subagent-runner-bootstrap.ts"), configPath], { cwd, env, stdio: ["ignore", "ignore", "pipe"] });
 	let stderr = "";
 	child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf-8"); });
 	return trackProcess(child, new Promise((resolve, reject) => {
@@ -132,7 +132,7 @@ function writeExternalConfig(dir: string, id: string, script: string, controlCon
 	fs.writeFileSync(configPath, JSON.stringify({
 		id,
 		sessionId: `session-${id}`,
-		steps: [{ agent: "external", task: "Activity test", runner: { type: "external-cli", command: process.execPath, args: ["-e", script] }, inheritProjectContext: false, inheritSkills: false }],
+		steps: [{ agent: "external", task: "Activity test", runner: { type: "external-cli", command: process.execPath, args: ["-e", script] }, inheritProjectContext: false, inheritGlobalContext: false, inheritSkills: false }],
 		resultPath: path.join(dir, "result.json"), cwd, placeholder: "{previous}", artifactConfig: { enabled: false }, asyncDir, resultMode: "single", controlConfig,
 	}));
 	return { asyncDir, configPath };
@@ -390,6 +390,7 @@ describe("external CLI async lifecycle", () => {
 			task: "Stay silent",
 			runner: { type: "external-cli", command: process.execPath, args: ["-e", `const fs=require('fs');fs.writeFileSync(${JSON.stringify(marker)},'');const hold=setInterval(()=>{if(fs.existsSync(${JSON.stringify(finish)})){clearInterval(hold);process.exit(0)}},10)`] },
 			inheritProjectContext: false,
+			inheritGlobalContext: false,
 			inheritSkills: false,
 		}));
 		const asyncDir = path.join(dir, "async");
@@ -487,6 +488,7 @@ describe("external CLI async lifecycle", () => {
 				systemPrompt: "System text",
 				systemPromptMode: "replace",
 				inheritProjectContext: false,
+				inheritGlobalContext: false,
 				inheritSkills: false,
 			}],
 			resultPath,
@@ -497,7 +499,7 @@ describe("external CLI async lifecycle", () => {
 			resultMode: "single",
 		}));
 		const repo = path.resolve(import.meta.dirname, "../..");
-		const exitCode = await runProcess(process.execPath, [jitiCliPath(), path.join(repo, "src/runs/background/subagent-runner.ts"), configPath], repo);
+		const exitCode = await runProcess(process.execPath, [jitiCliPath(), path.join(repo, "src/runs/background/subagent-runner-bootstrap.ts"), configPath], repo);
 		assert.equal(exitCode, 0);
 		const status = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8"));
 		assert.equal(status.state, "complete");
@@ -528,6 +530,7 @@ describe("external CLI async lifecycle", () => {
 				task: "Task text",
 				runner: { type: "external-cli", command: process.execPath, args: ["-e", "process.stdout.write('ok')"] },
 				inheritProjectContext: false,
+				inheritGlobalContext: false,
 				inheritSkills: false,
 			}],
 			resultPath,
@@ -538,7 +541,7 @@ describe("external CLI async lifecycle", () => {
 			resultMode: "single",
 		}));
 		const repo = path.resolve(import.meta.dirname, "../..");
-		const exitCode = await runProcess(process.execPath, [jitiCliPath(), path.join(repo, "src/runs/background/subagent-runner.ts"), configPath], repo);
+		const exitCode = await runProcess(process.execPath, [jitiCliPath(), path.join(repo, "src/runs/background/subagent-runner-bootstrap.ts"), configPath], repo);
 		assert.equal(exitCode, 0);
 		const status = JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf-8"));
 		assert.equal(status.state, "complete");
@@ -572,6 +575,7 @@ describe("external CLI async lifecycle", () => {
 				systemPrompt: "System text",
 				systemPromptMode: "replace",
 				inheritProjectContext: false,
+				inheritGlobalContext: false,
 				inheritSkills: false,
 			}],
 			resultPath,
@@ -584,7 +588,7 @@ describe("external CLI async lifecycle", () => {
 		const repo = path.resolve(import.meta.dirname, "../..");
 		const exitCode = await runProcess(
 			process.execPath,
-			[jitiCliPath(), path.join(repo, "src/runs/background/subagent-runner.ts"), configPath],
+			[jitiCliPath(), path.join(repo, "src/runs/background/subagent-runner-bootstrap.ts"), configPath],
 			repo,
 			{ ...process.env, PI_CODING_AGENT_DIR: agentDir, PI_SUBAGENT_ORCA_BINARY: fakeOrca, ORCA_TEST_CAPTURE: capture },
 		);

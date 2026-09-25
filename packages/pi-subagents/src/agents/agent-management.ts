@@ -5,6 +5,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
 	type AgentConfig,
 	type AgentDiscoveryDiagnostic,
+	type AgentDiscoveryAllResult,
 	type AgentScope,
 	type AgentSource,
 	defaultInheritProjectContext,
@@ -135,27 +136,31 @@ function parsePackageConfig(value: unknown): { packageName?: string; error?: str
 	return parsePackageName(value, "config.package");
 }
 
-function allAgents(d: { builtin: AgentConfig[]; package: AgentConfig[]; user: AgentConfig[]; project: AgentConfig[] }): AgentConfig[] {
+type DiscoveredAgentSets = Pick<AgentDiscoveryAllResult, "builtin" | "package" | "user" | "project" | "cwd">;
+
+function allAgents(d: DiscoveredAgentSets): AgentConfig[] {
 	return [...d.builtin, ...d.package, ...d.user, ...d.project];
 }
 
 function effectiveAgentsForScope(
 	scope: AgentScope,
-	d: { builtin: AgentConfig[]; package: AgentConfig[]; user: AgentConfig[]; project: AgentConfig[] },
+	d: DiscoveredAgentSets,
 	runtimeAgentOwner?: RuntimeAgentOwner,
+	preferredModelProvider?: string,
 ): AgentConfig[] {
 	let agents = mergeAgentsForScope(scope, d.user, d.project, d.builtin, d.package);
 	if (runtimeAgentOwner) {
-		agents = mergeRuntimeAgents(runtimeAgentOwner, { agents }, allAgents(d)).agents;
+		agents = mergeRuntimeAgents(runtimeAgentOwner, { agents }, allAgents(d), { cwd: d.cwd, scope, preferredModelProvider }).agents;
 	}
 	return agents;
 }
 
 function availableAgentNamesFromDiscovery(
-	d: { builtin: AgentConfig[]; package: AgentConfig[]; user: AgentConfig[]; project: AgentConfig[] },
+	d: DiscoveredAgentSets,
 	runtimeAgentOwner?: RuntimeAgentOwner,
+	preferredModelProvider?: string,
 ): string[] {
-	const agents = runtimeAgentOwner ? effectiveAgentsForScope("both", d, runtimeAgentOwner) : allAgents(d);
+	const agents = runtimeAgentOwner ? effectiveAgentsForScope("both", d, runtimeAgentOwner, preferredModelProvider) : allAgents(d);
 	return [...new Set(agents.map((agent) => agent.name))].sort((a, b) => a.localeCompare(b));
 }
 
@@ -166,13 +171,14 @@ export function availableAgentNames(cwd: string): string[] {
 
 function findAgentsInDiscovery(
 	name: string,
-	d: { builtin: AgentConfig[]; package: AgentConfig[]; user: AgentConfig[]; project: AgentConfig[] },
+	d: DiscoveredAgentSets,
 	scope: AgentScope = "both",
 	runtimeAgentOwner?: RuntimeAgentOwner,
+	preferredModelProvider?: string,
 ): AgentConfig[] {
 	const raw = name.trim();
 	const sanitized = sanitizeName(raw);
-	const scoped = effectiveAgentsForScope(scope, d, runtimeAgentOwner);
+	const scoped = effectiveAgentsForScope(scope, d, runtimeAgentOwner, preferredModelProvider);
 	let resolved = resolveAgentName(raw, scoped);
 	if (!resolved.agent && !resolved.error && sanitized !== raw) resolved = resolveAgentName(sanitized, scoped);
 	if (resolved.agent) return scoped.filter((agent) => agent.name === resolved.agent!.name).sort((a, b) => a.source.localeCompare(b.source));
@@ -289,9 +295,9 @@ export function editableAgentConfig(agent: AgentConfig): AgentConfig {
 		excludeTools: _excludeTools,
 		mcpDirectTools: _mcpDirectTools,
 		allowNestedSubagents: _allowNestedSubagents,
+		allowedAgents: _allowedAgents,
 		subagentOnlyExtensions: _subagentOnlyExtensions,
 		mutationTools: _mutationTools,
-		completionGuard: _completionGuard,
 		toolBudget: _toolBudget,
 		...editable
 	} = withoutExtensions;
@@ -325,10 +331,10 @@ export function editableAgentConfig(agent: AgentConfig): AgentConfig {
 		...(base.excludeTools !== undefined ? { excludeTools: [...base.excludeTools] } : {}),
 		...(base.mcpDirectTools !== undefined ? { mcpDirectTools: [...base.mcpDirectTools] } : {}),
 		...(base.allowNestedSubagents !== undefined ? { allowNestedSubagents: base.allowNestedSubagents } : {}),
+		...(base.allowedAgents !== undefined ? { allowedAgents: [...base.allowedAgents] } : {}),
 		...(base.extensions !== undefined ? { extensions: [...base.extensions] } : {}),
 		...(base.subagentOnlyExtensions !== undefined ? { subagentOnlyExtensions: [...base.subagentOnlyExtensions] } : {}),
 		...(base.mutationTools !== undefined ? { mutationTools: [...base.mutationTools] } : {}),
-		...(base.completionGuard !== undefined ? { completionGuard: base.completionGuard } : {}),
 		...(base.toolBudget !== undefined ? { toolBudget: base.toolBudget } : {}),
 	}, agent.filePath);
 }
@@ -393,10 +399,6 @@ export function preservedAgentFrontmatterFields(agent: AgentConfig, cfg: Record<
 	if (hasKey(cfg, "reads")) changed("defaultReads");
 	if (hasKey(cfg, "progress")) changed("defaultProgress");
 	if (hasKey(cfg, "maxSubagentDepth")) changed("maxSubagentDepth");
-	if (hasKey(cfg, "completionGuard")) {
-		changed("completionGuard");
-		if (cfg.completionGuard === true) fields.add("completionGuard");
-	}
 	if (hasKey(cfg, "toolBudget")) changed("toolBudget");
 	if (hasKey(cfg, "sandbox")) changed("sandbox");
 	if (hasKey(cfg, "permissionProfile")) changed("permission-profile");
@@ -610,10 +612,6 @@ function applyAgentConfig(target: AgentConfig, cfg: Record<string, unknown>): st
 			target.maxSubagentDepth = cfg.maxSubagentDepth;
 		} else return "config.maxSubagentDepth must be an integer >= 0 or false when provided.";
 	}
-	if (hasKey(cfg, "completionGuard")) {
-		if (typeof cfg.completionGuard !== "boolean") return "config.completionGuard must be a boolean when provided.";
-		target.completionGuard = cfg.completionGuard;
-	}
 	if (hasKey(cfg, "toolBudget")) {
 		if (cfg.toolBudget === false || cfg.toolBudget === "") delete target.toolBudget;
 		else {
@@ -649,7 +647,6 @@ function applyAgentConfig(target: AgentConfig, cfg: Record<string, unknown>): st
 			target.mutationTools?.length ? "mutationTools" : undefined,
 			target.skills?.length || target.skillPath?.length ? "skills" : undefined,
 			target.maxSubagentDepth !== undefined ? "maxSubagentDepth" : undefined,
-			target.completionGuard !== undefined ? "completionGuard" : undefined,
 			target.toolBudget ? "toolBudget" : undefined,
 			target.sandbox ? "sandbox" : undefined,
 			target.permissionProfile ? "permissionProfile" : undefined,
@@ -993,7 +990,6 @@ function formatAgentDetail(agent: AgentConfig): string {
 	if (agent.defaultReads?.length) lines.push(`Reads: ${agent.defaultReads.join(", ")}`);
 	if (agent.defaultProgress) lines.push("Progress: true");
 	if (agent.maxSubagentDepth !== undefined) lines.push(`Max subagent depth: ${agent.maxSubagentDepth}`);
-	if (agent.completionGuard === false) lines.push("Completion guard: false");
 	if (agent.toolBudget) lines.push(`Tool budget: ${JSON.stringify(agent.toolBudget)}`);
 	if (agent.sandbox) lines.push(`Sandbox profile: ${agent.sandbox}`);
 	if (agent.permissionProfile) lines.push(`Permission profile: ${agent.permissionProfile}`);
@@ -1005,7 +1001,7 @@ function formatAgentDetail(agent: AgentConfig): string {
 export function handleList(params: ManagementParams, ctx: ManagementContext): AgentToolResult<Details> {
 	const scope = normalizeListScope(params.agentScope) ?? "both";
 	const d = discoverAgentsAll(ctx.cwd, ctx.model?.provider);
-	let scopedAgents = effectiveAgentsForScope(scope, d, ctx.runtimeAgentOwner);
+	let scopedAgents = effectiveAgentsForScope(scope, d, ctx.runtimeAgentOwner, ctx.model?.provider);
 	scopedAgents = scopedAgents
 		.sort((a, b) => a.name.localeCompare(b.name));
 	const capabilityCeiling = resolveCurrentSubagentCapabilityCeiling(ctx.currentSessionId);
@@ -1061,7 +1057,7 @@ function handleModels(params: ManagementParams, ctx: ManagementContext): AgentTo
 	if (!scope) return result("agentScope must be 'user', 'project', or 'both' for models.", true);
 
 	const discovered = discoverAgentsAll(ctx.cwd, ctx.model?.provider);
-	const effectiveAgents = effectiveAgentsForScope(scope, discovered, ctx.runtimeAgentOwner)
+	const effectiveAgents = effectiveAgentsForScope(scope, discovered, ctx.runtimeAgentOwner, ctx.model?.provider)
 		.sort((a, b) => a.name.localeCompare(b.name));
 	const availableModels = ctx.modelRegistry.getAvailable().map(toModelInfo);
 	const currentModel = ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined;
@@ -1070,7 +1066,7 @@ function handleModels(params: ManagementParams, ctx: ManagementContext): AgentTo
 
 	let selectedAgents = effectiveAgents;
 	if (requestedAgent) {
-		const matches = findAgentsInDiscovery(requestedAgent, discovered, scope, ctx.runtimeAgentOwner);
+		const matches = findAgentsInDiscovery(requestedAgent, discovered, scope, ctx.runtimeAgentOwner, ctx.model?.provider);
 		const diagnostics = diagnosticsForScope(discovered.agentDiagnostics, scope);
 		const normalizedName = sanitizeName(requestedAgent);
 		const diagnostic = findBlockingAgentDiagnostic(requestedAgent, matches, diagnostics)
@@ -1079,7 +1075,7 @@ function handleModels(params: ManagementParams, ctx: ManagementContext): AgentTo
 		const distinctNames = [...new Set(matches.map((agent) => agent.name))];
 		if (distinctNames.length > 1) return result(`Ambiguous agent alias or name '${params.agent}': ${distinctNames.sort((a, b) => a.localeCompare(b)).join(", ")}`, true);
 		if (!matches.length) {
-			return result(`Agent '${params.agent}' not found. Available: ${availableAgentNamesFromDiscovery(discovered, ctx.runtimeAgentOwner).join(", ") || "none"}.`, true);
+			return result(`Agent '${params.agent}' not found. Available: ${availableAgentNamesFromDiscovery(discovered, ctx.runtimeAgentOwner, ctx.model?.provider).join(", ") || "none"}.`, true);
 		}
 		selectedAgents = [matches[0]!];
 	}

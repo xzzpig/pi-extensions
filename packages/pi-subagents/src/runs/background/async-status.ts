@@ -51,6 +51,7 @@ interface AsyncRunStepSummary {
 	structured?: boolean;
 	status: AsyncJobStep["status"];
 	runner?: AsyncJobStep["runner"];
+	externalProcess?: AsyncJobStep["externalProcess"];
 	activityState?: ActivityState;
 	lastActivityAt?: number;
 	currentTool?: string;
@@ -357,6 +358,7 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string 
 			...(step.structured ? { structured: step.structured } : {}),
 			status: step.status,
 			...(step.runner ? { runner: step.runner } : {}),
+			...(step.externalProcess ? { externalProcess: step.externalProcess } : {}),
 			...(stepActivityState ? { activityState: stepActivityState } : {}),
 			...(stepLastActivityAt ? { lastActivityAt: stepLastActivityAt } : {}),
 			...(step.currentTool ? { currentTool: step.currentTool } : {}),

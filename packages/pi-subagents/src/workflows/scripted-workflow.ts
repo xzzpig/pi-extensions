@@ -4,8 +4,7 @@ import { dirname, resolve as resolvePath } from "node:path";
 import { Worker } from "node:worker_threads";
 import { DEFAULT_GLOBAL_CONCURRENCY_LIMIT, Semaphore } from "../runs/shared/parallel-utils.ts";
 import { HOST_STEP_MAX_COUNT } from "../runs/shared/host-step-status.ts";
-import { classifyTaskMutationIntent } from "../runs/shared/task-intent.ts";
-import { describeGateAcceptanceConflict } from "../runs/shared/acceptance.ts";
+import { describeGateAcceptanceConflict, parseGateInput } from "../runs/shared/acceptance.ts";
 import type { AcceptanceRecoveryMetadata, HostStepNode, SingleResult } from "../shared/types.ts";
 import { normalizeWorkflowHostCommandParams, type WorkflowHostCommandParams, type WorkflowHostCommandResult } from "./host-command.ts";
 
@@ -384,8 +383,8 @@ function laneStageRecord(stageKey, child, forcedState) {
   const ok = result?.ok === true;
   const verdict = laneStageVerdict(result);
   const blocked = laneStageIsBlocked(result);
-  const state = forcedState ?? (result?.stopped ? "stopped" : result?.detached ? "detached" : ok ? blocked ? "blocked" : "completed" : "failed");
-  const error = state !== "completed"
+  const state = forcedState ?? (result?.state === "running" ? "running" : result?.stopped ? "stopped" : result?.detached ? "detached" : ok ? blocked ? "blocked" : "completed" : "failed");
+  const error = state !== "completed" && state !== "running"
     ? state === "blocked" && blocked
       ? "Stage returned a blocked verdict."
       : typeof result?.error === "string"
@@ -633,6 +632,24 @@ function validateLaneMetadata(value, label, workflowKey) {
   }
 }
 
+// Mirrors parseGateInput in src/runs/shared/acceptance.ts; the sandbox cannot import it.
+function describeGateShapeError(gate) {
+  const shape = "gate must be a non-empty command string or { command, output?: \"json\", schema?, timeoutMs? }.";
+  if (typeof gate === "string") return gate.trim() ? undefined : shape;
+  if (!gate || typeof gate !== "object" || Array.isArray(gate)) return shape;
+  for (const key of Object.keys(gate)) {
+    if (!["command", "output", "schema", "timeoutMs"].includes(key)) return "gate." + key + " is not supported.";
+  }
+  if (typeof gate.command !== "string" || !gate.command.trim()) return shape;
+  if (gate.output !== undefined && gate.output !== "json") return "gate.output must be \"json\" when present.";
+  if (gate.schema !== undefined) {
+    if (gate.output !== "json") return "gate.schema requires gate.output: \"json\".";
+    if (!gate.schema || typeof gate.schema !== "object" || Array.isArray(gate.schema)) return "gate.schema must be a JSON Schema object.";
+  }
+  if (gate.timeoutMs !== undefined && (!Number.isInteger(gate.timeoutMs) || gate.timeoutMs < 1)) return "gate.timeoutMs must be an integer >= 1.";
+  return undefined;
+}
+
 function describeGateAcceptanceConflict(gate, acceptance) {
   const render = (value) => {
     let encoded;
@@ -658,7 +675,10 @@ function validateRunCall(key, params, label, fingerprints) {
   if (params.worktree !== undefined && typeof params.worktree !== "boolean") throw new Error(label + " worktree must be true or false.");
   if (params.baseRef !== undefined && (typeof params.baseRef !== "string" || !validGitRef(params.baseRef))) throw new Error(label + " baseRef must be a valid Git ref: use HEAD or a supported named ref (for example, refs/heads/main). Full 40/64-character commit IDs and revision expressions are unsupported.");
   validateLaneMetadata(params.lane, label + " lane", key);
-  if (params.gate !== undefined && (typeof params.gate !== "string" || !params.gate.trim())) throw new Error(label + " gate must be a non-empty command string.");
+  if (params.gate !== undefined) {
+    const gateError = describeGateShapeError(params.gate);
+    if (gateError) throw new Error(label + " " + gateError);
+  }
   if (params.gate !== undefined && params.acceptance !== undefined && params.acceptance !== false) throw new Error(label + " gate cannot be combined with acceptance; use one gate command or acceptance.verify." + describeGateAcceptanceConflict(params.gate, params.acceptance));
   if (params.gate !== undefined && params.resume !== undefined) throw new Error(label + " gate is not supported with retained resume.");
   if (params.extensionBindings !== undefined && params.resume !== undefined) throw new Error(label + " extensionBindings is not supported with retained resume; resume uses the original retained child binding.");
@@ -1061,7 +1081,11 @@ parentPort.on("message", async (message) => {
 
 export interface WorkflowScriptChildResult {
 	key: string;
+	/** True only for successfully completed child work, never for a launch receipt. */
 	ok: boolean;
+	/** An explicit async launch returned before a final child result was available. */
+	state?: "running";
+	asyncDir?: string;
 	lane?: import("../shared/types.ts").WorkflowLaneMetadata;
 	terminalOutcome?: import("../shared/types.ts").WorkflowTerminalOutcome;
 	stopped?: boolean;
@@ -1076,6 +1100,8 @@ export interface WorkflowScriptChildResult {
 	requestedContext?: "fresh" | "fork";
 	resolvedContext?: "fresh" | "fork" | "mixed";
 	outputReference?: string;
+	/** A file produced by the child runtime (output or worktree handoff), not its job directory. */
+	outputArtifactPath?: string;
 	recovery?: AcceptanceRecoveryMetadata;
 	outputPathMapping?: { requestedPath: string; savedPath: string };
 	externalAdapter?: import("../shared/types.ts").ExternalCliReceiptMetadata;
@@ -1354,8 +1380,7 @@ function isExplicitReadOnlyRecoveryReview(params: Record<string, unknown>): bool
 		&& !RECOVERY_REVIEW_DELEGATION_PATTERN.test(taskMutationText)
 		&& !RECOVERY_REVIEW_ANAPHORIC_MUTATION_PATTERN.test(taskMutationText)
 		&& !RECOVERY_REVIEW_DESTRUCTIVE_COMMAND_PATTERN.test(taskMutationText)
-		&& !RECOVERY_REVIEW_DASH_LIVE_ACTION_PATTERN.test(taskDashLiveActionText)
-		&& classifyTaskMutationIntent(agent, task).kind === "read-only";
+		&& !RECOVERY_REVIEW_DASH_LIVE_ACTION_PATTERN.test(taskDashLiveActionText);
 }
 
 function recoveryBarrierMessage(sourceKey: string, target: string): string {
@@ -1442,7 +1467,7 @@ function workflowReturnRecoveryHint(children: WorkflowScriptChildResult[]): stri
 		const fields = [child.runId ? `runId=${child.runId.slice(0, 500)}` : undefined, child.outputReference ? `outputReference=${child.outputReference.slice(0, 500)}` : undefined, child.artifactPaths[0] ? `artifact=${child.artifactPaths[0].slice(0, 500)}` : undefined].filter((field): field is string => field !== undefined);
 		return `'${child.key}'${fields.length > 0 ? ` (${fields.join(", ")})` : ""}`;
 	});
-	return ` Child work completed before return serialization failed. Recover outputs from: ${references.join(", ")}${children.length > references.length ? `, and ${children.length - references.length} more` : ""}. Return a plain projection such as { runId: child.runId, ok: child.ok, outputReference: child.outputReference }.`;
+	return ` ${children.some((child) => child.state === "running") ? "Child calls returned before return serialization failed; launch receipts do not prove completion." : "Child work completed before return serialization failed."} Recover outputs from: ${references.join(", ")}${children.length > references.length ? `, and ${children.length - references.length} more` : ""}. Return a plain projection such as { runId: child.runId, ok: child.ok, outputReference: child.outputReference }.`;
 }
 
 export interface SimpleWorkflowRunPreview {
@@ -1565,6 +1590,62 @@ function walkAst(node: unknown, visit: (node: AstNode) => void, includeNestedFun
 	if (!includeNestedFunctions && (node.type === "FunctionDeclaration" || node.type === "FunctionExpression" || node.type === "ArrowFunctionExpression")) return;
 	for (const [key, child] of Object.entries(node)) {
 		if (!AST_LOCATION_KEYS.has(key)) walkAst(child, visit, includeNestedFunctions);
+	}
+}
+
+function bindingPatternContainsName(node: unknown, name: string): boolean {
+	if (!astNode(node)) return false;
+	if (node.type === "Identifier") return node.name === name;
+	if (node.type === "RestElement") return bindingPatternContainsName(node.argument, name);
+	if (node.type === "AssignmentPattern") return bindingPatternContainsName(node.left, name);
+	if (node.type === "ArrayPattern" && Array.isArray(node.elements)) return node.elements.some((element) => bindingPatternContainsName(element, name));
+	if (node.type === "ObjectPattern" && Array.isArray(node.properties)) return node.properties.some((property) => {
+		if (!astNode(property)) return false;
+		return property.type === "RestElement"
+			? bindingPatternContainsName(property.argument, name)
+			: property.type === "Property" && bindingPatternContainsName(property.value, name);
+	});
+	return false;
+}
+
+function definitelyReassignsBinding(node: unknown, name: string): boolean {
+	let assignment = node;
+	while (astNode(assignment) && assignment.type === "AssignmentExpression" && assignment.operator !== "&&=" && assignment.operator !== "||=" && assignment.operator !== "??=") {
+		if (bindingPatternContainsName(assignment.left, name)) return true;
+		assignment = assignment.right;
+	}
+	return false;
+}
+
+function lexicalDeclarationContainsName(node: unknown, name: string): boolean {
+	if (!astNode(node)) return false;
+	if (node.type === "VariableDeclaration" && node.kind !== "var" && Array.isArray(node.declarations)) {
+		return node.declarations.some((declaration) => astNode(declaration) && bindingPatternContainsName(declaration.id, name));
+	}
+	return (node.type === "FunctionDeclaration" || node.type === "ClassDeclaration") && bindingPatternContainsName(node.id, name);
+}
+
+function scopeShadowsIdentifier(node: AstNode, name: string): boolean {
+	if (node.type === "BlockStatement" && Array.isArray(node.body)) return node.body.some((statement) => lexicalDeclarationContainsName(statement, name));
+	if (node.type === "CatchClause") return bindingPatternContainsName(node.param, name);
+	if (node.type === "ForStatement") return lexicalDeclarationContainsName(node.init, name);
+	if (node.type === "ForInStatement" || node.type === "ForOfStatement") return lexicalDeclarationContainsName(node.left, name);
+	if (node.type === "SwitchStatement" && Array.isArray(node.cases)) {
+		return node.cases.some((entry) => astNode(entry) && Array.isArray(entry.consequent) && entry.consequent.some((statement) => lexicalDeclarationContainsName(statement, name)));
+	}
+	return false;
+}
+
+function walkAstWithoutShadowedIdentifier(node: unknown, name: string, visit: (node: AstNode) => void): void {
+	if (Array.isArray(node)) {
+		for (const item of node) walkAstWithoutShadowedIdentifier(item, name, visit);
+		return;
+	}
+	if (!astNode(node) || scopeShadowsIdentifier(node, name)) return;
+	visit(node);
+	if (node.type === "FunctionDeclaration" || node.type === "FunctionExpression" || node.type === "ArrowFunctionExpression") return;
+	for (const [key, child] of Object.entries(node)) {
+		if (!AST_LOCATION_KEYS.has(key)) walkAstWithoutShadowedIdentifier(child, name, visit);
 	}
 }
 
@@ -1830,16 +1911,20 @@ export function validateWorkflowScript(script: string, options: WorkflowScriptVa
 			for (const declaration of statement.declarations) {
 				if (!astNode(declaration) || !astNode(declaration.id) || declaration.id.type !== "Identifier" || !astNode(declaration.init) || declaration.init.type !== "AwaitExpression" || !astNode(declaration.init.argument) || !directRunsCall(declaration.init.argument, "all")) continue;
 				const name = declaration.id.name as string;
+				const laterStatements = workflowBody.body.slice(statementIndex + 1);
 				const keys = new Set(directRunsAllKeys(declaration.init.argument).map((entry) => entry.key));
 				if (keys.size === 0) continue;
 				const args = Array.isArray(declaration.init.argument.arguments) ? declaration.init.argument.arguments : [];
 				const itemCount = astNode(args[0]) && args[0].type === "ArrayExpression" && Array.isArray(args[0].elements) ? args[0].elements.length : 0;
 				const arrayResultShape = Array.from({ length: itemCount });
-				for (const later of workflowBody.body.slice(statementIndex + 1)) walkAst(later, (node) => {
-					if (node.type !== "MemberExpression" || !astNode(node.object) || node.object.type !== "Identifier" || node.object.name !== name) return;
-					const property = node.computed === true ? literalString(node.property) : astNode(node.property) && node.property.type === "Identifier" ? node.property.name as string : undefined;
-					if (property && keys.has(property) && !(property in arrayResultShape)) errors.push({ message: `runs.all returns an ordered array; '${name}.${property}' is keyed access. Use an index, destructuring, or map(...).`, ...nodeLocation(node) });
-				}, false);
+				for (const later of laterStatements) {
+					walkAstWithoutShadowedIdentifier(later, name, (node) => {
+						if (node.type !== "MemberExpression" || !astNode(node.object) || node.object.type !== "Identifier" || node.object.name !== name) return;
+						const property = node.computed === true ? literalString(node.property) : astNode(node.property) && node.property.type === "Identifier" ? node.property.name as string : undefined;
+						if (property && keys.has(property) && !(property in arrayResultShape)) errors.push({ message: `runs.all returns an ordered array; '${name}.${property}' is keyed access. Use an index, destructuring, or map(...).`, ...nodeLocation(node) });
+					});
+					if (statement.kind !== "const" && astNode(later) && later.type === "ExpressionStatement" && definitelyReassignsBinding(later.expression, name)) break;
+				}
 			}
 		}
 	}
@@ -1905,11 +1990,11 @@ function isZeroUsage(usage: unknown): boolean {
 }
 
 function setupAbortResumeParams(params: Record<string, unknown>, result: WorkflowScriptChildResult, signal: AbortSignal): Record<string, unknown> | undefined {
-	if (signal.aborted || result.ok || result.stopped || result.interrupted || !result.runId) return undefined;
+	if (signal.aborted || result.state === "running" || result.ok || result.stopped || result.interrupted || !result.runId) return undefined;
 	const childResult = Array.isArray(result.results) && result.results.length === 1 && isRecord(result.results[0]) ? result.results[0] : undefined;
 	const error = typeof childResult?.error === "string" ? childResult.error : result.error;
 	if (error !== "This operation was aborted" || !isZeroUsage(childResult?.usage)) return undefined;
-	const messages = Array.isArray(childResult?.messages) ? childResult.messages : [];
+	const messages: unknown[] = Array.isArray(childResult?.messages) ? childResult.messages : [];
 	const message = messages.findLast((entry) => isRecord(entry) && entry.role === "assistant");
 	if (message !== undefined) {
 		if (!isRecord(message)) return undefined;
@@ -2052,7 +2137,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 		return true;
 	};
 	const notifyChildSettled = (key: string, result: WorkflowScriptChildResult): void => {
-		if (!options.onChildSettled || !options.workflowRunId) return;
+		if (result.state === "running" || !options.onChildSettled || !options.workflowRunId) return;
 		const outcome: WorkflowChildSettledOutcome = result.ok
 			? "completed"
 			: result.stopped
@@ -2060,7 +2145,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 				: result.detached
 					? "paused"
 					: "failed";
-		const outputReference = result.outputReference ?? result.artifactPaths[0];
+		const outputReference = result.outputReference ?? result.outputArtifactPath;
 		try {
 			options.onChildSettled({
 				workflowRunId: options.workflowRunId,
@@ -2387,7 +2472,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 				: promise.then((result) => {
 					const recoverableAcceptanceMetadata = result.recovery?.status === "available-for-review"
 						&& result.recovery.reason === "acceptance-metadata-rejected";
-					if (!result.ok && !result.stopped && !recoverableAcceptanceMetadata) {
+					if (!result.ok && result.state !== "running" && !result.stopped && !recoverableAcceptanceMetadata) {
 						const childError = new Error(result.detached ? `Run '${key}' detached: ${result.error ?? result.output}` : `Run '${key}' failed: ${result.error ?? result.output}`) as Error & { workflowErrorKind?: "detached-child" };
 						if (result.detached) childError.workflowErrorKind = "detached-child";
 						throw childError;
@@ -2418,8 +2503,9 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			if (params.baseRef !== undefined && (typeof params.baseRef !== "string" || !validGitRef(params.baseRef))) {
 				return respond(Promise.reject(new Error(`runs.run('${key}') ${BASE_REF_VALIDATION_ERROR}`)));
 			}
-			if (params.gate !== undefined && (typeof params.gate !== "string" || !params.gate.trim())) {
-				return respond(Promise.reject(new Error(`runs.run('${key}') gate must be a non-empty command string.`)));
+			if (params.gate !== undefined) {
+				const parsedGate = parseGateInput(params.gate);
+				if (!parsedGate.ok) return respond(Promise.reject(new Error(`runs.run('${key}') ${parsedGate.error}`)));
 			}
 			if (params.gate !== undefined && params.acceptance !== undefined && params.acceptance !== false) {
 				return respond(Promise.reject(new Error(`runs.run('${key}') gate cannot be combined with acceptance; use one gate command or acceptance.verify.` + describeGateAcceptanceConflict(params.gate, params.acceptance))));
@@ -2517,7 +2603,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 				const reason = childController.signal.reason;
 				return stoppedChildResult(key, reason instanceof Error ? reason.message : typeof reason === "string" ? reason : "Workflow script aborted.");
 			}).then((result) => {
-				let normalized = !result.ok && !result.error ? { ...result, error: result.output } : result;
+				let normalized = !result.ok && result.state !== "running" && !result.error ? { ...result, error: result.output } : result;
 				if (resolvedResumeLineage?.length && normalized.runId) {
 					normalized = { ...normalized, continuation: { runIds: [...new Set([...resolvedResumeLineage, normalized.runId])] } };
 				}
@@ -2525,8 +2611,8 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 				if (stoppedLaunches.has(key)) return children.get(key) ?? normalized;
 				children.set(key, normalized);
 				recordAcceptanceRecoveryBarrier(key, normalized);
-				const state = normalized.ok ? "completed" : normalized.stopped ? "stopped" : normalized.detached ? "detached" : "failed";
-				trace.push({ operation: "run", key, state, durationMs: Date.now() - startedAt, ...workflowStringMetadata(params), ...(generatedLaneKey ? { generatedLaneKey } : {}), ...(normalized.agent ? { agent: normalized.agent } : {}), ...(normalized.runId ? { runId: normalized.runId } : {}), ...(!normalized.ok ? { error: normalized.error ?? normalized.output } : {}) });
+				const state = normalized.state === "running" ? "started" : normalized.ok ? "completed" : normalized.stopped ? "stopped" : normalized.detached ? "detached" : "failed";
+				trace.push({ operation: "run", key, state, durationMs: Date.now() - startedAt, ...workflowStringMetadata(params), ...(generatedLaneKey ? { generatedLaneKey } : {}), ...(normalized.agent ? { agent: normalized.agent } : {}), ...(normalized.runId ? { runId: normalized.runId } : {}), ...(!normalized.ok && normalized.state !== "running" ? { error: normalized.error ?? normalized.output } : {}) });
 				traceChanged();
 				notifyChildSettled(key, normalized);
 				return normalized;

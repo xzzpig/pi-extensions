@@ -37,6 +37,14 @@ const tsc = path.join(root, "node_modules", "typescript", "bin", "tsc");
 if (!fs.existsSync(tsc)) throw new Error("Missing TypeScript compiler; run npm install first");
 execFileSync(process.execPath, [tsc, "-p", path.join(root, "tsconfig.build.json")], { cwd: root, stdio: "inherit" });
 
+const runnerBootstrap = fs.readFileSync(path.join(output, "src/runs/background/subagent-runner-bootstrap.js"), "utf8");
+if (!runnerBootstrap.includes('import("./subagent-runner.js")')) {
+	throw new Error("Compiled runner bootstrap must dynamically import the heavy execution module");
+}
+if (/^import\s+.*["']\.\/subagent-runner\.js["'];?$/m.test(runnerBootstrap)) {
+	throw new Error("Compiled runner bootstrap must not statically import the heavy execution module");
+}
+
 const rootModules = fs.readdirSync(root).filter((name) => name.endsWith(".mjs"));
 for (const relativePath of [...rootModules, ...staticFiles]) {
 	fs.copyFileSync(path.join(root, relativePath), path.join(output, relativePath));
@@ -48,6 +56,7 @@ for (const relativePath of expectedDirectories) {
 // Upstream-original build script: this parses the package being packed, which must be valid JSON to publish.
 // pi-lens-ignore: unchecked-throwing-call-js
 const sourcePackage = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
+if (sourcePackage.private !== true) throw new Error("The source package must remain private; publish only ./dist-pkg");
 const copyFields = [
 	"name", "version", "description", "author", "license", "repository", "homepage", "bugs",
 	"bin", "dependencies", "peerDependencies", "peerDependenciesMeta", "engines", "keywords",

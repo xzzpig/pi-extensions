@@ -28,14 +28,14 @@ const hostPeerPackages = [
 ] as const;
 const expectedHostPeerRanges = {
 	"@earendil-works/pi-agent-core": "*",
-	"@earendil-works/pi-ai": ">=0.80.0",
+	"@earendil-works/pi-ai": ">=0.86.1",
 	"@earendil-works/pi-coding-agent": "*",
 	"@earendil-works/pi-tui": "*",
 } satisfies Record<(typeof hostPeerPackages)[number], string>;
 const expectedHostDevVersions = {
-	"@earendil-works/pi-agent-core": "0.85.1",
-	"@earendil-works/pi-ai": "0.85.1",
-	"@earendil-works/pi-tui": "0.85.1",
+	"@earendil-works/pi-agent-core": "0.87.0",
+	"@earendil-works/pi-ai": "0.87.0",
+	"@earendil-works/pi-tui": "0.87.0",
 } satisfies Record<Exclude<(typeof hostPeerPackages)[number], "@earendil-works/pi-coding-agent">, string>;
 
 test("the root entrypoint exposes the runtime error flag to TypeScript consumers", () => {
@@ -110,6 +110,11 @@ function collectSourceFiles(dir: string): string[] {
 test("published extension APIs use supported package entrypoints", async () => {
 	const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, "package.json"), "utf-8"));
 
+	// Fork: @xzzpig/pi-subagents publishes directly to npm (unlike upstream's
+	// private checkout + dist-pkg repack flow), so the manifest must stay public.
+	assert.equal(packageJson.private, undefined, "the fork checkout must stay publishable");
+	assert.equal(packageJson.publishConfig?.access, "public");
+	assert.equal(packageJson.name, "@xzzpig/pi-subagents");
 	assert.deepEqual(packageJson.pi?.extensions, ["./index.ts"]);
 	assert.equal(packageJson.files?.includes("index.ts"), true);
 	assert.equal(packageJson.files?.includes("*.mjs"), true);

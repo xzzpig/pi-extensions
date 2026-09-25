@@ -77,7 +77,7 @@ export async function rewritePromptWithGuidance(input: {
 		? registeredProvider.streamSimple
 		: streamSimple);
 	const sessionId = input.ctx.sessionManager.getSessionId();
-	const streamFn: StreamFn = (nextModel, context, streamOptions) => baseStreamFn(nextModel, context, {
+	const streamFn: StreamFn = (nextModel, context, streamOptions) => (baseStreamFn as StreamFn)(nextModel, context, {
 		...streamOptions,
 		...(auth.apiKey ? { apiKey: auth.apiKey } : {}),
 		env: auth.env || streamOptions?.env ? { ...(auth.env ?? {}), ...(streamOptions?.env ?? {}) } : undefined,
