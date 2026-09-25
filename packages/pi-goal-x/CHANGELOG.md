@@ -2,6 +2,42 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.8.2] — 2026-09-26 (fork release)
+
+### Fixed
+
+- **Dashboard shortcuts no longer re-fire when a keystroke's key-release
+  arrives late.** pi runs with the kitty keyboard protocol's press/release
+  reporting, so every keystroke arrives as two escape sequences that
+  `matchesKey` matches identically; pi-tui drops releases only on the
+  focused-component path, while the dashboard's raw `onTerminalInput`
+  listener received both. When the terminal or a session layer delivers the
+  release long after the press (Warp window refocus, multiplexer
+  detach/attach), Esc re-aborted/re-paused and Ctrl+Shift+A/T re-toggled
+  their state on refocus. The listener now drops release events outright
+  (mirroring pi-tui's `tui.js` focused-component filter and the
+  `tui-alt-screen` viewport-listener guards) and skips repeat events on the
+  state-changing branches while held-key navigation chords keep scrolling.
+- **Followed upstream pi-subagents v0.71.0 `completionGuard` removal**: the
+  runtime-registered default goal-auditor definition and its package test no
+  longer set the dropped `RuntimeAgentDefinition` field.
+
+### Changed
+
+- **Synced upstream v0.31.6 → v0.31.9.** Adopted the `goalPromptParts`
+  `{state, counters}` split (the fork's live-context channel already consumed
+  that shape), `contextUsageLine`, the `goalsRoot` setting (with
+  `PI_GOAL_ROOT` shared storage; upstream's key allowlist set was not adopted
+  — the fork's settings switch already emits `unknown_key` diagnostics),
+  `hideUnfocusedPrompt`, the post-budget reminder wiring in the
+  `/goal-tweak` flow, previous-audit rejection warm-context (gated behind
+  `auditor.warmContext`), orphaned-baseline reporting, and the
+  `modelBudgetLine` rename. Deliberately not adopted: upstream's auditor
+  checklist rewording and `<approved/>` verdict protocol (the fork keeps its
+  base checklist / `auditor.checklist` override and the structured_output
+  protocol per the 0.8.0 design) and the upstream `runGoalQuestionnaire`
+  flow (the fork questionnaire UI is retained).
+
 ## [0.8.1] — 2026-09-20 (fork release)
 
 ### Changed

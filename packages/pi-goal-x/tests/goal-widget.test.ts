@@ -524,7 +524,13 @@ function keybindingHarness(initialExpanded = false) {
 		isDashboardExpanded: () => expanded,
 		toggleDashboardExpanded: () => { expanded = !expanded; consumed.push("toggle"); },
 		toggleGoalAuditor: () => { consumed.push("toggle-auditor"); },
-		goalWidgetComponentRef: { current: { invalidate: () => { consumed.push("invalidate"); } } },
+		goalWidgetComponentRef: {
+			current: {
+				invalidate: () => { consumed.push("invalidate"); },
+				handleNavigationKey: () => { consumed.push("nav"); return true; },
+				handleCompactScrollKey: () => { consumed.push("scroll"); return true; },
+			},
+		},
 		terminalInputUnsubscribe: null,
 	} as never;
 	syncTerminalInputPause(core as never, ctx as never);
@@ -577,6 +583,41 @@ test("ctrl+shift+a is inert while a goal modal is open", () => {
 	(h.core as unknown as { state: { goal: unknown } }).state.goal = { status: "active", autoContinue: true };
 	h.fire(CTRL_SHIFT_A);
 	assert.deepEqual(h.consumed, [], "modal depth guard swallows the chord");
+});
+
+// kitty 键盘协议（pi 请求 press/release 上报）下每次按键是两条序列；pi-tui 只在
+// 聚焦组件路径过滤 release，raw onTerminalInput 监听器两条都收得到，而 matchesKey
+// 对两者同样命中。终端/会话层（Warp 失焦、复用器 detach/attach）会把 release 攒到
+// 重新聚焦才投递，若不过滤就会"回来后快捷键自己再触发一次"。
+const KITTY_CTRL_SHIFT_A_RELEASE = "\u001b[97:65;6:3u";
+const KITTY_CTRL_SHIFT_A_REPEAT = "\u001b[97:65;6:2u";
+const KITTY_CTRL_SHIFT_T_RELEASE = "\u001b[116:84;6:3u";
+const KITTY_CTRL_SHIFT_T_REPEAT = "\u001b[116:84;6:2u";
+const KITTY_ESC_RELEASE = "\u001b[27;1:3u";
+const KITTY_CTRL_SHIFT_DOWN_REPEAT = "\u001b[1;6:2B";
+const KITTY_CTRL_SHIFT_DOWN_RELEASE = "\u001b[1;6:3B";
+
+test("kitty release sequences never fire shortcuts and pass through unconsumed", () => {
+	const h = keybindingHarness();
+	(h.core as unknown as { state: { goal: unknown } }).state.goal = { status: "active", autoContinue: true };
+	assert.equal(h.fire(KITTY_CTRL_SHIFT_A_RELEASE), undefined, "ctrl+shift+a release must not toggle the auditor");
+	assert.equal(h.fire(KITTY_CTRL_SHIFT_T_RELEASE), undefined, "ctrl+shift+t release must not toggle the dashboard");
+	assert.equal(h.fire(KITTY_ESC_RELEASE), undefined, "escape release must not pause/abort/collapse");
+	assert.equal(h.fire(KITTY_CTRL_SHIFT_DOWN_RELEASE), undefined, "scroll chord release must not scroll");
+	assert.deepEqual(h.consumed, [], "no branch may act on a release event");
+	assert.equal(h.expanded(), false);
+});
+
+test("kitty repeat events still scroll but never re-fire the state toggles", () => {
+	const h = keybindingHarness();
+	h.fire(CTRL_SHIFT_T);
+	assert.equal(h.expanded(), true, "press expands the dashboard");
+	h.fire(KITTY_CTRL_SHIFT_DOWN_REPEAT);
+	assert.deepEqual(h.consumed, ["toggle", "scroll"], "held ctrl+shift+down keeps scrolling");
+	h.fire(KITTY_CTRL_SHIFT_A_REPEAT);
+	h.fire(KITTY_CTRL_SHIFT_T_REPEAT);
+	assert.deepEqual(h.consumed, ["toggle", "scroll"], "repeats must not flap the toggles");
+	assert.equal(h.expanded(), true, "dashboard stays expanded after repeats");
 });
 
 test("expanded mode renders the full dashboard without mutating editor state", () => {

@@ -1,4 +1,4 @@
-import { matchesKey } from "@earendil-works/pi-tui";
+import { isKeyRelease, isKeyRepeat, matchesKey } from "@earendil-works/pi-tui";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { cloneGoal, createGoal, nowIso, type GoalTask } from "./goal-record.ts";
 import { checkSubtasksComplete, findTaskInTree } from "./goal-policy.ts";
@@ -90,6 +90,18 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 		const settings = loadGoalSettings(typeof ctx.cwd === "string" ? ctx.cwd : process.cwd());
 		const keybindings = settings.keybindings?.dashboard ?? DEFAULT_GOAL_KEYBINDINGS.dashboard;
 		core.terminalInputUnsubscribe = ctx.ui.onTerminalInput((data) => {
+			// pi requests the kitty keyboard protocol with press/release reporting,
+			// so every keystroke arrives as TWO sequences and matchesKey() matches
+			// them identically. pi-tui filters releases only on the focused-
+			// component path (tui.js); raw onTerminalInput listeners must guard
+			// themselves (same as tui-alt-screen's viewport listener). Without
+			// this, a release delivered late — terminal window refocus (Warp),
+			// multiplexer detach/attach — re-fires the shortcuts below.
+			if (isKeyRelease(data)) return undefined;
+			// Repeats act like presses for scrolling (hold ctrl+shift+↓), but
+			// must not compound the state-changing branches, so those check
+			// !isRepeat.
+			const isRepeat = isKeyRepeat(data);
 			// If an audit is running, Escape aborts the audit instead of pausing.
 			// Must return { consume: true } so the TUI doesn't also process the key
 			// and abort the running tool execution, which would cascade into pausing
@@ -118,7 +130,7 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 			// /settings, session picker) emit no ui_prompt span and remain a known
 			// residual gap, documented in specs/2026-09-12-escape-foreign-ui-prompt-guard.
 			if (core.goalModalDepth > 0 || core.uiPromptDepth > 0 || core.goalTui?.hasOverlay?.()) return undefined;
-			if (matchesKey(data, "escape") && core.auditProgress) {
+			if (matchesKey(data, "escape") && core.auditProgress && !isRepeat) {
 				core.abortAudit(ctx);
 				return { consume: true };
 			}
@@ -129,7 +141,7 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 			// (the editor owns ↑/↓/PgUp/PgDn), so no focus state is needed and
 			// editor keybindings are untouched whenever the dashboard is not
 			// focused.
-			if (matchesKey(data, "escape") && core.isDashboardExpanded()) {
+			if (matchesKey(data, "escape") && core.isDashboardExpanded() && !isRepeat) {
 				core.toggleDashboardExpanded();
 				return { consume: true };
 			}
@@ -141,7 +153,7 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 			// When the goal is already paused this branch is skipped and Escape
 			// falls through to pi, which stops the current turn without any goal
 			// state change.
-			if (matchesKey(data, "escape") && core.state.goal?.status === "active" && core.state.goal.autoContinue) {
+			if (matchesKey(data, "escape") && core.state.goal?.status === "active" && core.state.goal.autoContinue && !isRepeat) {
 				core.pauseActiveGoal(ctx);
 				return undefined;
 			}
@@ -149,7 +161,7 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 			// Ctrl+Shift+T — toggle the unified dashboard between compact and
 			// expanded task views (the task-list overlay is merged into the
 			// dashboard; §10).
-			if (matchesKey(data, keybindings.toggleExpand)) {
+			if (matchesKey(data, keybindings.toggleExpand) && !isRepeat) {
 				core.toggleDashboardExpanded();
 				return { consume: true };
 			}
@@ -158,7 +170,7 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 			// Persisted per-goal (revision-safe), ledger event, dashboard
 			// refresh, notification; inert with no focused goal or a complete
 			// goal (the modal-depth guard above covers goal modals).
-			if (matchesKey(data, "ctrl+shift+a")) {
+			if (matchesKey(data, "ctrl+shift+a") && !isRepeat) {
 				core.toggleGoalAuditor(ctx);
 				core.goalWidgetComponentRef.current?.invalidate();
 				return { consume: true };
@@ -187,7 +199,7 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 			// ── Debug mode keybindings (hidden from normal view) ────────────────
 
 			// Ctrl+Shift+X — toggle debug mode on/off
-			if (matchesKey(data, "ctrl+shift+x")) {
+			if (matchesKey(data, "ctrl+shift+x") && !isRepeat) {
 				core.debugMode = !core.debugMode;
 				ctx.ui.notify(core.debugMode ? "Debug mode ON" : "Debug mode OFF", "info");
 				core.goalWidgetComponentRef.current?.invalidate();
@@ -198,25 +210,25 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 			if (!core.debugMode) return undefined;
 
 			// Ctrl+Shift+N — create a test goal
-			if (matchesKey(data, "ctrl+shift+n")) {
+			if (matchesKey(data, "ctrl+shift+n") && !isRepeat) {
 				createDebugGoal(ctx);
 				return { consume: true };
 			}
 
 			// Ctrl+Shift+T — inject sample tasks into current goal
-			if (matchesKey(data, "ctrl+shift+t")) {
+			if (matchesKey(data, "ctrl+shift+t") && !isRepeat) {
 				injectDebugTasks(ctx);
 				return { consume: true };
 			}
 
 			// Ctrl+Shift+R — start mock completion audit
-			if (matchesKey(data, "ctrl+shift+r")) {
+			if (matchesKey(data, "ctrl+shift+r") && !isRepeat) {
 				startMockAudit(ctx);
 				return { consume: true };
 			}
 
 			// Ctrl+Shift+O — open proposal dialog with sample data
-			if (matchesKey(data, "ctrl+shift+o")) {
+			if (matchesKey(data, "ctrl+shift+o") && !isRepeat) {
 				openDebugProposal(ctx);
 				return { consume: true };
 			}
