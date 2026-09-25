@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] — 2026-09-25
+
+### Changed
+
+- **Synced upstream `v32.1.0` → `v34.0.0`** (2 majors, ~342 upstream commits).
+  Highlights: a redirect's target is now checked against path rules even when
+  the file does not exist yet (upstream breaking fix — creating redirects such
+  as `cat x > newfile` were previously unchecked and now reach the path
+  surfaces); MCP server rules apply to prefix-named tools such as
+  `github_search_code`; MCP rule matching honors true last-match-wins across
+  every candidate name instead of stopping at the first match; pi ≥0.86
+  section-shaped prompts get the relocated tool-surface treatment while
+  keeping a project's own Guidelines section; config-issue reporter warns
+  once per report on new issues; additional secret-masking paths for
+  indirection wrappers and quote-stitched inline-shell payloads; quoted flag
+  and value parsing fixes; permission asks queue FIFO and a second ask no
+  longer replaces the first; pending asks are answered at session end.
+- The fork keeps its named permission profiles, session role layer, wrapper
+  floors, forwarded-decision broadcast, and project-scoped profiles
+  (dual-layer `resolveProfileScopes`) on top of the upstream changes.
+  `configStore.refresh` moved to a cwd parameter upstream; the fork's
+  untrusted-project profiles probe and upstream's new status-bar sync
+  (`syncPermissionSystemStatus`) now coexist in `PermissionSession.refreshConfig`.
+
 ## [1.2.0] — 2026-09-22
 
 ### Changed

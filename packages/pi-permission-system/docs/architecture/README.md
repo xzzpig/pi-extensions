@@ -4,8 +4,9 @@ This directory documents the permission system's internal architecture, informed
 
 ## Documents
 
-| Document                                   | Purpose                                                                                                |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| [v3-architecture.md](./v3-architecture.md) | Architecture as of v3.4–3.9 (pre-flat-config, pre-unified-evaluate). Retained as historical reference. |
-| [architecture.md](./architecture.md)       | Current architecture: unified rule model, evaluated ruleset, and session approval generalization       |
-| [history/](./history/)                     | Per-phase records of the completed improvement phases (findings, plans, dependency graphs, metrics).   |
+| Document                                                 | Purpose                                                                                                |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| [v3-architecture.md](./v3-architecture.md)               | Architecture as of v3.4–3.9 (pre-flat-config, pre-unified-evaluate). Retained as historical reference. |
+| [architecture.md](./architecture.md)                     | Current architecture: unified rule model, evaluated ruleset, and session approval generalization       |
+| [history/](./history/)                                   | Per-phase records of the completed improvement phases (findings, plans, dependency graphs, metrics).   |
+| [investigating-a-report.md](./investigating-a-report.md) | Maintainer technique: reproduce a bypass claim live, price a gate change against the review log.       |

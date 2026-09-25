@@ -160,7 +160,9 @@ The polling session publishes the session id it polls, and a child checks that i
 
 The announcement goes out on two channels, because a child cannot always reach the same one.
 A child running inside its parent's process reads a process-global registry.
+A stale mark left in that registry by a session that died without `session_shutdown` suppresses the fast-fail and falls back to the timeout — the safe direction for that channel.
 A child running as a separate `pi` process (the `PI_SUBAGENT_PARENT_SESSION` path) shares no memory with its parent, so it reads a heartbeat record the serving session refreshes under `<agent dir>/sessions/permission-forwarding/serving/`, holding the served session id, the serving process id, and the time it was last refreshed.
+That `serving/` directory is created on demand and never removed.
 
 For an out-of-process target, four things count as "not draining":
 
@@ -171,7 +173,7 @@ For an out-of-process target, four things count as "not draining":
 | A record nobody has refreshed for several seconds | The parent's process survives but has stopped polling                        |
 | A record for a different session id               | The child is forwarding somewhere nobody is listening                        |
 
-If the target is not draining its inbox, the child gives up after a two-second grace window rather than waiting out `forwardingTimeoutMs`, and the tool is blocked with:
+If the target is not draining its inbox, the child gives up after a two-second grace window (`PERMISSION_FORWARDING_SERVING_GRACE_MS`) rather than waiting out `forwardingTimeoutMs`, and the tool is blocked with:
 
 ```text
 [pi-permission-system] Running bash command 'pwd' requires approval, but no
@@ -180,6 +182,7 @@ permission requests.
 ```
 
 The grace window exists so a request that arrives while the parent is switching sessions is not abandoned in the gap.
+Absence of a record is deliberately **not** read as unknown: a cleanly exited parent leaves nothing behind, so treating absence as "maybe serving" would restore the full-timeout stall that the heartbeat exists to end.
 A target that *is* draining its inbox is waited on for the full `forwardingTimeoutMs`, however long the human takes to decide.
 That includes a parent whose human is still deliberating at an earlier forwarded prompt: it keeps refreshing its heartbeat throughout, so a second child does not read it as gone.
 
@@ -188,6 +191,7 @@ None of them is reported as a user denial, because no user was ever asked.
 
 The two sides of the exchange are correlatable in the review log: the serving session writes `forwarded_permission.serving_started` with the id it polls, and the child writes `forwarded_permission.request_created` with the `targetSessionId` it forwarded to.
 When a forwarded request goes unanswered, comparing those two entries distinguishes a parent that was not polling from one polling a different session.
+The child's `forwarded_permission.no_serving_session` entry also records `servingChannel` and `servingState` beside the ids observed, since "exited", "killed", and "polling a different session id" are different diagnoses the shared denial string does not distinguish.
 
 When a forwarded request *is* answered, the child's own terminal entry names both which session answered and what within it decided.
 The serving node records its decider on the response — a rule of its own (with the surface, pattern, and origin that matched), the link that ruled, or the human who answered its dialog — and the child records it nested under a `forwarded` frame:

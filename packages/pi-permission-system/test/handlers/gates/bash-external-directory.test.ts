@@ -288,6 +288,17 @@ describe("describeBashExternalDirectoryGate", () => {
     expect(desc.decision.surface).toBe("external_directory_read");
   });
 
+  describe("a redirect's target that does not exist yet (#609)", () => {
+    it("asks on the write surface for a bare target after a non-literal cd", async () => {
+      const result = (await describeGate(
+        makeTcc({ input: { command: 'cd "$D" && echo hi > out.txt' } }),
+        makeResolver(makeCheckResult("ask")),
+      )) as GateDescriptor;
+
+      expect(result.surface).toBe("external_directory_write");
+    });
+  });
+
   describe("directional routing (#807)", () => {
     it("routes a proven read to the read surface, end to end", async () => {
       const result = (await describeGate(

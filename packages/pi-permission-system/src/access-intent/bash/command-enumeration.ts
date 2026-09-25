@@ -6,6 +6,7 @@ import { classifyWrapperCommand } from "./wrapper-floors";
 import {
   type CommandWord,
   executedUnitOf,
+  inlineShellPayloadIndex,
   isTransparentWrapper,
   type WrapperKind,
 } from "./wrapper-analysis";
@@ -296,6 +297,30 @@ export function collectSalvagedCommands(node: TSNode): BashCommand[] {
   return out;
 }
 
+/**
+ * The node holding a `command` node's inline-shell payload — the inner program
+ * of `bash -c '…'`, `sh -c "…"`, or `eval '…'` — or `null` for any other
+ * command.
+ *
+ * The node rather than its text, because the log's command masker re-parses the
+ * payload and offsets the spans it recovers by the node's `startIndex`
+ * (`logging/command-redaction.ts`, #923). {@link executedUnitOf} answers the
+ * text question for display and cannot serve that one: it unquotes, unwraps
+ * nested indirection, and drops a result that adds nothing — all of which lose
+ * the correspondence to the command as written.
+ *
+ * The payload set is the *shell* set, which is what keeps an interpreter
+ * (`python3 -c`, `node -e`) out: its payload is another language, so re-parsing
+ * it as bash would read a secret out of embedded Python.
+ */
+export function inlineShellPayloadNode(command: TSNode): TSNode | null {
+  const nodes = commandWordNodes(command);
+  const index = inlineShellPayloadIndex(
+    nodes.map((node) => ({ text: node.text, offset: node.startIndex })),
+  );
+  return index === -1 ? null : (nodes.at(index) ?? null);
+}
+
 function collectCommandsInto(
 	node: TSNode,
 	inherited: UnitScope,
@@ -519,16 +544,32 @@ function redirectedScope(node: TSNode, scope: UnitScope): UnitScope {
  * list means a pure assignment with no `command_name`.
  */
 function readCommandWords(node: TSNode): CommandWord[] {
-	const words: CommandWord[] = [];
-	let unitStart: number | undefined;
-	for (let i = 0; i < node.childCount; i++) {
-		const child = node.child(i);
-		if (!child?.isNamed) continue;
-		if (child.type === "variable_assignment") continue;
-		unitStart ??= child.startIndex;
-		words.push({ text: child.text, offset: child.startIndex - unitStart });
-	}
-	return words;
+  const nodes = commandWordNodes(node);
+  const unitStart = nodes.at(0)?.startIndex ?? 0;
+  return nodes.map((child) => ({
+    text: child.text,
+    offset: child.startIndex - unitStart,
+  }));
+}
+
+/**
+ * The nodes {@link readCommandWords} reports words for, in the same order.
+ *
+ * Split out so a consumer that needs a *node* rather than a word — the log's
+ * command masker, which offsets a re-parse by the payload node's `startIndex` —
+ * walks the identical filtered list. Two walks over the same children with the
+ * same filter, written twice, is how the two come to disagree about which word
+ * is at which index.
+ */
+function commandWordNodes(node: TSNode): TSNode[] {
+  const nodes: TSNode[] = [];
+  for (let i = 0; i < node.childCount; i++) {
+    const child = node.child(i);
+    if (!child?.isNamed) continue;
+    if (child.type === "variable_assignment") continue;
+    nodes.push(child);
+  }
+  return nodes;
 }
 
 /**

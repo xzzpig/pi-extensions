@@ -692,6 +692,7 @@ An externally launched sandbox remains the supported containment route (unverifi
 3. **Wrapper transparency** ([#803]).
    Relieves the floored pure-reader prompts (~13% of current volume).
 4. **[#609] and [#785].**
+   — landed ([#609]).
    Redirect operator classification, unconditional projection of output-redirect destinations including bare nonexistent ones, and ADR 0009's wording correction.
    Carries the breaking-change footer.
 5. **Blame threading.**

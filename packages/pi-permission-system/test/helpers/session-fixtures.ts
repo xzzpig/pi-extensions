@@ -10,7 +10,6 @@
  * their own file (the vi.hoisted / vi.mock pattern from permission-session.test.ts)
  * since that mock is module-scoped.
  */
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { vi } from "vitest";
 
 import type { ResolvedAccessIntent } from "#src/access-intent/access-intent";
@@ -63,9 +62,7 @@ export function makeConfigStore(
         .mockReturnValue({ ...DEFAULT_EXTENSION_CONFIG }),
     refresh:
       overrides.refresh ??
-      vi.fn<
-        (ctx: ExtensionContext | undefined, projectTrusted: boolean) => void
-      >(),
+      vi.fn<(cwd: string | undefined, projectTrusted: boolean) => void>(),
     logResolvedPaths: overrides.logResolvedPaths ?? vi.fn<() => void>(),
   };
 }

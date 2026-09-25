@@ -118,6 +118,7 @@ For allowlisted commands, all non-flag positional arguments are assumed to be pa
 **This extension** extracts path candidates from all commands generically, then applies additional intelligence:
 
 - A `PATTERN_FIRST_COMMANDS` map understands flag arity for `sed`, `awk`, `grep`, `rg`, and similar tools, distinguishing inline patterns/scripts from file arguments to avoid false positives.
+  The same table reads an interpreter's inline script (`node -e`, `bun --eval`, `python3 -c`, `perl -e`, `ruby -e`) as a script rather than an operand, while leaving a script *file* (`node build.js`) an operand.
 - Redirect destinations (`> /path/to/file`) are extracted.
 - Heredoc bodies, comments, and variable assignments are skipped.
 

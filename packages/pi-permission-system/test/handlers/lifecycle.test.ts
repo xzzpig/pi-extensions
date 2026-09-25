@@ -1,12 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { AskDialogRelease } from "#src/authority/ask-dialog-queue";
 import {
+  SESSION_ENDED_REASON,
   SessionLifecycleHandler,
   UNTRUSTED_PROJECT_MESSAGE,
 } from "#src/handlers/lifecycle";
 import type { ServiceLifecycle } from "#src/service/service-lifecycle";
 
-import { makeCtx } from "#test/helpers/handler-fixtures";
+import {
+  makeConfigIssueReporter,
+  makeCtx,
+} from "#test/helpers/handler-fixtures";
 import {
   makeLogger,
   makeRealResolver,
@@ -39,12 +44,16 @@ function makeSetup(opts?: { configIssues?: string[] }) {
   // not reach-through to session.logger.
   const logger = makeLogger();
   const audit = { writeSummary: vi.fn<(logger: unknown) => void>() };
+  const configIssues = makeConfigIssueReporter();
+  const dialogs = { releaseAll: vi.fn<AskDialogRelease["releaseAll"]>() };
   const handler = new SessionLifecycleHandler(
     session,
     resolver,
     serviceLifecycle,
     logger,
     audit,
+    configIssues,
+    dialogs,
   );
   return {
     handler,
@@ -56,6 +65,8 @@ function makeSetup(opts?: { configIssues?: string[] }) {
     configStore,
     serviceLifecycle,
     audit,
+    configIssues,
+    dialogs,
   };
 }
 
@@ -66,7 +77,7 @@ describe("handleSessionStart", () => {
     const ctx = makeCtx();
     const { handler, configStore } = makeSetup();
     await handler.handleSessionStart({ reason: "startup" }, ctx);
-    expect(configStore.refresh).toHaveBeenCalledWith(ctx, true);
+    expect(configStore.refresh).toHaveBeenCalledWith(ctx.cwd, true);
   });
 
   it("calls resetForNewSession with ctx, trusted", async () => {
@@ -89,7 +100,7 @@ describe("handleSessionStart", () => {
       const { handler, configStore, session } = makeSetup();
       const spy = vi.spyOn(session, "resetForNewSession");
       await handler.handleSessionStart({ reason: "startup" }, ctx);
-      expect(configStore.refresh).toHaveBeenCalledWith(ctx, false);
+      expect(configStore.refresh).toHaveBeenCalledWith(ctx.cwd, false);
       expect(spy).toHaveBeenCalledWith(ctx, false);
     });
 
@@ -164,7 +175,11 @@ describe("handleSessionStart", () => {
     expect(serviceLifecycle.activate).toHaveBeenCalledWith(ctx);
   });
 
-  it("calls refreshConfig before resetForNewSession", async () => {
+  // `resetForNewSession` activates the session, which is what binds the
+  // context `PermissionSession.notify` delivers through. Refreshing after it
+  // means anything the config path reports — a debug-write IO failure, a
+  // config issue — has a UI to reach (#933).
+  it("calls resetForNewSession before refreshConfig", async () => {
     const callOrder: string[] = [];
     const { handler, session, configStore } = makeSetup();
     vi.spyOn(configStore, "refresh").mockImplementation(() => {
@@ -174,7 +189,28 @@ describe("handleSessionStart", () => {
       callOrder.push("resetForNewSession");
     });
     await handler.handleSessionStart({ reason: "startup" }, makeCtx());
-    expect(callOrder).toEqual(["refreshConfig", "resetForNewSession"]);
+    expect(callOrder).toEqual(["resetForNewSession", "refreshConfig"]);
+  });
+
+  describe("config issues", () => {
+    it("reports them, so one present before the session starts is shown", async () => {
+      const { handler, configIssues } = makeSetup();
+      await handler.handleSessionStart({ reason: "startup" }, makeCtx());
+      expect(configIssues.report).toHaveBeenCalledOnce();
+    });
+
+    it("reports after the config is refreshed, not before", async () => {
+      const callOrder: string[] = [];
+      const { handler, configStore, configIssues } = makeSetup();
+      vi.spyOn(configStore, "refresh").mockImplementation(() => {
+        callOrder.push("refreshConfig");
+      });
+      configIssues.report.mockImplementation(() => {
+        callOrder.push("report");
+      });
+      await handler.handleSessionStart({ reason: "startup" }, makeCtx());
+      expect(callOrder).toEqual(["refreshConfig", "report"]);
+    });
   });
 });
 
@@ -270,5 +306,28 @@ describe("handleSessionShutdown", () => {
     const { handler, audit, logger } = makeSetup();
     await handler.handleSessionShutdown();
     expect(audit.writeSummary).toHaveBeenCalledWith(logger);
+  });
+
+  it("releases every ask still waiting for an answer", async () => {
+    const { handler, dialogs } = makeSetup();
+    await handler.handleSessionShutdown();
+    expect(dialogs.releaseAll).toHaveBeenCalledWith(SESSION_ENDED_REASON);
+  });
+
+  it("releases pending asks before shutting the session down", async () => {
+    const { handler, session, dialogs } = makeSetup();
+    const order: string[] = [];
+    dialogs.releaseAll.mockImplementation(() => {
+      order.push("release");
+    });
+    vi.spyOn(session, "shutdown").mockImplementation(() => {
+      order.push("shutdown");
+    });
+
+    await handler.handleSessionShutdown();
+
+    // A drain awaiting a forwarded ask can only write its response once that
+    // ask is settled, and shutdown stops the forwarding lifecycle.
+    expect(order).toEqual(["release", "shutdown"]);
   });
 });

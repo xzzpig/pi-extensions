@@ -54,10 +54,7 @@ vi.mock("node:fs", () => ({
 
 // ── Imports ────────────────────────────────────────────────────────────────
 
-import type {
-  ExtensionCommandContext,
-  ExtensionContext,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import {
   ConfigStore,
   type ConfigStoreDeps,
@@ -93,16 +90,6 @@ function makeLogger() {
     debug: vi.fn<(event: string, details?: Record<string, unknown>) => void>(),
     review: vi.fn<(event: string, details?: Record<string, unknown>) => void>(),
   };
-}
-
-function makeCtx(overrides: Partial<ExtensionContext> = {}): ExtensionContext {
-  return {
-    cwd: "/test/project",
-    hasUI: false,
-    ui: { notify: vi.fn(), setStatus: vi.fn() },
-    sessionManager: { getEntries: vi.fn(), addEntry: vi.fn() },
-    ...overrides,
-  } as unknown as ExtensionContext;
 }
 
 function makeCommandCtx(
@@ -158,12 +145,46 @@ describe("ConfigStore", () => {
     });
   });
 
+  // ── getConfigIssues() ─────────────────────────────────────────────────
+
+  describe("getConfigIssues()", () => {
+    it("answers empty before any refresh", () => {
+      const { store } = makeStore();
+      expect(store.getConfigIssues()).toEqual([]);
+    });
+
+    it("answers the issues the last load produced", () => {
+      const { store } = makeStore();
+      mockLoadAndMergeConfigs.mockReturnValue({
+        merged: { ...DEFAULT_EXTENSION_CONFIG },
+        issues: ["first issue", "second issue"],
+      });
+      store.refresh("/test/project", true);
+      expect(store.getConfigIssues()).toEqual(["first issue", "second issue"]);
+    });
+
+    it("answers empty again once a reload finds the config clean", () => {
+      const { store } = makeStore();
+      mockLoadAndMergeConfigs.mockReturnValue({
+        merged: { ...DEFAULT_EXTENSION_CONFIG },
+        issues: ["transient issue"],
+      });
+      store.refresh("/test/project", true);
+      mockLoadAndMergeConfigs.mockReturnValue({
+        merged: { ...DEFAULT_EXTENSION_CONFIG },
+        issues: [],
+      });
+      store.refresh("/test/project", true);
+      expect(store.getConfigIssues()).toEqual([]);
+    });
+  });
+
   // ── refresh() ─────────────────────────────────────────────────────────
 
   describe("refresh()", () => {
-    it("uses the passed ctx cwd for loadAndMergeConfigs and includes the project scope when trusted", () => {
+    it("uses the passed cwd for loadAndMergeConfigs and includes the project scope when trusted", () => {
       const { store } = makeStore();
-      store.refresh(makeCtx({ cwd: "/my/project" }), true);
+      store.refresh("/my/project", true);
       expect(mockLoadAndMergeConfigs).toHaveBeenCalledWith(
         "/test/agent",
         "/my/project",
@@ -174,7 +195,7 @@ describe("ConfigStore", () => {
 
     it("withholds the project scope when the project is untrusted", () => {
       const { store } = makeStore();
-      store.refresh(makeCtx({ cwd: "/my/project" }), false);
+      store.refresh("/my/project", false);
       expect(mockLoadAndMergeConfigs).toHaveBeenCalledWith(
         "/test/agent",
         "/my/project",
@@ -183,7 +204,7 @@ describe("ConfigStore", () => {
       );
     });
 
-    it("uses empty string cwd when no ctx is provided", () => {
+    it("uses empty string cwd when no cwd is provided", () => {
       const { store } = makeStore();
       store.refresh(undefined, true);
       expect(mockLoadAndMergeConfigs).toHaveBeenCalledWith(
@@ -214,96 +235,37 @@ describe("ConfigStore", () => {
       );
     });
 
-    it("sets warning when issues are present", () => {
-      const { store } = makeStore();
-      const ctx = makeCtx({ hasUI: false });
+    // `config.loaded` is the durable record of what the load found, for
+    // whoever is diagnosing after the fact. The operator-facing notification
+    // is `ConfigIssueReporter`'s job; this field is not.
+    it("records the issues on config.loaded as one joined string", () => {
+      const { store, logger } = makeStore();
       mockLoadAndMergeConfigs.mockReturnValue({
         merged: { ...DEFAULT_EXTENSION_CONFIG },
-        issues: ["legacy config detected"],
-      });
-      store.refresh(ctx, true);
-      // Verify the warning is tracked (next identical call should not re-notify)
-      const mockNotify = vi.fn();
-      const ctx2 = makeCtx({
-        hasUI: true,
-        ui: { notify: mockNotify } as never,
-      });
-      mockLoadAndMergeConfigs.mockReturnValue({
-        merged: { ...DEFAULT_EXTENSION_CONFIG },
-        issues: ["legacy config detected"],
-      });
-      store.refresh(ctx2, true);
-      // Same warning — should not re-notify
-      expect(mockNotify).not.toHaveBeenCalled();
-    });
-
-    it("notifies UI when a new warning appears and hasUI is true", () => {
-      const mockNotify = vi.fn();
-      const { store } = makeStore();
-      const ctx = makeCtx({ hasUI: true, ui: { notify: mockNotify } as never });
-      mockLoadAndMergeConfigs.mockReturnValue({
-        merged: { ...DEFAULT_EXTENSION_CONFIG },
-        issues: ["new warning"],
-      });
-      store.refresh(ctx, true);
-      expect(mockNotify).toHaveBeenCalledWith("new warning", "warning");
-    });
-
-    it("does not re-notify the same warning on subsequent calls", () => {
-      const mockNotify = vi.fn();
-      const { store } = makeStore();
-      const ctx = makeCtx({ hasUI: true, ui: { notify: mockNotify } as never });
-      mockLoadAndMergeConfigs.mockReturnValue({
-        merged: { ...DEFAULT_EXTENSION_CONFIG },
-        issues: ["persistent warning"],
-      });
-      store.refresh(ctx, true);
-      store.refresh(ctx, true);
-      expect(mockNotify).toHaveBeenCalledTimes(1);
-    });
-
-    it("clears warning when no issues on next refresh", () => {
-      const mockNotify = vi.fn();
-      const { store } = makeStore();
-      // First call: set a warning
-      const ctxWithUI = makeCtx({
-        hasUI: true,
-        ui: { notify: mockNotify } as never,
-      });
-      mockLoadAndMergeConfigs.mockReturnValue({
-        merged: { ...DEFAULT_EXTENSION_CONFIG },
-        issues: ["warning"],
-      });
-      store.refresh(ctxWithUI, true);
-      // Second call: no issues — warning should clear
-      mockLoadAndMergeConfigs.mockReturnValue({
-        merged: { ...DEFAULT_EXTENSION_CONFIG },
-        issues: [],
+        issues: ["first issue", "second issue"],
       });
       store.refresh(undefined, true);
-      // Third call: same warning reappears — should notify again (dedup cleared)
-      mockLoadAndMergeConfigs.mockReturnValue({
-        merged: { ...DEFAULT_EXTENSION_CONFIG },
-        issues: ["warning"],
-      });
-      store.refresh(ctxWithUI, true);
-      expect(mockNotify).toHaveBeenCalledTimes(2);
-    });
-
-    it("calls syncPermissionSystemStatus when hasUI is true", () => {
-      const { store } = makeStore();
-      const ctx = makeCtx({ hasUI: true });
-      store.refresh(ctx, true);
-      expect(mockSyncPermissionSystemStatus).toHaveBeenCalledWith(
-        ctx,
-        expect.any(Object),
+      expect(logger.debug).toHaveBeenCalledWith(
+        "config.loaded",
+        expect.objectContaining({ warning: "first issue\nsecond issue" }),
       );
     });
 
-    it("does not call syncPermissionSystemStatus when hasUI is false", () => {
+    it("records a null warning on config.loaded when the config is clean", () => {
+      const { store, logger } = makeStore();
+      store.refresh(undefined, true);
+      expect(logger.debug).toHaveBeenCalledWith(
+        "config.loaded",
+        expect.objectContaining({ warning: null }),
+      );
+    });
+
+    // The load takes no context now, so it cannot notify or sync the status
+    // bar even by accident, which is the point: `PermissionSession` owns the
+    // status sync and `ConfigIssueReporter` owns the warning (#933).
+    it("does not sync the status bar", () => {
       const { store } = makeStore();
-      const ctx = makeCtx({ hasUI: false });
-      store.refresh(ctx, true);
+      store.refresh("/my/project", true);
       expect(mockSyncPermissionSystemStatus).not.toHaveBeenCalled();
     });
 

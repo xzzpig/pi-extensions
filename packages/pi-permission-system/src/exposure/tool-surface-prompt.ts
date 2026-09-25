@@ -15,17 +15,23 @@
  * and no session edits another's bytes.
  *
  * Removal is bounded to the text this package or Pi wrote. The prompt is split
- * at Pi's `Current working directory:` footer, which it writes last and
- * unconditionally: everything after it was appended by an extension, and
- * everything before it is Pi's own preamble only when Pi did not build the
- * prompt from a `customPrompt`. Under a custom prompt Pi writes no tool
- * surface at all, so a section matched above the footer is a user's or another
- * extension's — removing it destroyed their text (#919, #932).
+ * at the cwd layer Pi writes last and unconditionally: a
+ * `Current working directory:` footer through Pi 0.85, a `<cwd>` section from
+ * 0.86. Everything after it was appended by an extension, and everything
+ * before it is Pi's own only when Pi did not build the prompt from a
+ * `customPrompt`. Under a custom prompt Pi writes no tool surface at all, so a
+ * section matched above the cwd layer is a user's or another extension's, and
+ * removing it destroyed their text (#919, #932). On the 0.86 shape even a
+ * Pi-authored head is searched only for Pi's own `<tools>` and `<rules>`,
+ * bounded to where Pi writes them, since the plain headers it no longer
+ * writes would match only a context file's text.
  *
- * Rendering follows `buildSystemPrompt`'s own rules — a tool is listed only
- * when it has a snippet, and the guideline bullets are the allowed tools' own
- * `promptGuidelines` around Pi's built-in ones — so the block reads as the one
- * Pi would have written for this session's real surface.
+ * Rendering follows `buildSystemPrompt`'s own rules (a tool is listed only
+ * when it has a snippet; the guideline bullets are the allowed tools' own
+ * `promptGuidelines`, then other extensions' rules, around Pi's built-in
+ * ones) and its shape (plain headers or tagged sections, matching the
+ * prompt), so the block reads as the one Pi would have written for this
+ * session's real surface.
  */
 
 /** What a session's tool surface renders from. */
@@ -36,6 +42,16 @@ export interface ToolSurfaceInputs {
   readonly toolSnippets: Readonly<Record<string, string>>;
   /** Guideline bullets each tool contributes, keyed by tool name. */
   readonly guidelinesByTool: ReadonlyMap<string, readonly string[]>;
+  /**
+   * `systemPromptOptions.promptGuidelines`: bullets Pi writes into its rules
+   * after the tools' own.
+   *
+   * Only a bullet no registered tool contributes is carried. From Pi 0.86 the
+   * field holds what other extensions added; through 0.85 it *is* the tools'
+   * guidelines, flattened, and a denied tool's bullet must not return by this
+   * route.
+   */
+  readonly promptGuidelines: readonly string[];
   /**
    * Whether Pi wrote the prompt's preamble itself.
    *
@@ -75,6 +91,31 @@ const EMPTY_LIST_PLACEHOLDER = "(none)";
  */
 const PROMPT_FOOTER_PREFIX = "Current working directory: ";
 
+/**
+ * The tags of the section Pi renders the working directory into from 0.86,
+ * last among its own sections and in both of its branches.
+ */
+const CWD_SECTION_OPEN = "<cwd>";
+const CWD_SECTION_CLOSE = "</cwd>";
+
+/** The sections Pi 0.86+ writes its tool surface into, in the order it writes them. */
+const TOOL_SURFACE_SECTION_NAMES = ["tools", "rules"] as const;
+
+/**
+ * Opening tags of the sections Pi writes after its tool surface.
+ *
+ * Pi writes `<tools>` and `<rules>` directly under its preamble and ahead of
+ * every one of these, so a match that opens or closes past the first of them
+ * is text somebody quoted, not Pi's.
+ */
+const LATER_PI_SECTION_OPENS: ReadonlySet<string> = new Set([
+  "<docs>",
+  "<addendum>",
+  "<project_context>",
+  "<skills>",
+  CWD_SECTION_OPEN,
+]);
+
 /** Pi's two unconditional guideline bullets, in the order it writes them. */
 const UNIVERSAL_GUIDELINES: readonly string[] = [
   "Be concise in your responses",
@@ -93,43 +134,116 @@ export function renderToolSurface(
   inputs: ToolSurfaceInputs,
 ): string {
   const lines = normalizePrompt(systemPrompt).split("\n");
-  const tailStart = extensionTailStart(lines);
+  const { layout, tailStart } = detectPromptLayout(lines);
   const body = [
-    settleRegion(lines.slice(0, tailStart), inputs.piAuthoredPreamble),
-    settleRegion(lines.slice(tailStart), true),
+    settleRegion(
+      lines.slice(0, tailStart),
+      inputs.piAuthoredPreamble ? layout.removePiSurface : null,
+    ),
+    settleRegion(lines.slice(tailStart), layout.removeRelocatedSurface),
   ]
     .filter((region) => region.length > 0)
     .join("\n")
     .trimEnd();
-  const block = renderToolSurfaceBlock(inputs);
+  const block = layout.renderBlock(toolSurfaceBullets(inputs));
 
   return body.length > 0 ? `${body}\n\n${block}` : block;
 }
 
+/** Lines removed from one region of the prompt; the rest are returned in order. */
+type RegionRemoval = (lines: readonly string[]) => string[];
+
 /**
- * Where the text extensions appended begins: the line after Pi's footer, or
- * the end of the prompt when nothing downstream left one.
+ * How one prompt shape bounds and writes the tool surface.
  *
- * The last footer is Pi's own — it appends one after everything it assembled,
- * so a line of the same shape in a custom prompt is always above it.
- *
- * Accepted edge: a prompt carrying no footer at all is treated as all head, so
- * a block appended to *that* prompt cannot be found and replaced, and a custom
- * preamble would collect a second one. Pi writes the footer last and in both
- * branches, so reaching this needs a downstream rewrite of Pi's whole output —
- * which has already broken `@gotgenes/pi-subagents`' identity anchor, since it
- * reads the same line.
+ * Pi has written its prompt in more than one shape, and each shape answers the
+ * same three questions differently, so the shape is decided once per prompt
+ * and every answer is read off the layout it selected.
  */
-function extensionTailStart(lines: readonly string[]): number {
+interface PromptLayout {
+  /** Pi's own tool surface, removed from the head when Pi wrote the preamble. */
+  readonly removePiSurface: RegionRemoval;
+  /** A relocated block (this package's or a peer's), removed from the tail. */
+  readonly removeRelocatedSurface: RegionRemoval;
+  /** This session's block, in this layout's shape. */
+  readonly renderBlock: (bullets: ToolSurfaceBullets) => string;
+}
+
+/** A prompt's layout, and the line at which the text extensions appended begins. */
+interface DetectedLayout {
+  readonly layout: PromptLayout;
+  readonly tailStart: number;
+}
+
+/**
+ * The shape Pi wrote through 0.85: `Available tools:` and `Guidelines:`
+ * sections in its preamble, and a `Current working directory:` footer last.
+ */
+const HEADER_LAYOUT: PromptLayout = {
+  removePiSurface: removeToolSurfaceSections,
+  removeRelocatedSurface: removeToolSurfaceSections,
+  renderBlock: renderHeaderBlock,
+};
+
+/**
+ * The shape Pi writes from 0.86: an untagged preamble, then `<name>` sections
+ * joined by a blank line (`<tools>` and `<rules>` among them), and a `<cwd>`
+ * section last among its own.
+ */
+const SECTION_LAYOUT: PromptLayout = {
+  removePiSurface: removePiToolSurfaceSections,
+  removeRelocatedSurface: removeRelocatedToolSurface,
+  renderBlock: renderSectionBlock,
+};
+
+/**
+ * The prompt's layout, read off the cwd layer Pi wrote, and where the text
+ * extensions appended after that layer begins.
+ *
+ * Pi writes its cwd layer last among its own, in both of its branches: a
+ * `Current working directory:` footer through 0.85, a `<cwd>` section from
+ * 0.86. So whichever of the two sits later is Pi's, and a line of either shape
+ * quoted in a context file or a custom prompt is always above it. The shape is
+ * told apart by which layer is present, never by version sniffing.
+ *
+ * A prompt carrying neither is read as the header layout and treated as all
+ * head, so a block appended to *that* prompt cannot be found and replaced, and
+ * a custom preamble would collect a second one. Pi writes a cwd layer in both
+ * branches of both renderers, so reaching this needs a downstream rewrite of
+ * Pi's whole output.
+ */
+function detectPromptLayout(lines: readonly string[]): DetectedLayout {
   const footerAt = lines.findLastIndex((line) =>
     line.startsWith(PROMPT_FOOTER_PREFIX),
   );
-  return footerAt === -1 ? lines.length : footerAt + 1;
+  const cwdCloseAt = lastCwdSectionClose(lines);
+  if (cwdCloseAt > footerAt) {
+    return { layout: SECTION_LAYOUT, tailStart: cwdCloseAt + 1 };
+  }
+  return {
+    layout: HEADER_LAYOUT,
+    tailStart: footerAt === -1 ? lines.length : footerAt + 1,
+  };
+}
+
+/**
+ * Line index of the closing tag of the last `<cwd>` section, or -1 when there
+ * is none.
+ *
+ * Pi renders the section as exactly three lines (the opening tag, the
+ * directory, the closing tag), so that is the shape matched, the way the
+ * footer is matched by its prefix.
+ */
+function lastCwdSectionClose(lines: readonly string[]): number {
+  return lines.findLastIndex(
+    (line, index) =>
+      line === CWD_SECTION_CLOSE && lines[index - 2] === CWD_SECTION_OPEN,
+  );
 }
 
 /**
  * One region's surviving text: its sections removed, when they are ours to
- * remove.
+ * remove, or returned as it arrived when `removal` is `null`.
  *
  * Blank runs are collapsed only where a removal opened one, so a region this
  * pass took nothing out of is returned exactly as it arrived rather than
@@ -137,12 +251,12 @@ function extensionTailStart(lines: readonly string[]): number {
  */
 function settleRegion(
   lines: readonly string[],
-  removalAllowed: boolean,
+  removal: RegionRemoval | null,
 ): string {
-  if (!removalAllowed) {
+  if (!removal) {
     return lines.join("\n");
   }
-  const kept = removeToolSurfaceSections(lines);
+  const kept = removal(lines);
   const text = kept.join("\n");
   return kept.length === lines.length ? text : collapseExtraBlankLines(text);
 }
@@ -176,45 +290,155 @@ function removeToolSurfaceSections(lines: readonly string[]): string[] {
   );
 }
 
-/** This session's tool surface, as Pi would have rendered it. */
-function renderToolSurfaceBlock(inputs: ToolSurfaceInputs): string {
-  const sections: string[] = [];
+/**
+ * Remove Pi 0.86+'s own `<tools>` and `<rules>` sections, tags included.
+ *
+ * A section is Pi's only when it opens and closes before the first section Pi
+ * writes after it; the plain headers `removeToolSurfaceSections` matches are
+ * never searched here, because Pi writes none on this shape and every match
+ * would be a user's or another extension's text.
+ */
+function removePiToolSurfaceSections(head: readonly string[]): string[] {
+  return removeTaggedToolSurface(head, laterPiSectionStart);
+}
 
-  const toolList = renderAvailableTools(inputs);
-  if (toolList) {
-    sections.push(toolList);
+/**
+ * Remove a relocated block from the extension tail, in either shape.
+ *
+ * This package writes the tagged shape here, and a peer writer may write
+ * either, so both are removed: the pass stays safe to apply to its own output
+ * and order-independent with a second writer.
+ */
+function removeRelocatedToolSurface(tail: readonly string[]): string[] {
+  return removeToolSurfaceSections(
+    removeTaggedToolSurface(tail, (lines) => lines.length),
+  );
+}
+
+/**
+ * Remove the first `<tools>` and the first `<rules>` section, each only when
+ * it closes before the line `limitOf` names.
+ */
+function removeTaggedToolSurface(
+  lines: readonly string[],
+  limitOf: (lines: readonly string[]) => number,
+): string[] {
+  let remaining = [...lines];
+  for (const name of TOOL_SURFACE_SECTION_NAMES) {
+    const section = findTaggedSection(remaining, name, limitOf(remaining));
+    if (section) {
+      remaining = [
+        ...remaining.slice(0, section.start),
+        ...remaining.slice(section.end),
+      ];
+    }
   }
-  sections.push(renderGuidelines(inputs));
+  return remaining;
+}
+
+/** Line index of the first section Pi writes after its tool surface. */
+function laterPiSectionStart(lines: readonly string[]): number {
+  const at = lines.findIndex((line) => LATER_PI_SECTION_OPENS.has(line));
+  return at === -1 ? lines.length : at;
+}
+
+/**
+ * The first `<name>` section, opening tag through closing tag, that ends
+ * before `limit`; `null` when there is none.
+ */
+function findTaggedSection(
+  lines: readonly string[],
+  name: string,
+  limit: number,
+): LineSection | null {
+  const start = lines.indexOf(`<${name}>`);
+  if (start === -1 || start >= limit) {
+    return null;
+  }
+  const closeAt = lines.indexOf(`</${name}>`, start + 1);
+  if (closeAt === -1 || closeAt >= limit) {
+    return null;
+  }
+  return { start, end: closeAt + 1 };
+}
+
+/**
+ * This session's tool surface, as Pi 0.86+ would have rendered it: a `<tools>`
+ * section, when any allowed tool has a snippet, then a `<rules>` section.
+ */
+function renderSectionBlock(bullets: ToolSurfaceBullets): string {
+  const sections: string[] = [];
+  if (bullets.tools.length > 0) {
+    sections.push(taggedSection("tools", bullets.tools));
+  }
+  sections.push(taggedSection("rules", bullets.rules));
 
   return sections.join("\n\n");
 }
 
-/**
- * The `Available tools:` section for the allowed set, or `null` when none of
- * those tools has a snippet.
- *
- * Pi lists a tool only when the caller supplied a one-line snippet for it, so
- * a tool without one is left unlisted here too rather than rendered bare.
- */
-function renderAvailableTools(inputs: ToolSurfaceInputs): string | null {
-  const bullets = inputs.allowedTools
-    .map((toolName) => ({ toolName, snippet: inputs.toolSnippets[toolName] }))
-    .filter((tool) => Boolean(tool.snippet))
-    .map((tool) => `- ${tool.toolName}: ${tool.snippet}`);
+/** A section in the form Pi 0.86+ renders: its tags on their own lines. */
+function taggedSection(name: string, lines: readonly string[]): string {
+  return [`<${name}>`, ...lines, `</${name}>`].join("\n");
+}
 
+/** This session's tool surface, as Pi through 0.85 would have rendered it. */
+function renderHeaderBlock(bullets: ToolSurfaceBullets): string {
+  const sections: string[] = [];
+
+  const toolList = renderAvailableTools(bullets.tools);
+  if (toolList) {
+    sections.push(toolList);
+  }
+  sections.push(renderGuidelines(bullets.rules));
+
+  return sections.join("\n\n");
+}
+
+/** The `Available tools:` section, or `null` when it lists no tool. */
+function renderAvailableTools(bullets: readonly string[]): string | null {
   return bullets.length > 0
     ? [AVAILABLE_TOOLS_SECTION_HEADER, ...bullets].join("\n")
     : null;
 }
 
+/** The `Guidelines:` section. */
+function renderGuidelines(bullets: readonly string[]): string {
+  return [GUIDELINES_SECTION_HEADER, ...bullets].join("\n");
+}
+
+/** The bullets a tool-surface block wraps, whatever shape wraps them. */
+interface ToolSurfaceBullets {
+  /** `- name: snippet` lines; empty when no allowed tool has a snippet. */
+  readonly tools: readonly string[];
+  /** `- rule` lines, in `buildSystemPrompt`'s order. */
+  readonly rules: readonly string[];
+}
+
+function toolSurfaceBullets(inputs: ToolSurfaceInputs): ToolSurfaceBullets {
+  return { tools: toolBullets(inputs), rules: ruleBullets(inputs) };
+}
+
 /**
- * The `Guidelines:` section for the allowed set.
+ * One bullet per allowed tool that has a snippet.
+ *
+ * Pi lists a tool only when the caller supplied a one-line snippet for it, so
+ * a tool without one is left unlisted here too rather than rendered bare.
+ */
+function toolBullets(inputs: ToolSurfaceInputs): string[] {
+  return inputs.allowedTools
+    .map((toolName) => ({ toolName, snippet: inputs.toolSnippets[toolName] }))
+    .filter((tool) => Boolean(tool.snippet))
+    .map((tool) => `- ${tool.toolName}: ${tool.snippet}`);
+}
+
+/**
+ * The guideline bullets for the allowed set.
  *
  * Mirrors `buildSystemPrompt`'s assembly: its conditional file-exploration
- * bullet first, then each allowed tool's own contributions, then its two
- * unconditional bullets — de-duplicated in first-seen order, as Pi does.
+ * bullet first, then each allowed tool's own contributions, then the bullets
+ * other extensions added, then its two unconditional bullets — de-duplicated in first-seen order, as Pi does.
  */
-function renderGuidelines(inputs: ToolSurfaceInputs): string {
+function ruleBullets(inputs: ToolSurfaceInputs): string[] {
   const bullets: string[] = [];
   const seen = new Set<string>();
   const addGuideline = (guideline: string): void => {
@@ -237,14 +461,27 @@ function renderGuidelines(inputs: ToolSurfaceInputs): string {
     }
   }
 
+  for (const guideline of extensionGuidelines(inputs)) {
+    addGuideline(guideline);
+  }
+
   for (const guideline of UNIVERSAL_GUIDELINES) {
     addGuideline(guideline);
   }
 
-  return [
-    GUIDELINES_SECTION_HEADER,
-    ...bullets.map((bullet) => `- ${bullet}`),
-  ].join("\n");
+  return bullets.map((bullet) => `- ${bullet}`);
+}
+
+/** The `promptGuidelines` bullets no registered tool contributes. */
+function extensionGuidelines(inputs: ToolSurfaceInputs): string[] {
+  const toolGuidelines = new Set(
+    [...inputs.guidelinesByTool.values()]
+      .flat()
+      .map((guideline) => guideline.trim()),
+  );
+  return inputs.promptGuidelines.filter(
+    (guideline) => !toolGuidelines.has(guideline.trim()),
+  );
 }
 
 /**

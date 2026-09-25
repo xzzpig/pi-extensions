@@ -9,6 +9,7 @@ import {
   countProjectConfigProfiles,
   untrustedProjectProfilesWarning,
 } from "#src/config/project-profile-probe";
+import { syncPermissionSystemStatus } from "#src/config/status";
 import type { SkillPromptEntry } from "#src/exposure/skill-prompt-sanitizer";
 import {
   ToolSurfaceBaseline,
@@ -223,9 +224,16 @@ export class PermissionSession implements ToolCallGateInputs {
   // ── Config ─────────────────────────────────────────────────────────────
 
   /**
-   * Reload merged config from disk; optionally update the stored runtime
-   * context. When `projectTrusted` is `false`, the project scope is withheld
-   * so an untrusted project's runtime config is not merged (#644).
+   * Reload merged config from disk, then bring the status bar in step with it.
+   *
+   * When `projectTrusted` is `false`, the project scope is withheld so an
+   * untrusted project's runtime config is not merged (#644).
+   *
+   * The status sync lives here rather than in `ConfigStore` because it is a UI
+   * side effect of the session, keyed on the session's context: the store
+   * loads and answers, and needs no ctx to do it (#933). Both drivers
+   * (`session_start` and every `before_agent_start`) call this one method, so
+   * the sync has a single home rather than one copy per handler.
    *
    * Fork (project-permission-profiles): an untrusted project's profiles
    * registry is never applied — the loader withholds the project cwd, so
@@ -238,7 +246,7 @@ export class PermissionSession implements ToolCallGateInputs {
     ctx: ExtensionContext | undefined,
     projectTrusted: boolean,
   ): void {
-    this.configStore.refresh(ctx, projectTrusted);
+    this.configStore.refresh(ctx?.cwd, projectTrusted);
     const warning =
       !projectTrusted && ctx?.cwd
         ? (() => {
@@ -251,6 +259,9 @@ export class PermissionSession implements ToolCallGateInputs {
       ctx?.ui.notify(warning, "warning");
     } else if (!warning) {
       this.lastProjectProfileWarning = null;
+    }
+    if (ctx?.hasUI) {
+      syncPermissionSystemStatus(ctx, this.configStore.current());
     }
   }
 

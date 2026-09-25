@@ -47,7 +47,7 @@ Full suite green (1704 tests); `check`, `lint`, and `fallow` clean; pre-completi
 - The integration test deliberately uses `echo start && npm install …` (no path-like tokens) so the bash path / external-directory gates produce nothing and the bash command-pattern gate is the sole blocker — isolating the behavior under test.
 - `collectTopLevelCommandTexts` descends only `program`/`list`/`pipeline`/`redirected_statement`; subshells and command substitution emit whole (the documented top-level scope).
 - The `?? checkPermission(whole)` fallback in `resolveBashCommandCheck` guarantees the empty-units case is never weaker than before.
-- AST shapes for redirection, `&` background, and bare subshell were verified with a throwaway parse script before writing assertions (e.g. `npm install > out.txt` \u2192 `["npm install"]`, redirect target dropped).
+- AST shapes for redirection, `&` background, and bare subshell were verified with a throwaway parse script before writing assertions (e.g. `npm install > out.txt` → `["npm install"]`, redirect target dropped).
 - No fallow suppression needed for the new exports — fallow treats the test files as consumers, so `resolveBashCommandCheck` and `topLevelCommands()` were clean once their tests existed.
 
 ### Diagnostic details

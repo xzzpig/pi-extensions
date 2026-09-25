@@ -7,8 +7,9 @@ import { parseUnresolvedAt, type TSNode } from "./parser";
  *
  * `command-effects.ts` owns the operator *table* — which spelling means read,
  * which means write — and this module owns reading a `file_redirect` node well
- * enough to consult it: finding the operator among the node's children, and
- * telling a destination that names a file from one that names a descriptor.
+ * enough to consult it: finding the operator among the node's children,
+ * telling a destination that names a file from one that names a descriptor,
+ * and naming which destination is the redirect's own target.
  *
  * The split exists because two callers need different answers from the same
  * read, and — importantly — they need them under different burdens of proof.
@@ -90,6 +91,34 @@ export function redirectMayWriteFile(redirect: TSNode): boolean {
     }
   }
   return false;
+}
+
+/**
+ * The child index of the node `redirect` reads or writes (its first named
+ * child after the operator), or `undefined` when it names none (`>&-`).
+ *
+ * The operator is the redirect's only unnamed child, and a source descriptor
+ * (`2` in `2>`) precedes it, so the first named child after it is the
+ * target without asking its type.
+ *
+ * Only the first: tree-sitter-bash 0.25.1 declares the destination
+ * `repeat1`, so the words after it in `grep pat 2>/dev/null f.txt` parse as
+ * further destinations, while bash passes them to the redirected command as
+ * arguments (#977). An index rather than a node, because a caller iterating
+ * the children compares positions rather than wrapper identity.
+ */
+export function redirectTargetIndex(redirect: TSNode): number | undefined {
+  let seenOperator = false;
+  for (let i = 0; i < redirect.childCount; i++) {
+    const child = redirect.child(i);
+    if (!child) continue;
+    if (!child.isNamed) {
+      seenOperator = true;
+      continue;
+    }
+    if (seenOperator) return i;
+  }
+  return undefined;
 }
 
 /**

@@ -1,16 +1,67 @@
 ---
 status: accepted
 date: 2026-07-24
-amended: 2026-09-15
+amended: 2026-09-24
 ---
 
 # 0009 — The bash path projection is a completeness contract, not a best-effort heuristic
 
 ## Status
 
-Accepted, as amended 2026-09-15.
+Accepted, as amended 2026-09-24.
 This decision states the contract the bash path projection upholds, and settles how a "the gate missed my path" report is triaged.
 It is the framing for [#645], which closes two gaps the contract names as in-scope; it composes with `docs/decisions/0003-git-bash-posix-path-semantics.md` (win32 token shapes) and `docs/decisions/0007-model-judge-authorizer-chain-adr.md` (the judge that absorbs false positives).
+
+### Amendment, 2026-09-24 — a redirect's target is projected by its role
+
+The guarantee list below named redirect targets, and the nonexistent-bare-write-target residual said they were "collected separately and unaffected".
+Collection was real; projection then dropped them.
+The collector tagged a target with the operator's proof but passed nothing else along, so the projection ran the shape classifiers and the existence probe on it as if its role were unknown, and a bare target that did not exist yet (`cat x > newfile`, the ordinary creating redirect) reached no surface ([#609]).
+
+A collected token now carries a role beside its effect.
+A redirect's own target carries the `redirect-destination` role when the operator proved an effect, the value is literal, and it is non-empty; the projection admits such a token without the shape gates or the probe and resolves it against the effective working directory like any other operand.
+The role decides candidacy and the effect still decides direction, so an input target (`< in.txt`) is admitted on the same terms and lands on the `_read` surface.
+
+Three boundaries keep the role from over-reaching:
+
+- **Only the first destination.**
+  `tree-sitter-bash` 0.25.1 parses the words after a redirect (`grep pat 2>/dev/null f.txt`) as further destinations, while bash passes them to the command; they keep their ordinary collection, and their attribution is [#977]'s.
+- **Only a literal value.**
+  A computed target (`> "$OUT"`, `> out-$(date).txt`) stays under the computed-paths residual below: projecting its spelling would name a file the shell never touches.
+- **Only a proven redirect.**
+  A redirect the parse could not resolve proves nothing ([#814]) and keeps the ordinary collection too.
+
+Like the 2026-09-02 amendment, this one **newly prompts**, and it shipped as a breaking change.
+Measured over 8753 distinct commands of a real review log, 90 `path` candidates and 97 external paths were gained, all literal creating-redirect targets, and none were lost; a config with no explicit `path` rule sees no new `path` prompt, because an unmatched promotion stays unrestricted.
+
+### Amendment, 2026-09-20 — an interpreter's inline script is a script, not an operand
+
+The bound this record draws around `PATTERN_FIRST_COMMANDS` (§ "Where the bound sits", below) forbade adding a **command** the table does not name, on the argument that an omission only ever over-surfaces: "an unlisted flag costs a prompt, never an operand."
+
+[#863] is the counter-evidence.
+`node -e "<script>"` hands the collector a program text in a flag's argument slot; with `node` absent from the table the generic walker emits that text as a token, and a script opening with a `//` comment passes `classifyTokenAsPathCandidate`'s leading-`/` branch.
+A third party filed the resulting `external_directory` ask as a bug: the "path" it names is the script itself.
+The cost of an omission is real, and it is paid by the user rather than by the table.
+The same token also reached the broader `path` surface, which the report did not notice and which carries most of the population — so this is not a `//`-shaped defect of the strict classifier, and a fix confined to it would have left `python3 -c "# c"` and `ruby -e '# x'` standing.
+
+So the bound gains a **fourth** in-scope edit: a command whose inline script the table can identify by *flag role*.
+This is narrower than the per-command option table rejected below, and it is narrow for a structural reason rather than a stipulated one.
+A matching tool's question is "which positional is the pattern", which needs per-tool argument semantics; an interpreter's is "which flag carries the program", which every interpreter answers the same way and which the existing `script` role already expresses.
+The rows therefore assert **zero** pattern positionals, so a script *file* stays an operand (`node build.js /tmp/x` projects both tokens) and the only thing a row can suppress is an argument a listed flag consumed.
+
+The 2026-08-29 rule governs every new row unchanged: a flag is listed as consuming only when it consumes on every supported platform **and in every command sharing the entry**, verified against each tool's parser.
+All but one row was verified by running the binary (node v26.9.0, bun 1.4.2, python3 3.14.7, perl 5.34.1, ruby 4.0.7, macOS, 2026-09-20).
+The exception is `python`, which does not exist on the authoring host; it shares `python3`'s object on the ground that every implementation the name reaches is a CPython-compatible front end where `-c` takes the following argument.
+`node` and `bun` assert identical spellings and get **separate** objects, because the rule is a shared parser and not a shared spelling.
+`ruby -E` is deliberately unlisted — on `ruby` it is `--encoding`, and listing it would eat `utf-8` and then read the script as the operand.
+
+Measured over 7937 distinct bash commands from a local review log: 205 accepted `path` candidates and 17 accepted `external_directory` candidates are removed, **0** are added, and no token naming a real file is lost.
+Three of the 205 are path-*shaped* — all `perl` substitution expressions whose `/` or `|` delimiters give them separators — and none names a file.
+Counted per command node, the interpreter population contributing a non-path-shaped `path` candidate falls from 219 to 18 and `external_directory` from 20 to 3; the remainder is the cluster residual below, plus script *files* handed a shell string as a genuine positional.
+
+What the change creates is one new residual, recorded below: the script text is now invisible to the path surfaces entirely, exactly as a `bash -c` payload is.
+Nothing the gates could act on is lost, because the token being dropped was the *whole program*, not a path inside it — `node -e 'require("/etc/passwd")'` yielded the single token `require("/etc/passwd")`, which was never an `external_directory` candidate and matched no `path` rule but the universal fallback.
+Whether an interpreter payload should instead *floor to `ask`* like a shell payload is [#886]'s question, not this one's.
 
 ### Amendment, 2026-09-15 — a region the parse could not resolve still owes its operands
 
@@ -96,14 +147,23 @@ A pattern-first command now runs that split from inside its own walker, where th
 #### Where the bound sits
 
 `PATTERN_FIRST_COMMANDS` may hold facts about **argument structure** — which positional is a pattern, and whether a flag takes a separate argument — for the commands and flags it already names.
-Three edits are in scope:
+Four edits are in scope:
 
 1. A further spelling of a listed flag (a long form, a glued form).
 2. A split, when one spelling has different arity across the implementations a name reaches.
 3. A role correction on an existing row.
+4. A command whose inline script the table can identify by **flag role**, asserting zero pattern positionals — an interpreter (2026-09-20 amendment, [#863]).
 
-Adding a **flag** the table does not name, or a **command** it does not name, is the per-command option table rejected below and needs its own decision.
-There is no pressure to: the direction-of-failure rule makes an omission over-surface, so an unlisted flag costs a prompt, never an operand.
+Adding a **flag** the table does not name, or a **command** whose *positional* semantics it would have to encode, is the per-command option table rejected below and needs its own decision.
+The original bound rested a second argument on top of that one, and the second argument does not hold: "the direction-of-failure rule makes an omission over-surface, so an unlisted flag costs a prompt, never an operand."
+An over-surface is cheap only to the projection.
+[#863] was filed as a bug by a third party for an ask naming a token that was a JavaScript program, so the cost is real and is paid by the user; edit 4 exists because of it.
+What survives of the original argument is its *direction*: an omission is still the recoverable failure, which is why a row declines a spelling it cannot verify rather than guessing.
+
+Edit 4 is bounded by the structure of the question, not by a stipulation.
+A matching tool needs per-tool positional semantics ("which argument is the pattern"); an interpreter needs none, because every one of them takes its program from a flag and its script *file* from an ordinary operand.
+That is why the interpreter rows set `patternPositionals: 0`: the only argument a row can suppress is one a listed flag consumed, so a mis-listed flag over-surfaces rather than eating an operand.
+Extending the table to a command whose positionals would have to be classified is still out of scope and still needs its own decision.
 
 The bound is not row count — [#823] left the table one row *smaller* than it found it (48 written entries to 47), because deduplicating the `grep`/`egrep`/`fgrep` and `awk`/`nawk` aliases returned more than the long forms consumed.
 It is that each row asserts an arity of a **real binary on a real host**, a different kind of fact from "`grep`'s first operand is a pattern" and the only kind this record has had trouble with.
@@ -163,8 +223,9 @@ A promoted token that matches no explicit rule is therefore unrestricted for fre
 A path reaches the `path` and `external_directory` surfaces when it appears as:
 
 - A **shape-classified token** — absolute (`/x`), home-relative (`~/x`), parent-traversal (`../x`), separator-bearing (`a/b`), a Windows drive-letter path (`C:/x`, `D:\x`), or — under the win32 flavor — a backslash-relative token (`dir\file`, [#520]).
-- A **redirect target** (`> out.txt`, `2>/tmp/log`).
+- A **redirect target** (`> out.txt`, `2>/tmp/log`, `< in.txt`): the redirect's first destination, by its role and whether or not the file exists yet, unless its value is computed (2026-09-24 amendment).
 - A **value embedded in a long option** (`--file=/tmp/patterns`), split at collection time and classified by the ordinary shape rules ([#645]).
+- A **recognized pattern-first flag's value, however it is spelled** — the separated (`grep -e /tmp/patterns`), glued (`grep -e/tmp/patterns`), `=`-embedded (`grep --regexp=/tmp/patterns`), and quoted-in-either-of-the-last-two (`grep --regexp='/tmp/patterns'`, `rg -g'!docs'`, `awk -F':' '/k/{print $2}'`) spellings are one argument to the tool, so each is consumed as the flag's value and never classified as a path ([#957]).
 - A **bare token naming an existing filesystem entry** — the existence probe ([#645]).
   Its canonical (symlink-resolved) form is what policy matches, so a symlink is gated by rules naming its target ([#493]).
 - A **statement's own operand** — a `for`/`select` word-list entry or a `case` subject ([#839]).
@@ -187,12 +248,21 @@ Opacity is handled separately and conservatively: a wrapper command that hides i
 These are **accepted residuals**, not open bugs:
 
 - **Nonexistent bare write targets** (`touch newfile`, `mv a newfile`) — the probe cannot see a file that does not exist yet.
-  Redirect targets, the common creation path, are collected separately and unaffected.
+  A redirect target is not part of this residual: it is guaranteed by its role above, including one the command creates.
+  A word the grammar places after a redirect's target (`cmd 2>/dev/null newfile`) is the command's operand and is covered here, not by the role ([#977]).
 - **Glued short-option values of a flag no table lists** (`tar -f/tmp/x`) — distinguishing a glued value from a cluster of boolean flags (`-rf`) requires per-command option knowledge.
   A pattern-first command's own listed flags are the bounded exception ([#823]): there the table already names the flag, so `grep -f/tmp/patterns` is read as getopt reads it.
-- **A pattern-first flag spelling the table does not name** — an unlisted argument-consuming flag (`rg --pre CMD`), a GNU long-option abbreviation (`grep --reg=x`), a cluster whose argument-taking short flag is not first (`grep -ie pattern`), and a quoted glued value (`rg -g'!docs'`), which parses as a `concatenation` rather than a `word` and so never reaches flag detection.
-  Each of these spends the pattern positional on the wrong token, which **over-surfaces** — the last operand still reaches the surfaces — so all four sit on the recoverable side of the layering principle below.
-  Widening flag detection to quoted tokens is deliberately declined: it would reclassify a quoted leading-`-` *pattern* as a flag and drop the operand instead, trading a recoverable failure for an unrecoverable one.
+- **A pattern-first flag spelling the table does not name** — an unlisted argument-consuming flag (`rg --pre CMD`), a GNU long-option abbreviation (`grep --reg=x`), a cluster whose argument-taking short flag is not first (`grep -ie pattern`, and for an interpreter `perl -pe 's|a|b|'`), and a token whose flag is quoted *whole* (`grep '-e' pattern f.txt`).
+  Each of these spends the pattern positional on the wrong token, or leaves a consumed value unclaimed, which **over-surfaces** — the last operand still reaches the surfaces — so all of them sit on the recoverable side of the layering principle below.
+  Widening flag detection to quoted tokens *wholesale* is deliberately declined: it would reclassify a quoted leading-`-` *pattern* as a flag and drop the operand instead, trading a recoverable failure for an unrecoverable one.
+  A **narrow** widening is adopted in place of it ([#957]): a recognized flag is read as a flag when its token is a `word` or a `concatenation` whose leading `-` is unquoted (the shape a quoted glued or `=`-embedded value has), while a token quoted whole stays on the positional branch.
+  The distinction is load-bearing rather than stylistic: admitting *every* `-`-leading token of any node type reads ADR's own `sd '-old' '-new' file.txt` example as `-o` then `-n`, spends no positional for the second, and drops `file.txt` (`["file.txt"]` under the adopted rule, `[]` under the wider one).
+  The interpreter cluster instance resolves the same way as `grep -ie`: the glued rule reads `text.slice(0, 2)`, so `perl -pe` is looked up as `-p`, and listing `-p` would consume the following word on the separated spelling too and drop a real operand.
+  Measured after the 2026-09-20 amendment, 9 of the corpus's 188 `perl` command nodes still surface their script this way.
+- **An interpreter's inline script, as a payload** — once a `script`-role flag swallows it the program text reaches neither path surface, so a path written *inside* the script is invisible to them (2026-09-20 amendment).
+  This is the same opacity a shell payload has, and nothing actionable is lost relative to the behavior it replaces: the token previously projected was the whole program, which was not an `external_directory` candidate and matched no `path` rule but the universal fallback.
+  The command **enumerator** is unaffected, so `bash:` rules still govern the invocation and a substitution inside the script still enumerates as its own unit and projects its own operands.
+  Whether the payload should additionally floor to `ask`, as `bash -c` does, is deferred to [#886].
 - **An optional-argument flag's separated spelling.**
   BSD `sed -i bak` accepts a separate non-empty suffix that the `suffix` role declines, so the suffix spends the pattern positional and the script over-surfaces as a candidate.
   The file operand survives, so this one sits on the recoverable side.
@@ -292,6 +362,12 @@ Cost is ~0.04 ms p95 per command, ~19% of the already-paid tree-sitter parse.
   Measured over 4057 deduplicated real bash commands, closing it changes the external set for **1** (a true positive, gaining a token) and the rule-candidate set for **3**, with **0** tokens lost anywhere — two of the three recover operands and the third correctly stops emitting `rg --glob` filter values as paths.
   The GNU-only spellings are absent from that corpus (macOS traffic), so `sed -i 's/…/'` and `--in-place=` are covered by hand-written cases instead, as is the computed-pattern spelling — closing it changes **no** projection over the same 4057 commands.
   Two of the residuals above were found by the pre-completion review and by re-deriving its own finding, not by the corpus: a measurement over real traffic prices a change, and does not enumerate a mechanism's inputs.
+- [#957] is the fifth report triaged this way, and it landed **inside**: the value of a pattern-first flag was consumed for the unquoted spellings and handed back as a token for the quoted ones — [#694]'s shape once more, this time across a value's quoting rather than a flag's synonyms.
+  Measured over 4045 deduplicated commands from one operator's review log, closing it removes a token from **14** commands and adds none anywhere: every removed token is an inline `awk` program (`/api_key:|_key:/{print $2}`, `{printf "%.0f\n", $3}`) that a leading regex delimiter had spelled like an absolute path, and none of the four spelled `/…` names an existing file.
+  That is the visible harm the residual's "over-surfaces, so it is recoverable" argument under-prices: the over-surfaced token reached the `external_directory` gate as a false-positive ask for a file the command never opened, which is how a third party reported the family in [#863].
+  Only a token whose leading `-` is unquoted is admitted; the wholly quoted spelling (`grep '-e' pattern f.txt`) stays on the recoverable side, so the change costs no operand anywhere in the corpus or in the hand-written cases.
+  The rule also reads a recognized flag whose quote opens inside its name (`grep -'e' pattern`, `grep --reg'exp=x'`) as that flag, which the measurement above predates.
+  In a second operator's review log (25850 distinct lines of bash commands) that spelling appears only in this change's own test probes, so the measurement stands for it.
 - The [#509] promotion thread is deleted: `PathRuleTokenMatcher`, `PermissionManager.getPromotablePathTokenMatcher`, and the five-layer parameter thread from manager to resolver.
   The classifier is once again pure and policy-free.
 - `PathNormalizer` gains `entryExists`, keeping the filesystem edge in the same object that owns canonicalization; the classifiers stay pure shape functions.
@@ -320,3 +396,9 @@ Cost is ~0.04 ms p95 per command, ~19% of the already-paid tree-sitter parse.
 [#822]: https://github.com/gotgenes/pi-packages/issues/822
 [#875]: https://github.com/gotgenes/pi-packages/issues/875
 [#823]: https://github.com/gotgenes/pi-packages/issues/823
+[#863]: https://github.com/gotgenes/pi-packages/issues/863
+[#886]: https://github.com/gotgenes/pi-packages/issues/886
+[#957]: https://github.com/gotgenes/pi-packages/issues/957
+[#609]: https://github.com/gotgenes/pi-packages/issues/609
+[#814]: https://github.com/gotgenes/pi-packages/issues/814
+[#977]: https://github.com/gotgenes/pi-packages/issues/977

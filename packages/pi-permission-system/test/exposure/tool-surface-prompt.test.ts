@@ -21,6 +21,7 @@ function inputs(overrides: Partial<ToolSurfaceInputs> = {}): ToolSurfaceInputs {
     allowedTools: ["read"],
     toolSnippets: SNIPPETS,
     guidelinesByTool: new Map(),
+    promptGuidelines: [],
     piAuthoredPreamble: true,
     ...overrides,
   };
@@ -86,6 +87,82 @@ function piAuthoredPrompt(): string {
   ].join("\n");
 }
 
+/**
+ * A prompt shaped the way pi 0.86+ `buildSystemPrompt` writes one: an
+ * untagged preamble, then tagged sections joined by a blank line, the cwd last.
+ *
+ * Hand-built from the 0.87.1 dist (`buildSystemPromptSections` and
+ * `getSystemMessageText`), because the SDK this package pins predates the
+ * shape. Pi writes `<tools>`, `<rules>`, and `<docs>` only when it wrote the
+ * preamble itself.
+ */
+function piAuthoredSectionPrompt(
+  projectInstructions: readonly string[] = ["Project instructions."],
+): string {
+  return [
+    "You are an expert coding assistant operating inside pi, a coding agent harness.",
+    "",
+    "<tools>",
+    "- read: Read file contents",
+    "- bash: Execute bash commands (ls, grep, find, etc.)",
+    "",
+    "In addition to the tools above, you may have access to other custom tools depending on the project.",
+    "</tools>",
+    "",
+    "<rules>",
+    "- Use bash for file operations like ls, rg, find",
+    "- Be concise in your responses",
+    "- Show file paths clearly when working with files",
+    "</rules>",
+    "",
+    "<docs>",
+    "Pi documentation (read only when the user asks about pi itself):",
+    "- Main documentation: /pi/README.md",
+    "</docs>",
+    "",
+    "<addendum>",
+    "Operator addendum.",
+    "</addendum>",
+    "",
+    ...projectContextSection(projectInstructions),
+    "",
+    "<cwd>",
+    "/repo",
+    "</cwd>",
+  ].join("\n");
+}
+
+/**
+ * The same shape under `customPrompt` (a subagent child's, or a user's
+ * SYSTEM.md): Pi writes no tool surface, only the layers after the preamble.
+ */
+function customAuthoredSectionPrompt(
+  projectInstructions: readonly string[] = ["Project instructions."],
+): string {
+  return [
+    "You are a child agent.",
+    "",
+    ...projectContextSection(projectInstructions),
+    "",
+    "<cwd>",
+    "/repo",
+    "</cwd>",
+  ].join("\n");
+}
+
+/** Pi 0.86+'s `<project_context>` section around one AGENTS.md. */
+function projectContextSection(instructions: readonly string[]): string[] {
+  return [
+    "<project_context>",
+    "Project-specific instructions and guidelines:",
+    "",
+    '<project_instructions path="/repo/AGENTS.md">',
+    ...instructions,
+    "</project_instructions>",
+    "</project_context>",
+  ];
+}
+
 describe("renderToolSurface", () => {
   describe("removing what Pi wrote", () => {
     it("drops the tool list, the filler sentence, and the guidelines", () => {
@@ -136,9 +213,10 @@ describe("renderToolSurface", () => {
     });
 
     it("removes a section-header-shaped line in project context when Pi wrote the preamble", () => {
-      // Pi's own sections come first in a prompt it wrote, so this heading is
-      // only reachable when Pi wrote none - which cannot happen in its default
-      // branch. Documents the behavior of the Pi-authored path.
+      // Through Pi 0.85 its own sections come first in a prompt it wrote, so
+      // this heading is only reachable when Pi wrote none, which its default
+      // branch never does. Documents the header layout's Pi-authored path; a
+      // section-shaped prompt never searches its head for plain headers.
       const prompt = [
         "You are an assistant.",
         "",
@@ -606,6 +684,333 @@ describe("renderToolSurface", () => {
       );
 
       expect(fromNarrowed).toBe(fromFull);
+    });
+  });
+
+  describe("a section-shaped prompt", () => {
+    describe("the extension tail", () => {
+      it("keeps a project's own Guidelines section when Pi wrote the preamble", () => {
+        const instructions = [
+          "Guidelines:",
+          "- user rule one",
+          "- user rule two",
+          "",
+          "More user prose.",
+        ];
+
+        const result = renderToolSurface(
+          piAuthoredSectionPrompt(instructions),
+          inputs(),
+        );
+
+        expect(result).toContain(
+          projectContextSection(instructions).join("\n"),
+        );
+      });
+
+      it("replaces the block it appended to a custom preamble rather than adding a second", () => {
+        const once = renderToolSurface(
+          customAuthoredSectionPrompt(),
+          inputs({ piAuthoredPreamble: false }),
+        );
+        const twice = renderToolSurface(
+          once,
+          inputs({ piAuthoredPreamble: false }),
+        );
+
+        expect(twice).toBe(once);
+      });
+
+      it("anchors on Pi's cwd section, not a footer-shaped line quoted above it", () => {
+        const instructions = [
+          "Guidelines:",
+          "- user rule one",
+          "",
+          "Current working directory: /elsewhere",
+        ];
+
+        const result = renderToolSurface(
+          piAuthoredSectionPrompt(instructions),
+          inputs(),
+        );
+
+        expect(result).toContain(
+          projectContextSection(instructions).join("\n"),
+        );
+      });
+
+      it("anchors on Pi's footer, not a cwd section quoted above it", () => {
+        const prompt = piAuthoredPrompt().replace(
+          "Project instructions.",
+          ["<cwd>", "/elsewhere", "</cwd>"].join("\n"),
+        );
+
+        const result = renderToolSurface(prompt, inputs());
+        const identity = result.slice(
+          0,
+          result.indexOf("Current working directory: /repo"),
+        );
+
+        expect(identity).toContain("<cwd>\n/elsewhere\n</cwd>");
+        expect(identity).not.toContain("Available tools:");
+        expect(identity).not.toContain("- bash: Execute bash commands");
+      });
+    });
+
+    describe("Pi's own sections", () => {
+      it("drops Pi's tool list and rules from the identity", () => {
+        const result = renderToolSurface(piAuthoredSectionPrompt(), inputs());
+        const identity = result.slice(0, result.indexOf("</cwd>"));
+
+        expect(identity).not.toContain("<tools>");
+        expect(identity).not.toContain("<rules>");
+        expect(identity).not.toContain("- bash: Execute bash commands");
+        expect(identity).not.toContain("Use bash for file operations");
+      });
+
+      it("leaves every other section byte for byte, joined as Pi joined them", () => {
+        const result = renderToolSurface(piAuthoredSectionPrompt(), inputs());
+
+        expect(result).toBe(
+          [
+            "You are an expert coding assistant operating inside pi, a coding agent harness.",
+            "",
+            "<docs>",
+            "Pi documentation (read only when the user asks about pi itself):",
+            "- Main documentation: /pi/README.md",
+            "</docs>",
+            "",
+            "<addendum>",
+            "Operator addendum.",
+            "</addendum>",
+            "",
+            ...projectContextSection(["Project instructions."]),
+            "",
+            "<cwd>",
+            "/repo",
+            "</cwd>",
+            "",
+            "<tools>",
+            "- read: Read file contents",
+            "</tools>",
+            "",
+            "<rules>",
+            "- Be concise in your responses",
+            "- Show file paths clearly when working with files",
+            "</rules>",
+          ].join("\n"),
+        );
+      });
+
+      it("keeps tool and rules sections quoted in the addendum or project context", () => {
+        // Pi's own two sections are already gone, as a peer writer earlier in
+        // the chain leaves them, so the only matches are the quoted ones.
+        const quotedTools = ["<tools>", "- quoted: a tool", "</tools>"];
+        const quotedRules = ["<rules>", "- a quoted rule", "</rules>"];
+        const prompt = piAuthoredSectionPrompt(quotedRules)
+          .replace("Operator addendum.", quotedTools.join("\n"))
+          .replace(/<tools>\n- read[\s\S]*?<\/rules>\n\n/, "");
+
+        const result = renderToolSurface(prompt, inputs());
+
+        expect(result).toContain(
+          ["<addendum>", ...quotedTools, "</addendum>"].join("\n"),
+        );
+        expect(result).toContain(projectContextSection(quotedRules).join("\n"));
+      });
+
+      it("keeps a tool section a custom preamble carries", () => {
+        const inherited = [
+          "<tools>",
+          "- bash: inherited from the parent",
+          "</tools>",
+        ];
+        const prompt = [
+          "You are a child agent.",
+          "",
+          ...inherited,
+          "",
+          "<cwd>",
+          "/repo",
+          "</cwd>",
+        ].join("\n");
+
+        const result = renderToolSurface(
+          prompt,
+          inputs({ piAuthoredPreamble: false }),
+        );
+
+        expect(
+          result.startsWith(
+            ["You are a child agent.", "", ...inherited].join("\n"),
+          ),
+        ).toBe(true);
+      });
+
+      it("leaves the identity a child shares with its parent byte-identical", () => {
+        const parent = renderToolSurface(
+          piAuthoredSectionPrompt(),
+          inputs({ allowedTools: ["read", "bash"] }),
+        );
+        const child = renderToolSurface(
+          piAuthoredSectionPrompt(),
+          inputs({ allowedTools: ["read"] }),
+        );
+
+        const identity = parent.slice(0, parent.indexOf("</cwd>"));
+
+        expect(identity).not.toContain("- bash:");
+        expect(child.startsWith(identity)).toBe(true);
+        expect(child).not.toBe(parent);
+      });
+    });
+
+    describe("this session's block", () => {
+      it("ends the prompt as Pi's own tools and rules sections", () => {
+        const result = renderToolSurface(
+          customAuthoredSectionPrompt(),
+          inputs({ piAuthoredPreamble: false }),
+        );
+
+        expect(result).toBe(
+          [
+            customAuthoredSectionPrompt(),
+            "",
+            "<tools>",
+            "- read: Read file contents",
+            "</tools>",
+            "",
+            "<rules>",
+            "- Be concise in your responses",
+            "- Show file paths clearly when working with files",
+            "</rules>",
+          ].join("\n"),
+        );
+      });
+
+      it("writes no tools section when no allowed tool has a snippet", () => {
+        const result = renderToolSurface(
+          customAuthoredSectionPrompt(),
+          inputs({ allowedTools: ["undescribed"], piAuthoredPreamble: false }),
+        );
+
+        expect(result).toBe(
+          [
+            customAuthoredSectionPrompt(),
+            "",
+            "<rules>",
+            "- Be concise in your responses",
+            "- Show file paths clearly when working with files",
+            "</rules>",
+          ].join("\n"),
+        );
+      });
+
+      it("is unchanged by a second pass over its own output", () => {
+        const once = renderToolSurface(piAuthoredSectionPrompt(), inputs());
+        const twice = renderToolSurface(once, inputs());
+
+        expect(twice).toBe(once);
+      });
+
+      it("is unchanged by a second pass over a custom preamble's output", () => {
+        const custom = inputs({ piAuthoredPreamble: false });
+        const once = renderToolSurface(customAuthoredSectionPrompt(), custom);
+        const twice = renderToolSurface(once, custom);
+
+        expect(twice).toBe(once);
+      });
+
+      it("replaces a peer's header-shaped block in the tail", () => {
+        const prompt = [
+          customAuthoredSectionPrompt(),
+          "",
+          "Available tools:",
+          "- peer: a tool a peer listed",
+          "",
+          "Guidelines:",
+          "- a rule a peer listed",
+        ].join("\n");
+
+        const result = renderToolSurface(
+          prompt,
+          inputs({ piAuthoredPreamble: false }),
+        );
+
+        expect(result).toBe(
+          renderToolSurface(
+            customAuthoredSectionPrompt(),
+            inputs({ piAuthoredPreamble: false }),
+          ),
+        );
+      });
+
+      it("renders the same prompt whether Pi's listing is full or already narrowed", () => {
+        const narrowed = piAuthoredSectionPrompt().replace(
+          "- bash: Execute bash commands (ls, grep, find, etc.)\n",
+          "",
+        );
+
+        expect(renderToolSurface(narrowed, inputs())).toBe(
+          renderToolSurface(piAuthoredSectionPrompt(), inputs()),
+        );
+      });
+    });
+  });
+
+  describe("extension-contributed rules", () => {
+    it("carries a rule no tool contributes, after the tools' own and before Pi's two", () => {
+      const result = renderToolSurface(
+        customAuthoredSectionPrompt(),
+        inputs({
+          piAuthoredPreamble: false,
+          guidelinesByTool: new Map([["read", ["Read before editing"]]]),
+          promptGuidelines: ["An extension's rule"],
+        }),
+      );
+
+      expect(result).toContain(
+        [
+          "<rules>",
+          "- Read before editing",
+          "- An extension's rule",
+          "- Be concise in your responses",
+          "- Show file paths clearly when working with files",
+          "</rules>",
+        ].join("\n"),
+      );
+    });
+
+    it("does not carry a denied tool's rule back in by that route", () => {
+      const result = renderToolSurface(
+        customAuthoredSectionPrompt(),
+        inputs({
+          piAuthoredPreamble: false,
+          guidelinesByTool: new Map([["bash", ["  Use bash carefully"]]]),
+          promptGuidelines: ["Use bash carefully "],
+        }),
+      );
+
+      expect(result).not.toContain("Use bash carefully");
+    });
+
+    it("adds nothing when the field is Pi 0.85's flattened tool guidelines", () => {
+      const guidelinesByTool = new Map([
+        ["read", ["Read before editing"]],
+        ["bash", ["Use bash carefully"]],
+      ]);
+
+      const flattened = renderToolSurface(
+        piAuthoredPrompt(),
+        inputs({
+          guidelinesByTool,
+          promptGuidelines: ["Read before editing", "Use bash carefully"],
+        }),
+      );
+
+      expect(flattened).toBe(
+        renderToolSurface(piAuthoredPrompt(), inputs({ guidelinesByTool })),
+      );
     });
   });
 });

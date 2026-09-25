@@ -20,6 +20,7 @@ import {
   collectRedirectTokens,
   extractCommandName,
   type PathToken,
+  type TokenRole,
 } from "./token-collection";
 
 // ── Internal types ───────────────────────────────────────────────────────────
@@ -40,13 +41,14 @@ type EffectiveBase =
 
 /**
  * A path-candidate token paired with the effective working directory projected
- * onto the point in the command stream where it appears, and the effect its
- * position proved.
+ * onto the point in the command stream where it appears, the effect its
+ * position proved, and the role its collector gave it.
  */
 interface PathCandidate {
   readonly token: string;
   readonly base: EffectiveBase;
   readonly effect: TokenEffect;
+  readonly role: TokenRole;
 }
 
 /** A promoted bare token and its resolved path, before an effect is attached. */
@@ -101,9 +103,12 @@ const UNKNOWN_BASE: EffectiveBase = { kind: "unknown" };
  * decision — so no walk step re-reads the platform or threads the cwd.
  *
  * A bare token that fails both shape gates is admitted when the normalizer's
- * existence probe says it names a real filesystem entry (ADR 0009, #645). The
- * resolver consults no ruleset: candidacy is a filesystem question, and the
- * policy decision belongs to the gates downstream.
+ * existence probe says it names a real filesystem entry (ADR 0009, #645). A
+ * redirect's own target needs neither: its collector proved it names a file,
+ * so its `redirect-destination` role admits it whether or not the file exists
+ * yet (#609). The resolver consults no ruleset: candidacy is a syntax and
+ * filesystem question, and the policy decision belongs to the gates
+ * downstream.
  *
  * Tell-don't-ask: callers hand it a parsed tree and receive the resolved
  * {@link ResolvedBashPaths} slices in one {@link resolve} call; the AST walk,
@@ -448,7 +453,8 @@ export class BashPathResolver {
    * Project the collected candidates into deduplicated external paths.
    *
    * Filters candidates through the strict path classifier
-   * (`classifyTokenAsPathCandidate`), resolves each against its effective working
+   * (`classifyTokenAsPathCandidate`) unless their role already admits them,
+   * resolves each against its effective working
    * directory base, and returns only paths that resolve outside the baked cwd in
    * their lexical (as-typed, normalized but not symlink-resolved) form.
    *
@@ -462,8 +468,10 @@ export class BashPathResolver {
     const seen = new Map<string, number>();
     const externalPaths: BashExternalPath[] = [];
 
-    for (const { token, base, effect } of candidates) {
-      const candidate = classifyTokenAsPathCandidate(token);
+    for (const { token, base, effect, role } of candidates) {
+      const candidate = admittedByRole(role)
+        ? token
+        : classifyTokenAsPathCandidate(token);
       if (!candidate) {
         // A bare token the strict shape gate rejects can still escape the tree
         // through a symlink, so probe it and apply the ordinary boundary
@@ -542,7 +550,8 @@ export class BashPathResolver {
    * Filters candidates through the broad path classifier
    * (`classifyTokenAsRuleCandidate`), falling back to {@link probeBareToken}
    * for a bare token the broad classifier rejects for shape — admitted only
-   * when it names an existing filesystem entry (#645).
+   * when it names an existing filesystem entry (#645). A token its role
+   * admits skips both (#609).
    * On win32 the broad classifier is told to treat a backslash as a path
    * separator, so a backslash-relative token (`dir\file`) is recognized as a
    * rule candidate the same as its forward-slash equivalent (#520); on POSIX
@@ -558,11 +567,10 @@ export class BashPathResolver {
     const seen = new Map<string, number>();
     const result: BashPathRuleCandidate[] = [];
 
-    for (const { token, base, effect } of candidates) {
-      const shaped = classifyTokenAsRuleCandidate(
-        token,
-        this.normalizer.flavor,
-      );
+    for (const { token, base, effect, role } of candidates) {
+      const shaped = admittedByRole(role)
+        ? token
+        : classifyTokenAsRuleCandidate(token, this.normalizer.flavor);
       const probed =
         shaped === null
           ? this.probeBareToken(token, base)
@@ -677,7 +685,18 @@ function tagTokens(
   base: EffectiveBase,
   out: PathCandidate[],
 ): void {
-  for (const { token, effect } of tokens) out.push({ token, base, effect });
+  for (const { token, effect, role } of tokens) {
+    out.push({ token, base, effect, role });
+  }
+}
+
+/**
+ * Whether a candidate's role settles its candidacy, so neither shape gate nor
+ * the existence probe is consulted: a redirect's own target is proven by
+ * syntax to name a file, including one the command is about to create.
+ */
+function admittedByRole(role: TokenRole): boolean {
+  return role === "redirect-destination";
 }
 
 /**

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { AskDialogQueue } from "#src/authority/ask-dialog-queue";
 import { LocalUserAuthorizer } from "#src/authority/local-user-authorizer";
 import type { PermissionPromptDecision } from "#src/authority/permission-dialog";
 import type { requestPermissionDecision } from "#src/authority/permission-prompt-component";
@@ -38,15 +39,42 @@ function makePromptUi() {
   };
 }
 
+/**
+ * A `PermissionEventBus` double. `onEmit` observes the emission without
+ * replacing it, so a test that cares about emit-versus-present ordering can
+ * still build its deps through {@link makeDeps}.
+ */
+function makeEvents(onEmit?: () => void) {
+  return {
+    emit: vi.fn(() => {
+      onEmit?.();
+    }),
+    on: vi.fn().mockReturnValue(() => undefined),
+  };
+}
+
+/** Drain every pending microtask, so a queued presentation has had its turn. */
+function settleMicrotasks(): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
+const APPROVED: PermissionPromptDecision = {
+  approved: true,
+  state: "approved",
+  decidedBy: DECIDED_BY_HUMAN,
+};
+
 function makeDeps(
   overrides: {
+    events?: ReturnType<typeof makeEvents>;
+    dialogs?: AskDialogQueue;
     requestPermissionDecision?: typeof requestPermissionDecision;
   } = {},
 ) {
-  const events = {
-    emit: vi.fn(),
-    on: vi.fn().mockReturnValue(() => undefined),
-  };
+  const events = overrides.events ?? makeEvents();
+  const dialogs = overrides.dialogs ?? new AskDialogQueue();
   const ui = makePromptUi();
   const decisionFn =
     overrides.requestPermissionDecision ??
@@ -60,10 +88,12 @@ function makeDeps(
       ui,
       mode: "tui" as const,
       events,
+      dialogs,
       getPromptPreferences: () => makePromptPreferences(),
       requestPermissionDecision: decisionFn,
     },
     events,
+    dialogs,
     ui,
     decisionFn,
   };
@@ -151,13 +181,6 @@ describe("LocalUserAuthorizer", () => {
 
   it("emits the UI event before calling requestPermissionDecision", async () => {
     const calls: string[] = [];
-    const events = {
-      emit: vi.fn(() => {
-        calls.push("emit");
-      }),
-      on: vi.fn().mockReturnValue(() => undefined),
-    };
-    const ui = makePromptUi();
     const decisionFn = vi.fn<typeof requestPermissionDecision>(() => {
       calls.push("dialog");
       return Promise.resolve({
@@ -166,13 +189,13 @@ describe("LocalUserAuthorizer", () => {
         decidedBy: DECIDED_BY_HUMAN,
       });
     });
-    const authorizer = new LocalUserAuthorizer({
-      ui,
-      mode: "tui",
-      events,
-      getPromptPreferences: () => makePromptPreferences(),
+    const { deps } = makeDeps({
+      events: makeEvents(() => {
+        calls.push("emit");
+      }),
       requestPermissionDecision: decisionFn,
     });
+    const authorizer = new LocalUserAuthorizer(deps);
 
     await authorizer.authorize(makeDetails());
 
@@ -407,5 +430,81 @@ describe("LocalUserAuthorizer", () => {
     const result = await authorizer.authorize(makeDetails());
 
     expect(result).toEqual(decision);
+  });
+
+  describe("one dialog at a time", () => {
+    /**
+     * A pair of asks whose first dialog stays open until the test answers it,
+     * so "the second one has not been shown yet" is observable.
+     */
+    function makeOverlappingAsks() {
+      const open = Promise.withResolvers<PermissionPromptDecision>();
+      const decisionFn = vi
+        .fn<typeof requestPermissionDecision>()
+        .mockReturnValueOnce(open.promise)
+        .mockResolvedValue(APPROVED);
+      const { deps, events, dialogs } = makeDeps({
+        requestPermissionDecision: decisionFn,
+      });
+      const authorizer = new LocalUserAuthorizer(deps);
+      return {
+        decisionFn,
+        events,
+        dialogs,
+        answerFirst: () => {
+          open.resolve(APPROVED);
+        },
+        first: authorizer.authorize(makeDetails()),
+        second: authorizer.authorize(makeDetails()),
+      };
+    }
+
+    it("does not present a second ask while the first dialog is open", async () => {
+      const asks = makeOverlappingAsks();
+      await settleMicrotasks();
+
+      expect(asks.decisionFn).toHaveBeenCalledTimes(1);
+
+      asks.answerFirst();
+      await expect(asks.first).resolves.toEqual(APPROVED);
+      await expect(asks.second).resolves.toEqual(APPROVED);
+      expect(asks.decisionFn).toHaveBeenCalledTimes(2);
+    });
+
+    it("announces the second ask only when its dialog is presented", async () => {
+      const asks = makeOverlappingAsks();
+      await settleMicrotasks();
+
+      expect(asks.events.emit).toHaveBeenCalledTimes(1);
+
+      asks.answerFirst();
+      await asks.first;
+      await settleMicrotasks();
+
+      expect(asks.events.emit).toHaveBeenCalledTimes(2);
+      await asks.second;
+    });
+
+    it("answers a released ask as an unanswered denial", async () => {
+      const asks = makeOverlappingAsks();
+      await settleMicrotasks();
+
+      asks.dialogs.releaseAll("the session ended");
+
+      await expect(asks.first).resolves.toEqual({
+        approved: false,
+        state: "denied",
+        confirmationUnavailable: true,
+        denialReason: "the session ended",
+        decidedBy: { kind: "unavailable", reason: "the session ended" },
+      });
+      await expect(asks.second).resolves.toEqual({
+        approved: false,
+        state: "denied",
+        confirmationUnavailable: true,
+        denialReason: "the session ended",
+        decidedBy: { kind: "unavailable", reason: "the session ended" },
+      });
+    });
   });
 });

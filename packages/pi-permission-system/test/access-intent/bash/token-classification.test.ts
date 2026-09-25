@@ -95,12 +95,25 @@ describe("classifyTokenAsPathCandidate", () => {
       );
     });
 
-    test("parent-traversal (contains ..) → returned as-is", () => {
+    test("parent-traversal (a whole .. segment) → returned as-is", () => {
       expect(classifyTokenAsPathCandidate("../../etc/passwd")).toBe(
         "../../etc/passwd",
       );
       expect(classifyTokenAsPathCandidate("../foo")).toBe("../foo");
       expect(classifyTokenAsPathCandidate("..")).toBe("..");
+      expect(classifyTokenAsPathCandidate("foo/..")).toBe("foo/..");
+      expect(classifyTokenAsPathCandidate("a/../b")).toBe("a/../b");
+      expect(classifyTokenAsPathCandidate("..\\foo")).toBe("..\\foo");
+      expect(classifyTokenAsPathCandidate("foo\\..")).toBe("foo\\..");
+    });
+
+    test(".. inside a segment (git revision ranges) → null", () => {
+      expect(classifyTokenAsPathCandidate("HEAD..origin/master")).toBeNull();
+      expect(
+        classifyTokenAsPathCandidate("cc83d7b48..origin/master"),
+      ).toBeNull();
+      expect(classifyTokenAsPathCandidate("v1..v2")).toBeNull();
+      expect(classifyTokenAsPathCandidate("main...feature")).toBeNull();
     });
 
     test("plain word with no path shape → null", () => {
@@ -278,11 +291,28 @@ describe("classifyTokenAsRuleCandidate", () => {
       );
     });
 
-    test("parent-traversal (contains ..) → returned as-is", () => {
+    test("parent-traversal (a whole .. segment) → returned as-is", () => {
       expect(classifyTokenAsRuleCandidate("../foo", posixPathFlavor)).toBe(
         "../foo",
       );
       expect(classifyTokenAsRuleCandidate("..", posixPathFlavor)).toBe("..");
+      // On POSIX `\` is not a separator, so only the `..` rule admits this.
+      expect(classifyTokenAsRuleCandidate("foo\\..", posixPathFlavor)).toBe(
+        "foo\\..",
+      );
+    });
+
+    test(".. inside a segment (git revision ranges) → not by the .. rule", () => {
+      expect(
+        classifyTokenAsRuleCandidate("v1..v2", posixPathFlavor),
+      ).toBeNull();
+      expect(
+        classifyTokenAsRuleCandidate("main...feature", posixPathFlavor),
+      ).toBeNull();
+      // A range carrying a separator stays a rule candidate by its separator.
+      expect(
+        classifyTokenAsRuleCandidate("HEAD..origin/master", posixPathFlavor),
+      ).toBe("HEAD..origin/master");
     });
 
     test("dot-file (starts with .) → returned as-is", () => {
