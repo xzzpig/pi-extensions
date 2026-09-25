@@ -52,7 +52,7 @@
     "@xzzpig/sandbox-runtime"
   ],
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.80.0",
+    "@earendil-works/pi-coding-agent": ">=0.80.0 <0.88",
     "@earendil-works/pi-tui": "*",
     "@xzzpig/pi-tool-display": ">=0.1.1"
   },
@@ -65,8 +65,8 @@
     }
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.80.0",
-    "@earendil-works/pi-tui": "^0.80.0",
+    "@earendil-works/pi-coding-agent": "catalog:",
+    "@earendil-works/pi-tui": "catalog:",
     "@types/node": "^24",
     "oxfmt": "^0.47.0",
     "oxlint": "^1.62.0",
