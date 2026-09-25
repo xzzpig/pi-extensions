@@ -1,6 +1,6 @@
 # E2E evidence — Escape belongs to the open dialog (pi-goal-x)
 
-Skill: `.pi/skills/pi-plugin-e2e-test`. Date: 2026-09-12. pi: 0.85.1.
+Skill: `.agents/skills/pi-plugin-e2e-test`. Date: 2026-09-12. pi: 0.85.1.
 
 ## What was validated
 

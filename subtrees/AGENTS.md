@@ -32,7 +32,7 @@ non-changes (accepted debt). Keep it current on **every** fork change — not
 only on syncs — so the next synchronization (or agent) can distinguish a
 necessary adaptation from a droppable difference without archaeology. The
 conflict-minimization rules the notes should reflect are defined in the
-[Pi Upstream Subtree skill](../.pi/skills/pi-upstream-subtree/SKILL.md)
+[Pi Upstream Subtree skill](../.agents/skills/pi-upstream-subtree/SKILL.md)
 ("Fork divergence discipline").
 
 The metadata's `upstreamCommit` always identifies a commit in `source`. When
@@ -66,5 +66,5 @@ Use the explicit ref override in the upstream skill to review and accept a ref
 change. The helper exports metadata-derived `PI_UPSTREAM_*` variables and does
 not fetch, merge, commit, or push.
 
-Use the [Pi Upstream Subtree skill](../.pi/skills/pi-upstream-subtree/SKILL.md) for
+Use the [Pi Upstream Subtree skill](../.agents/skills/pi-upstream-subtree/SKILL.md) for
 all add, pull, record, split, push, and conflict-resolution workflows.

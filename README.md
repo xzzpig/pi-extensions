@@ -65,4 +65,4 @@ install options.
 
 [`AGENTS.md`](AGENTS.md) is the orientation for developers and AI agents
 working on this repository; the project skills in
-[`.pi/skills/`](./.pi/skills) are the normative workflow documentation.
+[`.agents/skills/`](./.agents/skills) are the normative workflow documentation.

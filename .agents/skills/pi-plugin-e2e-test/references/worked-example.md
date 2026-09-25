@@ -8,7 +8,7 @@ completion auditor needs).
 ## Setup
 
 ```bash
-S=/home/xzzpig/workspaces/nodejs/pi-extensions/.pi/skills/pi-plugin-e2e-test/scripts/pi-e2e-env.sh
+S=/home/xzzpig/workspaces/nodejs/pi-extensions/.agents/skills/pi-plugin-e2e-test/scripts/pi-e2e-env.sh
 $S start goalx \
   packages/pi-goal-x/extensions/goal.ts \
   ~/.pi/agent/npm/node_modules/@xzzpig/pi-subagents/index.ts

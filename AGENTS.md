@@ -7,12 +7,12 @@ detail lives in the sources of truth below.
 
 ## Sources of truth
 
-| Document                                                                                 | Covers                                                             |
-| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| [`README.md`](./README.md)                                                               | User-facing project overview, package list, install instructions   |
-| [`.pi/skills/pi-plugin-maintainer/SKILL.md`](./.pi/skills/pi-plugin-maintainer/SKILL.md) | Creating, validating, naming, and packaging a `pi-*` plugin        |
-| [`.pi/skills/pi-upstream-subtree/SKILL.md`](./.pi/skills/pi-upstream-subtree/SKILL.md)   | Importing and updating upstream-derived plugins, conflict handling |
-| [`subtrees/AGENTS.md`](./subtrees/AGENTS.md)                                             | The upstream metadata contract and the direnv runtime helper       |
+| Document                                                                                         | Covers                                                             |
+| ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| [`README.md`](./README.md)                                                                       | User-facing project overview, package list, install instructions   |
+| [`.agents/skills/pi-plugin-maintainer/SKILL.md`](./.agents/skills/pi-plugin-maintainer/SKILL.md) | Creating, validating, naming, and packaging a `pi-*` plugin        |
+| [`.agents/skills/pi-upstream-subtree/SKILL.md`](./.agents/skills/pi-upstream-subtree/SKILL.md)   | Importing and updating upstream-derived plugins, conflict handling |
+| [`subtrees/AGENTS.md`](./subtrees/AGENTS.md)                                                     | The upstream metadata contract and the direnv runtime helper       |
 
 Read the relevant skill before making non-trivial changes.
 

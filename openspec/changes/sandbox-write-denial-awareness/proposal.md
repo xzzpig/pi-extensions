@@ -27,6 +27,6 @@
 
 - `packages/pi-sandbox/src/sandbox-runtime.ts`：启用违规监控、新增 `collectBlockedWritePaths` 与 `onCompleted` 回调、说明文案助手。
 - `packages/pi-sandbox/src/extension.ts`：`bashTool.execute` 的结果后处理链路。
-- `packages/pi-sandbox/test/`：新增单元测试；`.pi/skills/pi-plugin-e2e-test` 流程下的真机 e2e。
+- `packages/pi-sandbox/test/`：新增单元测试；`.agents/skills/pi-plugin-e2e-test` 流程下的真机 e2e。
 - 依赖：仅使用既有 peer 依赖 `@xzzpig/sandbox-runtime` 的公开接口（`initialize` 第三参、`getSandboxViolationStore`、`SandboxViolationEvent`），无新增依赖。
 - 已知限制（写入 design 与最终文档）：违规路径为诊断性质（上游文档注明由 `process_vm_readv` 从沙箱进程内存读取，attacker-controlled），交互式允许提示仍由人类确认；bash 中被 denyRead 隐藏的读表现为 ENOENT，监控不覆盖读操作，维持现状。
