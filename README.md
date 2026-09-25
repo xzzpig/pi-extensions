@@ -11,7 +11,9 @@ A small [pi](https://github.com/earendil-works/pi-mono) extension that adds a `/
 - opens a parallel side conversation without interrupting the main run
 - runs that side conversation as a real pi sub-session with `read` / `bash` / `edit` / `write` tool access
 - keeps a continuous BTW thread by default
+- accepts `/side` as an alias for the `/btw` entry command
 - supports `/btw:tangent` for a contextless side thread that does not inherit the current main-session conversation
+- supports `/btw:ask` for a read-only side thread that inherits main-session context but exposes only `read` / `grep` / `find` / `ls`
 - opens a focused BTW modal shell with its own composer and transcript
 - keeps the BTW overlay open while you switch focus back to the main editor with `Alt+/`, `Super+/`, or `Ctrl+Alt+W` (all remappable)
 - keeps BTW thread entries out of the main agent's future context
@@ -51,10 +53,13 @@ pi install /absolute/path/to/pi-btw
 
 ```text
 /btw what file defines this route?
+/side what file defines this route?
 /btw how would you refactor this parser?
 /btw --save summarize the last error in one sentence
 /btw:new let's start a fresh thread about auth
 /btw:tangent brainstorm from first principles without using the current chat context
+/btw:ask what does this module do?
+/btw:ask --save explain the latest test failure
 /btw:model openai gpt-5-mini openai-responses
 /btw:thinking low
 /btw:inject implement the plan we just discussed
@@ -76,6 +81,12 @@ pi install /absolute/path/to/pi-btw
 - composer-only `/btw` requires the TUI; pass the question inline on RPC/SDK hosts
 - persists the BTW exchange as hidden thread state
 - with `--save`, also saves that single exchange as a visible session note
+
+### `/side [--save] <question>`
+
+- alias for `/btw`, matching the equivalent command in Codex
+- shares the same thread, overlay, persistence, model, and thinking settings as `/btw`
+- `/btw` stays canonical; lifecycle commands remain under the `/btw:*` namespace, so there is no `/side:new` or `/side:clear`
 
 ## Overlay controls
 
@@ -104,6 +115,17 @@ pi install /absolute/path/to/pi-btw
 - starts or continues a contextless tangent thread
 - does not inherit the current main-session conversation
 - if you switch from `/btw` to `/btw:tangent` (or back), the previous side thread is cleared so the modes do not mix
+- opens or refreshes the same focused BTW modal shell
+- with `--save`, also saves that single exchange as a visible session note
+
+### `/btw:ask [--save] <question>`
+
+- starts or continues an enforced read-only side thread
+- inherits the current main-session conversation, exactly like `/btw`
+- exposes only pi's built-in read-only tools (`read`, `grep`, `find`, `ls`); `bash`, `edit`, and `write` are never available to it
+- follows up read-only for the lifetime of the thread
+- identifies the thread as read-only in the overlay title
+- if you switch between `/btw`, `/btw:tangent`, and `/btw:ask`, the previous side thread is cleared and the child session is recreated so the capability boundary stays unambiguous
 - opens or refreshes the same focused BTW modal shell
 - with `--save`, also saves that single exchange as a visible session note
 
@@ -148,6 +170,7 @@ BTW is implemented as an actual pi sub-session with its own in-memory session st
 
 - contextual `/btw` threads seed that sub-session from the current main-session branch while filtering out BTW-visible notes from the parent context
 - `/btw:tangent` starts the same BTW UI in a contextless mode with no inherited main-session conversation
+- `/btw:ask` seeds the same main-session context as `/btw` but restricts the child session's tool surface to pi's read-only tools, so the boundary is structural rather than prompt-based
 - BTW can inherit the main thread model/thinking settings or use BTW-only overrides via `/btw:model` and `/btw:thinking`
 - `/btw:summarize` uses the current effective BTW model but keeps thinking off
 - the overlay transcript/status line is driven from sub-session events, so tool activity, streaming deltas, failures, and recovery are all visible without scraping rendered output
@@ -157,7 +180,7 @@ BTW is implemented as an actual pi sub-session with its own in-memory session st
 
 Inside the BTW modal composer, slash handling is split at the BTW/session boundary:
 
-- `/btw:new`, `/btw:tangent`, `/btw:clear`, `/btw:model`, `/btw:thinking`, `/btw:inject`, and `/btw:summarize` stay owned by BTW because they control BTW lifecycle, configuration, or handoff behavior
+- `/btw:new`, `/btw:tangent`, `/btw:ask`, `/btw:clear`, `/btw:model`, `/btw:thinking`, `/btw:inject`, and `/btw:summarize` stay owned by BTW because they control BTW lifecycle, configuration, or handoff behavior
 - any other slash-prefixed input is routed through the BTW sub-session's normal `prompt()` path
 - this means ordinary pi slash commands like `/help` are handled by the sub-session instead of being rejected by a modal-only fallback
 - if the sub-session cannot handle a slash command, BTW surfaces the real sub-session failure through the transcript/status state instead of inventing an "unsupported slash input" warning
@@ -172,7 +195,7 @@ BTW exchanges are persisted in the session as hidden custom entries so they:
 
 - survive reloads and restarts
 - rehydrate the BTW modal shell for the current branch
-- preserve whether the current side thread is a normal `/btw` thread or a contextless `/btw:tangent`
+- preserve whether the current side thread is a normal `/btw` thread, a contextless `/btw:tangent`, or a read-only `/btw:ask` thread
 - preserve the current BTW-only model and thinking overrides for that session history
 - stay out of the main agent's LLM context
 
@@ -209,6 +232,27 @@ To use it without installing:
 ```bash
 pi -e /path/to/pi-btw
 ```
+
+## DeepSeek Harness
+
+pi-btw also runs unmodified on [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) through the [pi2dsh](https://github.com/weijiafu14/pi2dsh) compatibility bridge.
+
+For DSH Web, install the **dsh-work-x** suite, which includes pi-btw, pi2dsh, a browser side-chat window, and other extensions:
+
+```bash
+dsh plugin --profile web add dsh-work-x
+```
+
+To install just the bridge and this extension instead:
+
+```bash
+dsh plugin --profile web add pi2dsh
+dsh plugin --profile web add pi-btw
+```
+
+Restart DSH after installation, then use `/btw <question>` to start a side conversation. The suite presents it in a browser side-chat window backed by a native DSH child session. DSH uses hyphens for the command family: for example, `/btw:inject` becomes `/btw-inject`.
+
+See the [DSH side-conversation guide](https://github.com/weijiafu14/pi2dsh/tree/main/examples/side-conversation) for CLI-only installation, usage, and screenshots, and the [versioned validation results](https://github.com/weijiafu14/pi2dsh/tree/main/community/release-0.25.1) for the tested releases. Report DSH integration problems to [pi2dsh](https://github.com/weijiafu14/pi2dsh/issues).
 
 ## License
 
