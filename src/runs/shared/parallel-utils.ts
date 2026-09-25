@@ -49,13 +49,14 @@ export interface RunnerSubagentStep {
 	tools?: string[];
 	excludeTools?: string[];
 	allowNestedSubagents?: boolean;
+	/** Resolved selected-agent policy for launches made by this child. */
+	allowedAgents?: string[];
 	extensions?: string[];
 	subagentOnlyExtensions?: string[];
 	/** Private immutable host policy snapshot serialized to the native runner. */
 	requiredExtensions?: import("../../shared/required-child-extensions.ts").RequiredChildExtensionSnapshot;
 	mcpDirectTools?: string[];
 	mutationTools?: string[];
-	completionGuard?: boolean;
 	systemPrompt?: string | null;
 	systemPromptMode?: "append" | "replace";
 	inheritProjectContext: boolean;

@@ -16,11 +16,11 @@ import { buildEffectiveSystemPrompt } from "../shared/effective-system-prompt.ts
 import { currentCompletionOwnerId } from "../../shared/completion-owner.ts";
 import { planChildLaunch, projectChainOutputSchemas, resolveStepBehavior, suppressProgressForReadOnlyTask, type ResolvedStepBehavior } from "../shared/child-launch-plan.ts";
 import { formatHerdrMachineRunnerUnsupported, resolveHerdrMachinePlacement } from "../shared/herdr-machine.ts";
-import { applyThinkingSuffix, getHostBuiltinToolNames, projectLaunchResolvedChildExtensions, resolvePiLaunchToolPlan } from "../shared/child-tool-plan.ts";
+import { applyThinkingSuffix, projectLaunchResolvedChildExtensions, resolvePiLaunchToolPlan } from "../shared/child-tool-plan.ts";
 import { injectSingleOutputInstruction, normalizeSingleOutputOverride, resolveSingleOutputPath, validateFileOnlyOutputMode } from "../shared/single-output.ts";
 import { applyWatchdogLaunchRules, sendRuleViolationWarning } from "../../watchdog/rules.ts";
 import { buildChainInstructions, isDynamicParallelStep, isParallelStep, resolveExistingReadInstructionPaths, resolveExistingReadPaths, writeInitialProgressFile, type ChainStep, type SequentialStep, type StepOverrides } from "../../shared/settings.ts";
-import type { RunnerStep } from "../shared/parallel-utils.ts";
+import { isDynamicRunnerGroup, isParallelGroup, type RunnerStep } from "../shared/parallel-utils.ts";
 import type { ContextMode } from "../shared/context-mode.ts";
 import { PI_CODING_AGENT_PACKAGE, resolveBunPiExecutable, resolveInstalledPiPackageRoot, resolvePiPackageRoot } from "../shared/pi-spawn.ts";
 import { JITI_ALIAS_ENV, resolveHostPeerAliases } from "./runner-aliases.ts";
@@ -40,7 +40,6 @@ import { ChainOutputValidationError, validateChainOutputBindings } from "../shar
 import { createStructuredOutputRuntime } from "../shared/structured-output.ts";
 import { resolveAcceptanceReportMode, resolveEffectiveAcceptance, validateAcceptanceInput, validateExecutionAcceptance } from "../shared/acceptance.ts";
 import { createRunFanoutBudget, writeRunFanoutBudgetDescriptor } from "../shared/run-fanout-budget.ts";
-import { validateImplementationToolContract } from "../shared/completion-guard.ts";
 import {
 	type AcceptanceInput,
 	type AgentContract,
@@ -69,7 +68,7 @@ import {
 	resolveChildMaxSubagentDepth,
 } from "../../shared/types.ts";
 import { inheritedNestedParentAddressOf, inheritedNestedRouteOf, nestedResultsPath, nestedSummaryFromAsyncStatus, writeNestedEvent } from "../shared/nested-events.ts";
-import type { ChildRuntimeConfig } from "../shared/child-runtime-config.ts";
+import { SUBAGENT_PARENT_SESSION_ENV, type ChildRuntimeConfig } from "../shared/child-runtime-config.ts";
 import { childSessionFactoryModule } from "../shared/child-session.ts";
 import { inheritedChildRuntime } from "../shared/child-launch.ts";
 import { resultFilePath } from "./result-files.ts";
@@ -79,6 +78,7 @@ import { usageBudgetState } from "../shared/usage-budget.ts";
 import type { ImportedAsyncRoot } from "./chain-root-attachment.ts";
 import type { SessionLeaseRequest } from "../shared/session-lease.ts";
 import { finalizeProcessTerminal, initializeProcessTerminal, readProcessTerminal } from "./process-terminal.ts";
+import { persistRunnerStartupFailure } from "./runner-startup-failure.ts";
 import type { ActiveAsyncCapacityHandle } from "./active-async-capacity.ts";
 import { statusStepDescription } from "./chain-append.ts";
 import { SUBAGENT_PROCESS_TERMINAL_EVENT } from "../../shared/types.ts";
@@ -86,6 +86,7 @@ import { assertAgentAllowedByCapabilityCeiling, intersectSubagentCapabilityCeili
 import { resolveLaunchBinding } from "../../shared/launch-contract.ts";
 import { resolvePermissionRules, type PermissionConfig } from "../shared/permissions.ts";
 import { normalizeExtensionBindings, omitExtensionBindingsEnv, type ExtensionBindings } from "../shared/extension-bindings.ts";
+import { omitGitRoutingEnv } from "../shared/git-environment.ts";
 import { assertWorkflowLaneKey, normalizeWorkflowLaneMetadata } from "../shared/lane-metadata.ts";
 import { resolveRequiredChildExtensions, type RequiredChildExtensionSnapshot } from "../../shared/required-child-extensions.ts";
 
@@ -154,7 +155,7 @@ function resolveJitiCliPath(): string | undefined {
 const jitiCliPath = resolveJitiCliPath();
 const asyncRunnerSourcePath = path.join(
 	path.dirname(fileURLToPath(import.meta.url)),
-	`subagent-runner${path.extname(fileURLToPath(import.meta.url))}`,
+	`subagent-runner-bootstrap${path.extname(fileURLToPath(import.meta.url))}`,
 );
 const sourceUnderNodeModules = asyncRunnerSourcePath.split(path.sep).some((segment) => segment.toLowerCase() === "node_modules");
 function supportsNativeRunner(nodeExecutable: string): boolean {
@@ -552,6 +553,7 @@ async function terminateRunnerBeforeProceedAsync(proc: ChildProcess, processClos
 async function completeRunnerStartupHandshake(
 	startupPath: string,
 	startupAckPath: string,
+	startupConfirmPath: string,
 	startupProceedPath: string,
 	proc: ChildProcess,
 	processClosed: Promise<{ exitCode: number | null; signal: NodeJS.Signals | null }>,
@@ -578,7 +580,7 @@ async function completeRunnerStartupHandshake(
 		const terminationObserved = await terminateRunnerBeforeProceedAsync(proc, processClosed);
 		return { pid: proc.pid, runnerProcessInstanceId, error: acknowledged.error, terminationObserved, startupDidNotProceed: true };
 	}
-	try { writeRunnerStartupControl(startupAckPath, { action: "confirm", token: ready.token }); } catch (error) {
+	try { writeRunnerStartupControl(startupConfirmPath, { action: "confirm", token: ready.token }); } catch (error) {
 		const message = `Failed to confirm async runner startup: ${error instanceof Error ? error.message : String(error)}`;
 		persistStartupFailure(message);
 		const terminationObserved = await terminateRunnerBeforeProceedAsync(proc, processClosed);
@@ -615,37 +617,8 @@ async function completeRunnerStartupHandshake(
 }
 
 function persistPreProceedStartupFailure(asyncDir: string, runId: string, runnerProcessInstanceId: string, sessionId: string | undefined, completionOwnerId: string | undefined, message: string): void {
-	const now = Date.now();
 	try {
-		const statusPath = path.join(asyncDir, "status.json");
-		let status: Partial<AsyncStatus> = {};
-		try {
-			status = JSON.parse(fs.readFileSync(statusPath, "utf-8")) as Partial<AsyncStatus>;
-		} catch {}
-		const existingProcessTerminal = status.processTerminal?.state === "observed" || status.processTerminal?.state === "unknown"
-			? status.processTerminal : undefined;
-		writePrivateAtomicJson(statusPath, {
-			...status,
-			runId,
-			...(sessionId ? { sessionId } : {}),
-			...(completionOwnerId ? { completionOwnerId } : {}),
-			state: "failed",
-			lastUpdate: now,
-			error: message,
-			processTerminal: existingProcessTerminal ?? {
-				version: 1,
-				state: "not-started",
-				runId,
-				runnerProcessInstanceId,
-			},
-		});
-		writePrivateAtomicJson(path.join(asyncDir, "process-terminal-candidate.json"), {
-			version: 1,
-			runId,
-			runnerProcessInstanceId,
-			writers: {},
-			expectedWriters: { 0: 0 },
-		});
+		persistRunnerStartupFailure({ asyncDir, runId, runnerProcessInstanceId, sessionId, completionOwnerId, message });
 	} catch {
 		// Startup failures must still return the original launch error.
 	}
@@ -672,19 +645,23 @@ export function emitProcessTerminalEvent(ctx: AsyncExecutionContext, proof: unkn
 	}
 }
 
-function spawnRunner(cfg: object, suffix: string, cwd: string, initialStatus: Omit<AsyncStatus, "pid" | "processTerminal">, initialStatusPath: string, onProcessTerminal?: (proof: unknown) => void, onBeforeProceed?: (runnerProcessInstanceId: string) => void, requestedCwd = cwd): SpawnRunnerResult | Promise<SpawnRunnerResult> {
+function spawnRunner(cfg: object, suffix: string, cwd: string, initialStatus: Omit<AsyncStatus, "pid" | "processTerminal">, initialStatusPath: string, launchParentSessionId: string | undefined, onProcessTerminal?: (proof: unknown) => void, onBeforeProceed?: (runnerProcessInstanceId: string) => void, requestedCwd = cwd): SpawnRunnerResult | Promise<SpawnRunnerResult> {
 	const cwdError = preflightLaunchCwd(requestedCwd, cwd);
 	if (cwdError) return { error: cwdError };
+	if (launchParentSessionId !== undefined && (!launchParentSessionId || launchParentSessionId.trim() !== launchParentSessionId)) {
+		return { error: "Background runner parent session identity is invalid." };
+	}
+	const steps = (cfg as { steps?: unknown }).steps;
+	if (!Array.isArray(steps)) return { error: "Background runner launch is missing its steps." };
+	const inconsistentParent = (steps as RunnerStep[]).some((step) => isParallelGroup(step)
+		? step.parallel.some((child) => child.parentSessionId !== launchParentSessionId)
+		: (isDynamicRunnerGroup(step) ? step.parallel.parentSessionId : step.parentSessionId) !== launchParentSessionId);
+	if (inconsistentParent) return { error: "Background runner steps have inconsistent parent session identities." };
 
 	// The compiled host exposes its SDK only through Pi's extension loader.
 	const binaryHost = resolveBunPiExecutable();
 	const nodeExecutable = resolveNodeExecutable();
-	const configuredExtensions = (cfg as { steps?: Array<{ extensions?: unknown[]; subagentOnlyExtensions?: unknown[]; requiredExtensions?: unknown[] }> }).steps?.some(
-		(step) => (step.extensions?.length ?? 0) > 0 || (step.subagentOnlyExtensions?.length ?? 0) > 0 || (step.requiredExtensions?.length ?? 0) > 0,
-	) ?? false;
-	// Keep provider/tool extensions in Jiti's host-alias boundary; the native preload
-	// only certifies the runner's imports, not a separately loaded extension graph.
-	const nativeRunnerSupported = supportsNativeRunner(nodeExecutable) && !configuredExtensions;
+	const nativeRunnerSupported = supportsNativeRunner(nodeExecutable);
 	const runner = asyncRunnerSourcePath;
 	const runnerIsJavaScript = path.extname(runner) === ".js";
 	const bootstrap = path.join(path.dirname(runner), `binary-bootstrap${path.extname(fileURLToPath(import.meta.url))}`);
@@ -719,11 +696,13 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, initialStatus: Om
 		? path.join(launchAsyncDir, "runner-startup.json")
 		: undefined;
 	const startupAckPath = startupPath ? path.join(path.dirname(startupPath), "runner-startup-ack.json") : undefined;
+	const startupConfirmPath = startupPath ? path.join(path.dirname(startupPath), "runner-startup-confirm.json") : undefined;
 	const startupProceedPath = launchAsyncDir && (startupPath || launchBarrierToken)
 		? path.join(launchAsyncDir, "runner-startup-proceed.json")
 		: undefined;
 	if (startupPath) fs.rmSync(startupPath, { force: true });
 	if (startupAckPath) fs.rmSync(startupAckPath, { force: true });
+	if (startupConfirmPath) fs.rmSync(startupConfirmPath, { force: true });
 	if (startupProceedPath) fs.rmSync(startupProceedPath, { force: true });
 
 	const logPaths = resolveAsyncRunnerLogPaths(launchConfig);
@@ -735,6 +714,7 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, initialStatus: Om
 			stdoutFd = fs.openSync(logPaths.stdoutPath, "a");
 			stderrFd = fs.openSync(logPaths.stderrPath, "a");
 		}
+		// Short-circuit native peer aliases so Pi's loader and generated factories preserve filesystem resolution semantics.
 		const preload = Object.keys(hostPeerAliases.aliases).length > 0
 			? ["--import", new URL("../../../runner-peer-preload.mjs", import.meta.url).href]
 			: [];
@@ -745,22 +725,23 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, initialStatus: Om
 				: nativeRunnerSupported
 				? [...preload, "--experimental-strip-types", runner, cfgPath]
 				: [...preload, jitiCliPath!, runner, cfgPath];
+		const runnerEnv: NodeJS.ProcessEnv = {
+			...omitGitRoutingEnv(omitExtensionBindingsEnv(process.env)),
+			...childCacheRetentionEnv(),
+			[PI_CODING_AGENT_PACKAGE_ROOT_ENV]: binaryHost ? undefined : piPackageRoot,
+			// npm must override inherited bundled layouts (#2071); binaries retain release assets.
+			PI_PACKAGE_DIR: binaryHost ? process.env.PI_PACKAGE_DIR : piPackageRoot,
+			[JITI_ALIAS_ENV]: binaryHost ? undefined : JSON.stringify(hostPeerAliases.aliases),
+			PI_ASYNC_NATIVE_RUNNER: !binaryHost && (runnerIsJavaScript || nativeRunnerSupported) ? "1" : "0",
+			PI_SUBAGENT_RUNNER_CONFIG: binaryHost ? cfgPath : undefined,
+		};
+		if (launchParentSessionId === undefined) delete runnerEnv[SUBAGENT_PARENT_SESSION_ENV];
+		else runnerEnv[SUBAGENT_PARENT_SESSION_ENV] = launchParentSessionId;
 		const proc = spawn(command, args, {
 			cwd,
 			...backgroundProcessOptions(),
 			stdio: ["ignore", stdoutFd ?? "ignore", stderrFd ?? "ignore"],
-			env: {
-				...omitExtensionBindingsEnv(process.env),
-				// Unset leaves the inherited parent value in place. See childCacheRetention.
-				...childCacheRetentionEnv(),
-				[PI_CODING_AGENT_PACKAGE_ROOT_ENV]: binaryHost ? undefined : piPackageRoot,
-				// npm must override inherited bundled layouts (#2071); binaries retain release assets.
-				PI_PACKAGE_DIR: binaryHost ? process.env.PI_PACKAGE_DIR : piPackageRoot,
-				[JITI_ALIAS_ENV]: binaryHost ? undefined : JSON.stringify(hostPeerAliases.aliases),
-				PI_ASYNC_NATIVE_RUNNER: !binaryHost && (runnerIsJavaScript || nativeRunnerSupported) ? "1" : "0",
-				PI_ASYNC_COMPILED_RUNNER: !binaryHost && runnerIsJavaScript ? "1" : "0",
-				PI_SUBAGENT_RUNNER_CONFIG: binaryHost ? cfgPath : undefined,
-			},
+			env: runnerEnv,
 		});
 		let observedProcessExit: { exitCode: number | null; signal: NodeJS.Signals | null } | undefined;
 		proc.once("exit", (exitCode, signal) => { observedProcessExit = { exitCode, signal }; });
@@ -874,11 +855,11 @@ function spawnRunner(cfg: object, suffix: string, cwd: string, initialStatus: Om
 			}
 		}
 		proc.unref();
-		if (startupPath && startupAckPath && startupProceedPath) {
+		if (startupPath && startupAckPath && startupConfirmPath && startupProceedPath) {
 			const persistStartupFailure = (message: string) => {
 				if (launchAsyncDir) persistPreProceedStartupFailure(launchAsyncDir, launchRunId, runnerProcessInstanceId, launchSessionId, launchCompletionOwnerId, message);
 			};
-			return completeRunnerStartupHandshake(startupPath, startupAckPath, startupProceedPath, proc, processClosed, () => observedProcessExit ?? (proc.exitCode !== null || proc.signalCode !== null ? { exitCode: proc.exitCode, signal: proc.signalCode } : undefined), runnerProcessInstanceId, persistStartupFailure);
+			return completeRunnerStartupHandshake(startupPath, startupAckPath, startupConfirmPath, startupProceedPath, proc, processClosed, () => observedProcessExit ?? (proc.exitCode !== null || proc.signalCode !== null ? { exitCode: proc.exitCode, signal: proc.signalCode } : undefined), runnerProcessInstanceId, persistStartupFailure);
 		}
 		return { pid: proc.pid, runnerProcessInstanceId };
 	} catch (error) {
@@ -915,6 +896,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		worktreeBranchPrefix,
 		asyncDir,
 	} = params;
+	const launchParentSessionId = ctx.parentSessionId ?? ctx.currentSessionId;
 	const outputBaseDir = params.outputBaseDir;
 	const resultMode = params.resultMode ?? "chain";
 	const chainSkills = params.chainSkills ?? [];
@@ -1116,7 +1098,6 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		const launchRuleError = applyWatchdogLaunchRules({ cwd: machine ? runnerCwd : stepCwd, agent: a.name, model: selectedModel, warn: (violation) => sendRuleViolationWarning(ctx.pi, violation) });
 		if (launchRuleError) throw new AsyncStartValidationError(launchRuleError);
 		const fast = s.fast ?? params.fast ?? a.fast;
-		const hostAvailableBuiltins = getHostBuiltinToolNames(ctx.pi);
 		const requiredExtensions = externalRunner ? [] : ctx.childRuntime?.requiredExtensions ?? resolveRequiredChildExtensions(ctx.parentSessionId ?? ctx.currentSessionId ?? undefined);
 		const toolPlan = resolvePiLaunchToolPlan({
 			tools: a.tools,
@@ -1136,28 +1117,13 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			agentName: a.name,
 			permissionRules,
 			runtimeSnapshotHost: ctx.pi,
-			hostAvailableBuiltins,
 		});
 		const launchResolvedExtensions = externalRunner ? undefined : projectLaunchResolvedChildExtensions(toolPlan);
 		if (externalRunner && permissionRules) {
 			throw new AsyncStartValidationError(`Agent '${a.name}' uses runner.type='${externalRunnerType}', which cannot enforce native Pi child permission rules.`);
 		}
-		if (!externalRunner) {
-			const contractTools = toolPlan.explicitToolAllowlist ? toolPlan.effectiveToolAllowlist : undefined;
-			const contractError = validateImplementationToolContract({
-				agent: a.name,
-				task,
-				tools: contractTools,
-				mcpDirectTools: toolPlan.effectiveMcpTools,
-				configuredExtensions: toolPlan.configuredExtensions,
-				requestedTools: toolPlan.requestedBuiltinTools,
-				acceptanceRole: a.acceptanceRole,
-				completionGuard: a.completionGuard,
-			});
-			if (contractError) throw new AsyncStartValidationError(contractError);
-		}
 		return {
-			parentSessionId: ctx.parentSessionId ?? ctx.currentSessionId,
+			parentSessionId: launchParentSessionId,
 			permissionRules,
 			...(params.capabilityCeiling ? { capabilityCeiling: params.capabilityCeiling } : {}),
 			...(runFanoutPath ? { runFanoutPath } : {}),
@@ -1187,12 +1153,12 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			tools: a.tools,
 			excludeTools: a.excludeTools,
 			allowNestedSubagents: a.allowNestedSubagents,
+			allowedAgents: a.allowedAgents,
 			extensions: a.extensions,
 			subagentOnlyExtensions: a.subagentOnlyExtensions,
 			...(!externalRunner ? { requiredExtensions } : {}),
 			mcpDirectTools: a.mcpDirectTools,
 			mutationTools: a.mutationTools,
-			completionGuard: a.completionGuard,
 			systemPrompt,
 			systemPromptMode: a.systemPromptMode,
 			inheritProjectContext: a.inheritProjectContext,
@@ -1327,6 +1293,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		});
 		const steps = params.attachRoot
 			? [{
+					parentSessionId: launchParentSessionId,
 					agent: params.attachRoot.agent,
 					task: "",
 					label: params.attachRoot.label ?? `Attached root ${params.attachRoot.runId}`,
@@ -1497,6 +1464,7 @@ export function executeAsyncChain(
 	}
 	const initialStatusAt = Date.now();
 	const initialCompletionOwnerId = ctx.completionOwnerId ?? currentCompletionOwnerId();
+	const launchParentSessionId = ctx.parentSessionId ?? ctx.currentSessionId;
 
 	let spawnResult: SpawnRunnerResult = {};
 	try {
@@ -1536,7 +1504,6 @@ export function executeAsyncChain(
 				deadlineAt,
 				globalConcurrencyLimit: params.globalConcurrencyLimit,
 				runFanoutBudget,
-				hostAvailableBuiltins: getHostBuiltinToolNames(ctx.pi),
 				workflowGraph,
 				...(params.parentWorkflowRunId ? { parentWorkflowRunId: params.parentWorkflowRunId } : {}),
 				...(params.workflowKey ? { workflowKey: params.workflowKey } : {}),
@@ -1565,6 +1532,7 @@ export function executeAsyncChain(
 				steps: initialStatusSteps,
 			},
 			path.join(asyncDir, "status.json"),
+			launchParentSessionId,
 			(proof) => emitProcessTerminalEvent(ctx, proof),
 			(runnerProcessInstanceId) => params.activeAsyncCapacity?.markStarted(runnerProcessInstanceId),
 		) as SpawnRunnerResult;
@@ -1927,7 +1895,6 @@ export function executeAsyncSingle(
 			return formatAsyncStartError("single", error instanceof Error ? error.message : String(error));
 		}
 	}
-	const hostAvailableBuiltins = getHostBuiltinToolNames(ctx.pi);
 	const requiredExtensions = externalRunner ? [] : params.requiredExtensions ?? ctx.childRuntime?.requiredExtensions ?? resolveRequiredChildExtensions(ctx.parentSessionId ?? ctx.currentSessionId ?? undefined);
 	const toolPlan = resolvePiLaunchToolPlan({
 		tools: agentConfig.tools,
@@ -1947,23 +1914,8 @@ export function executeAsyncSingle(
 		agentName: agentConfig.name,
 		permissionRules: resolvePermissionRules(ctx.permissions, agentConfig.permissions),
 		runtimeSnapshotHost: ctx.pi,
-		hostAvailableBuiltins,
 	});
 	const launchResolvedExtensions = externalRunner ? undefined : projectLaunchResolvedChildExtensions(toolPlan);
-	if (!externalRunner) {
-		const contractTools = toolPlan.explicitToolAllowlist ? toolPlan.effectiveToolAllowlist : undefined;
-		const contractError = validateImplementationToolContract({
-			agent: agentConfig.name,
-			task: taskText,
-			tools: contractTools,
-			mcpDirectTools: toolPlan.effectiveMcpTools,
-			configuredExtensions: toolPlan.configuredExtensions,
-			requestedTools: toolPlan.requestedBuiltinTools,
-			acceptanceRole: agentConfig.acceptanceRole,
-			completionGuard: agentConfig.completionGuard,
-		});
-		if (contractError) return formatAsyncStartError("single", contractError);
-	}
 	const fast = params.fast ?? agentConfig.fast;
 	const launchThinking = resolveEffectiveThinking(selectedModel, effectiveThinking);
 	const { definitionDigest, launchContractDigest } = resolveLaunchBinding({
@@ -2014,6 +1966,7 @@ export function executeAsyncSingle(
 		...(recoveryAgentConfig.tools ? { tools: [...recoveryAgentConfig.tools] } : {}),
 		...(recoveryAgentConfig.excludeTools ? { excludeTools: [...recoveryAgentConfig.excludeTools] } : {}),
 		...(recoveryAgentConfig.allowNestedSubagents !== undefined ? { allowNestedSubagents: recoveryAgentConfig.allowNestedSubagents } : {}),
+		...(recoveryAgentConfig.allowedAgents !== undefined ? { allowedAgents: [...recoveryAgentConfig.allowedAgents] } : {}),
 		...(recoveryAgentConfig.extensions ? { extensions: [...recoveryAgentConfig.extensions] } : {}),
 		...(recoveryAgentConfig.subagentOnlyExtensions ? { subagentOnlyExtensions: [...recoveryAgentConfig.subagentOnlyExtensions] } : {}),
 		...(recoveryAgentConfig.mcpDirectTools ? { mcpDirectTools: [...recoveryAgentConfig.mcpDirectTools] } : {}),
@@ -2026,7 +1979,6 @@ export function executeAsyncSingle(
 		...(resolvedSkills.length ? { skills: resolvedSkills.map((skill) => skill.name) } : {}),
 		...(recoveryAgentConfig.skillPath ? { skillPath: [...recoveryAgentConfig.skillPath] } : {}),
 		...(recoveryAgentConfig.filePath ? { agentFilePath: recoveryAgentConfig.filePath } : {}),
-		...(recoveryAgentConfig.completionGuard !== undefined ? { completionGuard: recoveryAgentConfig.completionGuard } : {}),
 		...(recoveryAgentConfig.memory ? { memory: { ...recoveryAgentConfig.memory } } : {}),
 		...(outputPath ? { outputPath } : {}),
 		outputMode,
@@ -2056,13 +2008,14 @@ export function executeAsyncSingle(
 	let spawnResultOrPromise: SpawnRunnerResult | Promise<SpawnRunnerResult> = {};
 	const initialStatusAt = Date.now();
 	const initialCompletionOwnerId = ctx.completionOwnerId ?? currentCompletionOwnerId();
+	const launchParentSessionId = ctx.parentSessionId ?? ctx.currentSessionId;
 	try {
 		spawnResultOrPromise = spawnRunner(
 			{
 				id,
 				steps: [
 					{
-						parentSessionId: ctx.parentSessionId ?? ctx.currentSessionId,
+						parentSessionId: launchParentSessionId,
 						permissionRules,
 						...(capabilityCeiling ? { capabilityCeiling } : {}),
 						agent,
@@ -2087,12 +2040,12 @@ export function executeAsyncSingle(
 						tools: agentConfig.tools,
 						excludeTools: agentConfig.excludeTools,
 						allowNestedSubagents: agentConfig.allowNestedSubagents,
+						allowedAgents: agentConfig.allowedAgents,
 						extensions: agentConfig.extensions,
 						subagentOnlyExtensions: agentConfig.subagentOnlyExtensions,
 						...(!externalRunner ? { requiredExtensions } : {}),
 						mcpDirectTools: agentConfig.mcpDirectTools,
 						mutationTools: agentConfig.mutationTools,
-						completionGuard: agentConfig.completionGuard,
 						systemPrompt,
 						systemPromptMode: agentConfig.systemPromptMode,
 						inheritProjectContext: agentConfig.inheritProjectContext,
@@ -2157,7 +2110,6 @@ export function executeAsyncSingle(
 				launchContractDigest,
 				launchResolvedExtensions,
 				runFanoutBudget,
-				hostAvailableBuiltins,
 				...(params.parentWorkflowRunId ? { parentWorkflowRunId: params.parentWorkflowRunId } : {}),
 				...(params.workflowKey ? { workflowKey: params.workflowKey } : {}),
 				...(lane ? { lane } : {}),
@@ -2187,6 +2139,7 @@ export function executeAsyncSingle(
 				steps: [{ agent, status: "pending", ...(lane ? { lane } : {}), ...(model ? { model } : {}), ...(contextLimit !== undefined ? { contextLimit } : {}) }],
 			},
 			path.join(asyncDir, "status.json"),
+			launchParentSessionId,
 			(proof) => emitProcessTerminalEvent(ctx, proof),
 			(runnerProcessInstanceId) => params.activeAsyncCapacity?.markStarted(runnerProcessInstanceId),
 			params.requestedCwd ?? runnerCwd,

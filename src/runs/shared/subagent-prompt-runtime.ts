@@ -11,12 +11,14 @@ import { validateAcceptanceReport } from "./acceptance.ts";
 import { formatChildToolDiagnostic } from "./tool-availability.ts";
 import { shouldBlockToolForBudget, toolBudgetBlockedMessage, toolBudgetSoftNudge } from "./tool-budget.ts";
 import type { ResolvedToolBudget, SubagentState } from "../../shared/types.ts";
+import { INTERCOM_SESSION_IDENTITY_EVENT } from "../../shared/types.ts";
 import { resolveCurrentSessionId } from "../../shared/session-identity.ts";
 import { getAgentDir } from "../../shared/utils.ts";
 import { registerChildWatchdog } from "../../watchdog/register-child.ts";
 import type { ChildWatchdogConfig } from "../../watchdog/child-status.ts";
 import { requestWatchdogPermission, type WatchdogPermissionRequest, type WatchdogPermissionResult } from "../../watchdog/permission-arbiter.ts";
 import { SUBAGENT_WATCHDOG_WARNING_TYPE } from "../../watchdog/types.ts";
+import { captureWatchdogDiffBaseline, createWatchdogDiffTool, WATCHDOG_DIFF_TOOL_NAME } from "../../watchdog/diff-tool.ts";
 import { inheritedNestedRouteOf } from "./nested-events.ts";
 import { registerWaitTool } from "../background/wait-tool.ts";
 import { drainOutstandingWork } from "../background/auto-drain.ts";
@@ -403,6 +405,7 @@ function registerToolBudget(pi: ExtensionAPI, budget: ResolvedToolBudget | undef
 }
 
 function registerStructuredOutputTool(pi: ExtensionAPI, structured: NonNullable<ChildRuntimeConfig["structuredOutput"]>): void {
+	const terminalState = structured.terminalState ??= { captured: false };
 	const required = structured.acceptanceReport === "required";
 	const parameters = createStructuredOutputToolParameters(structured.schema, { acceptanceReport: structured.acceptanceReport });
 	const registerTool = pi.registerTool as unknown as (tool: {
@@ -432,6 +435,7 @@ function registerStructuredOutputTool(pi: ExtensionAPI, structured: NonNullable<
 				}
 			}
 			structured.capture(params.value, structured.acceptanceReport ? params.acceptanceReport : undefined);
+			terminalState.captured = true;
 			return {
 				content: [{ type: "text", text: "Structured output captured." }],
 				details: {},
@@ -451,7 +455,15 @@ export default function registerSubagentPromptRuntime(pi: ExtensionAPI, config?:
 	registerRuntimeExtensionAcknowledgements(pi, config.runtimeAcknowledgements);
 	registerPermissionGate(pi, config.permissions, config.childWatchdog);
 	registerToolBudget(pi, config.toolBudget);
-	registerChildWatchdog(pi, config.childWatchdog, config.watchdogStatus);
+	if (config.structuredOutput && !config.structuredOutput.terminalState) config.structuredOutput.terminalState = { captured: false };
+	registerChildWatchdog(pi, config.childWatchdog, config.watchdogStatus, config.structuredOutput?.terminalState);
+	const requestedWatchdogDiff = config.requiredTools?.includes(WATCHDOG_DIFF_TOOL_NAME);
+	const reviewerLaunchBaseline = requestedWatchdogDiff && config.cwd
+		? captureWatchdogDiffBaseline(config.cwd)
+		: undefined;
+	if (requestedWatchdogDiff && typeof pi.registerTool === "function") {
+		pi.registerTool(createWatchdogDiffTool(reviewerLaunchBaseline, { workingTreeAtLaunch: true }));
+	}
 	const waitState = config.runtimeState ?? {
 		baseCwd: "",
 		currentSessionId: null,
@@ -516,13 +528,23 @@ export default function registerSubagentPromptRuntime(pi: ExtensionAPI, config?:
 		return { messages };
 	});
 
+	// pi-intercom asks at session start for this session's intercom ID. Claiming
+	// the route there frees the session name for the readable label. An older
+	// pi-intercom never asks and routes by name, so the route stays the name.
+	const routingName = config.intercomSessionName;
+	let intercomIdClaimed = false;
+	if (routingName) {
+		pi.events.on(INTERCOM_SESSION_IDENTITY_EVENT, (request: unknown) => {
+			if (!request || typeof request !== "object" || !("version" in request) || request.version !== 1 || !("claim" in request) || typeof request.claim !== "function") return;
+			request.claim(routingName);
+			intercomIdClaimed = true;
+		});
+	}
+
 	onRuntimeEvent("before_agent_start", async (event: unknown) => {
 		if (!event || typeof event !== "object" || !("systemPrompt" in event) || typeof event.systemPrompt !== "string") return undefined;
 		registerNativeSupervisorClientOnce();
-		// The intercom target is a routing address and always wins; the display
-		// name (agent + task excerpt, computed by the parent at launch) only
-		// applies when the bridge is not addressing this child.
-		const childSessionName = config.intercomSessionName || config.sessionName;
+		const childSessionName = intercomIdClaimed ? config.sessionName || routingName : routingName || config.sessionName;
 		if (childSessionName && typeof pi.setSessionName === "function") {
 			pi.setSessionName(childSessionName);
 		}

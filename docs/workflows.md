@@ -10,7 +10,7 @@ Use orchestration as parent-agent guidance, not as a runtime workflow mode. For 
 clarify → scout → worker → fresh reviewers → worker
 ```
 
-Packaged `worker`, `oracle`, and `advisor` default to forked context when a launch omits `context`. If the parent has no persisted session file or current leaf yet, that implicit default falls back to `fresh`. Pass `context: "fresh"` when you intentionally want a fresh child run, or `context: "fork"` when fork must remain strict.
+Packaged `worker` defaults to fresh context so implementation starts from its assigned brief instead of the parent's unfinished conversation. Packaged `oracle` and `advisor` default to forked context; if the parent has no persisted session file or current leaf yet, that implicit default falls back to `fresh`. Explicit `context`, `context: "profile"`, and global `defaultSubagentContext` still override these profile defaults.
 
 Child-safety boundaries are enforced at runtime:
 
@@ -50,6 +50,10 @@ For multi-step or parallel work, make exactly one top-level `subagent` workflow 
 Workflow-level child controls default onto each `runs.run`/`runs.all` launch; explicit child fields override them. See [retained children](tool-reference.md#retained-children) for follow-up challenges, [output binding](tool-reference.md#output-mode-details) for durable artifacts, and [schedules](missions.md#schedules) for delayed/recurring scripts.
 
 Child results cross into the script as plain JSON data. Non-JSON host metadata is omitted, so use returned fields such as `runId`, `ok`, `output`, and `structuredOutput` for workflow control.
+
+Omitting a child's `async` preserves awaited final-result semantics, even if the child runs in the background. Explicit child `async: true` intentionally returns after launch: its receipt has `state: "running"`, `ok: false`, an empty `output`, and no completion error or final `outputReference`. `ok` confirms successful child completion, not successful dispatch. Use `runId` and `asyncDir` to inspect the running child; `artifactPaths` may include runtime directories and is not a list of final reports. Reusing the same workflow key returns the same receipt, not a refreshed result.
+
+A workflow can finish dispatch while these children remain running. Its summary and child rows identify that distinction, and launch receipts do not generate child-completion notices. Consume the later child result before treating its work or report as complete.
 
 Validate a script without launching children:
 
@@ -194,6 +198,54 @@ The helper validates the complete plain-JSON lane inventory before launching any
 
 The board is bounded and contains only lane/stage keys, state, success, retained run ids, explicit output references, bounded errors, and an optional structured verdict. It does not return child transcripts or create a lane registry or cleanup authority. Use raw `runs.run(...)`/`runs.all(...)` when a workflow needs conditional or rolling orchestration beyond this helper.
 
+### Typed post-run checks and typed steps
+
+Two ways to put a small classifier (a script, a lookup, a fast evaluation model) into a workflow without spending an LLM turn on it.
+
+**A typed gate** runs a command after a child finishes and turns its JSON stdout into that child's `structuredOutput`:
+
+```js
+subagent({ workflowScript: `
+  const review = await runs.run("review", {
+    agent: "reviewer", task: packet,
+    output: "reports/review.md", outputMode: "file-only",
+    gate: { command: "classify --report reports/review.md", output: "json" }
+  });
+  if (review.structuredOutput.verdict === "blocked") {
+    return runs.run("fix", { agent: "worker", task: "Fix the findings in reports/review.md" });
+  }
+  return { verdict: review.structuredOutput.verdict, report: "reports/review.md" };
+` });
+```
+
+The parent receives a pointer plus a verdict instead of the review text. See [typed gates](tool-reference.md#typed-gates) for the contract and failure rules.
+
+**A typed step** is an agent whose runner is a command rather than a Pi session. The prompt arrives on stdin, stdout is the child's output, and the workflow uses it like any other child:
+
+```yaml
+---
+name: classifier
+description: Typed classification of the task text
+runner:
+  type: external-cli
+  command: /path/to/classify
+  args: [--stdin, --json]
+  promptDelivery: stdin
+async: true
+systemPromptMode: replace
+inheritProjectContext: false
+inheritGlobalContext: false
+inheritSkills: false
+---
+```
+
+```js
+const results = await runs.all(items.map((item) => ({ key: item.key, agent: "classifier", task: item.text })));
+const routed = results.map((r, i) => ({ key: items[i].key, ...JSON.parse(r.output) }));
+```
+
+Command-runner agents are async-only; workflows launch children async by default, but a direct `async: false` call is refused. The runner gets only the assembled prompt, never a forked transcript, so keep `inheritProjectContext` and `inheritGlobalContext` off unless the command wants that text. See [examples/typed-gate](https://github.com/nicobailon/pi-subagents/tree/main/examples/typed-gate) for a runnable version of both shapes.
+
 ### Host command steps
 
 Use the named `run-ci` resource when a permission/policy extension needs to admit one supported non-interactive command as workflow evidence instead of a child-agent run:
@@ -244,7 +296,7 @@ subagent({ workflowScript: `
 ` });
 ```
 
-The workflow trace records the run completions and steering receipt. Scripts still never see raw async directories, inbox paths, or session files. If the keyed child is terminal, stale, or has no live route when `runs.steer` runs, the receipt reports `missed` or `failed` and the script can decide whether to continue.
+The workflow trace records the run completions and steering receipt. Scripts cannot access the filesystem or control inboxes; returned run and artifact references are data only. If the keyed child is terminal, stale, or has no live route when `runs.steer` runs, the receipt reports `missed` or `failed` and the script can decide whether to continue.
 
 Use named outputs when later workflow steps need structured data or durable references:
 
@@ -473,7 +525,7 @@ If messages do not show up, run `/subagents-doctor`. Advanced users can tune the
 
 Subagents can call `subagent` only when their resolved builtin tools explicitly include `subagent`. That is meant for delegated fanout agents, not ordinary worker/reviewer children. A depth guard prevents unbounded nesting.
 
-By default, nesting is limited to two levels: main session → subagent → sub-subagent. Deeper calls are blocked with guidance to complete the current task directly. Nested runs appear in the parent status widget and `status` output as a tree, and `status`, `interrupt`, and `resume` can target a nested run by its id.
+By default, nesting is limited to two levels: main session → subagent → sub-subagent. Deeper calls are blocked with guidance to complete the current task directly. Nested runs appear in the parent status widget and `status` output as a tree, and `status`, `interrupt`, and `resume` can target a nested run by its id. Coordinator completion and widget cleanup retain descendant lookup authority in the owning parent session; they do not grant access to another session or outside a child's authorized subtree.
 
 Configure the limit with:
 

@@ -113,6 +113,24 @@ describe("builtin agent overrides", () => {
 		assert.throws(() => discoverAgentsAll(tempProject), /field 'machine' must be a non-empty string or false/u);
 	});
 
+	it("replaces and clears custom-agent allowedAgents while preserving explicit deny-all", () => {
+		writeProjectAgent(tempProject, "coordinator", "---\nname: coordinator\ndescription: Coordinator\nallowedAgents: scout\n---\n\nCoordinate.\n");
+		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
+			subagents: { agentOverrides: { coordinator: { allowedAgents: false } } },
+		});
+		assert.equal(discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "coordinator")?.allowedAgents, undefined);
+
+		writeJson(path.join(tempProject, ".pi", "settings.json"), {
+			subagents: { agentOverrides: { coordinator: { allowedAgents: [] } } },
+		});
+		assert.deepEqual(discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "coordinator")?.allowedAgents, []);
+
+		writeJson(path.join(tempProject, ".pi", "settings.json"), {
+			subagents: { agentOverrides: { coordinator: { allowedAgents: ["worker", "reviewer"] } } },
+		});
+		assert.deepEqual(discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "coordinator")?.allowedAgents, ["reviewer", "worker"]);
+	});
+
 	it("rejects removed fallbackModels in user agent overrides", () => {
 		writeJson(path.join(tempHome, ".pi", "agent", "settings.json"), {
 			subagents: { agentOverrides: { worker: { fallbackModels: ["model/backup"] } } },
@@ -152,7 +170,9 @@ describe("builtin agent overrides", () => {
 
 		const builtins = discoverAgentsAll(tempProject).builtin;
 		assert.equal(builtins.find((agent) => agent.name === "researcher")?.tools, undefined);
-		assert.deepEqual(builtins.find((agent) => agent.name === "reviewer")?.tools, ["read", "grep", "find", "ls", "contact_supervisor"]);
+		assert.deepEqual(builtins.find((agent) => agent.name === "reviewer")?.tools, ["read", "grep", "find", "ls", "watchdog_diff", "contact_supervisor"]);
+		assert.deepEqual(builtins.find((agent) => agent.name === "worker")?.tools, ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor"]);
+		assert.deepEqual(builtins.find((agent) => agent.name === "scout")?.tools, ["read", "grep", "find", "ls", "bash", "write", "contact_supervisor"]);
 	});
 
 	it("keeps explicit empty builtin tool allowlists distinct from inherited tools", () => {
@@ -398,7 +418,6 @@ describe("builtin agent overrides", () => {
 						acceptanceRole: "writer",
 						subagentOnlyExtensions: ["./tools/child-review.ts"],
 						mutationTools: ["replace", "undo_last_replace"],
-						completionGuard: false,
 					},
 				},
 			},
@@ -417,7 +436,6 @@ describe("builtin agent overrides", () => {
 		assert.equal(reviewer.acceptanceRole, "writer");
 		assert.deepEqual(reviewer.subagentOnlyExtensions, ["./tools/child-review.ts"]);
 		assert.deepEqual(reviewer.mutationTools, ["replace", "undo_last_replace"]);
-		assert.equal(reviewer.completionGuard, false);
 		assert.equal(reviewer.override?.scope, "user");
 		assert.equal(reviewer.override?.path, path.join(tempHome, ".pi", "agent", "settings.json"));
 	});
@@ -787,7 +805,6 @@ describe("builtin agent overrides", () => {
 						tools: ["bash", "mcp:xcodebuild_list_sims"],
 						skills: ["tdd"],
 						subagentOnlyExtensions: ["./tools/child-review.ts"],
-						completionGuard: false,
 					},
 				},
 			},
@@ -812,7 +829,6 @@ describe("builtin agent overrides", () => {
 		assert.deepEqual(implementer.mcpDirectTools, ["xcodebuild_list_sims"]);
 		assert.deepEqual(implementer.skills, ["tdd"]);
 		assert.deepEqual(implementer.subagentOnlyExtensions, ["./tools/child-review.ts"]);
-		assert.equal(implementer.completionGuard, false);
 		assert.equal(implementer.override?.scope, "project");
 		assert.equal(implementer.override?.path, path.join(tempProject, ".pi", "settings.json"));
 	});
@@ -879,12 +895,11 @@ describe("builtin agent overrides", () => {
 						defaultContext: "fork",
 						acceptanceRole: "writer",
 						systemPrompt: "Override prompt",
-						completionGuard: true,
 					},
 				},
 			},
 		});
-		writeProjectAgent(tempProject, "implementer", `---\nname: implementer\ndescription: TDD implementer\noutput: artifacts/explicit.md\noutputMode: inline\ndefaultReads: explicit.md\nmodel: google/gemini-3-pro\nfast: false\nthinking: medium\ntools: read, mcp:local_tool\nskills: agent-skill\ninheritProjectContext: false\ndefaultContext: fresh\nacceptanceRole: read-only\ncompletionGuard: false\n---\n\nDrive the failing test first.\n`);
+		writeProjectAgent(tempProject, "implementer", `---\nname: implementer\ndescription: TDD implementer\noutput: artifacts/explicit.md\noutputMode: inline\ndefaultReads: explicit.md\nmodel: google/gemini-3-pro\nfast: false\nthinking: medium\ntools: read, mcp:local_tool\nskills: agent-skill\ninheritProjectContext: false\ndefaultContext: fresh\nacceptanceRole: read-only\n---\n\nDrive the failing test first.\n`);
 
 		const implementer = discoverAgents(tempProject, "both").agents.find((agent) => agent.name === "implementer");
 		assert.ok(implementer);
@@ -901,7 +916,6 @@ describe("builtin agent overrides", () => {
 		assert.equal(implementer.defaultContext, "fork");
 		assert.equal(implementer.acceptanceRole, "writer");
 		assert.equal(implementer.systemPrompt, "Override prompt");
-		assert.equal(implementer.completionGuard, true);
 		assert.equal(implementer.override?.scope, "project");
 	});
 
@@ -1049,27 +1063,6 @@ describe("builtin agent overrides", () => {
 		}
 	});
 
-	it("surfaces malformed completion guard override values", () => {
-		const settingsPath = path.join(tempHome, ".pi", "agent", "settings.json");
-		writeJson(settingsPath, {
-			subagents: {
-				agentOverrides: {
-					reviewer: {
-						completionGuard: "false",
-					},
-				},
-			},
-		});
-
-		assert.throws(
-			() => discoverAgents(tempProject, "both"),
-			(error: unknown) => error instanceof Error
-				&& error.message.includes(settingsPath)
-				&& error.message.includes("reviewer")
-				&& error.message.includes("completionGuard"),
-		);
-	});
-
 	it("rejects unsupported outputMode override values", () => {
 		const settingsPath = path.join(tempHome, ".pi", "agent", "settings.json");
 		for (const outputMode of ["artifact-only", false]) {
@@ -1148,7 +1141,6 @@ describe("builtin agent overrides", () => {
 				tools: ["bash"],
 				mcpDirectTools: ["xcodebuild_list_sims"],
 				subagentOnlyExtensions: ["./tools/base-child.ts"],
-				completionGuard: false,
 			},
 			{
 				description: "Override description",
@@ -1167,7 +1159,6 @@ describe("builtin agent overrides", () => {
 				tools: undefined,
 				mcpDirectTools: undefined,
 				subagentOnlyExtensions: undefined,
-				completionGuard: true,
 			},
 		);
 
@@ -1185,7 +1176,6 @@ describe("builtin agent overrides", () => {
 			skills: false,
 			tools: false,
 			subagentOnlyExtensions: false,
-			completionGuard: true,
 		});
 		assert.ok(override);
 		fs.mkdirSync(path.join(tempProject, ".pi"), { recursive: true });

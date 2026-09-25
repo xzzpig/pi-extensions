@@ -7,10 +7,15 @@
  * without the real runtime; the default implementation wraps
  * `createAgentSession` from a pi package module.
  */
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { pinChildCacheRetention } from "../../shared/child-cache-retention.ts";
-import { getAgentDir } from "../../shared/utils.ts";
+import { getAgentDir, PI_CODING_AGENT_PACKAGE_ROOT_ENV } from "../../shared/utils.ts";
+import { resolvePackageSubpath } from "../background/runner-aliases.ts";
+import { PI_CODING_AGENT_PACKAGE, resolveInstalledPiPackageRoot, resolvePiPackageRoot } from "./pi-spawn.ts";
 import type { ChildRuntimeConfig } from "./child-runtime-config.ts";
 import type { RequiredChildExtensionSnapshot } from "../../shared/required-child-extensions.ts";
 import type { HerdrMachineReference, HerdrRemoteGitStatus } from "../../shared/types.ts";
@@ -237,11 +242,54 @@ function flushQueuedProviderRegistrations(loader: InstanceType<PiCodingAgentModu
 }
 
 /**
+ * Load the host-owned pi-coding-agent module by absolute package entry so a
+ * child cannot resolve an extension-owned copy. Root precedence is the running
+ * host, an explicit override, then the install tree. Once any root is selected,
+ * its manifest, package identity, entry, and import must all succeed; the bare
+ * specifier is used only when no root resolves.
+ */
+export async function loadHostPiCodingAgent(): Promise<PiCodingAgentModule> {
+	const overrideRoot = process.env[PI_CODING_AGENT_PACKAGE_ROOT_ENV]?.trim() || undefined;
+	const runningRoot = resolvePiPackageRoot();
+	const selectedOverride = runningRoot === undefined ? overrideRoot : undefined;
+	const root = runningRoot ?? selectedOverride ?? resolveInstalledPiPackageRoot();
+	if (root) {
+		const entry = fs.realpathSync(resolveHostPackageEntry(root, selectedOverride));
+		return import(pathToFileURL(entry).href);
+	}
+	return import(PI_CODING_AGENT_PACKAGE);
+}
+
+function resolveHostPackageEntry(root: string, overrideRoot: string | undefined): string {
+	const packageJson = path.join(root, "package.json");
+	const source = fs.readFileSync(packageJson, "utf8");
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(source);
+	} catch (error) {
+		throw new Error(`invalid host SDK manifest at ${packageJson}: malformed JSON`, { cause: error });
+	}
+	if (!isUnknownRecord(parsed)) throw new Error(`invalid host SDK manifest at ${packageJson}: expected a JSON object`);
+	const pkg = parsed;
+	if (pkg.name !== PI_CODING_AGENT_PACKAGE) {
+		const source = overrideRoot !== undefined ? ` (${PI_CODING_AGENT_PACKAGE_ROOT_ENV} override)` : "";
+		throw new Error(`refusing to load the host SDK from ${root}${source}: package.json name is "${String(pkg.name ?? "(none)")}", expected "${PI_CODING_AGENT_PACKAGE}"`);
+	}
+	const entry = resolvePackageSubpath(root, ".");
+	if (!entry) throw new Error(`host SDK manifest at ${packageJson} has no resolvable root export`);
+	return entry;
+}
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
  * Default factory: detached/background sessions retain the existing shared
  * runtime; each parent-bound foreground launch gets an isolated runtime.
  */
 export function createDefaultChildSessionFactory(options: DefaultChildSessionFactoryOptions = {}): ChildSessionFactory {
-	const loadPiCodingAgent = options.loadPiCodingAgent ?? (() => import("@earendil-works/pi-coding-agent"));
+	const loadPiCodingAgent = options.loadPiCodingAgent ?? loadHostPiCodingAgent;
 	const shutdownTimeoutMs = options.shutdownTimeoutMs ?? 5_000;
 	let runtime: ReturnType<PiCodingAgentModule["ModelRuntime"]["create"]> | undefined;
 	const live = new Set<ChildSession>();

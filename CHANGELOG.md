@@ -2,6 +2,136 @@
 
 ## [Unreleased]
 
+## [0.71.0] - 2026-09-23
+
+### Highlights
+
+- Other extensions can read subagent spend and follow async workflow progress as data, without scraping terminal output.
+- Workflow status can now confirm that every child process has actually exited.
+- Child sessions keep readable names such as `worker: fix auth refresh` in `/resume` and Herdr.
+- The full `subagent` tool loads only when a request needs it, which keeps unrelated prompts smaller.
+- Background runners, reviewers, and Bun, pnpm, and symlinked installs are more reliable.
+
+### Added
+
+- In-process RPC `cost` method. It returns the same parent-plus-child spend that `/subagent-cost` shows, as versioned data (`{ version: 1, parent, children, childTotal, total, unresolvedAsyncChildren }`). `ping.capabilities.cost` advertises `{ version: 1 }`. `/subagent-cost` output is unchanged. Thanks to [@raymondtri](https://github.com/raymondtri) for [#2378](https://github.com/nicobailon/pi-subagents/pull/2378).
+- Async `workflowScript` runs and the children they launch now emit public lifecycle events, so companion UIs can follow them without scraping terminal output. Thanks to [@navidemad](https://github.com/navidemad) for [#2382](https://github.com/nicobailon/pi-subagents/pull/2382).
+- Status for an async workflow now includes `details.workflowTerminalProof`. It reports `observed`, with each child's exit evidence, only after the workflow has stopped launching children and every async child has exited or failed to start. Otherwise it reports `pending` or `unknown` with a reason, including when the saved child list is missing. A finished workflow frees its capacity slot using the same check, so the two always agree. Thanks to [@alexei-led](https://github.com/alexei-led) for [#2436](https://github.com/nicobailon/pi-subagents/issues/2436) and [#2442](https://github.com/nicobailon/pi-subagents/pull/2442).
+
+### Changed
+
+- Packaged `worker` agents now start with fresh context instead of forking the parent's conversation. You can still request fork context per call or set it globally. Thanks to [@eduardopicolo-cb](https://github.com/eduardopicolo-cb) for [#2384](https://github.com/nicobailon/pi-subagents/issues/2384).
+- The full `subagent` tool stays hidden until a request activates it through the small `subagents_enable` loader, which keeps unrelated prompt context smaller. Direct commands, RPC, the TUI, and nested children work as before. Thanks to [@Knimoms](https://github.com/Knimoms) for [#2380](https://github.com/nicobailon/pi-subagents/pull/2380).
+- Child sessions keep a readable name (for example `worker: fix auth refresh`) in session lists, `/resume`, and Herdr while the intercom bridge is active. Nested children now reach their supervisor through the child's intercom ID instead of its session name. This needs a pi-intercom version that supports the `intercom:session-identity` claim; with an older pi-intercom, children keep the previous naming so routing still works. Thanks to [@Q-xuan](https://github.com/Q-xuan) for raising the problem in [#2432](https://github.com/nicobailon/pi-subagents/pull/2432).
+- The optional `@earendil-works/pi-ai` peer dependency now requires 0.86.1 or later, matching the oldest supported Pi host. Thanks to [@samuela](https://github.com/samuela) for [#2373](https://github.com/nicobailon/pi-subagents/issues/2373).
+- When a child's `structured_output` call is rejected, the result now includes a short summary of the validation errors. The missing-structured-output error is used only when the child never called the tool. Thanks to [@rtbe](https://github.com/rtbe) for [#2407](https://github.com/nicobailon/pi-subagents/issues/2407).
+
+### Fixed
+
+- `subagent` is available again after switching from an inactive session branch to one where it was activated.
+- Background runners and external CLI agents no longer inherit Git's repository variables (`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_CONFIG_*`, and the rest of `git rev-parse --local-env-vars`). When Pi was started from a Git hook or with `git --git-dir`, these made a child's Git commands act on the parent's repository instead of the child's working directory. Other variables such as `GIT_AUTHOR_*` still pass through, and an external agent's explicit environment allowlist is unchanged. Thanks to [@alexei-led](https://github.com/alexei-led) for [#2437](https://github.com/nicobailon/pi-subagents/issues/2437) and [#2440](https://github.com/nicobailon/pi-subagents/pull/2440).
+- Retained background runs no longer time out while the packaged runner is still starting. Thanks to [@muermaru](https://github.com/muermaru) for [#2403](https://github.com/nicobailon/pi-subagents/issues/2403), and to [@qsgy-edge](https://github.com/qsgy-edge) for the independent diagnosis and timing evidence in [#2415](https://github.com/nicobailon/pi-subagents/pull/2415).
+- When a background runner exits without writing a result, the failure notice now includes its exit code and signal. Thanks to [@grahama1970](https://github.com/grahama1970) for [#2423](https://github.com/nicobailon/pi-subagents/issues/2423).
+- A child that produced valid structured output keeps it as evidence when a later provider error or abort fails the run. Thanks to [@grahama1970](https://github.com/grahama1970) for [#2411](https://github.com/nicobailon/pi-subagents/issues/2411).
+- Completion notifications are no longer sent twice when the extension is registered more than once for the same session. Thanks to [@hongchu098](https://github.com/hongchu098) for [#2389](https://github.com/nicobailon/pi-subagents/issues/2389).
+- The bundled reviewer works in directories without Git: `watchdog_diff` reports that no baseline is available instead of failing the review. Thanks to [@matthewmathistrellys](https://github.com/matthewmathistrellys) for [#2422](https://github.com/nicobailon/pi-subagents/issues/2422).
+- The bundled reviewer's `watchdog_diff` counts as read-only, so a reviewer given a single output path returns its full report for the runtime to save, as introduced in [#426](https://github.com/nicobailon/pi-subagents/issues/426), with thanks to Alexander Gerdes ([@Avg8888](https://github.com/Avg8888)). Thanks to [@riskywhat](https://github.com/riskywhat) for [#2405](https://github.com/nicobailon/pi-subagents/issues/2405).
+- Watchdog reviews and permission checks work again on the Pi 0.86.1 package layout. Thanks to [@zieglar](https://github.com/zieglar) for the reproduction and version comparison in [#2377](https://github.com/nicobailon/pi-subagents/issues/2377).
+- A workflow child with no `agent` now fails with an error that names it (`Workflow child 'r1' has no agent…`) instead of the generic "Provide exactly one mode" message. Thanks to [@matthewmathistrellys](https://github.com/matthewmathistrellys) for raising the confusing error in [#2422](https://github.com/nicobailon/pi-subagents/issues/2422).
+- `/prompt-workflow` finds prompt files that are symlinks (as installed by dotfile managers such as GNU Stow or homeshick) and skips broken links instead of failing. Thanks to [@nietaki](https://github.com/nietaki) for [#2430](https://github.com/nicobailon/pi-subagents/issues/2430).
+- Completed retained agents can resume even when their own list of allowed child agents excludes them. Parent authority and that restriction both still apply; older retained children without the needed recovery data fail closed. Thanks to [@riskywhat](https://github.com/riskywhat) for [#2379](https://github.com/nicobailon/pi-subagents/issues/2379), building on the allowlist work in [#2338](https://github.com/nicobailon/pi-subagents/pull/2338) credited to [@shkrabov](https://github.com/shkrabov).
+- Guidance now says the list of retained workflow children is not complete: when you know a run's exact id, check its status and try resuming it before falling back to a labeled agent with the same role. Thanks to [@riskywhat](https://github.com/riskywhat) for [#2406](https://github.com/nicobailon/pi-subagents/issues/2406).
+- Skills marked `disable-model-invocation: true` are no longer shown to child agents, even when requested by name, and are no longer suggested to the model. Thanks to [@toRolex](https://github.com/toRolex) for [#2400](https://github.com/nicobailon/pi-subagents/pull/2400).
+- Pi hosts compiled with Bun are found from Pi's package directory or its bundled `share/pi-coding-agent` layout, while unrelated extension dependencies still cannot turn on dynamic tools. Thanks to [@fmoda3](https://github.com/fmoda3) for [#2417](https://github.com/nicobailon/pi-subagents/issues/2417).
+- pnpm installs follow npm-hosted peer aliases through their symlinks to the real package, so the package is not loaded twice. Thanks to [@henriquebastos](https://github.com/henriquebastos) for [#2409](https://github.com/nicobailon/pi-subagents/pull/2409).
+- npm and git installs detect dynamic tool support from the running Pi installation and keep the compact `subagents_enable` loader instead of an always-loaded `subagent` tool. Thanks to [@qsgy-edge](https://github.com/qsgy-edge) for [#2398](https://github.com/nicobailon/pi-subagents/pull/2398).
+- MCP direct tool names now match what pi-mcp-adapter registers, including servers whose tool names already start with the server name, the adapter's `mcp` prefix mode, and per-server `toolPrefix`. Thanks to [@qsgy-edge](https://github.com/qsgy-edge) for [#2395](https://github.com/nicobailon/pi-subagents/pull/2395).
+- Logs from running and failed external CLI agents can be viewed in Fleet, tool status, and the TUI. Thanks to [@Shujakuinkuraudo](https://github.com/Shujakuinkuraudo) for [#2375](https://github.com/nicobailon/pi-subagents/issues/2375).
+- Structured delegation updates report cumulative usage and no longer count missing provider cache numbers as zero. Thanks to [@bioShaun](https://github.com/bioShaun) for [#2374](https://github.com/nicobailon/pi-subagents/pull/2374).
+- Forked sessions keep Pi 0.87 context edits, including replaced content and signed Anthropic thinking blocks.
+## [0.70.1] - 2026-09-20
+
+### Highlights
+
+- Delegated tasks no longer fail solely because they finish without editing files.
+- Runtime-added agents now honor configured model, provider, and thinking preferences.
+- Foreground children launch reliably when Pi is installed outside the extension's own dependency tree.
+- Pi 0.86.1 support improves watchdog checks, provider-backed summaries, packaging, and standalone use.
+
+### Changed
+
+- Stop guessing whether task wording requires file edits. Successful tasks now follow their process result and explicitly configured output and acceptance checks. The `completionGuard` setting and `PI_SUBAGENTS_LLM_INTENT_ARBITER` switch have been removed. Thanks to [@SuTang-vain](https://github.com/SuTang-vain) for the reproduction that led to this change in [#2351](https://github.com/nicobailon/pi-subagents/issues/2351).
+- Clarify that a custom agent file fully replaces a bundled agent with the same name. Custom implementation agents must declare `acceptanceRole: writer` to receive writer acceptance defaults.
+- Update delegation guidance so large changes are split only when they contain independently testable parts.
+
+### Fixed
+
+- Apply `subagents.defaultModel`, `defaultProvider`, `defaultThinking`, and model-tier overrides to runtime-registered agents. Thanks to [@bioShaun](https://github.com/bioShaun) for [#2368](https://github.com/nicobailon/pi-subagents/pull/2368).
+- Show each workflow child's resolved model and thinking level in parent status output. Thanks to [@grahama1970](https://github.com/grahama1970) for [#2364](https://github.com/nicobailon/pi-subagents/pull/2364).
+- Preserve watchdog working-directory context and authenticated provider behavior for pruned-fork overflow summaries on Pi 0.86.1. Thanks to [@chem](https://github.com/chem) for [#2362](https://github.com/nicobailon/pi-subagents/issues/2362).
+- Launch the packaged inspector bootstrap from its compiled JavaScript instead of an absent TypeScript source. Thanks to [@pablog12](https://github.com/pablog12) for [#2360](https://github.com/nicobailon/pi-subagents/issues/2360).
+- Resolve the host `pi-coding-agent` package and its exports from the Pi installation that owns the session, so foreground children work across npm-hosted layouts without loading a second SDK instance. Thanks to [@nazerim](https://github.com/nazerim) for [#2348](https://github.com/nicobailon/pi-subagents/issues/2348).
+- Show an actionable expand shortcut when a host cannot provide its configured keybinding label.
+- Stop test-only background runners when their owning test process exits, and isolate test temporary data to reduce filesystem and Spotlight load.
+
+## [0.70.0] - 2026-09-19
+
+### Highlights
+
+- Control which extensions children load and which agents descendants may launch without widening their permissions.
+- Background workflows remain visible and recoverable through detaches, interruptions, restarts, and supervisor handoffs.
+- Invalid workflows, unsafe worktree launches, and blocked tool budgets now fail earlier with clearer results.
+- Linked worktrees, Windows supervisor polling, source-layout runners, and Orca progress tabs are more reliable.
+
+### Added
+
+- Add `subagents.defaultSubagentOnlyExtensions` for loading shared child-only extensions without disabling ambient extension discovery. Thanks to [@Shujakuinkuraudo](https://github.com/Shujakuinkuraudo) for #2284.
+- Allow agent frontmatter and `subagents.agentOverrides.<name>.allowedAgents` to restrict which canonical agents a child may launch without granting delegation or widening capability ceilings. Thanks to [@shkrabov](https://github.com/shkrabov) for #2312.
+
+### Changed
+
+- Document `/subagent-cost` as the combined accounting view for parent and asynchronous child usage. Thanks to [@swarajban](https://github.com/swarajban) for #2313.
+
+### Fixed
+
+- Wake root `bg_wait` calls when an owned nested child is waiting on `contact_supervisor`. Thanks to [@geril07](https://github.com/geril07) for #2344.
+- Keep explicitly detached workflow children visible, preserve their result lookup after the coordinator exits, and avoid treating launch receipts as completed results. Thanks to [@shaharmor](https://github.com/shaharmor) for #2299.
+- Settle interrupted, stopped, or timed-out background runs even when child session creation hangs. Thanks to [@onorua](https://github.com/onorua) for #2320.
+- Prevent concurrent workflow observers from overwriting retained-session startup confirmation and stranding resumed children. Thanks to [@luigiplr](https://github.com/luigiplr) for #2292.
+- Let children use the tools declared by their own agent configuration instead of incorrectly narrowing them to the parent's `--tools` selection. Thanks to [@carlesba](https://github.com/carlesba) for #2289.
+- Report foreground hard tool-budget blocks as `tool_budget_exhausted`, including calls blocked before execution starts. Thanks to [@kylerberry](https://github.com/kylerberry) for #2302.
+- Keep permission forwarding scoped to the validated launch parent instead of sharing an identity between independent root sessions. Thanks to [@kasumikira](https://github.com/kasumikira) for #2321.
+- Reject malformed inline and file-backed workflow scripts before creating asynchronous run state or launching children. Thanks to [@rtbe](https://github.com/rtbe) for #2309.
+- Reject direct asynchronous managed-worktree launches from a dirty source before creating run state or returning a receipt. Thanks to [@rtbe](https://github.com/rtbe) for #2311.
+- Avoid rejecting keyed property access after a mutable `runs.all(...)` result binding is reassigned.
+- Report useful rooted field paths for failed structured-output `if`/`then`/`else` schemas while preserving root `$defs`. Thanks to [@peedrr](https://github.com/peedrr) for #2317.
+- Give the bundled reviewer a bounded, read-only view of staged, unstaged, and untracked working-tree changes from its launch `HEAD`. Thanks to [@nateberkopec](https://github.com/nateberkopec) for #2306.
+- Show the correct child transcript when inspecting an indexed asynchronous workflow step. Thanks to [@swarajban](https://github.com/swarajban) for #2304.
+- Reconcile foreground and background child usage from terminal session messages when live usage events are missing or incomplete. Thanks to [@riique](https://github.com/riique) for #2295 and #2296.
+- Keep project-scoped agent memory stable across linked Git worktrees. Thanks to [@freezscholte](https://github.com/freezscholte) for #2293.
+- Keep Fleet workflow coverage stable during heartbeat, counter, and token updates without resetting an unchanged layout. Thanks to [@swarajban](https://github.com/swarajban) for #2305.
+- Continue supervisor polling on Windows when a temporary channel directory disappears during a scan. Thanks to [@asher-aqi](https://github.com/asher-aqi) for #2303.
+- Keep source-layout asynchronous runners on native Node TypeScript when child extensions are configured, with consistent peer-module resolution. Thanks to [@qsgy-edge](https://github.com/qsgy-edge) for #2314.
+- Make Orca progress tabs work under `fish`. Thanks to [@yourfriendaaron](https://github.com/yourfriendaaron) for #2294.
+- Prevent publishing the TypeScript source checkout directly to npm; only the compiled package is publishable. Thanks to [@niko-operal](https://github.com/niko-operal) for #2300.
+
+## [0.69.0] - 2026-09-18
+
+### Highlights
+- Gates can now return a JSON verdict. Point `gate` at a script that prints JSON, and its output becomes the child's structured output, so workflows can branch on a post-run check without the parent reading the child's report.
+- Ghostty detection no longer misfires inside terminals like cmux that embed Ghostty, so you stop seeing AppleScript `-1728`/`-2741` errors or the wrong window being targeted.
+- Hosts without `npm` start up quietly instead of printing `npm: command not found`.
+
+### Added
+
+- Typed gates: `gate` accepts `{ command, output: "json", schema?, timeoutMs? }` alongside the plain string form. When the command passes, its JSON stdout becomes the child's `structuredOutput` (validated against `schema` when given). Empty, truncated, or invalid output fails the gate rather than silently dropping the verdict. Typed gates always run (they are never cached), and a run cannot combine one with an `outputSchema`. See `docs/` for using command-runner agents as typed workflow steps and `examples/typed-gate` for a runnable example.
+
+### Fixed
+
+- The Ghostty inspector only activates when the macOS host bundle id identifies the standalone Ghostty app. Terminals that embed Ghostty (such as cmux) set `TERM_PROGRAM=ghostty` too, which previously targeted an unrelated Ghostty window or emitted `-1728`/`-2741` AppleScript errors; those hosts now fall back to the `inspector.command` hint. Thanks to [@wangpi26](https://github.com/wangpi26) for #2281.
+- Hosts without `npm` no longer print `/bin/sh: npm: command not found` during startup; global package-root discovery is optional and now stays silent when the package manager is missing. Thanks to [@PhrZer](https://github.com/PhrZer) for #2287.
+- Fixed `docs/tool-reference.md`, which claimed a default `maxOutput` cap of 200 KB / 5,000 lines. The cap applies only when `maxOutput` is set.
+
 ## [0.68.0] - 2026-09-15
 
 ### Highlights
@@ -9,7 +139,7 @@
 - Reuse workflow scripts with different JSON inputs, including scheduled runs.
 - Start npm-installed children much faster and let slow local models use Pi's configured HTTP timeout.
 - Keep local foreground children on the same extension-provided models as their parent without sharing provider state between sessions.
-- Get simpler, more predictable failures: each launch uses one resolved model instead of switching models automatically.
+- Ask async agents to checkpoint before a hard deadline, giving long-running work a chance to return useful progress instead of being killed.
 
 ### Added
 
@@ -33,6 +163,9 @@
 - Drop the bundled `@earendil-works/pi-server` copy that filled in the dependency Pi 0.85.0 forgot to ship. Background children on a Pi 0.85.0 host now fail to launch with a clear error; upgrade to Pi 0.85.1 or newer, which ships the package itself. Foreground children on 0.85.0 are unaffected.
 
 ### Fixed
+
+- Fail managed worktree setup before child launch when a required shared `node_modules` link cannot be created and verified, while preserving absent sources and preexisting destinations (#2283).
+- Allow checked writers to explicitly preserve a host-bound staged index while still rejecting child-created index changes (#2280).
 
 - Preserve the main watchdog's user scope across session compaction while clearing temporary activity state. Thanks to [@nimeetshah0](https://github.com/nimeetshah0) for #2263.
 - Resolve provider-extension models in local, in-process foreground children. Such a child never loads the parent's ambient extensions, so its model runtime only knew Pi's built-in providers and every model from an extension-registered provider failed with `Model "…" not found`; the child now inherits the providers registered in the parent session before resolving its model. Pane-native remote foreground children continue to use the remote machine's provider discovery and configuration. Builtin agents on such a model no longer need `async: true`. Thanks to [@lallenlowe](https://github.com/lallenlowe) for #2274.

@@ -2,6 +2,8 @@
 
 Parameters and actions for the `subagent` tool. These are what the LLM passes when it calls the tool; most users ask naturally or use slash commands instead.
 
+In a fresh parent session, `subagents_enable({})` makes the full `subagent` tool available on the immediately following model request without launching work. Pi may call it when delegation is authorized by the current request or applicable instructions, or to manage existing runs. Direct execution remains the default; task complexity does not grant delegation authority. The public `subagent` name and parameters are unchanged after activation.
+
 Call `{ action: "guide", topic: "tool-reference" }` for this reference or `topic: "workflows"` for [workflow recipes](workflows.md). Use `topic: "agents"` for authoring, `topic: "missions"` for missions/schedules, and `topic: "watchdog"` for watchdog controls. Guide reads do not change the schema or grant authority.
 
 ## Execution examples
@@ -95,7 +97,7 @@ The complete plain-JSON inventory is validated before the first launch (maximum 
 | `action` | string | - | Offline workflow `validate`, agent management (including `guide`, `children.list`, and `refine`/`refine.show`/`refine.rollback`), lane evidence (`lane.status`, `lane.recordMerge`, `lane.recordSupersession`), mission (`mission.create/list/show/update/resolve-decision/attach-run/close`), Inspect actions (`inspector.command/open/status/close`), Herdr project pane (`project.open/status/close`), status/control, plan-only `worktree.cleanup`, schedule, watchdog, or doctor action. |
 | `topic` | `overview \| workflows \| agents \| missions \| observability \| tool-reference \| configuration \| models \| watchdog \| extension-api` | `overview` | Packaged guide topic for `action: "guide"`. |
 | `config` | object/string | - | Agent config for management create/update. |
-| `context` | `fresh \| fork \| profile` | global or per-agent default, else `fresh` | Explicit `fresh` or `fork` overrides every workflow child. `profile` requires the selected agent's declared `defaultContext` and ignores config `defaultSubagentContext`; missing agent defaults fail. When omitted, [`defaultSubagentContext`](configuration.md#defaultsubagentcontext) wins over each agent's `defaultContext`; implicit fork falls back to fresh without a persisted parent session and leaf. Explicit fork is strict. Packaged `worker`, `oracle`, and `advisor` default to `fork`. |
+| `context` | `fresh \| fork \| profile` | global or per-agent default, else `fresh` | Explicit `fresh` or `fork` overrides every workflow child. `profile` requires the selected agent's declared `defaultContext` and ignores config `defaultSubagentContext`; missing agent defaults fail. When omitted, [`defaultSubagentContext`](configuration.md#defaultsubagentcontext) wins over each agent's `defaultContext`; implicit fork falls back to fresh without a persisted parent session and leaf. Explicit fork is strict. Packaged `worker` defaults to `fresh`; packaged `oracle` and `advisor` default to `fork`. |
 | `model` | string | agent default | Call `{action:"models"}` first and copy an exact `provider/id`; bare ids resolve only if unique, and agent names are not model ids. A suffix such as `provider/id:high` (`off/minimal/low/medium/high/xhigh/max`) overrides agent thinking. The `thinking` field is only for `watchdog.configure`, ignored on dispatch. |
 | `missionId` | string | - | Attach a workflow to an existing project mission instead of creating its default enclosing mission. |
 | `mission` | object/false | auto-create | Override the default enclosing mission with `{ title \| summary, objective?, goal?, budget?, labels? }`. Set exactly one non-empty `title` or `summary`; `objective` and `labels` are optional. `goal` may only be `true`, requires `budget.tokens`, and enables continuation notices. Pass `false` for an intentionally ephemeral workflow with no mission for it or its children and no `state` global. Explicit mission persistence failures are strict. |
@@ -122,13 +124,13 @@ The complete plain-JSON inventory is validated before the first launch (maximum 
 | `usageBudget` | object | none | Optional root-only reported-usage budget `{ tokens?: { soft?, hard }, costUsd?: { soft?, hard } }`. Soft limits are status-only. Hard limits prevent later child launches after reported usage is reconciled; already-running children are not stopped and no reservations are made. |
 | `cwd` | string | runtime cwd | Override working directory. With `machine`, the directory on that machine. |
 | `machine` | string | - | Herdr saved machine (label or profile id) for external-cli agents; see [agents.md](agents.md#running-external-cli-agents-on-a-herdr-saved-machine). |
-| `maxOutput` | object | 200KB, 5000 lines | Final output truncation limits. |
+| `maxOutput` | object | none | Final output truncation limits `{ bytes?, lines? }`. Only applied when set; there is no default cap on the inline path, so use `outputMode: "file-only"` for large outputs. |
 | `artifacts` | boolean | true | Write debug artifacts. |
 | `includeProgress` | boolean | false | Include full progress in result. |
 | `share` | boolean | false | Upload session export to GitHub Gist. |
 | `sessionDir` | string | derived | Override session log directory. |
 | `acceptance` | string/object/false | inferred | Configure evidence gates. See [Acceptance gates](#acceptance-gates). |
-| `gate` | string | - | One host-run verification command, shorthand for `acceptance: { level: "verified", verify: [{ id: "gate", command }] }`. Also valid on individual `runs.run`/`runs.all` items. Rejects `acceptance` except `false` (treated as omitted), and rejects retained `resume`. |
+| `gate` | string \| object | - | One host-run verification command, shorthand for `acceptance: { level: "verified", verify: [{ id: "gate", command }] }`. The object form `{ command, output?: "json", schema?, timeoutMs? }` adds a [typed gate](#typed-gates): with `output: "json"`, a passing command's stdout becomes the child's `structuredOutput`. Also valid on individual `runs.run`/`runs.all` items. Rejects `acceptance` except `false` (treated as omitted), rejects retained `resume`, and `output: "json"` rejects `outputSchema`. |
 
 ### Budget guidance for writers
 
@@ -142,7 +144,7 @@ Explicit `context: "fork"` fails fast when the parent session is not persisted, 
 
 When the inherited transcript contains signed Anthropic `thinking` / `redacted_thinking` blocks, `pi-subagents` strips those provider-private blocks from the forked child session: a thinking signature is bound to the session that produced it and cannot be replayed into a branch. The child keeps its requested thinking level and reasons fresh from its first turn; sanitizing the inherited transcript is not a downgrade. Explicit `context: "fork"` never silently downgrades to `fresh`.
 
-In workflow runs that omit `context`, each `runs.run` child follows the global `defaultSubagentContext` when set, then its own `defaultContext`. Without the global setting, a fresh-default scout can run fresh beside a fork-default worker. If the parent session file or current leaf is not available yet, implicit fork-default children run fresh. Pass explicit `context: "fork"` or `context: "fresh"` when you intentionally want one context for every child.
+In workflow runs that omit `context`, each `runs.run` child follows the global `defaultSubagentContext` when set, then its own `defaultContext`. Without the global setting, a fresh-default worker can run fresh beside a fork-default oracle. If the parent session file or current leaf is not available yet, implicit fork-default children run fresh. Pass explicit `context: "fork"` or `context: "fresh"` when you intentionally want one context for every child.
 
 ### Workflow steering
 
@@ -179,7 +181,7 @@ Workflows get `await state.get(key)` and `await state.set(key, value)` through t
 
 ### Retained children
 
-Completed workflow children from the current parent session stay addressable as retained children. `{ action: "children.list" }` lists up to the last 10 with their run ids and explicit `resumable` or `not resumable` state. Resume only rows reported `resumable`; if no row is resumable, start a same-role fallback challenge and label it as fallback. A later workflow continues a resumable child by passing `resume` instead of `agent`:
+Completed workflow children from the current parent session stay addressable as retained children. `{ action: "children.list" }` lists up to the last 10 with their run ids and explicit `resumable` or `not resumable` state. This workflow-only roster is not an exhaustive list of direct native children. Resume only rows reported `resumable`. When the exact run id of an intended direct child is known, inspect it with `{ action: "status", id: "<run-id>" }`; if status identifies the candidate, attempt `{ action: "resume", id: "<run-id>", message: "..." }`. Resume performs the authoritative eligibility check and may reject the attempt. Start a same-role fallback challenge, labeled as fallback, only when no known candidate exists or resume rejects eligibility. A later workflow continues a resumable child by passing `resume` instead of `agent`:
 
 ```js
 { workflowScript: `
@@ -196,7 +198,7 @@ Each workflow key identifies one result lane. Use a new stable workflow key for 
 
 Inside `workflowScript`, `await runs.run(key, { resume, task })` waits for the revived child to finish and returns its completed output and new `runId`. Each resume can return a new retained run id, so loops must continue from the latest returned `runId`. Top-level `{ action: "resume" }` remains detached and returns a background-run receipt.
 
-For a simple implementation challenge outside a workflow script, send the challenge through `subagent({ action: "resume", id: "<retained-writer-run>", message: "Reconsider the implementation and make any better current-scope change." })` only when `children.list` reports that retained writer as `resumable`. If no retained writer is resumable, start a same-role fallback challenge and record why it is a fallback. Use workflow `runs.run({ resume })` only when the script must await the revived writer output before the next step. Do not use `steer` as the sole challenge action for a completed retained child; `steer` with `mode: "follow_up"` only queues text for the next `resume`.
+For a simple implementation challenge outside a workflow script, send the challenge through `subagent({ action: "resume", id: "<retained-writer-run>", message: "Reconsider the implementation and make any better current-scope change." })` when `children.list` reports that retained writer as `resumable`, or attempt it after exact-id status inspection identifies a known direct-child candidate. Status is advisory; resume authoritatively checks eligibility and may reject missing recovery requirements. If there is no known candidate or resume rejects eligibility, start a same-role fallback challenge and record why it is a fallback. Use workflow `runs.run({ resume })` only when the script must await the revived writer output before the next step. Do not use `steer` as the sole challenge action for a completed retained child; `steer` with `mode: "follow_up"` only queues text for the next `resume`.
 
 `resume` and `agent` are mutually exclusive. The revived child keeps its stored agent, model, and tool contract. `gate` is rejected on retained resume items because resume uses the retained child contract.
 
@@ -242,7 +244,7 @@ Agent definitions are not loaded into context by default. Management actions let
 
 { action: "update", agent: "code-analysis.scout", config: { model: "openai/gpt-4o" } }
 { action: "update", agent: "code-analysis.scout", config: { acceptance: "" } } // clear the frontmatter default
-{ action: "update", agent: "code-analysis.scout", config: { acceptanceRole: false } } // restore inferred name fallback
+{ action: "update", agent: "code-analysis.scout", config: { acceptanceRole: false } } // restore default lightweight attestation
 { action: "delete", agent: "scout" }
 
 { action: "eject", agent: "reviewer" }
@@ -381,6 +383,8 @@ The `/subagents-steer <run-id> [--child <child-id>] <message>` slash command is 
 
 Every run resolves an effective acceptance policy. Callers may omit `acceptance` for the inferred default, or set it on single runs, top-level parallel task items, chain steps, static parallel tasks, and dynamic fanout templates.
 
+Checked writers reject staged files by default. When a parent intentionally starts a single writer with reviewed staged content, opt in with `acceptance: { level: "checked", preserveStagedIndex: true }`. The host captures the repository-wide index tree immediately before each launch (including each retained resume) and accepts only if `git write-tree` produces the same tree at completion. Working-tree-only fixes are allowed; child-created staging is rejected. Capture or terminal Git failures, including an unavailable or unmerged index, fail closed. This option does not stage or restore files and should not be used for concurrent writers sharing one worktree.
+
 Prefer an inline JSON object. JSON-encoded object strings are tolerated only during input normalization; invalid strings fail closed. `true` is invalid. Supported evidence kinds are `changed-files`, `tests-added`, `commands-run`, `validation-output`, `residual-risks`, `no-staged-files`, `diff-summary`, `review-findings`, and `manual-notes`. For example: `{level:"checked",evidence:["commands-run","changed-files"],review:{required:true}}`. Evidence levels end at `verified`; independent review is a separate gate, not a stronger evidence level.
 
 ```ts
@@ -406,17 +410,32 @@ When one host-run command is the entire verification contract, use the `gate` sh
 
 `gate` normalizes to verified acceptance with that single command, so the runtime executes it on the host and records the result as evidence. Verification results are memoized per tracked workspace state and effective environment, so an unchanged tree does not rerun the same command. Use explicit `acceptance.verify` when you need multiple commands, timeouts, or custom criteria. `gate` rejects `acceptance` except `false` (treated as omitted), and rejects retained `resume` items. With `worktree: true`, the gate runs inside the child's managed worktree.
 
+### Typed gates
+
+A gate given as `{ command, output: "json" }` runs like a string gate, and then parses the command's stdout:
+
+```js
+{ workflowScript: `return runs.run("review", {
+  agent: "reviewer", task: "Review the change", output: "reports/review.md", outputMode: "file-only",
+  gate: { command: "classify --report reports/review.md", output: "json",
+          schema: { type: "object", properties: { verdict: { enum: ["ok", "blocked"] } }, required: ["verdict"] } }
+})` }
+```
+
+- The command runs after the child's output file is saved, in the child's cwd or managed worktree, so it can read what the child wrote.
+- A passing command must print one JSON document on stdout (at most 12,000 characters). The parsed value becomes `result.structuredOutput`, is recorded on the verify run as `structuredOutput`, and is projected into `status.json`. When `schema` is given, the value must validate against it.
+- Empty, truncated, non-JSON, or schema-invalid stdout marks the gate `failed` with a `structuredOutputError`; explicit acceptance then fails the run, exactly as a non-zero exit would. The verdict is never silently dropped.
+- Typed gates are never memoized: their input (a report, a log) can change without the tracked tree changing.
+- `output: "json"` cannot be combined with an `outputSchema` from any source: the launch `outputSchema` param or the agent's frontmatter, paired with `gate`, an explicit `acceptance.verify` entry, or the agent's `defaultAcceptance`. Preflight rejects the launch and names both sources. A child has exactly one structured-output source.
+- `runs.lanes` treats a bridged `structuredOutput.verdict === "blocked"` like any other blocked stage. Scripts read the value as `result.structuredOutput`.
+
 ### Levels and inference
 
 Acceptance evidence levels are `auto`, `none`, `attested`, `checked`, and `verified`. `acceptance: "auto"` is the default.
 
-Review is a separate gate configured with `acceptance.review`:
+Automatic inference uses only the declared structured role: `acceptanceRole: "writer"` infers checked evidence, with `review: { agent: "reviewer", required: true }` for async and dynamic writers; `"read-only"` infers none; and an omitted role infers lightweight attestation. Task wording, risk vocabulary, and agent names do not affect inference. Explicit acceptance can raise or add policy, while `{ level: "none", reason: "..." }` disables inferred gates according to the existing policy rules.
 
-- Async, risky, and dynamic writer contexts infer checked evidence plus `review: { agent: "reviewer", required: true }`.
-- Tasks classified as read-only infer no acceptance by default, including reviews of release, migration, or security work; those topics do not turn a read-only task into implementation. With role metadata omitted, unknown risk-topic tasks retain their gate even when the agent name suggests a reviewer. Explicit acceptance requests still apply.
-- Normal writer tasks infer checked evidence without review.
-
-Agent frontmatter or `subagents.agentOverrides` may set `acceptanceRole: "read-only" | "writer"` for ambiguous tasks. Explicit task mutation or no-edit intent wins over that role, while omitted metadata preserves the existing reviewer/scout/worker name heuristics. The role affects acceptance inference only and does not change tool access.
+Agent frontmatter or `subagents.agentOverrides` may set `acceptanceRole`. The role affects acceptance inference only and does not change tool access. Review is a separate gate configured with `acceptance.review`.
 
 Edge cases:
 

@@ -39,6 +39,8 @@ export interface ChildPermissions {
 export interface ChildStructuredOutput {
 	schema: JsonSchemaObject;
 	acceptanceReport?: "optional" | "required";
+	/** Authoritative child-local state set only after validated capture succeeds. */
+	terminalState?: { captured: boolean };
 	/** Receives the validated value; `acceptanceReport` is undefined when the child omitted it. */
 	capture: (value: unknown, acceptanceReport: unknown | undefined) => void;
 }
@@ -58,6 +60,7 @@ export interface ChildSupervisorMetadata {
  * that hosts the child session builds it and passes it to the hooks directly.
  */
 export interface ChildRuntimeConfig {
+	cwd?: string;
 	runId?: string;
 	agent?: string;
 	childIndex?: number;

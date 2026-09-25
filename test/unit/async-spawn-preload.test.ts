@@ -77,13 +77,12 @@ test("executeAsyncSingle preloads all peer aliases before the selected runner lo
 			assert.equal(args[0], "--import");
 			assert.equal(args[1], new URL("../../runner-peer-preload.mjs", import.meta.url).href);
 			assert.ok(fs.existsSync(fileURLToPath(args[1])));
-			const nativeRunner = Boolean(process.features.typescript) && typeof nodeModule.registerHooks === "function" && !configuredExtension;
+			const nativeRunner = Boolean(process.features.typescript) && typeof nodeModule.registerHooks === "function";
 			if (nativeRunner) assert.equal(args[2], "--experimental-strip-types");
 			else assert.match(args[2], /[/\\]jiti-cli\.mjs$/);
-			assert.match(args[3], /[/\\]subagent-runner\.ts$/);
+			assert.match(args[3], /[/\\]subagent-runner-bootstrap\.ts$/);
 			assert.equal(args.length, 5);
 			assert.equal(options.env.PI_ASYNC_NATIVE_RUNNER, nativeRunner ? "1" : "0");
-			assert.equal(options.env.PI_ASYNC_COMPILED_RUNNER, "0");
 		}
 	} finally {
 		t.mock.restoreAll();

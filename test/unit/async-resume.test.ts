@@ -3,7 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
-import { asyncReviveRequiresRecoveryDescriptor, buildRevivedAsyncTask, resolveAsyncResumeTarget } from "../../src/runs/background/async-resume.ts";
+import { applySteeringRecoveryAgentConfig, asyncReviveRequiresRecoveryDescriptor, buildRevivedAsyncTask, resolveAsyncResumeTarget } from "../../src/runs/background/async-resume.ts";
+import type { AgentConfig } from "../../src/agents/agents.ts";
 import { createRunFanoutBudget } from "../../src/runs/shared/run-fanout-budget.ts";
 
 function writeJson(filePath: string, value: object): void {
@@ -42,10 +43,11 @@ describe("async resume lookup", () => {
 		}
 	});
 
-	it("resolves a workflow child session without a recovery descriptor", () => {
+	it("requires a recovery descriptor for a legacy workflow child session", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-resume-workflow-"));
 		try {
 			const asyncRoot = path.join(root, "runs");
+			const resultsDir = path.join(root, "results");
 			const sessionFile = path.join(root, "child-session.jsonl");
 			fs.writeFileSync(sessionFile, "", "utf-8");
 			writeJson(path.join(asyncRoot, "workflow-1", "status.json"), {
@@ -66,8 +68,41 @@ describe("async resume lookup", () => {
 			assert.equal(target.agent, "worker");
 			assert.equal(target.sessionFile, sessionFile);
 			assert.equal(target.recoveryDescriptor, undefined);
+			assert.equal(asyncReviveRequiresRecoveryDescriptor(target), true);
+			assert.equal(asyncReviveRequiresRecoveryDescriptor({}), true);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("uses a current workflow's persisted parent admission authority", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-resume-current-workflow-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const resultsDir = path.join(root, "results");
+			const sessionFile = path.join(root, "child-session.jsonl");
+			const parentAuthority = { version: 1 as const, allowedAgents: ["researcher", "worker"], denyExtensions: false, sources: ["workflow-parent"] };
+			fs.writeFileSync(sessionFile, "", "utf-8");
+			writeJson(path.join(asyncRoot, "workflow-2", "status.json"), {
+				runId: "workflow-2", mode: "workflow", state: "complete", startedAt: 100, endedAt: 200, lastUpdate: 200, cwd: root,
+				admissionCapabilityCeiling: parentAuthority,
+				steps: [{ agent: "worker", status: "complete", sessionFile, capabilityCeiling: { version: 1, allowedAgents: ["researcher"], denyExtensions: false, sources: ["agent:worker"] } }],
+			});
+
+			const target = resolveAsyncResumeTarget({ id: "workflow-2" }, { asyncDirRoot: asyncRoot, resultsDir });
+
+			assert.deepEqual(target.capabilityCeiling, parentAuthority);
 			assert.equal(asyncReviveRequiresRecoveryDescriptor(target), false);
-			assert.equal(asyncReviveRequiresRecoveryDescriptor({ mode: "single", sessionFile }), true);
+
+			fs.rmSync(path.join(asyncRoot, "workflow-2"), { recursive: true });
+			writeJson(path.join(resultsDir, "workflow-2.json"), {
+				runId: "workflow-2", mode: "workflow", state: "complete", success: true, cwd: root,
+				admissionCapabilityCeiling: parentAuthority,
+				results: [{ agent: "worker", success: true, sessionFile }],
+			});
+			const resultOnly = resolveAsyncResumeTarget({ id: "workflow-2" }, { asyncDirRoot: asyncRoot, resultsDir });
+			assert.deepEqual(resultOnly.capabilityCeiling, parentAuthority);
+			assert.equal(asyncReviveRequiresRecoveryDescriptor(resultOnly), false);
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}
@@ -294,6 +329,7 @@ describe("async resume lookup", () => {
 				...descriptor,
 				launchContractDigest: "launch-contract-digest",
 				allowNestedSubagents: true,
+				allowedAgents: ["worker", "scout", "worker"],
 				intercomBridge: { mode: "off" },
 				extensionBindings: { "shepherd.dispatch/1": { role: "coder" } },
 				requiredExtensions: [{ id: "provider", path: path.join(root, "provider.mjs") }],
@@ -302,13 +338,31 @@ describe("async resume lookup", () => {
 			assert.equal(valid.launchContractDigest, "launch-contract-digest");
 			assert.equal(valid.recoveryDescriptor?.launchContractDigest, "launch-contract-digest");
 			assert.equal(valid.recoveryDescriptor?.allowNestedSubagents, true);
+			assert.deepEqual(valid.recoveryDescriptor?.allowedAgents, ["scout", "worker"]);
 			assert.deepEqual(valid.recoveryDescriptor?.intercomBridge, { mode: "off" });
 			assert.deepEqual(valid.recoveryDescriptor?.extensionBindings, { "shepherd.dispatch/1": { role: "coder" } });
 			assert.deepEqual(valid.recoveryDescriptor?.requiredExtensions, [{ id: "provider", path: path.join(root, "provider.mjs") }]);
 			assert.ok(Object.isFrozen(valid.recoveryDescriptor?.requiredExtensions));
+			const currentAgent = {
+				name: "worker", description: "Current", systemPrompt: "Current", systemPromptMode: "replace",
+				inheritProjectContext: false, inheritGlobalContext: false, inheritSkills: false,
+				source: "project", filePath: "/current/worker.md", allowedAgents: ["reviewer", "worker"],
+			} as AgentConfig;
+			assert.deepEqual(applySteeringRecoveryAgentConfig(currentAgent, valid.recoveryDescriptor!).allowedAgents, ["scout", "worker"]);
+
+			writeJson(path.join(asyncDir, "recovery-descriptor.json"), { ...descriptor, allowedAgents: [] });
+			const denied = resolveAsyncResumeTarget({ id: "run-descriptor" }, { asyncDirRoot: asyncRoot, resultsDir });
+			assert.deepEqual(applySteeringRecoveryAgentConfig(currentAgent, denied.recoveryDescriptor!).allowedAgents, []);
+
+			writeJson(path.join(asyncDir, "recovery-descriptor.json"), descriptor);
+			const unrestricted = resolveAsyncResumeTarget({ id: "run-descriptor" }, { asyncDirRoot: asyncRoot, resultsDir });
+			assert.equal(applySteeringRecoveryAgentConfig(currentAgent, unrestricted.recoveryDescriptor!).allowedAgents, undefined);
 
 			writeJson(path.join(asyncDir, "recovery-descriptor.json"), { ...descriptor, allowNestedSubagents: "true" });
 			assert.throws(() => resolveAsyncResumeTarget({ id: "run-descriptor" }, { asyncDirRoot: asyncRoot, resultsDir }), /allowNestedSubagents/);
+
+			writeJson(path.join(asyncDir, "recovery-descriptor.json"), { ...descriptor, allowedAgents: ["bad name"] });
+			assert.throws(() => resolveAsyncResumeTarget({ id: "run-descriptor" }, { asyncDirRoot: asyncRoot, resultsDir }), /allowedAgents entry 'bad name'/);
 
 			writeJson(path.join(asyncDir, "recovery-descriptor.json"), { ...descriptor, extensionBindings: { invalid: true } });
 			assert.throws(() => resolveAsyncResumeTarget({ id: "run-descriptor" }, { asyncDirRoot: asyncRoot, resultsDir }), /namespace/);

@@ -128,6 +128,30 @@ describe("agent outputSchema frontmatter", () => {
 	}));
 });
 
+describe("agent allowedAgents frontmatter", () => {
+	it("preserves omission and empty lists, round-trips canonical lists, and rejects malformed names", () => withTempHome(() => {
+		const project = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-allowed-agents-"));
+		tempDirs.push(project);
+		const dir = path.join(project, ".pi", "agents");
+		writeAgent(path.join(dir, "omitted.md"), "---\nname: omitted\ndescription: Omitted\n---\n\nPrompt.\n");
+		writeAgent(path.join(dir, "empty.md"), "---\nname: empty\ndescription: Empty\nallowedAgents:\n---\n\nPrompt.\n");
+		writeAgent(path.join(dir, "listed.md"), "---\nname: listed\ndescription: Listed\nallowedAgents: worker, scout\n---\n\nPrompt.\n");
+		writeAgent(path.join(dir, "blocked.md"), "---\nname: blocked\ndescription: Blocked\nallowedAgents:\n  - reviewer\n  - package.scout\n---\n\nPrompt.\n");
+		writeAgent(path.join(dir, "invalid.md"), "---\nname: invalid\ndescription: Invalid\nallowedAgents: bad name\n---\n\nPrompt.\n");
+
+		const discovered = discoverAgents(project, "project");
+		assert.equal(discovered.agents.find((entry) => entry.name === "omitted")?.allowedAgents, undefined);
+		assert.deepEqual(discovered.agents.find((entry) => entry.name === "empty")?.allowedAgents, []);
+		assert.deepEqual(discovered.agents.find((entry) => entry.name === "listed")?.allowedAgents, ["scout", "worker"]);
+		assert.deepEqual(discovered.agents.find((entry) => entry.name === "blocked")?.allowedAgents, ["package.scout", "reviewer"]);
+		assert.match(discovered.agentDiagnostics.find((entry) => entry.name === "invalid")?.error ?? "", /Invalid capability ceiling allowedAgents entry 'bad name'/u);
+
+		const listed = discovered.agents.find((entry) => entry.name === "listed")!;
+		writeAgent(path.join(dir, "listed.md"), serializeAgent(listed));
+		assert.deepEqual(discoverAgents(project, "project").agents.find((entry) => entry.name === "listed")?.allowedAgents, ["scout", "worker"]);
+	}));
+});
+
 describe("agent definition directory inspection", () => {
 	it("distinguishes absent, empty, candidates, unreadable, and non-directory paths", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-inspection-"));
@@ -338,6 +362,8 @@ Review carefully.`);
 		tempDirs.push(project);
 		writeAgent(path.join(project, ".pi", "agents", "external.md"), `---\nname: external\ndescription: External\nrunner:\n  type: external-cli\n  command: node\nmodel: provider/model\n---\nBody`);
 		assert.match(discoverAgents(project, "project").agentDiagnostics?.[0]?.error ?? "", /unsupported Pi-only fields: model/);
+		writeAgent(path.join(project, ".pi", "agents", "external.md"), `---\nname: external\ndescription: External\nrunner:\n  type: external-cli\n  command: node\nallowedAgents: worker\n---\nBody`);
+		assert.match(discoverAgents(project, "project").agentDiagnostics?.[0]?.error ?? "", /unsupported Pi-only fields: allowedAgents/);
 	}));
 
 	it("keeps valid agents executable when another agent is malformed", () => withTempHome(() => {
@@ -658,16 +684,14 @@ Do work
 		assert.equal(worker?.defaultContext, "fork");
 	});
 
-	it("loads packaged worker and oracle with fork defaultContext and advisor alias", () => {
+	it("loads packaged worker fresh and oracle forked with advisor alias", () => {
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-builtin-default-context-"));
 		tempDirs.push(dir);
 		const agents = discoverAgentsAll(dir).builtin;
 
-		for (const name of ["worker", "oracle"]) {
-			const agent = agents.find((candidate) => candidate.name === name);
-			assert.equal(agent?.defaultContext, "fork", `${name} should default to fork context`);
-		}
+		assert.equal(agents.find((candidate) => candidate.name === "worker")?.defaultContext, "fresh");
 		const oracle = agents.find((candidate) => candidate.name === "oracle");
+		assert.equal(oracle?.defaultContext, "fork");
 		assert.deepEqual(oracle?.aliases, ["advisor"]);
 		assert.doesNotMatch(oracle?.tools?.join(",") ?? "", /contact_supervisor/);
 		for (const name of ["scout", "researcher", "oracle", "reviewer"]) {
@@ -1408,62 +1432,6 @@ Review only.
 	}));
 });
 
-describe("agent frontmatter completionGuard", () => {
-	it("serializes disabled completion guard into agent frontmatter", () => {
-		const agent: AgentConfig = {
-			name: "test-runner",
-			description: "Test runner",
-			systemPrompt: "Validate changes",
-			systemPromptMode: "replace",
-			inheritProjectContext: false,
-			inheritSkills: false,
-			source: "project",
-			filePath: "/tmp/test-runner.md",
-			completionGuard: false,
-		};
-
-		const serialized = serializeAgent(agent);
-		assert.match(serialized, /completionGuard: false/);
-	});
-
-	it("omits enabled completion guard from serialized frontmatter", () => {
-		const agent: AgentConfig = {
-			name: "test-runner",
-			description: "Test runner",
-			systemPrompt: "Validate changes",
-			systemPromptMode: "replace",
-			inheritProjectContext: false,
-			inheritSkills: false,
-			source: "project",
-			filePath: "/tmp/test-runner.md",
-			completionGuard: true,
-		};
-
-		const serialized = serializeAgent(agent);
-		assert.doesNotMatch(serialized, /completionGuard:/);
-	});
-
-	it("parses completionGuard from discovered agent frontmatter", () => {
-		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-agent-completion-guard-"));
-		tempDirs.push(dir);
-		const agentsDir = path.join(dir, ".pi", "agents");
-		fs.mkdirSync(agentsDir, { recursive: true });
-		fs.writeFileSync(path.join(agentsDir, "test-runner.md"), `---
-name: test-runner
-description: Test runner
-completionGuard: false
----
-
-Validate changes
-`, "utf-8");
-
-		const result = discoverAgents(dir, "project");
-		const runner = result.agents.find((agent) => agent.name === "test-runner");
-		assert.equal(runner?.completionGuard, false);
-		assert.equal(runner?.extraFields?.completionGuard, undefined);
-	});
-});
-
 describe("agent frontmatter maxSubagentDepth", () => {
 	it("serializes maxSubagentDepth into agent frontmatter", () => {
 		const agent: AgentConfig = {
@@ -1904,7 +1872,7 @@ Do work
 			const expectedTools = {
 				worker: ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor"],
 				delegate: ["read", "grep", "find", "ls", "bash", "edit", "write", "contact_supervisor"],
-				reviewer: ["read", "grep", "find", "ls", "contact_supervisor"],
+				reviewer: ["read", "grep", "find", "ls", "watchdog_diff", "contact_supervisor"],
 				scout: ["read", "grep", "find", "ls", "bash", "write", "contact_supervisor"],
 				researcher: ["read", "write", "web_search", "fetch_content", "get_search_content", "source_check"],
 				"evidence-auditor": ["read", "web_search", "fetch_content", "get_search_content", "source_check"],
