@@ -306,6 +306,10 @@ export interface GoalCreatedReportArgs {
 	tokenBudget?: number;
 }
 
+export function formatGoalBudget(budget: number | undefined): string {
+	return `Budget: ${budget === undefined ? "none" : `${budget} tokens`}`;
+}
+
 export function buildGoalCreatedReport(args: GoalCreatedReportArgs): string {
 	const opening = args.confirmed
 		? ["✓ Goal created and focused.", "Continuing automatically with the confirmed plan."]
@@ -317,7 +321,7 @@ export function buildGoalCreatedReport(args: GoalCreatedReportArgs): string {
 	if (args.taskCount !== undefined) details.push(`Tasks: ${args.taskCount}`);
 	if (args.verificationContract?.trim()) details.push(`Verification: ${args.verificationContract.trim()}`);
 	if (args.auditorEnabled !== undefined) details.push(`Auditor: ${args.auditorEnabled ? "enabled" : "disabled"}`);
-	if (args.tokenBudget !== undefined) details.push(`Token budget: ${args.tokenBudget}`);
+	details.push(formatGoalBudget(args.tokenBudget));
 	const summary = args.detailedSummary?.trim();
 	if (summary) details.push(summary);
 	if (details.length > 0) {

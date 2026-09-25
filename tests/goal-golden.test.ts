@@ -365,7 +365,7 @@ test("golden: compaction summary text for a focused active goal", () => {
 			"[FOCUSED GOAL]",
 			"Goal golden_fixture_goal — running",
 			"  Objective: Golden fixture goal objective",
-			"  Usage: 123K (123,456) tokens",
+			"  Cumulative goal usage (not context occupancy): 123K (123,456) tokens",
 			"  Time: 1h00m00s",
 			"",
 			"[INSTRUCTION]",

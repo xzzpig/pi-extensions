@@ -7,7 +7,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { formatDuration, formatTokenValue, statusLabel, truncateText } from "./goal-core.ts";
 import { extractVerificationContract } from "./goal-contract.ts";
 import { detailedSummary, goalDetails, renderGoalResult } from "./goal-format.ts";
-import { budgetLine } from "./goal-accounting.ts";
+import { modelBudgetLine } from "./goal-accounting.ts";
 import { buildGoalCreatedReport, buildTaskSummary, findTaskInTree, validateGoalAgentPause, validateGoalBlock } from "./goal-policy.ts";
 import { buildUnfocusedOpenGoalsSummary, otherOpenGoalCount } from "./goal-pool.ts";
 import { readGoalLedger, goalOracleState } from "./goal-ledger.ts";
@@ -99,8 +99,8 @@ pi.registerTool(defineTool({
 			const usageBits: string[] = [];
 			if (view.usage.activeSeconds > 0) usageBits.push(formatDuration(view.usage.activeSeconds));
 			if (view.usage.tokensUsed > 0) usageBits.push(formatTokenValue(view.usage.tokensUsed));
-			lines.push(`Usage: ${usageBits.length > 0 ? usageBits.join(" · ") : "none"}`);
-			const budget = budgetLine(view);
+			lines.push(`Cumulative goal usage (not context occupancy): ${usageBits.length > 0 ? usageBits.join(" · ") : "none"}`);
+			const budget = modelBudgetLine(view);
 			if (budget) lines.push(`Budget: ${budget}`);
 			if (view.taskList) {
 				lines.push(`Tasks: ${buildTaskSummary(view.taskList)}`);
@@ -145,7 +145,7 @@ pi.registerTool(defineTool({
 		} else if (view.currentTaskId) {
 			lines.push(`Current task: ${view.currentTaskId}`);
 		}
-		const budget = budgetLine(view);
+		const budget = modelBudgetLine(view);
 		if (budget) lines.push(`Budget: ${budget}`);
 		if ((view.status === "paused" || view.status === "blocked") && view.pauseReason) {
 			lines.push(`Blocker: ${view.pauseReason}`);
@@ -223,7 +223,7 @@ pi.registerTool(defineTool({
 			? `\n\nThe objective contains ${derived.length} ordered step${derived.length === 1 ? "" : "s"}; propose them as the task tree with set_goal_tasks if the user wants tracked milestones.`
 			: "";
 		return {
-			content: [{ type: "text", text: `${buildGoalCreatedReport({ objective: created?.objective ?? objective, detailedSummary: detailedSummary(created) })}${bootstrapLine}${otherLine}` }],
+			content: [{ type: "text", text: `${buildGoalCreatedReport({ objective: created?.objective ?? objective, detailedSummary: detailedSummary(created), tokenBudget: created?.tokenBudget })}${bootstrapLine}${otherLine}` }],
 			details: goalDetails(created),
 			terminate: true,
 		};

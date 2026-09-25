@@ -26,6 +26,8 @@ To retry a release after fixing workflow infrastructure:
 gh workflow run publish.yml --ref main -f tag=vX.Y.Z -f dry_run=false
 ```
 
+Registry metadata and the latest tag may lag a successful npm publish. Verification polls each for up to five minutes; a timeout does not mean publication failed. Check registry availability before retrying. Failed-job reruns reuse the successful ranking job’s artifact ID, including across run attempts.
+
 Each run attempt retains its own tarball artifact. Repacking on another platform or npm version can change archive integrity even when source files match; an integrity mismatch stops the retry for investigation.
 
 Manual runs default to dry run. A dry run does not exercise npm OIDC authentication; only a real publish verifies the complete exchange. Do not publish an extra version solely to test authentication.

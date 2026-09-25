@@ -1,3 +1,4 @@
+import { goalStoragePath, goalPoolSnapshotPath, isExternalGoalStorage, ensureGoalStorageDirectory, type GoalStorageContext } from "./goal-root.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -92,25 +93,15 @@ interface PoolSnapshot {
 	goals: GoalRecord[];
 }
 
-const POOL_SNAPSHOT_NAME = ".goals-pool-snapshot.json";
-/** Legacy location: inside the goals dir (its own write perturbed the dir mtime it used as its validity key — reliability campaign 2026-08-09). */
 const POOL_SNAPSHOT_LEGACY_NAME = ".goals-pool-snapshot.json";
-
-function poolSnapshotPath(root: string): string {
-	// OUTSIDE the watched goals dir: the snapshot records the goals-dir mtime
-	// as its freshness key, so writing it must not touch that directory (a
-	// temp-write + rename inside it changed the mtime and silently broke the
-	// claimed 2-op cold path — measured 3 ops; see reliability spec phase 3c).
-	return path.join(path.dirname(root), POOL_SNAPSHOT_NAME);
-}
 
 function poolSnapshotLegacyPath(root: string): string {
 	return path.join(root, POOL_SNAPSHOT_LEGACY_NAME);
 }
 
 /** Read + validate the snapshot; null when missing/corrupt/unsupported. */
-function readPoolSnapshotSync(root: string): PoolSnapshot | null {
-	const parsed = tryParsePoolSnapshotSync(poolSnapshotPath(root));
+function readPoolSnapshotSync(ctx: GoalFileContext, root: string): PoolSnapshot | null {
+	const parsed = tryParsePoolSnapshotSync(goalPoolSnapshotPath(ctx));
 	if (parsed) return parsed;
 	// One-time migration fallback: a snapshot written before 2026-08-09 lives
 	// inside the goals dir; keep serving it until the next write replaces it.
@@ -129,8 +120,8 @@ function tryParsePoolSnapshotSync(filePath: string): PoolSnapshot | null {
 	return null;
 }
 
-async function readPoolSnapshotAsync(root: string): Promise<PoolSnapshot | null> {
-	const parsed = await tryParsePoolSnapshotAsync(poolSnapshotPath(root));
+async function readPoolSnapshotAsync(ctx: GoalFileContext, root: string): Promise<PoolSnapshot | null> {
+	const parsed = await tryParsePoolSnapshotAsync(goalPoolSnapshotPath(ctx));
 	if (parsed) return parsed;
 	return tryParsePoolSnapshotAsync(poolSnapshotLegacyPath(root));
 }
@@ -161,7 +152,8 @@ function writePoolSnapshotSync(ctx: GoalFileContext, root: string, goals: GoalRe
 	try {
 		const rootStat = fs.lstatSync(root);
 		const snapshot: PoolSnapshot = { version: 1, dirMtimeMs: rootStat.mtimeMs, goals };
-		const target = poolSnapshotPath(root);
+		if (isExternalGoalStorage(ctx)) ensureGoalStorageDirectory(ctx, ".pi/goals/.metadata");
+		const target = goalPoolSnapshotPath(ctx);
 		const tempPath = `${target}.${process.pid}.${Date.now()}.tmp`;
 		fs.writeFileSync(tempPath, JSON.stringify(snapshot), "utf8");
 		fs.renameSync(tempPath, target);
@@ -175,7 +167,8 @@ async function writePoolSnapshotAsync(ctx: GoalFileContext, root: string, goals:
 	try {
 		const rootStat = await fs.promises.lstat(root);
 		const snapshot: PoolSnapshot = { version: 1, dirMtimeMs: rootStat.mtimeMs, goals };
-		const target = poolSnapshotPath(root);
+		if (isExternalGoalStorage(ctx)) ensureGoalStorageDirectory(ctx, ".pi/goals/.metadata");
+		const target = goalPoolSnapshotPath(ctx);
 		const tempPath = `${target}.${process.pid}.${Date.now()}.tmp`;
 		await fs.promises.writeFile(tempPath, JSON.stringify(snapshot), "utf8");
 		await fs.promises.rename(tempPath, target);
@@ -187,13 +180,14 @@ async function writePoolSnapshotAsync(ctx: GoalFileContext, root: string, goals:
 
 /** Merge a delta (written goal or removal) into the persisted snapshot. */
 function updatePoolSnapshotSync(ctx: GoalFileContext, root: string, mutate: (goals: GoalRecord[]) => GoalRecord[]): void {
-	const snapshot = readPoolSnapshotSync(root);
+	const snapshot = readPoolSnapshotSync(ctx, root);
 	if (!snapshot) return; // no snapshot yet — next cold read does a full scan + write
 	snapshot.goals = mutate(snapshot.goals);
 	try {
 		const rootStat = fs.lstatSync(root);
 		snapshot.dirMtimeMs = rootStat.mtimeMs;
-		const target = poolSnapshotPath(root);
+		if (isExternalGoalStorage(ctx)) ensureGoalStorageDirectory(ctx, ".pi/goals/.metadata");
+		const target = goalPoolSnapshotPath(ctx);
 		const tempPath = `${target}.${process.pid}.${Date.now()}.tmp`;
 		fs.writeFileSync(tempPath, JSON.stringify(snapshot), "utf8");
 		fs.renameSync(tempPath, target);
@@ -212,9 +206,7 @@ function removeLegacyPoolSnapshot(root: string): void {
 	}
 }
 
-export interface GoalFileContext {
-	cwd: string;
-}
+export type GoalFileContext = GoalStorageContext;
 
 export function timestampForFile(iso = nowIso()): string {
 	const date = new Date(iso);
@@ -236,8 +228,8 @@ export function isSafeRelativeUnder(ctx: GoalFileContext, rootRel: string, relPa
 	const normalized = normalizeRelPath(relPath);
 	const parent = normalizeRelPath(path.posix.dirname(normalized));
 	if (parent !== normalizeRelPath(rootRel)) return false;
-	const root = path.resolve(ctx.cwd, rootRel);
-	const absolutePath = path.resolve(ctx.cwd, normalized);
+	const root = goalStoragePath(ctx, rootRel);
+	const absolutePath = goalStoragePath(ctx, normalized);
 	const relative = path.relative(root, absolutePath);
 	return !relative.startsWith("..") && !path.isAbsolute(relative);
 }
@@ -264,14 +256,12 @@ export function sanitizeGoalPaths(ctx: GoalFileContext, goal: GoalRecord): GoalR
 }
 
 export function ensureDirectory(ctx: GoalFileContext, relPath: string): void {
-	const absolutePath = path.resolve(ctx.cwd, relPath);
-	fs.mkdirSync(absolutePath, { recursive: true });
-	if (fs.lstatSync(absolutePath).isSymbolicLink()) throw new Error(`Goal directory is a symlink: ${relPath}`);
+	ensureGoalStorageDirectory(ctx, relPath);
 }
 
 export function resolveGoalPath(ctx: GoalFileContext, rootRel: string, relPath: string): string {
-	const root = path.resolve(ctx.cwd, rootRel);
-	const absolutePath = path.resolve(ctx.cwd, normalizeRelPath(relPath));
+	const root = goalStoragePath(ctx, rootRel);
+	const absolutePath = goalStoragePath(ctx, normalizeRelPath(relPath));
 	const relative = path.relative(root, absolutePath);
 	if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error(`Goal path escapes ${rootRel}: ${relPath}`);
 	return absolutePath;
@@ -287,7 +277,7 @@ export function atomicWriteGoalFile(ctx: GoalFileContext, rootRel: string, relPa
 	fs.writeFileSync(tempPath, content, "utf8");
 	fs.renameSync(tempPath, filePath);
 	invalidateGoalPathCaches(filePath);
-	invalidateGoalDirCache(path.resolve(ctx.cwd, rootRel));
+	invalidateGoalDirCache(goalStoragePath(ctx, rootRel));
 }
 
 /** One metadata read suffices for existence and symlink checks; retain real IO errors. */
@@ -302,9 +292,9 @@ export function safeUnlinkGoalFile(ctx: GoalFileContext, rootRel: string, relPat
 	if (stat && !stat.isSymbolicLink()) {
 		fs.unlinkSync(filePath);
 		invalidateGoalPathCaches(filePath);
-		invalidateGoalDirCache(path.resolve(ctx.cwd, rootRel));
+		invalidateGoalDirCache(goalStoragePath(ctx, rootRel));
 		if (rootRel === GOALS_DIR) {
-			const root = path.resolve(ctx.cwd, GOALS_DIR);
+			const root = goalStoragePath(ctx, GOALS_DIR);
 			const normalized = normalizeRelPath(relPath);
 			updatePoolSnapshotSync(ctx, root, (goals) => goals.filter((g) => normalizeRelPath(g.activePath ?? "") !== normalized));
 		}
@@ -467,7 +457,7 @@ export function writeActiveGoalFile(ctx: GoalFileContext, current: GoalRecord): 
 	const next = sanitizeGoalPaths(ctx, { ...current, activePath, updatedAt: nowIso() });
 	atomicWriteGoalFile(ctx, GOALS_DIR, activePath, serializeGoalFile(next));
 	// Keep the persistent pool snapshot current (read-modify-write, best-effort).
-	updatePoolSnapshotSync(ctx, path.resolve(ctx.cwd, GOALS_DIR), (goals) => {
+	updatePoolSnapshotSync(ctx, goalStoragePath(ctx, GOALS_DIR), (goals) => {
 		const rest = goals.filter((g) => g.id !== next.id);
 		rest.push(next);
 		return rest;
@@ -494,7 +484,7 @@ export function mergeGoalPromptFromDisk(ctx: GoalFileContext, current: GoalRecor
 	// (invalidated on every extension write) — source the objective from it so
 	// the per-turn merge is 0 fs ops. When the cache is empty (cold or just
 	// invalidated by a write), fall back to the mtime-keyed direct parse.
-	const root = path.resolve(ctx.cwd, GOALS_DIR);
+	const root = goalStoragePath(ctx, GOALS_DIR);
 	const cached = goalPoolCache.get(root)?.get(current.id);
 	if (cached) return { ...current, objective: cached.objective };
 	try {
@@ -507,7 +497,7 @@ export function mergeGoalPromptFromDisk(ctx: GoalFileContext, current: GoalRecor
 }
 
 export function readActiveGoalFiles(ctx: GoalFileContext): GoalRecord[] {
-	const root = path.resolve(ctx.cwd, GOALS_DIR);
+	const root = goalStoragePath(ctx, GOALS_DIR);
 	const cachedPool = goalPoolCache.get(root);
 	if (cachedPool) return Array.from(cachedPool.values());
 	const goals = scanActiveGoalFiles(ctx, root);
@@ -522,7 +512,7 @@ function scanActiveGoalFiles(ctx: GoalFileContext, root: string): GoalRecord[] {
 	let entries: string[];
 	try {
 		const rootStat = fs.lstatSync(root);
-		if (rootStat.isSymbolicLink()) return [];
+		if (rootStat.isSymbolicLink()) { if (isExternalGoalStorage(ctx)) throw new Error(`Goal root is a symlink: ${root}`); return []; }
 		const cachedListing = goalDirListingCache.get(root);
 		if (cachedListing && cachedListing.mtimeMs === rootStat.mtimeMs) {
 			entries = cachedListing.names;
@@ -532,7 +522,8 @@ function scanActiveGoalFiles(ctx: GoalFileContext, root: string): GoalRecord[] {
 				.sort((a, b) => a.localeCompare(b));
 			goalDirListingCache.set(root, { mtimeMs: rootStat.mtimeMs, names: entries });
 		}
-	} catch {
+	} catch (error) {
+		if (isExternalGoalStorage(ctx)) throw error;
 		return [];
 	}
 	return entries
@@ -547,7 +538,7 @@ function scanActiveGoalFiles(ctx: GoalFileContext, root: string): GoalRecord[] {
 }
 
 export function readActiveGoalPoolView(ctx: GoalFileContext): ReadonlyMap<string, GoalRecord> {
- const root = path.resolve(ctx.cwd, GOALS_DIR);
+ const root = goalStoragePath(ctx, GOALS_DIR);
  const cached = goalPoolCache.get(root);
  if (cached) return cached;
  const pool = readPoolWithSnapshotSync(ctx, root);
@@ -571,7 +562,7 @@ function readPoolWithSnapshotSync(ctx: GoalFileContext, root: string): Map<strin
 		rootStat = null;
 	}
 	if (rootStat && !rootStat.isSymbolicLink()) {
-		const snapshot = readPoolSnapshotSync(root);
+		const snapshot = readPoolSnapshotSync(ctx, root);
 		if (snapshot) {
 			if (snapshot.dirMtimeMs === rootStat.mtimeMs || activeGoalNamesMatchSync(root, snapshot)) {
 				return hydratePoolFromSnapshot(snapshot);
@@ -620,7 +611,7 @@ function activeGoalNamesMatch(names: string[], snapshot: PoolSnapshot): boolean 
  * (reconcile, get_goal, prompts) are zero-op.
  */
 export async function readActiveGoalPoolAsync(ctx: GoalFileContext): Promise<Map<string, GoalRecord>> {
-	const root = path.resolve(ctx.cwd, GOALS_DIR);
+	const root = goalStoragePath(ctx, GOALS_DIR);
 	const cachedPool = goalPoolCache.get(root);
 	if (cachedPool) return new Map(cachedPool);
 	const pool = await readPoolWithSnapshotAsync(ctx, root);
@@ -636,7 +627,7 @@ async function readPoolWithSnapshotAsync(ctx: GoalFileContext, root: string): Pr
 		rootStat = null;
 	}
 	if (rootStat && !rootStat.isSymbolicLink()) {
-		const snapshot = await readPoolSnapshotAsync(root);
+		const snapshot = await readPoolSnapshotAsync(ctx, root);
 		if (snapshot) {
 			if (snapshot.dirMtimeMs === rootStat.mtimeMs || (await activeGoalNamesMatchAsync(root, snapshot))) {
 				return hydratePoolFromSnapshot(snapshot);
@@ -652,11 +643,12 @@ async function scanActiveGoalFilesAsync(ctx: GoalFileContext, root: string): Pro
 	let names: string[];
 	try {
 		const rootStat = await fs.promises.lstat(root);
-		if (rootStat.isSymbolicLink()) return new Map();
+		if (rootStat.isSymbolicLink()) { if (isExternalGoalStorage(ctx)) throw new Error(`Goal root is a symlink: ${root}`); return new Map(); }
 		names = (await fs.promises.readdir(root))
 			.filter((name) => /^active_goal_.*\.md$/.test(name))
 			.sort((a, b) => a.localeCompare(b));
-	} catch {
+	} catch (error) {
+		if (isExternalGoalStorage(ctx)) throw error;
 		return new Map();
 	}
 	const parsed = await Promise.all(names.map(async (name): Promise<GoalRecord | null> => {

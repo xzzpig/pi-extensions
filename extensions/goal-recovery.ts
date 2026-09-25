@@ -1,3 +1,4 @@
+import { goalStoragePath, goalPoolSnapshotPath, ensureGoalStorageDirectory } from "./storage/goal-root.ts";
 /**
  * /goal-recovery — read-only storage/recovery report + guarded repair.
  *
@@ -18,7 +19,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { readGoalLedger, type GoalLedgerContext } from "./goal-ledger.ts";
+import { readGoalLedger } from "./goal-ledger.ts";
 import { GOAL_LOCK_DIR } from "./storage/goal-lock.ts";
 import { invalidateGoalPoolCache, parseGoalFile, readActiveGoalPool, type GoalFileContext } from "./storage/goal-files.ts";
 
@@ -73,17 +74,17 @@ function pidAlive(pid: number): boolean {
 	}
 }
 
-function goalsDir(cwd: string): string {
-	return path.join(cwd, GOALS_DIR);
+function goalsDir(ctx: GoalFileContext): string {
+	return goalStoragePath(ctx, GOALS_DIR);
 }
 
-function locksDir(cwd: string): string {
-	return path.join(cwd, GOAL_LOCK_DIR);
+function locksDir(ctx: GoalFileContext): string {
+	return goalStoragePath(ctx, GOAL_LOCK_DIR);
 }
 
 /** Scan the goals dir for active_goal files that fail to parse. */
-function scanMalformedGoalFiles(cwd: string): MalformedGoalFileEntry[] {
-	const root = goalsDir(cwd);
+function scanMalformedGoalFiles(ctx: GoalFileContext): MalformedGoalFileEntry[] {
+	const root = goalsDir(ctx);
 	const out: MalformedGoalFileEntry[] = [];
 	let names: string[];
 	try {
@@ -103,8 +104,8 @@ function scanMalformedGoalFiles(cwd: string): MalformedGoalFileEntry[] {
 }
 
 /** Scan the lock dir for lock files whose pid is dead or whose age exceeds the TTL. */
-function scanStaleLocks(cwd: string): StaleLockEntry[] {
-	const dir = locksDir(cwd);
+function scanStaleLocks(ctx: GoalFileContext): StaleLockEntry[] {
+	const dir = locksDir(ctx);
 	const out: StaleLockEntry[] = [];
 	let names: string[];
 	try {
@@ -133,8 +134,8 @@ function scanStaleLocks(cwd: string): StaleLockEntry[] {
 }
 
 /** Snapshot goals whose active file no longer exists in the goals dir. */
-function scanOrphanedSnapshotGoals(cwd: string): OrphanedSnapshotEntry[] {
-	const root = goalsDir(cwd);
+function scanOrphanedSnapshotGoals(ctx: GoalFileContext): OrphanedSnapshotEntry[] {
+	const root = goalsDir(ctx);
 	const out: OrphanedSnapshotEntry[] = [];
 	let present: Set<string>;
 	try {
@@ -143,7 +144,7 @@ function scanOrphanedSnapshotGoals(cwd: string): OrphanedSnapshotEntry[] {
 		return out;
 	}
 	try {
-		const snapshotPath = path.join(cwd, ".pi", ".goals-pool-snapshot.json");
+		const snapshotPath = goalPoolSnapshotPath(ctx);
 		const snapshot = JSON.parse(fs.readFileSync(snapshotPath, "utf8")) as { goals?: Array<{ goalId?: unknown; activePath?: unknown }> };
 		for (const goal of snapshot.goals ?? []) {
 			const activePath = typeof goal.activePath === "string" ? goal.activePath : "";
@@ -160,10 +161,10 @@ function scanOrphanedSnapshotGoals(cwd: string): OrphanedSnapshotEntry[] {
 
 /** Read-only recovery report. Never mutates goal storage. */
 export function runRecoveryReport(ctx: GoalFileContext): RecoveryReport {
-	const ledger = readGoalLedger({ cwd: ctx.cwd } as GoalLedgerContext);
-	const malformedGoalFiles = scanMalformedGoalFiles(ctx.cwd);
-	const staleLocks = scanStaleLocks(ctx.cwd);
-	const orphanedSnapshotGoals = scanOrphanedSnapshotGoals(ctx.cwd);
+	const ledger = readGoalLedger(ctx);
+	const malformedGoalFiles = scanMalformedGoalFiles(ctx);
+	const staleLocks = scanStaleLocks(ctx);
+	const orphanedSnapshotGoals = scanOrphanedSnapshotGoals(ctx);
 	return {
 		scannedAt: new Date().toISOString(),
 		malformedGoalFiles,
@@ -193,12 +194,12 @@ export async function runRecoveryRepair(
 	if (!confirmed) return { applied: [], backupDir: null, confirmed: false };
 
 	const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-	const backupDir = path.join(ctx.cwd, RECOVERY_BACKUP_DIR, stamp);
-	fs.mkdirSync(backupDir, { recursive: true });
+	const backupDir = goalStoragePath(ctx, `${RECOVERY_BACKUP_DIR}/${stamp}`);
+	ensureGoalStorageDirectory(ctx, `${RECOVERY_BACKUP_DIR}/${stamp}`);
 	const applied: string[] = [];
 
 	for (const lock of report.staleLocks) {
-		const source = path.join(locksDir(ctx.cwd), lock.fileName);
+		const source = path.join(locksDir(ctx), lock.fileName);
 		try {
 			fs.copyFileSync(source, path.join(backupDir, `lock-${safeLockName(lock.fileName)}`));
 			fs.unlinkSync(source);
@@ -209,7 +210,7 @@ export async function runRecoveryRepair(
 	}
 
 	if (report.orphanedSnapshotGoals.length > 0) {
-		const snapshotPath = path.join(ctx.cwd, ".pi", ".goals-pool-snapshot.json");
+		const snapshotPath = goalPoolSnapshotPath(ctx);
 		try {
 			if (fs.existsSync(snapshotPath)) {
 				fs.copyFileSync(snapshotPath, path.join(backupDir, "pool-snapshot.json"));

@@ -30,14 +30,17 @@ import { classifyRows } from "./classify.mjs";
 const benchDir = fileURLToPath(new URL(".", import.meta.url));
 const campaign = process.argv[2] ?? "extension-review-plan";
 const cfg = campaignConfig(campaign);
-const before = JSON.parse(readFileSync(path.join(benchDir, `${cfg.jsonPrefix}before.json`), "utf8"));
+// CI measures the current base on the same machine; historical 10x campaign
+// targets still apply when no reference is supplied.
+const reference = process.env.PI_GOAL_BENCH_REFERENCE;
+const before = JSON.parse(readFileSync(reference ?? path.join(benchDir, `${cfg.jsonPrefix}before.json`), "utf8"));
 const afterPath = path.join(benchDir, `${cfg.jsonPrefix}after.json`);
 let after = null;
 try {
 	after = JSON.parse(readFileSync(afterPath, "utf8"));
 } catch {
 	console.error("[B6] baseline-after.json missing — nothing to gate yet. Run run-bench.mjs after first.");
-	process.exit(0);
+	process.exit(1);
 }
 
 const byId = (rows) => new Map(rows.map((r) => [r.id, r]));
@@ -114,7 +117,7 @@ if (campaign === "naf") {
 			failures.push(`${row.id}: missing in after run`);
 			continue;
 		}
-		if (row.cls === "headroom" && row.target) {
+		if (!reference && row.cls === "headroom" && row.target) {
 			const { metric, limit } = row.target;
 			const beforeValue = metric === "p50 ms" ? row.p50 : row.ops;
 			const afterValue = metric === "p50 ms" ? aRow.p50 : aRow.ops;
@@ -134,7 +137,7 @@ if (campaign === "naf") {
 	}
 }
 
-console.log(`[B6] campaign=${campaign}: gating ${after.rows.length} after rows against ${before.rows.length} before rows`);
+console.log(`[B6] campaign=${campaign}: gating ${after.rows.length} after rows against ${before.rows.length} before rows${reference ? " (same-runner reference; regression checks)" : ""}`);
 if (regressions.length > 0) {
 	console.log("\nRegressions (after p50 > max(before*1.5, before+10)ms):");
 	for (const r of regressions) console.log(`  FAIL ${r.id}: ${r.before}ms -> ${r.after}ms (limit ${r.limit}ms)`);

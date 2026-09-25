@@ -104,17 +104,22 @@ export function run(baseline) {
 		details: { version: 2, kind: "checkpoint", goalId: "bench-goal", status: "active", revision: 0, checkpointSeq: 1001, timestamp: Date.now() },
 	});
 	const compacted = compactGoalCheckpointContext(messages, goal);
-	const visibleCheckpoints = compacted.filter((m) => m && m.customType === "pi-goal-event").length;
-	if (visibleCheckpoints > 1) throw new Error(`B10 gate: provider-visible checkpoints = ${visibleCheckpoints} > 1`);
+	const checkpoints = compacted.filter(m => m && m.customType === "pi-goal-event");
+	// Since #68, tiny triggers stay in their original positions for cache continuity.
+	// Full goal snapshots must still never survive normalization.
+	const visibleCheckpoints = checkpoints.filter(m => String(m.content).length > CHECKPOINT_TRIGGER_MAX_CHARS || String(m.content).includes("[PI GOAL ACTIVE")).length;
+	if (visibleCheckpoints !== 0) throw new Error(`B10 gate: ${visibleCheckpoints} unbounded/full-state checkpoints`);
+	if (compacted.length !== messages.length || checkpoints.length !== 1001) throw new Error("B10 gate: normalization changed history positions");
+	for (let i = 0; i < messages.length; i++) if (messages[i].role === "assistant" && compacted[i] !== messages[i]) throw new Error("B10 gate: assistant history changed");
 	baseline.add({
 		id: "B10.checkpoint.provider-context.1000",
-		label: "provider-visible checkpoints after compaction (1000-turn fixture)",
+		label: "unbounded provider-visible checkpoints (1000-turn fixture)",
 		modules: "extensions/goal-events",
 		fixture: "1001 checkpoints (1000 legacy + 1 v2), 50-task tree",
 		p50: "-", p95: "-", max: "-",
 		ops: visibleCheckpoints,
 		n: 1,
-		notes: "must be <= 1; latest marker rewritten to bounded v2 content",
+		notes: "must be 0; all 1001 bounded triggers retain their history positions",
 	});
 
 	// ── legacy session recovery (850-entry issue #30 fixture) ────────────
@@ -150,7 +155,7 @@ export function run(baseline) {
 	// full-goal-block markers and objective occurrences guards PR A's
 	// single-source invariant.
 	const systemPrompt = `${"base system ".repeat(10)}\n\n${goalPrompt(goal)}`;
-	const composed = systemPrompt + "\n" + String(compacted[compacted.length - 1]?.content ?? "");
+	const composed = systemPrompt + "\n" + compacted.map(m => typeof m.content === "string" ? m.content : JSON.stringify(m.content)).join("\n");
 	const fullGoalBlocks = (composed.match(/\[PI GOAL ACTIVE goalId=/g) ?? []).length;
 	const objectiveOccurrences = (composed.match(/Implement the full feature set\./g) ?? []).length;
 	if (fullGoalBlocks !== 1) throw new Error(`B10 gate: composed full goal blocks = ${fullGoalBlocks} != 1`);

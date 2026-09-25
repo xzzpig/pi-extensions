@@ -1,10 +1,10 @@
-import { schedulerSummary } from "../goal-scheduler-state.ts";
+import { schedulerSummaryParts } from "../goal-scheduler-state.ts";
 import { taskIndex } from "../goal-task-index.ts";
 import { statusLabel, truncateText } from "../goal-core.ts";
 import { promptSafeObjective } from "../goal-contract.ts";
 import type { GoalRecord, GoalTask } from "../goal-record.ts";
 import type { GoalSettings } from "../goal-settings.ts";
-import { budgetLine } from "../goal-accounting.ts";
+import { modelBudgetLine, contextUsageLine, type GoalContextUsage } from "../goal-accounting.ts";
 
 /** Hard cap for the complete injected prompt fragment (TECH Stage 6). */
 export const MAX_PROMPT_FRAGMENT_CHARS = 10_000;
@@ -228,10 +228,23 @@ function retainedTaskChars(task: GoalTask): number {
   + (task.skipReason?.length ?? 0) + (task.subtasks?.reduce((n, child) => n + retainedTaskChars(child), 0) ?? 0);
 }
 
-export function goalPrompt(goal: GoalRecord, settings?: GoalSettings): string {
+export function goalPromptParts(goal: GoalRecord, settings?: GoalSettings, contextUsage?: GoalContextUsage): { state: string; counters: string } {
+	// The policy block changes only when the goal itself changes; the counters
+	// change nearly every turn. Splitting them lets request-only injection retain
+	// each at its own rate so consecutive provider requests stay prefix-stable.
+	// Scheduling instructions ride with the policy block: they are cleared by
+	// omission, so a retained copy would keep issuing a cancelled order.
 	const fixed = cachedPrompt(goal, settings, "goal", () => buildGoalPrompt(goal, settings));
- const budget = budgetLine(goal);
- return `${fixed}\nUsage: ${formatUsage(goal)}${budget ? `\n${budget}` : ""}\n${schedulerSummary(goal.scheduler, settings?.maxAutonomousRuns)}`;
+	const { runs, instructions } = schedulerSummaryParts(goal.scheduler, settings?.maxAutonomousRuns);
+	const limits = `Limits: lifetime tokens=${goal.tokenBudget ?? "none"}; runs=${settings?.maxAutonomousRuns ?? "unlimited"}.`;
+	const state = [fixed, instructions, limits, "Usage spans goal turns, not context. Latest snapshot supersedes earlier snapshots."].filter(Boolean).join("\n");
+	const counters = `Goal snapshot: ${formatUsage(goal)}\n${contextUsageLine(contextUsage)}\n${runs}`;
+	return { state, counters };
+}
+
+export function goalPrompt(goal: GoalRecord, settings?: GoalSettings): string {
+	const { state, counters } = goalPromptParts(goal, settings);
+	return `${state}\n${counters}`;
 }
 
 function buildGoalPrompt(goal: GoalRecord, settings?: GoalSettings): string {
@@ -247,7 +260,7 @@ function buildGoalPrompt(goal: GoalRecord, settings?: GoalSettings): string {
 
 /** Steering injected when the user edits the objective (bounded). */
 export function objectiveEditedPrompt(goal: GoalRecord): string {
-	const budget = budgetLine(goal);
+	const budget = modelBudgetLine(goal);
 	let prompt = [
 		`[GOAL OBJECTIVE UPDATED goalId=${goal.id}]`,
 		"The user revised this goal's objective via /goal-tweak. Usage, tasks, mode, and budget were preserved.",
@@ -289,7 +302,7 @@ Do not perform task work for this stale checkpoint. Do not call tools. Reply bri
 export function unfocusedOpenGoalsPrompt(openGoalCount: number): string {
 	return [
 		"[PI GOAL UNFOCUSED]",
-		`${openGoalCount} open pi goal${openGoalCount === 1 ? "" : "s"} exist, but this session has no focused goal.`,
+		`${openGoalCount} open pi goal${openGoalCount === 1 ? " exists" : "s exist"}, but this session has no focused goal.`,
 		"Do not choose or switch focus autonomously. Focus is human-owned intent.",
 		"Ask the user to run /goal-focus, /goal-list, or /goal-resume before doing goal work.",
 	].join("\n");

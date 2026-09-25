@@ -160,7 +160,7 @@ function minimalGoalMetadata(goal: GoalRecord): string {
 		`Goal id: ${goal.id}`,
 		`Status: ${statusLabel(goal)}`,
 		`Mode: ${goal.sisyphus ? "sisyphus" : "regular"}`,
-		goal.tokenBudget ? `Budget: ${goal.tokenBudget} tokens (${goal.usage.tokensUsed} used)` : undefined,
+		goal.tokenBudget ? `Lifetime spending cap: ${goal.tokenBudget} tokens (${goal.usage.tokensUsed} cumulatively used; not context occupancy)` : undefined,
 	].filter(Boolean).join("\n");
 }
 
@@ -177,7 +177,7 @@ export function buildGoalAuditorPrompt(args: {
 		"You are the independent completion auditor for pi-goal. Decide whether the user's objective is actually satisfied.",
 		"Audit checklist:",
 		"1. Extract the real success criteria, including every explicit requirement and quality/reader outcome. Disapprove missing, contradicted, weakly verified or uninspectable requirements.",
-		"2. Inspect real artifacts with read/grep/find/ls/bash as needed. Do not mutate files or run destructive commands. Paperwork, intent, file/word counts, build success and plausible summaries alone are not proof.",
+		"2. Inspect real artifacts with read/grep/find/ls/bash as needed. Never mutate files or clean runtime metadata (.pi goals/subagents). Report environment failures separately. Paperwork, counts and build success alone are not proof.",
 		...(!args.settings?.disableContracts && args.goal.verificationContract?.trim()
 			? ["3. Verify that the executor has satisfied every item in the <verification_contract>. If any item is missing or weakly addressed, disapprove."] : []),
 		"4. Explain missing or weak evidence concisely. Disapprove alpha scaffold, generated template, shallow draft or proxy milestones lacking the user-facing value requested.",

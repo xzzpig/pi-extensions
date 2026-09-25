@@ -1,3 +1,5 @@
+import * as path from "node:path";
+import { goalStorageContext, goalStorageRoot } from "./storage/goal-root.ts";
 import { type AgentToolResult, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { FOCUS_ENTRY, STATE_ENTRY, GOAL_EVENT_ENTRY, goalDetails } from "./goal-format.ts";
 import { loadGoalSettings, loadGoalSettingsFileConfig } from "./goal-settings.ts";
@@ -409,9 +411,11 @@ export function createGoalCore(
 		return goalService.reconcileFocused(ctx, opts);
 	}
 
+	let focusStorageRoot: string | undefined;
+	let externalFocusRoot = false;
 	function appendFocusEntry(goalId: string | null, reason: GoalFocusReason): void {
 		hasExplicitSessionFocus = true;
-		pi.appendEntry(FOCUS_ENTRY, goalFocusDetails(goalId, reason));
+		pi.appendEntry(FOCUS_ENTRY, { ...goalFocusDetails(goalId, reason), ...(externalFocusRoot ? { storageRoot: focusStorageRoot } : {}) });
 	}
 
 	function setFocusedGoalId(
@@ -496,28 +500,17 @@ export function createGoalCore(
 		state.goal = next;
 		persist(ctx);
 
-		// F6: threshold alerts at 50/75/90% — one ledger event + notification each.
+		// One warning per accounting update, even when several thresholds are crossed.
 		const budgetGoal = state.goal;
 		if (budgetGoal && budgetGoal.status === "active" && typeof budgetGoal.tokenBudget === "number" && budgetGoal.tokenBudget > 0 && budgetGoal.usage.tokensUsed > 0) {
 			const pct = budgetGoal.usage.tokensUsed / budgetGoal.tokenBudget;
-			for (const threshold of [0.5, 0.75, 0.9]) {
-				const key = `${budgetGoal.id}:${threshold}`;
-				if (!budgetWarningsFired.has(key) && pct >= threshold) {
-					budgetWarningsFired.add(key);
-					try {
-						goalService.appendEvents(ctx, [{
-							type: "goal_budget_warning",
-							goalId: budgetGoal.id,
-							budget: budgetGoal.tokenBudget,
-							tokensUsed: budgetGoal.usage.tokensUsed,
-							pct: Math.round(pct * 100),
-							at: nowIso(),
-						}]);
-					} catch {
-						// Alert must never crash the turn.
-					}
-					ctx.ui.notify(`Token budget ${Math.round(pct * 100)}% used (${budgetGoal.usage.tokensUsed}/${budgetGoal.tokenBudget} tokens) — consider raising or trimming scope before the limit.`, "warning");
-				}
+			const crossed = [0.5, 0.75, 0.9].filter(threshold => pct >= threshold && !budgetWarningsFired.has(`${budgetGoal.id}:${budgetGoal.tokenBudget}:${threshold}`));
+			for (const threshold of crossed) budgetWarningsFired.add(`${budgetGoal.id}:${budgetGoal.tokenBudget}:${threshold}`);
+			if (crossed.length) {
+				try {
+					goalService.appendEvents(ctx, [{type: "goal_budget_warning", goalId: budgetGoal.id, budget: budgetGoal.tokenBudget, tokensUsed: budgetGoal.usage.tokensUsed, pct: Math.round(pct * 100), at: nowIso()}]);
+				} catch { /* Alert must never crash the turn. */ }
+				ctx.ui.notify(`Token budget ${Math.round(pct * 100)}% used (${budgetGoal.usage.tokensUsed}/${budgetGoal.tokenBudget} tokens). Use /goal-tweak to change or remove the budget.`, "warning");
 			}
 		}
 
@@ -575,8 +568,11 @@ export function createGoalCore(
 	let widgetRegistered = false;
 
 	function clearGoalWidget(ctx: ExtensionContext): void {
-		ctx.ui.setStatus("goal", undefined);
-		ctx.ui.setWidget(GOAL_WIDGET_KEY, undefined);
+		lastUiCtx = null;
+		if (ctx.hasUI) {
+			ctx.ui.setStatus("goal", undefined);
+			ctx.ui.setWidget(GOAL_WIDGET_KEY, undefined);
+		}
 		widgetRegistered = false;
 		goalWidgetComponentRef.current = null;
 	}
@@ -606,7 +602,7 @@ export function createGoalCore(
 
 	let lastGoalActivityAt = Date.now();
 	let stallNotified = false;
-	const budgetWarningsFired = new Set<string>(); // "goalId:threshold"
+	const budgetWarningsFired = new Set<string>(); // "goalId:budget:threshold"
 
 	function touchGoalActivity(): void {
 		lastGoalActivityAt = Date.now();
@@ -656,6 +652,8 @@ export function createGoalCore(
 	}
 
 	function renderUI(ctx: ExtensionContext): void {
+		const goalCwd = ctx.cwd;
+		const storage = goalStorageContext(ctx);
 		const totalOpen = otherOpenGoalCount(goalsById, null);
 		if (!state.goal && totalOpen === 0) {
 			clearGoalWidget(ctx);
@@ -677,11 +675,11 @@ export function createGoalCore(
 						getGoal: () => goalForDisplay() ?? state.goal,
 						getOpenGoalCount: () => otherOpenGoalCount(goalsById, null),
 						getAuditorProgress: () => auditProgress,
-						getSettings: () => loadGoalSettings(ctx.cwd),
+						getSettings: () => loadGoalSettings(goalCwd),
 						getDebugMode: () => debugMode,
 						getStalled: () => stallNotified,
 						getExpanded: () => dashboardExpanded,
-						getLedgerEvents: () => state.goal ? goalActivityEvents(ctx, state.goal.id) : [],
+						getLedgerEvents: () => state.goal ? goalActivityEvents(storage, state.goal.id) : [],
 						getAuditResult: () => auditResult,
 					}),
 					{ placement: "aboveEditor" },
@@ -707,11 +705,11 @@ export function createGoalCore(
 					getGoal: () => goalForDisplay() ?? state.goal,
 					getOpenGoalCount: () => otherOpenGoalCount(goalsById, null),
 					getAuditorProgress: () => auditProgress,
-					getSettings: () => loadGoalSettings(ctx.cwd),
+					getSettings: () => loadGoalSettings(goalCwd),
 					getDebugMode: () => debugMode,
 					getStalled: () => stallNotified,
 					getExpanded: () => dashboardExpanded,
-					getLedgerEvents: () => state.goal ? goalActivityEvents(ctx, state.goal.id) : [],
+					getLedgerEvents: () => state.goal ? goalActivityEvents(storage, state.goal.id) : [],
 					getAuditResult: () => auditResult,
 				}),
 				{ placement: "aboveEditor" },
@@ -723,6 +721,9 @@ export function createGoalCore(
 	}
 
 	async function loadState(ctx: ExtensionContext): Promise<void> {
+		clearGoalWidget(ctx);
+		focusStorageRoot = goalStorageRoot(ctx);
+		externalFocusRoot = focusStorageRoot !== path.resolve(ctx.cwd, ".pi/goals");
 		goalsById = await readActiveGoalPoolAsync(ctx);
 		tasksEnabled = !loadGoalSettings(ctx.cwd).disableTasks;
 		focusRevision += 1; // Session reload/tree navigation invalidates pending async focus operations.
@@ -748,6 +749,11 @@ export function createGoalCore(
 			legacyGoal = sanitizeGoalPaths(ctx, mergeGoalPromptFromDisk(ctx, legacyGoal));
 		}
 		const settings = loadGoalSettings(ctx.cwd);
+		if (focusEntry && (focusEntry.storageRoot ?? path.resolve(ctx.cwd, ".pi/goals")) !== focusStorageRoot) {
+			focusEntry = { ...focusEntry, focusedGoalId: null };
+			legacyGoal = null;
+		}
+		if (focusStorageRoot !== path.resolve(ctx.cwd, ".pi/goals")) legacyGoal = null;
 		hasExplicitSessionFocus = focusEntry !== null;
 		assignFocusedGoalId(resolveSessionFocus({ pool: goalsById, focusEntry, legacyGoal, autoSelectSingleGoal: settings.autoSelectSingleGoal }));
 		if (!focusEntry && focusedGoalId) {
@@ -912,7 +918,7 @@ export function createGoalCore(
 		});
 		if (result.focusChanged) appendFocusEntry(result.goalId, "created");
 		beginAccounting();
-		ctx.ui.notify(buildGoalRunningNotification(config), "info");
+		ctx.ui.notify(`${buildGoalRunningNotification(config)}\nBudget: ${goal.tokenBudget === undefined ? "none" : `${goal.tokenBudget} tokens`}`, "info");
 		if (startNow && state.goal?.autoContinue) scheduler.kickoff(ctx);
 	}
 

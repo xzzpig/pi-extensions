@@ -1,3 +1,4 @@
+import { goalStoragePath, ensureGoalStorageDirectory } from "./goal-root.ts";
 /**
  * Short per-goal filesystem lock (follow-up Stage 4).
  *
@@ -83,9 +84,9 @@ export function acquireGoalLock(
 	const attempts = opts.attempts ?? DEFAULT_ACQUIRE_ATTEMPTS;
 	const retryMs = opts.retryMs ?? DEFAULT_RETRY_MS;
 	const ttlMs = opts.staleTtlMs ?? DEFAULT_STALE_TTL_MS;
-	const lockDir = path.resolve(ctx.cwd, GOAL_LOCK_DIR);
+	const lockDir = goalStoragePath(ctx, GOAL_LOCK_DIR);
 	const lockPath = path.join(lockDir, `${safeLockName(goalId)}.lock`);
-	fs.mkdirSync(lockDir, { recursive: true });
+	ensureGoalStorageDirectory(ctx, GOAL_LOCK_DIR, false);
 	const payload = JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() });
 
 	for (let attempt = 0; attempt < attempts; attempt++) {

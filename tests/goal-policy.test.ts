@@ -108,7 +108,7 @@ test("resume and clear policy preserve human-owned lifecycle affordances", () =>
 	assert.ok(result.includes("Goal audit approved."), "completion report must indicate audit approval");
 	assert.equal(
 		buildGoalCreatedReport({ objective: "# Objective\nShip the feature.", detailedSummary: "Status: active" }),
-		"Goal confirmed and created.\n\nFinalized goal:\n\n# Objective\nShip the feature.\n\nGoal details:\nStatus: active",
+		"Goal confirmed and created.\n\nFinalized goal:\n\n# Objective\nShip the feature.\n\nGoal details:\nBudget: none\nStatus: active",
 	);
 
 	// auditSkippedReason produces "Goal audit skipped." header and includes the reason

@@ -115,6 +115,9 @@ export interface GoalSettingsResolvedShape {
 	keybindings?: GoalKeybindings;
 	/** PR #29: suppress the unfocused goal widget + status hint (default false). */
 	hideUnfocusedBanner?: boolean;
+	/** Issue #72: suppress the model-facing [PI GOAL UNFOCUSED] prompt (default false). */
+	hideUnfocusedPrompt?: boolean;
+	goalsRoot?: string;
 	/** Issue #26: opt-in read-only blocker Oracle configuration (sparse). */
 	oracle?: GoalOracleSettingsLayer;
 	/**
@@ -336,6 +339,8 @@ const ALLOWED_SETTINGS_KEYS = new Set([
 	"objectiveMaxChars",
 	"keybindings",
 	"hideUnfocusedBanner",
+	"hideUnfocusedPrompt",
+	"goalsRoot",
 	"oracle",
 	"networkRecovery",
 ]);
@@ -388,7 +393,8 @@ export function parseSettingsLayer(
 			case "disabled":
 			case "autoSelectSingleGoal":
 			case "auditorProjectResources":
-			case "hideUnfocusedBanner": {
+			case "hideUnfocusedBanner":
+			case "hideUnfocusedPrompt": {
 				const parsed = asBool(value);
 				if (parsed === undefined) {
 					if (value !== undefined) diagnostics.push(diagnostic("invalid_value", `${key} must be true or false`, key));
@@ -416,6 +422,7 @@ export function parseSettingsLayer(
 				else layer[key] = parsed;
 				break;
 			}
+			case "goalsRoot":
 			case "provider":
 			case "model": {
 				const parsed = asNonEmptyString(value);
@@ -685,7 +692,7 @@ function pathKey(...parts: Array<string | undefined>): string {
  * Resolve both layers + env into one snapshot with per-leaf provenance.
  * Nested keybindings resolve leaf-by-leaf from the SPARSE layers.
  */
-const resolutionEnvKeys = ["PI_GOAL_DISABLE_TASKS", "PI_GOAL_DISABLE_CONTRACTS", "PI_GOAL_OBJECTIVE_MAX_CHARS", "PI_GOAL_NETWORK_RECOVERY_MAX_ATTEMPTS", "PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS"] as const;
+const resolutionEnvKeys = ["PI_GOAL_ROOT", "PI_GOAL_DISABLE_TASKS", "PI_GOAL_DISABLE_CONTRACTS", "PI_GOAL_OBJECTIVE_MAX_CHARS", "PI_GOAL_NETWORK_RECOVERY_MAX_ATTEMPTS", "PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS"] as const;
 const resolvedSettingsCache: Array<{global: SettingsLayerRead; project: SettingsLayerRead; environment: Array<string | undefined>; snapshot: SettingsSnapshot}> = [];
 
 function resolvedSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv): SettingsSnapshot {
@@ -761,6 +768,15 @@ function resolvedSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv): Settings
 		projectValue: project.layer.hideUnfocusedBanner,
 		globalValue: global.layer.hideUnfocusedBanner,
 		defaultValue: false,
+	}));
+	const hideUnfocusedPrompt = track("hideUnfocusedPrompt", resolveLeaf<boolean>({
+		projectValue: project.layer.hideUnfocusedPrompt,
+		globalValue: global.layer.hideUnfocusedPrompt,
+		defaultValue: false,
+	}));
+	const goalsRoot = track("goalsRoot", resolveLeaf<string | undefined>({
+		envValue: env.PI_GOAL_ROOT, envVar: "PI_GOAL_ROOT",
+		projectValue: project.layer.goalsRoot, globalValue: global.layer.goalsRoot, defaultValue: undefined,
 	}));
 	// Issue #26: Oracle leaves resolve per leaf like every other setting.
 	const oracleEnabled = track("oracle.enabled", resolveLeaf<boolean>({
@@ -861,6 +877,8 @@ function resolvedSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv): Settings
 		autoSelectSingleGoal,
 		auditorProjectResources,
 		hideUnfocusedBanner,
+		hideUnfocusedPrompt,
+		goalsRoot,
 		stallTimeoutMinutes,
 		maxAutonomousRuns,
 		strictExecutionContract,
@@ -1195,6 +1213,8 @@ function buildPersistedLayer(settings: GoalSettings): Record<string, unknown> {
 	if (settings.autoSelectSingleGoal !== undefined) persisted.autoSelectSingleGoal = settings.autoSelectSingleGoal;
 	if (settings.auditorProjectResources !== undefined) persisted.auditorProjectResources = settings.auditorProjectResources;
 	if (settings.hideUnfocusedBanner !== undefined) persisted.hideUnfocusedBanner = settings.hideUnfocusedBanner;
+	if (settings.goalsRoot !== undefined) persisted.goalsRoot = settings.goalsRoot;
+	if (settings.hideUnfocusedPrompt !== undefined) persisted.hideUnfocusedPrompt = settings.hideUnfocusedPrompt;
 	if ((settings as { networkRecovery?: ResolvedGoalNetworkRecoverySettings }).networkRecovery) {
 		const nr = (settings as { networkRecovery?: ResolvedGoalNetworkRecoverySettings }).networkRecovery!;
 		const o: Record<string, unknown> = {};
@@ -1229,6 +1249,7 @@ function buildPersistedLayer(settings: GoalSettings): Record<string, unknown> {
  * E2: which env var (if any) overrides a settings key's effective value.
  */
 export function envOverrideFor(key: keyof GoalSettings | "settingsFile", env: NodeJS.ProcessEnv = process.env): string | null {
+	if (key === "goalsRoot" && env.PI_GOAL_ROOT !== undefined) return "PI_GOAL_ROOT";
 	if (key === "disableTasks" && env.PI_GOAL_DISABLE_TASKS !== undefined) return "PI_GOAL_DISABLE_TASKS";
 	if (key === "disableContracts" && env.PI_GOAL_DISABLE_CONTRACTS !== undefined) return "PI_GOAL_DISABLE_CONTRACTS";
 	if (key === "objectiveMaxChars" && env.PI_GOAL_OBJECTIVE_MAX_CHARS !== undefined) return "PI_GOAL_OBJECTIVE_MAX_CHARS";
@@ -1258,6 +1279,8 @@ export function effectiveSettingsReport(cwd: string, env: NodeJS.ProcessEnv = pr
 		{ key: "thinkingLevel", label: "thinking_level", format: () => snapshot.value.thinkingLevel ?? "(default)" },
 		{ key: "auditorProjectResources", label: "auditor project resources", format: () => String(snapshot.value.auditorProjectResources) },
 		{ key: "hideUnfocusedBanner", label: "hide unfocused banner", format: () => String(snapshot.value.hideUnfocusedBanner) },
+		{ key: "goalsRoot", label: "goals root (reload to change)", format: () => snapshot.value.goalsRoot ?? ".pi/goals" },
+		{ key: "hideUnfocusedPrompt", label: "hide unfocused prompt", format: () => String(snapshot.value.hideUnfocusedPrompt) },
 		{ key: "strictExecutionContract", label: "explicit execution contracts (opt-in)", format: () => String(snapshot.value.strictExecutionContract) },
 		{ key: "maxAutonomousRuns", label: "autonomous run allowance", format: () => snapshot.value.maxAutonomousRuns === 0 ? "0 (disabled)" : String(snapshot.value.maxAutonomousRuns ?? "unlimited (default)") },
 		{ key: "stallTimeoutMinutes", label: "stall timeout (minutes)", format: () => String(snapshot.value.stallTimeoutMinutes) },

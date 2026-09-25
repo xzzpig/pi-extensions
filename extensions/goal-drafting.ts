@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Type } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
@@ -6,10 +7,11 @@ import { buildDraftConfirmationText, buildProposalSummary, buildTweakConfirmatio
 import { renderConfirmationTasks } from "./goal-task-confirmation.ts";
 import { deriveTasksFromObjective } from "./goal-task-derive.ts";
 import { goalDetails, renderGoalResult } from "./goal-format.ts";
-import { buildGoalCreatedReport } from "./goal-policy.ts";
+import { budgetReached } from "./goal-accounting.ts";
+import { buildGoalCreatedReport, formatGoalBudget } from "./goal-policy.ts";
 import { loadGoalSettings } from "./goal-settings.ts";
 import { DIALOG_UNAVAILABLE_HINT, proposalDialogFailureMessage, formatQuestionnaireAnswers, runGoalQuestionnaire, shouldAutoConfirmProposal, showProposalDialog, type GoalQuestionnaireQuestion, type ProposalDecision } from "./goal-questionnaire.ts";
-import { currentTaskIdIsPending, nowIso, type GoalRecord, type GoalTaskList } from "./goal-record.ts";
+import { currentTaskIdIsPending, nowIso, validateTokenBudgetInput, type GoalRecord, type GoalTaskList } from "./goal-record.ts";
 import type { GoalCore } from "./goal-state.ts";
 import { convertFlatTasks, countTasks, mergeTasksWithExisting, type FlatTaskInput } from "./goal-task-tools.ts";
 import { PROPOSE_DRAFT_TOOL_NAME, QUESTIONNAIRE_TOOL_NAME, QUESTION_TOOL_NAME } from "./goal-tool-names.ts";
@@ -171,6 +173,8 @@ export async function startGoalDrafting(core: GoalCore, ctx: ExtensionContext, m
 		"[GOAL TWEAK DRAFT]",
 		"The user wants to revise the focused persistent goal. Discuss requirements as needed; do not edit files or start substantive work.",
 		"Propose the complete revised objective with propose_goal_draft. Preserve the current goal mode. Include a complete flat task list when the revision changes a decomposable plan; omit tasks to retain the current list.",
+		"For budget-only changes preserve the objective, tasks, mode and auditor. token_budget: positive integer sets the total lifetime limit; null removes it; omit to retain it. Change budgets only when requested. Do not add clarification steps when the request is clear.",
+		formatGoalBudget(targetGoal?.tokenBudget),
 		"Current objective:", targetGoal?.objective ?? "(goal no longer available)",
 		"User request:", trimmed || "(ask what they want to change)",
 	].join("\n") : goalDraftingPrompt(trimmed, mode);
@@ -190,7 +194,7 @@ function proposedTaskList(core: GoalCore, ctx: ExtensionContext, tasks: FlatTask
 	return { ok: true, value: { tasks: converted.tasks, blockCompletion: blockCompletion === true, proposedAt: nowIso() } };
 }
 
-export function proposalText(draft: ActiveGoalDraft, objective: string, autoContinue: boolean, taskList: GoalTaskList | undefined, current?: GoalRecord): string {
+export function proposalText(draft: ActiveGoalDraft, objective: string, autoContinue: boolean, taskList: GoalTaskList | undefined, current?: GoalRecord, tokenBudget?: number | null): string {
 	const base = draft.mode === "tweak" && current
 		? buildTweakConfirmationText({ currentObjective: current.objective, newObjective: objective, changeSummary: draft.originalTopic || "Goal revised through guided drafting.", sisyphus: current.sisyphus, tasks: taskList?.tasks })
 		: buildDraftConfirmationText({ focus: draft.mode === "sisyphus" ? "sisyphus" : "goal", originalTopic: draft.originalTopic, objective, autoContinue });
@@ -219,7 +223,7 @@ export function proposalText(draft: ActiveGoalDraft, objective: string, autoCont
 			tasksText = "\n\nTasks derived from the objective (confirm or ask the agent to adjust):\n" + renderConfirmationTasks(derived, 0).join("\n");
 		}
 	}
-	return base + tasksText;
+	return `${draft.mode === "tweak" ? `Current ${formatGoalBudget(current?.tokenBudget)}\nProposed ${formatGoalBudget(tokenBudget === undefined ? current?.tokenBudget : tokenBudget ?? undefined)}` : formatGoalBudget(tokenBudget ?? undefined)}\n\n${base}${tasksText}`;
 }
 
 function flatTaskSchema() {
@@ -310,7 +314,8 @@ export function registerDraftingTools(core: GoalCore): void {
 			"Confirmation creates or revises the goal atomically. Continue Chatting leaves drafting active for refinement.",
 		],
 		parameters: Type.Object({
-			objective: Type.String({ description: "Complete proposed objective, including criteria and constraints." }),
+			objective: Type.String({ description: "Complete proposed objective; preserve it exactly for budget-only tweaks." }),
+			token_budget: Type.Optional(Type.Union([Type.Integer({minimum: 1}), Type.Null()], {description: "Only on user request: positive whole-token lifetime limit; null removes it. Omit to retain the current tweak budget or create without one."})),
 			auto_continue: Type.Optional(Type.Boolean({ description: "Defaults to true." })),
 			sisyphus: Type.Optional(Type.Boolean({ description: "Must match the user-selected goal mode." })),
 			tasks: Type.Optional(flatTaskSchema()),
@@ -320,6 +325,10 @@ export function registerDraftingTools(core: GoalCore): void {
 		async execute(_id, params, _signal, _update, ctx) {
 			const draft = activeDraft(core);
 			if (!draft) return { content: [{ type: "text", text: "No guided goal draft is active. Do not create a goal without the user starting /goal or /sisyphus." }], details: goalDetails(core.state.goal) };
+			if (params.token_budget !== undefined && params.token_budget !== null) {
+				const validation = validateTokenBudgetInput(params.token_budget);
+				if (!validation.ok) return {content: [{type: "text", text: validation.message}], details: goalDetails(core.state.goal)};
+			}
 			const objective = params.objective.trim();
 			if (!objective) return { content: [{ type: "text", text: "The proposed objective must be at least 1 character." }], details: goalDetails(core.state.goal) };
 			const objectiveMaxChars = loadGoalSettings(ctx.cwd).objectiveMaxChars ?? 0;
@@ -328,9 +337,16 @@ export function registerDraftingTools(core: GoalCore): void {
 			if (draft.mode !== "tweak" && ((params.sisyphus === true) !== expectedSisyphus)) return { content: [{ type: "text", text: "Proposal mode does not match the command that began this draft." }], details: goalDetails(core.state.goal) };
 			const taskResult = proposedTaskList(core, ctx, params.tasks as FlatTaskInput[] | undefined, params.block_completion);
 			if (!taskResult.ok) return { content: [{ type: "text", text: taskResult.message }], details: goalDetails(core.state.goal) };
+			const flushError = core.goalService.flushForAudit(ctx);
+			if (flushError || core.goalService.isTurnBuffered()) return {content: [{type: "text", text: "Proposal not saved: " + (flushError ?? "goal changes are still buffered")}], details: goalDetails(core.state.goal)};
 			core.reconcileFocusedGoalFromDisk(ctx);
 			const target = draft.mode === "tweak" ? core.state.goal : undefined;
 			if (draft.mode === "tweak" && (!target || target.id !== draft.targetGoalId)) return { content: [{ type: "text", text: "The goal changed while drafting; review it and start /goal-tweak again." }], details: goalDetails(core.state.goal) };
+			if (target?.status === "complete") return {content: [{type: "text", text: "Completed goals cannot be tweaked."}], details: goalDetails(target)};
+			const proposalToken = target ? core.focusedOperationToken(target.id) : undefined;
+			const proposalRevision = target?.revision ?? 0;
+			const proposedBudget = params.token_budget === undefined ? target?.tokenBudget : params.token_budget ?? undefined;
+			const budgetSummary = target ? `Current ${formatGoalBudget(target.tokenBudget)}\nProposed ${formatGoalBudget(proposedBudget)}` : formatGoalBudget(proposedBudget);
 			if (draft.mode === "sisyphus" && !sisyphusObjectiveSufficient(objective)) return { content: [{ type: "text", text: "A Sisyphus goal needs ordered steps with explicit per-step done criteria. Refine the objective with numbered steps (1) ..., 2) ...) or Step N: blocks before proposing again." }], details: goalDetails(core.state.goal) };
 			let confirmation: { decision: ProposalDecision; auditorEnabled: boolean; unavailable: boolean };
 			if (shouldAutoConfirmProposal({ hasUI: ctx.hasUI, autoConfirmEnv: process.env.PI_GOAL_AUTO_CONFIRM })) {
@@ -338,7 +354,7 @@ export function registerDraftingTools(core: GoalCore): void {
 			} else {
 				core.enterGoalModal();
 				try {
-					confirmation = await showProposalDialog(ctx, proposalText(draft, objective, params.auto_continue !== false, taskResult.value, target ?? undefined), draft.mode === "sisyphus" ? "sisyphus" : "goal", draft.auditorEnabled);
+					confirmation = await showProposalDialog(ctx, proposalText(draft, objective, params.auto_continue !== false, taskResult.value, target ?? undefined, params.token_budget), draft.mode === "sisyphus" ? "sisyphus" : "goal", draft.auditorEnabled);
 				} catch (error) {
 					return { content: [{ type: "text", text: `${proposalDialogFailureMessage(error)} Do not retry the dialog until the host issue is resolved.` }], details: goalDetails(core.state.goal) };
 				} finally {
@@ -350,7 +366,7 @@ export function registerDraftingTools(core: GoalCore): void {
 			// §14: the durable proposal summary is part of the transcript for
 			// EVERY outcome (confirm / continue refining / cancel), so the user
 			// can review the proposal after the dialog closes.
-			const summary = buildProposalSummary({
+			const summary = budgetSummary + "\n\n" + buildProposalSummary({
 				objective: extracted.objective,
 				taskList: taskResult.value,
 				verificationContract: extracted.verificationContract,
@@ -385,7 +401,7 @@ export function registerDraftingTools(core: GoalCore): void {
 					const derived = deriveTasksFromObjective(extracted.objective);
 					return derived && derived.length > 0 ? { tasks: derived, blockCompletion: false, proposedAt: nowIso() } : undefined;
 				})();
-				core.replaceGoal({ objective: extracted.objective, autoContinue: params.auto_continue !== false, sisyphus: expectedSisyphus, taskList: effectiveTaskList, skipAuditor }, ctx, true, extracted.verificationContract);
+				core.replaceGoal({ objective: extracted.objective, autoContinue: params.auto_continue !== false, sisyphus: expectedSisyphus, taskList: effectiveTaskList, skipAuditor }, ctx, true, extracted.verificationContract, proposedBudget);
 				clearGoalDrafting(core, ctx);
 				const created = core.state.goal;
 				return { content: [{ type: "text", text: `${summary}\n\n${buildGoalCreatedReport({
@@ -401,7 +417,10 @@ export function registerDraftingTools(core: GoalCore): void {
 				})}` }], details: goalDetails(core.state.goal), terminate: true };
 			}
 			if (!target) return { content: [{ type: "text", text: "The goal changed while drafting; review it and start /goal-tweak again." }], details: goalDetails(core.state.goal) };
-			const token = core.focusedOperationToken(target.id);
+			const token = proposalToken!;
+			const finalFlushError = core.goalService.flushForAudit(ctx);
+			core.reconcileFocusedGoalFromDisk(ctx);
+			if (finalFlushError || core.goalService.isTurnBuffered() || !core.isFocusedOperationCurrent(token) || core.state.goal?.revision !== proposalRevision || core.state.goal?.status === "complete") return {content: [{type: "text", text: "Goal tweak was not applied: the goal changed during confirmation. Review and propose again."}], details: goalDetails(core.state.goal)};
 			const now = nowIso();
 			// §7.5 merge: a goal tweak must never change the status of steps that
 			// persist across the tweak. The proposed list merges into the goal's
@@ -427,16 +446,24 @@ export function registerDraftingTools(core: GoalCore): void {
 						: goal.currentTaskId;
 					// §tweak-resume: resume a paused/blocked goal (mirror the
 					// /goal-resume transition: status active + pause metadata
-					// cleared); budget_limited stays behind its hard resource
-					// gate and an active goal stays active.
-					const stalled = goal.status === "paused" || goal.status === "blocked";
+					// cleared). A budget-limited goal needs an explicit budget
+					// change that clears the resource gate; preserve scheduler limits.
+					const exhausted = budgetReached({...goal, tokenBudget: proposedBudget});
+					const wantsResume = goal.status === "paused" || goal.status === "blocked" || (goal.status === "budget_limited" && params.token_budget !== undefined && !exhausted);
+					const scheduler = goal.scheduler;
+					const owned = !scheduler || (scheduler.owner === (ctx.sessionManager.getSessionId() || "unknown-session") && !["interrupted", "claimed"].includes(scheduler.phase));
+					const limit = loadGoalSettings(ctx.cwd).maxAutonomousRuns;
+					const allowance = limit === undefined || (scheduler?.used ?? 0) < limit;
+					const stalled = wantsResume && !exhausted && owned && allowance;
 					if (stalled) resumed = true;
 					return {
 						...goal,
+						tokenBudget: proposedBudget,
+						...(exhausted && owned && scheduler ? {scheduler: {...scheduler, generation: randomUUID(), phase: "idle" as const, decision: undefined, dispatch: undefined, wait: undefined}} : {}),
 						objective: extracted.objective,
 						verificationContract: extracted.verificationContract ?? goal.verificationContract,
 						taskList, currentTaskId, skipAuditor,
-						status: stalled ? "active" : goal.status,
+						status: exhausted && (goal.status === "active" || goal.status === "budget_limited" || wantsResume) ? "budget_limited" : stalled ? "active" : wantsResume ? "paused" : goal.status,
 						autoContinue: stalled ? true : goal.autoContinue,
 						stopReason: stalled ? undefined : goal.stopReason,
 						pauseReason: stalled ? undefined : goal.pauseReason,
@@ -444,7 +471,7 @@ export function registerDraftingTools(core: GoalCore): void {
 						updatedAt: now,
 					};
 				},
-				ledger: (written) => [{ type: "goal_tweaked", goalId: written.id, changeSummary: "Goal revised through /goal-tweak drafting.", at: written.updatedAt }, ...(taskResult.value ? [{ type: "task_list_set" as const, goalId: written.id, taskCount: countTasks(written.taskList?.tasks), blockCompletion: taskResult.value.blockCompletion, at: written.updatedAt }] : [])],
+				ledger: (written) => [...(target.tokenBudget !== written.tokenBudget ? [{type: "goal_budget_changed" as const, goalId: written.id, oldBudget: target.tokenBudget ?? null, newBudget: written.tokenBudget ?? null, tokensUsed: written.usage.tokensUsed, at: written.updatedAt}] : []), ...(target.status !== "budget_limited" && written.status === "budget_limited" ? [{type: "goal_budget_limited" as const, goalId: written.id, budget: written.tokenBudget!, tokensUsed: written.usage.tokensUsed, at: written.updatedAt}] : []), { type: "goal_tweaked", goalId: written.id, changeSummary: "Goal revised through /goal-tweak drafting.", at: written.updatedAt }, ...(taskResult.value ? [{ type: "task_list_set" as const, goalId: written.id, taskCount: countTasks(written.taskList?.tasks), blockCompletion: taskResult.value.blockCompletion, at: written.updatedAt }] : [])],
 			});
 			if (!result.ok) return { content: [{ type: "text", text: "Goal tweak was not applied: " + result.message }], details: goalDetails(core.state.goal) };
 			if (resumed) {
@@ -455,15 +482,20 @@ export function registerDraftingTools(core: GoalCore): void {
 				}
 			}
 			core.clearContinuationState();
+			if (!budgetReached(result.goal)) core.runtime.consumePostBudgetReminder();
+			else { core.runtime.armPostBudgetReminder(); core.clearActiveAccounting(); core.scheduler.cancelTimer(); }
 			core.updateUI(ctx);
+			let schedulingNote = "";
 			if (resumed) {
 				// Resume glue mirrors replaceGoal: restart accounting and queue
 				// the auto-continuation so the revived goal keeps going.
 				core.beginAccounting();
+				const scheduling = core.scheduler.declare(ctx, {kind: "ready", next_action: "Continue the goal after the confirmed tweak."});
+				if (!scheduling.terminate) schedulingNote = "\n" + scheduling.content.filter(item => item.type === "text").map(item => item.text).join("\n");
 				core.queueContinuation(ctx, true);
 			}
 			clearGoalDrafting(core, ctx);
-			return { content: [{ type: "text", text: `${summary}\n\nGoal tweak confirmed and applied.` }], details: goalDetails(result.goal), terminate: true };
+			return { content: [{ type: "text", text: `${summary}\n\nGoal tweak confirmed and applied.\n${formatGoalBudget(result.goal.tokenBudget)}${schedulingNote}${result.goal.status === "budget_limited" ? "\nConsumed tokens already meet this budget; the goal remains budget-limited." : result.goal.status === "paused" ? "\nGoal remains paused. Use /goal-resume to continue when scheduling permits." : ""}` }], details: goalDetails(result.goal), terminate: true };
 		},
 		renderCall(args, theme) {
 			// §proposal-presentation: the tool-call display lands in the terminal

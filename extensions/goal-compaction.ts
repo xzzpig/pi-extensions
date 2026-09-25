@@ -23,7 +23,7 @@ export function buildGoalCompactSummary(
   lines.push(`Goal ${goal.id} — ${statusLabel(goal)}`);
   lines.push(`  Objective: ${truncateText(goal.objective, 200)}`);
   if (goal.usage.tokensUsed > 0) {
-    lines.push(`  Usage: ${formatTokenValue(goal.usage.tokensUsed)}`);
+    lines.push(`  Cumulative goal usage (not context occupancy): ${formatTokenValue(goal.usage.tokensUsed)}`);
   }
   if (goal.usage.activeSeconds > 0) {
     lines.push(`  Time: ${formatDuration(goal.usage.activeSeconds)}`);

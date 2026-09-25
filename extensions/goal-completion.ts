@@ -9,7 +9,7 @@ import {
 import { loadGoalSettings, loadGoalSettingsFileConfig } from "./goal-settings.ts";
 import { runGoalCompletionAuditor } from "./goal-auditor.ts";
 import { nowIso, type GoalRecord } from "./goal-record.ts";
-import { latestEventsForGoal, goalRuntimeEvents } from "./goal-ledger.ts";
+import { latestEventsForGoal, latestAuditorResultForGoal, goalRuntimeEvents } from "./goal-ledger.ts";
 import { mergeGoalPromptFromDisk } from "./storage/goal-files.ts";
 import { showEscapeDialog, type EscapeDialogResult } from "./widgets/goal-escape-dialog.ts";
 import type { GoalCore } from "./goal-state.ts";
@@ -242,9 +242,12 @@ if (settings.disabled === true) {
 	// (recent lifecycle + task evidence) so it does not re-derive session facts.
 	const ledger = goalRuntimeEvents(ctx, auditTarget.id);
 	const warmTail = latestEventsForGoal(ledger, auditTarget.id, 8);
-	const warmContext = warmTail.length > 0
+	const previousAudit = latestAuditorResultForGoal(ledger, auditTarget.id);
+	let warmContext = warmTail.length > 0
 		? `Recent goal events (from the shared ledger):\n${warmTail.map((e) => `- ${e.at} ${e.type}${"taskId" in e ? ` (task ${e.taskId})` : ""}${"evidence" in e && e.evidence ? ` evidence: ${e.evidence}` : ""}`).join("\n")}`
 		: null;
+
+	if (previousAudit?.verdict === "disapproved") warmContext = `${warmContext ?? ""}\nPrevious rejection (verify whether resolved): ${previousAudit.report.slice(0, 600)}`;
 
 	const auditor = await (core.dependencies.runCompletionAuditor ?? runGoalCompletionAuditor)({
 		ctx,

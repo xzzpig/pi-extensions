@@ -1,3 +1,4 @@
+import { goalStoragePath, goalStorageRoot } from "./storage/goal-root.ts";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -197,9 +198,9 @@ export function registerGoalCommands(core: GoalCore): void {
 	}
 
 	async function runGoalRecovery(rawArgs: string, ctx: ExtensionContext): Promise<void> {
-		const report = runRecoveryReport({ cwd: ctx.cwd });
+		const report = runRecoveryReport(ctx);
 		if (/^repair$/i.test(rawArgs)) {
-			const result = await runRecoveryRepair({ cwd: ctx.cwd }, report, async () => {
+			const result = await runRecoveryRepair(ctx, report, async () => {
 				const confirmed = await ctx.ui.confirm(`Remove ${report.staleLocks.length} stale lock(s) and refresh the pool snapshot?`, `Files are backed up to .pi/goals/.recovery-backup first.`);
 				return confirmed === true;
 			});
@@ -287,7 +288,7 @@ export function registerGoalCommands(core: GoalCore): void {
 			verbose,
 			health,
 			activeFilePresent: health && view?.activePath
-				? existsSync(path.resolve(ctx.cwd, view.activePath))
+				? existsSync(goalStoragePath(ctx, view.activePath))
 				: undefined,
 			// Issue #30: checkpoint growth report (health view only, read-only).
 			checkpointHealth: health
@@ -298,7 +299,7 @@ export function registerGoalCommands(core: GoalCore): void {
 			checkpointSessionFile: (ctx.sessionManager as { getSessionFile?: () => string | undefined } | undefined)?.getSessionFile?.(),
 			// §13.2: effective settings with provenance appear only in verbose mode;
 			// the standard mode stays free of settings noise (§13.1).
-			settingsReport: verbose ? effectiveSettingsReport(ctx.cwd) : [],
+			settingsReport: verbose ? [...effectiveSettingsReport(ctx.cwd), `effective goal pool: ${goalStorageRoot(ctx)}`] : [],
 		});
 		ctx.ui.notify(text, "info");
 		core.updateUI(ctx);
@@ -369,6 +370,7 @@ export function registerGoalCommands(core: GoalCore): void {
 	const SETTING_ROWS: readonly SettingRow[] = [
 		{ key: "autoSelectSingleGoal", label: "autoSelectSingleGoal", section: "Goal behavior", kind: "boolean" },
 		{ key: "hideUnfocusedBanner", label: "hideUnfocusedBanner", section: "Goal behavior", kind: "boolean" },
+		{ key: "hideUnfocusedPrompt", label: "hideUnfocusedPrompt", section: "Goal behavior", kind: "boolean" },
 		{ key: "disableContracts", label: "disableContracts", section: "Goal behavior", kind: "boolean" },
 		{ key: "strictExecutionContract", label: "explicit execution contracts (opt-in)", section: "Goal behavior", kind: "boolean" },
 		{ key: "maxAutonomousRuns", label: "autonomous run allowance", section: "Goal behavior", kind: "positiveInteger" },
@@ -390,7 +392,7 @@ export function registerGoalCommands(core: GoalCore): void {
 	];
 
 	function settingsValue(config: GoalSettings, key: keyof GoalSettings | string): string {
-		if (key === "strictExecutionContract" || key === "disabled" || key === "disableTasks" || key === "disableContracts" || key === "autoSelectSingleGoal" || key === "auditorProjectResources" || key === "hideUnfocusedBanner") {
+		if (key === "strictExecutionContract" || key === "disabled" || key === "disableTasks" || key === "disableContracts" || key === "autoSelectSingleGoal" || key === "auditorProjectResources" || key === "hideUnfocusedBanner" || key === "hideUnfocusedPrompt") {
 			return config[key] === true ? "true" : "false";
 		}
 		if (key === "subtaskDepth") return config.subtaskDepth !== undefined ? String(config.subtaskDepth) : "1";
@@ -697,13 +699,13 @@ export function registerGoalCommands(core: GoalCore): void {
 		}
 		const trimmed = replacement.trim();
 		if (!trimmed) {
-			ctx.ui.notify("Provide the replacement objective: /goal-tweak <new objective>", "info");
+			ctx.ui.notify("Describe the requested change: /goal-tweak <change>, for example remove the token budget", "info");
 			return;
 		}
 		const max = loadGoalSettings(ctx.cwd).objectiveMaxChars;
 		if (trimmed.length > (max ?? 0)) {
 			if (max !== undefined && max > 0) {
-				ctx.ui.notify(`Replacement objective exceeds ${max} characters (${trimmed.length}).`, "warning");
+				ctx.ui.notify(`Requested change exceeds ${max} characters (${trimmed.length}).`, "warning");
 				return;
 			}
 		}
@@ -788,7 +790,7 @@ export function registerGoalCommands(core: GoalCore): void {
 		},
 	});
 	pi.registerCommand("goal-tweak", {
-		description: "Refine the current goal's objective with the user.",
+		description: "Revise the current goal or its token budget with confirmation.",
 		handler: async (rawArgs, ctx) => {
 			await runGoalTweak(rawArgs, ctx);
 		},
