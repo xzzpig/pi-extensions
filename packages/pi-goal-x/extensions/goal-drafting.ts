@@ -311,7 +311,10 @@ export function registerDraftingTools(core: GoalCore): void {
 			});
 			if (confirmation.decision === "cancel") {
 				clearGoalDrafting(core, ctx);
-				return { content: [{ type: "text", text: `${summary}\n\nDraft cancelled; no goal was created. Run /goal or /sisyphus to start a new draft.` }], details: goalDetails(core.state.goal) };
+				return {
+					content: [{ type: "text", text: `${summary}\n\nDraft cancelled; no goal was created. Run /goal or /sisyphus to start a new draft.` }],
+					details: goalDetails(core.state.goal, undefined, { decision: "cancelled", ...(confirmation.feedback?.trim() ? { reason: confirmation.feedback.trim() } : {}) }),
+				};
 			}
 			if (confirmation.unavailable) {
 				return { content: [{ type: "text", text: `${summary}\n\n${DIALOG_UNAVAILABLE_HINT} The goal was NOT created and drafting remains active; do not retry the dialog until the host supports it or the user explicitly restarts with PI_GOAL_AUTO_CONFIRM=1.` }], details: goalDetails(core.state.goal) };
@@ -333,7 +336,10 @@ export function registerDraftingTools(core: GoalCore): void {
 				const refinement = feedback
 					? `Goal draft refinement requested. The goal was not changed; the user typed this adjustment request in the dialog (verbatim):\n${feedback}\n\nUse this request as the refinement instruction.`
 					: "Goal draft refinement requested. The goal was not changed; ask what the user wants revised before proposing again.";
-				return { content: [{ type: "text", text: `${summary}\n\n${refinement}` }], details: goalDetails(core.state.goal) };
+				return {
+					content: [{ type: "text", text: `${summary}\n\n${refinement}` }],
+					details: goalDetails(core.state.goal, undefined, { decision: "refining", ...(feedback ? { reason: feedback } : {}) }),
+				};
 			}
 			const skipAuditor = confirmation.auditorEnabled === false;
 			if (draft.mode !== "tweak") {

@@ -70,11 +70,23 @@ export interface GoalRecord {
 	verificationContract?: string;
 }
 
+/**
+ * Draft-proposal outcome carried by propose_goal_draft results. The draft has
+ * no goal record yet, so the renderer cannot derive the decision from `goal`.
+ */
+export interface GoalDraftOutcome {
+	decision: "cancelled" | "refining";
+	/** Verbatim text the user typed in the dialog; absent for plain decisions. */
+	reason?: string;
+}
+
 export interface GoalStateEntry {
 	version: 3;
 	goal: GoalRecord | null;
 	/** E7: expandable tool-result detail line (e.g. full pause reason). */
 	resultDetail?: string;
+	/** Proposal rejection/continue outcome for draft results (see GoalDraftOutcome). */
+	draftOutcome?: GoalDraftOutcome;
 }
 
 export interface GoalFocusEntry {

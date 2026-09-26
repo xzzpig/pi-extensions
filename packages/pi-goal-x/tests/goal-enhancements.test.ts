@@ -84,6 +84,64 @@ describe("E7 expandable pause detail", () => {
 	});
 });
 
+describe("draft rejection rendering (propose_goal_draft outcomes)", () => {
+	const summary = "Budget: none\n\nProposed objective: Build a tiny app";
+
+	function draftResult(text: string, details: ReturnType<typeof goalDetails>) {
+		return { content: [{ type: "text", text }], details };
+	}
+
+	it("collapsed result shows the rejection and the reason the user typed", () => {
+		const result = draftResult(
+			`${summary}\n\nGoal draft refinement requested. The goal was not changed; the user typed this adjustment request in the dialog (verbatim):\nSplit the work into two milestones.`,
+			goalDetails(null, undefined, { decision: "refining", reason: "Split the work into two milestones." }),
+		);
+		const collapsed = renderGoalResult(result, undefined, theme).render(200).join("\n").trim();
+		assert.match(collapsed, /Goal draft rejected — reason:/);
+		assert.ok(collapsed.includes("Split the work into two milestones."), "the typed reason is visible collapsed");
+	});
+
+	it("plain continue without a typed reason renders the no-reason heading", () => {
+		const result = draftResult(
+			`${summary}\n\nGoal draft refinement requested. The goal was not changed; ask what the user wants revised before proposing again.`,
+			goalDetails(null, undefined, { decision: "refining" }),
+		);
+		const collapsed = renderGoalResult(result, undefined, theme).render(200).join("\n").trim();
+		assert.match(collapsed, /Goal draft rejected — no reason given/);
+	});
+
+	it("cancel renders the cancelled heading", () => {
+		const result = draftResult(
+			`${summary}\n\nDraft cancelled; no goal was created. Run /goal or /sisyphus to start a new draft.`,
+			goalDetails(null, undefined, { decision: "cancelled" }),
+		);
+		const collapsed = renderGoalResult(result, undefined, theme).render(200).join("\n").trim();
+		assert.match(collapsed, /Goal draft cancelled — no goal was created/);
+	});
+
+	it("a very long reason is bounded in the collapsed view and verbatim when expanded", () => {
+		const reason = "A".repeat(390) + "TAILMARK";
+		const result = draftResult(
+			`${summary}\n\nGoal draft refinement requested. (verbatim):\n${reason}`,
+			goalDetails(null, undefined, { decision: "refining", reason }),
+		);
+		const collapsed = renderGoalResult(result, undefined, theme).render(200).join("\n");
+		assert.ok(collapsed.includes("..."), "long reason is truncated collapsed");
+		assert.equal(collapsed.includes("TAILMARK"), false, "the collapsed view does not show the untruncated tail");
+		const expanded = renderGoalResult(result, { expanded: true }, theme).render(200).join("\n");
+		assert.ok(expanded.includes("TAILMARK"), "expanded shows the full verbatim reason");
+	});
+
+	it("legacy details without a draftOutcome keep the generic one-line heading", () => {
+		const result = draftResult(
+			`${summary}\n\nDraft cancelled; no goal was created.`,
+			goalDetails(null),
+		);
+		const collapsed = renderGoalResult(result, undefined, theme).render(200).join("\n").trim();
+		assert.match(collapsed, /^Goal No goal is set\.$/);
+	});
+});
+
 describe("E4 budget line in the widget", () => {
 	it("renders used/total with remaining when a budget is set", () => {
 		const goal = makeGoalRecord({ objective: "Budget test" });

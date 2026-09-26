@@ -158,6 +158,7 @@ test("dialog cancel is a durable no-op and clears the draft", async () => {
 		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: CANCEL_ANSWER, wasCustom: false }], cancelled: false });
 		const result = await pending;
 		assert.match(result.content[0].text, /Draft cancelled/);
+		assert.deepEqual(result.details.draftOutcome, { decision: "cancelled" }, "cancel outcome is surfaced for the TUI renderer");
 		assert.equal(activeGoalFiles(cwd).length, 0, "cancel must not create a goal");
 		assert.deepEqual(ledgerEvents(cwd).filter((e) => e.type === "goal_created"), [], "cancel must not write a goal_created event");
 		// Draft cleared; the tool surface itself never changed.
@@ -333,6 +334,11 @@ test("continue refining carries the adjustment the user typed in the dialog", as
 		const result = await pending;
 		assert.match(result.content[0].text, /refinement requested/);
 		assert.ok(result.content[0].text.includes(adjustment), "the typed adjustment is delivered verbatim");
+		assert.deepEqual(
+			result.details.draftOutcome,
+			{ decision: "refining", reason: adjustment },
+			"the typed rejection reason is carried in the details for the TUI renderer",
+		);
 		assert.equal(activeGoalFiles(cwd).length, 0, "typing an adjustment must not create a goal");
 		assert.ok(h.draftActive(), "drafting stays active exactly like a plain continue");
 	} finally {
@@ -357,6 +363,8 @@ test("an empty dialog adjustment keeps the plain continue message byte-identical
 		h.dialogResult({ questions: [], answers: [{ id: "confirm", question: "Confirm Goal Draft", answer: "", wasCustom: true }], cancelled: false });
 		const emptyText = (await empty).content[0].text.replace(/^Budget: [^\n]*\n\nProposed objective:[\s\S]*?Independent auditor: [^\n]*\n\n/, "");
 		assert.equal(emptyText, plainText, "an empty editor submission is the pre-existing continue outcome");
+		assert.deepEqual((await plain).details.draftOutcome, { decision: "refining" }, "plain continue carries no reason");
+		assert.deepEqual((await empty).details.draftOutcome, { decision: "refining" }, "empty adjustment carries no reason");
 		assert.equal(activeGoalFiles(cwd).length, 0, "no goal was created");
 	} finally {
 		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }

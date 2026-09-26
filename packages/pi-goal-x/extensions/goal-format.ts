@@ -13,6 +13,7 @@ import { GOAL_PROGRESS_TOOL_NAMES } from "./goal-tool-names.ts";
 import {
 	asRecord,
 	cloneGoal,
+	type GoalDraftOutcome,
 	type GoalEventDetails,
 	type GoalEventKind,
 	type GoalMode,
@@ -105,8 +106,13 @@ export function oneLineSummary(goal: GoalRecord | null): string {
 
 // ---------- entry / render helpers ----------
 
-export function goalDetails(goal: GoalRecord | null, resultDetail?: string): GoalStateEntry {
-	return { version: 3, goal: goal ? cloneGoal(goal) : null, ...(resultDetail ? { resultDetail } : {}) };
+export function goalDetails(goal: GoalRecord | null, resultDetail?: string, draftOutcome?: GoalDraftOutcome): GoalStateEntry {
+	return {
+		version: 3,
+		goal: goal ? cloneGoal(goal) : null,
+		...(resultDetail ? { resultDetail } : {}),
+		...(draftOutcome ? { draftOutcome } : {}),
+	};
 }
 
 export function renderGoalResult(result: { details?: unknown; content: Array<{ type: string; text?: string }> }, options: { expanded?: boolean } | undefined, theme: Theme): Text {
@@ -120,6 +126,26 @@ export function renderGoalResult(result: { details?: unknown; content: Array<{ t
 	}
 	if (!details || typeof details !== "object" || !("goal" in details)) {
 		return new Text(firstText, 0, 0);
+	}
+	// Draft proposals carry no goal record, so the decision (reject/cancel)
+	// and the reason the user typed in the dialog must come from the details.
+	// The collapsed heading surfaces them directly; expanded already shows the
+	// full agent-facing text with the verbatim reason.
+	const draftDecision = details.draftOutcome?.decision === "cancelled" || details.draftOutcome?.decision === "refining"
+		? details.draftOutcome.decision
+		: null;
+	if (draftDecision) {
+		if (options?.expanded) return new Text(firstText, 0, 0);
+		if (draftDecision === "cancelled") {
+			return new Text(theme.fg("accent", "Goal draft cancelled — no goal was created"), 0, 0);
+		}
+		const reason = details.draftOutcome?.reason?.trim();
+		if (!reason) return new Text(theme.fg("accent", "Goal draft rejected — no reason given"), 0, 0);
+		return new Text(
+			theme.fg("accent", "Goal draft rejected — reason:") + "\n" + theme.fg("toolOutput", truncateText(reason, 300)),
+			0,
+			0,
+		);
 	}
 	if (
 		firstText.startsWith("Goal audit ")

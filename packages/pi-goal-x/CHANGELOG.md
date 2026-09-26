@@ -2,6 +2,21 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.8.3] — 2026-09-27 (fork release)
+
+### Changed
+
+- **Goal-draft proposal rejections are now visible in the transcript.** The
+  collapsed `propose_goal_draft` result heading was the generic
+  "Goal No goal is set." one-liner for every non-confirm outcome, so the
+  decision — and the adjustment reason the user typed in the dialog — stayed
+  invisible until the result was expanded. The result now carries a
+  structured `draftOutcome` detail, and the renderer shows
+  `Goal draft rejected — reason:` with the verbatim typed text (bounded in
+  the collapsed view, full text when expanded), `Goal draft rejected — no
+  reason given` for a plain continue, and `Goal draft cancelled — no goal
+  was created` for a discard.
+
 ## [0.8.2] — 2026-09-26 (fork release)
 
 ### Fixed
