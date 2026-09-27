@@ -5,6 +5,7 @@ export const CUSTOM_TOOL_OVERRIDE_KINDS = ["generic", "mcp"] as const;
 export const CUSTOM_TOOL_OUTPUT_MODES = ["hidden", "summary", "preview"] as const;
 export const BASH_OUTPUT_MODES = ["opencode", "summary", "preview", "auto"] as const;
 export const BASH_LIVE_PREVIEW_MODES = ["tail", "head"] as const;
+export const BASH_COMMAND_DISPLAY_MODES = ["full", "collapsed", "auto"] as const;
 export const DIFF_VIEW_MODES = ["auto", "split", "unified"] as const;
 export const DIFF_INDICATOR_MODES = ["bars", "classic", "none"] as const;
 
@@ -15,6 +16,7 @@ export type CustomToolOverrideKind = (typeof CUSTOM_TOOL_OVERRIDE_KINDS)[number]
 export type CustomToolOutputMode = (typeof CUSTOM_TOOL_OUTPUT_MODES)[number];
 export type BashOutputMode = (typeof BASH_OUTPUT_MODES)[number];
 export type BashLivePreviewMode = (typeof BASH_LIVE_PREVIEW_MODES)[number];
+export type BashCommandDisplay = (typeof BASH_COMMAND_DISPLAY_MODES)[number];
 export type DiffViewMode = (typeof DIFF_VIEW_MODES)[number];
 export type DiffIndicatorMode = (typeof DIFF_INDICATOR_MODES)[number];
 
@@ -59,6 +61,7 @@ export interface ToolDisplayConfig {
 	bashOutputMode: BashOutputMode;
 	bashCollapsedLines: number;
 	bashLivePreviewMode: BashLivePreviewMode;
+	bashCommandDisplay: BashCommandDisplay;
 	diffViewMode: DiffViewMode;
 	diffIndicatorMode: DiffIndicatorMode;
 	diffSplitMinWidth: number;
@@ -89,6 +92,7 @@ export const DEFAULT_TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
 	bashOutputMode: "opencode",
 	bashCollapsedLines: 10,
 	bashLivePreviewMode: "tail",
+	bashCommandDisplay: "full",
 	diffViewMode: "auto",
 	diffIndicatorMode: "bars",
 	diffSplitMinWidth: 120,

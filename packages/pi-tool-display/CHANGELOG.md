@@ -27,6 +27,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   normalizer (`src/bash-auto-mode.ts`) so the upstream mode dispatch stays
   untouched.
 
+## [0.3.0] - 2026-09-28
+
+### Added
+
+- `bashCommandDisplay` config option (`"full" | "collapsed" | "auto"`, default
+  `"full"`) controlling the bash tool-call command line: `collapsed` folds
+  multi-line commands onto one line and clamps it to the width available to the
+  tool row with `…`, while `auto` shows the full command while it is running
+  (`executionStarted && isPartial`) and collapses it once it finishes, including
+  on failure. Expanding the row with `ctrl+o` always restores the original
+  multi-line command, and the `$` prefix, spinner, elapsed time, `[shell: …]`,
+  and `(timeout …)` hints are preserved. Collapsing is presentation only: the
+  executed command is never modified.
+- Fork-only `src/bash-command-display.ts`: `BashCommandLineText` (a `Text`
+  subclass that clamps at `render(width)`, so the line fits the message box and
+  not just the terminal), `foldBashCommandToSingleLine`,
+  `clampBashCommandLineToWidth`, `resolveBashCommandDisplayWidth` (render width
+  → `process.stdout.columns` → 120-column fallback), `shouldCollapseBashCommand`,
+  and `resolveBashCommandDisplayArgs`.
+- `tests/bash-command-display.test.ts` covering the config contract, the three
+  modes, truncation, the expanded override, component reuse, the config summary,
+  the settings inspector, and preset detection.
+
+### Changed
+
+- `bashCommandDisplay` is configurable from the interactive settings inspector
+  (search term `multiline`) and documented in the README config table, the
+  "Bash Command Line Display" section, and the example config.
+- Defaults and preset profiles keep `bashCommandDisplay: "full"`, so existing
+  configurations render exactly as before.
+
 ## [0.5.0] - 2026-07-03
 
 ### Added

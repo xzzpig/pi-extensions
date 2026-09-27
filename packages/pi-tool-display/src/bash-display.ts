@@ -1,5 +1,11 @@
 import { Text } from "@earendil-works/pi-tui";
+import {
+	BashCommandLineText,
+	resolveBashCommandDisplayArgs,
+	shouldCollapseBashCommand,
+} from "./bash-command-display.js";
 import { registerCleanup, registerTimer } from "./disposable.js";
+import type { ToolDisplayConfig } from "./types.js";
 
 const BASH_SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"] as const;
 const BASH_SPINNER_INTERVAL_MS = 200;
@@ -165,8 +171,13 @@ export function renderBashCall(
 	args: BashCallArgs,
 	theme: BashCallRenderTheme,
 	context: BashCallRenderContextLike,
+	config?: ToolDisplayConfig,
 ): Text {
-	const text = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
+	const text = context.lastComponent instanceof BashCommandLineText
+		? context.lastComponent
+		: new BashCommandLineText("", 0, 0);
+	args = resolveBashCommandDisplayArgs(args, config, context);
+	text.setCollapse(shouldCollapseBashCommand(config, context));
 	const carrier = toStateCarrier(context.state);
 	const toolCallId = getToolCallId(context);
 	const spinnerState = getOrCreateSpinnerState(toolCallId, carrier);

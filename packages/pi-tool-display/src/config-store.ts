@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, statSync, unlinkSync, 
 import { dirname, join } from "node:path";
 import {
 	BUILT_IN_TOOL_OVERRIDE_NAMES,
+	BASH_COMMAND_DISPLAY_MODES,
 	BASH_LIVE_PREVIEW_MODES,
 	BASH_OUTPUT_MODES,
 	CUSTOM_TOOL_OUTPUT_MODES,
@@ -70,6 +71,12 @@ function toBashLivePreviewMode(value: unknown): ToolDisplayConfig["bashLivePrevi
 	return BASH_LIVE_PREVIEW_MODES.includes(value as ToolDisplayConfig["bashLivePreviewMode"])
 		? (value as ToolDisplayConfig["bashLivePreviewMode"])
 		: DEFAULT_TOOL_DISPLAY_CONFIG.bashLivePreviewMode;
+}
+
+function toBashCommandDisplay(value: unknown): ToolDisplayConfig["bashCommandDisplay"] {
+	return BASH_COMMAND_DISPLAY_MODES.includes(value as ToolDisplayConfig["bashCommandDisplay"])
+		? (value as ToolDisplayConfig["bashCommandDisplay"])
+		: DEFAULT_TOOL_DISPLAY_CONFIG.bashCommandDisplay;
 }
 
 function toDiffViewMode(value: unknown): ToolDisplayConfig["diffViewMode"] {
@@ -235,6 +242,7 @@ export function normalizeToolDisplayConfig(raw: unknown): ToolDisplayConfig {
 		bashOutputMode: toBashOutputMode(source.bashOutputMode),
 		bashCollapsedLines: clampNumber(source.bashCollapsedLines, 0, 80, DEFAULT_TOOL_DISPLAY_CONFIG.bashCollapsedLines),
 		bashLivePreviewMode: toBashLivePreviewMode(source.bashLivePreviewMode),
+		bashCommandDisplay: toBashCommandDisplay(source.bashCommandDisplay),
 		diffViewMode: toDiffViewMode(source.diffViewMode),
 		diffIndicatorMode: toDiffIndicatorMode(source.diffIndicatorMode),
 		diffSplitMinWidth: clampNumber(source.diffSplitMinWidth, 70, 240, DEFAULT_TOOL_DISPLAY_CONFIG.diffSplitMinWidth),

@@ -10,7 +10,7 @@ import {
 } from "./presets.js";
 import { shortenPath } from "./render-utils.js";
 import type { InspectorSettingItem } from "./settings-inspector-modal.js";
-import { type ToolDisplayConfig } from "./types.js";
+import { type ToolDisplayConfig, BASH_COMMAND_DISPLAY_MODES } from "./types.js";
 
 interface ToolDisplayConfigController {
 	getConfig(): ToolDisplayConfig;
@@ -50,6 +50,7 @@ function summarizeConfig(config: ToolDisplayConfig, capabilities: ToolDisplayCap
 		`expandedMax=${config.expandedPreviewMaxLines}`,
 		`bash=${config.bashOutputMode}`,
 		`bashLines=${config.bashCollapsedLines}`,
+		`bashCommand=${config.bashCommandDisplay}`,
 		`diff=${config.diffViewMode}/${config.diffIndicatorMode}@${config.diffSplitMinWidth}`,
 		`diffLines=${config.diffCollapsedLines}`,
 		`diffWrap=${toOnOff(config.diffWordWrap)}`,
@@ -249,6 +250,27 @@ function buildInspectorSettings(
 			searchTerms: ["bash", "collapsed", "lines", "stdout", "zero"],
 		},
 		{
+			id: "bashCommandDisplay",
+			label: "Bash command line",
+			currentValue: config.bashCommandDisplay,
+			values: [...BASH_COMMAND_DISPLAY_MODES],
+			inspectorTitle: "Bash Command Line",
+			inspectorSummary: [
+				"Controls how the bash command itself is rendered on the tool call line, before any output.",
+				"Collapsed folds multi-line commands onto one line and truncates to the terminal width; expanding the tool row always shows the full command.",
+			],
+			inspectorOptions: [
+				"full — always show the original command, including line breaks",
+				"collapsed — always fold the command onto one width-clamped line",
+				"auto — full while the command is running, collapsed after it finishes",
+			],
+			inspectorAdvanced: buildAdvancedNotes(config, capabilities, [
+				"Collapsing is presentation only: the executed command is never modified, and ctrl+o still reveals the original multi-line command.",
+			]),
+			inspectorPath: configPath,
+			searchTerms: ["bash", "command", "collapse", "fold", "single", "line", "multiline"],
+		},
+		{
 			id: "diffViewMode",
 			label: "Edit diff layout",
 			currentValue: config.diffViewMode,
@@ -359,6 +381,11 @@ function applySetting(config: ToolDisplayConfig, id: string, value: string): Too
 			return {
 				...config,
 				bashCollapsedLines: parseNumber(value, config.bashCollapsedLines),
+			};
+		case "bashCommandDisplay":
+			return {
+				...config,
+				bashCommandDisplay: value as ToolDisplayConfig["bashCommandDisplay"],
 			};
 		case "diffViewMode":
 			return {

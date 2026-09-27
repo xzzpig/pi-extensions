@@ -139,6 +139,18 @@ This is how pi-sandbox forks pass their registered `bash` tool to `pi-tool-displ
 
 While a command is still running, the live preview shows the **last** `bashCollapsedLines` / `previewLines` lines (`bashLivePreviewMode: "tail"`, the default) so you can follow the most recent output of long-running commands; after completion the result is rendered as described above (first lines). Set `bashLivePreviewMode` to `"head"` to keep showing the first lines during execution. The `auto` output mode always tails while running, regardless of `bashLivePreviewMode`.
 
+### Bash Command Line Display
+
+`bashCommandDisplay` controls the command line above the output, which is what makes long or multi-line commands take up vertical space:
+
+| Mode | Behavior |
+|------|----------|
+| `full` (default) | The original command is rendered verbatim, including line breaks. This is the upstream behavior. |
+| `collapsed` | Line breaks and tabs are folded into single spaces and the resulting line is truncated to the width available to the tool row with `…`. |
+| `auto` | `full` while the command is still running (`executionStarted && isPartial`), `collapsed` once it finishes, including on failure. |
+
+Expanding the tool row with `ctrl+o` always reveals the original multi-line command, in every mode, and the `$` prefix, spinner, elapsed time, `[shell: …]`, and `(timeout …)` hints are preserved. Collapsing is presentation only: the executed command is never modified. The line is clamped to the width the tool row is actually rendered at (narrower than the terminal because of the message-box frame); if that width is unusable it falls back to `process.stdout.columns`, and finally to 120 columns.
+
 ## Configuration
 
 Runtime configuration is stored at:
@@ -166,6 +178,7 @@ A starter template is included at `config/config.example.json`.
 | `bashOutputMode` | string | `"opencode"` | `opencode` (collapse), `summary` (line count), `preview` (show lines), or `auto` (live tail preview while running, line-count summary after completion) |
 | `bashCollapsedLines` | number | `10` | Lines shown for collapsed bash output and the `auto` live preview (opencode and auto modes) |
 | `bashLivePreviewMode` | string | `"tail"` | While a bash command is still running: `tail` shows the **last** lines of the output so far, `head` shows the first lines (the behavior of the upstream package). Final results always show the first lines |
+| `bashCommandDisplay` | string | `"full"` | How the bash **command** itself is rendered on the tool call line: `full` (always show the original command), `collapsed` (fold it onto one width-clamped line), or `auto` (full while the command is running, collapsed after it finishes) |
 | `diffViewMode` | string | `"auto"` | `auto`, `split`, or `unified` |
 | `diffIndicatorMode` | string | `"bars"` | `bars` (vertical indicators), `classic` (+/- markers), or `none` |
 | `diffSplitMinWidth` | number | `120` | Minimum width before auto mode prefers split diffs |
@@ -277,6 +290,7 @@ Notes:
   "expandedPreviewMaxLines": 4000,
   "bashOutputMode": "opencode",
   "bashCollapsedLines": 15,
+  "bashCommandDisplay": "collapsed",
   "diffViewMode": "auto",
   "diffIndicatorMode": "bars",
   "diffSplitMinWidth": 120,

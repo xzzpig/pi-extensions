@@ -30,6 +30,7 @@
   "bashOutputMode": "opencode",
   "bashCollapsedLines": 10,
   "bashLivePreviewMode": "tail",
+  "bashCommandDisplay": "full",
   "diffViewMode": "auto",
   "diffIndicatorMode": "bars",
   "diffSplitMinWidth": 120,

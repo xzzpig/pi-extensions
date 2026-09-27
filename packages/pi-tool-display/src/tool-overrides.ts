@@ -1621,7 +1621,7 @@ function installToolDisplayApi(getConfig: ConfigGetter): ToolDisplayApi {
         decorated.renderCall = (args: unknown, theme: RenderTheme, context: ToolRenderContextLike) => renderEditDisplayCall(args, theme, context, resolvedAdapter, getConfig);
       } else if (kind === "bash" && (overrideExisting || typeof decorated.renderCall !== "function")) {
         decorated.renderCall = (args: unknown, theme: RenderTheme, context: ToolRenderContextLike) =>
-          renderBashCall(args, theme, context as never);
+          renderBashCall(args, theme, context as never, getConfig());
       } else if (kind === "mcp" && (overrideExisting || typeof decorated.renderCall !== "function")) {
         decorated.renderCall = (args: unknown, theme: RenderTheme) => {
           const toolName = getTextField(decorated, "name") ?? "mcp";
@@ -1942,7 +1942,7 @@ export function registerToolDisplayOverrides(
     label: "bash",
     ...createBuiltinToolBase("bash"),
     renderCall(args, theme, context) {
-      return renderBashCall(args, theme, context as never);
+      return renderBashCall(args, theme, context as never, getConfig());
     },
     renderResult(result, options, theme, context) {
       return renderBashDisplayResult(result as never, options, theme, context as never, getConfig());
