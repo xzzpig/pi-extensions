@@ -2,6 +2,7 @@ import type {
   BeforeAgentStartEventResult,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import type { SubagentDetector } from "#src/authority/subagent-detection";
 import { resolveSkillPromptEntries } from "#src/exposure/skill-prompt-sanitizer";
 import {
   type RegisteredTools,
@@ -23,7 +24,8 @@ interface BeforeAgentStartPayload {
    * handler render the session's own tool list instead of editing the one Pi
    * wrote — including in a child, whose inherited identity carries none.
    * `customPrompt` says whether Pi wrote a preamble at all: under one, it
-   * writes no tool surface, so there is nothing of Pi's to remove.
+   * writes no tool surface, so there is nothing of Pi's to remove, and a root
+   * node adds none either.
    * `promptGuidelines` carries rules other extensions added, which removing
    * Pi's own rules section would otherwise drop.
    */
@@ -60,6 +62,9 @@ export function shouldExposeTool(
  *
  * The tool surface is relocated rather than edited in place, so a subagent
  * child's inherited identity stays byte-identical to its parent's (#890).
+ * A root node whose prompt Pi built from a custom one states no tool surface,
+ * matching Pi, which writes none there; a subagent child's prompt is always a
+ * custom one, and it still states its own tools.
  *
  * Constructor deps:
  * - `turnPrep` — brings the node up to date for the turn before anything reads
@@ -68,6 +73,8 @@ export function shouldExposeTool(
  * - `resolver` — owns permission-query surface: `isToolFullyDenied`, skill check
  * - `toolRegistry` — Pi tool API subset (getAll + getActive + setActive)
  * - `logger` — records each change to the effective tool surface
+ * - `detector` — tells a subagent child from a root, which decides whether a
+ *   custom prompt gets this node's tool surface
  *
  * The active set is recomputed from the session's pre-filter tool surface
  * every turn, so relaxing a rule restores the tool it had withheld (#873).
@@ -79,6 +86,7 @@ export class AgentPrepHandler {
     private readonly resolver: PermissionResolver,
     private readonly toolRegistry: ToolRegistry,
     private readonly logger: DebugLogger,
+    private readonly detector: SubagentDetector,
   ) {}
 
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -108,15 +116,15 @@ export class AgentPrepHandler {
       });
     }
 
-    const toolSurfacePrompt = renderToolSurface(event.systemPrompt, {
-      allowedTools,
-      toolSnippets: event.systemPromptOptions?.toolSnippets ?? {},
-      guidelinesByTool: registered.guidelinesByTool,
-      promptGuidelines: event.systemPromptOptions?.promptGuidelines ?? [],
-      // Pi's own `if (customPrompt)` test, so an empty string reads here the
-      // way it reads there: as no custom prompt at all.
-      piAuthoredPreamble: !event.systemPromptOptions?.customPrompt,
-    });
+    const toolSurfacePrompt = this.statesOwnToolSurface(event, ctx)
+      ? renderToolSurface(event.systemPrompt, {
+          allowedTools,
+          toolSnippets: event.systemPromptOptions?.toolSnippets ?? {},
+          guidelinesByTool: registered.guidelinesByTool,
+          promptGuidelines: event.systemPromptOptions?.promptGuidelines ?? [],
+          piAuthoredPreamble: !hasCustomPrompt(event),
+        })
+      : event.systemPrompt;
     const skillPromptResult = resolveSkillPromptEntries(
       toolSurfacePrompt,
       this.resolver,
@@ -129,6 +137,21 @@ export class AgentPrepHandler {
       : {};
   }
 
+  /**
+   * Whether this node renders its own tool surface into the prompt.
+   *
+   * Every node does except a root whose prompt Pi built from a custom one:
+   * there Pi writes no tool list or rules, and the operator's prompt is left
+   * as Pi built it. A subagent child's prompt is always a custom one, and its
+   * inherited identity carries no tool list, so it still states its own.
+   */
+  private statesOwnToolSurface(
+    event: BeforeAgentStartPayload,
+    ctx: ExtensionContext,
+  ): boolean {
+    return !hasCustomPrompt(event) || this.detector.isSubagent(ctx);
+  }
+
   private observeToolSurface(
     registered: RegisteredTools,
   ): ToolSurfaceObservation {
@@ -137,4 +160,12 @@ export class AgentPrepHandler {
       registered: new Set(registered.names),
     };
   }
+}
+
+/**
+ * Whether Pi built the prompt from a custom one, by Pi's own `if (customPrompt)`
+ * test, so an empty string reads here the way it reads there: as none.
+ */
+function hasCustomPrompt(event: BeforeAgentStartPayload): boolean {
+  return Boolean(event.systemPromptOptions?.customPrompt);
 }

@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { ARG_NODE_TYPES } from "#src/access-intent/bash/node-text";
-import { getParser, type TSNode } from "#src/access-intent/bash/parser";
+import { getGrammarParser, type TSNode } from "#src/access-intent/bash/parser";
 import {
   redirectEffectForDestination,
   redirectMayWriteFile,
   redirectTargetIndex,
+  trailingArgumentIndex,
 } from "#src/access-intent/bash/redirect-analysis";
 import type { TokenEffect } from "#src/access-intent/effect";
 
@@ -26,13 +27,16 @@ function findNodes(node: TSNode, type: string, out: TSNode[] = []): TSNode[] {
  * A command can carry several, and an unresolvable one does not contaminate a
  * resolvable neighbour — so a test asserting that needs the whole list from one
  * parse, not the first match.
+ *
+ * Parsed by the grammar's own parser: this module reads a redirect node as
+ * `tree-sitter-bash` produced it, words after its target included.
  */
 async function withRedirects<T>(
   command: string,
   type: string,
   read: (redirects: TSNode[]) => T,
 ): Promise<T> {
-  const parser = await getParser();
+  const parser = await getGrammarParser();
   const tree = parser.parse(command);
   if (!tree) throw new Error("parser.parse returned null");
   try {
@@ -310,5 +314,46 @@ describe("redirectTargetIndex", () => {
 
   it("names nothing for a redirect that closes a descriptor", async () => {
     await expect(targetText("echo hi >&-")).resolves.toBeUndefined();
+  });
+
+  it.each(["cmd >&- arg", "cmd <&- arg"])(
+    "names nothing for %s, whose word belongs to the command",
+    async (command) => {
+      // The grammar reads the word as the close operator's destination; the
+      // operator closes a descriptor and names no file, so bash passes `arg`
+      // to the command.
+      await expect(targetText(command)).resolves.toBeUndefined();
+    },
+  );
+});
+
+describe("trailingArgumentIndex", () => {
+  /** The text of the child `trailingArgumentIndex` names, or `undefined`. */
+  function trailingText(command: string): Promise<string | undefined> {
+    return withRedirect(command, "file_redirect", (redirect) => {
+      const index = trailingArgumentIndex(redirect);
+      return index === undefined ? undefined : redirect.child(index)?.text;
+    });
+  }
+
+  describe("a redirect the grammar hung the command's words on", () => {
+    it.each([
+      ["grep pat 2>/dev/null f.txt", "f.txt"],
+      ["find ~/x 2>/dev/null -delete -print", "-delete"],
+      ["pnpm x 2>&1 arg", "arg"],
+      ["cmd >&- arg", "arg"],
+      ["cmd <&- arg", "arg"],
+    ])("names the first word after the target in %s", async (command, text) => {
+      await expect(trailingText(command)).resolves.toBe(text);
+    });
+  });
+
+  describe("a redirect with nothing after its target", () => {
+    it.each(["cat a > out.txt", "pnpm x 2>&1", "echo hi >&-"])(
+      "names nothing for %s",
+      async (command) => {
+        await expect(trailingText(command)).resolves.toBeUndefined();
+      },
+    );
   });
 });

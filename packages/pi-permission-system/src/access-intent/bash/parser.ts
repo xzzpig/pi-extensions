@@ -1,13 +1,14 @@
 import { createRequire } from "node:module";
 import { memoizeAsyncWithRetry } from "./async-cache";
+import { reattachRedirectArguments } from "./redirect-arguments";
 
 /**
  * Minimal subset of web-tree-sitter's SyntaxNode used by the AST walker.
  * Defined locally so callers do not need to import web-tree-sitter types.
  *
  * The last two members are the parse's own health, where every other member
- * describes a *successful* parse's structure. They are read only by this
- * module's two `parseUnresolved*` predicates — see their doc comments for why
+ * describes a *successful* parse's structure. They are read only by
+ * `parse-health.ts`'s two `parseUnresolved*` predicates — see their doc comments for why
  * that boundary matters.
  */
 export interface TSNode {
@@ -25,67 +26,6 @@ export interface TSNode {
   /** The node immediately before this one under the same parent, named or not. */
   readonly previousSibling: TSNode | null;
   child(index: number): TSNode | null;
-}
-
-/**
- * Whether tree-sitter failed to resolve the syntax at `node`.
- *
- * Error recovery disposes of text it cannot attach in one of two places, and
- * which one it picks depends on what follows. The read-write open `<>`, which
- * `tree-sitter-bash` 0.25.1 has no node for, shows both: `cat <> rw.txt` keeps
- * the discarded `>` as an `ERROR` *child* of the redirect, while
- * `cat <> ~/rw.txt` strands the `<` as an `ERROR` *sibling* ahead of a redirect
- * that is otherwise indistinguishable from a genuine `> ~/rw.txt`. A reader
- * that consults only the node's own subtree sees the first and not the second.
- *
- * The immediate predecessor, rather than the enclosing statement, is what makes
- * the answer per-redirect: in `cat a > out.txt <> ~/rw.txt` the statement has
- * an error but its first redirect is a fully resolved write, and condemning it
- * would forfeit a proof the parse really did establish.
- *
- * The question is about the parse, not about `<>`, so the population is wider
- * than the form that exposed it: `cat $(( > out.txt` and `echo ) > out.txt`
- * both carry a perfectly good `> out.txt` whose predecessor failed for an
- * unrelated reason, and both go unproven. That is the accepted cost, and it is
- * the same shape as the only real occurrence measured across 5000+ logged
- * commands — `git commit -F - <<'MSG' 2>&1 | tail -4`, valid bash the grammar
- * cannot parse (ADR 0013's 2026-08-29 amendment), where the demoted token
- * belongs to no `<>` either. Over-refusing costs a prompt; under-refusing hands
- * a write to a read grant.
- *
- * This module is the one place {@link TSNode.hasError} and
- * {@link TSNode.previousSibling} are read. Keeping the lateral navigation here
- * is deliberate: recovering-parser behavior is a fact about tree-sitter rather
- * than about any construct, so a caller asks this question instead of
- * hand-rolling a sibling walk of its own.
- */
-export function parseUnresolvedAt(node: TSNode): boolean {
-  return node.hasError || (node.previousSibling?.hasError ?? false);
-}
-
-/**
- * Whether tree-sitter failed to resolve the syntax anywhere within `node`.
- *
- * The subtree-only question, and the one a walker descending statements asks:
- * a statement holding an unresolved region is one whose recovered shape is
- * invented rather than observed, so nothing beneath it is evidence of what
- * runs. The failure can sit well below the statement that exposes it —
- * `git commit -F - <<'MSG' 2>&1 | tail -4` strands its `ERROR` under
- * `heredoc_redirect → file_redirect`, where no command node sees it.
- *
- * {@link parseUnresolvedAt} answers the redirect-shaped question instead,
- * widening to the immediate predecessor because error recovery strands a
- * discarded operator ahead of the redirect it belonged to. That widening is a
- * fact about redirects, not about statements: a statement whose *predecessor*
- * failed is not itself unparsed, and borrowing the wider predicate here would
- * condemn every statement following a failed one.
- *
- * `unresolved-salvage.ts` asks the same question twice over: to locate the
- * innermost region worth re-parsing, and to refuse the re-parse's own result
- * when it failed too (#875).
- */
-export function parseUnresolvedWithin(node: TSNode): boolean {
-  return node.hasError;
 }
 
 /**
@@ -125,7 +65,46 @@ async function initParser(): Promise<TSParser> {
 // Memoize on success but drop a rejected result so a transient init failure
 // (e.g. a slow WASM load) is retried on the next tool call instead of poisoning
 // the parser for the process lifetime.
-export const getParser = memoizeAsyncWithRetry(initParser);
+
+/**
+ * The parser every consumer reads the bash grammar through.
+ *
+ * Its trees are the grammar's with one correction applied where they enter the
+ * package: a word `tree-sitter-bash` hung on a redirect is handed back to the
+ * command it belongs to (`reattachRedirectArguments`, #977). Every walker, the
+ * salvage re-parse, and the log masker read that corrected tree, so none of
+ * them has to learn the grammar's quirk on its own.
+ */
+export const getParser = memoizeAsyncWithRetry(async () =>
+  correctingParser(await getGrammarParser()),
+);
+
+function correctingParser(grammar: TSParser): TSParser {
+  return {
+    parse: (input) => {
+      const tree = grammar.parse(input);
+      if (!tree) return null;
+      return {
+        rootNode: reattachRedirectArguments(tree.rootNode),
+        delete: () => {
+          tree.delete();
+        },
+      };
+    },
+    delete: () => {
+      grammar.delete();
+    },
+  };
+}
+
+/**
+ * `tree-sitter-bash`'s own parser, whose trees are exactly what the grammar
+ * produced.
+ *
+ * Production code reads {@link getParser}; this one exists so a test whose
+ * subject is the grammar's own shape can still see it.
+ */
+export const getGrammarParser = memoizeAsyncWithRetry(initParser);
 
 // Resolved parser cached for synchronous access after warm-up. The tree-sitter
 // parser is stateless (parse is a pure function of its input), so caching it at

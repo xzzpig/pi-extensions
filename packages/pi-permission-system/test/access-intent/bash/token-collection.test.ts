@@ -1315,6 +1315,17 @@ describe("effect attribution", () => {
       ]);
     });
   });
+
+  describe("a word after a redirect's target", () => {
+    it("carries the command's proof, not the operator's", async () => {
+      // The grammar parses `f.txt` as a second destination of the redirect;
+      // bash passes it to `grep`, so it is grep's read (#977).
+      expect(await attributedTokens("grep pat 2>/dev/null f.txt")).toEqual([
+        { token: "/dev/null", effect: { effect: "write", source: "syntax" } },
+        { token: "f.txt", effect: { effect: "read", source: "core" } },
+      ]);
+    });
+  });
 });
 
 describe("token role", () => {
@@ -1349,15 +1360,6 @@ describe("token role", () => {
   });
 
   describe("a redirect child that is not a proven literal target", () => {
-    it("is an operand when it is a word after the first destination", async () => {
-      // tree-sitter-bash parses `f.txt` as a second destination; bash passes
-      // it to `grep` as an argument (#977).
-      expect(await rolesOf("grep pat 2>/dev/null f.txt")).toEqual([
-        { token: "/dev/null", role: "redirect-destination" },
-        { token: "f.txt", role: "operand" },
-      ]);
-    });
-
     it("is an operand when the target is computed at run time", async () => {
       expect(await rolesOf('echo hi > "$OUT"')).toEqual([
         { token: "hi", role: "operand" },

@@ -346,6 +346,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     resolver,
     toolRegistry,
     logger,
+    subagentDetection,
   );
 
   const gateRunner = new GateRunner(

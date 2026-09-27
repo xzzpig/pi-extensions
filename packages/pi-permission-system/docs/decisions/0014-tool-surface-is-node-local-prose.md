@@ -79,9 +79,10 @@ This is not a new cost — the override was already re-emitted every turn so ski
   The prompt is split at Pi's `Current working directory:` footer, which it writes last and unconditionally in both branches — the anchor `pi-subagents` uses for the skills catalogue.
   Above it, sections are removed only when `systemPromptOptions.customPrompt` is absent, because that is exactly when Pi wrote a preamble of its own; below it, always, since that region holds this package's own block and any peer's under [#901].
   A section is also bounded to its own body, so no match can sweep the prose after it.
-- **Accepted residual:** a prompt Pi built from a `customPrompt` still receives this session's block after the footer, so an operator who wrote their own tool list is shown two.
-  Preserving their text and appending the honest list was chosen over standing aside, because the appended block is the only statement of a policy-narrowed surface and every subagent child is a `customPrompt` session too.
-  `docs/plans/0919-preserve-a-custom-system-prompt.md` records the condition that would reopen it.
+- **Residual resolved in [#980]: an operator's custom prompt no longer receives a block.**
+  [#919] kept appending this session's block after a custom prompt, so an operator who wrote their own tool list was shown two, and one who wrote none was shown sections Pi deliberately omits.
+  It chose that over standing aside because every subagent child is a `customPrompt` session too, and the block is a child's only tool prose.
+  See the amendment below for how the two cases are now told apart.
 - **Accepted residual:** the prompt is still split on LF and the assembled body still `trimEnd`ed, so a CRLF-authored `SYSTEM.md` is not returned byte-for-byte even when nothing is removed.
 - **Accepted residual:** a child running without this extension installed still inherits its parent's list, because nothing then relocates or restates it.
   Tracked as [#901], which records the contract a second writer must honor to stay order-independent with this one: membership from the live registry (`pi.getActiveTools()`, the one input that changes mid-chain), text from `toolSnippets`, guidelines from `getAllTools()`, and idempotent remove-then-render so the last writer in the chain is correct in either order.
@@ -94,6 +95,13 @@ This is not a new cost — the override was already re-emitted every turn so ski
   The block is rendered in the prompt's own shape, and the tail removes a relocated block in either shape, so the [#901] contract holds for a second writer on either shape.
   Removing Pi's `<rules>` would also drop the rules other extensions add through `systemPromptOptions.promptGuidelines`, so the relocated rules carry every such bullet no registered tool contributes; through 0.85 that field is the tools' own guidelines, and the filter leaves nothing.
   The section shape could have been reached through `systemPromptOptions` instead of the text, but no option removes Pi's `<tools>`/`<rules>` short of `customPrompt`, and a custom `tools` section replaces Pi's in place, inside the inherited region.
+- **Amendment in [#980]: a root node under a custom prompt states no tool surface.**
+  When Pi built the prompt from `systemPromptOptions.customPrompt` and `SubagentDetector.isSubagent(ctx)` answers `false`, the handler skips this pass and hands the prompt to the skill filter exactly as Pi built it, matching Pi, which writes no tool list or rules there.
+  A node the detector recognizes as a child still renders its block, so "The block is always rendered" now reads: in every node whose prompt Pi authored, and in every subagent child.
+  Such a root returns an override only when skill filtering changed the prompt, and `{}` otherwise.
+  Both detection errors land on an existing behavior: a root misread as a child keeps the block it had before this amendment, and a child nothing recognizes gets Pi's native `customPrompt` prompt, with its tools still listed in the request's `tools` array.
+  The inherited identity is unaffected, since the dropped block lay past everything a child copies.
+  Suppressing the block in children too was considered and deferred until someone asks: a child cannot see its root's `customPrompt`, so it would need a cross-node signal or a config switch.
 - A shared prompt-composer that owns prompt layout for every extension editing this string is the direction this points at; four packages currently anchor on Pi's literal section headers.
   Not built, and no issue filed.
 
@@ -117,6 +125,7 @@ This decision makes that proposed key a verbatim substring of the child's prompt
 [#932]: https://github.com/gotgenes/pi-packages/issues/932
 [#901]: https://github.com/gotgenes/pi-packages/issues/901
 [#962]: https://github.com/gotgenes/pi-packages/issues/962
+[#980]: https://github.com/gotgenes/pi-packages/issues/980
 [pi-subagents ADR 0006]: https://github.com/gotgenes/pi-packages/blob/main/packages/pi-subagents/docs/decisions/0006-inherited-prompt-is-identity-only.md
 [pi-claude-bridge#88]: https://github.com/elidickinson/pi-claude-bridge/issues/88
 [pi-claude-bridge#89]: https://github.com/elidickinson/pi-claude-bridge/issues/89

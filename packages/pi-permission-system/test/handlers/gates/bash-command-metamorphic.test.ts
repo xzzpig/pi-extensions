@@ -150,6 +150,87 @@ describe("bash command gate — nested execution hosts do not weaken", () => {
 });
 
 /**
+ * Where a redirect sits in a simple command does not change which command runs,
+ * so moving it must not weaken a rule anchored on the command's own words.
+ *
+ * The resolver models a `<prefix> *` rule: it matches a unit that *starts with*
+ * the prefix, which is what a redirect's text or a dropped word defeats. A
+ * substring match would find `git` in `2>/dev/null git push` and prove nothing.
+ */
+describe("bash command gate — a redirect's position does not weaken", () => {
+  function makePrefixResolver(
+    prefix: string,
+    state: PermissionState,
+  ): ScopedPermissionResolver {
+    return {
+      resolve: (intent) => {
+        const command =
+          intent.kind === "tool"
+            ? ((intent.input as { command?: string }).command ?? "")
+            : "";
+        return makeCheckResult({
+          state: command.startsWith(prefix) ? state : "allow",
+          source: "bash",
+          command,
+        });
+      },
+    };
+  }
+
+  const placements: {
+    label: string;
+    place: (head: string, rest: string) => string;
+  }[] = [
+    { label: "before the command", place: (h, r) => `2>/dev/null ${h} ${r}` },
+    {
+      label: "between a prefix assignment and the command",
+      place: (h, r) => `FOO=1 >/dev/null ${h} ${r}`,
+    },
+    {
+      label: "as a herestring after the head word",
+      place: (h, r) => `${h} <<< x ${r}`,
+    },
+    {
+      label: "after the head word",
+      place: (h, r) => `${h} 2>/dev/null ${r}`,
+    },
+    {
+      label: "between the arguments",
+      place: (h, r) => {
+        const [first = "", ...others] = r.split(" ");
+        return `${h} ${first} 2>&1 ${others.join(" ")}`;
+      },
+    },
+    {
+      label: "after the head word of a list's last command",
+      place: (h, r) => `cd a && ${h} 2>/dev/null ${r}`,
+    },
+  ];
+
+  const cases: {
+    head: string;
+    rest: string;
+    prefix: string;
+    state: PermissionState;
+  }[] = [
+    { head: "git", rest: "push --force", prefix: "git push", state: "deny" },
+    { head: "rm", rest: "-rf build", prefix: "rm -rf", state: "deny" },
+    { head: "gh", rest: "pr create", prefix: "gh pr", state: "ask" },
+  ];
+
+  for (const { label, place } of placements) {
+    for (const { head, rest, prefix, state } of cases) {
+      it(`a redirect ${label} leaves "${head} ${rest}" at ${state}`, async () => {
+        const resolver = makePrefixResolver(prefix, state);
+
+        expect(await decide(`${head} ${rest}`, resolver)).toBe(state);
+        expect(await decide(place(head, rest), resolver)).toBe(state);
+      });
+    }
+  }
+});
+
+/**
  * The same never-weaker property for wrapper transparency (#803).
  *
  * An exempt wrapper resolves by its inner command's own rule instead of the
