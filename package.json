@@ -16,6 +16,8 @@
     "pnpm": ">=11.13.1 <12"
   },
   "scripts": {
+    "audit:fork-divergence": "bash .agents/skills/pi-fork-divergence/scripts/audit-fork-divergence.sh --all",
+    "verify": "pnpm run audit:fork-divergence && pnpm exec prettier --check .",
     "publish:all": "bash scripts/publish-all.sh",
     "publish:check": "bash scripts/publish-all.sh --dry-run"
   },

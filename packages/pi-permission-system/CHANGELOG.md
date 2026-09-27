@@ -1740,9 +1740,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - All @earendil-works/pi-* peerDependencies and devDependencies now require >=0.75.0, aligning with Pi's Node 22 minimum.
 - Minimum supported Node.js version is now >=22, aligning with Pi v0.75.0. tsconfig target raised from ES2023 to ES2024.
-  - ES2024 APIs (Promise.withResolvers, Object.groupBy, Map.groupBy, Array.fromAsync) are now allowed.
-  - @types/node catalog aligned to ^22.15.3.
-  - pi-autoformat now declares engines.node for consistency.
+    - ES2024 APIs (Promise.withResolvers, Object.groupBy, Map.groupBy, Array.fromAsync) are now allowed.
+    - @types/node catalog aligned to ^22.15.3.
+    - pi-autoformat now declares engines.node for consistency.
 
 ### Features
 

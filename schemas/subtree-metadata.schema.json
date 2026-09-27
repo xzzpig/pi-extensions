@@ -54,6 +54,31 @@
       "type": "string",
       "format": "date-time"
     },
-    "notes": { "type": "string" }
+    "notes": { "type": "string" },
+    "reapplyOnSync": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "doNotReintroduce": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "knownDebt": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "reason"],
+        "properties": {
+          "path": { "type": "string", "minLength": 1 },
+          "kind": {
+            "type": "string",
+            "pattern": "^(noise|deleted|lint|test|other)$"
+          },
+          "reason": { "type": "string", "minLength": 1 },
+          "recordedAt": { "type": "string", "format": "date-time" }
+        }
+      }
+    }
   }
 }

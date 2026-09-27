@@ -17,8 +17,8 @@
  *   concatenation, or `Markdown` stops drawing tables out of box-drawing
  *   glyphs, these fixtures go red — which is the point.
  * - `FramedToolComponent` is the one thing that has to be a stand-in, because
- *   `pi-coding-agent` is not a dependency of this package. It is
- *   `pi-toolbox`'s patched `ToolExecutionComponent.render` transcribed: a
+ * `pi-coding-agent` is not a dependency of this package. It is
+ * `pi-toolbox`'s patched `ToolExecutionComponent.render` transcribed: a
  *   `Container` subclass exposing `setExpanded`, whose render opens with a
  *   blank spacer row and then wraps its children's lines in `drawFrame`.
  *   That leading `""` is not decoration — it is `const out: string[] = [""]`

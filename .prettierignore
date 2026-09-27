@@ -49,6 +49,10 @@ packages/pi-vibeguard
 # Upstream-derived subtree with upstream's own formatting (tabs); check the package via its own toolchain.
 packages/pi-context-cap
 
+# Upstream-derived support library kept at upstream bytes (restoring them is not
+# prettier-clean); check the package via its own toolchain.
+packages/sandbox-runtime
+
 # /dev/null device files bind-mounted into the repo root by the host
 # environment; unreadable and not part of the repository.
 .bash_profile

@@ -22,6 +22,12 @@
 # cache-busting query plus `cache-control: no-cache`, so results reflect the
 # registry's real state.
 #
+# The probes run with NODE_USE_ENV_PROXY=1 so that `fetch` honours HTTP_PROXY and
+# HTTPS_PROXY (Node does not read them by default). Set HTTPS_PROXY when the
+# registry is only reachable through a proxy, or when this host has no working
+# IPv6 route: undici's address-family selection can stall on the AAAA records
+# instead of falling back to IPv4, which makes a probe look like a hang.
+#
 # Usage:
 #   bash scripts/publish-all.sh [options] [-- <extra pnpm publish args>]
 #
@@ -235,7 +241,7 @@ NODE
 # briefly behind a successful publish.
 # Exit: 0 = published, 1 = not published, 2 = the registry could not be queried.
 registry_probe_version() {
-  node -e '
+  NODE_USE_ENV_PROXY=1 node -e '
     (async () => {
       const [name, version, registry] = process.argv.slice(1);
       const base = registry.replace(/\/+$/, "");
@@ -263,7 +269,7 @@ registry_probe_version() {
 
 # Print the registry's latest version for a package, or nothing when unknown.
 registry_latest() {
-  node -e '
+  NODE_USE_ENV_PROXY=1 node -e '
     (async () => {
       const [name, registry] = process.argv.slice(1);
       const base = registry.replace(/\/+$/, "");

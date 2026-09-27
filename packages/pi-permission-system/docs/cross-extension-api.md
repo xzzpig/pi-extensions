@@ -367,10 +367,10 @@ All four broadcasts are best-effort: a throwing listener cannot block permission
 
 ## Channel Reference
 
-| Channel                          | Direction | When                                                                                                  | Payload type                       |
+| Channel                 | Direction | When                                                                                                  | Payload type              |
 | -------------------------------- | --------- | ----------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| `permissions:ready`              | Broadcast | At each node's `session_start` after that node publishes, and again at its first `before_agent_start` | `PermissionsReadyEvent`            |
-| `permissions:ui_prompt`          | Broadcast | Before active UI prompt                                                                               | `PermissionUiPromptEvent`          |
+| `permissions:ready`     | Broadcast | At each node's `session_start` after that node publishes, and again at its first `before_agent_start` | `PermissionsReadyEvent`   |
+| `permissions:ui_prompt` | Broadcast | Before active UI prompt                                                                               | `PermissionUiPromptEvent` |
 | `permissions:decision`           | Broadcast | After every original gate resolution                                                                  | `PermissionDecisionEvent`          |
 | `permissions:forwarded_decision` | Broadcast | After parent response is durably written                                                              | `PermissionForwardedDecisionEvent` |
 

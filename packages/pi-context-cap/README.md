@@ -114,14 +114,14 @@ configuration sources.
 `/context-cap` supports a **tri-state session override** that can force the
 guard on or off regardless of the whitelist, resetting when the session ends:
 
-| Command                                 | Effect                                                                 |
+| Command | Effect |
 | --------------------------------------- | ---------------------------------------------------------------------- |
 | `/context-cap` or `/context-cap status` | Show budget, threshold, usage, and the effective state with its reason |
 | `/context-cap <tokens>`                 | Set the budget (e.g. `/context-cap 150000`, session only)              |
 | `/context-cap off`                      | Force the guard off for this session (ignores usage and whitelist)     |
 | `/context-cap on`                       | Force the guard on for this session (ignores the whitelist)            |
 | `/context-cap default`                  | Back to default: follow the model whitelist                            |
-| `/context-cap resume on\|off`           | Toggle the auto-resume prompt after mid-task compaction                |
+| `/context-cap resume on\|off` | Toggle the auto-resume prompt after mid-task compaction |
 
 `/context-cap <tokens>` and the session switch last only for the current
 session; they are never written to a config file.

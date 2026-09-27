@@ -1,9 +1,9 @@
 import type {
-	DenyWithReason,
-	FlatPermissionConfig,
-	PatternValue,
-	PermissionState,
-	ProfilePermissionConfig,
+  DenyWithReason,
+  FlatPermissionConfig,
+  PatternValue,
+  PermissionState,
+  ProfilePermissionConfig,
 } from "#src/config/config-schema";
 import type { RuleOrigin } from "#src/policy/rule";
 
@@ -11,12 +11,12 @@ import type { RuleOrigin } from "#src/policy/rule";
 // (config-schema.ts) — the single source of truth — and re-exported here so
 // existing importers keep their import path.
 export type {
-	DenyWithReason,
-	FlatPermissionConfig,
-	PatternValue,
-	PermissionState,
-	ProfilePermissionConfig,
-	RuleOrigin,
+  DenyWithReason,
+  FlatPermissionConfig,
+  PatternValue,
+  PermissionState,
+  ProfilePermissionConfig,
+  RuleOrigin,
 };
 
 /**
@@ -29,18 +29,18 @@ export type {
  *   frontmatter file (global agent scope or project agent scope).
  */
 export interface ScopeConfig {
-	permission?: FlatPermissionConfig;
-	/** Named permission rulesets; global scope only. */
-	profiles?: Record<string, ProfilePermissionConfig>;
-	/** Agent frontmatter selection of one named profile. */
-	profileName?: string;
-	/**
-	 * True when the scope's config file was present but failed to load or
-	 * validate (JSON parse error or schema rejection). Absent and valid files
-	 * leave this unset. Drives the fail-closed allow→ask clamp for non-global
-	 * scopes (#646).
-	 */
-	invalid?: boolean;
+  permission?: FlatPermissionConfig;
+  /** Named permission rulesets; global scope only. */
+  profiles?: Record<string, ProfilePermissionConfig>;
+  /** Agent frontmatter selection of one named profile. */
+  profileName?: string;
+  /**
+   * True when the scope's config file was present but failed to load or
+   * validate (JSON parse error or schema rejection). Absent and valid files
+   * leave this unset. Drives the fail-closed allow→ask clamp for non-global
+   * scopes (#646).
+   */
+  invalid?: boolean;
 }
 
 /**
@@ -48,11 +48,11 @@ export interface ScopeConfig {
  * or wrapper. Absent for current-shell (top-level) commands.
  */
 export type BashCommandContext =
-	| "command_substitution"
-	| "process_substitution"
-	| "subshell"
-	| "wrapper_payload"
-	| "wrapper_indirection";
+  | "command_substitution"
+  | "process_substitution"
+  | "subshell"
+  | "wrapper_payload"
+  | "wrapper_indirection";
 
 /**
  * How wrapper commands (`eval`/`bash -c`/`sudo`/`env`/`xargs`/`timeout`/…)
@@ -80,39 +80,39 @@ export type WrapperFloors = "fallback" | "always";
 export type FloorExemption = "core-reader";
 
 export interface PermissionCheckResult {
-	toolName: string;
-	state: PermissionState;
-	/** Custom denial reason from a deny-with-reason pattern, when present. */
-	reason?: string;
-	matchedPattern?: string;
-	command?: string;
-	target?: string;
-	source: "tool" | "bash" | "mcp" | "skill" | "special" | "default" | "session";
-	/** Which source contributed the winning rule. */
-	origin: RuleOrigin;
-	/**
-	 * Execution context of the offending nested command, when the winning bash
-	 * unit came from a substitution or subshell. Absent for current-shell
-	 * (top-level) commands.
-	 */
-	commandContext?: BashCommandContext;
-	/**
-	 * The command the winning bash unit actually runs, when it is a wrapper whose
-	 * inner command differs from the unit text (#713). Display-only: the gate
-	 * decides on `command`, and on `executedUnit`'s rules only when
-	 * {@link floorExemption} says the inner command is a proven pure reader.
-	 */
-	executedUnit?: string;
-	/**
-	 * Set when the winning bash unit is a wrapper the floor no longer covers,
-	 * naming why (#803). Recorded in the review log so an allow the floor would
-	 * once have prompted for is auditable to the reason that let it through.
-	 */
-	floorExemption?: FloorExemption;
+  toolName: string;
+  state: PermissionState;
+  /** Custom denial reason from a deny-with-reason pattern, when present. */
+  reason?: string;
+  matchedPattern?: string;
+  command?: string;
+  target?: string;
+  source: "tool" | "bash" | "mcp" | "skill" | "special" | "default" | "session";
+  /** Which source contributed the winning rule. */
+  origin: RuleOrigin;
+  /**
+   * Execution context of the offending nested command, when the winning bash
+   * unit came from a substitution or subshell. Absent for current-shell
+   * (top-level) commands.
+   */
+  commandContext?: BashCommandContext;
+  /**
+   * The command the winning bash unit actually runs, when it is a wrapper whose
+   * inner command differs from the unit text (#713). Display-only: the gate
+   * decides on `command`, and on `executedUnit`'s rules only when
+   * {@link floorExemption} says the inner command is a proven pure reader.
+   */
+  executedUnit?: string;
+  /**
+   * Set when the winning bash unit is a wrapper the floor no longer covers,
+   * naming why (#803). Recorded in the review log so an allow the floor would
+   * once have prompted for is auditable to the reason that let it through.
+   */
+  floorExemption?: FloorExemption;
 }
 
 export function isPermissionState(value: unknown): value is PermissionState {
-	return value === "allow" || value === "deny" || value === "ask";
+  return value === "allow" || value === "deny" || value === "ask";
 }
 
 /**
@@ -121,12 +121,12 @@ export function isPermissionState(value: unknown): value is PermissionState {
  * Rejects a non-string `reason` to keep malformed config out of the rule set.
  */
 export function isDenyWithReason(value: unknown): value is DenyWithReason {
-	if (typeof value !== "object" || value === null || Array.isArray(value)) {
-		return false;
-	}
-	const record = value as Record<string, unknown>;
-	return (
-		record.action === "deny" &&
-		(record.reason === undefined || typeof record.reason === "string")
-	);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    record.action === "deny" &&
+    (record.reason === undefined || typeof record.reason === "string")
+  );
 }

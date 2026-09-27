@@ -9,5 +9,22 @@
   "upstreamCommit": "672121246907a60e646bb3d2e8a1940371f4c904",
   "squash": true,
   "lastSyncedAt": "2026-08-28T14:58:42+08:00",
-  "notes": "Forked from aizigao/pi-vibeguard (npm @aizigao/pi-vibeguard v0.1.2). Local divergence per openspec change add-vibeguard-mapping-command: (1) npm renamed to @xzzpig/pi-vibeguard, fork version 0.1.0 (now 0.2.0), repository field repointed to xzzpig/pi-extensions; (2) added peerDependency @earendil-works/pi-tui (range aligned with pi-tool-display) plus vitest devDep for the new tests; (3) Mapping View section (parseCategoryFromPlaceholder/maskOriginal/buildMappingSnapshot/buildCategoryStats/formatTtlRemaining + MappingViewModal) lives in fork-only mapping-view.ts and category-picker.ts (CategoryPickerModal) since 2026-09-19; index.ts keeps imports + construction sites; both files are in tsconfig include and package.json files. Registered /vibeguard:list and /vibeguard:stats (ctx.ui.custom only, zero session writes; command layer reuses the engine's own cleanup before snapshotting); (4) tests/ added (vitest unit + extension-level integration); tsconfig include widened (tests, allowImportingTsExtensions; test-engine.ts deliberately excluded from typecheck since 2026-09-19 — upstream standalone script with zero runtime references) and eslint ignores test-engine.ts (must stay: typed linting requires tsconfig membership) and eslint ignores test-engine.ts (upstream standalone script); (5) README fork notice + CHANGELOG 0.1.0 fork entry. (6) 0.2.0 session suspension: SuspensionState class in index.ts (~:258-320), suspension skip-params threaded through redactText/redactDeep/redactMessageContent and the restore path, /vibeguard:disable|enable|status|categories commands. 2026-09-19 P2 pass: the suspension skip-threading through redactText/redactDeep/redactMessageContent was replaced by a call-site PatternSet filter (fork-only suspension-filter.ts, filterPatternSet, applied once at the context handler entry); the three engine functions are byte-identical to upstream again (restore path untouched, single call site verified)."
+  "notes": "Forked from aizigao/pi-vibeguard (npm @aizigao/pi-vibeguard v0.1.2). The Mapping View contract lives in openspec (spec vibeguard-mapping-view).",
+  "knownDebt": [
+    {
+      "kind": "noise",
+      "path": "packages/pi-vibeguard/tsconfig.json",
+      "reason": "Diff-alignment artifact on a repeated closing brace: the raw diff pairs `-}` with `+}` while `git diff -w` renders `}` as unchanged context; the file is otherwise at upstream bytes.",
+      "recordedAt": "2026-09-28T05:40:00+08:00"
+    }
+  ],
+  "reapplyOnSync": [
+    "keep the packaging divergence: npm name @xzzpig/pi-vibeguard, the repository field repointed to xzzpig/pi-extensions, and the @earendil-works/pi-tui peerDependency (range aligned with pi-tool-display) plus the vitest devDep",
+    "keep the fork-only modules mapping-view.ts, category-picker.ts and suspension-filter.ts, with index.ts holding the imports, construction sites, the SuspensionState class and the /vibeguard:* commands",
+    "keep the tsconfig include widening (tests, allowImportingTsExtensions) with test-engine.ts excluded from typecheck, and keep eslint ignoring test-engine.ts since typed linting requires tsconfig membership",
+    "keep the README fork notice and the CHANGELOG 0.1.0 fork entry"
+  ],
+  "doNotReintroduce": [
+    "do not thread the suspension skip-params through redactText/redactDeep/redactMessageContent: those three engine functions stay byte-identical to upstream, and the call-site PatternSet filter (suspension-filter.ts) replaces that threading"
+  ]
 }

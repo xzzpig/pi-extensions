@@ -9,5 +9,16 @@
   "upstreamCommit": "6771c67040874b6708f0139c735b654675c011c3",
   "squash": true,
   "lastSyncedAt": "2026-09-01T00:00:00+08:00",
-  "notes": "Forked from lukeramsden/pi-context-cap (npm @lukeramsden/pi-context-cap v1.0.1). Local divergence per openspec change fork-pi-context-cap: (1) npm renamed to @xzzpig/pi-context-cap, fork version 0.1.0 (now 0.1.3); (2) added config file support (global context-cap.json + project .pi/context-cap.json, key-level merge, project trusted guard) with models whitelist (minimatch provider/modelId or bare modelId), budget/reserve from config; (3) session tri-state override /context-cap on|off|default (default follows whitelist); (4) fork-only config.ts/whitelist.ts modules are additive — the upstream core logic stays in extensions/context-cap.ts and only wires into them (earlier 'refactored core' wording was misleading); README fork notice + CHANGELOG 0.1.0 fork entry. (6) 2026-09-19: package files keep upstream's own tab formatting (package added to root .prettierignore); .github/workflows are dead in the monorepo and stay byte-identical to upstream; since 0.1.3 the CLI flags use the same strict parser as the config file (200k is rejected with a warning, not truncated); the /context-cap <tokens> command keeps upstream's original parsing."
+  "notes": "Forked from lukeramsden/pi-context-cap (npm @lukeramsden/pi-context-cap v1.0.1). The fork contract lives in openspec (change fork-pi-context-cap).",
+  "knownDebt": [],
+  "reapplyOnSync": [
+    "keep the packaging divergence: npm name @xzzpig/pi-context-cap, the README fork notice and the CHANGELOG 0.1.0 fork entry",
+    "keep the fork-only config.ts/whitelist.ts modules additive, with the upstream core logic staying in extensions/context-cap.ts and only wiring into them",
+    "keep the config-file support (global context-cap.json plus project .pi/context-cap.json, key-level merge, project-trusted guard) with the models whitelist and budget/reserve, plus the session tri-state override /context-cap on|off|default",
+    "keep the CLI flags on the same strict parser as the config file (an out-of-range value such as 200k is rejected with a warning, not truncated), while /context-cap <tokens> keeps upstream's original parsing"
+  ],
+  "doNotReintroduce": [
+    "package files keep upstream's own tab formatting (the package is listed in root .prettierignore)",
+    "the .github/workflows are dead in the monorepo and stay byte-identical to upstream"
+  ]
 }

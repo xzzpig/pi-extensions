@@ -9,5 +9,72 @@
   "upstreamCommit": "caa1acd3a6e873f753a4cc737aaf50a7f4e16828",
   "squash": true,
   "lastSyncedAt": "2026-09-25T04:12:42+08:00",
-  "notes": " Local divergence, reconstructed 2026-09-19 from diff vs upstream e54af55 (v0.3.5): (1) mouse features no longer patch TuiAltScreen.prototype — they register with the local @xzzpig/pi-mouse-events extension (optional peer >=0.1.0 <2, devDep workspace:*): wheel/press/copy handler slots, keyboard range-delete via ctx.ui.onTerminalInput; without it mouse features are simply off (no fallback), one console note per process. Click-to-expand toggles from any row of an expandable component (hint row or the component's expanded/_expanded state field), plain same-cell click only, double-click debounced; mouse/capabilities.ts probes the receiver for calling (not patching) plus copySlot; prototype-patch-registry drops the four mouse adapter keys. mouse/api-consumer.ts reads the API off Symbol.for('pi-mouse-events.api.v1') (duplicated key pinned by test/contract/mouse-api.test.ts); test/mouse/shim.ts replays the dispatch for the behavioural suites. (2) every git probe in extensions/starline/git.ts passes --no-optional-locks (index.lock churn; test/git-no-optional-locks.test.ts). (3) npm renamed @xzzpig/pi-starline, fork version 0.4.0 (0.x fork convention: upstream minor bump -> fork minor bump), README install section updated, CHANGELOG rewritten fork-only. (4) test/runtime.test.ts passes an explicit empty env to detectRuntime so ambient Nix markers (IN_NIX_SHELL) do not shadow file-marker fixtures (uses upstream's optional env param; runtime.ts itself unchanged). (5) comment-only additions: ui.ts SAFETY/pi-lens-ignore notes, config.ts empty-catch note. Keep package-lock.json in npm's native tab indentation (restored to upstream bytes + name/version lines on 2026-09-19); biome protects package-lock.json and root prettier ignores this package. Re-apply all of the above on each future sync. 2026-09-19 hardening: mouse/api-consumer.ts rejects an API object whose version !== 1, and test/contract/mouse-api.test.ts pins the slot-dispatch semantics (priority order, consume-on-first-handled, skip-throwing, fall-through) against the real implementation via the new @xzzpig/pi-mouse-events/test-support export (pi-mouse-events 0.1.2), so shim drift goes red in the contract suite. 2026-09-20 publish-gate fix: \"biome check .\" (prepublishOnly -> verify) failed with 3 errors, blocking the 0.4.1 publish: package.json had been re-serialized with 2-space indent by the conflict-surface refactor (upstream and biome both use TABS), and fork-only test/contract/mouse-api.test.ts was unformatted with unsorted type imports. Both fixed with \"biome check --write\"; no behavior change. KEEP package.json TAB-indented whenever re-applying fork name/version/deps lines after a sync, or prepublishOnly blocks the release again. editor-wheel.test.ts (upstream file) keeps 9 lint/style/noNonNullAssertion warnings and shim.ts keeps 2 lint/suspicious/noConfusingVoidType warnings by deliberate non-change: warnings do not fail biome check, and fixing them would add fork edits inside upstream files.\n 2026-09-25 sync v0.3.5 -> v0.3.7 (fork 0.4.1 -> 0.5.0): merged upstream v0.3.6 (user-message markdown-transformers fix) and v0.3.7 (drop clickToExpandTools). Fork keeps the click-any-collapsible engine per design D7, so these upstream deletions were resolved as KEEP fork versions (recurring modify/delete conflicts on every future pull): extensions/starline/mouse/tool-box.ts, mouse/component-tree.ts, test/contract/tool-box-hint.test.ts, test/mouse/tool-box.test.ts, test/mouse/component-tree.test.ts, test/contract/transcript-layout.test.ts. mouse/index.ts stays the fork's 941-line consumer-API rewrite (took OURS wholesale). clickToExpandTools is NOT restored anywhere: the config key was renamed to clickToToggleExpandable (default true) at all 5 config.ts sites (MouseConfig field, FIXED_EDITOR_KEY_MAP entry clickToExpandTools->clickToToggleExpandable for fixedEditor-era migration, defaultConfig.mouse true, normalizeMouseConfig new-key-read-plus-old-key-fallback coercion, saveMousePatch spread), capabilities.ts MouseFeature union + REQUIREMENTS, mouse/index.ts feature gate, and the 7 test files; the /starline settings toggle was re-added under the new key name. handlesMouse() bow-out predicate (onMouse duck-type) was DELETED as dead code — starline owns tool rows via ToolExecutionComponent ancestor resolution; onMouse now has zero residue under mouse/. mouse/hit-test.ts was restored to fork HEAD wholesale because upstream removed scrollContentOrigin that fork tool-box.ts still imports/calls (upstream's component-tree.ts-deleted comment would lie about the fork). key-text.ts dedup: adopted upstream caa1acd3a's key-text.ts byte-stable as single source; removed the duplicate keyTextFor/fallbackKeyText from tool-box.ts; tool-box.ts and index.ts now import keyTextFor from './key-text'. capabilities.ts D8 type tightening applied: isCallable/probeCapabilities use <T extends object> (rejecting Record<string, unknown> which fails TS2345 at mouse/index.ts:238). package-lock.json kept at upstream-bytes + name/version patch (TAB indent, biome-formatted; pnpm monorepo does not consume it); package.json name @xzzpig/pi-starline version 0.5.0 with peer ranges >=0.86.0 <0.88 and devDeps ^0.87.1. pi-mouse-events 0.2.0 and pi-thinking-collapse 0.2.0 share the same >=0.86.0 <0.88 peer floor (pi 0.86.0 is when core's five MouseRegion wrappers — thinking, tool result, branch/compaction summary, skill invocation — are all native). Re-apply all of the above on each future sync; expect modify/delete conflicts on the six kept files every pull. 2026-09-25 contract v2: Starline's mouse/api-consumer.ts now reads Symbol.for('pi-mouse-events.api.v2') and rejects any candidate whose version !== 2 (pi-mouse-events 0.2.0 removed the component-dispatch half and reshaped the API, so the key and version were bumped together per api.ts's no-removal-within-a-major promise). An older published pi-mouse-events (v1) is therefore rejected, not misread: Starline's mouse features switch off with the usual console note. test/contract/mouse-api.test.ts pins the key and keeps a version:1 fixture asserting the rejection."
+  "notes": "Forked from carderne/pi-starline. The mouse capability contract lives in openspec (change adopt-pi-native-mouse-api, spec component-mouse-deference); the rest is documented in the package README and CHANGELOG.",
+  "knownDebt": [
+    {
+      "kind": "noise",
+      "path": "packages/pi-starline/package-lock.json",
+      "reason": "Kept at upstream bytes plus the two @xzzpig name/version lines (npm tab indentation); unconsumed by this pnpm monorepo. Re-apply after each sync.",
+      "recordedAt": "2026-09-28T02:09:09+08:00"
+    },
+    {
+      "kind": "lint",
+      "path": "packages/pi-starline/test/mouse/editor-wheel.test.ts",
+      "reason": "9 lint/style/noNonNullAssertion warnings on an upstream test file, kept by deliberate non-change: warnings do not fail biome check and fixing them would add fork edits inside an upstream file.",
+      "recordedAt": "2026-09-28T02:09:09+08:00"
+    },
+    {
+      "kind": "lint",
+      "path": "packages/pi-starline/test/mouse/shim.ts",
+      "reason": "2 lint/suspicious/noConfusingVoidType warnings on an upstream test file, kept by deliberate non-change for the same reason.",
+      "recordedAt": "2026-09-28T02:09:09+08:00"
+    },
+    {
+      "kind": "noise",
+      "path": "packages/pi-starline/test/mouse/capabilities.test.ts",
+      "reason": "Residual raw-vs-w delta is a diff-alignment artifact: 19 of the fork's 91 added lines are whitespace-twins of upstream lines (repeated }); closers), so git aligns them differently in raw vs -w. Upstream-original lines are byte-identical to upstream.",
+      "recordedAt": "2026-09-28T02:09:09+08:00"
+    },
+    {
+      "kind": "noise",
+      "path": "packages/pi-starline/extensions/starline/mouse/index.ts",
+      "reason": "Residual raw-vs-w delta is a diff-alignment artifact: 104 of the fork's 481 added lines are whitespace-twins of upstream lines (this file is the fork's consumer-API rewrite, so added and upstream lines interleave heavily). Upstream-original lines are byte-identical to upstream.",
+      "recordedAt": "2026-09-28T02:09:09+08:00"
+    },
+    {
+      "kind": "noise",
+      "path": "packages/pi-starline/extensions/starline/git.ts",
+      "reason": "Diff-alignment artifact: the fork's multiline call and restructuring indent these upstream-origin lines one level deeper than upstream; restoring upstream bytes fails `biome check .`, which runs inside `prepublishOnly`.",
+      "recordedAt": "2026-09-28T05:40:00+08:00"
+    },
+    {
+      "kind": "noise",
+      "path": "packages/pi-starline/test/contract/mouse-install.test.ts",
+      "reason": "Diff-alignment artifact: the fork's multiline call and restructuring indent these upstream-origin lines one level deeper than upstream; restoring upstream bytes fails `biome check .`, which runs inside `prepublishOnly`.",
+      "recordedAt": "2026-09-28T05:40:00+08:00"
+    },
+    {
+      "kind": "noise",
+      "path": "packages/pi-starline/test/mouse/install-wiring.test.ts",
+      "reason": "Diff-alignment artifact: the fork's multiline call and restructuring indent these upstream-origin lines one level deeper than upstream; restoring upstream bytes fails `biome check .`, which runs inside `prepublishOnly`.",
+      "recordedAt": "2026-09-28T05:40:00+08:00"
+    }
+  ],
+  "reapplyOnSync": [
+    "mouse features register with the local @xzzpig/pi-mouse-events extension instead of patching TuiAltScreen.prototype (optional peer >=0.1.0 <2, devDep workspace:*); without it mouse features are simply off, with one console note per process",
+    "mouse/api-consumer.ts reads Symbol.for('pi-mouse-events.api.v2') and rejects any candidate whose version !== 2, so an older v1 publisher is rejected rather than misread",
+    "keep test/contract/mouse-api.test.ts pinning that key plus the version:1 rejection fixture",
+    "every git probe in extensions/starline/git.ts passes --no-optional-locks (test/git-no-optional-locks.test.ts)",
+    "test/runtime.test.ts passes an explicit empty env to detectRuntime so ambient Nix markers cannot shadow file-marker fixtures",
+    "keep the comment-only additions: ui.ts SAFETY/pi-lens-ignore notes and config.ts's empty-catch note",
+    "package-lock.json stays at upstream bytes plus the name/version lines in npm's TAB indentation; package.json MUST stay TAB-indented when re-applying the fork name/version/deps lines or prepublishOnly blocks the release",
+    "mouse/index.ts stays the fork's consumer-API rewrite (took OURS wholesale)",
+    "keep clickToToggleExpandable (default true) across the config.ts sites and the test files; clickToExpandTools is not restored anywhere",
+    "keep handlesMouse() deleted, mouse/hit-test.ts at fork HEAD, key-text.ts at upstream bytes as the single source with tool-box.ts/index.ts importing keyTextFor from ./key-text, and capabilities.ts's D8 type tightening (<T extends object>)",
+    "keep peer ranges >=0.86.0 <0.88 with devDeps ^0.87.1 (pi-mouse-events 0.2.0 and pi-thinking-collapse 0.2.0 share that floor)"
+  ],
+  "doNotReintroduce": [
+    "expect recurring modify/delete conflicts on every pull: upstream deleted these files and the fork keeps them — extensions/starline/mouse/tool-box.ts, mouse/component-tree.ts, test/contract/tool-box-hint.test.ts, test/mouse/tool-box.test.ts, test/mouse/component-tree.test.ts, test/contract/transcript-layout.test.ts",
+    "keep editor-wheel.test.ts's 9 lint/style warnings and shim.ts's 2 noConfusingVoidType warnings by deliberate non-change"
+  ]
 }

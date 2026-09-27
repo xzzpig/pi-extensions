@@ -3,3 +3,8 @@ schema: spec-driven
 context: |
   语言：中文（简体）
   所有产出物必须用简体中文撰写。
+
+  组织约定：
+  - capability（能力域）是 spec 的组织单位。新建 change 前先查 openspec/specs/ 是否已有同域 capability；
+    有则以 MODIFIED/ADDED 扩展它并保持 capability path 不变，不要为同一领域再新建窄 spec。
+  - MODIFIED 会整块替换该要求：必须把不想丢弃的既有场景一并写入 delta，否则归档会被拒绝。

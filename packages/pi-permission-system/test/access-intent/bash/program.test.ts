@@ -1951,11 +1951,11 @@ describe("BashProgram", () => {
         ["stdbuf -oL aws s3 ls", "stdbuf -oL aws s3 ls", "aws s3 ls"],
         ["flock /tmp/lock aws s3 ls", "flock /tmp/lock aws s3 ls", "aws s3 ls"],
       ])("flags %s as an indirection wrapper and emits its inner command", async (command, text, inner) => {
-        const program = await BashProgram.parse(command, normalizer);
-        expect(program.commands()).toEqual([
+          const program = await BashProgram.parse(command, normalizer);
+          expect(program.commands()).toEqual([
           { text, wrapperKind: "indirection", executedUnit: inner },
           { text: inner, context: "wrapper_indirection" },
-        ]);
+          ]);
       });
 
 
@@ -2081,11 +2081,11 @@ describe("BashProgram", () => {
         ["fd -X rm", "rm", "rm"],
         ["fd --exec-batch rm", "rm", "rm"],
       ])("flags %s as an indirection wrapper and emits the exec'd command", async (command, inner, executedUnit) => {
-        const program = await BashProgram.parse(command, normalizer);
-        expect(program.commands()).toEqual([
-          { text: command, wrapperKind: "indirection", executedUnit },
+          const program = await BashProgram.parse(command, normalizer);
+          expect(program.commands()).toEqual([
+            { text: command, wrapperKind: "indirection", executedUnit },
           { text: inner, context: "wrapper_indirection" },
-        ]);
+          ]);
       });
 
       it.each(["find . -name foo", "fd pattern", "fd -H -t f pattern"])(

@@ -241,7 +241,11 @@ Use the project configuration.
 	assert.equal(resolved.ok, true);
 	if (!resolved.ok) return;
 	assert.equal(resolved.contract.agent.source, "project");
-	assert.deepEqual(resolved.contract.tools.declaredBuiltin, ["read"]);
+	// The default intercom bridge is active, and applyIntercomBridgeToAgent
+	// appends contact_supervisor to every agent that declares a non-empty tool
+	// list (src/intercom/intercom-bridge.ts:216). declaredBuiltin reads the
+	// rewritten declaration, so the bridge entry belongs in the expectation.
+	assert.deepEqual(resolved.contract.tools.declaredBuiltin, ["read", "contact_supervisor"]);
 });
 
 test("D-03/D-11: missing configured model fails before dispatch", async () => {	const agentDir = process.env.PI_CODING_AGENT_DIR!;

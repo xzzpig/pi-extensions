@@ -25,49 +25,49 @@ export type { WrapperKind } from "./wrapper-analysis";
  * #307 adds per-command path candidates and an effective working directory.
  */
 export interface BashCommand {
-	readonly text: string;
-	/**
-	 * Execution context for a nested command (substitution or subshell); absent
-	 * for a current-shell (top-level) command.
-	 */
-	readonly context?: BashCommandContext;
-	/**
-	 * Set when this unit is a floored indirection wrapper; its decision is floored
-	 * to at least `ask` so the wrapped command cannot ride a permissive `allow`.
-	 * Absent for an ordinary command.
-	 */
-	readonly wrapperKind?: WrapperKind;
-	/**
-	 * The command this wrapper unit actually runs (#713). Absent for an ordinary
-	 * command, and for a wrapper whose inner command cannot be established.
-	 *
-	 * Display-only, and deliberately looks past an `sh -c` layer the gate must
-	 * not look past — {@link floorExemption} is the gateable answer, established
-	 * by its own walk rather than read off this string (#803).
-	 */
-	readonly executedUnit?: string;
-	/**
-	 * Set when this wrapper unit's floor has no reason left to hold, naming the
-	 * reason (#803). Only ever present alongside `wrapperKind: "indirection"`
-	 * and an established {@link executedUnit}.
-	 */
-	readonly floorExemption?: FloorExemption;
-	/**
-	 * Set when this unit was emitted from, or beneath, a statement holding a
-	 * region tree-sitter could not resolve. Its decision is floored to at least
-	 * `ask`, because the recovered structure is not evidence of what runs — ADR
-	 * 0013 §10's fail-closed base case (#840).
-	 */
-	readonly parseUnresolved?: true;
-	/**
-	 * Fork: set on a wrapper unit whose inner command could not be located or
-	 * parsed. The gate floors such a unit to `ask` (fail-closed) even in the
-	 * configurable `wrapperFloors: "fallback"` mode, where resolved wrappers are
-	 * gated by their own text and their inner commands are gated as units of
-	 * their own. Absent for ordinary commands and for wrappers whose inner
-	 * commands were resolved.
-	 */
-	readonly payloadUnresolved?: boolean;
+  readonly text: string;
+  /**
+   * Execution context for a nested command (substitution or subshell); absent
+   * for a current-shell (top-level) command.
+   */
+  readonly context?: BashCommandContext;
+  /**
+   * Set when this unit is a floored indirection wrapper; its decision is floored
+   * to at least `ask` so the wrapped command cannot ride a permissive `allow`.
+   * Absent for an ordinary command.
+   */
+  readonly wrapperKind?: WrapperKind;
+  /**
+   * The command this wrapper unit actually runs (#713). Absent for an ordinary
+   * command, and for a wrapper whose inner command cannot be established.
+   *
+   * Display-only, and deliberately looks past an `sh -c` layer the gate must
+   * not look past — {@link floorExemption} is the gateable answer, established
+   * by its own walk rather than read off this string (#803).
+   */
+  readonly executedUnit?: string;
+  /**
+   * Set when this wrapper unit's floor has no reason left to hold, naming the
+   * reason (#803). Only ever present alongside `wrapperKind: "indirection"`
+   * and an established {@link executedUnit}.
+   */
+  readonly floorExemption?: FloorExemption;
+  /**
+   * Set when this unit was emitted from, or beneath, a statement holding a
+   * region tree-sitter could not resolve. Its decision is floored to at least
+   * `ask`, because the recovered structure is not evidence of what runs — ADR
+   * 0013 §10's fail-closed base case (#840).
+   */
+  readonly parseUnresolved?: true;
+  /**
+   * Fork: set on a wrapper unit whose inner command could not be located or
+   * parsed. The gate floors such a unit to `ask` (fail-closed) even in the
+   * configurable `wrapperFloors: "fallback"` mode, where resolved wrappers are
+   * gated by their own text and their inner commands are gated as units of
+   * their own. Absent for ordinary commands and for wrappers whose inner
+   * commands were resolved.
+   */
+  readonly payloadUnresolved?: boolean;
   readonly salvaged?: true;
 }
 
@@ -161,14 +161,14 @@ const COMMAND_ENUM_DESCEND = new Set(["program", "list", "pipeline"]);
  * pair is one entry.
  */
 const COMPOUND_STATEMENT_TYPES = new Set([
-	"if_statement",
-	"while_statement",
-	"for_statement",
-	"c_style_for_statement",
-	"case_statement",
-	"function_definition",
-	"compound_statement",
-	"negated_command",
+  "if_statement",
+  "while_statement",
+  "for_statement",
+  "c_style_for_statement",
+  "case_statement",
+  "function_definition",
+  "compound_statement",
+  "negated_command",
 ]);
 
 /**
@@ -178,10 +178,10 @@ const COMPOUND_STATEMENT_TYPES = new Set([
  * punctuation — so emitting one would produce a `do rm $f; done` unit.
  */
 const STATEMENT_GROUP_TYPES = new Set([
-	"do_group",
-	"case_item",
-	"elif_clause",
-	"else_clause",
+  "do_group",
+  "case_item",
+  "elif_clause",
+  "else_clause",
 ]);
 
 /**
@@ -211,17 +211,17 @@ const COMMAND_ENUM_SKIP = new Set(["comment", "heredoc_end"]);
  * a prompt. Membership is what {@link descendStatementChildren} filters on.
  */
 const STATEMENT_TYPES = new Set([
-	"command",
-	"redirected_statement",
-	"subshell",
-	"declaration_command",
-	"variable_assignment",
-	"test_command",
-	"unset_command",
-	"ERROR",
-	...COMMAND_ENUM_DESCEND,
-	...COMPOUND_STATEMENT_TYPES,
-	...STATEMENT_GROUP_TYPES,
+  "command",
+  "redirected_statement",
+  "subshell",
+  "declaration_command",
+  "variable_assignment",
+  "test_command",
+  "unset_command",
+  "ERROR",
+  ...COMMAND_ENUM_DESCEND,
+  ...COMPOUND_STATEMENT_TYPES,
+  ...STATEMENT_GROUP_TYPES,
 ]);
 
 // ── Command enumeration ──────────────────────────────────────────────
@@ -269,17 +269,17 @@ const STATEMENT_TYPES = new Set([
 let activeParseProgram: ParseProgram | undefined;
 
 export function collectCommands(
-	node: TSNode,
-	options?: { parseProgram?: ParseProgram },
+  node: TSNode,
+  options?: { parseProgram?: ParseProgram },
 ): BashCommand[] {
-	const out: BashCommand[] = [];
-	activeParseProgram = options?.parseProgram;
-	try {
-		collectCommandsInto(node, TOP_LEVEL_SCOPE, out);
-	} finally {
-		activeParseProgram = undefined;
-	}
-	return out;
+  const out: BashCommand[] = [];
+  activeParseProgram = options?.parseProgram;
+  try {
+  collectCommandsInto(node, TOP_LEVEL_SCOPE, out);
+  } finally {
+    activeParseProgram = undefined;
+  }
+  return out;
 }
 
 /**
@@ -323,16 +323,16 @@ export function inlineShellPayloadNode(command: TSNode): TSNode | null {
 }
 
 function collectCommandsInto(
-	node: TSNode,
-	inherited: UnitScope,
-	out: BashCommand[],
+  node: TSNode,
+  inherited: UnitScope,
+  out: BashCommand[],
 ): void {
-	// Anonymous tokens (operators `&&`/`;`/`|`, delimiters `$(`/`)`/`` ` ``/`(`)
-	// carry no command.
-	if (!node.isNamed) return;
-	if (COMMAND_ENUM_SKIP.has(node.type)) return;
+  // Anonymous tokens (operators `&&`/`;`/`|`, delimiters `$(`/`)`/`` ` ``/`(`)
+  // carry no command.
+  if (!node.isNamed) return;
+  if (COMMAND_ENUM_SKIP.has(node.type)) return;
 
-	const scope = unresolvedScope(node, inherited);
+  const scope = unresolvedScope(node, inherited);
 
   if (node.type === "command") {
     makeCommandUnit(node, scope, out);
@@ -342,10 +342,10 @@ function collectCommandsInto(
     return;
   }
 
-	if (node.type === "redirected_statement") {
-		descendCommandChildren(node, redirectedScope(node, scope), out);
-		return;
-	}
+  if (node.type === "redirected_statement") {
+    descendCommandChildren(node, redirectedScope(node, scope), out);
+    return;
+  }
 
   if (EXECUTION_HOST_TYPES.has(node.type)) {
     // Not a command itself, but its subtree can host one that really runs
@@ -354,36 +354,36 @@ function collectCommandsInto(
     return;
   }
 
-	if (node.type === "subshell") {
-		out.push(makeUnit(node.text, scope)); // never-weaker whole emit
-		descendCommandChildren(node, { ...scope, context: "subshell" }, out);
-		return;
-	}
+  if (node.type === "subshell") {
+    out.push(makeUnit(node.text, scope)); // never-weaker whole emit
+    descendCommandChildren(node, { ...scope, context: "subshell" }, out);
+    return;
+  }
 
-	if (COMMAND_ENUM_DESCEND.has(node.type)) {
-		descendCommandChildren(node, scope, out);
-		return;
-	}
+  if (COMMAND_ENUM_DESCEND.has(node.type)) {
+    descendCommandChildren(node, scope, out);
+    return;
+  }
 
-	if (COMPOUND_STATEMENT_TYPES.has(node.type)) {
-		out.push(makeUnit(node.text, scope)); // never-weaker whole emit
-		descendStatementChildren(node, scope, out);
-		return;
-	}
+  if (COMPOUND_STATEMENT_TYPES.has(node.type)) {
+    out.push(makeUnit(node.text, scope)); // never-weaker whole emit
+    descendStatementChildren(node, scope, out);
+    return;
+  }
 
-	if (STATEMENT_GROUP_TYPES.has(node.type)) {
-		descendStatementChildren(node, scope, out);
-		return;
-	}
+  if (STATEMENT_GROUP_TYPES.has(node.type)) {
+    descendStatementChildren(node, scope, out);
+    return;
+  }
 
-	if (node.type === "ERROR") {
-		// Tree-sitter's error recovery *invents* structure, so the node types
-		// inside an ERROR subtree are not evidence that anything runs: descending
-		// one turns backtick-quoted prose in an unterminated heredoc into command
-		// units. Emit the unparsed blob whole and stop (#742).
-		out.push(makeUnit(node.text, scope));
-		return;
-	}
+  if (node.type === "ERROR") {
+    // Tree-sitter's error recovery *invents* structure, so the node types
+    // inside an ERROR subtree are not evidence that anything runs: descending
+    // one turns backtick-quoted prose in an unterminated heredoc into command
+    // units. Emit the unparsed blob whole and stop (#742).
+    out.push(makeUnit(node.text, scope));
+    return;
+  }
 
   // Any other named statement (compound_statement `{ … }`, if/while/for/case,
   // function_definition): emit whole, do not descend — deferred (#306).
@@ -410,44 +410,44 @@ function collectCommandsInto(
  * whole statement for a failure buried in one of its redirects acceptable.
  */
 function unresolvedScope(node: TSNode, scope: UnitScope): UnitScope {
-	if (scope.parseUnresolved) return scope;
-	if (COMMAND_ENUM_DESCEND.has(node.type)) return scope;
-	return parseUnresolvedWithin(node)
-		? { ...scope, parseUnresolved: true }
-		: scope;
+  if (scope.parseUnresolved) return scope;
+  if (COMMAND_ENUM_DESCEND.has(node.type)) return scope;
+  return parseUnresolvedWithin(node)
+    ? { ...scope, parseUnresolved: true }
+    : scope;
 }
 
 /** The wrapper facts a `command` node's words establish about its unit. */
 interface WrapperFacts {
-	readonly wrapperKind?: WrapperKind;
-	readonly executedUnit?: string;
-	readonly floorExemption?: FloorExemption;
-	readonly payloadUnresolved?: boolean;
+  readonly wrapperKind?: WrapperKind;
+  readonly executedUnit?: string;
+  readonly floorExemption?: FloorExemption;
+  readonly payloadUnresolved?: boolean;
 }
 
 function makeUnit(
-	text: string,
-	scope: UnitScope,
-	wrapper: WrapperFacts = {},
+  text: string,
+  scope: UnitScope,
+  wrapper: WrapperFacts = {},
 ): BashCommand {
-	const { wrapperKind, executedUnit, floorExemption, payloadUnresolved } =
-		wrapper;
-	const scoped: BashCommand = scope.context
-		? { text, context: scope.context }
-		: { text };
-	const flagged = wrapperKind ? { ...scoped, wrapperKind } : scoped;
-	const named =
-		executedUnit === undefined ? flagged : { ...flagged, executedUnit };
-	const exempted =
-		floorExemption === undefined ? named : { ...named, floorExemption };
-	const payloadMarked =
-		payloadUnresolved === undefined
-			? exempted
-			: { ...exempted, payloadUnresolved };
-	const marked: BashCommand = scope.parseUnresolved
-		? { ...payloadMarked, parseUnresolved: true }
-		: payloadMarked;
-	return scope.salvaged ? { ...marked, salvaged: true } : marked;
+  const { wrapperKind, executedUnit, floorExemption, payloadUnresolved } =
+    wrapper;
+  const scoped: BashCommand = scope.context
+    ? { text, context: scope.context }
+    : { text };
+  const flagged = wrapperKind ? { ...scoped, wrapperKind } : scoped;
+  const named =
+    executedUnit === undefined ? flagged : { ...flagged, executedUnit };
+  const exempted =
+    floorExemption === undefined ? named : { ...named, floorExemption };
+  const payloadMarked =
+    payloadUnresolved === undefined
+      ? exempted
+      : { ...exempted, payloadUnresolved };
+  const marked: BashCommand = scope.parseUnresolved
+    ? { ...payloadMarked, parseUnresolved: true }
+    : payloadMarked;
+  return scope.salvaged ? { ...marked, salvaged: true } : marked;
 }
 
 /**
@@ -467,54 +467,54 @@ function makeUnit(
  * unresolvable inner marks the wrapper `payloadUnresolved` (fail-closed).
  */
 function makeCommandUnit(
-	node: TSNode,
-	scope: UnitScope,
-	out: BashCommand[],
+  node: TSNode,
+  scope: UnitScope,
+  out: BashCommand[],
 ): void {
-	const { text, words } = readCommandUnit(node);
-	const classification = classifyWrapperCommand(
-		node,
-		text,
-		words,
-		activeParseProgram,
-	);
-	if (classification === undefined) {
-		out.push(
-			makeUnit(text, scope, {
-				executedUnit: executedUnitOf(text, words) ?? undefined,
-			}),
-		);
-		return;
-	}
-	out.push(
-		makeUnit(text, scope, {
-			wrapperKind: classification.kind,
-			executedUnit: classification.executedUnit,
-			floorExemption: isTransparentWrapper(words, redirectedScope(node, scope))
-				? "core-reader"
-				: undefined,
-			payloadUnresolved: classification.unresolved || undefined,
-		}),
-	);
-	const innerContext =
-		classification.kind === "opaque-payload"
-			? "wrapper_payload"
-			: "wrapper_indirection";
-	for (const inner of classification.inner) {
-		if (
-			inner.context !== undefined ||
-			inner.wrapperKind !== undefined ||
-			inner.payloadUnresolved !== undefined ||
-			inner.parseUnresolved !== undefined ||
-			inner.floorExemption !== undefined
-		) {
-			// A unit with its own context or flooring metadata is kept verbatim, so
-			// a payload's own wrappers retain their flooring facts.
-			out.push(inner);
-		} else {
-			out.push({ text: inner.text, context: innerContext });
-		}
-	}
+  const { text, words } = readCommandUnit(node);
+  const classification = classifyWrapperCommand(
+    node,
+    text,
+    words,
+    activeParseProgram,
+  );
+  if (classification === undefined) {
+    out.push(
+      makeUnit(text, scope, {
+    executedUnit: executedUnitOf(text, words) ?? undefined,
+      }),
+    );
+    return;
+  }
+  out.push(
+    makeUnit(text, scope, {
+      wrapperKind: classification.kind,
+      executedUnit: classification.executedUnit,
+    floorExemption: isTransparentWrapper(words, redirectedScope(node, scope))
+      ? "core-reader"
+      : undefined,
+      payloadUnresolved: classification.unresolved || undefined,
+    }),
+  );
+  const innerContext =
+    classification.kind === "opaque-payload"
+      ? "wrapper_payload"
+      : "wrapper_indirection";
+  for (const inner of classification.inner) {
+    if (
+      inner.context !== undefined ||
+      inner.wrapperKind !== undefined ||
+      inner.payloadUnresolved !== undefined ||
+      inner.parseUnresolved !== undefined ||
+      inner.floorExemption !== undefined
+    ) {
+      // A unit with its own context or flooring metadata is kept verbatim, so
+      // a payload's own wrappers retain their flooring facts.
+      out.push(inner);
+    } else {
+      out.push({ text: inner.text, context: innerContext });
+    }
+  }
 }
 
 /**
@@ -530,15 +530,15 @@ function makeCommandUnit(
  * redirect is a refusal rather than a proof.
  */
 function redirectedScope(node: TSNode, scope: UnitScope): UnitScope {
-	if (scope.writesViaRedirect) return scope;
-	for (let i = 0; i < node.childCount; i++) {
-		const child = node.child(i);
-		if (child?.type !== "file_redirect") continue;
-		if (redirectMayWriteFile(child)) {
-			return { ...scope, writesViaRedirect: true };
-		}
-	}
-	return scope;
+  if (scope.writesViaRedirect) return scope;
+  for (let i = 0; i < node.childCount; i++) {
+    const child = node.child(i);
+    if (child?.type !== "file_redirect") continue;
+    if (redirectMayWriteFile(child)) {
+      return { ...scope, writesViaRedirect: true };
+    }
+  }
+  return scope;
 }
 
 /**
@@ -638,14 +638,14 @@ function hostedRedirects(node: TSNode): TSNode[] {
 }
 
 function descendCommandChildren(
-	node: TSNode,
-	scope: UnitScope,
-	out: BashCommand[],
+  node: TSNode,
+  scope: UnitScope,
+  out: BashCommand[],
 ): void {
-	for (let i = 0; i < node.childCount; i++) {
-		const child = node.child(i);
-		if (child) collectCommandsInto(child, scope, out);
-	}
+  for (let i = 0; i < node.childCount; i++) {
+    const child = node.child(i);
+    if (child) collectCommandsInto(child, scope, out);
+  }
 }
 
 /**
@@ -665,9 +665,9 @@ function descendCommandChildren(
  * covers every unit beneath it (#803).
  */
 function descendStatementChildren(
-	node: TSNode,
-	scope: UnitScope,
-	out: BashCommand[],
+  node: TSNode,
+  scope: UnitScope,
+  out: BashCommand[],
 ): void {
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);

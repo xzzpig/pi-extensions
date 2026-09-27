@@ -12,6 +12,7 @@ detail lives in the sources of truth below.
 | [`README.md`](./README.md)                                                                       | User-facing project overview, package list, install instructions   |
 | [`.agents/skills/pi-plugin-maintainer/SKILL.md`](./.agents/skills/pi-plugin-maintainer/SKILL.md) | Creating, validating, naming, and packaging a `pi-*` plugin        |
 | [`.agents/skills/pi-upstream-subtree/SKILL.md`](./.agents/skills/pi-upstream-subtree/SKILL.md)   | Importing and updating upstream-derived plugins, conflict handling |
+| [`.agents/skills/pi-fork-divergence/SKILL.md`](./.agents/skills/pi-fork-divergence/SKILL.md)     | Mandatory conflict-minimization discipline for fork (二开) code    |
 | [`subtrees/AGENTS.md`](./subtrees/AGENTS.md)                                                     | The upstream metadata contract and the direnv runtime helper       |
 
 Read the relevant skill before making non-trivial changes.
@@ -40,6 +41,13 @@ commits, or pushes.
 - One metadata record per imported subtree, validated against
   `schemas/subtree-metadata.schema.json`. Ref changes are an explicit skill
   workflow; never edit a record's `ref` and reload direnv to bypass it.
+- Secondary development (二开) of an upstream-derived package MUST follow the
+  `pi-fork-divergence` skill: fork logic in fork-only files with minimal
+  upstream seams, byte-stable upstream files, fork-only tests and docs,
+  current `subtrees/<name>.json` `reapplyOnSync` and `doNotReintroduce`
+  entries, every accepted divergence declared in that record's `knownDebt`
+  array, and a passing whitespace audit before any commit that touches an
+  upstream file.
 - Keep repository-specific metadata outside imported subtree prefixes.
 - Do not commit credentials, generated environment state, or fake upstream
   records. Never silently overwrite an existing `upstream-*` remote.
@@ -59,11 +67,19 @@ pnpm install --frozen-lockfile
 pnpm --filter pi-permission-system run typecheck
 pnpm --filter pi-permission-system test
 pnpm exec prettier --check .
+
+# Fork-divergence gate: every NOISE/DELETED finding in an upstream-derived
+# package must be fixed or declared in subtrees/<name>.json `knownDebt`.
+pnpm run audit:fork-divergence   # or: pnpm run verify (audit + prettier)
 ```
 
 The subtree (`packages/pi-permission-system`) is excluded from the prettier
 check via `.prettierignore` because its upstream code is formatted with biome,
 not prettier.
+
+`pnpm run audit:fork-divergence` is the fork-divergence gate: it must exit 0
+before publishing (see the `pi-publish` skill's pre-publish gate) and before
+committing a change that touches an upstream file.
 
 `direnv reload` re-runs the metadata schema and ref validation and exports the
 `PI_UPSTREAM_*` environment; address any failure it reports before committing.

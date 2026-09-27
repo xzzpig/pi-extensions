@@ -960,9 +960,9 @@ async function generateFilesystemArgs(
 
     // Deny writes within allowed paths (user-specified + mandatory denies)
     const mandatoryDenyPaths = await linuxGetMandatoryDenyPaths(
-      ripgrepConfig,
-      mandatoryDenySearchDepth,
-      abortSignal,
+        ripgrepConfig,
+        mandatoryDenySearchDepth,
+        abortSignal,
     )
     // When the caller opted out of protecting non-existent dangerous
     // files, drop the entries that do not exist on the host yet. Only
