@@ -4,6 +4,18 @@
 
 ### Changed
 
+- Synced upstream `v0.71.0` → `v0.72.0`: lazy subagent executor/Fleet loading,
+  global npm root discovery for package agents, external inspector
+  registration (`pi-subagents/inspectors` API, lazy `openSubagentFleet`
+  loading with the `getInspectorPlugins` getter), fast-mode accepting any
+  native `openai-codex/*` model via provider-prefix matching, watchdog helper
+  model calls routed through `modelRegistry.streamSimple`, `typebox` moved to
+  an optional peer dependency, and the `before_agent_start` advertised-agent
+  wait. The fork's `events`/inspector wiring, context injection,
+  sandbox/permission-profile threading, and the eject delegation were
+  re-applied on top; SDK pins stay at pi `0.87.0` (upstream pairing) with the
+  fork's `as StreamFn` casts extended to the three retargeted watchdog/audit
+  stream call sites.
 - Synced upstream `v0.68.0` → `v0.71.0`: workflow terminal proof and readable
   child session names, runner-side stripping of inherited Git routing
   environment, symlinked prompt workflow file discovery, runner exit

@@ -277,7 +277,7 @@ async function runWatchdogAttempt(ctx: ExtensionContext, request: WatchdogReview
 	});
 	if (ctx.signal?.aborted || request.signal?.aborted) return { result: { stopReason: "aborted" } };
 	const auth = selection.auth;
-	const baseStreamFn: StreamFn = options.streamFn ?? ((model, context, streamOptions) => ctx.modelRegistry.streamSimple(model, context, streamOptions));
+	const baseStreamFn: StreamFn = (options.streamFn ?? ((model, context, streamOptions) => ctx.modelRegistry.streamSimple(model, context, streamOptions))) as StreamFn;
 	const sessionId = ctx.sessionManager.getSessionId();
 	const streamFn: StreamFn = (model, context, streamOptions) => {
 		// Agent may enter one final loop iteration after an aborted mixed tool batch.

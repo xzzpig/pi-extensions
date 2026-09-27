@@ -69,7 +69,7 @@ export async function rewritePromptWithGuidance(input: {
 		import("@earendil-works/pi-coding-agent"),
 	]);
 	const auth = await resolveRewriteAuth(input.ctx, model);
-	const baseStreamFn: StreamFn = input.streamFn ?? ((nextModel, context, streamOptions) => input.ctx.modelRegistry.streamSimple(nextModel, context, streamOptions));
+	const baseStreamFn: StreamFn = (input.streamFn ?? ((nextModel, context, streamOptions) => input.ctx.modelRegistry.streamSimple(nextModel, context, streamOptions))) as StreamFn;
 	const sessionId = input.ctx.sessionManager.getSessionId();
 	const streamFn: StreamFn = (nextModel, context, streamOptions) => (baseStreamFn as StreamFn)(nextModel, context, {
 		...streamOptions,

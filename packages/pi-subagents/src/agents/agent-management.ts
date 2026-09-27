@@ -67,11 +67,7 @@ function result(text: string, isError = false, details?: Partial<Details>): Agen
 }
 
 function jsonDetails<T>(value: T): T {
-	try {
-		return JSON.parse(JSON.stringify(value)) as T;
-	} catch (error) {
-		throw new Error(`Failed to serialize agent management details: ${error instanceof Error ? error.message : String(error)}`);
-	}
+	return JSON.parse(JSON.stringify(value)) as T;
 }
 
 function presentDetails<T extends Record<string, unknown>>(value: T): T | undefined {

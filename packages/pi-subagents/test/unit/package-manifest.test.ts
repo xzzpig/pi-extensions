@@ -35,9 +35,9 @@ const expectedHostPeerRanges = {
 	typebox: "*",
 } satisfies Record<(typeof hostPeerPackages)[number], string>;
 const expectedHostDevVersions = {
-	"@earendil-works/pi-agent-core": "0.87.1",
-	"@earendil-works/pi-ai": "0.87.1",
-	"@earendil-works/pi-tui": "0.87.1",
+	"@earendil-works/pi-agent-core": "0.87.0",
+	"@earendil-works/pi-ai": "0.87.0",
+	"@earendil-works/pi-tui": "0.87.0",
 	typebox: "1.3.27",
 } satisfies Record<Exclude<(typeof hostPeerPackages)[number], "@earendil-works/pi-coding-agent">, string>;
 
@@ -83,6 +83,10 @@ void result.isError;
 					"pi-subagents": [path.join(projectRoot, "index.ts")],
 					"pi-subagents/workflow-resources": [path.join(projectRoot, "src/api/workflow-resources.ts")],
 				"@earendil-works/pi-agent-core": [hoistedDependencyPath("@earendil-works", "pi-agent-core", "dist", "index.d.ts")],
+				// Fork: pin the consumer graph to the shim's 0.87.0-shaped types so the
+				// version stays consistent with the package's own devDependencies instead
+				// of leaking the workspace-hoisted pi-coding-agent copy.
+				"@earendil-works/pi-coding-agent": [hoistedDependencyPath("@earendil-works", "pi-coding-agent", "dist", "index.d.ts")],
 				},
 			},
 			files: [path.join(consumerRoot, "consumer.ts")],

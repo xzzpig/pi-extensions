@@ -95,7 +95,7 @@ export function createWatchdogPermissionArbiter(options: WatchdogPermissionArbit
 				const selection = await resolveWatchdogReviewModel(request.ctx, config);
 				const auth = selection.auth;
 				const sessionId = request.ctx.sessionManager.getSessionId();
-				const baseStreamFn: StreamFn = options.streamFn ?? ((model, context, streamOptions) => request.ctx.modelRegistry.streamSimple(model, context, streamOptions));
+				const baseStreamFn: StreamFn = (options.streamFn ?? ((model, context, streamOptions) => request.ctx.modelRegistry.streamSimple(model, context, streamOptions))) as StreamFn;
 				const streamFn: StreamFn = (model, context, streamOptions) => baseStreamFn(model, context, {
 					...streamOptions,
 					...(auth.apiKey ? { apiKey: auth.apiKey } : {}),

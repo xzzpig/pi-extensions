@@ -4,6 +4,23 @@ import { randomUUID } from "node:crypto";
 
 export const __piSubagentsTestShim = true;
 
+export function createEventBus() {
+	const listeners = new Map();
+	return {
+		emit(channel, data) { for (const handler of listeners.get(channel) ?? []) handler(data); },
+		on(channel, handler) {
+			const list = listeners.get(channel) ?? [];
+			list.push(handler);
+			listeners.set(channel, list);
+			return () => {
+				const index = list.indexOf(handler);
+				if (index >= 0) list.splice(index, 1);
+			};
+		},
+		clear() { listeners.clear(); },
+	};
+}
+
 export function getMarkdownTheme() { return {}; }
 export function keyText(_keybinding) { return ""; }
 export function initTheme() {}
