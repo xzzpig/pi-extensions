@@ -210,7 +210,7 @@ function buildInspectorSettings(
 			id: "bashOutputMode",
 			label: "Bash tool output",
 			currentValue: config.bashOutputMode,
-			values: ["opencode", "summary", "preview"],
+			values: ["opencode", "summary", "preview", "auto"],
 			inspectorTitle: "Bash Tool Output",
 			inspectorSummary: [
 				"Controls how shell command output is rendered when the command finishes successfully.",
@@ -220,6 +220,7 @@ function buildInspectorSettings(
 				"opencode — Pi/OpenCode-style collapsed bash view",
 				"summary — output count only",
 				"preview — uses the shared previewLines setting",
+				"auto — live tail preview while running; line-count summary after completion",
 			],
 			inspectorAdvanced: buildAdvancedNotes(config, capabilities, [
 				"Quiet commands still collapse aggressively, so mode selection matters most on verbose build, test, and script output.",
@@ -234,7 +235,7 @@ function buildInspectorSettings(
 			values: BASH_PREVIEW_LINE_VALUES,
 			inspectorTitle: "Bash Collapsed Lines",
 			inspectorSummary: [
-				"Sets the inline line budget used specifically by opencode bash mode before expansion.",
+				"Sets the inline line budget used by the opencode and auto bash modes before expansion.",
 				"Accepted manual range: 0 to 80 lines. Setting 0 hides collapsed bash output entirely while keeping the command visible.",
 			],
 			inspectorOptions: [
@@ -242,7 +243,7 @@ function buildInspectorSettings(
 				"5/10/20/40 — progressively larger inline command previews",
 			],
 			inspectorAdvanced: buildAdvancedNotes(config, capabilities, [
-				"This setting only changes the opencode bash renderer; preview mode continues to use previewLines instead.",
+				"This setting drives the opencode and auto bash renderers; preview mode continues to use previewLines instead.",
 			]),
 			inspectorPath: configPath,
 			searchTerms: ["bash", "collapsed", "lines", "stdout", "zero"],

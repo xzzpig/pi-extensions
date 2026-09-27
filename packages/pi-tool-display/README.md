@@ -119,7 +119,7 @@ This is how pi-sandbox forks pass their registered `bash` tool to `pi-tool-displ
 ## Presets
 
 | Preset | Read Output | Search Output | MCP Output | Bash Output | Preview Lines | Bash Lines |
-| -------- | ------------- | --------------- | ------------ | -------------- | --------------- | ------------ |
+|--------|-------------|---------------|------------|--------------|---------------|------------|
 | `opencode` | hidden | hidden | hidden | opencode | 8 | 10 |
 | `balanced` | summary | count | summary | summary | 8 | 10 |
 | `verbose` | preview | preview | preview | preview | 12 | 20 |
@@ -131,12 +131,13 @@ This is how pi-sandbox forks pass their registered `bash` tool to `pi-tool-displ
 ### Bash Output Modes
 
 | Mode | Behavior |
-| ------ | ---------- |
+|------|----------|
 | `opencode` | Classic collapsed output using `bashCollapsedLines` limit with expansion hint |
 | `summary` | Shows only line count (e.g., "↳ 3 lines returned") — no output displayed |
 | `preview` | Shows actual output lines using `previewLines` limit |
+| `auto` | Live tail preview (last `bashCollapsedLines` lines) while running; auto-collapses to a line count after completion |
 
-While a command is still running, the live preview shows the **last** `bashCollapsedLines` / `previewLines` lines (`bashLivePreviewMode: "tail"`, the default) so you can follow the most recent output of long-running commands; after completion the result is rendered as described above (first lines). Set `bashLivePreviewMode` to `"head"` to keep showing the first lines during execution.
+While a command is still running, the live preview shows the **last** `bashCollapsedLines` / `previewLines` lines (`bashLivePreviewMode: "tail"`, the default) so you can follow the most recent output of long-running commands; after completion the result is rendered as described above (first lines). Set `bashLivePreviewMode` to `"head"` to keep showing the first lines during execution. The `auto` output mode always tails while running, regardless of `bashLivePreviewMode`.
 
 ## Configuration
 
@@ -152,7 +153,7 @@ A starter template is included at `config/config.example.json`.
 ### Configuration options
 
 | Option | Type | Default | Description |
-| -------- | ------ | --------- | ------------- |
+|--------|------|---------|-------------|
 | `debug` | boolean | `false` | Opt-in file logging for extension diagnostics; missing values are treated as `false` |
 | `registerToolOverrides` | object | all `true` | Built-in tool ownership flags |
 | `customToolOverrides` | object | `{}` | Explicit opt-in rendering rules for non-built-in extension tools |
@@ -162,8 +163,8 @@ A starter template is included at `config/config.example.json`.
 | `mcpOutputMode` | string | `"hidden"` | `hidden`, `summary`, or `preview` |
 | `previewLines` | number | `8` | Lines shown in collapsed preview mode |
 | `expandedPreviewMaxLines` | number | `4000` | Max preview lines when fully expanded |
-| `bashOutputMode` | string | `"opencode"` | `opencode` (collapse), `summary` (line count), or `preview` (show lines) |
-| `bashCollapsedLines` | number | `10` | Lines shown for collapsed bash output (opencode mode) |
+| `bashOutputMode` | string | `"opencode"` | `opencode` (collapse), `summary` (line count), `preview` (show lines), or `auto` (live tail preview while running, line-count summary after completion) |
+| `bashCollapsedLines` | number | `10` | Lines shown for collapsed bash output and the `auto` live preview (opencode and auto modes) |
 | `bashLivePreviewMode` | string | `"tail"` | While a bash command is still running: `tail` shows the **last** lines of the output so far, `head` shows the first lines (the behavior of the upstream package). Final results always show the first lines |
 | `diffViewMode` | string | `"auto"` | `auto`, `split`, or `unified` |
 | `diffIndicatorMode` | string | `"bars"` | `bars` (vertical indicators), `classic` (+/- markers), or `none` |
@@ -219,7 +220,7 @@ Use `customToolOverrides` when another extension registers a noisy top-level too
 Each entry supports:
 
 | Field | Type | Default | Description |
-| ------- | ------ | --------- | ------------- |
+|-------|------|---------|-------------|
 | `enabled` | boolean | `true` | Whether `pi-tool-display` should decorate this custom tool |
 | `kind` | string | `"generic"` | `generic` for plain compact output, or `mcp` for MCP-style call labels and result handling |
 | `outputMode` | string | `"summary"` | `hidden`, `summary`, or `preview` for this custom tool's result output |

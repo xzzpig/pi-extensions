@@ -23,6 +23,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { resolvePiAgentDir } from "./agent-dir.js";
+import { resolveBashAutoOutputMode } from "./bash-auto-mode.js";
 import { renderBashCall } from "./bash-display.js";
 import { logToolDisplayDebug } from "./debug-logger.js";
 import { registerCleanup } from "./disposable.js";
@@ -1117,6 +1118,7 @@ function renderBashDisplayResult(
 ): Text {
   const details = result.details as BashToolDetails | undefined;
   const rawOutput = extractTextOutput(result);
+  config = resolveBashAutoOutputMode(config, options, isToolError(result, context));
 
   if (options.isPartial) {
     return renderBashLivePreview(rawOutput, options, config, theme, details);

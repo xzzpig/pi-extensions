@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Conflict-surface refactor, no behavior change.** The fork's tail live-preview hint functions were folded into the upstream `formatTruncationHint`/`buildPreviewText` via optional, default-valued parameters (`label`, `take: "head" | "tail"`), removing the duplicated fork copies and an unreachable empty-lines branch.
 
-## [Unreleased]
+## [0.2.0] - 2026-09-28
 
 ### Added
 
@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while running, configurable `bashOutputMode` result display) without touching
   execution. The bash result rendering logic is shared with the built-in bash
   tool override.
+- `bashOutputMode: "auto"`: while a bash command runs, the result area streams
+  a live tail preview of the last `bashCollapsedLines` lines; when the command
+  finishes, it auto-collapses to a line count ("↳ N lines returned") with
+  Ctrl+O to expand. Implemented as a fork-only `resolveBashAutoOutputMode`
+  normalizer (`src/bash-auto-mode.ts`) so the upstream mode dispatch stays
+  untouched.
 
 ## [0.5.0] - 2026-07-03
 
