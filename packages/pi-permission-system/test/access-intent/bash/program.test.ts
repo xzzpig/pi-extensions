@@ -1347,6 +1347,9 @@ describe("BashProgram", () => {
         expect(program.commands()).toEqual([{ text }]);
       });
 
+      // Fork: the wrapper emission additionally surfaces the resolved inner
+      // command as its own unit (`wrapper_payload` / `wrapper_indirection`),
+      // so the expectations below carry that inner unit on top of upstream's.
       it("reads the head word past a leading redirect", async () => {
         const program = await BashProgram.parse(
           ">/dev/null bash -c 'rm -rf /tmp/x'",
@@ -1358,6 +1361,7 @@ describe("BashProgram", () => {
             wrapperKind: "opaque-payload",
             executedUnit: "rm -rf /tmp/x",
           },
+          { text: "rm -rf /tmp/x", context: "wrapper_payload" },
         ]);
       });
 
@@ -1372,6 +1376,7 @@ describe("BashProgram", () => {
             wrapperKind: "indirection",
             executedUnit: "rm -rf /",
           },
+          { text: "rm -rf /", context: "wrapper_indirection" },
         ]);
       });
     });
@@ -1409,6 +1414,7 @@ describe("BashProgram", () => {
             wrapperKind: "indirection",
             executedUnit: "rm -rf /",
           },
+          { text: "rm -rf /", context: "wrapper_indirection" },
         ]);
       });
     });

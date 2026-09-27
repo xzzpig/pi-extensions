@@ -18,6 +18,7 @@
 
 import type { BashCommand, ParseProgram } from "./command-enumeration";
 import type { TSNode } from "./parser";
+import { REDIRECT_NODE_TYPES } from "./redirect-analysis";
 import {
 	type CommandWord,
 	executedUnitOf,
@@ -401,9 +402,10 @@ function findInnerCommandStart(
 
 /**
  * A `command` node's name basename and its argument texts with offsets,
- * skipping any leading `variable_assignment` prefix (matching
- * `commandUnitText`). `commandName` is `undefined` for a pure assignment with
- * no `command_name`.
+ * skipping any leading `variable_assignment` prefix and any hosted redirect
+ * (matching `commandWordNodes`, so a redirect written before or between the
+ * words never masquerades as the command name or as an argument).
+ * `commandName` is `undefined` for a pure assignment with no `command_name`.
  */
 function readWrapperCommand(node: TSNode): {
 	commandName: string | undefined;
@@ -415,6 +417,7 @@ function readWrapperCommand(node: TSNode): {
 		const child = node.child(i);
 		if (!child?.isNamed) continue;
 		if (child.type === "variable_assignment") continue;
+		if (REDIRECT_NODE_TYPES.has(child.type)) continue;
 		if (commandName === undefined) {
 			commandName = basename(child.text);
 			continue;

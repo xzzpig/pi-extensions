@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] — 2026-09-27
+
+### Changed
+
+- **Synced upstream `v34.0.0` → `v35.0.0`** (breaking). Highlights: an
+  operator's custom system prompt no longer receives the appended permission
+  tool surface or rules (upstream #980; the tool surface is now entirely
+  node-local prose); a redirect written before or between a command's words
+  (`>/tmp/o xargs grep foo`) is checked against the command's own rules and
+  its trailing words are reattached to the command at the parser boundary
+  (upstream #977), with the word-reading helpers refactored into
+  `readCommandUnit` / `commandWordNodes` / `hostedRedirects` and
+  `parseUnresolvedWithin` moved to the new `parse-health` module.
+- The fork keeps its wrapper-floor feature on the new helpers:
+  `makeCommandUnit` keeps the spec-driven `classifyWrapperCommand` emission
+  (wrapper plus inner units) but adopts upstream's redirect-aware floor scope
+  (`isTransparentWrapper(words, redirectedScope(node, scope))`) and the new
+  redirect-normalized unit text; `commandUnitText` / `readCommandWords` are
+  dropped with the upstream refactor. Named permission profiles, the session
+  role layer, forwarded-decision broadcast, and project-scoped profiles
+  (dual-layer `resolveProfileScopes`) carry over unchanged — the breaking
+  tool-surface removal touches no fork seam.
+
 ## [1.3.0] — 2026-09-25
 
 ### Changed
