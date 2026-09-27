@@ -2,6 +2,46 @@
 
 ## [Unreleased]
 
+## [0.72.0] - 2026-09-26
+
+### Highlights
+
+- Pi starts faster with pi-subagents installed: startup no longer waits on global agent discovery, and the executor and Fleet load the first time you use them.
+- The package no longer bundles its own copy of TypeBox, so installs are smaller and Pi stops warning about the manifest.
+- Models from complete provider extensions now work everywhere pi-subagents calls a model, including the watchdog, permission checks, and Prompt Audit.
+- Other extensions can plug their own inspectors into Fleet.
+- Async runs are more dependable: child sessions can start and resume their own external jobs, `/subagent-cost` counts every async launch, and live runs are no longer marked failed when containers share a temp directory.
+
+### Added
+
+- Extensions can register their own inspector providers with the `pi-subagents/inspectors` helper or the `pi-subagents:inspector-register:v1` event. Fleet uses them for inspector actions, while the built-in inspectors and runner controls keep working as before. Thanks to [@ninjapenguin](https://github.com/ninjapenguin) for [#2482](https://github.com/nicobailon/pi-subagents/pull/2482).
+
+### Changed
+
+- Pi starts faster with pi-subagents enabled. The foreground executor and the Fleet view now load on first use, which cuts the extension's own startup modules from 264 to 199. Tools, commands, and prompts are registered exactly as before. Thanks to [@h4yfans](https://github.com/h4yfans) for the measurements in [#2480](https://github.com/nicobailon/pi-subagents/issues/2480).
+- TypeBox is now provided by Pi instead of bundled with the package. Pi no longer warns about the manifest, and the extension, its children, and background runners all use Pi's copy. Thanks to [@felipemm](https://github.com/felipemm) for [#2454](https://github.com/nicobailon/pi-subagents/issues/2454) and [#2455](https://github.com/nicobailon/pi-subagents/pull/2455).
+
+### Fixed
+
+- The watchdog, permission checks, and Prompt Audit now reach models from complete provider extensions (`pi.registerProvider(provider)`). They used an older lookup that only knew config-style providers, so these calls failed even though ordinary children could use the same model. Thanks to [@chem](https://github.com/chem) for [#2496](https://github.com/nicobailon/pi-subagents/issues/2496).
+- Model names such as `openrouter/auto-beta` now resolve when the provider's own model id already starts with the provider name. They used to fail with `Unknown subagent model`. Thanks to [@schmlblk](https://github.com/schmlblk) for [#2487](https://github.com/nicobailon/pi-subagents/issues/2487).
+- `fast: true` accepts any `openai-codex/*` model instead of only two named models, so newer Codex models no longer fail before launch. Other providers are still rejected. Thanks to [@jtabke](https://github.com/jtabke) for [#2452](https://github.com/nicobailon/pi-subagents/issues/2452).
+- Async status shows a child's real context limit once its session starts, including a limit raised by an extension. Thanks to [@johnhenaot](https://github.com/johnhenaot) for [#2448](https://github.com/nicobailon/pi-subagents/pull/2448).
+- Session startup no longer freezes while pi-subagents looks for globally installed agents. The first agent prompt and `subagents_enable` still wait until discovery finishes. Thanks to [@trading-bl](https://github.com/trading-bl) for [#2474](https://github.com/nicobailon/pi-subagents/issues/2474).
+- `subagents_enable` ignores extra arguments instead of rejecting the call. DeepSeek V4.1 Flash sends `subagents_enable({ action: "enable" })`, which used to fail every time. Thanks to [@crusaderky](https://github.com/crusaderky) for [#2483](https://github.com/nicobailon/pi-subagents/issues/2483).
+- An older `pi-ai` installed next to the package no longer turns off on-demand tool loading, so `subagent` stays hidden behind `subagents_enable` until it is needed. Thanks to [@abdwhb-png](https://github.com/abdwhb-png) for [#2471](https://github.com/nicobailon/pi-subagents/pull/2471).
+- `/council` works when Pi runs with `--no-skills`. It now loads its instructions through `subagent({ action: "guide", topic: "council" })`. Thanks to [@felipemm](https://github.com/felipemm) for [#2467](https://github.com/nicobailon/pi-subagents/issues/2467).
+- External-job runs that a child session launches now start instead of staying queued. Thanks to [@juanpprieto](https://github.com/juanpprieto) for [#2449](https://github.com/nicobailon/pi-subagents/issues/2449).
+- A child session can follow up its own external-job runs with `resume`, and a repeated resume no longer sends the follow-up twice. Thanks to [@juanpprieto](https://github.com/juanpprieto) for [#2465](https://github.com/nicobailon/pi-subagents/issues/2465).
+- A background run that is still working is no longer reported failed when Pi processes in different containers share one `PI_SUBAGENTS_TEMP_ROOT`. Pi could not see the runner's process from another container and treated it as gone. Such runs now fall back to the usual 24-hour stale check. Thanks to [@zeezooz](https://github.com/zeezooz) for [#2494](https://github.com/nicobailon/pi-subagents/issues/2494) and [#2495](https://github.com/nicobailon/pi-subagents/issues/2495).
+- `/subagent-cost` includes async single, chain, and parallel launches, which it used to report as having no child usage. Thanks to [@zeezooz](https://github.com/zeezooz) for [#2484](https://github.com/nicobailon/pi-subagents/issues/2484).
+- Awaited workflow children send the `subagent:async-complete` event without an extra child notification. Thanks to [@mmarabel](https://github.com/mmarabel) for [#2456](https://github.com/nicobailon/pi-subagents/issues/2456).
+- Worktree labels stay within 256 bytes when shortened in the middle of a multi-byte character, so async status stays readable. Thanks to [@chenhaoxiang](https://github.com/chenhaoxiang) for [#2446](https://github.com/nicobailon/pi-subagents/pull/2446).
+- A launch blocked by the session's capability ceiling now fails before any fork work starts. It used to branch the parent session or prepare the fork summary first. Thanks to [@antonioc-cl](https://github.com/antonioc-cl) for [#2481](https://github.com/nicobailon/pi-subagents/pull/2481).
+- The `subagent` schema and guides describe preflight, timeout aliases, budget limits, and child extension bindings accurately, and an empty `usageBudget` is now rejected. Thanks to [@amchen2310](https://github.com/amchen2310) for [#2473](https://github.com/nicobailon/pi-subagents/issues/2473).
+- The async workflow widget no longer flickers while the inline Fleet roster is open. Thanks to [@gustavo-neiva](https://github.com/gustavo-neiva) for [#2468](https://github.com/nicobailon/pi-subagents/pull/2468).
+- `subagent_supervisor` `pending` shows each request's question, so you can answer a request after missing its notice ([#2460](https://github.com/nicobailon/pi-subagents/issues/2460)).
+
 ## [0.71.0] - 2026-09-23
 
 ### Highlights
