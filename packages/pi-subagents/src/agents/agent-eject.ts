@@ -14,7 +14,7 @@ import { serializeAgent } from "./agent-serializer.ts";
 import { resolveSkillsWithFallback } from "./skills.ts";
 import { parseFrontmatter } from "./frontmatter.ts";
 import { resolvePiLaunchToolPlan } from "../runs/shared/child-tool-plan.ts";
-import { availableAgentNames, nameExistsInScope, sanitizeName } from "./agent-management.ts";
+import { availableAgentNamesForCwd, nameExistsInScopeForCwd, sanitizeName } from "./agent-management.ts";
 
 export type AgentEjectionScope = "user" | "project";
 
@@ -250,11 +250,11 @@ export function ejectAgentDefinition(input: EjectAgentDefinitionInput): EjectAge
 			ok: false,
 			code: "missing_source",
 			scope: input.scope,
-			message: `Agent '${raw}' not found or is not a bundled/package agent. eject copies a builtin or package agent to ${input.scope} scope so it can be customized. Available: ${availableAgentNames(input.cwd).join(", ") || "none"}.`,
+			message: `Agent '${raw}' not found or is not a bundled/package agent. eject copies a builtin or package agent to ${input.scope} scope so it can be customized. Available: ${availableAgentNamesForCwd(input.cwd).join(", ") || "none"}.`,
 		};
 	}
 	const runtimeName = source.name;
-	if (nameExistsInScope(input.cwd, input.scope, runtimeName)) {
+	if (nameExistsInScopeForCwd(input.cwd, input.scope, runtimeName)) {
 		return {
 			ok: false,
 			code: "name_conflict",

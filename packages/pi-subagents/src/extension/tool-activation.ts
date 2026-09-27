@@ -1,6 +1,5 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as piAi from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { PI_CODING_AGENT_PACKAGE_ROOT_ENV } from "../shared/utils.ts";
@@ -20,7 +19,7 @@ let warnedUnsupportedHost = false;
 
 /** Returns why dynamic tool activation is unavailable, or undefined when the host supports it. */
 export function unsupportedDynamicToolsReason(pi: ExtensionAPI, deps: PiSpawnDeps = {}): string | undefined {
-	if (typeof pi.getAllTools !== "function" || typeof pi.getActiveTools !== "function" || typeof pi.setActiveTools !== "function" || typeof piAi.getCurrentTools !== "function") return UNSUPPORTED_HOST_MESSAGE;
+	if (typeof pi.getAllTools !== "function" || typeof pi.getActiveTools !== "function" || typeof pi.setActiveTools !== "function") return UNSUPPORTED_HOST_MESSAGE;
 	const probe = probeHostPiVersion(deps);
 	if ("reason" in probe) return probe.reason;
 	return supportsMinimumVersion(probe.version) ? undefined : `${UNSUPPORTED_HOST_MESSAGE} (detected ${probe.version} in ${probe.root})`;
@@ -98,8 +97,14 @@ export function supportsMinimumVersion(version: string): boolean {
 	return true;
 }
 
-function hasNativeToolSelection(messages: Parameters<typeof piAi.getCurrentTools>[0]): boolean {
-	return messages.some((message) => !!message && typeof message === "object"
+type ToolSelectionMessage = {
+	role: string;
+	toolsAdded?: readonly { name: string }[];
+	toolsRemoved?: readonly { name: string }[];
+};
+
+function hasNativeToolSelection(messages: readonly ToolSelectionMessage[]): boolean {
+	return messages.some((message) => message.role === "system"
 		&& (Object.hasOwn(message, "toolsAdded") || Object.hasOwn(message, "toolsRemoved")));
 }
 
@@ -115,9 +120,16 @@ function applyRecordedSelection(pi: ExtensionAPI, ctx: ExtensionContext): void {
 	if (!Array.isArray(available) || !Array.isArray(pi.getActiveTools())) return;
 	if (!available.some((tool) => tool.name === LOADER_NAME)) return;
 	// SAFETY: The running Pi session manager exposes buildSessionContext, but its read-only extension type omits it.
-	const messages = (ctx.sessionManager as typeof ctx.sessionManager & { buildSessionContext(): { messages: Parameters<typeof piAi.getCurrentTools>[0] } }).buildSessionContext().messages;
+	const messages = (ctx.sessionManager as typeof ctx.sessionManager & { buildSessionContext(): { messages: ToolSelectionMessage[] } }).buildSessionContext().messages;
 	if (hasNativeToolSelection(messages)) {
-		setSelection(pi, piAi.getCurrentTools(messages).some((tool) => tool.name === SUBAGENT_NAME));
+		// Only this tool's membership matters; a package-local pi-ai may be older than the running Pi.
+		let selected = false;
+		for (const message of messages) {
+			if (message.role !== "system") continue;
+			if (message.toolsRemoved?.some((tool) => tool.name === SUBAGENT_NAME)) selected = false;
+			if (message.toolsAdded?.some((tool) => tool.name === SUBAGENT_NAME)) selected = true;
+		}
+		setSelection(pi, selected);
 		return;
 	}
 	setSelection(pi, messages.length > 0 && pi.getActiveTools().includes(SUBAGENT_NAME));
@@ -125,7 +137,7 @@ function applyRecordedSelection(pi: ExtensionAPI, ctx: ExtensionContext): void {
 
 export function registerSubagentToolActivation(
 	pi: ExtensionAPI,
-	options: { advertisedPrompt: () => string | undefined },
+	options: { advertisedPrompt: () => string | undefined | Promise<string | undefined> },
 ): void {
 	const unsupportedReason = unsupportedDynamicToolsReason(pi);
 	if (unsupportedReason) {
@@ -136,7 +148,8 @@ export function registerSubagentToolActivation(
 		return;
 	}
 
-	const parameters = Type.Object({}, { additionalProperties: false });
+	// Takes no arguments, but a stray one (DeepSeek sends `{ action: "enable" }`) must not fail validation.
+	const parameters = Type.Object({});
 	const loader: ToolDefinition<typeof parameters, ActivationDetails> = {
 		name: LOADER_NAME,
 		label: "Enable Subagents",
@@ -163,7 +176,7 @@ export function registerSubagentToolActivation(
 				content: [{ type: "text", text: "Activation failed: subagent." }],
 				details: { missing: [SUBAGENT_NAME] },
 			};
-			const advertised = options.advertisedPrompt();
+			const advertised = await options.advertisedPrompt();
 			return {
 				content: [{ type: "text", text: `Enabled: subagent. On the next model request, call subagent({action:\"list\",capabilities:true}) for current capabilities.${advertised ? `\n\n${advertised}` : ""}` }],
 				details: { enabled: [SUBAGENT_NAME] },

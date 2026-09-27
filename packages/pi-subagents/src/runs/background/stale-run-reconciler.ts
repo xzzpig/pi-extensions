@@ -11,6 +11,7 @@ import { normalizeParallelGroups } from "./parallel-groups.ts";
 import { nestedSummaryFromAsyncStatus, projectNestedEvents, resolveNestedAsyncDir, writeNestedEvent, type NestedRoute } from "../shared/nested-events.ts";
 import { assertWorkflowGraphHostSteps } from "../shared/host-step-status.ts";
 import type { RawDrainStatusObserver } from "../shared/readonly-drain-observation.ts";
+import { currentPidNamespaceScope } from "./pid-namespace.ts";
 
 export type PidLiveness = "alive" | "dead" | "unknown";
 
@@ -37,6 +38,7 @@ interface ReconcileAsyncRunOptions {
 	startedRun?: StartedRunMetadata;
 	missingStatusGraceMs?: number;
 	staleAlivePidMs?: number;
+	pidNamespaceScope?: () => string | undefined;
 }
 
 interface ReconcileAsyncRunResult {
@@ -211,6 +213,7 @@ function buildStartedStatus(asyncDir: string, startedRun: StartedRunMetadata, no
 		mode: startedRun.mode ?? "single",
 		state: "running",
 		pid: startedRun.pid,
+		pidNamespaceScope: currentPidNamespaceScope(),
 		startedAt,
 		lastUpdate: now,
 		currentStep: 0,
@@ -431,12 +434,17 @@ export function reconcileAsyncRun(asyncDir: string, options: ReconcileAsyncRunOp
 		}
 	}
 
-	const liveness = checkPidLiveness(effectiveStatus.pid, options.kill);
+	const observedScope = options.pidNamespaceScope ? options.pidNamespaceScope() : currentPidNamespaceScope();
+	// An observer without a scope (macOS/Windows host sharing a container's temp root) cannot match a recorded one.
+	const pidScopeMismatch = effectiveStatus.pidNamespaceScope !== undefined && effectiveStatus.pidNamespaceScope !== observedScope;
+	const observedLiveness = checkPidLiveness(effectiveStatus.pid, options.kill);
+	const liveness = observedLiveness === "dead" && pidScopeMismatch ? "unknown" : observedLiveness;
 	if (liveness !== "dead") {
 		const staleAfterMs = options.staleAlivePidMs ?? 24 * 60 * 60 * 1000;
 		const lastUpdate = effectiveStatus.lastUpdate ?? effectiveStatus.startedAt;
 		if (now - lastUpdate <= staleAfterMs) return { status: status ?? null, repaired: false, resultPath };
-		const message = `Async runner process ${effectiveStatus.pid} still has a live PID, but status has not updated for ${now - lastUpdate}ms. Marked run failed by stale-run reconciliation because PID ownership cannot be verified.`;
+		const probe = liveness === "alive" ? "is still live" : "cannot be probed from this process";
+		const message = `Async runner PID ${effectiveStatus.pid} ${probe}; status has not updated for ${now - lastUpdate}ms, so stale-run reconciliation marked the run failed because PID ownership is unverified.`;
 		return writeFailedRepair(asyncDir, effectiveStatus, resultPath, now, message);
 	}
 

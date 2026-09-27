@@ -120,7 +120,7 @@ export interface FleetViewOptions {
 	fleetKeybindings?: FleetKeybindingsConfig;
 	actions?: FleetActionHandlers;
 	copyText?: (text: string) => Promise<void> | void;
-	inspectorPlugins?: readonly InspectorPlugin[];
+	inspectorPlugins?: () => readonly InspectorPlugin[];
 	inspectorEnv?: NodeJS.ProcessEnv;
 	/** Event bus used to claim the fleet dialog as a silent span. */
 	events?: UiSpanSilentEvents;
@@ -1547,7 +1547,7 @@ export async function openSubagentFleet(ctx: ExtensionContext, state: SubagentSt
 			cwd: state.baseCwd,
 			...(state.authorityPolicy ? { authorityPolicy: state.authorityPolicy } : {}),
 			...(state.missionStoreConfig ? { missions: state.missionStoreConfig } : {}),
-			...(options.inspectorPlugins ? { plugins: options.inspectorPlugins } : {}),
+			plugins: options.inspectorPlugins?.(),
 			...(options.inspectorEnv ? { env: options.inspectorEnv } : {}),
 		}), `Failed to open inspector for async run ${input.runId}.`),
 		redoPrompt: async (input: { runId: string; index: number; guidance: string; control?: ForegroundRunControl }) => {
@@ -1577,8 +1577,8 @@ export interface OpenFleetFromStatusOptions {
 	asyncDirRoot: string;
 	resultsDir: string;
 	fleetKeybindings?: FleetKeybindingsConfig;
-	/** Built-in inspector plugins, when the caller hosts inspector integration. */
-	inspectorPlugins?: readonly InspectorPlugin[];
+	/** Lazy inspector plugins, when the caller hosts inspector integration. */
+	inspectorPlugins?: () => readonly InspectorPlugin[];
 }
 
 /**

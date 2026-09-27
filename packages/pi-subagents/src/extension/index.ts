@@ -20,6 +20,7 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { keyText, type ExtensionAPI, type ExtensionContext, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Box, Container, Spacer, Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
 import { clearAgentDiscoveryCache, discoverAgentSnapshot, discoverAgents, discoverAgentsAll, type AgentConfig, type AgentScope } from "../agents/agents.ts";
+import { resolveGlobalNpmRoot } from "../agents/global-npm-root.ts";
 import { appendAdvertisedAgentPrompt, buildAdvertisedAgentPrompt } from "../agents/advertised-agent-prompt.ts";
 import { mergeAgentsForScope } from "../agents/agent-selection.ts";
 import { clearRuntimeAgentsForPi, listRuntimeAgentConfigs, mergeRuntimeAgents } from "../agents/runtime-agent-registry.ts";
@@ -33,11 +34,10 @@ import { isStaleExtensionContextError, withCachedUiContext } from "../shared/ext
 import { currentCompletionOwnerId } from "../shared/completion-owner.ts";
 import { cleanupOldChainDirs } from "../shared/settings.ts";
 import { clearLegacyResultAnimationTimer, renderSubagentResult, renderSubagentSummary, setInlineWorkflowCoverage } from "../tui/render.ts";
-import { openSubagentFleet } from "../tui/fleet.ts";
-import { createBuiltinInspectorPlugins } from "../inspectors/plugins.ts";
+import { getInspectorPlugins, registerInspectorEventListener } from "../inspectors/plugins.ts";
 import { SubagentFleetStatus, resolveFleetViewPlacement } from "../tui/fleet-status.ts";
 import { createSubagentParamsSchema } from "./schemas.ts";
-import { createSubagentExecutor, type SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
+import type { SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import { createAsyncJobTracker } from "../runs/background/async-job-tracker.ts";
 import { getActiveAsyncCapacitySnapshot, resolveAbandonedSlotReleaseAfterMs, resolveMaxActiveAsyncRunsPerSession } from "../runs/background/active-async-capacity.ts";
 import { cleanupResultIndexes, missionObserverResultCandidateFiles } from "../runs/background/result-files.ts";
@@ -110,6 +110,10 @@ export { loadConfig, resolveAsyncByDefault } from "./config.ts";
 
 const SLOW_RELOAD_PHASE_MS = 250;
 const RUNTIME_REGISTRY_STORE_KEY = "__piSubagentRuntimeRegistry";
+
+type SubagentExecutorModule = typeof import("../runs/foreground/subagent-executor.ts");
+type SubagentExecutor = ReturnType<SubagentExecutorModule["createSubagentExecutor"]>;
+type SubagentExecutorDeps = Parameters<SubagentExecutorModule["createSubagentExecutor"]>[0];
 
 interface SubagentRuntimeEntry {
 	cleanup(): void;
@@ -491,7 +495,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	};
 
 	const supervisorChannel = createNativeSupervisorChannel(pi, state, {
-		getCurrentOwnerStates: () => executor.getCurrentSupervisorOwnerStates(),
+		// Owner states are created only by scheduled execution, which loads the executor first.
+		getCurrentOwnerStates: () => executor?.getCurrentSupervisorOwnerStates() ?? [],
 	});
 	const waitSubscriptionManager = createWaitSubscriptionManager(pi, state);
 	const mainWatchdog = registerMainWatchdog(pi);
@@ -503,7 +508,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			const ctx = withLastUiContext((current) => current);
 			if (!ctx) return;
 			try {
-				await openSubagentFleet(ctx, state, { initialKey: itemKey, asyncDirRoot: DIRS.async, resultsDir: DIRS.results, fleetKeybindings: config.fleetKeybindings, inspectorPlugins: createBuiltinInspectorPlugins(), events: pi.events });
+				const { openSubagentFleet } = await import("../tui/fleet.ts");
+				await openSubagentFleet(ctx, state, { initialKey: itemKey, asyncDirRoot: DIRS.async, resultsDir: DIRS.results, fleetKeybindings: config.fleetKeybindings, inspectorPlugins: () => getInspectorPlugins(pi), events: pi.events });
 			} catch (error) {
 				if (isStaleExtensionContextError(error)) {
 					if (state.lastUiContext === ctx) state.lastUiContext = null;
@@ -513,34 +519,58 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			}
 		}, { placement: fleetViewPlacement, onWorkflowCoverageChange: setInlineWorkflowCoverage })
 		: undefined;
-	let executorScheduled: ((id: string, params: SubagentParamsLike, signal: AbortSignal, ctx: ExtensionContext) => Promise<AgentToolResult<Details>>) | undefined;
 	let goalTurnId = 0;
 	let releaseHostSessionLiveness = () => {};
 	const scheduledStoreRoot = config.scheduledRuns?.storeRoot === undefined ? undefined : resolveScheduledStoreRoot(config.scheduledRuns.storeRoot);
 	const scheduledRunManager = createScheduledRunManager({
 		config,
 		storeRoot: scheduledStoreRoot,
-		launch: (params, ctx, signal) => {
-			if (!executorScheduled) {
-				return Promise.resolve({
-					content: [{ type: "text", text: "Scheduled subagent launch is unavailable (executor not ready)." }],
-					isError: true,
-					details: { mode: "management" as const, results: [] },
-				});
-			}
-			return executorScheduled(randomUUID(), params, signal, ctx);
+		launch: async (params, ctx, signal) => {
+			await waitForAdvertisement();
+			return (await getExecutor()).executeScheduled(randomUUID(), params, signal, ctx);
 		},
 		resolveCapabilityCeiling: (sessionId) => resolveCurrentSubagentCapabilityCeiling(sessionId),
 	});
 	let refreshResultDelivery = () => {};
 	let advertisedAgents: AgentConfig[] = [];
 	let advertisedContext: Pick<ExtensionContext, "cwd" | "model"> | undefined;
+	let advertisementGeneration = 0;
+	let globalRoot: string | null = null;
+	let advertisementReady: Promise<void | { error: unknown }> = Promise.resolve();
+	let notifySessionChange = () => {};
+	let sessionChanged: Promise<void> = Promise.resolve();
+	const waitForAdvertisement = async () => {
+		let pending: typeof advertisementReady;
+		do {
+			pending = advertisementReady;
+			const result = await Promise.race([pending, sessionChanged]);
+			if (pending === advertisementReady && result) throw result.error;
+		} while (pending !== advertisementReady);
+	};
 	const refreshAdvertisedAgents = () => {
 		advertisedAgents = [];
 		if (!advertisedContext) return;
 		clearAgentDiscoveryCache();
-		advertisedAgents = discoverAgents(advertisedContext.cwd, "both", advertisedContext.model?.provider).agents
+		advertisedAgents = discoverAgents(advertisedContext.cwd, "both", advertisedContext.model?.provider, { globalNpmRoot: globalRoot }).agents
 			.filter((agent) => agent.advertise === true);
+	};
+	const beginAdvertisement = (ctx: ExtensionContext) => {
+		const generation = ++advertisementGeneration;
+		notifySessionChange();
+		sessionChanged = new Promise<void>((resolve) => { notifySessionChange = resolve; });
+		advertisedAgents = [];
+		advertisedContext = { cwd: ctx.cwd, model: ctx.model };
+		globalRoot = null;
+		advertisementReady = resolveGlobalNpmRoot().then((root) => {
+			if (generation !== advertisementGeneration) return;
+			globalRoot = root;
+			refreshAdvertisedAgents();
+		}).catch((error) => {
+			if (generation !== advertisementGeneration) return;
+			// Settle without an unhandled rejection if no turn follows session_start.
+			console.error("Failed to refresh advertised agents:", error);
+			return { error };
+		});
 	};
 	const hasResultDeliveryDemand = () => {
 		if ([...state.asyncJobs.values()].some((job) => job.status === "queued" || job.status === "running")) return true;
@@ -549,8 +579,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		return missionObserverResultCandidateFiles(DIRS.results).length > 0;
 	};
 	const discoverAgentsForRuntime = (cwd: string, scope: AgentScope, preferredModelProvider?: string) => {
-		if (listRuntimeAgentConfigs(pi).length === 0) return discoverAgents(cwd, scope, preferredModelProvider);
-		const snapshot = discoverAgentSnapshot(cwd, scope, preferredModelProvider, { includeChains: false });
+		if (listRuntimeAgentConfigs(pi).length === 0) return discoverAgents(cwd, scope, preferredModelProvider, { globalNpmRoot: globalRoot });
+		const snapshot = discoverAgentSnapshot(cwd, scope, preferredModelProvider, { includeChains: false, globalNpmRoot: globalRoot });
 		const discovered = snapshot.effective;
 		const all = snapshot.all;
 		const configuredAgents: AgentConfig[] = [
@@ -623,7 +653,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		}
 	};
 
-	const executorDeps: Parameters<typeof createSubagentExecutor>[0] = {
+	const executorDeps: SubagentExecutorDeps = {
 		pi,
 		state,
 		config,
@@ -636,6 +666,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		getSubagentSessionRoot,
 		expandTilde,
 		discoverAgents: discoverAgentsForRuntime,
+		discoverAgentsAll: (cwd, provider) => discoverAgentsAll(cwd, provider, { globalNpmRoot: globalRoot }),
 		onAgentsChanged: () => {
 			try {
 				refreshAdvertisedAgents();
@@ -649,8 +680,15 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		refreshResultDelivery: () => refreshResultDelivery(),
 		trackRetainedNestedRoute: undefined,
 	};
-	const executor = createSubagentExecutor(executorDeps);
-	executorScheduled = executor.executeScheduled;
+	let executor: SubagentExecutor | undefined;
+	let executorPromise: Promise<SubagentExecutor> | undefined;
+	const getExecutor = (): Promise<SubagentExecutor> => {
+		executorPromise ??= import("../runs/foreground/subagent-executor.ts").then(({ createSubagentExecutor }) => {
+			executor = createSubagentExecutor(executorDeps);
+			return executor;
+		});
+		return executorPromise;
+	};
 
 	pi.registerMessageRenderer<SupervisorRequestMessageDetails>(SUPERVISOR_REQUEST_MESSAGE_TYPE, renderSupervisorRequest);
 	// SAFETY: `registerEntryRenderer` is not part of the typed ExtensionAPI in the
@@ -739,9 +777,13 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		return new SubagentControlNoticeComponent({ ...details, noticeText: formatSubagentControlNotice(details, content) }, theme);
 	});
 
+	const executeSubagentReady = async (id: string, params: SubagentParamsLike, signal: AbortSignal, onUpdate: ((result: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => {
+		await waitForAdvertisement();
+		return (await getExecutor()).executePublic(id, params, signal, onUpdate, ctx);
+	};
 	const executeSubagentCollapsed = (id: string, params: SubagentParamsLike, signal: AbortSignal, onUpdate: ((result: AgentToolResult<Details>) => void) | undefined, ctx: ExtensionContext) => {
 		if (ctx.hasUI) ctx.ui.setToolsExpanded(false);
-		return executor.executePublic(id, params, signal, onUpdate, ctx);
+		return executeSubagentReady(id, params, signal, onUpdate, ctx);
 	};
 
 	const slashBridge = registerSlashSubagentBridge({
@@ -756,16 +798,17 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		getContext: () => state.lastUiContext,
 		execute: (requestId, params, signal, ctx, onUpdate) =>
 			executeSubagentCollapsed(requestId, params, signal, onUpdate, ctx),
-		executeStructured: (requestId, params, signal, ctx, onUpdate) => {
+		executeStructured: async (requestId, params, signal, ctx, onUpdate) => {
 			if (ctx.hasUI) ctx.ui.setToolsExpanded(false);
-			return executor.executeDelegated(requestId, params, signal, onUpdate, ctx);
+			await waitForAdvertisement();
+			return (await getExecutor()).executeDelegated(requestId, params, signal, onUpdate, ctx);
 		},
 	});
 
 	const rpcBridge = registerSubagentRpcBridge({
 		events: pi.events,
 		getContext: () => state.lastUiContext,
-		execute: (id, params, signal, onUpdate, ctx) => executor.executePublic(id, params, signal, onUpdate, ctx),
+		execute: executeSubagentReady,
 		state,
 	});
 
@@ -833,7 +876,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		return next ? { systemPrompt: next } : undefined;
 	});
 
-	pi.on("before_agent_start", (event, ctx) => {
+	pi.on("before_agent_start", async (event, ctx) => {
+		await waitForAdvertisement();
 		const selectedTools = event.systemPromptOptions?.selectedTools ?? (typeof pi.getActiveTools === "function" ? pi.getActiveTools() : []);
 		const sessionId = state.currentSessionId ?? resolveCurrentSessionId(ctx.sessionManager);
 		const advertisedPrompt = Array.isArray(selectedTools) && selectedTools.includes("subagent")
@@ -907,6 +951,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	};
 	const eventUnsubscribes = [
 		registerRuntimeAgentEventListener(pi),
+		registerInspectorEventListener(pi),
 		pi.events.on(SUBAGENT_ASYNC_STARTED_EVENT, asyncStartedHandler),
 		pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, asyncCompleteHandler),
 		pi.events.on(SUBAGENT_PROCESS_TERMINAL_EVENT, () => {
@@ -1231,12 +1276,12 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		await herdrStatusBridge.flush();
 	});
 
-	pi.on("session_start", (_event, ctx) => {
-		advertisedContext = { cwd: ctx.cwd, model: ctx.model };
-		refreshAdvertisedAgents();
-	});
+	pi.on("session_start", (_event, ctx) => beginAdvertisement(ctx));
 
 	registerSubagentToolActivation(pi, {
-		advertisedPrompt: () => buildAdvertisedAgentPrompt(advertisedAgents, resolveCurrentSubagentCapabilityCeiling(state.currentSessionId ?? undefined)),
+		advertisedPrompt: async () => {
+			await waitForAdvertisement();
+			return buildAdvertisedAgentPrompt(advertisedAgents, resolveCurrentSubagentCapabilityCeiling(state.currentSessionId ?? undefined));
+		},
 	});
 }
