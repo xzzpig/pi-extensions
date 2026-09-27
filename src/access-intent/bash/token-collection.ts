@@ -128,8 +128,10 @@ export function collectCommandTokens(node: TSNode): PathToken[] {
  *
  * The redirect's own target carries the `redirect-destination` role when the
  * syntax proves it names a file, so the projection admits it whether or not
- * the file exists yet (#609). Every other child is an `operand`: a word the
- * grammar appends after the target belongs to the redirected command (#977).
+ * the file exists yet (#609). Every other child is an `operand`. A word the
+ * grammar appends after the target reaches here only in a statement whose parse
+ * failed: everywhere else `getParser` has already handed it back to the command
+ * it belongs to (#977).
  *
  * Reading the redirect node itself belongs to `redirect-analysis.ts`, which
  * the command enumerator consults for the same fact (#803).
@@ -314,8 +316,7 @@ function commandArgumentWords(node: TSNode): string[] {
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
     if (!child) continue;
-    if (child.type === "command_name" || child.type === "variable_assignment")
-      continue;
+    if (COMMAND_PREFIX_TYPES.has(child.type)) continue;
     if (!ARG_NODE_TYPES.has(child.type)) continue;
     words.push(resolveNodeText(child));
   }
@@ -334,7 +335,7 @@ function commandArgumentWords(node: TSNode): string[] {
  * different state machines and so each carry their own skip, which is why the
  * question is named here once rather than spelled twice (#742).
  */
-const COMMAND_PREFIX_TYPES: ReadonlySet<string> = new Set([
+export const COMMAND_PREFIX_TYPES: ReadonlySet<string> = new Set([
   "command_name",
   "variable_assignment",
 ]);
@@ -372,8 +373,7 @@ function collectEmbeddedOptionValues(
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
     if (!child) continue;
-    if (child.type === "command_name" || child.type === "variable_assignment")
-      continue;
+    if (COMMAND_PREFIX_TYPES.has(child.type)) continue;
     if (!ARG_NODE_TYPES.has(child.type)) continue;
 
     const value = OPTION_VALUE_PATTERN.exec(resolveNodeText(child))?.[1];

@@ -142,6 +142,16 @@ A subagent's ask is reviewed by the chain of the session serving it, one hop up,
 
 For the full reference — all surfaces, runtime knobs, per-agent overrides, merge semantics, and common recipes — see [docs/configuration.md](docs/configuration.md).
 
+## Downstream packages
+
+These packages build on this extension's seams.
+Each one that registers an authorizer link decides nothing until you name it in `authorizerChain`.
+
+- [`@gotgenes/pi-permission-model-judge`](https://www.npmjs.com/package/@gotgenes/pi-permission-model-judge) (first-party): a deny-first model reviewer that auto-denies mistyped out-of-directory paths.
+- [`pi-permission-classifier`](https://github.com/TacoTakumi/pi-permission-classifier) by [@TacoTakumi](https://github.com/TacoTakumi): an auto-approve mode in which a light model reviews each `ask` and returns allow, deny with a short reason, or defer to you; every failure path defers.
+
+Third-party packages are maintained by their authors; review one before granting it a place in your chain.
+
 ## Upgrading
 
 ### 22.0.0 — project config requires project trust

@@ -60,3 +60,56 @@ The re-run corpus spike matched the plan exactly: over 8753 commands, `path` +90
 - Pre-completion reviewer: **WARN**.
   It independently re-derived the redirect spellings (fd-prefixed, `>&-`, `<>`, herestrings, heredocs, quoted/expanded, substitution targets, redirects on compound statements) and found no gap.
   Reviewer warnings: the TDD retro entry was missing (this entry); two decision-surface consumers outside the diff, `logging/command-redaction.ts` (for `node-text.ts`, which only gained an export) and `command-enumeration.ts` (for `redirectMayWriteFile`, which is unchanged), are not re-covered by in-range tests.
+
+## Stage: Final Retrospective (2026-09-25T04:43:42Z)
+
+### Session summary
+
+One continuous trunk session planned, implemented, shipped, and retro'd #609, released as `pi-permission-system-v34.0.0`.
+Planning prototyped the design against 8746 real review-log commands, which surfaced a pre-existing bash deny bypass (filed #977) and refuted three claims in the roadmap step; implementation matched the plan's corpus prediction exactly (+90 `path`, +97 external, 0 lost).
+
+### Observations
+
+#### What went well
+
+- Prototyping the fix and diffing it over the real corpus was the move that paid for the session.
+  The first prototype run admitted `-type`, `d`, and `--include=*.ts` as write paths, which led straight to the `tree-sitter-bash` `repeat1` destination quirk and, through a real `resolveBashCommandCheck` run, to a deny bypass (`git 2>/dev/null push --force` allowed under `git push *: deny`).
+  A design reasoned from the issue alone would have shipped that over-admission.
+- Measuring roadmap claims before planning around them corrected three: the suggested migration note (`path_write: {"*": "allow"}`) would lift a user's `path` write denies, an unconfigured install does not prompt in the working directory, and `> /dev/null` was already a `path_write` candidate.
+  The first would have shipped in a `BREAKING CHANGE:` footer as a harmful recommendation.
+- The Tidy-First assessor refuted both preparatory steps the roadmap assigned, finding that `bash-path-extractor.ts` has no production caller (a grep confirmed it), and proposed the one prep that actually shrank the change.
+- The pre-completion reviewer was asked to re-derive redirect spellings rather than check the tests' own, and it enumerated heredocs, herestrings, fd-close, and substitution targets independently.
+
+#### What caused friction (agent side)
+
+- `other` — em-dashes left the model as a literal `\u2014` escape five times: two planning `Edit` batches on `architecture.md` were rejected whole, and a TS doc comment in `redirect-analysis.ts`, ADR 0013's staging line, and a retro heading each needed a repair pass.
+  Impact: two rejected batches and three repair tool calls; the TS-comment instance passes every gate (`unicode-escapes.mjs` scans markdown only) and was caught only by a manual grep.
+  It recurred once more while this retro entry was written, where `pi-autoformat` decoded the prose separators and the stage timestamp's date was also mistyped (corrected from the `date` output).
+- `instruction-violation` (self-identified) — during step 1's mutation check, the `cp` saving the green file and the mutating `Edit` sat in one tool batch, ran concurrently, and the saved copy held the mutation; `git checkout` recovered only because the file had no uncommitted green edit.
+  Impact: no rework, but on a step with uncommitted green work the restore would have committed the mutation or lost the edit.
+- `instruction-violation` (self-identified) — the plan recorded the assessor's count of 19 exact `PathToken` assertions without re-grepping, which the `/plan-issue` prompt asks for; a 20th (the `node -e "$(cat /etc/shadow)"` case) broke at step 4.
+  Impact: one extra fix folded into the step-4 commit.
+- `instruction-violation` (self-identified) — test blocks inserted with Python scripts skipped `pi-autoformat`, so the Biome pre-commit hook reformatted `program.test.ts` and rejected the first `fix!:` commit; the `edit-tool` skill already says to append source with `Edit`/`Write`.
+  Impact: one rejected commit, re-staged.
+- `missing-context` — the plan named `cat <> rw.txt` as the case killing the `syntax`-source mutation without tracing it; that parse leaves an `ERROR` child after the operator, so the word is never the target index and the mutation survived.
+  Impact: one added test (`cat <> ~/rw.txt`); the TDD prompt's "fewer reds than predicted is a finding" rule caught it as designed.
+- `instruction-violation` (user-caught) — the tidy-reassignment gate offered "move both out of #609" without saying whether #609 still proceeded, and the operator answered with "So do we pause #609 here then?".
+  The answer ("No, #609 doesn't need to pause") was composed only in two thinking blocks, and the turn emitted nothing but a second `ask_user` — confirmed in the transcript, where that assistant message holds two `thinking` parts and a `toolCall` and no `text` part.
+  `clarification-gates` already said to answer a question without re-offering the menu; it did not say the answer must be visible or that the turn should end there.
+  The operator reports the same pattern (reply only in reasoning, then another gate) several times on `claude-opus-5-5`.
+  Impact: an unanswered question and an extra gate round; landed as a `clarification-gates` amendment.
+
+#### What caused friction (user side)
+
+- None beyond the above; the operator's retro comment is what surfaced the unanswered-question pattern, which the agent had not noticed.
+
+### Diagnostic details
+
+- **Model-performance correlation** — planning, TDD, and the retro ran on `claude-opus-5-5` (209 then 7 assistant turns); `/ship` ran on `claude-sonnet-5` (29 turns), appropriate for a checklist stage with no judgment calls.
+  Both subagents (`tidy-first-assessor`, `pre-completion-reviewer`) ran on `claude-sonnet-5` per their transcripts; both produced findings the main session verified and acted on, so no mismatch.
+- **Feedback-loop gap analysis** — `pnpm run check` ran after every interface-changing step and the full package suite ran at step 4 and after step 5, so no gap; the one late catch was the Biome hook at commit, a formatting check rather than a verification gap.
+
+### Changes made
+
+1. `.pi/prompts/tdd-plan.md` — step 3 now says to run the green-file `cp` in its own tool call before the mutating `Edit`, since calls in one batch run concurrently.
+2. `.pi/skills/clarification-gates/SKILL.md` — "When the operator answers with a question" now requires the answer in a visible message and ending the turn there, with no follow-up `ask_user` in the same turn.

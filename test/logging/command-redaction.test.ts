@@ -201,6 +201,16 @@ describe("redactCommandSecrets", () => {
           `/bin/bash -c 'MY_KEY=${MASK} deploy'`,
         ],
         [
+          "a payload behind a leading redirect",
+          `>/dev/null bash -c 'TOKEN=sk-secret deploy'`,
+          `>/dev/null bash -c 'TOKEN=${MASK} deploy'`,
+        ],
+        [
+          "a payload after a redirect between the shell and its flag",
+          `bash 2>/dev/null -c 'TOKEN=sk-secret deploy'`,
+          `bash 2>/dev/null -c 'TOKEN=${MASK} deploy'`,
+        ],
+        [
           "an unquoted payload, which the word rule already reached",
           `bash -c TOKEN=sk-x`,
           `bash -c TOKEN=${MASK}`,

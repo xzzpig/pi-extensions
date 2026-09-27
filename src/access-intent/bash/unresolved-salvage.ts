@@ -1,8 +1,5 @@
-import {
-  type BashReparser,
-  parseUnresolvedWithin,
-  type TSNode,
-} from "./parser";
+import { parseUnresolvedWithin } from "./parse-health";
+import type { BashReparser, TSNode } from "./parser";
 
 /**
  * Run `use` over the roots of every region the primary parse could not resolve

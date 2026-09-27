@@ -1,6 +1,7 @@
 import { type TokenEffect, UNPROVEN_EFFECT } from "#src/access-intent/effect";
 import { redirectDestinationEffect } from "./command-effects";
-import { parseUnresolvedAt, type TSNode } from "./parser";
+import { parseUnresolvedAt } from "./parse-health";
+import type { TSNode } from "./parser";
 
 /**
  * What a redirect node in the parse tree proves.
@@ -24,6 +25,19 @@ import { parseUnresolvedAt, type TSNode } from "./parser";
  * handle cannot be a proof to one caller and a resolvable read to the other
  * (#814).
  */
+
+/**
+ * The redirect node types a `command` or a statement can host.
+ *
+ * A redirect is not a word of the command it sits in, wherever it sits: bash
+ * accepts one before, between, or after the words (`2>/dev/null git push`), and
+ * none of them changes which command runs (#977).
+ */
+export const REDIRECT_NODE_TYPES: ReadonlySet<string> = new Set([
+  "file_redirect",
+  "herestring_redirect",
+  "heredoc_redirect",
+]);
 
 /**
  * The effect `redirect` proves for `destination`, or `null` when the redirect
@@ -95,7 +109,8 @@ export function redirectMayWriteFile(redirect: TSNode): boolean {
 
 /**
  * The child index of the node `redirect` reads or writes (its first named
- * child after the operator), or `undefined` when it names none (`>&-`).
+ * child after the operator), or `undefined` when it names none: nothing
+ * follows the operator, or the operator closes a descriptor (`>&-`, `<&-`).
  *
  * The operator is the redirect's only unnamed child, and a source descriptor
  * (`2` in `2>`) precedes it, so the first named child after it is the
@@ -104,19 +119,52 @@ export function redirectMayWriteFile(redirect: TSNode): boolean {
  * Only the first: tree-sitter-bash 0.25.1 declares the destination
  * `repeat1`, so the words after it in `grep pat 2>/dev/null f.txt` parse as
  * further destinations, while bash passes them to the redirected command as
- * arguments (#977). An index rather than a node, because a caller iterating
- * the children compares positions rather than wrapper identity.
+ * arguments ({@link trailingArgumentIndex} names where they begin, #977). A
+ * close operator takes an optional destination in the grammar, but it closes a
+ * descriptor and names no file, so a word after it is the command's too. An
+ * index rather than a node, because a caller iterating the children compares
+ * positions rather than wrapper identity.
  */
 export function redirectTargetIndex(redirect: TSNode): number | undefined {
-  let seenOperator = false;
+  const operator = redirectOperatorIndex(redirect);
+  if (operator === undefined) return undefined;
+  if (CLOSE_OPERATORS.has(redirect.child(operator)?.type ?? "")) {
+    return undefined;
+  }
+  return namedChildIndexAfter(redirect, operator);
+}
+
+/**
+ * The child index of the first word the grammar appended after `redirect`'s
+ * own target, or `undefined` when none follows.
+ *
+ * Every named child from there on is a word bash passes to the redirected
+ * command rather than a destination of the redirect: `f.txt` in
+ * `grep pat 2>/dev/null f.txt`, and `arg` in `cmd >&- arg`, where the close
+ * operator has no target at all (#977).
+ */
+export function trailingArgumentIndex(redirect: TSNode): number | undefined {
+  const operator = redirectOperatorIndex(redirect);
+  if (operator === undefined) return undefined;
+  const target = redirectTargetIndex(redirect);
+  return namedChildIndexAfter(redirect, target ?? operator);
+}
+
+/** Operators that close a descriptor, naming no file (`>&-`, `<&-`). */
+const CLOSE_OPERATORS: ReadonlySet<string> = new Set([">&-", "<&-"]);
+
+/** The index of `redirect`'s operator, its only unnamed child. */
+function redirectOperatorIndex(redirect: TSNode): number | undefined {
   for (let i = 0; i < redirect.childCount; i++) {
-    const child = redirect.child(i);
-    if (!child) continue;
-    if (!child.isNamed) {
-      seenOperator = true;
-      continue;
-    }
-    if (seenOperator) return i;
+    if (redirect.child(i)?.isNamed === false) return i;
+  }
+  return undefined;
+}
+
+/** The index of the first named child of `node` after index `after`. */
+function namedChildIndexAfter(node: TSNode, after: number): number | undefined {
+  for (let i = after + 1; i < node.childCount; i++) {
+    if (node.child(i)?.isNamed) return i;
   }
   return undefined;
 }
@@ -141,9 +189,6 @@ const DESCRIPTOR_NODE_TYPES: ReadonlySet<string> = new Set([
  * syntax proof is a lookup on the first one found.
  */
 function redirectOperatorOf(node: TSNode): string {
-  for (let i = 0; i < node.childCount; i++) {
-    const child = node.child(i);
-    if (child && !child.isNamed) return child.type;
-  }
-  return "";
+  const operator = redirectOperatorIndex(node);
+  return operator === undefined ? "" : (node.child(operator)?.type ?? "");
 }

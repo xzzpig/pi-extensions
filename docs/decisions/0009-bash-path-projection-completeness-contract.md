@@ -1,16 +1,29 @@
 ---
 status: accepted
 date: 2026-07-24
-amended: 2026-09-24
+amended: 2026-09-25
 ---
 
 # 0009 — The bash path projection is a completeness contract, not a best-effort heuristic
 
 ## Status
 
-Accepted, as amended 2026-09-24.
+Accepted, as amended 2026-09-25.
 This decision states the contract the bash path projection upholds, and settles how a "the gate missed my path" report is triaged.
 It is the framing for [#645], which closes two gaps the contract names as in-scope; it composes with `docs/decisions/0003-git-bash-posix-path-semantics.md` (win32 token shapes) and `docs/decisions/0007-model-judge-authorizer-chain-adr.md` (the judge that absorbs false positives).
+
+### Amendment, 2026-09-25 — the words after a redirect are the command's operands
+
+The 2026-09-24 amendment below left the words `tree-sitter-bash` 0.25.1 parses after a redirect's target (`grep pat 2>/dev/null f.txt`) with the redirect, attributed the operator's effect.
+They are the command's: bash passes them to it.
+The parser now hands them back to the command before any walker reads the tree ([#977]), so they are collected as the command's operands, under the command's own effect proof and its retraction guards.
+`f.txt` above is `grep`'s `read (core)`, and `find ~/x 2>/dev/null -delete` retracts `~/x`'s read.
+A close operator (`>&-`, `<&-`) names no file, so a word after one is the command's too.
+A statement whose parse failed is left as the grammar produced it, so an unresolvable redirect still proves nothing ([#814]).
+
+This amendment adds no candidate and drops none; it moves an attribution from the operator's proof to the command's.
+Measured over 8891 distinct commands of a real review log, exactly 4 change, each only by the words it reattaches.
+A heredoc's own tail (`cat <<EOF > /tmp/o`) is a different grammar production and is not covered ([#979]).
 
 ### Amendment, 2026-09-24 — a redirect's target is projected by its role
 
@@ -25,7 +38,7 @@ The role decides candidacy and the effect still decides direction, so an input t
 Three boundaries keep the role from over-reaching:
 
 - **Only the first destination.**
-  `tree-sitter-bash` 0.25.1 parses the words after a redirect (`grep pat 2>/dev/null f.txt`) as further destinations, while bash passes them to the command; they keep their ordinary collection, and their attribution is [#977]'s.
+  `tree-sitter-bash` 0.25.1 parses the words after a redirect (`grep pat 2>/dev/null f.txt`) as further destinations, while bash passes them to the command; the parser hands them back to the command as its operands (2026-09-25 amendment above).
 - **Only a literal value.**
   A computed target (`> "$OUT"`, `> out-$(date).txt`) stays under the computed-paths residual below: projecting its spelling would name a file the shell never touches.
 - **Only a proven redirect.**
@@ -402,3 +415,4 @@ Cost is ~0.04 ms p95 per command, ~19% of the already-paid tree-sitter parse.
 [#609]: https://github.com/gotgenes/pi-packages/issues/609
 [#814]: https://github.com/gotgenes/pi-packages/issues/814
 [#977]: https://github.com/gotgenes/pi-packages/issues/977
+[#979]: https://github.com/gotgenes/pi-packages/issues/979

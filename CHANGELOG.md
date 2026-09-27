@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [35.0.0](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v34.0.1...pi-permission-system-v35.0.0) (2026-09-26)
+
+
+### Features
+
+* **pi-permission-system:** **breaking:** stop appending a tool list and rules to an operator's custom system prompt ([672a64c](https://github.com/gotgenes/pi-packages/commit/672a64c0844ec2fff8e113130109919623158107)), closes [#980](https://github.com/gotgenes/pi-packages/issues/980)
+
+### Documentation
+
+* **pi-permission-system:** record that a custom system prompt gets no appended tool surface ([7e0816d](https://github.com/gotgenes/pi-packages/commit/7e0816d28ab5377de011b5558b034c5b2bdaca4d))
+
+## [34.0.1](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v34.0.0...pi-permission-system-v34.0.1) (2026-09-26)
+
+
+### Bug Fixes
+
+* **pi-permission-system:** gate a command whose redirect comes before or inside its words ([cdfea17](https://github.com/gotgenes/pi-packages/commit/cdfea17f9169890d33a50eec447d26bb1d001ebf)), closes [#977](https://github.com/gotgenes/pi-packages/issues/977)
+* **pi-permission-system:** resolve paths after a cd whose redirect precedes its target ([3f62169](https://github.com/gotgenes/pi-packages/commit/3f6216967e4e44dfabe68de18382298c8915a274)), closes [#977](https://github.com/gotgenes/pi-packages/issues/977)
+* **pi-permission-system:** check the words after a mid-command redirect against the command's own rules ([73c41a5](https://github.com/gotgenes/pi-packages/commit/73c41a5ccb6b62b17451a197612983af5a3eb8e7)), closes [#977](https://github.com/gotgenes/pi-packages/issues/977)
+
+### Documentation
+
+* **pi-permission-system:** list downstream packages in README ([629a174](https://github.com/gotgenes/pi-packages/commit/629a174d6d8f2aab9025f1780ae9b24c7557d7eb)), closes [#472](https://github.com/gotgenes/pi-packages/issues/472)
+* **pi-permission-system:** record that a redirect's trailing words are reattached at the parser boundary ([2f72602](https://github.com/gotgenes/pi-packages/commit/2f72602260deb7a84d21eeb50b15fa4d0c38e8e2)), closes [#977](https://github.com/gotgenes/pi-packages/issues/977)
+
 ## [34.0.0](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v33.1.1...pi-permission-system-v34.0.0) (2026-09-25)
 
 

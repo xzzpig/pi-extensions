@@ -1,7 +1,8 @@
 import type { BashCommandContext, FloorExemption } from "#src/types";
 import { EXECUTION_HOST_TYPES, forEachExecutionIn } from "./nested-execution";
-import { parseUnresolvedWithin, type TSNode } from "./parser";
-import { redirectMayWriteFile } from "./redirect-analysis";
+import { parseUnresolvedWithin } from "./parse-health";
+import type { TSNode } from "./parser";
+import { REDIRECT_NODE_TYPES, redirectMayWriteFile } from "./redirect-analysis";
 import {
   type CommandWord,
   classifyWrapperWords,
@@ -414,25 +415,30 @@ function makeUnit(
  * Build the unit for a `command` node, reading its words once to answer all
  * three wrapper questions: whether the unit is floored, what it actually runs,
  * and whether the floor still has a reason to hold.
+ *
+ * The floor question also reads the command's own redirects: one written
+ * before or between the words (`>/tmp/o xargs grep foo`) writes a file as
+ * surely as one on the enclosing statement.
  */
 function makeCommandUnit(node: TSNode, scope: UnitScope): BashCommand {
-  const text = commandUnitText(node);
-  const words = readCommandWords(node);
+  const { text, words } = readCommandUnit(node);
   return makeUnit(text, scope, {
     wrapperKind: classifyWrapperWords(words),
     executedUnit: executedUnitOf(text, words) ?? undefined,
-    floorExemption: isTransparentWrapper(words, scope)
+    floorExemption: isTransparentWrapper(words, redirectedScope(node, scope))
       ? "core-reader"
       : undefined,
   });
 }
 
 /**
- * The scope a `redirected_statement`'s children run under: the enclosing one,
- * plus a write unless every one of its redirects provably only reads.
+ * The scope a node's own children run under: the enclosing one, plus a write
+ * unless every `file_redirect` among its children provably only reads.
  *
- * The redirect belongs to the last element of a pipeline, but it hangs off the
- * whole statement in the parse tree, so every command beneath it is marked.
+ * Asked of a `redirected_statement` and of a `command`, since a redirect may
+ * hang off either. On a statement, the redirect belongs to the last element of
+ * a pipeline, but it hangs off the whole statement in the parse tree, so every
+ * command beneath it is marked.
  * Over-attributing is the fail-closed direction — the flag can only withhold an
  * exemption, never grant one — which is also why the question asked of each
  * redirect is a refusal rather than a proof.
@@ -450,27 +456,75 @@ function redirectedScope(node: TSNode, scope: UnitScope): UnitScope {
 }
 
 /**
- * A `command` node's words — its `command_name` followed by its arguments — each
- * carrying its offset into the unit text `commandUnitText` produces.
+ * A `command` node's unit: the command-pattern text a bash rule is matched
+ * against, and its words (the `command_name` followed by its arguments), each
+ * carrying its offset into that text.
  *
- * A leading `variable_assignment` prefix is skipped (matching
- * `commandUnitText`), so offsets are relative to the `command_name`. An empty
- * list means a pure assignment with no `command_name`.
+ * The text runs from the first word to the last, so it leaves out two kinds of
+ * child that are not words of the command:
+ *
+ * - An env-var prefix (`AWS_PROFILE=prod aws …`, `PGPASSWORD=…`), which is part
+ *   of the `command` node's text but must not defeat a rule that gates the
+ *   underlying command.
+ * - A redirect, wherever it sits (`2>/dev/null git push`, `git <<< x push`).
+ *   Bash accepts one anywhere in a simple command, and its position does not
+ *   change which command runs, so it must not change which rule applies either
+ *   (#977).
+ *
+ * The source between two consecutive words is kept verbatim, so a command with
+ * no hosted redirect keeps its exact spacing and line continuations; where a
+ * redirect sat between two words, one space joins them instead.
+ * A pure assignment (`FOO=bar`, no `command_name`) runs no command, has no
+ * words, and keeps its whole text.
  */
-function readCommandWords(node: TSNode): CommandWord[] {
+function readCommandUnit(node: TSNode): {
+  text: string;
+  words: CommandWord[];
+} {
   const nodes = commandWordNodes(node);
-  const unitStart = nodes.at(0)?.startIndex ?? 0;
-  return nodes.map((child) => ({
-    text: child.text,
-    offset: child.startIndex - unitStart,
-  }));
+  if (nodes.length === 0) return { text: node.text, words: [] };
+
+  const redirects = hostedRedirects(node);
+  const words: CommandWord[] = [];
+  let text = "";
+  let previous: TSNode | undefined;
+  for (const word of nodes) {
+    if (previous) text += gapBetween(node, previous, word, redirects);
+    words.push({ text: word.text, offset: text.length });
+    text += word.text;
+    previous = word;
+  }
+  return { text, words };
 }
 
 /**
- * The nodes {@link readCommandWords} reports words for, in the same order.
+ * The text that joins two consecutive words of a unit: the command's own
+ * source between them, or one space where a hosted redirect sat there.
+ */
+function gapBetween(
+  command: TSNode,
+  before: TSNode,
+  after: TSNode,
+  redirects: readonly TSNode[],
+): string {
+  const hostsRedirect = redirects.some(
+    (redirect) =>
+      redirect.startIndex >= before.endIndex &&
+      redirect.startIndex < after.startIndex,
+  );
+  if (hostsRedirect) return " ";
+  return command.text.slice(
+    before.endIndex - command.startIndex,
+    after.startIndex - command.startIndex,
+  );
+}
+
+/**
+ * The nodes {@link readCommandUnit} reports words for, in the same order: every
+ * named child except a prefix assignment and a hosted redirect.
  *
- * Split out so a consumer that needs a *node* rather than a word — the log's
- * command masker, which offsets a re-parse by the payload node's `startIndex` —
+ * Split out so a consumer that needs a *node* rather than a word (the log's
+ * command masker, which offsets a re-parse by the payload node's `startIndex`)
  * walks the identical filtered list. Two walks over the same children with the
  * same filter, written twice, is how the two come to disagree about which word
  * is at which index.
@@ -481,30 +535,20 @@ function commandWordNodes(node: TSNode): TSNode[] {
     const child = node.child(i);
     if (!child?.isNamed) continue;
     if (child.type === "variable_assignment") continue;
+    if (REDIRECT_NODE_TYPES.has(child.type)) continue;
     nodes.push(child);
   }
   return nodes;
 }
 
-/**
- * The command-pattern text of a `command` node, with any leading
- * `variable_assignment` prefix stripped.
- *
- * An env-var prefix (`AWS_PROFILE=prod aws …`, `PGPASSWORD=…`) is part of the
- * `command` node's text but must not defeat a rule that gates the underlying
- * command, so matching targets the text from the first non-assignment child
- * (the `command_name`) onward, sliced verbatim to preserve spacing. A pure
- * assignment (`FOO=bar`, no `command_name`) runs no command and is returned
- * unchanged.
- */
-function commandUnitText(node: TSNode): string {
+/** The redirects a `command` node hosts among its own children. */
+function hostedRedirects(node: TSNode): TSNode[] {
+  const redirects: TSNode[] = [];
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i);
-    if (child?.isNamed && child.type !== "variable_assignment") {
-      return node.text.slice(child.startIndex - node.startIndex);
-    }
+    if (child && REDIRECT_NODE_TYPES.has(child.type)) redirects.push(child);
   }
-  return node.text;
+  return redirects;
 }
 
 function descendCommandChildren(

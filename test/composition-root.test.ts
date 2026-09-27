@@ -1812,6 +1812,80 @@ describe("session approvals do not leak across same-cwd session switches", () =>
   });
 });
 
+describe("tool-surface prose under a custom system prompt", () => {
+  // Pi writes no tool list or rules when it builds the prompt from a custom
+  // one. A root node leaves it that way; a subagent child, whose prompt is
+  // always a custom one, still states its own tools.
+  const custom = "You are my personal coding assistant.";
+
+  function customPromptEvent(cwd: string): unknown {
+    return {
+      systemPrompt: custom,
+      systemPromptOptions: {
+        cwd,
+        customPrompt: custom,
+        toolSnippets: { read: "Read file contents" },
+        promptGuidelines: [],
+      },
+    };
+  }
+
+  it("leaves a root session's custom prompt as Pi built it", async () => {
+    const cwd = mkdtempSync(join(tmpdir(), "pi-perm-custom-root-cwd-"));
+    const pi = makeFakePi({ toolNames: ["read"] });
+    piPermissionSystemExtension(pi as unknown as ExtensionAPI);
+    const ctx = makeBaseCtx(cwd, "custom-root-session");
+    await fireSessionStart(pi, ctx);
+
+    const result = await pi.fire(
+      "before_agent_start",
+      customPromptEvent(cwd),
+      ctx,
+    );
+
+    expect(result).toEqual({});
+
+    await pi.fire("session_shutdown");
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("states a registered child's tools under its custom prompt", async () => {
+    const parentCwd = mkdtempSync(join(tmpdir(), "pi-perm-custom-parent-cwd-"));
+    const childCwd = mkdtempSync(join(tmpdir(), "pi-perm-custom-child-cwd-"));
+    const parentSessionId = "custom-parent-session";
+    const childSessionId = "custom-child-session";
+
+    const parentPi = makeFakePi({
+      toolNames: ["read"],
+      events: createEventBus(),
+    });
+    piPermissionSystemExtension(parentPi as unknown as ExtensionAPI);
+    const childPi = makeFakePi({
+      toolNames: ["read"],
+      events: createEventBus(),
+    });
+    piPermissionSystemExtension(childPi as unknown as ExtensionAPI);
+
+    await fireSessionStart(parentPi, makeBaseCtx(parentCwd, parentSessionId));
+    getSubagentSessionRegistry().register(childSessionId, { parentSessionId });
+    const childCtx = makeChildCtx(childCwd, childSessionId);
+    await fireSessionStart(childPi, childCtx);
+
+    const result = (await childPi.fire(
+      "before_agent_start",
+      customPromptEvent(childCwd),
+      childCtx,
+    )) as { systemPrompt?: string };
+
+    expect(result.systemPrompt).toContain("- read: Read file contents");
+
+    await childPi.fire("session_shutdown");
+    await parentPi.fire("session_shutdown");
+    rmSync(parentCwd, { recursive: true, force: true });
+    rmSync(childCwd, { recursive: true, force: true });
+  });
+});
+
 describe("forwarded grant-scope selection round-trip", () => {
   // A UI-present serving ctx whose `select` drives the two-step forwarded
   // dialog: the main prompt picks "for this session" (options[1]); the scope
