@@ -99,6 +99,12 @@ const INDIRECTION_WRAPPER_NAMES = new Set([
 	"stdbuf",
 	"watch",
 	"flock",
+	// Transparent output proxies: a proxy rewrites its own argv into the real
+	// command (`rtk git push origin main` runs `git push origin main`), so the
+	// proxied command — not the proxy — is what a bash rule must match. Without
+	// this entry the rewritten unit matches only a catch-all `*` rule and a
+	// `git push *: ask` / `find /: deny` rule is silently bypassed.
+	"rtk",
 ]);
 
 /**

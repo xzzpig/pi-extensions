@@ -18,6 +18,15 @@ controls this:
 
 See [`docs/configuration.md`](./docs/configuration.md) for the full fail-closed behavior documentation.
 
+**Transparent output proxies** — a command proxy that rewrites its own argv into the real command (`rtk git push origin main` runs `git push origin main`)
+is listed in the indirection-wrapper table, so the **proxied** command is what a `bash` rule matches: `rtk git add x` hits `git add *`, `rtk find /` hits
+`find / *`. This matters because such a proxy commonly rewrites the tool call *before* the permission gate reads it — a `tool_call` handler registered ahead
+of this extension sees the command first — and the `bash` surface matches `^…$`-anchored globs, so an unpeeled `rtk git add x` matches only a catch-all `*`
+and a `git push *: ask` / `find /: deny` rule is silently bypassed. Peeling the proxy keeps its output compression and removes the load-order dependency.
+The proxy's own leading options are skipped (`rtk --ultra-compact git add x` still gates on `git add x`). Known boundary: a proxy *subcommand* that itself
+names the command to run (`rtk err <cmd>`) is not unwrapped further — the inner unit's head is the proxy's subcommand word — so it falls back to the
+catch-all rule; rewrites emitted by `rtk rewrite` do not use that shape.
+
 ---
 
 # @xzzpig/pi-permission-system

@@ -114,6 +114,7 @@ Four fields carry the record, each holding what only it can hold:
   contract lives (`openspec/`). Capability intent belongs in a spec or a
   change, not here.
 - `reapplyOnSync` — one entry per adaptation a sync must re-apply by hand.
+  A fork-only file's own addition never qualifies (see "Which field, if any").
 - `doNotReintroduce` — one entry per decision never to re-introduce: a
   dropped divergence, or a deliberate non-change worth keeping.
 - `knownDebt` — the machine-readable list of divergences that are
@@ -122,9 +123,47 @@ Four fields carry the record, each holding what only it can hold:
   `noise | deleted | lint | test | other`. `noise` and `deleted` entries
   require `path` (exact or shell glob) because the audit reconciles them.
 
+### Which field, if any: classify the file before writing an entry
+
+Every maintenance entry describes a cost a **future sync** imposes, and that
+cost exists only where upstream owns something — either the file itself, or the
+upstream code a fork-only file mirrors. Classify the file you changed with the
+audit's own derivation before writing anything:
+
+```bash
+.agents/skills/pi-fork-divergence/scripts/audit-fork-divergence.sh --inventory <name>
+```
+
+| The file you changed is…                                                                                     | Then                                                                                                                        |
+| ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
+| a **fork-only file** holding the fork's own logic                                                            | no maintenance entry: a pull cannot overwrite, delete, or conflict a file upstream does not have, so nothing is re-applied. |
+| a **fork-only file that mirrors upstream code** (a duplicated helper, name table, or parser the fork copied) | `reapplyOnSync`, because the next upstream change to that code forces a hand re-alignment.                                  |
+| an **upstream file** the fork edits                                                                          | `reapplyOnSync` for the edit a sync must re-apply, plus `knownDebt` for any `NOISE`/`DELETED` finding it leaves.            |
+| a **behavior decision**, not a file                                                                          | `doNotReintroduce` for the decision; the contract itself belongs in the `openspec/` spec `notes` names.                     |
+
+Both fork-only rows are fork-only, and only the second earns an entry. That
+asymmetry is the rule: the fork's own addition costs nothing on a sync, while
+the fork's copy of upstream code is exactly as expensive as an upstream edit.
+
+Do not promote a hazard into an obligation. "Whoever mirrors upstream's next
+change might drop this line" is a reason to comment the code and, when it is a
+behavior contract, to specify it in `openspec/` — it is not an adaptation a sync
+re-applies. Recorded example of this error: `"rtk"` in the fork's
+`INDIRECTION_WRAPPER_NAMES` table was once added to `reapplyOnSync`; the file is
+fork-only and the entry described a mirroring hazard, so it was removed. The
+inverse error costs more, so never delete a legitimate entry merely because it
+names a fork-only module: `"wrapper-floors readWrapperCommand skips
+REDIRECT_NODE_TYPES children"` names fork-only code and stays, because that
+code mirrors upstream's word-reading helpers and must be re-aligned whenever
+upstream refactors them.
+
 Keep those three maintenance fields current on every fork change, not just on
 syncs; sync-time agents read them, and a missing or stale entry turns the next
-sync into archaeology. Do not store what another source already holds: the
+sync into archaeology. "Current" cuts both ways: an entry that no longer applies
+is stale, and an entry added to satisfy the ritual is padding — a change
+confined to a fork-only file's own logic normally updates none of the three.
+
+Do not store what another source already holds: the
 dated sync narrative (the record's own git history has it), "file X is
 byte-identical to upstream" claims and the seam / fork-only module inventory
 (the audit derives both — see the `--inventory` flag below), implementation
@@ -213,7 +252,9 @@ Before committing any diff that touches an upstream file, confirm all of:
 - [ ] fork tests and fork docs are fork-only files;
 - [ ] the `subtrees/<name>.json` `notes`, `reapplyOnSync`,
       `doNotReintroduce` and `knownDebt` fields describe every divergence
-      added, changed, or removed by this change;
+      added, changed, or removed by this change — and every entry they gained
+      or lost passed the "Which field, if any" classification (no entry for a
+      fork-only file's own addition, no legitimate fork-only entry deleted);
 - [ ] the audit command and its result are reported with the diff.
 
 Run this audit before publishing (see the pre-publish gate in the `pi-publish`

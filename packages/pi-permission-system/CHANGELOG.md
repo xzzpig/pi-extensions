@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [1.4.1] — 2026-09-29
+
+### Fixed
+
+- **A transparent command proxy no longer bypasses `bash` rules.** A proxy that
+  rewrites its own argv into the real command (`rtk git push origin main` runs
+  `git push origin main`) commonly rewrites the tool call *before* this
+  extension's `tool_call` handler reads it — a handler registered earlier in the
+  load order sees the command first. The `bash` surface matches `^…$`-anchored
+  globs, so the rewritten unit matched only a catch-all `*` and `git add *: ask`
+  / `git commit *: ask` / `git push *: ask` / `find /: deny` were silently
+  bypassed. `rtk` is now in the fork's indirection-wrapper table, so the
+  **proxied** command is enumerated as its own gated unit and the verdict no
+  longer depends on which handler ran first. The proxy's own leading options are
+  skipped (`rtk --ultra-compact git add x` still gates on `git add x`). Known
+  boundary: a proxy *subcommand* that itself names the command to run
+  (`rtk err <cmd>`) is not unwrapped further, so it falls back to the catch-all
+  rule; `rtk rewrite` emits no such shape.
+
 ## [1.4.0] — 2026-09-27
 
 ### Changed
@@ -74,7 +95,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Conflict-surface refactor, no behavior change.** The fork's bash wrapper-classification block moved from `src/access-intent/bash/command-enumeration.ts` to fork-only `src/access-intent/bash/wrapper-floors.ts` (substantive diff ~714+/186− → ~109+/23−); the profile-scope resolution inside `resolvePermissions` moved to fork-only `src/policy/profile-scope.ts`; the duplicated `parseCommandUnits` closure now lives once in fork-only `src/access-intent/bash/wrapper-parse.ts`; five upstream test files are byte-identical to upstream again with fork cases in `*.fork.test.ts` files; the zero-reference `src/denial-messages.ts` (a revived copy of an upstream-dissolved module) was deleted; ~1,500 lines of whitespace churn were reverted to upstream formatting.
 
-## [Unreleased]
+## [1.1.0] — 2026-09-17
 
 ### Added
 
