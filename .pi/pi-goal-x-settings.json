@@ -1,0 +1,7 @@
+{
+  "auditor": {
+    "checklistExtra": [
+      "二开分歧纪律：若改动涉及 fork 插件（subtrees/<name>.json 有记录的包），按 .agents/skills/pi-fork-divergence/SKILL.md 检查，并运行 `pnpm run audit:fork-divergence`（退出码 0，NOISE/DELETED 均已在 knownDebt 声明）；不涉及则记 not applicable。未满足不得批准。"
+    ]
+  }
+}
