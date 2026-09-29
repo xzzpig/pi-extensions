@@ -1,0 +1,133 @@
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { describe, expect, test } from "vitest";
+import {
+  createHarness,
+  failVerdict,
+  passVerdict,
+  waitUntil,
+} from "./harness.ts";
+
+function commandCtx(
+  h: ReturnType<typeof createHarness>,
+): ExtensionCommandContext {
+  return h.ctx as ExtensionCommandContext;
+}
+
+describe("/sentinel:test dry run", () => {
+  test("shows the verdict and produces no dispatch side effects", async () => {
+    const h = createHarness({
+      rules: [
+        {
+          name: "bash-safety",
+          trigger: { type: "tool_call", tools: ["bash"] },
+          mode: "blocking",
+          prompt: "检查 {{input.command}}",
+        },
+      ],
+    });
+
+    const first = h.runtime.handleTestCommand(
+      "bash-safety rm -rf /tmp/build",
+      commandCtx(h),
+    );
+    await waitUntil(() => h.controls.length === 1);
+    h.controls[0].verdict({ verdict: "fail", message: "危险命令" });
+    await first;
+
+    const output = h.notified.map((entry) => entry.message).join("\n");
+    expect(output).toContain("试运行");
+    expect(output).toContain("fail");
+    expect(output).toContain("危险命令");
+
+    // No injection, no tool blocking, no cache, no cooldown.
+    expect(h.sent).toHaveLength(0);
+    expect(h.runtime.getRunners().get("bash-safety")?.isCoolingDown()).toBe(
+      false,
+    );
+    expect(
+      h.runtime
+        .getRegistry()
+        .getHistory()
+        .some((entry) => entry.kind === "test"),
+    ).toBe(true);
+
+    // A second identical dry run runs a fresh audit (nothing was cached).
+    const second = h.runtime.handleTestCommand(
+      "bash-safety rm -rf /tmp/build",
+      commandCtx(h),
+    );
+    await waitUntil(() => h.controls.length === 2);
+    h.controls[1].verdict(passVerdict);
+    await second;
+    expect(h.controls).toHaveLength(2);
+  });
+
+  test("an unknown rule name reports an error", async () => {
+    const h = createHarness({ rules: [] });
+    await h.runtime.handleTestCommand("ghost content", commandCtx(h));
+
+    expect(h.notified.some((entry) => entry.message.includes("不存在"))).toBe(
+      true,
+    );
+    expect(h.controls).toHaveLength(0);
+  });
+
+  test("disabled rules can still be dry-run", async () => {
+    const h = createHarness({
+      rules: [
+        {
+          name: "r",
+          trigger: { type: "turn_end" },
+          prompt: "检查",
+        },
+      ],
+    });
+    h.runtime.setRuleEnabled("r", false, h.ctx);
+
+    const pending = h.runtime.handleTestCommand("r 模拟内容", commandCtx(h));
+    await waitUntil(() => h.controls.length === 1);
+    h.controls[0].verdict(passVerdict);
+    await pending;
+
+    expect(h.notified.some((entry) => entry.message.includes("试运行"))).toBe(
+      true,
+    );
+  });
+
+  test("a missing usage line and empty args are handled", async () => {
+    const h = createHarness({ rules: [] });
+    await h.runtime.handleTestCommand("", commandCtx(h));
+    expect(h.notified.some((entry) => entry.message.includes("用法"))).toBe(
+      true,
+    );
+  });
+
+  test("a failed dry run reports the failure without entering the cooldown", async () => {
+    const h = createHarness({
+      rules: [
+        {
+          name: "r",
+          trigger: { type: "tool_call", tools: ["bash"] },
+          mode: "blocking",
+          prompt: "检查",
+        },
+      ],
+    });
+
+    const pending = h.runtime.handleTestCommand("r ls", commandCtx(h));
+    await waitUntil(() => h.controls.length === 1);
+    h.controls[0].fail("模型超时");
+    await pending;
+
+    expect(h.notified.some((entry) => entry.message.includes("审计失败"))).toBe(
+      true,
+    );
+    expect(h.runtime.getRunners().get("r")?.isCoolingDown()).toBe(false);
+    expect(
+      h.runtime
+        .getRegistry()
+        .getHistory()
+        .some((entry) => entry.kind === "test" && entry.status === "failed"),
+    ).toBe(true);
+  });
+});

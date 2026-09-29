@@ -1,0 +1,59 @@
+{
+  "name": "@xzzpig/pi-sentinel",
+  "version": "0.1.0",
+  "description": "Declarative natural-language sentinel rules for the pi coding agent: side-loop LLM audits on tool calls, tool results, turn/agent boundaries and context thresholds, with blocking gates and background finding injection.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xzzpig/pi-extensions.git",
+    "directory": "packages/pi-sentinel"
+  },
+  "homepage": "https://github.com/xzzpig/pi-extensions/tree/main/packages/pi-sentinel#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-extension",
+    "pi-coding-agent",
+    "sentinel",
+    "audit",
+    "guardrail",
+    "llm-as-judge"
+  ],
+  "files": [
+    "extensions",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ]
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "handlebars": "4.7.9",
+    "minimatch": "10.2.5"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": ">=0.87.1 <0.88.0",
+    "@earendil-works/pi-ai": ">=0.87.1 <0.88.0",
+    "@earendil-works/pi-coding-agent": ">=0.87.1 <0.88.0",
+    "@earendil-works/pi-tui": ">=0.87.1 <0.88.0"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-agent-core": "0.87.1",
+    "@earendil-works/pi-ai": "0.87.1",
+    "@earendil-works/pi-coding-agent": "catalog:",
+    "@earendil-works/pi-tui": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

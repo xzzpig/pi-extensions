@@ -1,0 +1,27 @@
+# Live evidence: session_tree is a light reset (P3-2)
+
+Environment: same config; `/tree` opens the Session Tree selector.
+
+Command: while the bash gate had three audits in flight (defaults.maxConcurrent=1),
+`/tree` → `Up` → `Enter`, then capture (`tree-nav.txt`, `tree-list2.txt`).
+
+Raw capture excerpt showing the navigation:
+
+
+ $ echo hi
+
+ hi
+
+
+ Navigated to selected point
+
+
+Raw status markers afterwards (`tree-list2.txt`): `▶1` (an audit was still
+running), and the transcript continued to the normal tool output — the
+navigation did not abort the in-flight audits, did not clear the verdict cache
+and did not abort any configuration dialog. The complementary assertions
+(negative cooldown and dedupe cooldown preserved across `session_tree`, while a
+session switch clears the negative cooldown) are pinned deterministically by
+`test/p2p3-fixes.test.ts` ("session_tree preserves the negative cooldown",
+"a session switch clears the negative cooldown", "session_tree keeps running
+audits alive").

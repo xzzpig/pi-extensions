@@ -1,0 +1,24 @@
+# Live evidence: unresolved-variable diagnostics ignore @root (P3-9)
+
+Environment: rule `slow-a` (blocking, `tool_call` on bash, tool `read`) with the
+prompt `... 诊断探针：{{@root}} 与 {{unknownVar}}。`; `defaults.maxConcurrent = 1`.
+
+Command: send the bash prompt, open `/sentinel:fleet` 3 s later, capture every 2 s
+(`root4-1..12.txt`), with the first rule row selected.
+
+Raw capture excerpt (`root4-1.txt`), fleet detail panel while the audit runs:
+
+                                                              规则：slow-a
+                                                              已耗时：3430ms
+                                                              模型：new-api/deepseek-ai/DeepSeek-V4-Flash
+                                                              工具调用：1
+                                                              缓存：未命中
+                                                              prompt 概要：先 read /tmp/pi-e2e-sentinel/big.txt，再裁决 pass。诊断探针：...
+                                                              范围概要：{"tool":"bash","toolCallId":"call_00_qBR9j3pUEqaqApTS4eNn5571...
+                                                              未解析变量：unknownVar
+                                                              流式输出尾部：
+                                                                I'll read the file first as instructed, then issue the verdict.
+
+
+`未解析变量：unknownVar` is listed; `@root` is not. Before the fix the collector
+reported `@root` as well (its AST depth is 0 with `data: true`).

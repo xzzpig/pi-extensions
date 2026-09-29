@@ -1,0 +1,36 @@
+# Live evidence: global concurrency cap under mixed triggers (P2-1)
+
+Environment: defaults.maxConcurrent = 1; three blocking rules all matching the
+`bash` tool (`slow-a`, `slow-b` — each with the `read` tool and a 5000-line file;
+`bad-model` — model resolution failure). One `Run this bash command: echo hi`
+prompt triggers all three audits concurrently (Promise.all in the tool gate).
+
+Command: `tmux send-keys ... 'Run this bash command: echo hi' Enter`, then a
+capture every 3 s (`conc-1..18.txt`), grepping the footer status widget.
+
+Observed status-marker histogram across the 18 captures (raw grep output):
+
+  7 x ▶1
+
+The gate completed with:
+
+  Took 16.1s
+
+Sample raw capture (verbatim excerpt):
+
+ Error: Failed to load theme "one-dark": Theme not found: one-dark
+ Fell back to dark theme.
+
+
+ Run this bash command: echo hi
+
+
+
+
+Interpretation: never more than one audit ran at a time (only `▶1`, no `▶2`/
+`▶3`), and the single tool call serialized three audits into one 16.1 s gate —
+the shared budget held across rules that were all created in the same rebuild.
+The stricter "reused runner after a rebuild keeps the old semaphore" scenario is
+pinned deterministically by `test/p2p3-fixes.test.ts` ("a rule added mid-flight
+cannot bypass the shared cap") because the exact interleaving cannot be driven
+reliably in a TUI.

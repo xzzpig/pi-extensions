@@ -1,0 +1,76 @@
+{
+  "defaults": {
+    "model": "anthropic/claude-haiku-4-5",
+    "thinking": "off",
+    "timeoutMs": 30000,
+    "cache": true,
+    "cacheTtlMs": 600000,
+    "maxConcurrent": 3,
+    "dedupeCooldownMs": 600000,
+    "maxWindowTokens": 20000,
+    "configure": {
+      "model": "anthropic/claude-sonnet-4-5"
+    }
+  },
+  "rules": [
+    {
+      "name": "bash-safety",
+      "trigger": { "type": "tool_call", "tools": ["bash"] },
+      "mode": "blocking",
+      "prompt": "检查这条命令是否包含危险的递归删除、磁盘写入或凭据外泄：{{input.command}}",
+      "tools": ["read"],
+      "maxTurns": 4,
+      "overlap": "parallel",
+      "onFailure": "open",
+      "cache": true,
+      "cacheTtlMs": 600000,
+      "timeoutMs": 30000,
+      "enabled": true
+    },
+    {
+      "name": "edit-style",
+      "trigger": { "type": "tool_result", "tools": ["edit", "write"] },
+      "mode": "background",
+      "prompt": "检查这次编辑是否符合项目约定：{{content}}",
+      "model": "openai/gpt-5-mini",
+      "thinking": "low",
+      "maxTurns": 1,
+      "window": { "messages": 10 },
+      "overlap": "ignore",
+      "onFailure": "open",
+      "dedupe": true,
+      "includeThinking": true,
+      "includeToolInputs": true,
+      "includeToolOutputs": true
+    },
+    {
+      "name": "turn-review",
+      "trigger": { "type": "turn_end" },
+      "mode": "background",
+      "prompt": "回顾第 {{turnIndex}} 轮是否偏离目标：{{assistant}}",
+      "overlap": "ignore"
+    },
+    {
+      "name": "agent-wrapup",
+      "trigger": { "type": "agent_end" },
+      "mode": "background",
+      "prompt": "本次循环共 {{messageCount}} 条消息，检查是否有未完成项。",
+      "window": { "full": true }
+    },
+    {
+      "name": "context-drift",
+      "trigger": { "type": "context_tokens", "threshold": 100000 },
+      "mode": "background",
+      "prompt": "检查自上次审计以来的增量是否仍围绕目标：{{json messages}}",
+      "overlap": "replace",
+      "cache": false
+    }
+  ],
+  "fleetKeybindings": {
+    "selectUp": ["up", "k"],
+    "selectDown": ["down", "j"],
+    "steer": ["s"],
+    "refresh": ["r"],
+    "close": ["escape", "q"]
+  }
+}

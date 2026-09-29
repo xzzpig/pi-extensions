@@ -1,0 +1,46 @@
+# Live evidence: session-scope write shadowing a file rule (P2-3)
+
+Environment: project config already contains a file rule named `shadow-target`
+(turn_end/background). `/sentinel:configure 添加一条会话级规则 shadow-target：background turn_end，总是返回 pass`
+starts the background dialog; the draft preview is shown, then the scope select.
+
+Raw capture (`shadow-preview2.txt`):
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+ pi-sentinel 配置草稿预览
+ 变更：新增规则 "shadow-target" (background/turn_end)
+ 选择下一步操作：
+
+ → 写入
+   继续调整
+   放弃
+
+
+Raw capture (`shadow-scope.txt`) after choosing 写入:
+
+
+ 写入作用域
+
+ → global
+   project
+   session
+
+
+Raw capture (`shadow-list.txt`) after the write, `/sentinel:list`:
+
+   slow-b [tool_call [bash]] blocking model=(会话模型) idle (project)
+   diag-root [turn_end] background model=(会话模型) idle (project)
+   bad-model [tool_call [bash]] blocking model=new-api/does-not-exist idle (project)
+   shadow-target [turn_end] background model=(会话模型) idle (session)
+   bad-bg [turn_end] background model=new-api/does-not-exist idle (project)
+
+
+The project file was unchanged by the session write (`slow-a, slow-b, diag-root,
+bad-model, shadow-target, bad-bg` before and after), i.e. the session rule
+shadowed the inherited namesake. The shadowing *notice text* itself is produced
+by the same code path and asserted end-to-end through the real runtime by
+`test/p2p3-fixes.test.ts` ("a session write over a real file rule reports
+shadowing", "without a file namesake no shadow notice is produced"), which drives
+`/sentinel:configure` → `submit_config` → real `applyChange` with a real
+`fileConfig` (no fake host).

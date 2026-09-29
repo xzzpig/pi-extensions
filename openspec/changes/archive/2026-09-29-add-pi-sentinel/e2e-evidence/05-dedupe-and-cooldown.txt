@@ -1,0 +1,35 @@
+# Live evidence: dedupe cooldown retention and negative-cooldown lifecycle
+
+Recorded during the earlier Level 4 run (same isolation recipe; the throwaway
+dirs were deleted afterwards, so these are the recorded commands and outputs).
+
+## P2-2 — an unrelated config change does not wipe dedupe cooldowns
+
+Config: `turn-warn` (background turn_end, prompt forcing `warn-fixed-e2e`),
+`other-rule` (background tool_call on edit), `defaults.cache = false`.
+
+1. Turn 1 (`Reply with exactly: ok`) injected the finding once:
+   `[pi-sentinel][WARN] turn-warn (1512ms)` / `warn-fixed-e2e`.
+   `grep -c pi-sentinel-finding sessions/*.jsonl` -> 1
+2. Turn 2 (identical finding) -> `grep -c` -> 1 (deduped).
+3. `/sentinel:list` -> select `other-rule` -> 禁用
+   (`pi-sentinel: 已禁用规则 "other-rule"`, which rebuilds the runners).
+4. Turn 3 -> `grep -c pi-sentinel-finding` -> 1: the cooldown survived the
+   rebuild. Before the fix the rebuilt injector lost every cooldown and turn 3
+   injected a second finding.
+
+## P3-3 — negative cooldown: active inside the window, cleared by a session switch
+
+Config: `bad-model` (blocking tool_call on bash, model `new-api/does-not-exist`),
+so the failure is deterministic and needs no LLM call.
+
+1. `Run this bash command: echo hi` -> one failure notification
+   `Warning: sentinel 审计失败（规则 "bad-model"）：模型未找到: new-api/does-not-exist`
+   (fail-open: the command still ran). Pane notification count 1 -> 2.
+2. A second identical prompt ~19 s later (inside the 30 s window) left the count
+   at 2: no new audit was started (cooldown short-circuit).
+3. `/new` (session switch, screen cleared, count 0) followed by the same prompt
+   produced a fresh failure notification (count 1): a real audit was attempted
+   again, i.e. the session switch cleared the cooldown. With a surviving
+   cooldown the trigger would have been short-circuited and no notification
+   would appear (count 0).
