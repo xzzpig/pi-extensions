@@ -2,8 +2,9 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import {
   CONFIG_DIR_NAME,
-  getAgentDir,
   type ExtensionContext,
+  type ExtensionEvent,
+  getAgentDir,
 } from "@earendil-works/pi-coding-agent";
 
 /**
@@ -29,8 +30,71 @@ export const TRIGGER_TYPES = [
   "turn_end",
   "agent_end",
   "context_tokens",
+  "event",
 ] as const;
 export type TriggerType = (typeof TRIGGER_TYPES)[number];
+
+/**
+ * Host extension event names a `core:`-prefixed trigger may subscribe.
+ *
+ * Enumerated from `ExtensionAPI.on()`'s per-event overloads of the pinned
+ * host version (0.87.1). The `satisfies` clause proves every entry is a real
+ * host event name; the `KNOWN_CORE_EVENTS_COMPLETE` guard fails to compile
+ * when the host union gains events the table does not list yet.
+ */
+export const KNOWN_CORE_EVENTS = [
+  "project_trust",
+  "resources_discover",
+  "session_start",
+  "session_info_changed",
+  "session_before_switch",
+  "session_before_fork",
+  "session_before_compact",
+  "session_compact",
+  "session_compact_failed",
+  "session_shutdown",
+  "session_before_tree",
+  "session_tree",
+  "context",
+  "context_with_system",
+  "cache_warming_decision",
+  "before_provider_request",
+  "before_provider_headers",
+  "after_provider_response",
+  "before_agent_start",
+  "agent_start",
+  "agent_end",
+  "agent_before_settle",
+  "agent_settled",
+  "ui_prompt_start",
+  "ui_prompt_end",
+  "turn_start",
+  "turn_end",
+  "message_start",
+  "message_update",
+  "message_end",
+  "tool_execution_start",
+  "tool_execution_update",
+  "tool_execution_end",
+  "model_select",
+  "thinking_level_select",
+  "tool_call",
+  "tool_result",
+  "user_bash",
+  "input",
+] as const satisfies readonly ExtensionEvent["type"][];
+
+type MissingCoreEventName = Exclude<
+  ExtensionEvent["type"],
+  (typeof KNOWN_CORE_EVENTS)[number]
+>;
+const KNOWN_CORE_EVENTS_COMPLETE: [MissingCoreEventName] extends [never]
+  ? true
+  : never = true;
+void KNOWN_CORE_EVENTS_COMPLETE;
+
+/** Reserved prefix distinguishing host extension events from bus channels. */
+export const CORE_EVENT_PREFIX = "core:";
 
 export const EXECUTION_MODES = ["blocking", "background"] as const;
 export type ExecutionMode = (typeof EXECUTION_MODES)[number];
@@ -90,6 +154,12 @@ export interface SentinelTrigger {
   tools?: string[];
   /** Required for `context_tokens`: fire once per crossed multiple. */
   threshold?: number;
+  /**
+   * Required for `event`: bare name subscribes the pi.events plugin bus,
+   * `core:` names subscribe a host extension event (validated against
+   * KNOWN_CORE_EVENTS).
+   */
+  event?: string;
 }
 
 export interface SentinelRule {
@@ -298,7 +368,11 @@ export function validateRule(raw: unknown): RuleValidation {
   }
 
   const unknownTriggerKeys = Object.keys(raw.trigger).filter(
-    (key) => key !== "type" && key !== "tools" && key !== "threshold",
+    (key) =>
+      key !== "type" &&
+      key !== "tools" &&
+      key !== "threshold" &&
+      key !== "event",
   );
   if (unknownTriggerKeys.length > 0) {
     return {
@@ -350,6 +424,34 @@ export function validateRule(raw: unknown): RuleValidation {
       ok: false,
       error: "`trigger.threshold` is required for context_tokens",
     };
+  }
+
+  if (raw.trigger.event !== undefined) {
+    if (triggerType !== "event") {
+      return {
+        ok: false,
+        error: "`trigger.event` is only valid for event triggers",
+      };
+    }
+    if (!isNonEmptyString(raw.trigger.event)) {
+      return {
+        ok: false,
+        error: "`trigger.event` must be a non-empty string",
+      };
+    }
+    if (raw.trigger.event.startsWith(CORE_EVENT_PREFIX)) {
+      const coreName = raw.trigger.event.slice(CORE_EVENT_PREFIX.length);
+      if (!(KNOWN_CORE_EVENTS as readonly string[]).includes(coreName)) {
+        return {
+          ok: false,
+          error: `unknown \`core:\` event name "${raw.trigger.event}"; known host events: ${KNOWN_CORE_EVENTS.join(", ")}`,
+        };
+      }
+    }
+    trigger.event = raw.trigger.event;
+  }
+  if (triggerType === "event" && trigger.event === undefined) {
+    return { ok: false, error: "`trigger.event` is required for event rules" };
   }
 
   const rule: SentinelRule = {

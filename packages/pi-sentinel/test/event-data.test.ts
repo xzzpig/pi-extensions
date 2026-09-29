@@ -8,6 +8,7 @@ import { describe, expect, test } from "vitest";
 import {
   buildAgentEndEventData,
   buildContextTokensEventData,
+  buildEventEventData,
   buildScopeText,
   buildToolCallEventData,
   buildToolResultEventData,
@@ -15,9 +16,11 @@ import {
   buildTurnEndEventData,
   capScopeTokens,
   DEFAULT_SERIALIZE_OPTIONS,
+  defaultWindowKind,
   estimateTokens,
   serializeMessage,
   sliceByTokens,
+  toJsonSafe,
 } from "../extensions/event-data.ts";
 
 function userMessage(content: string): UserMessage {
@@ -354,5 +357,91 @@ describe("truncation and serialization", () => {
         toolResultMessage("grep", [{ type: "text", text: "match" }], true),
       ]),
     ).toBe("[user] hi\n[toolResult:grep] match");
+  });
+});
+
+describe("event trigger data", () => {
+  test("toJsonSafe projects functions and class instances to placeholders", () => {
+    class Instance {
+      value = 1;
+    }
+    const data = toJsonSafe({
+      n: 1,
+      s: "x",
+      b: false,
+      nil: null,
+      arr: [1, "two", () => "fn"],
+      nested: { fn: () => "fn", inst: new Instance() },
+    });
+
+    expect(data).toEqual({
+      n: 1,
+      s: "x",
+      b: false,
+      nil: null,
+      arr: [1, "two", "[unserializable]"],
+      nested: { fn: "[unserializable]", inst: "[unserializable]" },
+    });
+  });
+
+  test("buildEventEventData keeps a plain core event payload as-is (projected)", () => {
+    const data = buildEventEventData({
+      name: "core:session_compact",
+      payload: { reason: "手动压缩", callback: () => "fn" },
+    });
+
+    expect(data).toEqual({
+      name: "core:session_compact",
+      event: { reason: "手动压缩", callback: "[unserializable]" },
+    });
+  });
+
+  test("bus non-object payloads are wrapped as { value }", () => {
+    expect(
+      buildEventEventData({ name: "pi-subagents:done", payload: "finished" }),
+    ).toEqual({
+      name: "pi-subagents:done",
+      event: { value: "finished" },
+    });
+
+    expect(
+      buildEventEventData({ name: "chan", payload: [1, "two"] }).event,
+    ).toEqual({ value: [1, "two"] });
+  });
+
+  test("payload strings over 8000 characters are truncated with a marker", () => {
+    const data = buildEventEventData({
+      name: "core:input",
+      payload: { text: "y".repeat(8100) },
+    });
+
+    const text = (data.event as { text: string }).text;
+    expect(text.length).toBeLessThan(8100);
+    expect(text).toContain("...[截断 100 字符]");
+  });
+
+  test("event defaults to the payload JSON scope while a window overrides to a transcript", () => {
+    const data = buildEventEventData({
+      name: "core:session_compact",
+      payload: { reason: "手动压缩" },
+    });
+    expect(defaultWindowKind("event")).toBe("event");
+
+    const defaultScope = buildScopeText({
+      triggerType: "event",
+      eventData: data,
+      allMessages: [userMessage("older context")],
+      maxWindowTokens: 20_000,
+    });
+    expect(defaultScope).toBe(JSON.stringify(data));
+
+    const windowScope = buildScopeText({
+      triggerType: "event",
+      eventData: data,
+      allMessages: [userMessage("m1"), userMessage("m2"), userMessage("m3")],
+      window: { messages: 5 },
+      maxWindowTokens: 20_000,
+    });
+    expect(windowScope).toBe("[user] m1\n[user] m2\n[user] m3");
   });
 });

@@ -7,9 +7,11 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, test } from "vitest";
 import {
+  KNOWN_CORE_EVENTS,
   loadConfig,
   loadConfigFromPaths,
   mergeRules,
+  validateRule,
   type SourcedRule,
 } from "../extensions/config.ts";
 
@@ -323,5 +325,152 @@ describe("rule validation details", () => {
     const c = { name: "c", source: "project" } as SourcedRule;
 
     expect(mergeRules([a, b], [a2, c])).toEqual([a2, b, c]);
+  });
+});
+
+describe("KNOWN_CORE_EVENTS", () => {
+  test("lists 39 unique host event names", () => {
+    expect(KNOWN_CORE_EVENTS).toHaveLength(39);
+    expect(new Set(KNOWN_CORE_EVENTS).size).toBe(39);
+  });
+
+  test("contains representative host events", () => {
+    expect(KNOWN_CORE_EVENTS).toContain("session_compact");
+    expect(KNOWN_CORE_EVENTS).toContain("message_update");
+    expect(KNOWN_CORE_EVENTS).toContain("tool_call");
+  });
+});
+
+describe("event trigger validation", () => {
+  function eventRule(
+    trigger: Record<string, unknown>,
+  ): Record<string, unknown> {
+    return {
+      name: "on-event",
+      trigger,
+      mode: "background",
+      prompt: "check it",
+    };
+  }
+
+  test("a valid bare-name and core: rule passes validation", () => {
+    const bus = validateRule(
+      eventRule({ type: "event", event: "pi-subagents:done" }),
+    );
+    expect(bus.ok).toBe(true);
+
+    const core = validateRule(
+      eventRule({ type: "event", event: "core:session_compact" }),
+    );
+    expect(core.ok).toBe(true);
+  });
+
+  test("trigger.event is required for event rules and must be non-empty", () => {
+    const missing = validateRule(eventRule({ type: "event" }));
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) expect(missing.error).toContain("required");
+
+    const blank = validateRule(eventRule({ type: "event", event: "   " }));
+    expect(blank.ok).toBe(false);
+    if (!blank.ok) expect(blank.error).toContain("non-empty string");
+  });
+
+  test("trigger.event on other trigger types fails validation", () => {
+    const result = validateRule(
+      eventRule({ type: "tool_call", event: "pi-subagents:done" }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("only valid for event");
+  });
+
+  test("blocking mode combined with event is rejected", () => {
+    const result = validateRule({
+      name: "on-event",
+      trigger: { type: "event", event: "core:session_compact" },
+      mode: "blocking",
+      prompt: "check it",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("blocking");
+  });
+
+  test("trigger.tools and trigger.threshold on event rules are rejected", () => {
+    const tools = validateRule(
+      eventRule({ type: "event", event: "done", tools: ["bash"] }),
+    );
+    expect(tools.ok).toBe(false);
+    if (!tools.ok) expect(tools.error).toContain("trigger.tools");
+
+    const threshold = validateRule(
+      eventRule({ type: "event", event: "done", threshold: 5 }),
+    );
+    expect(threshold.ok).toBe(false);
+    if (!threshold.ok) expect(threshold.error).toContain("trigger.threshold");
+  });
+
+  test("an unknown core: event name is rejected and the error lists all legal names", () => {
+    const result = validateRule(
+      eventRule({ type: "event", event: "core:sesson_compact" }),
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("core:sesson_compact");
+      expect(result.error).toContain(KNOWN_CORE_EVENTS.join(", "));
+    }
+  });
+});
+
+describe("event trigger loading", () => {
+  test("a misspelled core: event name is skipped with a warning listing legal names", () => {
+    const dir = tempDir();
+    const globalPath = join(dir, "global.json");
+    writeJson(globalPath, {
+      rules: [
+        baseRule({
+          name: "typo-event",
+          mode: "background",
+          trigger: { type: "event", event: "core:sesson_compact" },
+        }),
+        baseRule({
+          name: "fine",
+          mode: "background",
+          trigger: { type: "turn_end" },
+        }),
+      ],
+    });
+
+    const loaded = loadConfigFromPaths({ globalPath, projectPath: null });
+
+    expect(loaded.rules.map((rule) => rule.name)).toEqual(["fine"]);
+    expect(loaded.warnings).toHaveLength(1);
+    expect(loaded.warnings[0]).toContain("typo-event");
+    expect(loaded.warnings[0]).toContain("session_compact");
+  });
+
+  test("bus channel names load without validation and hot core events are accepted", () => {
+    const dir = tempDir();
+    const globalPath = join(dir, "global.json");
+    writeJson(globalPath, {
+      rules: [
+        baseRule({
+          name: "bus-rule",
+          mode: "background",
+          trigger: { type: "event", event: "pi-subagents:done" },
+        }),
+        baseRule({
+          name: "hot-core-rule",
+          mode: "background",
+          trigger: { type: "event", event: "core:message_update" },
+        }),
+      ],
+    });
+
+    const loaded = loadConfigFromPaths({ globalPath, projectPath: null });
+
+    expect(loaded.rules.map((rule) => rule.name)).toEqual([
+      "bus-rule",
+      "hot-core-rule",
+    ]);
+    expect(loaded.warnings).toEqual([]);
   });
 });

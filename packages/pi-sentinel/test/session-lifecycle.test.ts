@@ -1,5 +1,6 @@
 import type {
   SessionBeforeSwitchEvent,
+  SessionShutdownEvent,
   SessionStartEvent,
   SessionTreeEvent,
   ToolCallEvent,
@@ -347,5 +348,95 @@ describe("session-level configuration", () => {
         .getHistory()
         .some((entry) => entry.status === "verdict"),
     ).toBe(true);
+  });
+});
+
+describe("event trigger subscriptions", () => {
+  test("a session switch keeps event subscriptions alive", async () => {
+    const h = createHarness({
+      register: true,
+      rules: [
+        {
+          name: "bus",
+          trigger: { type: "event", event: "pi-subagents:done" },
+          prompt: "bus",
+          cache: false,
+        },
+        {
+          name: "core",
+          trigger: { type: "event", event: "core:session_compact" },
+          prompt: "core",
+          cache: false,
+        },
+      ],
+    });
+
+    h.runtime.handleSessionBeforeSwitch({
+      type: "session_before_switch",
+      reason: "resume",
+    } as SessionBeforeSwitchEvent);
+
+    // Subscriptions are config-level wiring: the switch resets runtime state
+    // but must not touch them.
+    expect(h.runtime.getEventSubscriptionRegistry()?.subscribedNames()).toEqual(
+      ["pi-subagents:done", "core:session_compact"],
+    );
+    expect(h.busHandlers.has("pi-subagents:done")).toBe(true);
+    expect(h.handlers.has("session_compact")).toBe(true);
+
+    h.busHandlers.get("pi-subagents:done")?.({ ok: 1 });
+    h.handlers.get("session_compact")?.({ reason: "later" }, h.ctx);
+    await waitUntil(() => h.controls.length === 2);
+    expect(h.controls).toHaveLength(2);
+  });
+
+  test("removing the last rule referencing an event unsubscribes it", async () => {
+    const h = createHarness({
+      register: true,
+      rules: [
+        {
+          name: "solo",
+          trigger: { type: "event", event: "core:session_compact" },
+          prompt: "{{name}}",
+          cache: false,
+        },
+      ],
+    });
+    expect(h.handlers.has("session_compact")).toBe(true);
+
+    // Hot reload with the event rule removed.
+    h.runtime.applyConfig({ ...h.config, rules: [] }, h.ctx);
+
+    expect(h.runtime.getEventSubscriptionRegistry()?.subscribedNames()).toEqual(
+      [],
+    );
+    expect(h.handlers.has("session_compact")).toBe(false);
+
+    // The host dispatching the event again reaches nothing: no audit, no history.
+    h.handlers.get("session_compact")?.({ reason: "late" }, h.ctx);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(h.controls).toHaveLength(0);
+    expect(h.runtime.getRegistry().getHistory()).toHaveLength(0);
+  });
+
+  test("session shutdown tears down event subscriptions", () => {
+    const h = createHarness({
+      register: true,
+      rules: [
+        {
+          name: "bus",
+          trigger: { type: "event", event: "pi-subagents:done" },
+        },
+      ],
+    });
+
+    h.runtime.handleSessionShutdown({
+      type: "session_shutdown",
+    } as SessionShutdownEvent);
+
+    expect(h.runtime.getEventSubscriptionRegistry()?.subscribedNames()).toEqual(
+      [],
+    );
+    expect(h.busHandlers.has("pi-subagents:done")).toBe(false);
   });
 });

@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, test } from "vitest";
 import type { SourcedRule } from "../extensions/config.ts";
+import { describeTrigger } from "../extensions/commands.ts";
 import {
   buildFleetRows,
   openFleetInspector,
@@ -135,6 +136,28 @@ describe("fleet row assembly", () => {
     expect(renderFleetLines([], 0, 80).join("\n")).toContain(
       "没有已加载的哨兵",
     );
+  });
+});
+
+describe("event trigger display", () => {
+  test("event rules show event:<configured name> verbatim, prefixes included", () => {
+    const bus = rule("bus", {
+      trigger: { type: "event", event: "pi-subagents:done" },
+    });
+    const core = rule("core", {
+      trigger: { type: "event", event: "core:session_compact" },
+    });
+
+    expect(describeTrigger(bus)).toBe("event:pi-subagents:done");
+    expect(describeTrigger(core)).toBe("event:core:session_compact");
+
+    const rows = buildFleetRows({
+      rules: [bus, core],
+      statuses: [],
+      dialogs: [],
+    });
+    expect(rows[0]?.trigger).toBe("event:pi-subagents:done");
+    expect(rows[1]?.trigger).toBe("event:core:session_compact");
   });
 });
 

@@ -56,6 +56,8 @@ export interface HarnessOptions {
   configLoader?: (ctx: ExtensionContext) => LoadedSentinelConfig;
   /** Override the audit loop (e.g. to drive the configuration dialog). */
   agentLoop?: AuditLoopFn;
+  /** Wire runtime handlers at creation (event-trigger tests need them). */
+  register?: boolean;
 }
 
 export function messageEntry(
@@ -214,6 +216,7 @@ export function createHarness(options: HarnessOptions) {
     string,
     (event: unknown, context: ExtensionContext) => unknown
   >();
+  const busHandlers = new Map<string, (data: unknown) => void>();
   const commands = new Map<string, unknown>();
   let entryCounter = 0;
   const pi = {
@@ -222,6 +225,20 @@ export function createHarness(options: HarnessOptions) {
       handler: (event: unknown, context: ExtensionContext) => unknown,
     ) => {
       handlers.set(event, handler);
+      return () => {
+        handlers.delete(event);
+      };
+    },
+    events: {
+      on: (channel: string, handler: (data: unknown) => void) => {
+        busHandlers.set(channel, handler);
+        return () => {
+          busHandlers.delete(channel);
+        };
+      },
+      emit: (channel: string, data: unknown) => {
+        busHandlers.get(channel)?.(data);
+      },
     },
     registerMessageRenderer: () => {},
     registerCommand: (name: string, options: unknown) => {
@@ -266,6 +283,9 @@ export function createHarness(options: HarnessOptions) {
     now: options.now,
     configLoader: options.configLoader,
   });
+  // Production wires handlers before the first config load; registering here
+  // lets rebuild() establish event-trigger subscriptions at creation.
+  if (options.register) runtime.register();
   runtime.applyConfig(config, ctx);
 
   return {
@@ -273,6 +293,7 @@ export function createHarness(options: HarnessOptions) {
     ctx,
     pi,
     handlers,
+    busHandlers,
     commands,
     config,
     controls,

@@ -60,29 +60,38 @@ function makeHarness(options: {
   const selects = [...(options.selects ?? [])];
   const inputs = [...(options.inputs ?? [])];
   const submitted: string[] = [];
+  let systemPrompt: string | undefined;
   const applied: Array<{ change: ConfigChange; scope: ConfigScope }> = [];
   const notifications: string[] = [];
   let params: SubmitParams = { changeType: "add", ruleJson: validRuleJson };
 
-  const loop: AuditLoopFn = (_prompts, context) => ({
-    async *[Symbol.asyncIterator]() {
-      const tool = context.tools?.find(
-        (candidate) => candidate.name === "submit_config",
-      );
-      if (tool) {
-        const result = await tool.execute("c", params, undefined, undefined);
-        submitted.push(
-          result.content
-            .map((block) => (block.type === "text" ? block.text : ""))
-            .join(""),
+  const loop: AuditLoopFn = (_prompts, context) => {
+    const system = context.messages.find(
+      (message) => message.role === "system",
+    );
+    if (system && typeof system.content === "string") {
+      systemPrompt = system.content;
+    }
+    return {
+      async *[Symbol.asyncIterator]() {
+        const tool = context.tools?.find(
+          (candidate) => candidate.name === "submit_config",
         );
-      }
-      yield { type: "agent_end", messages: [] } as AgentEvent;
-    },
-    async result() {
-      return [];
-    },
-  });
+        if (tool) {
+          const result = await tool.execute("c", params, undefined, undefined);
+          submitted.push(
+            result.content
+              .map((block) => (block.type === "text" ? block.text : ""))
+              .join(""),
+          );
+        }
+        yield { type: "agent_end", messages: [] } as AgentEvent;
+      },
+      async result() {
+        return [];
+      },
+    };
+  };
 
   const host: ConfigureHost = {
     applyChange: (change, scope) => {
@@ -123,6 +132,7 @@ function makeHarness(options: {
     applied,
     notifications,
     sentinelRegistry,
+    getSystemPrompt: () => systemPrompt,
     setParams: (next: SubmitParams) => {
       params = next;
     },
@@ -150,6 +160,26 @@ describe("configure dialog", () => {
     expect(views).toHaveLength(1);
     expect(views[0]?.status).toBe("running");
     expect(views[0]?.transcript[0]?.text).toContain("rm 命令");
+  });
+
+  test("the system prompt cheat sheet documents the event trigger", async () => {
+    const h = makeHarness({});
+    h.dialog.start(h.ctx, "配置");
+    await waitForSubmit(h);
+
+    const prompt = h.getSystemPrompt() ?? "";
+    expect(prompt).toContain(
+      "type: tool_call|tool_result|turn_end|agent_end|context_tokens|event",
+    );
+    expect(prompt).toContain("event?: 非空字符串（仅 event 触发器必填");
+    expect(prompt).toContain("裸名=订阅插件事件总线通道");
+    expect(prompt).toContain("core:session_compact");
+    expect(prompt).toContain("未知的 core: 名会被校验拒绝");
+    expect(prompt).toContain("core: 为保留前缀");
+    expect(prompt).toContain(
+      "blocking 仅限 tool_call；background 可用全部六种触发器",
+    );
+    expect(prompt).toContain("{{event.<字段>}}");
   });
 
   test("an invalid draft is not written and the error goes back to the loop", async () => {

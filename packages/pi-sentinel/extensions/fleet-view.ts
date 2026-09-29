@@ -103,7 +103,7 @@ function latestCached(
   return entry?.cached;
 }
 function describeTriggerShort(rule: SourcedRule): string {
-  const { type, tools, threshold } = rule.trigger;
+  const { type, tools, threshold, event } = rule.trigger;
   if (
     (type === "tool_call" || type === "tool_result") &&
     tools &&
@@ -111,6 +111,7 @@ function describeTriggerShort(rule: SourcedRule): string {
   ) {
     return `${type}[${tools.join("|")}]`;
   }
+  if (type === "event") return `event:${event ?? ""}`;
   if (type === "context_tokens") return `ctx@${threshold ?? 0}`;
   return type;
 }

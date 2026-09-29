@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import {
   createHarness,
   failVerdict,
+  messageText,
   passVerdict,
   waitUntil,
 } from "./harness.ts";
@@ -100,6 +101,57 @@ describe("/sentinel:test dry run", () => {
     expect(h.notified.some((entry) => entry.message.includes("用法"))).toBe(
       true,
     );
+  });
+
+  test("dry running an event rule simulates the configured payload without side effects", async () => {
+    const h = createHarness({
+      rules: [
+        {
+          name: "compact-watch",
+          trigger: { type: "event", event: "core:session_compact" },
+          mode: "background",
+          prompt: "检查 {{name}} {{event.reason}}",
+        },
+      ],
+    });
+
+    const pending = h.runtime.handleTestCommand(
+      'compact-watch {"reason":"手动压缩"}',
+      commandCtx(h),
+    );
+    await waitUntil(() => h.controls.length === 1);
+    h.controls[0].verdict({ verdict: "warn", message: "注意压缩时机" });
+    await pending;
+
+    const output = h.notified.map((entry) => entry.message).join("\n");
+    expect(output).toContain("试运行");
+    expect(output).toContain("warn");
+    expect(output).toContain("注意压缩时机");
+    expect(output).toContain("audit-model");
+    expect(output).toMatch(/耗时：\d+ms/);
+
+    // The simulated event data reaches the audit as the template root and the
+    // payload-JSON scope block.
+    const auditText = h.capturedPrompts[0].map(messageText).join("\n");
+    expect(auditText).toContain("检查 core:session_compact 手动压缩");
+    expect(auditText).toContain(
+      JSON.stringify({
+        name: "core:session_compact",
+        event: { reason: "手动压缩" },
+      }),
+    );
+
+    // No injection, no cache, no cooldown.
+    expect(h.sent).toHaveLength(0);
+    expect(h.runtime.getRunners().get("compact-watch")?.isCoolingDown()).toBe(
+      false,
+    );
+    expect(
+      h.runtime
+        .getRegistry()
+        .getHistory()
+        .some((entry) => entry.kind === "test"),
+    ).toBe(true);
   });
 
   test("a failed dry run reports the failure without entering the cooldown", async () => {

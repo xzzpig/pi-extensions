@@ -26,10 +26,11 @@ export interface RuleListEntry {
 
 /** Human-readable trigger summary, including tool patterns and threshold. */
 export function describeTrigger(rule: SourcedRule): string {
-  const { type, tools, threshold } = rule.trigger;
+  const { type, tools, threshold, event } = rule.trigger;
   if (type === "tool_call" || type === "tool_result") {
     return tools && tools.length > 0 ? `${type} [${tools.join(", ")}]` : type;
   }
+  if (type === "event") return `event:${event ?? ""}`;
   if (type === "context_tokens") return `${type} @${threshold ?? 0}`;
   return type;
 }

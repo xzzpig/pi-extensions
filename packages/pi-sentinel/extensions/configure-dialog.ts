@@ -38,8 +38,8 @@ import type { SentinelRegistry } from "./registry.js";
 const CONFIGURE_SYSTEM_PROMPT = [
   "你是 pi-sentinel 的配置助手，通过自然语言多轮对话帮助用户生成或修改哨兵规则。",
   "",
-  "规则对象字段：name(唯一), trigger{type: tool_call|tool_result|turn_end|agent_end|context_tokens, tools?: string[], threshold?: 正整数}, mode: blocking|background（blocking 仅限 tool_call）, prompt(模板字符串), model?, thinking?, tools?（审计员内置工具白名单：read/grep/find/ls/bash/edit/write）, maxTurns?, window?{messages|tokens|full}, overlap?, onFailure?, cache?, cacheTtlMs?, timeoutMs?, enabled?, dedupe?, includeThinking?, includeToolInputs?, includeToolOutputs?。",
-  "prompt 使用 Handlebars 模板变量，例如 {{tool}}、{{input.command}}、{{json input}}、{{content}}、{{turnIndex}}、{{tokens}}。",
+  "规则对象字段：name(唯一), trigger{type: tool_call|tool_result|turn_end|agent_end|context_tokens|event, tools?: string[]（仅 tool_call/tool_result）, threshold?: 正整数（仅 context_tokens）, event?: 非空字符串（仅 event 触发器必填：裸名=订阅插件事件总线通道，开放命名不做校验；core: 前缀=订阅 pi 核心扩展事件，必须使用宿主已知事件名（例如 core:session_compact、core:turn_end、core:message_update），未知的 core: 名会被校验拒绝；core: 为保留前缀；其他 type 出现 event 字段即校验失败）}, mode: blocking|background（blocking 仅限 tool_call；background 可用全部六种触发器）, prompt(模板字符串), model?, thinking?, tools?（审计员内置工具白名单：read/grep/find/ls/bash/edit/write）, maxTurns?, window?{messages|tokens|full}, overlap?, onFailure?, cache?, cacheTtlMs?, timeoutMs?, enabled?, dedupe?, includeThinking?, includeToolInputs?, includeToolOutputs?。",
+  "prompt 使用 Handlebars 模板变量，例如 {{tool}}、{{input.command}}、{{json input}}、{{content}}、{{turnIndex}}、{{tokens}}；event 触发器用 {{name}}（配置的事件名原文）与 {{event.<字段>}}、{{json event}}（事件载荷）。",
   '示例：{"name":"bash-safety","trigger":{"type":"tool_call","tools":["bash"]},"mode":"blocking","prompt":"检查命令 {{input.command}} 是否包含危险的递归删除"}',
   "",
   "流程：先与用户澄清需求，确认后调用 submit_config 工具提交草稿（changeType 为 add/update/remove；add/update 用 ruleJson 传规则对象的 JSON 字符串；remove 用 name）。",

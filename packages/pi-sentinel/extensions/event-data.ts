@@ -70,9 +70,46 @@ export interface ContextTokensEventData {
   messages: ContextTokensMessage[];
 }
 
+export interface EventEventData {
+  /** Configured event name verbatim (including any `core:` prefix). */
+  name: string;
+  event: JsonValue;
+}
+
 /** Estimate tokens from characters (matches the repo-wide chars/4 convention). */
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
+}
+
+/** Placeholder replacing values that cannot survive a JSON round-trip. */
+const UNSERIALIZABLE_PLACEHOLDER = "[unserializable]";
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null) return false;
+  const proto: unknown = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * Project a raw event payload into a JSON-safe value: null/boolean/number/
+ * string pass through, arrays and plain objects recurse, and anything else
+ * (functions, class instances, ...) becomes a `"[unserializable]"` string so
+ * the payload is safe for template rendering and scope JSON.
+ */
+export function toJsonSafe(value: unknown): JsonValue {
+  if (value === null) return null;
+  if (typeof value === "string") return value;
+  if (typeof value === "number") return value;
+  if (typeof value === "boolean") return value;
+  if (Array.isArray(value)) return value.map((entry) => toJsonSafe(entry));
+  if (isPlainObject(value)) {
+    const out: Record<string, JsonValue> = {};
+    for (const [key, entry] of Object.entries(value)) {
+      out[key] = toJsonSafe(entry);
+    }
+    return out;
+  }
+  return UNSERIALIZABLE_PLACEHOLDER;
 }
 
 /** Marker prepended when the scope is trimmed from the head to fit a budget. */
@@ -311,6 +348,25 @@ export function buildContextTokensEventData(
   };
 }
 
+export interface EventEventInput {
+  name: string;
+  payload: unknown;
+}
+
+/**
+ * Build the `event` trigger's data object. A plain-object payload is used
+ * directly (host core events arrive as plain objects); any other bus value is
+ * wrapped as `{ value }`. Non-JSON-safe members are projected away and every
+ * string is truncated by `truncateEventData`.
+ */
+export function buildEventEventData(event: EventEventInput): EventEventData {
+  const projected = toJsonSafe(event.payload);
+  const payload: JsonValue = isPlainObject(event.payload)
+    ? projected
+    : { value: projected };
+  return truncateEventData({ name: event.name, event: payload });
+}
+
 /** Last N messages. */
 export function sliceByMessageCount(
   messages: readonly AgentMessage[],
@@ -354,7 +410,8 @@ export type SentinelEventData =
   | ToolResultEventData
   | TurnEndEventData
   | AgentEndEventData
-  | ContextTokensEventData;
+  | ContextTokensEventData
+  | EventEventData;
 
 export interface ScopeInput {
   triggerType: TriggerType;
@@ -406,7 +463,8 @@ export function buildScopeText(input: ScopeInput): string {
 
   if (
     input.triggerType === "tool_call" ||
-    input.triggerType === "tool_result"
+    input.triggerType === "tool_result" ||
+    input.triggerType === "event"
   ) {
     return capScopeTokens(
       JSON.stringify(input.eventData),
@@ -427,6 +485,7 @@ export function defaultWindowKind(
   switch (triggerType) {
     case "tool_call":
     case "tool_result":
+    case "event":
       return "event";
     case "turn_end":
       return "turn";

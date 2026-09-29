@@ -56,6 +56,7 @@ import {
 import {
   buildAgentEndEventData,
   buildContextTokensEventData,
+  buildEventEventData,
   buildScopeText,
   buildToolCallEventData,
   buildToolResultEventData,
@@ -64,6 +65,10 @@ import {
   type SerializeOptions,
   type SentinelEventData,
 } from "./event-data.js";
+import {
+  EventSubscriptionRegistry,
+  type CoreSubscriber,
+} from "./event-subscriptions.js";
 import {
   FINDING_CUSTOM_TYPE,
   FindingInjector,
@@ -91,7 +96,7 @@ import {
 
 /**
  * pi-sentinel composition root: loads config, builds one runner per rule, wires
- * the five triggers, and owns the lifecycle/reset rules.
+ * the six triggers, and owns the lifecycle/reset rules.
  */
 
 /** Pending blocking-warn lines attached to a tool call's result. */
@@ -172,6 +177,8 @@ export class SentinelRuntime {
   /** context_tokens multiple watermarks: last observed level. */
   private readonly watermarks = new Map<string, number>();
   private readonly pendingWarnings = new Map<string, PendingWarning[]>();
+  /** `event`-trigger subscriptions; built in register(), null before that. */
+  private eventSubscriptions: EventSubscriptionRegistry | null = null;
 
   constructor(
     private readonly pi: ExtensionAPI,
@@ -180,6 +187,11 @@ export class SentinelRuntime {
 
   getRegistry(): SentinelRegistry {
     return this.registry;
+  }
+
+  /** Read-only access to the event subscription registry (tests). */
+  getEventSubscriptionRegistry(): EventSubscriptionRegistry | null {
+    return this.eventSubscriptions;
   }
 
   getResolvedConfig(): LoadedSentinelConfig | null {
@@ -196,6 +208,18 @@ export class SentinelRuntime {
 
   /** Register every event handler, command, and renderer. */
   register(): void {
+    this.eventSubscriptions = new EventSubscriptionRegistry(
+      // Host `pi.on` exposes per-event overloads but routes by string name at
+      // runtime: the single controlled cast for event-trigger subscriptions.
+      this.pi.on as unknown as CoreSubscriber,
+      (channel, handler) => this.pi.events.on(channel, handler),
+      (name, payload, ...ctxArgs) => {
+        // Spread-forward to preserve the registry's dispatch arity: core
+        // events always carry the host ctx as a third argument, bus events
+        // never do.
+        void this.handleEventTrigger(name, payload, ...ctxArgs);
+      },
+    );
     this.pi.on("session_start", (event, ctx) =>
       this.handleSessionStart(event, ctx),
     );
@@ -267,6 +291,10 @@ export class SentinelRuntime {
   }
 
   handleSessionShutdown(_event: SessionShutdownEvent): void {
+    // Session shutdown is the only reset path that tears down event
+    // subscriptions: session switches and tree navigation share
+    // resetRuntimeState, which must keep the config-level wiring alive.
+    this.eventSubscriptions?.clear();
     this.handleRuntimeReset("session_shutdown");
   }
 
@@ -423,6 +451,16 @@ export class SentinelRuntime {
       this.watermarks.delete(name);
     }
     this.refreshStatusBar();
+
+    // Event-trigger subscriptions are config-level wiring: keep them aligned
+    // with the effective rule set's event names (an empty set unsubscribes
+    // everything). Null before register().
+    const eventNames = new Set<string>();
+    for (const rule of effective.rules) {
+      if (rule.trigger.type === "event" && rule.trigger.event)
+        eventNames.add(rule.trigger.event);
+    }
+    this.eventSubscriptions?.reconcile(eventNames);
   }
 
   private buildAuditDeps(
@@ -791,6 +829,51 @@ export class SentinelRuntime {
     const slice = entries.slice(startIndex + 1);
     return slice.flatMap((entry) => sessionEntryToContextMessages(entry));
   }
+
+  /**
+   * `event` trigger dispatch, invoked by the subscription registry. The
+   * registry guarantees core events always dispatch a third argument (the
+   * host ctx, possibly undefined) while bus events never do; the dispatch
+   * wiring spreads its arguments through, so `ctxArgs.length === 1`
+   * reliably separates a host-provided ctx from the bus path, which falls
+   * back to the runtime ctx refreshed by rebuild().
+   */
+  async handleEventTrigger(
+    name: string,
+    payload: unknown,
+    ...ctxArgs: unknown[]
+  ): Promise<void> {
+    let ctx: ExtensionContext | null | undefined = null;
+    try {
+      ctx = ctxArgs.length > 0 ? (ctxArgs[0] as ExtensionContext) : this.ctx;
+      if (!ctx) return;
+      // Payload projection is rule-independent: build once for every match.
+      const eventData = buildEventEventData({ name, payload });
+      for (const rule of this.rulesFor("event")) {
+        if (rule.trigger.event !== name) continue;
+        try {
+          this.fireBackground(
+            rule,
+            this.buildRequest(rule, ctx, { eventData }),
+          );
+        } catch (error) {
+          // One malformed rule (e.g. an uncompilable template) must not starve
+          // its siblings: every matching rule SHALL run for a given event.
+          const reason = error instanceof Error ? error.message : String(error);
+          ctx.ui.notify(
+            `sentinel 事件分发失败（规则 "${rule.name}"，事件 "${name}"）：${reason}`,
+            "warning",
+          );
+        }
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      (ctx ?? this.ctx)?.ui.notify(
+        `sentinel 事件分发失败（事件 "${name}"）：${reason}`,
+        "warning",
+      );
+    }
+  }
   // ---------------------------------------------------------------------------
   // Commands and session-level management
   // ---------------------------------------------------------------------------
@@ -1152,6 +1235,13 @@ export class SentinelRuntime {
           serialize,
         );
         defaultMessages = content.length > 0 ? [simulated] : [];
+        break;
+      case "event":
+        // The event default scope is the payload JSON, so no default messages.
+        eventData = buildEventEventData({
+          name: rule.trigger.event ?? "",
+          payload: parseSimulatedInput(content),
+        });
         break;
     }
 
