@@ -1,0 +1,55 @@
+{
+  "name": "@xzzpig/pi-openspec-x",
+  "version": "0.1.0",
+  "description": "OpenSpec workflow for the pi coding agent: spec-driven planning and implementation via dedicated subagents, sandboxed /opsx:plan and /opsx:implement commands.",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-extension",
+    "pi-coding-agent",
+    "openspec",
+    "spec-driven-development",
+    "subagents"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xzzpig/pi-extensions.git",
+    "directory": "packages/pi-openspec-x"
+  },
+  "homepage": "https://github.com/xzzpig/pi-extensions/tree/main/packages/pi-openspec-x#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "index.ts",
+    "src",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "package.json"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": ">=0.86.1 <0.88.0",
+    "@earendil-works/pi-coding-agent": ">=0.87.1 <0.88.0",
+    "@xzzpig/pi-goal-x": "*",
+    "@xzzpig/pi-sandbox": "*",
+    "@xzzpig/pi-subagents": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  // ES2023: the type imports from @xzzpig/pi-subagents pull its .ts sources
+  // into this program, and those sources use ES2023 lib APIs (findLast) —
+  // same override pi-goal-x carries for the same reason.
+  "compilerOptions": {
+    "target": "ES2023"
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}

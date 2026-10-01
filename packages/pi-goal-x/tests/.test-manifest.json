@@ -6,6 +6,8 @@
     ".tests/goal-accounting-runtime.test.ts",
     ".tests/goal-activity.test.ts",
     ".tests/goal-audit-dashboard.test.ts",
+    ".tests/goal-auditor-agent-resolver.test.ts",
+    ".tests/goal-auditor-override.test.ts",
     ".tests/goal-auditor-package.test.ts",
     ".tests/goal-auditor-selector.test.ts",
     ".tests/goal-auditor.test.ts",

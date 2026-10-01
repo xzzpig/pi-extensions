@@ -18,6 +18,10 @@ import {
   type SandboxConfigOverride,
   type SandboxProfileConfig,
 } from "./config.ts";
+import {
+  lookupRegisteredSandboxProfile,
+  registeredSandboxProfilesSnapshot,
+} from "./fork-profile-registry.ts";
 
 /**
  * [fork] Named-profile sandbox layer.
@@ -199,7 +203,13 @@ function mergeProfileConfig(
       unionConfiguredArrays(merged.network?.deniedDomains, profileNetwork.deniedDomains) ?? [];
   }
   if (profileFilesystem) {
-    filesystem.allowRead = replaceConfiguredArray(
+    // Reads are unioned, not replaced: the baseline read allowlist is what
+    // lets tooling outside the project work at all (agent cache and skills,
+    // subagent result archives, /nix/store, /tmp). A profile that replaced it
+    // with the project root alone made every external tool unreadable — the
+    // opsx planner could not even read its own generated skills. Narrowing
+    // reads is what `denyRead` is for, and it still unions.
+    filesystem.allowRead = unionConfiguredArrays(
       merged.filesystem?.allowRead,
       profileFilesystem.allowRead,
     );
@@ -211,8 +221,15 @@ function mergeProfileConfig(
       unionConfiguredArrays(merged.filesystem?.denyWrite, profileFilesystem.denyWrite) ?? [];
   }
 
-  network.disabled = false;
-  filesystem.disabled = false;
+  // A profile that declares nothing for these switches inherits the baseline,
+  // so a global network/filesystem opt-out stays in force; declaring one is
+  // honoured, and `validateProfileConfig` already rejects a profile that tries
+  // to loosen isolation with `disabled: true`. Forcing them on was the fork's
+  // earlier overreach and broke the common `network.disabled: true` + profile
+  // combination (the runtime never started a network proxy).
+  network.disabled = profileNetwork?.disabled ?? base.network?.disabled ?? false;
+  filesystem.disabled =
+    profileFilesystem?.disabled ?? base.filesystem?.disabled ?? false;
   filesystem.protectNonexistentFiles = preserveProtectNonexistentFiles(
     base.filesystem?.protectNonexistentFiles,
     profileFilesystem?.protectNonexistentFiles,
@@ -355,7 +372,10 @@ export function mergeProfileObjects(
   const projectFilesystem = projectProfile.filesystem;
   if (projectFilesystem) {
     const filesystem = merged.filesystem as Partial<FilesystemConfig>;
-    filesystem.allowRead = replaceConfiguredArray(
+    // Reads union for the same reason the single-profile merge unions them: a
+    // project profile that lists only the project root would otherwise make
+    // the agent cache, subagent archives and /nix/store unreadable.
+    filesystem.allowRead = unionConfiguredArrays(
       globalFilesystem?.allowRead,
       projectFilesystem.allowRead,
     );
@@ -464,7 +484,7 @@ function globalHardDenyConfig(config: SandboxConfigFile): SandboxConfigOverride 
   };
 }
 
-function validateProfileConfig(value: unknown, profileName: string): SandboxProfileConfig {
+export function validateProfileConfig(value: unknown, profileName: string): SandboxProfileConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error(`Sandbox profile '${profileName}' must be a JSON object.`);
   }
@@ -655,6 +675,10 @@ export function untrustedProjectProfilesWarning(
  * without weakening its deny boundary. A project-only name resolves directly
  * when trusted.
  *
+ * A name no user configuration defines falls back to the runtime-registered
+ * profiles (see ./fork-profile-registry.ts); a user-defined same-name profile
+ * always wins over a registration.
+ *
  * When the project is untrusted its registry never contributes to the result.
  * A name that stays unresolvable then fails closed, and when the name is
  * actually defined only in the ignored project registry the diagnostic says so
@@ -672,20 +696,30 @@ function resolveProfile(
   const rawGlobal = globalProfiles?.[profileName];
   const globalProfile =
     rawGlobal === undefined ? undefined : validateProfileConfig(rawGlobal, profileName);
-  const globalNames = availableProfileNames(
-    (globalProfiles ?? {}) as Record<string, SandboxProfileConfig>,
-  );
 
   if (!projectTrusted) {
     const ignoredProfiles = untrustedProfileRegistry(projectConfig);
-    if (globalProfile === undefined && ignoredProfiles[profileName] !== undefined) {
+    const registeredProfile = lookupRegisteredSandboxProfile(profileName);
+    if (
+      globalProfile === undefined &&
+      registeredProfile === undefined &&
+      ignoredProfiles[profileName] !== undefined
+    ) {
       throw new Error(
         `Sandbox profile '${profileName}' is defined only in the project sandbox configuration, which is not trusted. Trust the project or define the profile in the global sandbox configuration.`,
       );
     }
     if (globalProfile !== undefined) return globalProfile;
+    // Runtime-registered profiles are extension-owned and sit at the global
+    // registry's trust tier: they resolve regardless of project trust, and a
+    // user-defined same-name profile above already took priority.
+    if (registeredProfile !== undefined) return registeredProfile;
+    const available = availableProfileNames({
+      ...globalProfiles,
+      ...registeredSandboxProfilesSnapshot(),
+    } as Record<string, SandboxProfileConfig>);
     throw new Error(
-      `Sandbox profile '${profileName}' is not defined in the global sandbox configuration. Add it to the global 'profiles' map. Available profiles: ${globalNames}.`,
+      `Sandbox profile '${profileName}' is not defined in the global sandbox configuration. Add it to the global 'profiles' map. Available profiles: ${available}.`,
     );
   }
 
@@ -700,9 +734,15 @@ function resolveProfile(
   if (globalProfile !== undefined) return globalProfile;
   if (projectProfile !== undefined) return projectProfile;
 
+  // Runtime-registered profiles fill only the names no user configuration
+  // defines; the fallbacks above keep every user-defined name in charge.
+  const registeredProfile = lookupRegisteredSandboxProfile(profileName);
+  if (registeredProfile !== undefined) return registeredProfile;
+
   const available = availableProfileNames({
     ...globalProfiles,
     ...projectProfiles,
+    ...registeredSandboxProfilesSnapshot(),
   } as Record<string, SandboxProfileConfig>);
   throw new Error(
     `Sandbox profile '${profileName}' is not defined in the global or project sandbox configuration. Add it to a 'profiles' map. Available profiles: ${available}.`,
@@ -777,9 +817,12 @@ function readJsonConfigResult(
  * The global registry is operator-owned and is always listed. A trusted
  * project's registry is added on top so a session-launch picker can offer the
  * names that will actually resolve; an untrusted project's registry is not
- * listed because it can never resolve. A name failing the shared profile-name
- * grammar is skipped rather than reported, so every returned name is safe to use
- * as a selector and a malformed registry entry can never reach a launch site.
+ * listed because it can never resolve. Runtime-registered names
+ * (./fork-profile-registry.ts) are always listed as well: they passed the
+ * selector grammar at registration and resolve regardless of project trust. A
+ * name failing the shared profile-name grammar is skipped rather than reported,
+ * so every returned name is safe to use as a selector and a malformed registry
+ * entry can never reach a launch site.
  */
 export function listGlobalSandboxProfiles(
   cwd: string,
@@ -788,6 +831,7 @@ export function listGlobalSandboxProfiles(
   const { globalPath, projectPath } = getConfigPaths(cwd);
   const { config: globalConfig } = readJsonConfigResult(globalPath, false);
   const names = new Set(validProfileNames(globalConfig.profiles));
+  for (const name of Object.keys(registeredSandboxProfilesSnapshot())) names.add(name);
   if (options.projectTrusted === true) {
     const { config: projectConfig } = readJsonConfigResult(projectPath, false);
     for (const name of validProfileNames(projectConfig.profiles)) names.add(name);

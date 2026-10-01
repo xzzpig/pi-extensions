@@ -9,7 +9,7 @@
   "upstreamCommit": "a5bdf61bed449735132a61da983c3f6a5ae82222",
   "squash": true,
   "lastSyncedAt": "2026-09-25T17:38:31+08:00",
-  "notes": "Forked from the pi-goal-x upstream. Capability contracts live in openspec (spec goal-completion-auditing; the goal-persisted-event-channels spec for the persisted message channels) and in the package-local spec specs/2026-09-12-escape-foreign-ui-prompt-guard for the Escape/ui-prompt guard.",
+  "notes": "Forked from the pi-goal-x upstream. Capability contracts live in openspec (spec goal-completion-auditing; the goal-persisted-event-channels spec for the persisted message channels; the S1/S2 auditor seams for pi-openspec-x live in openspec change add-pi-openspec-x, design D10) and in the package-local spec specs/2026-09-12-escape-foreign-ui-prompt-guard for the Escape/ui-prompt guard.",
   "knownDebt": [
     {
       "kind": "lint",
@@ -103,6 +103,8 @@
     "re-apply the auditor prompt design: baseChecklist/auditor.checklist override plus the structured_output protocol, the buildGoalAuditorPrompt injection order, the always-preserved protocol tail, byte-identical output when unset, and feedbackNotes appending to rejectionText in goal-completion.ts",
     "extend goal-drafting's strip regex to strip the 'Budget: …' prefix line",
     "re-apply the agents/goal-auditor.md deletion if upstream re-adds it",
+    "re-apply the goal-completion S1 seam: the completion-audit settings read point calls loadGoalSettingsWithAuditorOverride(ctx.cwd, auditTarget.id) from the fork-only extensions/goal-auditor-override.ts (per-goal auditor override merged over the global settings; no override returns the global settings unchanged). goal-auditor-override.ts's THINKING_LEVELS literal mirrors goal-settings.ts's ThinkingLevel union for read-time validation — re-align it whenever upstream adds a thinking level",
+    "regenerate tests/.test-manifest.json with `node scripts/run-unit-tests.mjs --write-manifest` so fork-only test files stay pinned (test:selfcheck fails otherwise)",
     "keep the fork section on top of the upstream history in CHANGELOG.md and README.md and re-apply the fork wording (every sync conflicts on both)"
   ],
   "doNotReintroduce": [

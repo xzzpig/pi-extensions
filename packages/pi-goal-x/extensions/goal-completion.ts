@@ -8,6 +8,7 @@ import {
 } from "./goal-policy.ts";
 import { loadGoalSettings } from "./goal-settings.ts";
 import { runGoalCompletionAuditor, appendAuditUsageEntry, type GoalAuditorResult } from "./goal-auditor.ts";
+import { loadGoalSettingsWithAuditorOverride } from "./goal-auditor-override.ts"; // [fork] S1: per-goal completion-auditor override
 import { nowIso, type GoalRecord } from "./goal-record.ts";
 import { latestEventsForGoal, latestAuditorResultForGoal, goalRuntimeEvents } from "./goal-ledger.ts";
 import { mergeGoalPromptFromDisk } from "./storage/goal-files.ts";
@@ -99,7 +100,9 @@ export async function runGoalCompletionFlow(core: GoalCore, ctx: ExtensionContex
 	} catch {
 		// Ledger append failure should not block completion
 	}
-	const settings = loadGoalSettings(ctx.cwd);
+	// [fork] S1: the goal's per-goal auditor override merges over the global
+	// settings; without an override this returns the exact global settings.
+	const settings = loadGoalSettingsWithAuditorOverride(ctx.cwd, auditTarget.id);
 	const auditorSettings = settings.auditor;
 	const auditorLabel = auditorSettings?.provider || auditorSettings?.model || auditorSettings?.thinkingLevel
 		? `${auditorSettings?.agent ?? "goal-auditor"} (${auditorSettings?.provider ?? "default"}/${auditorSettings?.model ?? "default"}${auditorSettings?.thinkingLevel ? `:${auditorSettings.thinkingLevel}` : ""})`

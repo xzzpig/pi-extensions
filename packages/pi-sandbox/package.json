@@ -1,6 +1,6 @@
 {
   "name": "@xzzpig/pi-sandbox",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "OS-level sandboxing for pi with interactive permission prompts",
   "keywords": [
     "pi-package",
@@ -43,7 +43,9 @@
     "ci:fmt": "oxfmt --check index.ts src test",
     "ci:lint": "pnpm run lint",
     "ci:check": "pnpm run check",
-    "ci:test": "pnpm test"
+    "ci:test": "pnpm test",
+    "prepack": "node scripts/pack-bundle.mjs",
+    "postpack": "node scripts/pack-bundle.mjs --clean"
   },
   "dependencies": {
     "@xzzpig/sandbox-runtime": "workspace:*"

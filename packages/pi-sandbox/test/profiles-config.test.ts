@@ -33,7 +33,7 @@ test("network.disabled merges as a scalar with project overriding global", () =>
   assert.equal(projectWins.network?.disabled, false);
 });
 
-test("profile layers inherit global config by default and replace allow lists", () => {
+test("profile layers inherit global config by default, replace write lists and union reads", () => {
   const merged = mergeProfileLayers(
     DEFAULT_CONFIG,
     {
@@ -70,7 +70,15 @@ test("profile layers inherit global config by default and replace allow lists", 
   );
 
   assert.deepEqual(merged.network?.allowedDomains, ["profile.example.com"]);
-  assert.deepEqual(merged.filesystem?.allowRead, ["/profile-read"]);
+  // Reads union: the baseline read allowlist is what keeps external tooling
+  // (agent cache and skills, subagent result archives, /nix/store, /tmp)
+  // reachable. Replacing it with the profile's list made every opsx profile
+  // unable to read anything outside the project root.
+  assert.deepEqual(merged.filesystem?.allowRead, [
+    "/global-read",
+    "/project-read",
+    "/profile-read",
+  ]);
   assert.deepEqual(merged.filesystem?.allowWrite, []);
   assert.deepEqual(merged.network?.deniedDomains, ["global-denied.example.com"]);
   assert.deepEqual(merged.filesystem?.denyWrite, [
@@ -700,4 +708,116 @@ test("selected profiles reject malformed hard-deny layers instead of dropping th
       ),
     /Project sandbox configuration\.filesystem\.denyWrite must be an array of strings/,
   );
+});
+
+test("a profile that declares no network block inherits a global network opt-out", () => {
+  const merged = mergeProfileLayers(
+    DEFAULT_CONFIG,
+    {
+      network: { allowedDomains: [], deniedDomains: [], disabled: true },
+      profiles: { planner: { filesystem: { allowWrite: ["openspec/**"] } } },
+    },
+    {},
+    "planner",
+  );
+
+  assert.equal(merged.network?.disabled, true);
+  assert.deepEqual(merged.filesystem?.allowWrite, ["openspec/**"]);
+});
+
+test("a profile that declares network without disabled still inherits the global opt-out (per-field)", () => {
+  const merged = mergeProfileLayers(
+    DEFAULT_CONFIG,
+    {
+      network: { allowedDomains: [], deniedDomains: [], disabled: true },
+      profiles: {
+        planner: { network: { allowedDomains: ["example.com"] } },
+      },
+    },
+    {},
+    "planner",
+  );
+
+  // Per-field resolution: `disabled` was not declared, so the global opt-out
+  // stays in force and the profile allow list is deliberately inert.
+  assert.equal(merged.network?.disabled, true);
+  assert.deepEqual(merged.network?.allowedDomains, ["example.com"]);
+});
+
+test("a profile may tighten network and filesystem isolation on a restricted baseline", () => {
+  const merged = mergeProfileLayers(
+    DEFAULT_CONFIG,
+    {
+      network: { allowedDomains: ["example.com"], deniedDomains: [] },
+      filesystem: { allowWrite: ["/global"] },
+      profiles: {
+        planner: {
+          network: { disabled: false },
+          filesystem: { disabled: false, allowWrite: [] },
+        },
+      },
+    },
+    {},
+    "planner",
+  );
+
+  assert.equal(merged.network?.disabled, false);
+  assert.equal(merged.filesystem?.disabled, false);
+});
+
+test("a profile cannot disable network isolation on a restricted baseline", () => {
+  assert.throws(
+    () =>
+      mergeProfileLayers(
+        DEFAULT_CONFIG,
+        {
+          network: { allowedDomains: ["example.com"], deniedDomains: [] },
+          profiles: { planner: { network: { disabled: true } } },
+        },
+        {},
+        "planner",
+      ),
+    /Sandbox profile 'planner' cannot disable network isolation/,
+  );
+});
+
+test("a profile cannot disable filesystem isolation on a restricted baseline", () => {
+  assert.throws(
+    () =>
+      mergeProfileLayers(
+        DEFAULT_CONFIG,
+        {
+          filesystem: { allowWrite: ["/global"] },
+          profiles: { planner: { filesystem: { disabled: true } } },
+        },
+        {},
+        "planner",
+      ),
+    /Sandbox profile 'planner' cannot disable filesystem isolation/,
+  );
+});
+
+test("a profile inherits a global filesystem opt-out", () => {
+  const merged = mergeProfileLayers(
+    DEFAULT_CONFIG,
+    {
+      filesystem: { disabled: true },
+      profiles: { planner: { filesystem: { allowWrite: [] } } },
+    },
+    {},
+    "planner",
+  );
+
+  assert.equal(merged.filesystem?.disabled, true);
+});
+
+test("selecting a profile still enables the sandbox even when the global default is off", () => {
+  const merged = mergeProfileLayers(
+    DEFAULT_CONFIG,
+    { enabled: false, profiles: { planner: {} } },
+    {},
+    "planner",
+  );
+
+  assert.equal(merged.enabled, true);
 });

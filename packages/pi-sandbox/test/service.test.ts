@@ -285,7 +285,12 @@ test("keeps a failed profile switch fail-closed and reports it", async () => {
   // The sandbox stops coming up: the requested profile cannot be applied, so
   // the switch must report failure and leave the session on what it was
   // actually running rather than claiming a policy that is not in force.
+  // Both application paths must fail: an in-place update, and the
+  // re-initialization a profile that newly turns network restriction on needs.
   sandboxStub.updateConfig = () => {
+    throw new Error("bwrap is unavailable");
+  };
+  sandboxStub.initialize = async () => {
     throw new Error("bwrap is unavailable");
   };
   const failed = await service.setProfile("loose");

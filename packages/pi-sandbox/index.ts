@@ -11,3 +11,7 @@ export {
   type SandboxProfileSelectionResult,
   type SandboxService,
 } from "./src/service.ts";
+export {
+  registerSandboxProfiles,
+  type SandboxProfileDefinition,
+} from "./src/fork-profile-registry.ts";

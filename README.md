@@ -25,6 +25,7 @@ while developing changes.
 | [`@xzzpig/pi-context-cap`](./packages/pi-context-cap)             | Mid-turn context budget enforcement with model whitelist config and a session toggle; local fork of `lukeramsden/pi-context-cap` that compacts inside long tool loops instead of riding the model window.                                                                                                  | `pi install npm:@xzzpig/pi-context-cap`       |
 | [`@xzzpig/pi-vibeguard`](./packages/pi-vibeguard)                 | Sensitive-string redaction before LLM requests with session-stable placeholders; local fork of `aizigao/pi-vibeguard` that adds `/vibeguard:list` and `/vibeguard:stats` viewers for the placeholder mapping table.                                                                                        | `pi install npm:@xzzpig/pi-vibeguard`         |
 | [`@xzzpig/pi-sentinel`](./packages/pi-sentinel)                   | Declarative natural-language sentinel audits on Pi events: side-loop LLM rules that gate tool calls (blocking) or inject findings (background), with five triggers, a structured verdict protocol, session-level config, and `/sentinel:list`, `/sentinel:fleet`, `/sentinel:test`, `/sentinel:configure`. | `pi install npm:@xzzpig/pi-sentinel`          |
+| [`@xzzpig/pi-openspec-x`](./packages/pi-openspec-x)               | OpenSpec workflow for Pi: version-matched official skills extracted from the installed CLI, plus enhanced `/opsx:plan` (gap-analysis and plan-review gates, user approval) and `/opsx:implement` (agent or direct mode on a goal-x base, final completion-audit gate) with sandboxed write boundaries.     | `pi install npm:@xzzpig/pi-openspec-x`        |
 
 ## Install an extension
 
@@ -35,6 +36,7 @@ pi install npm:@xzzpig/pi-permission-system
 pi install npm:@xzzpig/pi-notify
 pi install npm:@xzzpig/pi-tool-display
 pi install npm:@xzzpig/pi-sentinel
+pi install npm:@xzzpig/pi-openspec-x
 ```
 
 For local development from a checkout:

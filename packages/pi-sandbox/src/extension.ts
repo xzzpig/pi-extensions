@@ -29,12 +29,12 @@ import {
   resolveWritePermission,
 } from "./policy.ts";
 import { listGlobalSandboxProfiles, loadConfig, SANDBOX_PROFILE_ENV } from "./profile-config.ts";
+import { applySandboxConfigChange } from "./fork-profile-network.ts";
 import {
   createSandboxedBashOps,
   extractBlockedWritePath,
   initializeSandbox,
   sandboxManagerFactory,
-  updateSandboxConfig,
   resolveAllowances,
   type SessionAllowances,
   supportsNodeEnvProxy,
@@ -239,11 +239,15 @@ export default function (pi: ExtensionAPI) {
   };
 
   const recordProfileStartupFailure = (error: unknown, ctx?: ExtensionContext): void => {
-    if (!selectedSandboxProfile) return;
     const detail = error instanceof Error ? error.message : String(error);
-    profileStartupError = `${profileLabel()} could not initialize: ${detail}`;
+    // applySandboxConfigChange may already have reset the manager before the
+    // failure, so the sandbox is unusable whether or not a profile is
+    // selected. Marking it unavailable in both cases keeps the status line
+    // honest instead of reporting an enabled sandbox with a reset manager.
     sandboxEnabled = false;
     sandboxInitialized = false;
+    if (!selectedSandboxProfile) return;
+    profileStartupError = `${profileLabel()} could not initialize: ${detail}`;
     writeSandboxDiagnostic(profileStartupError);
     writeStartupFailureDiagnostic(profileStartupError);
     if (ctx) notifySafely(ctx, profileStartupError, "error");
@@ -258,7 +262,9 @@ export default function (pi: ExtensionAPI) {
   async function refreshSandbox(cwd: string): Promise<void> {
     if (!sandboxInitialized) return;
     try {
-      updateSandboxConfig(sandboxManager, resolveSandboxConfig(cwd), allowances);
+      // Fork seam: applying a profile can turn network restriction on for a
+      // manager initialized without a proxy; the helper re-initializes then.
+      await applySandboxConfigChange(sandboxManager, resolveSandboxConfig(cwd), allowances);
     } catch (error) {
       recordProfileStartupFailure(error);
       if (selectedSandboxProfile) {

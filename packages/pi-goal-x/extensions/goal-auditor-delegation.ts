@@ -34,6 +34,7 @@ import {
 	type ThinkingLevel,
 } from "./goal-settings.ts";
 import { getDefaultGoalAuditorRegistration } from "./goal-auditor-registration.ts";
+import { resolveExternalAuditorAgentDefinition } from "./goal-auditor-agent-resolver.ts";
 import {
 	REPORT_AUDITOR_PROGRESS_PROTOCOL_PREFIX,
 	REPORT_AUDITOR_PROGRESS_TOOL_NAME,
@@ -439,7 +440,18 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 			// that was actually handed to the owner. structured_output is
 			// guaranteed by the structured delegation request shape below.
 			const auditorAgent = resolveAuditorAgent(settings);
-			const registered = getDefaultGoalAuditorRegistration();
+			// [fork] S2: before the local default-registration fallback, let a
+			// cross-extension resolver (./goal-auditor-agent-resolver.ts, fed by
+			// e.g. pi-openspec-x at init) supply an equivalent definition for the
+			// configured agent: file-based preflight discovery cannot see runtime
+			// registrations owned by pi-subagents. A hit takes exactly the
+			// local-registration path below (protocol-tool enforcement on the
+			// supplied definition; structured_output is guaranteed by the request
+			// shape); a miss leaves the original fallback byte-identical.
+			const externallyResolved = resolveExternalAuditorAgentDefinition(auditorAgent);
+			const registered = externallyResolved
+				? { name: auditorAgent, definition: externallyResolved }
+				: getDefaultGoalAuditorRegistration();
 			if (!registered) {
 				return {
 					approved: false,

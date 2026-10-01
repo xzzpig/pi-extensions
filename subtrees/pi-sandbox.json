@@ -9,7 +9,7 @@
   "upstreamCommit": "31fa5060689624467c1aeace2664ce91784522ff",
   "squash": true,
   "lastSyncedAt": "2026-09-17T03:30:00+08:00",
-  "notes": "Forked from carderne/pi-sandbox. The fork adds optional pi-tool-display bash rendering decoration (falling back to built-in rendering when pi-tool-display is absent), named sandbox profiles for subagents, the per-session SandboxService profile layer, network.disabled, and protectNonexistentFiles passthrough. The project-scoped profile contract lives in openspec (change add-project-scoped-profiles, spec project-sandbox-profiles).",
+  "notes": "Forked from carderne/pi-sandbox. The fork adds optional pi-tool-display bash rendering decoration (falling back to built-in rendering when pi-tool-display is absent), named sandbox profiles for subagents, the per-session SandboxService profile layer, a runtime in-memory profile registry (registerSandboxProfiles; user sandbox.json definitions of the same name keep priority), network.disabled, and protectNonexistentFiles passthrough. The project-scoped profile contract lives in openspec (change add-project-scoped-profiles, spec project-sandbox-profiles); the runtime registration contract lives in openspec change add-pi-openspec-x (design D4).",
   "knownDebt": [
     {
       "kind": "deleted",
@@ -37,18 +37,23 @@
     }
   ],
   "reapplyOnSync": [
-    "the sandboxManagerFactory seam, the tool-display decoration, the profile layer, network.disabled and protectNonexistentFiles",
+    "the sandboxManagerFactory seam, the tool-display decoration, the profile layer, the inherit-not-force rule for network.disabled/filesystem.disabled (an unprovided switch follows the baseline; validateProfileConfig still rejects a profile that sets disabled: true) and protectNonexistentFiles, and the filesystem.allowRead union rule (a profile's allowRead extends the inherited list in both merge paths — single profile and same-name project profile — because replacing it made every path outside the project unreadable)",
+    "the root index.ts export block's re-export of registerSandboxProfiles/type SandboxProfileDefinition from the fork-only src/fork-profile-registry.ts (upstream index.ts only exports the default)",
     "the profile-config module split",
     "resolveProfile/mergeProfileObjects/validProfileNames",
     "the loadConfig onWarning option and its warning emission",
     "the extension.ts reportProfileWarning plus listProfiles wiring",
+    "the refreshSandbox seam delegating to the fork-only src/fork-profile-network.ts applySandboxConfigChange, which re-initializes the manager when a profile newly turns network restriction on (a profile may declare network.disabled: false or inherit a baseline where it is false, while the upstream updateSandboxConfig path cannot start the proxy); its failure path goes through recordProfileStartupFailure, which sets sandboxEnabled/sandboxInitialized to false even when no profile is selected (applySandboxConfigChange may already have reset the manager, so the disabled status is the honest one — keep that no-profile branch when re-applying)",
     "the fork mergeConfigLayers thin wrapper delegating to the now-exported upstream mergeConfigLayers",
     "the loadConfig delegation that keeps the no-profile path byte-identical to upstream (silent peek reads decide delegation, the profile path re-reads with warnings)",
     "the denyWrite existence check reusing pathEntryLstatExists exported by the sandbox-runtime fork (root re-export added there)",
     "the fork-only packages/pi-sandbox/.prettierignore list, because oxfmt reads .prettierignore as its default ignore list and would otherwise reformat the upstream lines again whenever a seam changes nesting",
-    "after each subtree pull run git rm packages/pi-sandbox/pnpm-lock.yaml packages/pi-sandbox/pnpm-workspace.yaml (recurring modify/delete conflict; the package-local workspace files break pnpm pack in the monorepo)"
+    "after each subtree pull run git rm packages/pi-sandbox/pnpm-lock.yaml packages/pi-sandbox/pnpm-workspace.yaml (recurring modify/delete conflict; the package-local workspace files break pnpm pack in the monorepo)",
+    "the prepack/postpack scripts in package.json running the fork-only scripts/pack-bundle.mjs: it copies sandbox-runtime's hoisted runtime deps (commander, node-forge, @pondwader/socks5-server — hoisted to the root node_modules by the workspace's nodeLinker: hoisted) into packages/sandbox-runtime/node_modules before pack and removes them after, because pnpm pack otherwise emits those bundled files at package/../../node_modules paths the npm registry rejects with E415 invalid path; re-add the two script lines whenever a pull overwrites package.json"
   ],
   "doNotReintroduce": [
-    "do not let src/extension.ts, src/ui.ts, test/config.test.ts or test/policy.test.ts drift from upstream bytes (test/sandbox-runtime.test.ts keeps only the two @xzzpig package-name lines)"
+    "do not let src/extension.ts, src/ui.ts, test/config.test.ts or test/policy.test.ts drift from upstream bytes (test/sandbox-runtime.test.ts keeps only the two @xzzpig package-name lines)",
+    "do not force network or filesystem isolation on inside a profile: a switch the profile does not declare inherits the baseline, so a global network.disabled/filesystem.disabled opt-out stays in force (forcing network isolation broke the common opt-out case by requiring a proxy the runtime never started)",
+    "do not go back to replacing the baseline filesystem.allowRead with the profile's own list: a profile's allowRead unions onto the inherited list in both merge paths, because replacing it (the opsx profiles declared only '.') made every path outside the project unreadable — agent cache and generated skills, subagent result archives, /nix/store, /tmp — so the opsx planner could not even read its own generated skills; narrowing reads is what denyRead is for, and denyRead still unions"
   ]
 }

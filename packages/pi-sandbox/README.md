@@ -144,8 +144,13 @@ fails the launch or changes the effective policy.
 from the ordinary global configuration; with `false`, it starts from the built-in
 safe defaults instead. For a selected profile, the effective order is built-in
 defaults, optional global settings, trusted project settings, the profile, and
-in-memory session allowances. A profile explicitly replaces `allowedDomains`,
-`allowRead`, or `allowWrite` so it can narrow a role. `deniedDomains`,
+in-memory session allowances. A profile explicitly replaces `allowedDomains` or `allowWrite` so it can narrow
+a role. `allowRead` is unioned rather than replaced: the inherited read
+allowlist is what keeps tooling outside the project reachable (agent cache and
+skills, subagent result archives, `/nix/store`, `/tmp`), and a profile that
+replaced it with the project root alone would make those unreadable. Narrow
+reads with `denyRead`, which is checked before the native `read` tool can
+prompt. `deniedDomains`,
 `denyRead`, and `denyWrite` are unioned, so neither a profile nor an allow list
 can remove an inherited hard denial. For a named profile, `denyRead` is checked
 before the native `read` tool can prompt; ordinary sandbox configuration keeps
@@ -153,8 +158,12 @@ its existing prompt behavior. Named profiles also force
 `protectNonexistentFiles` when their effective `denyWrite` list contains a
 literal path, so Bash cannot create a hard-denied target before it exists.
 This profile-only safeguard does not change the ordinary placeholder-free
-default. Profiles cannot disable the sandbox, network isolation, or filesystem
-isolation.
+default. A profile cannot *declare* `disabled: true` — registration rejects it —
+but it does inherit the baseline's `disabled` state. So with a global
+`network.disabled: true` a selected profile also runs with network restriction
+off, and any `allowedDomains` the profile declares is then inert (the runtime
+never starts a proxy it does not need). Declaring `disabled: false` in the
+profile is what re-enables restriction for that profile.
 
 A project layer participates only after Pi has marked the project trusted. An
 untrusted project cannot supply a profile selector or change the effective
@@ -165,7 +174,7 @@ headless child without it uses global-only profile resolution.
 
 When a trusted project defines a profile with the same name as a global profile,
 the project definition merges onto the global one instead of replacing it. The
-project may replace `allowedDomains`, `allowRead`, and `allowWrite`, while
+project may replace `allowedDomains` and `allowWrite`, while `allowRead` and
 `deniedDomains`, `denyRead`, and `denyWrite` are unioned with the global profile's
 lists — a project profile can never drop or clear a global hard denial.
 Sensitive relaxations (`allowAllUnixSockets`, `allowLocalBinding`,
