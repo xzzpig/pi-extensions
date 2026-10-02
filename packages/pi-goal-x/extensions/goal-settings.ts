@@ -229,6 +229,12 @@ export interface GoalSettingsResolvedShape {
 	stallTimeoutMinutes?: number;
 	/** Optional extension-run limit per creation/resume; zero disables, absent inherits (default unlimited). */
 	maxAutonomousRuns?: number;
+	/**
+	 * Report the "Autonomous runs: used/limit" line for a finite run allowance
+	 * (default true). The line reports a limit, so it appears exactly when a
+	 * finite allowance exists. Display only; enforcement is unaffected.
+	 */
+	showAutonomousRuns?: boolean;
 	strictExecutionContract?: boolean;
 	/**
 	 * Maximum objective length in characters (0/unset = no limit, the
@@ -508,6 +514,29 @@ function asBoundedStringList(value: unknown, itemMaxLength: number): { items?: s
 	return { items };
 }
 
+const ALLOWED_SETTINGS_KEYS = new Set([
+	"disableTasks",
+	"disableContracts",
+	"subtaskDepth",
+	"provider",
+	"model",
+	"thinkingLevel",
+	"thinking_level",
+	"disabled",
+	"autoSelectSingleGoal",
+	"auditorProjectResources",
+	"stallTimeoutMinutes",
+	"maxAutonomousRuns",
+	"strictExecutionContract",
+	"objectiveMaxChars",
+	"keybindings",
+	"hideUnfocusedBanner",
+	"showAutonomousRuns",
+	"hideUnfocusedPrompt",
+	"goalsRoot",
+	"oracle",
+	"networkRecovery",
+]);
 
 const ALLOWED_NETWORK_RECOVERY_KEYS = new Set(["maxAttempts", "maxDelayMs"]);
 const ALLOWED_ORACLE_KEYS = new Set([
@@ -560,6 +589,7 @@ export function parseSettingsLayer(
 			case "autoSelectSingleGoal":
 			case "auditorProjectResources":
 			case "hideUnfocusedBanner":
+			case "showAutonomousRuns":
 			case "hideUnfocusedPrompt": {
 				const parsed = asBool(value);
 				if (parsed === undefined) {
@@ -1300,6 +1330,11 @@ function resolvedSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv): Settings
 		globalValue: global.layer.hideUnfocusedBanner,
 		defaultValue: false,
 	}));
+	const showAutonomousRuns = track("showAutonomousRuns", resolveLeaf<boolean>({
+		projectValue: project.layer.showAutonomousRuns,
+		globalValue: global.layer.showAutonomousRuns,
+		defaultValue: true,
+	}));
 	const hideUnfocusedPrompt = track("hideUnfocusedPrompt", resolveLeaf<boolean>({
 		projectValue: project.layer.hideUnfocusedPrompt,
 		globalValue: global.layer.hideUnfocusedPrompt,
@@ -1438,6 +1473,7 @@ function resolvedSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv): Settings
 		autoSelectSingleGoal,
 		auditorProjectResources,
 		hideUnfocusedBanner,
+		showAutonomousRuns,
 		hideUnfocusedPrompt,
 		goalsRoot,
 		stallTimeoutMinutes,
@@ -1832,6 +1868,7 @@ function buildPersistedLayer(settings: GoalSettings): Record<string, unknown> {
 	if (settings.autoSelectSingleGoal !== undefined) persisted.autoSelectSingleGoal = settings.autoSelectSingleGoal;
 	if (settings.auditorProjectResources !== undefined) persisted.auditorProjectResources = settings.auditorProjectResources;
 	if (settings.hideUnfocusedBanner !== undefined) persisted.hideUnfocusedBanner = settings.hideUnfocusedBanner;
+	if (settings.showAutonomousRuns !== undefined) persisted.showAutonomousRuns = settings.showAutonomousRuns;
 	if (settings.goalsRoot !== undefined) persisted.goalsRoot = settings.goalsRoot;
 	if (settings.hideUnfocusedPrompt !== undefined) persisted.hideUnfocusedPrompt = settings.hideUnfocusedPrompt;
 	if ((settings as { networkRecovery?: ResolvedGoalNetworkRecoverySettings }).networkRecovery) {
@@ -1930,6 +1967,7 @@ export function effectiveSettingsReport(cwd: string, env: NodeJS.ProcessEnv = pr
 		{ key: "auditor.sandbox", label: "auditor sandbox profile (next session)", format: () => snapshot.value.auditor?.sandbox ?? "(unset)" },
 		{ key: "auditor.permissionProfile", label: "auditor permission profile (next session)", format: () => snapshot.value.auditor?.permissionProfile ?? "(unset)" },
 		{ key: "hideUnfocusedBanner", label: "hide unfocused banner", format: () => String(snapshot.value.hideUnfocusedBanner) },
+		{ key: "showAutonomousRuns", label: "show autonomous runs line", format: () => String(snapshot.value.showAutonomousRuns) },
 		{ key: "goalsRoot", label: "goals root (reload to change)", format: () => snapshot.value.goalsRoot ?? ".pi/goals" },
 		{ key: "hideUnfocusedPrompt", label: "hide unfocused prompt", format: () => String(snapshot.value.hideUnfocusedPrompt) },
 		{ key: "strictExecutionContract", label: "explicit execution contracts (opt-in)", format: () => String(snapshot.value.strictExecutionContract) },

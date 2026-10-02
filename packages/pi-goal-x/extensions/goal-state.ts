@@ -881,6 +881,7 @@ export function createGoalCore(
 						onTui: (tui) => {
 							goalTuiRef.current = tui;
 						},
+						componentRef: goalWidgetComponentRef,
 					}),
 					{ placement: "aboveEditor" },
 				);
@@ -914,6 +915,7 @@ export function createGoalCore(
 					onTui: (tui) => {
 						goalTuiRef.current = tui;
 					},
+					componentRef: goalWidgetComponentRef,
 				}),
 				{ placement: "aboveEditor" },
 			);

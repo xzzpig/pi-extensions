@@ -87,8 +87,7 @@ export async function toggleTaskViaService(core: GoalCore, ctx: ExtensionContext
 export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): void {
 		if (!ctx.hasUI) return;
 		core.terminalInputUnsubscribe?.();
-		const settings = loadGoalSettings(typeof ctx.cwd === "string" ? ctx.cwd : process.cwd());
-		const keybindings = settings.keybindings?.dashboard ?? DEFAULT_GOAL_KEYBINDINGS.dashboard;
+		const goalCwd = typeof ctx.cwd === "string" ? ctx.cwd : process.cwd();
 		core.terminalInputUnsubscribe = ctx.ui.onTerminalInput((data) => {
 			// pi requests the kitty keyboard protocol with press/release reporting,
 			// so every keystroke arrives as TWO sequences and matchesKey() matches
@@ -130,6 +129,7 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 			// /settings, session picker) emit no ui_prompt span and remain a known
 			// residual gap, documented in specs/2026-09-12-escape-foreign-ui-prompt-guard.
 			if (core.goalModalDepth > 0 || core.uiPromptDepth > 0 || core.goalTui?.hasOverlay?.()) return undefined;
+			const keybindings = loadGoalSettings(goalCwd).keybindings?.dashboard ?? DEFAULT_GOAL_KEYBINDINGS.dashboard;
 			if (matchesKey(data, "escape") && core.auditProgress && !isRepeat) {
 				core.abortAudit(ctx);
 				return { consume: true };

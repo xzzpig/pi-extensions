@@ -43,6 +43,8 @@ const FIXTURE_GOAL = readFileSync(
 const REPORTED_503_MESSAGE =
 	'503: {"type":"server_error","message":"Error from provider (Console): Upstream request failed: Endpoint is unavailable."}';
 const REPORTED_503_AFTER_RETRIES = `Retry failed after 3 attempts: ${REPORTED_503_MESSAGE}`;
+const REPORTED_HTTP2_PROTOCOL_ERROR =
+	'Post "https://chatgpt.com/backend-api/codex/responses": stream error: stream ID 1; PROTOCOL_ERROR; received from peer';
 
 // ── Harness (mirrors tests/goal-stale-continuation-golden.test.ts) ──────────
 
@@ -167,10 +169,22 @@ async function markGoalWork(h: ReturnType<typeof createHarness>): Promise<void> 
 	await h.handlers["turn_start"]!({}, h.ctx);
 	await h.handlers["tool_call"]!({ toolName: "bash", args: { command: "ls" } }, h.ctx);
 	await h.handlers["tool_execution_end"]!({}, h.ctx);
-	assert.equal(h.core.scheduler.declare(h.ctx, { kind: "ready", next_action: "Continue after recovery" }).terminate, true);
+	assert.equal(h.core.scheduler.declare(h.ctx, { kind: "ready" }).terminate, true);
 }
 
 // ── Classification unit coverage ─────────────────────────────────────────────
+
+test("classification: HTTP/2 stream PROTOCOL_ERROR is transient", () => {
+	assert.equal(
+		isNetworkErrorAssistantMessage({
+			role: "assistant",
+			stopReason: "error",
+			errorMessage: REPORTED_HTTP2_PROTOCOL_ERROR,
+		}),
+		true,
+		"the reported transport failure must engage goal-level recovery",
+	);
+});
 
 test("classification: exact reported 503 server_error payload is a network error", () => {
 	assert.equal(
@@ -252,6 +266,18 @@ test("classification: non-transient errors stay non-recoverable", () => {
 	}
 });
 
+test("classification: generic provider finish_reason: error is transient", () => {
+	assert.equal(
+		isNetworkErrorAssistantMessage({
+			role: "assistant",
+			stopReason: "error",
+			errorMessage: "Provider finish_reason: error",
+		}),
+		true,
+		"the generic provider finish_reason: error must engage goal-level recovery",
+	);
+});
+
 // ── Regression through the real agent_end → agent_settled lifecycle ─────────
 
 test("regression: reported 503 payload schedules goal-level recovery after settle", async () => {
@@ -276,6 +302,35 @@ test("regression: reported 503 payload schedules goal-level recovery after settl
 			h.notifications.at(-1)?.message ?? "",
 			/Retrying the goal in 5s/,
 			"the reported 503 outage must engage the bounded goal-level recovery",
+		);
+		assert.equal(await countCheckpoints(h), 0, "the first recovery is delayed by the backoff policy");
+	} finally {
+		// The delayed timer is unref'd and needs no test teardown.
+	}
+});
+
+test("regression: generic Provider finish_reason: error schedules goal-level recovery after settle", async () => {
+	const { cwd, goal } = fixtureCwd();
+	saveGoalSettingsFileConfig(cwd, { maxAutonomousRuns: 100 });
+	const h = createHarness(cwd);
+	try {
+		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
+		await h.handlers["before_agent_start"]!({
+			systemPrompt: "base",
+			prompt: "user typed: continue",
+			systemPromptOptions: {},
+		}, h.ctx);
+
+		await h.handlers["agent_end"]!({
+			messages: [{ role: "assistant", stopReason: "error", errorMessage: "Provider finish_reason: error" }],
+		}, idleCtx(h.ctx));
+		assert.equal(await countCheckpoints(h), 0, "agent_end must not race Pi's built-in retries");
+
+		await h.handlers["agent_settled"]!({}, idleCtx(h.ctx));
+		assert.match(
+			h.notifications.at(-1)?.message ?? "",
+			/Retrying the goal in 5s/,
+			"the generic finish_reason: error must engage the bounded goal-level recovery",
 		);
 		assert.equal(await countCheckpoints(h), 0, "the first recovery is delayed by the backoff policy");
 	} finally {
@@ -512,4 +567,51 @@ test("lifecycle: a successful turn resets the recovery counter and clears pendin
 	} finally {
 		delete process.env.PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS;
 	}
+});
+// ── pi 1.0.0 session_compact_failed ─────────────────────────────────────────
+
+test("session_compact_failed warns the user instead of failing silently (pi 1.0.0)", async () => {
+	// pi 1.0.0 added `session_compact_failed`. The extension already charges
+	// progress to the goal at `session_before_compact`, so a failed compaction
+	// must not leave the goal silently uncompacted — that is how a long-running
+	// goal walks into the same context overflow on the next turn.
+	const { cwd, goal } = fixtureCwd();
+	const h = createHarness(cwd);
+	await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
+	await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: "user typed: go", systemPromptOptions: {} }, h.ctx);
+
+	const before = h.notifications.length;
+	await h.handlers["session_compact_failed"]!({
+		type: "session_compact_failed",
+		reason: "threshold",
+		errorMessage: "provider rejected the summarization request",
+		aborted: false,
+		willRetry: false,
+		fromExtension: false,
+	}, h.ctx);
+
+	assert.equal(h.notifications.length, before + 1, "a failed compaction is announced");
+	const message = lastNotification(h);
+	assert.match(message, /compaction failed/i, "the warning names the failure");
+	assert.match(message, /threshold/, "the warning names the trigger reason");
+	assert.match(message, /provider rejected the summarization request/, "the warning carries the error text");
+	assert.match(message, /stays active/i, "the goal is not silently stopped");
+});
+
+test("session_compact_failed stays silent when the user aborted or no goal is focused", async () => {
+	// An abort is a user action, not a fault: warning about it would be noise.
+	const { cwd, goal } = fixtureCwd();
+	const h = createHarness(cwd);
+	await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
+	await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: "go", systemPromptOptions: {} }, h.ctx);
+
+	const before = h.notifications.length;
+	await h.handlers["session_compact_failed"]!({
+		type: "session_compact_failed",
+		reason: "manual",
+		aborted: true,
+		willRetry: false,
+		fromExtension: false,
+	}, h.ctx);
+	assert.equal(h.notifications.length, before, "an aborted compaction produces no warning");
 });

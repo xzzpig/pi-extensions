@@ -6,7 +6,7 @@
   <a href="https://pi.dev/packages" target="_blank" rel="noopener noreferrer">
     <picture>
       <source media="(prefers-color-scheme: dark)" srcset="assets/badge-dark.svg">
-      <img src="assets/badge-light.svg" alt="TOP 0.3% of Pi coding agent extensions: #7 of 3,275 by downloads · Sep 22, 2026 (best recorded rank)" width="480">
+      <img src="assets/badge-light.svg" alt="TOP 0.2% of Pi coding agent extensions: #6 of 3,177 by downloads · Oct 2, 2026 (best recorded rank)" width="480">
     </picture>
   </a>
 </div>
@@ -505,6 +505,7 @@ environment > project layer > global layer > defaults
 | --- | --- |
 | Explicit execution contracts (`strictExecutionContract`) | Opt-in ready/wait protocol with one missing-decision repair, then pause. Defaults to `false`: successful executions continue automatically. |
 | Autonomous run allowance (`maxAutonomousRuns`) | Positive whole number of extension-started runs per creation or `/goal-resume` period. **Unset means unlimited; zero disables automatic continuation.** Settings edits change the limit without resetting usage. |
+| Autonomous runs line (`showAutonomousRuns`) | Controls the `Autonomous runs: N/limit` line that appears for a finite allowance. Defaults to `true`. |
 | Task tracking (`disableTasks`) | Turn task lists on or off. Set to `true` to disable them. |
 | Subtask depth (`subtaskDepth`) | Limit how many levels of subtasks the agent can create. |
 | Completion requirements (`disableContracts`) | Turn explicit goal and task completion requirements on or off. Set to `true` to disable them. |

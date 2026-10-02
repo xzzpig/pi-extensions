@@ -332,7 +332,7 @@ function lifecyclePolicyBlock(autonomous: boolean, strict: boolean): string {
   "[OUTCOMES]",
   '- Automatic runs default to unlimited. maxAutonomousRuns in .pi/pi-goal-x-settings.json caps runs; 0 disables (agents may set it). Only creation or user /goal-resume renews usage.',
   ...(autonomous && strict ? ['- End execution with update_goal: ready for runnable work, wait for an external condition, or a status below. Saved decisions terminate; further work invalidates them. Missing decisions allow one repair. Never busy-poll.'] : []),
-  ...(autonomous && !strict ? ['- Continue pursuing the goal automatically after each execution; no scheduling declaration is required. Optional ready saves a next action. New waits require user opt-in to strictExecutionContract; do not enable it merely to continue.'] : []),
+  ...(autonomous && !strict ? ['- Continue pursuing the goal automatically after each execution; no scheduling declaration is required. New waits require user opt-in to strictExecutionContract; do not enable it merely to continue.'] : []),
 		'- update_goal({status: "complete"}) only when every requirement is satisfied; the independent auditor derives the requirements from the objective and any verification contract and inspects the actual workspace evidence. Approval archives; rejection keeps the goal open with feedback.',
   '- update_goal({status: "blocked"}) only after the SAME blocker recurs on three consecutive goal turns; keep trying concrete steps before then.',
 		'- update_goal({status: "paused", reason: "…"}) pauses immediately. A user pause is a distinct state controlled by the user (/goal-pause, /goal-resume, /goal-clear).',
@@ -390,7 +390,7 @@ export function goalPromptParts(goal: GoalRecord, settings?: GoalSettings, conte
 	// Scheduling instructions ride with the policy block: they are cleared by
 	// omission, so a retained copy would keep issuing a cancelled order.
 	const fixed = cachedPrompt(goal, settings, "goal", () => buildGoalPrompt(goal, settings));
-	const { runs, instructions } = schedulerSummaryParts(goal.scheduler, settings?.maxAutonomousRuns);
+	const { runs, instructions } = schedulerSummaryParts(goal.scheduler, settings?.maxAutonomousRuns, settings?.showAutonomousRuns);
 	const limits = `Limits: lifetime tokens=${goal.tokenBudget ?? "none"}; runs=${settings?.maxAutonomousRuns ?? "unlimited"}.`;
 	const state = [fixed, instructions, limits, "Usage spans goal turns, not context. Latest snapshot supersedes earlier snapshots."].filter(Boolean).join("\n");
 	const counters = `Goal snapshot: ${formatUsage(goal)}\n${contextUsageLine(contextUsage)}\n${runs}`;

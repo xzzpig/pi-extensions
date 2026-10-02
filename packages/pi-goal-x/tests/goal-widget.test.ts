@@ -508,10 +508,15 @@ function keybindingHarness(initialExpanded = false) {
 	let expanded = initialExpanded;
 	const consumed: string[] = [];
 	let inputCb: ((data: string) => unknown) | undefined;
+	const subscriptions = new Set<(data: string) => unknown>();
 	const ctx = {
 		hasUI: true,
 		ui: {
-			onTerminalInput: (cb: unknown) => { inputCb = cb as (data: string) => unknown; return () => {}; },
+			onTerminalInput: (cb: unknown) => {
+				inputCb = cb as (data: string) => unknown;
+				subscriptions.add(inputCb);
+				return () => { subscriptions.delete(cb as (data: string) => unknown); };
+			},
 			notify: () => {},
 		},
 	} as never;
@@ -537,10 +542,21 @@ function keybindingHarness(initialExpanded = false) {
 	return {
 		core,
 		fire: (data: string) => inputCb?.(data),
+		resync: () => syncTerminalInputPause(core as never, ctx as never),
+		listenerCount: () => subscriptions.size,
 		expanded: () => expanded,
 		consumed,
 	};
 }
+
+test("re-registering terminal input replaces the old listener", () => {
+	const h = keybindingHarness();
+	assert.equal(h.listenerCount(), 1);
+	h.resync();
+	assert.equal(h.listenerCount(), 1);
+	h.fire(CTRL_SHIFT_T);
+	assert.deepEqual(h.consumed, ["toggle"]);
+});
 
 test("compact mode is the default and the task shortcut expands and collapses", () => {
 	const h = keybindingHarness();
@@ -554,12 +570,45 @@ test("compact mode is the default and the task shortcut expands and collapses", 
 	assert.deepEqual(h.consumed, ["toggle", "toggle"]);
 });
 
+test("one Kitty key press toggles the dashboard once despite repeat and release events", () => {
+	const h = keybindingHarness();
+	assert.deepEqual(h.fire("\x1b[116;6:1u"), { consume: true });
+	assert.equal(h.expanded(), true);
+	h.fire("\x1b[116;6:2u");
+	h.fire("\x1b[116;6:3u");
+	assert.equal(h.expanded(), true);
+	assert.deepEqual(h.consumed, ["toggle"]);
+});
+
+test("one Kitty scroll key press advances one task; repeats keep scrolling; release never scrolls", () => {
+	const h = scrollHarness(false);
+	h.component.render(100);
+	h.fire("\x1b[1;6:1B");
+	assert.match(h.component.render(100).join("\n"), /↑ 16 more tasks/, "one press advances one task");
+	// Fork: repeats act like presses for scrolling (hold ctrl+shift+↓ to keep
+	// scrolling), so a repeat event advances one more task instead of being
+	// swallowed by the single-press upstream guard.
+	h.fire("\x1b[1;6:2B");
+	assert.match(h.component.render(100).join("\n"), /↑ 17 more tasks/, "a repeat event keeps scrolling");
+	h.fire("\x1b[1;6:3B");
+	assert.match(h.component.render(100).join("\n"), /↑ 17 more tasks/, "release must not scroll");
+});
+
 test("escape collapses the expanded dashboard instead of pausing", () => {
 	const h = keybindingHarness(true);
 	h.fire("\u001b");
 	assert.equal(h.expanded(), false, "escape collapses the expanded dashboard");
 	assert.deepEqual(h.consumed, ["toggle"]);
 	assert.equal(h.consumed.includes("pause"), false, "escape while expanded must not pause the goal");
+});
+
+test("repeated Escape after collapsing does not pause the goal", () => {
+	const h = keybindingHarness(true);
+	(h.core as unknown as { state: { goal: unknown } }).state.goal = { status: "active", autoContinue: true };
+	h.fire("\x1b[27;1:1u");
+	h.fire("\x1b[27;1:2u");
+	h.fire("\x1b[27;1:3u");
+	assert.deepEqual(h.consumed, ["toggle"]);
 });
 
 test("escape still pauses a running goal when the dashboard is compact", () => {
@@ -889,6 +938,39 @@ test("Ctrl+Shift+T toggles expansion; plain arrows scroll only while expanded", 
 	assert.equal(h.expanded(), false);
 	h.fire(UP);
 	assert.equal(h.consumed.filter((c) => c.startsWith("c:")).length, 4, "chord + Ctrl+Shift+T + expanded ↑ + Esc consumed; plain ↑ reaches the editor after collapse");
+});
+
+test("scrolling before the first render keeps the requested viewport", () => {
+	const compact = scrollHarness(false);
+	assert.deepEqual(compact.fire(CS_DOWN), { consume: true });
+	assert.match(compact.component.render(100).join("\n"), /↑ 16 more tasks/);
+
+	const expanded = scrollHarness(true);
+	assert.deepEqual(expanded.fire(DOWN), { consume: true });
+	assert.match(expanded.component.render(100).join("\n"), /↑ 1 more task/);
+});
+
+test("expanded short task lists keep plain arrows out of the editor", () => {
+	const shortGoal = goal({ taskList: { tasks: [
+		{ id: "t1", title: "One", status: "pending" },
+		{ id: "t2", title: "Two", status: "pending" },
+	], blockCompletion: false, proposedAt: testProposedAt } });
+	const h = scrollHarness(true, shortGoal);
+	h.component.render(100);
+	const before = h.component.render(100);
+	assert.deepEqual(h.fire(DOWN), { consume: true });
+	assert.deepEqual(h.fire(UP), { consume: true });
+	assert.deepEqual(h.component.render(100), before);
+});
+
+test("compact scroll chords do not change the hidden list while expanded", () => {
+	const h = scrollHarness(false);
+	assert.match(h.component.render(100).join("\n"), /↑ 15 more tasks/);
+	h.fire(CTRL_SHIFT_T);
+	assert.equal(h.expanded(), true);
+	assert.equal(h.fire(CS_HOME), undefined);
+	h.fire("\u001b");
+	assert.match(h.component.render(100).join("\n"), /↑ 15 more tasks/);
 });
 
 test("a new completion re-anchors the viewport to the latest completed task", () => {

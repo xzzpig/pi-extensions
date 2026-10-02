@@ -247,6 +247,7 @@ export function registerDraftingTools(core: GoalCore): void {
 		promptGuidelines: [
 			"Use only during a /goal, /sisyphus, or /goal-tweak guided draft.",
 			"Clarify ambiguity before proposing. Include tasks when the work naturally decomposes into trackable milestones; omit them for genuinely simple work.",
+			"Set token_budget only when the user explicitly asked for a token budget or a spend limit. Never invent, estimate, or infer one from the objective's size; omitting it creates a goal with no budget.",
 			"Confirmation creates or revises the goal atomically. Continue Chatting leaves drafting active for refinement.",
 		],
 		parameters: Type.Object({
@@ -440,7 +441,7 @@ export function registerDraftingTools(core: GoalCore): void {
 				// Resume glue mirrors replaceGoal: restart accounting and queue
 				// the auto-continuation so the revived goal keeps going.
 				core.beginAccounting();
-				const scheduling = core.scheduler.declare(ctx, {kind: "ready", next_action: "Continue the goal after the confirmed tweak."});
+				const scheduling = core.scheduler.declare(ctx, {kind: "ready"});
 				if (!scheduling.terminate) schedulingNote = "\n" + scheduling.content.filter(item => item.type === "text").map(item => item.text).join("\n");
 				core.queueContinuation(ctx, true);
 			}
