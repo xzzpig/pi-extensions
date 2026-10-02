@@ -4,6 +4,22 @@ All notable changes to the `@xzzpig/pi-btw` fork are documented here. This
 fork tracks [`dbachelder/pi-btw`](https://github.com/dbachelder/pi-btw) via git
 subtree; entries below describe only fork-specific deviations from upstream.
 
+## 0.10.0
+
+### Changed
+
+- **Synced upstream `v0.6.1` → `v0.7.1`**, adopting the opt-in headless
+  extension tools for `/btw`, `/side`, and `/btw:tangent` (btw.json extension
+  allowlists, separate BTW cache for remote sources, child-lifecycle
+  startup/shutdown) and the child capability-claims fix. The pi-components
+  transcript migration and outcome threading were re-applied onto the new
+  session-options shape (`builtinTools`/`noTools`, the four-argument
+  `createBtwResourceLoader`), keeping the `[BTW SESSION BOUNDARY]` marker and
+  the model-runtime sharing spreads.
+- Peer dependencies follow the workspace Pi 1.0.0 baseline (`>=1.0.0 <2`),
+  devDependencies moved to the pnpm catalog; the upstream `package-lock.json`
+  resurrection was deleted again per the standing knownDebt.
+
 ## 0.8.1
 
 ### Changed

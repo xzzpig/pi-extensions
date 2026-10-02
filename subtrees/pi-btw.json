@@ -4,11 +4,11 @@
   "prefix": "packages/pi-btw",
   "source": "https://github.com/dbachelder/pi-btw.git",
   "remote": "upstream-pi-btw",
-  "ref": "v0.6.1",
-  "version": "v0.6.1",
-  "upstreamCommit": "cf71cdee7d43551d569cb990f95b020dc401a293",
+  "ref": "v0.7.1",
+  "version": "v0.7.1",
+  "upstreamCommit": "d0d1ba5404b66058c501ed3e286733660df56aa9",
   "squash": true,
-  "lastSyncedAt": "2026-09-25T16:57:22+08:00",
+  "lastSyncedAt": "2026-10-02T23:29:23+08:00",
   "notes": "Forked from the pi-btw upstream. The transcript-builder contract lives in openspec (spec transcript-builder-api).",
   "knownDebt": [
     {
