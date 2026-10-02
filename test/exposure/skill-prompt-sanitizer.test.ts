@@ -3,8 +3,9 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import {
   findSkillPathMatch,
   parseAllSkillPromptSections,
-  resolveSkillPromptEntries,
   type SkillPermissionChecker,
+  visibleSkillPromptEntries,
+  withoutDeniedSkills,
 } from "#src/exposure/skill-prompt-sanitizer";
 import { posixPathFlavor } from "#src/path/path-flavor";
 import { PathNormalizer } from "#src/path/path-normalizer";
@@ -73,60 +74,56 @@ function availableSkillsSection(...names: string[]): string {
   ].join("\n");
 }
 
-// ── resolveSkillPromptEntries ───────────────────────────────────────────────
+// ── visibleSkillPromptEntries ──────────────────────────────────────────────
 
-describe("resolveSkillPromptEntries", () => {
-  test("returns unchanged prompt and empty entries when no skills section present", () => {
-    const input = "You are a helpful assistant.";
-    const manager = makeManager("allow");
-    const result = resolveSkillPromptEntries(input, manager, null, normalizer);
-    expect(result.prompt).toBe(input);
-    expect(result.entries).toEqual([]);
+describe("visibleSkillPromptEntries", () => {
+  test("returns nothing and checks nothing when no skills section is present", () => {
+    const manager = makeManager("deny");
+    const entries = visibleSkillPromptEntries(
+      "You are a helpful assistant.",
+      manager,
+      null,
+      normalizer,
+    );
+    expect(entries).toEqual([]);
     expect(manager.checkPermission).not.toHaveBeenCalled();
   });
 
-  test("keeps all skills when all are allowed", () => {
+  test("keeps all skills visible when all are allowed", () => {
     const input = availableSkillsSection("librarian", "ask-user");
     const manager = makeManager("allow");
-    const result = resolveSkillPromptEntries(input, manager, null, normalizer);
-    expect(result.prompt).toContain("librarian");
-    expect(result.prompt).toContain("ask-user");
-    expect(result.entries).toHaveLength(2);
+    const entries = visibleSkillPromptEntries(input, manager, null, normalizer);
+    expect(entries.map((e) => e.name)).toEqual(["librarian", "ask-user"]);
   });
 
-  test("removes denied skill from section", () => {
-    const input = availableSkillsSection("librarian", "dangerous");
-    const manager = makeManager("allow", { dangerous: "deny" });
-    const result = resolveSkillPromptEntries(input, manager, null, normalizer);
-    expect(result.prompt).toContain("librarian");
-    expect(result.prompt).not.toContain("dangerous");
-    // denied skill is excluded from returned entries
-    expect(result.entries.map((e) => e.name)).not.toContain("dangerous");
+  test("keeps a denied skill out of the visible entries", () => {
+    const input = availableSkillsSection("alpha", "beta");
+    const manager = makeManager("allow", { beta: "deny" });
+    const entries = visibleSkillPromptEntries(input, manager, null, normalizer);
+    expect(entries.map((e) => e.name)).toEqual(["alpha"]);
   });
 
-  test("removes entire section when all skills are denied", () => {
-    const input = `Intro\n${availableSkillsSection("dangerous")}\nOutro`;
-    const manager = makeManager("deny");
-    const result = resolveSkillPromptEntries(input, manager, null, normalizer);
-    expect(result.prompt).not.toContain("<available_skills>");
-    expect(result.prompt).toContain("Intro");
-    expect(result.prompt).toContain("Outro");
-    expect(result.entries).toHaveLength(0);
+  test("keeps an ask-state skill visible", () => {
+    const input = availableSkillsSection("alpha", "beta");
+    const manager = makeManager("allow", { beta: "ask" });
+    const entries = visibleSkillPromptEntries(input, manager, null, normalizer);
+    expect(entries.map((e) => [e.name, e.state])).toEqual([
+      ["alpha", "allow"],
+      ["beta", "ask"],
+    ]);
   });
 
-  test("keeps ask-state skills in section and entries", () => {
-    const input = availableSkillsSection("librarian");
-    const manager = makeManager("ask");
-    const result = resolveSkillPromptEntries(input, manager, null, normalizer);
-    expect(result.prompt).toContain("librarian");
-    expect(result.entries).toHaveLength(1);
-    expect(result.entries[0].state).toBe("ask");
+  test("classifies every catalogue in the prompt", () => {
+    const input = `${availableSkillsSection("alpha")}\n${availableSkillsSection("beta")}`;
+    const manager = makeManager("allow", { beta: "deny" });
+    const entries = visibleSkillPromptEntries(input, manager, null, normalizer);
+    expect(entries.map((e) => e.name)).toEqual(["alpha"]);
   });
 
   test("delegates permission check to permissionManager for each skill", () => {
     const input = availableSkillsSection("alpha", "beta");
     const manager = makeManager("allow");
-    resolveSkillPromptEntries(input, manager, null, normalizer);
+    visibleSkillPromptEntries(input, manager, null, normalizer);
     expect(manager.checkPermission).toHaveBeenCalledWith(
       "skill",
       { name: "alpha" },
@@ -142,7 +139,7 @@ describe("resolveSkillPromptEntries", () => {
   test("passes agentName to permissionManager", () => {
     const input = availableSkillsSection("librarian");
     const manager = makeManager("allow");
-    resolveSkillPromptEntries(input, manager, "my-agent", normalizer);
+    visibleSkillPromptEntries(input, manager, "my-agent", normalizer);
     expect(manager.checkPermission).toHaveBeenCalledWith(
       "skill",
       { name: "librarian" },
@@ -157,7 +154,7 @@ describe("resolveSkillPromptEntries", () => {
       availableSkillsSection("librarian"),
     ].join("\n");
     const manager = makeManager("allow");
-    resolveSkillPromptEntries(input, manager, null, normalizer);
+    visibleSkillPromptEntries(input, manager, null, normalizer);
     // Should only be called once despite appearing twice.
     expect(manager.checkPermission).toHaveBeenCalledTimes(1);
   });
@@ -166,23 +163,43 @@ describe("resolveSkillPromptEntries", () => {
     const location = "/skills/librarian/SKILL.md";
     const input = availableSkillsSection("librarian");
     const manager = makeManager("allow");
-    const result = resolveSkillPromptEntries(input, manager, null, normalizer);
-    expect(result.entries[0].normalizedLocation).toBe(location);
-    expect(result.entries[0].normalizedBaseDir).toBe("/skills/librarian");
-  });
-
-  test("handles multi-section prompt: processes each section independently", () => {
-    const section1 = availableSkillsSection("alpha");
-    const section2 = availableSkillsSection("beta");
-    const input = `${section1}\n${section2}`;
-    const manager = makeManager("allow", { beta: "deny" });
-    const result = resolveSkillPromptEntries(input, manager, null, normalizer);
-    expect(result.entries.map((e) => e.name)).toContain("alpha");
-    expect(result.entries.map((e) => e.name)).not.toContain("beta");
+    const entries = visibleSkillPromptEntries(input, manager, null, normalizer);
+    expect(entries[0].normalizedLocation).toBe(location);
+    expect(entries[0].normalizedBaseDir).toBe("/skills/librarian");
   });
 });
 
 // ── findSkillPathMatch ──────────────────────────────────────────────────────
+
+describe("withoutDeniedSkills", () => {
+  test("drops a denied skill and keeps the rest in order", () => {
+    const manager = makeManager("allow", { beta: "deny" });
+    expect(
+      withoutDeniedSkills(
+        [{ name: "alpha" }, { name: "beta" }, { name: "gamma" }],
+        manager,
+        null,
+      ),
+    ).toEqual([{ name: "alpha" }, { name: "gamma" }]);
+  });
+
+  test("keeps an ask-state skill", () => {
+    const manager = makeManager("allow", { beta: "ask" });
+    expect(
+      withoutDeniedSkills([{ name: "alpha" }, { name: "beta" }], manager, null),
+    ).toEqual([{ name: "alpha" }, { name: "beta" }]);
+  });
+
+  test("passes agentName to permissionManager", () => {
+    const manager = makeManager("allow");
+    withoutDeniedSkills([{ name: "librarian" }], manager, "my-agent");
+    expect(manager.checkPermission).toHaveBeenCalledWith(
+      "skill",
+      { name: "librarian" },
+      "my-agent",
+    );
+  });
+});
 
 describe("findSkillPathMatch", () => {
   const entries = [
@@ -311,7 +328,7 @@ test("parseAllSkillPromptSections finds every available_skills block", () => {
   expect(sections[1].entries[0]?.name).toBe("skill-two");
 });
 
-test("REGRESSION: resolveSkillPromptEntries sanitizes every available_skills block", () => {
+test("REGRESSION: visibleSkillPromptEntries excludes a denied skill from every available_skills block", () => {
   const { manager, cleanup } = createManager({
     permission: {
       "*": "ask",
@@ -345,25 +362,20 @@ test("REGRESSION: resolveSkillPromptEntries sanitizes every available_skills blo
       "System prompt end",
     ].join("\n");
 
-    const result = resolveSkillPromptEntries(
+    const entries = visibleSkillPromptEntries(
       prompt,
       asChecker(manager),
       null,
       new PathNormalizer(posixPathFlavor, "/cwd"),
     );
 
-    expect(result.prompt).not.toContain("denied-skill");
-    expect(result.prompt).toContain("visible-skill");
-    expect((result.prompt.match(/<available_skills>/g) ?? []).length).toBe(1);
-    expect(result.entries.map((entry) => entry.name)).toEqual([
-      "visible-skill",
-    ]);
+    expect(entries.map((entry) => entry.name)).toEqual(["visible-skill"]);
   } finally {
     cleanup();
   }
 });
 
-test("REGRESSION: resolveSkillPromptEntries keeps only visible skills available for path matching", () => {
+test("REGRESSION: visibleSkillPromptEntries keeps only visible skills available for path matching", () => {
   const { manager, cleanup } = createManager({
     permission: {
       "*": "ask",
@@ -392,7 +404,7 @@ test("REGRESSION: resolveSkillPromptEntries keeps only visible skills available 
       "System prompt end",
     ].join("\n");
 
-    const result = resolveSkillPromptEntries(
+    const entries = visibleSkillPromptEntries(
       prompt,
       asChecker(manager),
       null,
@@ -402,12 +414,12 @@ test("REGRESSION: resolveSkillPromptEntries keeps only visible skills available 
     const blockedPath = resolve("/cwd", "./skills/blocked/file.ts");
     const matchedVisibleSkill = findSkillPathMatch(
       process.platform === "win32" ? visiblePath.toLowerCase() : visiblePath,
-      result.entries,
+      entries,
       normalizer,
     );
     const matchedBlockedSkill = findSkillPathMatch(
       process.platform === "win32" ? blockedPath.toLowerCase() : blockedPath,
-      result.entries,
+      entries,
       normalizer,
     );
 

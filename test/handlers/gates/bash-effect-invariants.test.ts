@@ -221,6 +221,85 @@ describe("a directional grant covers only its own direction", () => {
   });
 });
 
+describe("a presumed reader under a directional read grant", () => {
+  const readAllowed = { external_directory_read: { "/outside/*": "allow" } };
+
+  it("silences sed that only prints", async () => {
+    const result = await externalDirectoryGate(
+      "sed -n '1,80p' /outside/notes.md",
+      readAllowed,
+    );
+
+    expect(resolvedState(result)).toBe("allow");
+  });
+
+  it("does not silence an in-place sed", async () => {
+    const result = await externalDirectoryGate(
+      "sed -i 's/a/b/' /outside/notes.md",
+      readAllowed,
+    );
+
+    expect(resolvedState(result)).not.toBe("allow");
+    expect(isGateDescriptor(result) && result.surface).toBe(
+      "external_directory",
+    );
+  });
+
+  it("does not silence sed whose script is computed", async () => {
+    const result = await externalDirectoryGate(
+      'sed -n "$range" /outside/notes.md',
+      readAllowed,
+    );
+
+    expect(resolvedState(result)).not.toBe("allow");
+    expect(isGateDescriptor(result) && result.surface).toBe(
+      "external_directory",
+    );
+  });
+
+  it("does not silence sed that an unquoted variable may turn in-place", async () => {
+    const result = await externalDirectoryGate(
+      "sed -n 1p $opt /outside/notes.md",
+      readAllowed,
+    );
+
+    expect(resolvedState(result)).not.toBe("allow");
+  });
+
+  it("silences awk that only reads its input", async () => {
+    const result = await externalDirectoryGate(
+      "awk '{print $1}' /outside/data",
+      readAllowed,
+    );
+
+    expect(resolvedState(result)).toBe("allow");
+  });
+
+  it("does not silence awk that writes back to its input", async () => {
+    const result = await externalDirectoryGate(
+      "awk '{print > FILENAME}' /outside/data",
+      readAllowed,
+    );
+
+    expect(resolvedState(result)).not.toBe("allow");
+    expect(isGateDescriptor(result) && result.surface).toBe(
+      "external_directory",
+    );
+  });
+
+  it("keeps a redirect's write proof over a print-only sed", async () => {
+    const result = await externalDirectoryGate(
+      "sed -n p /outside/a > /outside/b",
+      readAllowed,
+    );
+
+    expect(resolvedState(result)).not.toBe("allow");
+    expect(isGateDescriptor(result) && result.surface).toBe(
+      "external_directory_write",
+    );
+  });
+});
+
 describe("the fail-closed base case reaches the bare family", () => {
   it("consults both directions for a command outside the core", async () => {
     const result = await externalDirectoryGate("pnpm test /outside/spec.ts", {

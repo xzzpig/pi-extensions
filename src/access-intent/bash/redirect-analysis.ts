@@ -138,17 +138,48 @@ export function redirectTargetIndex(redirect: TSNode): number | undefined {
  * The child index of the first word the grammar appended after `redirect`'s
  * own target, or `undefined` when none follows.
  *
- * Every named child from there on is a word bash passes to the redirected
- * command rather than a destination of the redirect: `f.txt` in
+ * Every {@link LITERAL_NODE_TYPES} child from there on is a word bash passes to
+ * the redirected command rather than a destination of the redirect: `f.txt` in
  * `grep pat 2>/dev/null f.txt`, and `arg` in `cmd >&- arg`, where the close
  * operator has no target at all (#977).
+ *
+ * A heredoc carries them the same way: `git <<EOF push --force` hangs `push`
+ * and `--force` after its delimiter, where its own target would be. Its body
+ * follows them and is not a word, and neither is any other tail the grammar
+ * lets a heredoc carry (a redirect, a `| …` or `&& …` statement), so the first
+ * child after the target counts only when it is a literal (#979).
  */
 export function trailingArgumentIndex(redirect: TSNode): number | undefined {
   const operator = redirectOperatorIndex(redirect);
   if (operator === undefined) return undefined;
   const target = redirectTargetIndex(redirect);
-  return namedChildIndexAfter(redirect, target ?? operator);
+  const index = namedChildIndexAfter(redirect, target ?? operator);
+  if (index === undefined) return undefined;
+  return LITERAL_NODE_TYPES.has(redirect.child(index)?.type ?? "")
+    ? index
+    : undefined;
 }
+
+/**
+ * The node types `tree-sitter-bash` 0.25.1 parses a literal word as: its
+ * `_literal` rule, which a file redirect's destinations and a heredoc's
+ * trailing words are both declared as.
+ */
+export const LITERAL_NODE_TYPES: ReadonlySet<string> = new Set([
+  "concatenation",
+  "word",
+  "string",
+  "raw_string",
+  "translated_string",
+  "ansi_c_string",
+  "number",
+  "expansion",
+  "simple_expansion",
+  "command_substitution",
+  "process_substitution",
+  "arithmetic_expansion",
+  "brace_expression",
+]);
 
 /** Operators that close a descriptor, naming no file (`>&-`, `<&-`). */
 const CLOSE_OPERATORS: ReadonlySet<string> = new Set([">&-", "<&-"]);

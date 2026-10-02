@@ -1,16 +1,45 @@
 ---
 status: accepted
 date: 2026-07-24
-amended: 2026-09-25
+amended: 2026-09-27
 ---
 
 # 0009 — The bash path projection is a completeness contract, not a best-effort heuristic
 
 ## Status
 
-Accepted, as amended 2026-09-25.
+Accepted, as amended 2026-09-30.
 This decision states the contract the bash path projection upholds, and settles how a "the gate missed my path" report is triaged.
 It is the framing for [#645], which closes two gaps the contract names as in-scope; it composes with `docs/decisions/0003-git-bash-posix-path-semantics.md` (win32 token shapes) and `docs/decisions/0007-model-judge-authorizer-chain-adr.md` (the judge that absorbs false positives).
+
+### Amendment, 2026-09-30 — a `HOME` or `PWD` the program rebinds is not resolved
+
+The `HOME`/`PWD` exception below resolved a plain reference to its startup value whatever the program assigned first, so `HOME=/etc; cat "$HOME/shadow"` projected `~/shadow` and `HOME=-delete; find "$HOME"` proved `find` a read ([#995]).
+The exception now holds only while the program leaves the name alone.
+One scan over the parse roots, the salvaged regions included, decides which of the two names the program rebinds: a `variable_name` carrying one anywhere but as a plain reference's name (an assignment, a prefix assignment, a declaration, a `for` variable, `unset`, an arithmetic assignment, `${HOME:=x}`), an argument a name-binding builtin is handed (`read HOME`, `printf -v HOME`, `let HOME=1`, `export "HOME=/etc"`, `declare -n r=HOME`), or a command running code the walk never parses (`eval`, `source`, `.`, `trap`), its name read after quote removal so `"eval"` counts.
+An argument to any other command binds nothing: `grep HOME ~/.bashrc` still projects `~/.bashrc`.
+Position is ignored, because a loop or a function body can run a later assignment first.
+A rebound reference is computed, so it withdraws a guarded word's claim like any other, and a token spelled from a rebound `HOME` (`$HOME/x`, `~/x`) leaves both path surfaces before projection, since path normalization would otherwise expand its prefix to the startup home.
+A leading `~` follows a rebound `HOME` too: bash 3.2, which Pi runs as `/bin/bash` on macOS, expands it from the reassigned value.
+Unrebound, a `~` leads with whatever the inherited `HOME` does, which `os.homedir()` returns verbatim.
+
+The scan holds which names are rebound, never their values: tracking what a program assigns is the same-program dataflow this ADR declines below.
+A name the program builds at run time is a residual: `declare "$n=/etc"`, `read "$n"`, `declare -n r=$n`, and a name-binding or code-running builtin reached through a wrapper or keyword (`builtin eval`, `command export`, `time eval x`).
+So are the spellings that bind a name outside an argument the scan reads as one: an attached `printf -vHOME`, an ANSI-C `read $'HOME'`, `coproc HOME { …; }`, and `exec {HOME}>f`.
+In the other direction, `printf -- -v HOME` counts as a rebinding although `--` ends its options, which only drops that program's `~` projection.
+Measured over 10,226 distinct commands of a real review log, none changes its projection, command units, or effects; the shapes above that do change are absent from that log.
+
+### Amendment, 2026-09-27 — the rest of a heredoc's line is projected where its `< in` spelling is
+
+The 2026-09-25 amendment below left a heredoc's own tail uncovered.
+`tree-sitter-bash` 0.25.1 parses what follows `<<EOF` on the same line (argument words, redirects, a `| …` or `&& …` statement) as children of the heredoc, which every walker read only for its substitutions, so `cat <<EOF > /tmp/o` projected no path and `cat <<EOF ~/x/in` no operand ([#979]).
+The parser now moves the tail before any walker reads the tree: a redirect becomes a sibling after the heredoc, collected with its operator's effect, a word is handed to the command as an operand under the command's own proof, and a statement is joined as the grammar joins it to the same line spelled with `< in`.
+Where that grouping is not bash's, the heredoc form either matches it or keeps bash's grouping, and it never charges a write to fewer units than the `< in` spelling does.
+`/tmp/o` above is a `write (syntax)` target and `~/x/in` is `cat`'s `read (core)`.
+A tail the grammar cannot parse (`cat <<EOF ; rm x`) stays unresolved and floored ([#985]).
+
+This amendment adds candidates and drops none.
+Measured over 8996 distinct commands of a real review log, 2 gain a `write (syntax)` token; three more heredoc writes name a file a later command on the line already projects as `unproven`, so their projection is unchanged.
 
 ### Amendment, 2026-09-25 — the words after a redirect are the command's operands
 
@@ -23,7 +52,7 @@ A statement whose parse failed is left as the grammar produced it, so an unresol
 
 This amendment adds no candidate and drops none; it moves an attribution from the operator's proof to the command's.
 Measured over 8891 distinct commands of a real review log, exactly 4 change, each only by the words it reattaches.
-A heredoc's own tail (`cat <<EOF > /tmp/o`) is a different grammar production and is not covered ([#979]).
+A heredoc's own tail (`cat <<EOF > /tmp/o`) is a different grammar production, covered by the 2026-09-27 amendment above.
 
 ### Amendment, 2026-09-24 — a redirect's target is projected by its role
 
@@ -243,7 +272,7 @@ A path reaches the `path` and `external_directory` surfaces when it appears as:
   Its canonical (symlink-resolved) form is what policy matches, so a symlink is gated by rules naming its target ([#493]).
 - A **statement's own operand** — a `for`/`select` word-list entry or a `case` subject ([#839]).
   A `case` *pattern* is not one: it is matched against the subject string rather than naming a path.
-- A **plain `$HOME` / `${HOME}` / `$PWD` / `${PWD}` reference**, resolved at token collection before classification ([#694]).
+- A **plain `$HOME` / `${HOME}` / `$PWD` / `${PWD}` reference**, resolved at token collection before classification ([#694]), unless the program rebinds the name ([#995]).
   `$HOME/x` is therefore gated exactly as `~/x` and as the literal absolute spelling, independent of whether the target exists; `$PWD/x` is gated exactly as `./x`.
 - Any of the above resolved against the **effective working directory** after literal current-shell `cd` folding; a non-literal `cd` renders the base unknown and keeps tokens literal-only ([#393]).
 
@@ -297,7 +326,7 @@ These are **accepted residuals**, not open bugs:
   Where no single answer holds, the table is allowed to decline the question rather than guess, which is the option the first two instances of this defect did not have.
 - **Glob-filter option values** (`--include=`, `--exclude=`, `--exclude-dir=`) — their values are split like any unrecognized option's and reach the surfaces on their own shape, so `grep --exclude-dir=node_modules` contributes a `node_modules` candidate.
   This over-surfaces and is left alone rather than given table entries ([#823]); an unmatched candidate is unrestricted by the universal-fallback exclusion above.
-- **Computed paths** other than the plain `HOME`/`PWD` references above — any other `$VAR`, a command substitution (`$(cmd)`), an operator-bearing expansion (`${HOME:-/tmp}`, `${#HOME}`), and a variable reached through an assignment (`CURRENT="$HOME"; ls "$CURRENT"`).
+- **Computed paths** other than the plain `HOME`/`PWD` references above — a reference to a `HOME`/`PWD` the program rebinds, any other `$VAR`, a command substitution (`$(cmd)`), an operator-bearing expansion (`${HOME:-/tmp}`, `${#HOME}`), and a variable reached through an assignment (`CURRENT="$HOME"; ls "$CURRENT"`).
   The residual here is the **value the substitution evaluates to** — the filename `> $(cmd)` ultimately writes to is not knowable without running `cmd`.
   It is **not** the nested command's own literal operands, which the positional-invariance guarantee above covers.
   Reading this bullet as sanctioning the latter is what let [#741] persist.
@@ -328,9 +357,9 @@ This is not a new concession.
 Canonicalization made resolution filesystem-dependent when it shipped, and it is the only sound treatment: a symlink's meaning simply is not a property of its name.
 Ambient, non-filesystem host state (environment variables, which shell binary was resolved, `cygpath` output) remains excluded, per ADR 0003 — with two named, closed exceptions ([#694]):
 
-- **`HOME`**, resolved via `os.homedir()`.
+- **`HOME`**, resolved via `os.homedir()` while the program does not rebind it.
   This is not a widening: `expandHomePath` already resolved `~` and `$HOME` in config rule patterns, `piInfrastructureReadPaths`, and path policy literals, so the exception existed and only the bash projection disagreed with it.
-- **`PWD`**, resolved to the projection's own effective base.
+- **`PWD`**, resolved to the projection's own effective base while the program does not rebind it.
   It reads no environment at all, so it is strictly more deterministic than `HOME`.
 
 The set is closed: adding a third name is an ADR amendment, not an implementation detail.
@@ -385,7 +414,7 @@ Cost is ~0.04 ms p95 per command, ~19% of the already-paid tree-sitter parse.
   The classifier is once again pure and policy-free.
 - `PathNormalizer` gains `entryExists`, keeping the filesystem edge in the same object that owns canonicalization; the classifiers stay pure shape functions.
 - Bare tokens naming existing files become gateable, so a config using `path`/`external_directory` denies now sees operands it previously missed — a breaking behavior change on upgrade ([#645]), remediated with `path`/`external_directory` allow patterns.
-- Expansion resolution lives at token collection (`resolveNodeText` → `shell-variable-expansion.ts`), never in the classifiers.
+- Expansion resolution lives at token collection (`WordReader` → `ShellVariables` in `shell-variable-expansion.ts`, one per program), never in the classifiers.
   Teaching `classifyTokenAsPathCandidate` a `$HOME` prefix instead would have put the home-directory vocabulary in a second place and reproduced the drift that caused [#694]; resolving upstream keeps the classifiers pure shape functions that need no per-variable knowledge.
 - The probe adds one `lstat` per prelude-surviving bare token with a known base.
   If a future workload makes that cost material, the fallback is to gate the probe on "any explicit `path`/`external_directory` restriction exists in config" — a pipeline-level consult that still keeps the classifier policy-free.
@@ -401,6 +430,7 @@ Cost is ~0.04 ms p95 per command, ~19% of the already-paid tree-sitter parse.
 [#620]: https://github.com/gotgenes/pi-packages/issues/620
 [#645]: https://github.com/gotgenes/pi-packages/issues/645
 [#694]: https://github.com/gotgenes/pi-packages/issues/694
+[#995]: https://github.com/gotgenes/pi-packages/issues/995
 [#306]: https://github.com/gotgenes/pi-packages/issues/306
 [#741]: https://github.com/gotgenes/pi-packages/issues/741
 [#742]: https://github.com/gotgenes/pi-packages/issues/742
@@ -416,3 +446,4 @@ Cost is ~0.04 ms p95 per command, ~19% of the already-paid tree-sitter parse.
 [#814]: https://github.com/gotgenes/pi-packages/issues/814
 [#977]: https://github.com/gotgenes/pi-packages/issues/977
 [#979]: https://github.com/gotgenes/pi-packages/issues/979
+[#985]: https://github.com/gotgenes/pi-packages/issues/985

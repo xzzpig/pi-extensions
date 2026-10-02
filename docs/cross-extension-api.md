@@ -516,6 +516,39 @@ pi.events.on("permissions:decision", (raw) => {
 | `confirmation_unavailable`    | State was `ask` but no UI was available — blocked                    |
 | `gate_error`                  | The gate threw, or an escalation failed — blocked, fail-closed       |
 
+### Recipe: bridging a prompt to an external notifier
+
+This extension can ring the terminal itself (`promptNotifications` in [configuration.md](configuration.md#terminal-notifications)).
+Anything beyond that (running a program, reporting to a session manager such as Herdr, calling `cmux notify`, pushing to a phone) belongs in a small extension of your own that listens to the two broadcasts.
+This package does not emit another tool's events itself: an outbound bridge would tie it to that tool's contract, where a listener leaves both sides free to change.
+
+The two channels pair up by `requestId`.
+`permissions:ui_prompt` means the human is being asked right now, and the `permissions:decision` carrying the same `requestId` means that prompt is over, however it ended.
+Track the open ids rather than a counter or a boolean: several prompts can be pending at once (queued in one session, or forwarded from subagents), and a decision for a request that never prompted must not clear anything.
+
+```typescript
+import type {
+  PermissionDecisionEvent,
+  PermissionUiPromptEvent,
+} from "@gotgenes/pi-permission-system";
+
+const open = new Set<string>();
+
+pi.events.on("permissions:ui_prompt", (raw) => {
+  const { requestId } = raw as PermissionUiPromptEvent;
+  if (open.size === 0) markBlocked(); // e.g. herdr:blocked { active: true }
+  open.add(requestId);
+});
+
+pi.events.on("permissions:decision", (raw) => {
+  const { requestId } = raw as PermissionDecisionEvent;
+  if (!open.delete(requestId)) return; // decided without a prompt
+  if (open.size === 0) clearBlocked(); // e.g. herdr:blocked { active: false }
+});
+```
+
+Both events fire on the bus of the session that shows the prompt, including the parent session that shows a forwarded subagent ask, so the listener belongs in whichever session holds the UI.
+
 ---
 
 ## Ready Event

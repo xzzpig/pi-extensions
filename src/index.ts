@@ -160,6 +160,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
       doublePressToConfirm: configStore.current().doublePressToConfirm,
       budget: resolveRenderBudget(configStore.current()),
       dialogKeys: resolveDialogKeys(configStore.current()).keys,
+      promptNotifications: configStore.current().promptNotifications ?? [],
     }),
     requestPermissionDecision,
     forwardingDir: paths.forwardingDir,

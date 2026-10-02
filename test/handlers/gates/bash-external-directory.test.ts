@@ -389,6 +389,19 @@ describe("describeBashExternalDirectoryGate", () => {
         effectSource: "retracted",
       });
     });
+
+    it("records a retraction when a variable may spell the withdrawing option", async () => {
+      const result = (await describeGate(
+        makeTcc({ input: { command: "A=-delete; find /outside $A" } }),
+        makeResolver(makeCheckResult("ask")),
+      )) as GateDescriptor;
+
+      expect(result.surface).toBe("external_directory");
+      expect(result.logContext).toMatchObject({
+        effect: "unproven",
+        effectSource: "retracted",
+      });
+    });
   });
 
   it("payload carries the command and the boundary it escaped", async () => {

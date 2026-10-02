@@ -7,14 +7,19 @@ import type {
 import {
   type PermissionPromptUi,
   type PermissionPromptView,
+  type PromptPreferences,
   presentInlinePermissionPrompt,
   requestPermissionDecision,
 } from "#src/authority/permission-prompt-component";
 import { DEFAULT_DIALOG_KEYS } from "#src/config/dialog-keys";
 import { DEFAULT_RENDER_BUDGET } from "#src/presentation/dialog-renderer";
+import type { PromptNotice } from "#src/presentation/prompt-notification";
 import type { PromptPayload } from "#src/presentation/prompt-payload";
 import { makePromptPayload } from "#test/helpers/prompt-details-fixtures";
-import { makePromptPreferences } from "#test/helpers/prompt-view-fixtures";
+import {
+  makePromptNotice,
+  makePromptPreferences,
+} from "#test/helpers/prompt-view-fixtures";
 
 // ── Fake TUI view harness ────────────────────────────────────────────────────
 
@@ -35,7 +40,10 @@ interface CapturedComponent {
 }
 
 type PromptFactory = (
-  tui: { requestRender: () => void },
+  tui: {
+    requestRender: () => void;
+    terminal: { write(data: string): void };
+  },
   theme: ReturnType<typeof plainTheme>,
   keybindings: { matches(data: string, action: string): boolean },
   done: (decision: UnattributedDecision) => void,
@@ -44,12 +52,18 @@ type PromptFactory = (
 /** Pi's default binding for the `app.tools.expand` action. */
 const CTRL_O = "\u000f";
 
+/** The preferences a fake view overrides, plus the key bound to tool expansion. */
+interface FakeViewOptions extends Partial<PromptPreferences> {
+  expandKey?: string;
+  notice?: PromptNotice;
+}
+
 function makeFakeView(
   doublePressToConfirm: boolean,
-  expandKey = CTRL_O,
-  budget = DEFAULT_RENDER_BUDGET,
-  dialogKeys = DEFAULT_DIALOG_KEYS,
+  options: FakeViewOptions = {},
 ) {
+  const { expandKey = CTRL_O, notice, ...preferences } = options;
+  const terminalWrite = vi.fn<(data: string) => void>();
   const captured: {
     component?: CapturedComponent;
     options?: unknown;
@@ -66,7 +80,7 @@ function makeFakeView(
     captured.options = options;
     return new Promise<UnattributedDecision>((resolve) => {
       captured.component = factory(
-        { requestRender: vi.fn() },
+        { requestRender: vi.fn(), terminal: { write: terminalWrite } },
         plainTheme(),
         {
           matches: (data, action) =>
@@ -78,7 +92,6 @@ function makeFakeView(
   };
   const view = makeView(
     "tui",
-    doublePressToConfirm,
     {
       select: vi.fn(),
       input: vi.fn(),
@@ -86,10 +99,10 @@ function makeFakeView(
       getToolsExpanded,
       setToolsExpanded,
     },
-    budget,
-    dialogKeys,
+    { doublePressToConfirm, ...preferences },
+    notice,
   );
-  return { view, captured, getToolsExpanded, setToolsExpanded };
+  return { view, captured, getToolsExpanded, setToolsExpanded, terminalWrite };
 }
 
 /**
@@ -101,15 +114,15 @@ function makeFakeView(
  */
 function makeView(
   mode: PermissionPromptView["mode"],
-  doublePressToConfirm: boolean,
   ui: unknown,
-  budget = DEFAULT_RENDER_BUDGET,
-  dialogKeys = DEFAULT_DIALOG_KEYS,
+  preferences: Partial<PromptPreferences> = {},
+  notice: PromptNotice = makePromptNotice(),
 ): PermissionPromptView {
   return {
     mode,
     ui: ui as PermissionPromptUi,
-    ...makePromptPreferences({ doublePressToConfirm, budget, dialogKeys }),
+    ...makePromptPreferences(preferences),
+    notice,
   };
 }
 
@@ -253,23 +266,13 @@ describe("presentInlinePermissionPrompt", () => {
     } as const;
 
     it("renders each decision row with its configured binding", () => {
-      const { view, captured } = makeFakeView(
-        true,
-        CTRL_O,
-        DEFAULT_RENDER_BUDGET,
-        DIGITS,
-      );
+      const { view, captured } = makeFakeView(true, { dialogKeys: DIGITS });
       void presentInlinePermissionPrompt(view, "Permission Required", ASK);
       expect(decisionOptionKeys(captured)).toEqual(["1", "2", "4", "5"]);
     });
 
     it("commits the decision whose configured binding was pressed", async () => {
-      const { view, captured } = makeFakeView(
-        true,
-        CTRL_O,
-        DEFAULT_RENDER_BUDGET,
-        DIGITS,
-      );
+      const { view, captured } = makeFakeView(true, { dialogKeys: DIGITS });
       const promise = presentInlinePermissionPrompt(
         view,
         "Permission Required",
@@ -281,12 +284,7 @@ describe("presentInlinePermissionPrompt", () => {
     });
 
     it("routes a keystroke by the action it is bound to, not by its letter", async () => {
-      const { view, captured } = makeFakeView(
-        false,
-        CTRL_O,
-        DEFAULT_RENDER_BUDGET,
-        SWAPPED,
-      );
+      const { view, captured } = makeFakeView(false, { dialogKeys: SWAPPED });
       const promise = presentInlinePermissionPrompt(
         view,
         "Permission Required",
@@ -294,6 +292,44 @@ describe("presentInlinePermissionPrompt", () => {
       );
       captured.component?.handleInput("y");
       expect(await promise).toEqual({ approved: false, state: "denied" });
+    });
+  });
+
+  describe("terminal notification on open", () => {
+    it("writes the configured channels once, before any keystroke", () => {
+      const { view, terminalWrite } = makeFakeView(true, {
+        promptNotifications: ["bell", "osc777"],
+        notice: { title: "the notice title", body: "the notice body" },
+      });
+      void presentInlinePermissionPrompt(view, "Permission Required", ASK);
+
+      // The view's notice, not the dialog title: the notice is composed from
+      // labels only, so the path being decided never reaches the terminal's
+      // notification history.
+      expect(terminalWrite).toHaveBeenCalledExactlyOnceWith(
+        "\x07\x1b]777;notify;the notice title;the notice body\x07",
+      );
+    });
+
+    it("does not signal again when the dialog re-renders", () => {
+      const { view, captured, terminalWrite } = makeFakeView(true, {
+        promptNotifications: ["bell"],
+      });
+      void presentInlinePermissionPrompt(view, "Permission Required", ASK);
+
+      captured.component?.handleInput("y"); // arms, and re-renders
+      captured.component?.render(80);
+
+      expect(terminalWrite).toHaveBeenCalledTimes(1);
+    });
+
+    it("writes nothing when no channel is configured", () => {
+      const { view, terminalWrite } = makeFakeView(true, {
+        promptNotifications: [],
+      });
+      void presentInlinePermissionPrompt(view, "Permission Required", ASK);
+
+      expect(terminalWrite).not.toHaveBeenCalled();
     });
   });
 
@@ -502,7 +538,7 @@ describe("presentInlinePermissionPrompt", () => {
     it("falls back to the select flow outside TUI mode", async () => {
       const custom = vi.fn();
       const select = vi.fn().mockResolvedValue("Yes");
-      const view = makeView("rpc", true, {
+      const view = makeView("rpc", {
         select,
         input: vi.fn(),
         custom,
@@ -524,7 +560,7 @@ describe("presentInlinePermissionPrompt", () => {
 
     it("attributes a denial to the surface the human answered on", async () => {
       const select = vi.fn().mockResolvedValue("No");
-      const view = makeView("rpc", true, {
+      const view = makeView("rpc", {
         select,
         input: vi.fn(),
         custom: vi.fn(),
@@ -659,9 +695,8 @@ describe("presentInlinePermissionPrompt", () => {
     });
 
     it("expands the dialog to the complete request and back", () => {
-      const { view, captured, setToolsExpanded } = makeFakeView(true, CTRL_O, {
-        maxRows: 24,
-        fieldMaxWidth: 10,
+      const { view, captured, setToolsExpanded } = makeFakeView(true, {
+        budget: { maxRows: 24, fieldMaxWidth: 10 },
       });
       void presentInlinePermissionPrompt(
         view,
@@ -693,7 +728,9 @@ describe("presentInlinePermissionPrompt", () => {
     it("does not intercept the expand key while a denial reason is typed", async () => {
       // Bound to a printable key on purpose: the default Ctrl+O is a control
       // character the reason editor rejects anyway, so it cannot discriminate.
-      const { view, captured, setToolsExpanded } = makeFakeView(false, "e");
+      const { view, captured, setToolsExpanded } = makeFakeView(false, {
+        expandKey: "e",
+      });
       const promise = presentInlinePermissionPrompt(view, "Title", ASK);
 
       captured.component?.handleInput("r"); // decision -> reason

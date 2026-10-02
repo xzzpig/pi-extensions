@@ -1,16 +1,20 @@
 import type {
   BeforeAgentStartEventResult,
   ExtensionContext,
+  NormalizedBuildSystemPromptOptions,
 } from "@earendil-works/pi-coding-agent";
 import type { SubagentDetector } from "#src/authority/subagent-detection";
-import { resolveSkillPromptEntries } from "#src/exposure/skill-prompt-sanitizer";
+import {
+  visibleSkillPromptEntries,
+  withoutDeniedSkills,
+} from "#src/exposure/skill-prompt-sanitizer";
 import {
   type RegisteredTools,
   readRegisteredTools,
   type ToolRegistry,
 } from "#src/exposure/tool-registry";
 import type { ToolSurfaceObservation } from "#src/exposure/tool-surface-baseline";
-import { renderToolSurface } from "#src/exposure/tool-surface-prompt";
+import { renderToolSurfaceSections } from "#src/exposure/tool-surface-prompt";
 import type { DebugLogger } from "#src/logging/session-logger";
 import type { PermissionResolver } from "#src/policy/permission-resolver";
 import type { PermissionSession } from "#src/session/permission-session";
@@ -18,22 +22,20 @@ import type { TurnPreparation } from "./session-turn-prep";
 
 /** Minimal subset of BeforeAgentStartEvent used by this handler. */
 interface BeforeAgentStartPayload {
-  systemPrompt: string;
+  /** The prompt rendered from `systemPromptOptions` as it stands right now. */
+  readonly systemPrompt: string;
   /**
-   * The parts Pi assembled the prompt from. `toolSnippets` is what lets this
-   * handler render the session's own tool list instead of editing the one Pi
-   * wrote — including in a child, whose inherited identity carries none.
-   * `customPrompt` says whether Pi wrote a preamble at all: under one, it
-   * writes no tool surface, so there is nothing of Pi's to remove, and a root
-   * node adds none either.
-   * `promptGuidelines` carries rules other extensions added, which removing
-   * Pi's own rules section would otherwise drop.
+   * The mutable parts Pi renders the prompt from; later handlers, and Pi
+   * itself, see what this handler writes here. `customPrompt` says whether Pi
+   * wrote a preamble at all: under one, it writes no tool surface.
+   * `toolSnippets` and `promptGuidelines` are what a child's own tool surface
+   * renders from, and `sections` is where it is stated. `skills` is the
+   * catalogue Pi renders, which policy narrows.
    */
-  systemPromptOptions?: {
-    customPrompt?: string;
-    toolSnippets?: Record<string, string>;
-    promptGuidelines?: readonly string[];
-  };
+  systemPromptOptions: Pick<
+    NormalizedBuildSystemPromptOptions,
+    "customPrompt" | "toolSnippets" | "promptGuidelines" | "sections" | "skills"
+  >;
 }
 
 /**
@@ -54,17 +56,16 @@ export function shouldExposeTool(
 /**
  * Handles the `before_agent_start` event: tool filtering + prompt sanitization.
  *
- * Recomputes the active tool set and the returned system-prompt override on
- * every fire (no memoization): the override must be returned each turn so that
- * skill filtering is reapplied and the wire prompt stays stable across turns,
- * rather than letting Pi reset to its skill-unfiltered base prompt on a cache
- * hit.
+ * Every change to the prompt is stated through `event.systemPromptOptions`,
+ * never as a returned `systemPrompt`: a returned prompt is frozen for the run,
+ * so the sections an extension later in the chain adds (Pi's own
+ * `<mcp_servers>` among them) would never reach the provider (#999).
  *
- * The tool surface is relocated rather than edited in place, so a subagent
- * child's inherited identity stays byte-identical to its parent's (#890).
- * A root node whose prompt Pi built from a custom one states no tool surface,
- * matching Pi, which writes none there; a subagent child's prompt is always a
- * custom one, and it still states its own tools.
+ * Narrowing the active set is enough for a prompt Pi wrote: Pi renders its
+ * `<tools>` and `<rules>` from the reconciled active set. A subagent child's
+ * prompt is always a custom one, under which Pi writes neither, so a child
+ * states its own as `sections`, which Pi places after its `<cwd>` section. A
+ * root under a custom prompt states none, matching Pi.
  *
  * Constructor deps:
  * - `turnPrep` — brings the node up to date for the turn before anything reads
@@ -116,40 +117,53 @@ export class AgentPrepHandler {
       });
     }
 
-    const toolSurfacePrompt = this.statesOwnToolSurface(event, ctx)
-      ? renderToolSurface(event.systemPrompt, {
-          allowedTools,
-          toolSnippets: event.systemPromptOptions?.toolSnippets ?? {},
-          guidelinesByTool: registered.guidelinesByTool,
-          promptGuidelines: event.systemPromptOptions?.promptGuidelines ?? [],
-          piAuthoredPreamble: !hasCustomPrompt(event),
-        })
-      : event.systemPrompt;
-    const skillPromptResult = resolveSkillPromptEntries(
-      toolSurfacePrompt,
+    const options = event.systemPromptOptions;
+    if (this.isSubagentUnderCustomPrompt(event, ctx)) {
+      const sections = renderToolSurfaceSections({
+        allowedTools,
+        toolSnippets: options.toolSnippets,
+        guidelinesByTool: registered.guidelinesByTool,
+        promptGuidelines: options.promptGuidelines,
+      });
+      // An empty section is one Pi leaves out, so this also clears a stale peer list.
+      options.sections.tools = sections.tools ?? "";
+      options.sections.rules = sections.rules;
+    }
+
+    // Path-match entries come from every catalogue the rendered prompt lists,
+    // read before the skill list is narrowed.
+    this.session.setActiveSkillEntries(
+      visibleSkillPromptEntries(
+        event.systemPrompt,
+        this.resolver,
+        agentName,
+        this.session.getPathNormalizer(),
+      ),
+    );
+    // Denials are judged on the list Pi renders `<skills>` from, not on the
+    // rendered prompt: that prompt predates this turn's tool changes, and on
+    // the turn `read`/`bash` return from a full denial it lists no catalogue.
+    options.skills = withoutDeniedSkills(
+      options.skills,
       this.resolver,
       agentName,
-      this.session.getPathNormalizer(),
     );
-    this.session.setActiveSkillEntries(skillPromptResult.entries);
-    return skillPromptResult.prompt !== event.systemPrompt
-      ? { systemPrompt: skillPromptResult.prompt }
-      : {};
+    return {};
   }
 
   /**
-   * Whether this node renders its own tool surface into the prompt.
+   * Whether this node states its own tool surface through `sections`.
    *
-   * Every node does except a root whose prompt Pi built from a custom one:
-   * there Pi writes no tool list or rules, and the operator's prompt is left
-   * as Pi built it. A subagent child's prompt is always a custom one, and its
-   * inherited identity carries no tool list, so it still states its own.
+   * Only a subagent child does: its prompt is always a custom one, under which
+   * Pi writes no tool list or rules, and its inherited identity carries none
+   * either. A root needs none — Pi renders its own from the narrowed active
+   * set, or, under an operator's custom prompt, deliberately writes none.
    */
-  private statesOwnToolSurface(
+  private isSubagentUnderCustomPrompt(
     event: BeforeAgentStartPayload,
     ctx: ExtensionContext,
   ): boolean {
-    return !hasCustomPrompt(event) || this.detector.isSubagent(ctx);
+    return hasCustomPrompt(event) && this.detector.isSubagent(ctx);
   }
 
   private observeToolSurface(
@@ -167,5 +181,5 @@ export class AgentPrepHandler {
  * test, so an empty string reads here the way it reads there: as none.
  */
 function hasCustomPrompt(event: BeforeAgentStartPayload): boolean {
-  return Boolean(event.systemPromptOptions?.customPrompt);
+  return Boolean(event.systemPromptOptions.customPrompt);
 }

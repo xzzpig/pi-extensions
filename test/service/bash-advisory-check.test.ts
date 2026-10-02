@@ -186,6 +186,27 @@ describe("resolveBashAdvisoryCheck", () => {
       expect(result.matchedPattern).toBe("rm -rf *");
     });
 
+    it("reports the deny covering a command after a heredoc the grammar cannot parse", () => {
+      // The salvage re-parses the line's heredoc-free spelling, and the
+      // advisory path must see it too or it answers weaker than the gate.
+      const resolver = makeBashResolver({
+        "rm -rf /tmp/x": makeCheckResult({
+          state: "deny",
+          toolName: "bash",
+          matchedPattern: "rm -rf *",
+        }),
+      });
+
+      const result = resolveBashAdvisoryCheck(
+        "cat <<EOF ; rm -rf /tmp/x\nb\nEOF",
+        undefined,
+        resolver,
+      );
+
+      expect(result.state).toBe("deny");
+      expect(result.matchedPattern).toBe("rm -rf *");
+    });
+
     it("fails closed for a non-empty command that parses to zero units", () => {
       const resolver = makeBashResolver();
       const result = resolveBashAdvisoryCheck("> out.txt", undefined, resolver);

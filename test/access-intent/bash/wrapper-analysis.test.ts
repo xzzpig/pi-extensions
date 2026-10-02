@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ArgWord } from "#src/access-intent/bash/node-text";
 import {
   type CommandWord,
   classifyWrapperWords,
@@ -20,10 +21,26 @@ function words(unitText: string): CommandWord[] {
   const pattern = /"[^"]*"|'[^']*'|\S+/g;
   let match = pattern.exec(unitText);
   while (match !== null) {
-    out.push({ text: match[0], offset: match.index });
+    out.push({ ...argWordOf(match[0]), text: match[0], offset: match.index });
     match = pattern.exec(unitText);
   }
   return out;
+}
+
+/**
+ * The value a stand-in word reaches its program with: the surrounding quotes
+ * removed, and computed when an unquoted or double-quoted `$` decides it. A
+ * computed stand-in may always lead with a dash, the conservative reading.
+ */
+function argWordOf(text: string): ArgWord {
+  const quoted = /^(['"])(.*)\1$/s.exec(text);
+  const value = quoted ? quoted[2] : text;
+  const computed = quoted?.[1] !== "'" && value.includes("$");
+  return {
+    value,
+    computed,
+    mayLeadWithDash: computed || value.startsWith("-"),
+  };
 }
 
 describe("classifyWrapperWords", () => {

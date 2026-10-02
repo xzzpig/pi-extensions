@@ -49,6 +49,7 @@ function makeCtx(overrides: Partial<ExtensionContext> = {}): ExtensionContext {
       getEntries: vi.fn().mockReturnValue([]),
       getSessionDir: vi.fn().mockReturnValue("/sessions/test"),
       getSessionId: vi.fn().mockReturnValue(null),
+      getSessionName: vi.fn((): string | undefined => undefined),
       addEntry: vi.fn(),
     },
     ...overrides,

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { inlineShellPayloadNode } from "#src/access-intent/bash/command-enumeration";
+import { WordReader } from "#src/access-intent/bash/node-text";
 import { getParser, type TSNode } from "#src/access-intent/bash/parser";
+import { ShellVariables } from "#src/access-intent/bash/shell-variable-expansion";
 
 /**
  * Parse a bash snippet, find its first `command` node, and ask what inline-shell
@@ -16,7 +18,10 @@ async function payloadOf(
   try {
     const commandNode = findFirst(tree.rootNode, "command");
     if (!commandNode) throw new Error(`no command node in ${command}`);
-    const payload = inlineShellPayloadNode(commandNode);
+    const payload = inlineShellPayloadNode(
+      commandNode,
+      new WordReader(ShellVariables.UNREBOUND),
+    );
     return payload === null
       ? null
       : { text: payload.text, startIndex: payload.startIndex };

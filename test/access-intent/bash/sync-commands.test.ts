@@ -22,6 +22,27 @@ describe("parseBashCommandsSync", () => {
       await warmBashParser();
     });
 
+    it("withholds a wrapped reader's exemption once its argument's HOME is reassigned", () => {
+      expect(parseBashCommandsSync('xargs find "$HOME"')).toEqual([
+        {
+          text: 'xargs find "$HOME"',
+          wrapperKind: "indirection",
+          executedUnit: 'find "$HOME"',
+          floorExemption: "core-reader",
+        },
+      ]);
+      expect(parseBashCommandsSync('HOME=-delete; xargs find "$HOME"')).toEqual(
+        [
+          { text: "HOME=-delete" },
+          {
+            text: 'xargs find "$HOME"',
+            wrapperKind: "indirection",
+            executedUnit: 'find "$HOME"',
+          },
+        ],
+      );
+    });
+
     it("returns a single unit for a lone command", () => {
       expect(parseBashCommandsSync("echo hi")).toEqual([{ text: "echo hi" }]);
     });
@@ -68,6 +89,19 @@ describe("parseBashCommandsSync", () => {
       ).toEqual([
         { text: "git add -A .", parseUnresolved: true },
         { text: "git commit -F", parseUnresolved: true },
+        { text: "rm -rf /tmp/x", parseUnresolved: true, salvaged: true },
+        { text: "git add -A .", parseUnresolved: true, salvaged: true },
+        { text: "git commit -F", parseUnresolved: true, salvaged: true },
+        { text: "rm -rf /tmp/x", parseUnresolved: true, salvaged: true },
+      ]);
+    });
+
+    it("enumerates a command after a heredoc the grammar cannot parse", () => {
+      expect(
+        parseBashCommandsSync("cat <<EOF ; rm -rf /tmp/x\nb\nEOF"),
+      ).toEqual([
+        { text: "cat", parseUnresolved: true },
+        { text: "cat", parseUnresolved: true, salvaged: true },
         { text: "rm -rf /tmp/x", parseUnresolved: true, salvaged: true },
       ]);
     });

@@ -1,4 +1,7 @@
 import { type TokenEffect, UNPROVEN_EFFECT } from "#src/access-intent/effect";
+import { awkWithdrawsReadClaim } from "./awk-invocation";
+import type { ArgWord } from "./node-text";
+import { sedWithdrawsReadClaim } from "./sed-invocation";
 
 // ── Public surface ─────────────────────────────────────────────────────────
 
@@ -13,7 +16,7 @@ import { type TokenEffect, UNPROVEN_EFFECT } from "#src/access-intent/effect";
  * without reading the host's path language.
  *
  * A guarded word's claim is withdrawn when an argument names one of its
- * write-capable options, yielding `retracted` rather than a write: the command
+ * write-capable options, or is computed and may arrive as one, yielding `retracted` rather than a write: the command
  * may still only read, so the fail-closed base case is the honest answer and
  * `retracted` is the blame line that says why.
  *
@@ -22,18 +25,16 @@ import { type TokenEffect, UNPROVEN_EFFECT } from "#src/access-intent/effect";
  */
 export function proveCommandEffect(
   headWord: string,
-  argWords: readonly string[],
+  argWords: readonly ArgWord[],
 ): TokenEffect {
   if (!isBareCoreWord(headWord)) return UNPROVEN_EFFECT;
-  const guard = RETRACTION_GUARDS.get(headWord);
-  if (guard && argWords.some((word) => retractsClaim(word, guard))) {
-    return RETRACTED_EFFECT;
-  }
+  const withdrawsClaim = RETRACTION_GUARDS.get(headWord);
+  if (withdrawsClaim?.(argWords)) return RETRACTED_EFFECT;
   return CORE_READ_EFFECT;
 }
 
 /**
- * The frozen v1 pure-reader core: 21 command words that are read-only for any
+ * The pure-reader core: the command words that are read-only for any
  * arguments, in any implementation.
  *
  * Exported so `docs/configuration.md`'s published roster is held to it by a
@@ -118,8 +119,7 @@ interface CoreAdmission {
  *
  * | Word                                            | Why not                                                        |
  * | ----------------------------------------------- | -------------------------------------------------------------- |
- * | `awk`, `gawk`, `nawk`                           | The program text can `print > "file"` — not stable under args  |
- * | `sed`                                           | `-i` is in-place, and BSD needs a separate argument where GNU attaches one, so the guard is dialect-variant |
+ * | `gawk`, `nawk`                                  | Their own dialects' options are unaudited; `awk` is guarded instead |
  * | `uniq`                                          | `uniq IN OUT` writes its second positional                     |
  * | `tee`, `dd`, `split`, `csplit`, `xxd`, `tree`, `curl`, `wget` | Each has a positional or option that writes a file |
  * | `less`, `more`                                  | Interactive shell escape (`!cmd`) and `LESSOPEN` preprocessing |
@@ -160,6 +160,16 @@ function coreAdmissions(): readonly CoreAdmission[] {
       reason:
         "Read-only until an argument says otherwise — see RETRACTION_GUARDS",
     },
+    {
+      words: ["sed"],
+      reason:
+        "Read-only until the command line says otherwise: an allowlist proof over its options and script — see sed-invocation.ts",
+    },
+    {
+      words: ["awk"],
+      reason:
+        "Read-only until the command line says otherwise: an allowlist proof over its options and program text — see awk-invocation.ts",
+    },
   ];
 }
 
@@ -189,18 +199,45 @@ interface RetractionGuard {
 }
 
 /**
- * The three guarded words and what withdraws each one's claim.
+ * Whether a guarded word's arguments withdraw its read claim.
  *
- * All three were chosen because their write options spell identically in GNU
- * and BSD — which is exactly why `sed` is excluded outright rather than
- * guarded. `find`'s options are single-dash long words that never cluster, so
- * they match as exact words; `sort`'s only short option containing `o` is `-o`
- * itself, so the cluster rule cannot over-retract there.
+ * Each guarded word owns its own predicate, so a word whose proof needs more
+ * than option spellings can supply one without widening the option shape.
  */
-const RETRACTION_GUARDS: ReadonlyMap<string, RetractionGuard> = new Map([
+type ClaimWithdrawal = (argWords: readonly ArgWord[]) => boolean;
+
+/**
+ * A withdrawal decided by option spellings: any argument naming one.
+ *
+ * A computed argument's value is its unresolved source spelling, not what the
+ * program receives, so it is asked only whether it may arrive beginning with
+ * `-`, the shape every guarded option has.
+ */
+function optionGuard(guard: RetractionGuard): ClaimWithdrawal {
+  return (argWords) =>
+    argWords.some((word) =>
+      word.computed ? word.mayLeadWithDash : retractsClaim(word.value, guard),
+    );
+}
+
+/**
+ * The guarded words and what withdraws each one's claim.
+ *
+ * `find`, `fd`, and `sort` are guarded by option spellings, chosen because
+ * their write options spell identically in GNU and BSD; a computed argument
+ * that may lead with `-` withdraws their claim too, since it could spell any
+ * of them. `sed` needs a
+ * proof over its script too, since a `w` command writes whatever its options
+ * say, and `awk` a proof over its program, since `print >` does the same — so
+ * each owns a predicate of its own. `find`'s options are single-dash long
+ * words that never cluster, so they match as exact words; `sort`'s only short
+ * option containing `o` is `-o` itself, so the cluster rule cannot
+ * over-retract there.
+ */
+const RETRACTION_GUARDS: ReadonlyMap<string, ClaimWithdrawal> = new Map([
   [
     "find",
-    {
+    optionGuard({
       exactWords: new Set([
         "-exec",
         "-execdir",
@@ -212,22 +249,24 @@ const RETRACTION_GUARDS: ReadonlyMap<string, RetractionGuard> = new Map([
         "-fprintf",
         "-fls",
       ]),
-    },
+    }),
   ],
   [
     "fd",
-    {
+    optionGuard({
       longStems: new Set(["--exec", "--exec-batch"]),
       shortLetters: new Set(["x", "X"]),
-    },
+    }),
   ],
   [
     "sort",
-    {
+    optionGuard({
       longStems: new Set(["--output"]),
       shortLetters: new Set(["o"]),
-    },
+    }),
   ],
+  ["sed", sedWithdrawsReadClaim],
+  ["awk", awkWithdrawsReadClaim],
 ]);
 
 // ── Private helpers ────────────────────────────────────────────────────────

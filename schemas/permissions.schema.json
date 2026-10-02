@@ -68,6 +68,16 @@
         }
       ]
     },
+    "promptNotifications": {
+      "description": "Terminal notifications to emit when the inline permission dialog opens: bell (BEL), osc9 (OSC 9 notification), osc777 (OSC 777 notification). Omit or leave empty for none. TUI sessions only.",
+      "markdownDescription": "Terminal notifications to emit when the inline permission dialog opens, so a terminal or multiplexer can flag a session waiting on a decision.\n\n- `\"bell\"` writes a BEL — what tmux `monitor-bell` and most terminals react to.\n- `\"osc9\"` writes an OSC 9 desktop notification.\n- `\"osc777\"` writes an OSC 777 desktop notification.\n\nOmit or leave empty for none (the default). Applies to interactive **TUI** sessions only. The notification names the session and the requested tool and agent, never the command, path, or other value being decided.",
+      "default": [],
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["bell", "osc9", "osc777"]
+      }
+    },
     "forwardingTimeoutMs": {
       "description": "How long a subagent waits for the parent session to answer a forwarded permission request, in milliseconds. Omit to use the default (600000, ten minutes).",
       "markdownDescription": "How long a subagent waits for the parent session to answer a forwarded permission request, in milliseconds.\n\nOmit to use the default (`600000`, ten minutes). A child whose in-process parent is not draining its inbox at all gives up in a couple of seconds regardless of this value, so lower it only to bound how long you are willing to leave an *unanswered* prompt pending.",

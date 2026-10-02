@@ -198,6 +198,7 @@ function formatConfigIssues(error: ZodError): string[] {
  * - Array fields (piInfrastructureReadPaths) replace the base when present in
  *   the override (override-wins, same as scalars).
  * - `permissionDialogKeys` replaces the base map whole, unlike `shellTools`.
+ * - `promptNotifications` replaces the base list whole, like the arrays.
  */
 // Scalar knobs merged by override-replaces-base; keep in sync with
 // PermissionSystemExtensionConfig booleans (debugLog, permissionReviewLog,
@@ -252,6 +253,15 @@ export function mergeUnifiedConfigs(
   const dialogKeys = override.permissionDialogKeys ?? base.permissionDialogKeys;
   if (dialogKeys !== undefined) {
     merged.permissionDialogKeys = dialogKeys;
+  }
+
+  // promptNotifications: override replaces base, as the string arrays above
+  // do; its own block because a union-keyed write in that loop would have to
+  // satisfy both element types at once.
+  const notifications =
+    override.promptNotifications ?? base.promptNotifications;
+  if (notifications !== undefined) {
+    merged.promptNotifications = notifications;
   }
 
   // shellTools: shallow-merge by tool name so a project entry overrides a

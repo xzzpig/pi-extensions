@@ -9,6 +9,7 @@ import {
   type KeyId,
   matchesKey,
 } from "@earendil-works/pi-tui";
+import type { PromptNotificationChannel } from "#src/config/config-schema";
 import type { DialogKeyBindings, PromptAction } from "#src/config/dialog-keys";
 import {
   completeViewBudget,
@@ -17,6 +18,10 @@ import {
   renderPromptDialog,
 } from "#src/presentation/dialog-renderer";
 import { fitLinesToWidth } from "#src/presentation/line-fitting";
+import {
+  type PromptNotice,
+  renderPromptNotification,
+} from "#src/presentation/prompt-notification";
 import type { PromptPayload } from "#src/presentation/prompt-payload";
 import { collapsePastedNewlines } from "./bracketed-paste";
 import type { DecisionSource, UserDecisionSurface } from "./decision-source";
@@ -58,6 +63,8 @@ type PromptKeybindings = Pick<KeybindingsManager, "matches">;
 export interface PermissionPromptView extends PromptPreferences {
   mode: ExtensionContext["mode"];
   ui: PermissionPromptUi;
+  /** What the inline dialog's terminal notification says; the fallback ignores it. */
+  notice: PromptNotice;
 }
 
 /** Live prompt-behavior preferences read at prompt time (see `doublePressToConfirm`). */
@@ -67,6 +74,8 @@ export interface PromptPreferences {
   budget: RenderBudget;
   /** The character bound to each decision. */
   dialogKeys: DialogKeyBindings;
+  /** Terminal notifications the inline dialog emits as it opens; empty for none. */
+  promptNotifications: readonly PromptNotificationChannel[];
 }
 
 /**
@@ -151,8 +160,17 @@ export function presentInlinePermissionPrompt(
     keys: view.dialogKeys,
   };
   return view.ui.custom<UnattributedDecision>(
-    (tui, theme, keybindings, done) =>
-      new PermissionPromptComponent(
+    (tui, theme, keybindings, done) => {
+      // The factory runs once, as the dialog mounts, which is the moment the
+      // human is being asked; a re-render does not come back through here.
+      const notification = renderPromptNotification(
+        view.promptNotifications,
+        view.notice,
+      );
+      if (notification) {
+        tui.terminal.write(notification);
+      }
+      return new PermissionPromptComponent(
         theme,
         config,
         title,
@@ -163,7 +181,8 @@ export function presentInlinePermissionPrompt(
           tui.requestRender();
         },
         done,
-      ),
+      );
+    },
     { overlay: false },
   );
 }

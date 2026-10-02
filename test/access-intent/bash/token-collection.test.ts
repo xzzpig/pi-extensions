@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { WordReader } from "#src/access-intent/bash/node-text";
 import type { TSNode } from "#src/access-intent/bash/parser";
 import { getParser } from "#src/access-intent/bash/parser";
+import { ShellVariables } from "#src/access-intent/bash/shell-variable-expansion";
 import {
   collectCommandTokens,
   collectPathCandidateTokens,
@@ -10,6 +12,9 @@ import {
   type PathToken,
 } from "#src/access-intent/bash/token-collection";
 import { UNPROVEN_EFFECT } from "#src/access-intent/effect";
+
+/** Every command here rebinds nothing, so its words read at their startup values. */
+const words = new WordReader(ShellVariables.UNREBOUND);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -22,15 +27,15 @@ import { UNPROVEN_EFFECT } from "#src/access-intent/effect";
  * collectors directly.
  */
 function commandTokens(node: TSNode): string[] {
-  return tokenTextsOf(collectCommandTokens(node));
+  return tokenTextsOf(collectCommandTokens(node, words));
 }
 
 function redirectTokens(node: TSNode): string[] {
-  return tokenTextsOf(collectRedirectTokens(node));
+  return tokenTextsOf(collectRedirectTokens(node, words));
 }
 
 function pathCandidateTokens(node: TSNode): string[] {
-  return tokenTextsOf(collectPathCandidateTokens(node));
+  return tokenTextsOf(collectPathCandidateTokens(node, words));
 }
 
 function tokenTextsOf(tokens: readonly Pick<PathToken, "token">[]): string[] {
@@ -97,7 +102,7 @@ describe("extractCommandName", () => {
   it("returns the basename for a bare command", async () => {
     const { node, tree } = await parseCommandNode("sed 's/x/y/' file.txt");
     try {
-      expect(extractCommandName(node)).toBe("sed");
+      expect(extractCommandName(node, words)).toBe("sed");
     } finally {
       tree.delete();
     }
@@ -108,7 +113,7 @@ describe("extractCommandName", () => {
       "/usr/bin/sed 's/x/y/' file.txt",
     );
     try {
-      expect(extractCommandName(node)).toBe("sed");
+      expect(extractCommandName(node, words)).toBe("sed");
     } finally {
       tree.delete();
     }
@@ -116,14 +121,14 @@ describe("extractCommandName", () => {
 
   it("returns the substitution text when the command name is a command substitution", async () => {
     // $(which sed) parses with a command_name child whose text is "$(which sed)";
-    // resolveNodeText returns that text, so extractCommandName returns its basename.
+    // WordReader.text returns that text, so extractCommandName returns its basename.
     // PATTERN_FIRST_COMMANDS.get("$(which sed)") returns undefined, so
     // collectCommandTokens falls back to generic collection — correct behaviour.
     const { node, tree } = await parseCommandNode(
       "$(which sed) 's/x/y/' file.txt",
     );
     try {
-      expect(extractCommandName(node)).toBe("$(which sed)");
+      expect(extractCommandName(node, words)).toBe("$(which sed)");
     } finally {
       tree.delete();
     }
@@ -487,7 +492,7 @@ describe("collectCommandTokens — pattern-first commands", () => {
           'node -e "$(cat /etc/shadow)"',
         );
         try {
-          expect(tokenEffectsOf(collectCommandTokens(node))).toEqual([
+          expect(tokenEffectsOf(collectCommandTokens(node, words))).toEqual([
             {
               token: "/etc/shadow",
               effect: { effect: "read", source: "core" },
@@ -953,7 +958,7 @@ describe("statement operands", () => {
     const tree = parser.parse(command);
     if (!tree) throw new Error("parse returned null");
     try {
-      return tokenEffectsOf(collectPathCandidateTokens(tree.rootNode));
+      return tokenEffectsOf(collectPathCandidateTokens(tree.rootNode, words));
     } finally {
       tree.delete();
     }
@@ -1167,7 +1172,7 @@ describe("extractCommandWord", () => {
   it("returns a bare head word unchanged", async () => {
     const { node, tree } = await parseCommandNode("grep pattern file.txt");
     try {
-      expect(extractCommandWord(node)).toBe("grep");
+      expect(extractCommandWord(node, words)).toBe("grep");
     } finally {
       tree.delete();
     }
@@ -1178,8 +1183,8 @@ describe("extractCommandWord", () => {
     async (headWord) => {
       const { node, tree } = await parseCommandNode(`${headWord} p file.txt`);
       try {
-        expect(extractCommandWord(node)).toBe(headWord);
-        expect(extractCommandName(node)).toBe("grep");
+        expect(extractCommandWord(node, words)).toBe(headWord);
+        expect(extractCommandName(node, words)).toBe("grep");
       } finally {
         tree.delete();
       }
@@ -1197,7 +1202,7 @@ describe("effect attribution", () => {
     const tree = parser.parse(command);
     if (!tree) throw new Error("parse returned null");
     try {
-      return tokenEffectsOf(collectPathCandidateTokens(tree.rootNode));
+      return tokenEffectsOf(collectPathCandidateTokens(tree.rootNode, words));
     } finally {
       tree.delete();
     }
@@ -1238,12 +1243,72 @@ describe("effect attribution", () => {
     ]);
   });
 
+  it("keeps sed's read claim over a digit argument, which the shell passes as written", async () => {
+    const read = { effect: "read", source: "core" };
+    expect(await attributedTokens("sed -n 1p 2 /etc/hosts")).toEqual([
+      { token: "/etc/hosts", effect: read },
+    ]);
+  });
+
   it("retracts a guarded word's claim when an option withdraws it", async () => {
     const retracted = { effect: "unproven", source: "retracted" };
     expect(await attributedTokens("find /etc -delete")).toEqual([
       { token: "/etc", effect: retracted },
       { token: "-delete", effect: retracted },
     ]);
+  });
+
+  describe("a computed argument to an option-guarded word", () => {
+    const read = { effect: "read", source: "core" };
+    const retracted = { effect: "unproven", source: "retracted" };
+
+    /** Every collected token of a command, attributed the one effect. */
+    function attributed(tokens: string[], effect: object) {
+      return tokens.map((token) => ({ token, effect }));
+    }
+
+    it("retracts find's claim when a variable may spell a withdrawing option", async () => {
+      expect(await attributedTokens("A=-delete; find /etc $A")).toEqual(
+        attributed(["/etc"], retracted),
+      );
+    });
+
+    it("retracts find's claim when a quoted variable leads its start point", async () => {
+      expect(await attributedTokens('find "$dir" -name /etc/x')).toEqual(
+        attributed(["$dir", "-name", "/etc/x"], retracted),
+      );
+    });
+
+    it("retracts sort's claim when a quoted variable may spell -o", async () => {
+      expect(await attributedTokens('sort "$O" /etc/out in')).toEqual(
+        attributed(["$O", "/etc/out", "in"], retracted),
+      );
+    });
+
+    it('retracts find\'s claim when a quoted "$@" follows a literal', async () => {
+      // Each positional parameter after the first arrives as its own word.
+      expect(await attributedTokens('find /etc "x$@"')).toEqual(
+        attributed(["/etc", "x$@"], retracted),
+      );
+    });
+
+    it("retracts find's claim for a quoted variable, which may be a nameref", async () => {
+      expect(await attributedTokens('find /etc -name "x$y"')).toEqual(
+        attributed(["/etc", "-name", "x$y"], retracted),
+      );
+    });
+
+    it("keeps find's claim for a glob behind a literal", async () => {
+      expect(await attributedTokens("find /etc/* -name x")).toEqual(
+        attributed(["/etc/*", "-name", "x"], read),
+      );
+    });
+
+    it("keeps find's claim for a quoted glob and a depth limit", async () => {
+      expect(
+        await attributedTokens("find /etc -maxdepth 2 -name '*.ts'"),
+      ).toEqual(attributed(["/etc", "-maxdepth", "-name", "*.ts"], read));
+    });
   });
 
   it("proves a write for an output redirect destination", async () => {
@@ -1281,13 +1346,13 @@ describe("effect attribution", () => {
   });
 
   it("gives an argument-hosted execution's tokens their own attribution", async () => {
-    // `sed` is outside the pure-reader core and `cat` is in it, so the two
-    // tokens must disagree — a token that inherited the enclosing command's
-    // proof would read unproven here (#945).
+    // `sed`'s script is computed, which withdraws its read claim, while `cat`
+    // proves one — so the two tokens must disagree, and a token that inherited
+    // the enclosing command's proof would read retracted here (#945).
     expect(await attributedTokens('sed -e "$(cat /etc/shadow)" f.txt')).toEqual(
       [
         { token: "/etc/shadow", effect: { effect: "read", source: "core" } },
-        { token: "f.txt", effect: UNPROVEN_EFFECT },
+        { token: "f.txt", effect: { effect: "unproven", source: "retracted" } },
       ],
     );
   });
@@ -1336,7 +1401,7 @@ describe("token role", () => {
     const tree = parser.parse(command);
     if (!tree) throw new Error("parse returned null");
     try {
-      return collectPathCandidateTokens(tree.rootNode).map(
+      return collectPathCandidateTokens(tree.rootNode, words).map(
         ({ token, role }) => ({ token, role }),
       );
     } finally {

@@ -211,6 +211,11 @@ describe("redactCommandSecrets", () => {
           `bash 2>/dev/null -c 'TOKEN=${MASK} deploy'`,
         ],
         [
+          "a payload after a heredoc between the shell and its flag",
+          `bash <<EOF -c 'TOKEN=sk-secret deploy'\nbody\nEOF`,
+          `bash <<EOF -c 'TOKEN=${MASK} deploy'\nbody\nEOF`,
+        ],
+        [
           "an unquoted payload, which the word rule already reached",
           `bash -c TOKEN=sk-x`,
           `bash -c TOKEN=${MASK}`,

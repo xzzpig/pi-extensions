@@ -291,6 +291,8 @@ const dialogKeysSchema = z
     ],
   });
 
+const promptNotificationChannelSchema = z.enum(["bell", "osc9", "osc777"]);
+
 const shellToolAliasSchema = z
   .strictObject({
     commandArgument: z.string().min(1).meta({
@@ -369,6 +371,16 @@ export const unifiedConfigSchema = z
       default: true,
     }),
     permissionDialogKeys: dialogKeysSchema.optional(),
+    promptNotifications: z
+      .array(promptNotificationChannelSchema)
+      .optional()
+      .meta({
+        description:
+          "Terminal notifications to emit when the inline permission dialog opens: bell (BEL), osc9 (OSC 9 notification), osc777 (OSC 777 notification). Omit or leave empty for none. TUI sessions only.",
+        markdownDescription:
+          'Terminal notifications to emit when the inline permission dialog opens, so a terminal or multiplexer can flag a session waiting on a decision.\n\n- `"bell"` writes a BEL — what tmux `monitor-bell` and most terminals react to.\n- `"osc9"` writes an OSC 9 desktop notification.\n- `"osc777"` writes an OSC 777 desktop notification.\n\nOmit or leave empty for none (the default). Applies to interactive **TUI** sessions only. The notification names the session and the requested tool and agent, never the command, path, or other value being decided.',
+        default: [],
+      }),
     forwardingTimeoutMs: z.number().int().min(1).optional().meta({
       description:
         "How long a subagent waits for the parent session to answer a forwarded permission request, in milliseconds. Omit to use the default (600000, ten minutes).",
@@ -453,6 +465,11 @@ export type ShellToolsConfig = z.infer<typeof shellToolsSchema>;
 
 /** The raw config file shape after validation (all fields optional). */
 export type UnifiedPermissionConfig = z.infer<typeof unifiedConfigSchema>;
+
+/** One terminal notification the inline dialog emits as it opens. */
+export type PromptNotificationChannel = z.infer<
+  typeof promptNotificationChannelSchema
+>;
 
 /**
  * Derive the published JSON Schema (Draft 2020-12) from the zod source.
