@@ -4,11 +4,11 @@
   "prefix": "packages/pi-subagents",
   "source": "https://github.com/nicobailon/pi-subagents.git",
   "remote": "upstream-pi-subagents",
-  "ref": "v0.72.0",
-  "version": "0.72.0",
-  "upstreamCommit": "fe1b898898339c3a1efcd9c7744ff422da9d1c94",
+  "ref": "v0.74.0",
+  "version": "v0.74.0",
+  "upstreamCommit": "b6bda32f03b7f549623bc404c9be14dca298ddc4",
   "squash": true,
-  "lastSyncedAt": "2026-09-27T20:42:24+08:00",
+  "lastSyncedAt": "2026-10-03T00:58:06+08:00",
   "notes": "Forked from nicobailon/pi-subagents. Capability contracts live in openspec (specs fleet-native-transcript and subagent-context-injection; the changes under openspec/changes/ for the rest); fork doc chapters live in docs/fork-extensions.md.",
   "knownDebt": [
     {
@@ -93,9 +93,17 @@
       "path": "packages/pi-subagents/test/unit/global-npm-root.test.ts",
       "reason": "resolveGlobalNpmRoot and 'terminates the owned npm process on timeout' flap under parallel full test:unit load (npm spawn + owned-kill timing); both pass solo and in single-file runs. Same family as the 2026-09-27 SIGTERM-on-spawnSync flakes, not tied to a fork change.",
       "recordedAt": "2026-10-02T22:30:00+08:00"
+    },
+    {
+      "kind": "test",
+      "reason": "The spawn-family unit tests (nested-control.test.ts external-job follow-ups, background child-spawn timeouts, native fleet, subagent extension child mode) exceed their 10-40s waits under the default parallel `node --test` load on this WSL host — child processes start much slower than upstream CI and the suite grew with v0.74.0; every affected file passes solo and the whole unit suite passes with --test-concurrency=1. Verify releases with the serial run, not the parallel one, on this machine.",
+      "recordedAt": "2026-10-02T23:30:00+08:00"
     }
   ],
   "reapplyOnSync": [
+    "v0.74.0 sync (2026-10-02): keep the fork's projectTrusted threading — upstream v0.74.0 added its own sessionProjectTrust(ctx)/projectTrusted fields and call sites for the same untrusted-project feature the fork already implements; on conflict keep the fork's currentProjectTrusted(input.ctx)/currentProjectTrusted(ctx) calls and trustedProjectCwd spreads, drop upstream's duplicate projectTrusted field declarations (async-execution.ts AsyncExecutionContext, child-launch.ts BuildInProcessChildLaunchInput, shared/types.ts) and duplicate object-literal properties (execution.ts, subagent-executor.ts at the executeAsyncSingle/runSync ctx sites)",
+    "v0.74.0 sync (2026-10-02): the shim fixture's dist/core/system-prompt.d.ts declares NormalizedBuildSystemPromptOptions (selectedTools + sections required) and the fixture's BeforeAgentStartEvent.systemPromptOptions uses it, mirroring real Pi 1.0.0 — upstream's 0.99-era fixture only had optional selectedTools and no sections, which fails the fork's strict typecheck on the 0.74.0 before_agent_start advertise handler",
+    "v0.74.0 sync (2026-10-02): merge upstream's new fields/functions alongside the fork's: preflight runtimeSnapshotHost next to sandbox/permissionProfile/hostAvailableBuiltins, child-session selectedBuiltinMcpExtension/missingBuiltinMcpTools next to captureProcessEnv/restoreProcessEnv, child-tool-plan builtinMcpTools next to hostAvailableBuiltins, fleet.ts keeps the native-transcript imports plus upstream's runningTone/childThinkingLevel, index.ts imports buildAdvertisedAgentCatalog + the fork's mergeAgentsForScope (appendAdvertisedAgentPrompt is gone upstream)",
     "Pi 1.0.0 baseline (2026-10-02): child-session.ts ChildSession wrappers call .then(() => undefined) on session.steer/followUp (Pi 1.0.0 returns Promise<QueuedInputDisposition>; the fork API stays Promise<void>). The shim fixture version is 1.0.0, so TypeScript's package-id dedup unifies it with the real 1.0.0 host inside consumer programs (pi-goal-x, pi-openspec-x) and those programs typecheck the fork sources against real 1.0.0 types — keep the .then wrappers when re-applying",
     "Pi 1.0.0 baseline (2026-10-02): runner-aliases.ts best-effort subpath aliases — in resolveHostPeerAliases, when the peer package resolves but the subpath is no longer declared by its exports (pi-agent-core 1.0.0 dropped ./node), skip the alias instead of failing the launch; a declared-but-missing target stays a fatal missing",
     "Pi 1.0.0 baseline (2026-10-02): host-peer-runtime-imports.test.ts final loop iterates resolved.aliases entries and asserts the root (subpath \".\") HOST_PEER_ALIASES specifiers instead of every table entry, because dropped subpaths are best-effort",

@@ -4,6 +4,20 @@
 
 ### Changed
 
+- **Synced upstream `v0.72.0` → `v0.74.0`**: fenced ```` ```js workflow ```` blocks
+  replacing `workflowScript`/`workflowScriptPath` (`workflow: true`), `toolActivation`
+  (eager/dynamic/auto) and `disabledFeatures` config, Pi built-in MCP selections
+  (`mcp:` tools, codemode in children), `subagents.modelScope` `scoped` token,
+  `agentOverrides.<name>.advertise`, untrusted-project respect for children,
+  `/reload` no longer killing background workflows, and the undici 8.10.2 security
+  bump. The fork's projectTrusted/sandbox/permissionProfile threading, native
+  fleet transcript, context injection, and `as StreamFn` casts were re-applied;
+  upstream's duplicate `sessionProjectTrust` fields were dropped in favor of the
+  fork's `currentProjectTrusted`/`trustedProjectCwd`. The shim fixture gains the
+  Pi 1.0.0 normalized `systemPromptOptions` shape.
+- Peer range follows the workspace Pi 1.0.0 baseline (`>=1.0.0 <2` for pi-ai);
+  devDeps pin pi-agent-core/pi-ai/pi-tui at exact `1.0.0` per the fork manifest
+  invariant.
 - Synced upstream `v0.71.0` → `v0.72.0`: lazy subagent executor/Fleet loading,
   global npm root discovery for package agents, external inspector
   registration (`pi-subagents/inspectors` API, lazy `openSubagentFleet`
