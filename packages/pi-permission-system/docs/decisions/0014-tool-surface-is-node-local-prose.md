@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded
 date: 2026-09-08
 ---
 
@@ -7,7 +7,10 @@ date: 2026-09-08
 
 ## Status
 
-Accepted.
+Superseded by [ADR 0015](0015-prompt-changes-through-system-prompt-options.md).
+The relocation below was carried by a returned `systemPrompt`, which Pi sends as the whole prompt and which therefore dropped the sections later extensions add, `<mcp_servers>` among them.
+ADR 0015 states every prompt change through `systemPromptOptions` instead, and gives up the inherited prefix this decision kept.
+The rationale below remains useful context.
 
 ## Context
 

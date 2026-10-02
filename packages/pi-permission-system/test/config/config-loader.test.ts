@@ -667,6 +667,30 @@ describe("mergeUnifiedConfigs", () => {
     expect(merged.authorizerChain).toEqual(["kept-judge"]);
   });
 
+  it("override promptNotifications replaces the base list whole", () => {
+    const merged = mergeUnifiedConfigs(
+      { promptNotifications: ["osc777"] },
+      { promptNotifications: ["bell"] },
+    );
+    expect(merged.promptNotifications).toEqual(["bell"]);
+  });
+
+  it("base promptNotifications survives when override omits it", () => {
+    const merged = mergeUnifiedConfigs(
+      { promptNotifications: ["bell", "osc777"] },
+      { debugLog: true },
+    );
+    expect(merged.promptNotifications).toEqual(["bell", "osc777"]);
+  });
+
+  it("an empty override promptNotifications turns a base list off", () => {
+    const merged = mergeUnifiedConfigs(
+      { promptNotifications: ["bell"] },
+      { promptNotifications: [] },
+    );
+    expect(merged.promptNotifications).toEqual([]);
+  });
+
   // Whole-object replacement rather than the shellTools shallow merge: a
   // key map is validated as a unit, and merging two valid maps could produce
   // a collision neither file's own validation could see.

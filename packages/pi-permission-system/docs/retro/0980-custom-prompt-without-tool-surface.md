@@ -67,3 +67,46 @@ No deferred work: the Non-Goals' child-override question stays an open question 
 ### Observations
 
 Nothing beyond the TDD stage's own notes; this sync found the branch already green.
+
+## Stage: Final Retrospective (2026-09-26T20:48:28Z)
+
+### Session summary
+
+Worktree-lane ship: fast-forward-merged the branch, pre-push gates and CI green, closed #980, released `pi-permission-system-v35.0.0` (major, for the breaking `feat!` commit), and tore down the worktree.
+Across all four stages the design and implementation were clean; the one defect was a fabricated commit SHA published in the #980 close comment, corrected by a follow-up comment.
+
+### Observations
+
+#### What went well
+
+- **A Non-Goal with an explicit reopen condition was honored as written.**
+  Issue #919's plan said to reconsider standing aside "if duplication is reported again as a problem in its own right"; planning recognized #980 as that report, re-verified why #919 rejected the same one-liner (every `pi-subagents` child is a `customPrompt` session), and found an existing discriminator (`SubagentDetector.isSubagent`) instead of re-litigating.
+- **The #967 unicode-escape mechanism caught a live slip.**
+  The sync stage's `Edit` emitted `\u2014` escapes; `pi-autoformat` decoded them before any commit, and the agent confirmed the literal characters landed.
+  First observed in-the-wild catch since the gate shipped.
+- **Planned killing mutations matched their predictions exactly** (five of five), with `cp` backups used for every swap per the `git-workflow` rule.
+
+#### What caused friction (agent side)
+
+- `instruction-violation` — the ship's close comment on #980 cited `7e0816d2c3902d0752c6c02ecf5b0ef2fb15c8e0` for the docs commit; the real SHA is `7e0816d28ab5377de011b5558b034c5b2bdaca4d`.
+  The eight-character prefix came from `git log --oneline`; the remaining 32 characters were invented.
+  `/ship` step 9 requires `git rev-parse` of every SHA before drafting and a re-resolve of every hex token in the finished draft before `issue_close`; the ship resolved only the landing commit (`672a64c0`), added the second SHA mid-draft, and skipped the pre-call re-resolve entirely.
+  Self-identified, but only after the irreversible call: a post-hoc `git rev-parse 7e0816d2` exposed the mismatch.
+  Impact: a correction comment on a third-party reporter's issue; the wrong hash remains in the close comment and in every subscriber's notification.
+  This is the recurrence #948 predicts: the rule already carries seven incident refs, and prose cannot close it.
+
+#### What caused friction (user side)
+
+- Nothing noted; the operator's one planning intervention (asking whether children could also suppress the block) was strategic and was answered in a visible message before the gate resumed.
+
+### Diagnostic details
+
+- **Model-performance correlation** — planning and TDD ran on `anthropic/claude-opus-5-5`; sync and ship ran on `anthropic/claude-sonnet-5`, as did both subagents (`tidy-first-assessor`, `pre-completion-reviewer`, attributed from their own transcripts).
+  Both of this issue's slips (the `\u2014` escapes, the fabricated SHA) came from the `claude-sonnet-5` stages and both are exact-token emission failures.
+  Two data points, not a finding; worth watching across future retros before acting on it.
+- **Feedback-loop gap analysis** — the ship's only verification gap was the SHA re-resolve, run after `issue_close` instead of before it; lint, `fallow`, and CI ran at their prescribed points.
+
+### Changes made
+
+1. `.pi/prompts/ship.md` step 9: the range command prints `git log --format='%H %s'` instead of `--oneline`, so full SHAs are in context and no short hash is left to extend.
+2. Commented on #948 with this recurrence as evidence; the proposed resolvability check alone would have refused the fabricated token.

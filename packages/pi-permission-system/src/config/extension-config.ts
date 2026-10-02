@@ -10,6 +10,7 @@ import type {
   UnifiedPermissionConfig,
 } from "./config-loader";
 import type { WrapperFloors } from "#src/types";
+import type { PromptNotificationChannel } from "./config-schema";
 import type { DialogKeyOverrides } from "./dialog-keys";
 export const EXTENSION_ID = "pi-permission-system";
 
@@ -38,6 +39,8 @@ export interface PermissionSystemExtensionConfig {
   reviewLogFieldMaxWidth?: number;
   /** The inline dialog's hotkey bindings, as configured; resolved at prompt time. */
   permissionDialogKeys?: DialogKeyOverrides;
+  /** Terminal notifications the inline dialog emits as it opens; absent means none. */
+  promptNotifications?: PromptNotificationChannel[];
   /** Non-bash tools that carry shell semantics, keyed by tool name. */
   shellTools?: ShellToolsConfig;
   /** Ordered names of registered live-authority chain links to consult before the terminal authorizer. */
@@ -105,6 +108,9 @@ export function normalizePermissionSystemConfig(
   // one (ADR 0011 §5, #745).
   if (raw.permissionDialogKeys !== undefined) {
     result.permissionDialogKeys = raw.permissionDialogKeys;
+  }
+  if (raw.promptNotifications !== undefined) {
+    result.promptNotifications = raw.promptNotifications;
   }
   if (raw.shellTools !== undefined) {
     result.shellTools = raw.shellTools;

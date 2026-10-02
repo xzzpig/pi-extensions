@@ -262,11 +262,11 @@ export function classifyWrapperCommand(
 	} else if (INDIRECTION_WRAPPER_NAMES.has(commandName)) {
 		const spec = INDIRECTION_WRAPPER_SPECS[commandName] ?? {};
 		if (spec.inlinePayloadFlag === undefined) {
-			classification = classifyIndirection(node, args, spec);
+			classification = classifyIndirection(node, text, args, spec);
 		} else {
 			const flagIndex = args.findIndex((arg) => arg.text === spec.inlinePayloadFlag);
 			if (flagIndex === -1) {
-				classification = classifyIndirection(node, args, spec);
+				classification = classifyIndirection(node, text, args, spec);
 			} else {
 				classification = classifyOpaquePayload(args.slice(flagIndex + 1), parseProgram);
 			}
@@ -276,7 +276,7 @@ export function classifyWrapperCommand(
 		if (execFlags === undefined) return undefined;
 		const flagIndex = args.findIndex((arg) => execFlags.has(arg.text));
 		if (flagIndex === -1) return undefined; // bare search runs no subcommand
-		classification = classifyIndirection(node, args.slice(flagIndex + 1), { skipPositionals: 0 });
+		classification = classifyIndirection(node, text, args.slice(flagIndex + 1), { skipPositionals: 0 });
 	} else {
 		return undefined;
 	}
@@ -348,6 +348,7 @@ function classifyOpaquePayload(
  */
 function classifyIndirection(
 	node: TSNode,
+	text: string,
 	args: readonly WrapperArg[],
 	spec: WrapperSpec,
 ): WrapperClassification {
@@ -355,7 +356,7 @@ function classifyIndirection(
 	if (start !== undefined) {
 		return {
 			kind: "indirection",
-			inner: [{ text: node.text.slice(start) }],
+			inner: [{ text: innerCommandText(node, text, args, start) }],
 			unresolved: false,
 		};
 	}
@@ -368,6 +369,30 @@ function classifyIndirection(
 		return { kind: "indirection", inner: [], unresolved: true };
 	}
 	return { kind: "indirection", inner: [], unresolved: false, empty: true };
+}
+
+/**
+ * The inner command's text, sliced from the unit's word-joined `text` rather
+ * than the raw node text. The unit text is upstream's WordReader
+ * reconstruction, which excludes a hosted heredoc's body; `node.text` spans
+ * it, so slicing the raw text would glue the heredoc lines onto the inner
+ * unit and no rule could match it. The inner token's node offset is mapped to
+ * its position in `text` by scanning the wrapper's own arguments in order.
+ */
+function innerCommandText(
+	node: TSNode,
+	text: string,
+	args: readonly WrapperArg[],
+	start: number,
+): string {
+	let from = 0;
+	for (const arg of args) {
+		const at = text.indexOf(arg.text, from);
+		if (at === -1) continue;
+		from = at + arg.text.length;
+		if (arg.startIndex === start) return text.slice(at);
+	}
+	return node.text.slice(start);
 }
 
 /**

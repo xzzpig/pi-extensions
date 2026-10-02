@@ -1,6 +1,13 @@
-import { parseUnresolvedWithin } from "./parse-health";
+import {
+  childrenOf,
+  lastNamedChild,
+  rewriteStatements,
+  rewrittenNode,
+  type Source,
+  sourceOf,
+} from "./parse-view";
 import type { TSNode } from "./parser";
-import { trailingArgumentIndex } from "./redirect-analysis";
+import { LITERAL_NODE_TYPES, trailingArgumentIndex } from "./redirect-analysis";
 
 /**
  * `tree-sitter-bash`'s parse with each word it hung on a redirect handed back
@@ -21,6 +28,11 @@ import { trailingArgumentIndex } from "./redirect-analysis";
  * followed by its words; a redirect after the last word stays at the
  * statement, and a statement left with no redirect gives way to its body.
  *
+ * A heredoc carries words the same way (`git <<EOF push --force`), and they
+ * move into the command after it; its body stays in the heredoc, which is
+ * written after the words and so ends after them (#979). Every other tail a
+ * heredoc can carry is `heredoc-tails.ts`'s to move.
+ *
  * Three kinds of statement are left exactly as the grammar produced them:
  *
  * - One whose parse failed. Its units are floored already, and moving a word
@@ -35,28 +47,7 @@ import { trailingArgumentIndex } from "./redirect-analysis";
  * stay positions in the command string every caller already slices.
  */
 export function reattachRedirectArguments(root: TSNode): TSNode {
-  return correct(root) ?? root;
-}
-
-/** The corrected node, or `undefined` when nothing beneath `node` changed. */
-function correct(node: TSNode): TSNode | undefined {
-  const children: TSNode[] = [];
-  let changed = false;
-  for (let i = 0; i < node.childCount; i++) {
-    const child = node.child(i);
-    if (!child) continue;
-    const corrected = correct(child);
-    if (corrected) changed = true;
-    children.push(corrected ?? child);
-  }
-
-  if (node.type === "redirected_statement" && !parseUnresolvedWithin(node)) {
-    const reattached = reattachStatement(node, children);
-    if (reattached) return reattached;
-  }
-  return changed
-    ? adoptingView(node, children, parseUnresolvedWithin(node))
-    : undefined;
+  return rewriteStatements(root, reattachStatement);
 }
 
 /**
@@ -74,7 +65,7 @@ function reattachStatement(
 
   const lastCarrier = children.findLastIndex(
     (child) =>
-      child.type === "file_redirect" &&
+      WORD_CARRYING_TYPES.has(child.type) &&
       trailingArgumentIndex(child) !== undefined,
   );
   if (lastCarrier === -1) return undefined;
@@ -112,23 +103,34 @@ function reachesCommand(body: TSNode): boolean {
 /** The bodies whose last element a statement-level redirect belongs to. */
 const GROUPING_TYPES: ReadonlySet<string> = new Set(["list", "pipeline"]);
 
+/** The redirects the grammar can hang a command's words on. */
+const WORD_CARRYING_TYPES: ReadonlySet<string> = new Set([
+  "file_redirect",
+  "heredoc_redirect",
+]);
+
 /**
- * `redirect` as it belongs in the command: truncated after its own target and
- * followed by the words the grammar appended to it. A redirect carrying no
- * words, or a node that is not a file redirect, moves as it is.
+ * `redirect` as it belongs in the command: without the words the grammar
+ * appended to it, and followed by them. A redirect carrying no words, or a node
+ * that cannot carry any, moves as it is.
+ *
+ * A file redirect's words are the rest of its children, so it is truncated
+ * after its target. A heredoc keeps its body and delimiter, which follow the
+ * words in the source, so it keeps its own end.
  */
 function splitRedirect(redirect: TSNode, source: Source): TSNode[] {
-  const trailing =
-    redirect.type === "file_redirect"
-      ? trailingArgumentIndex(redirect)
-      : undefined;
+  const trailing = WORD_CARRYING_TYPES.has(redirect.type)
+    ? trailingArgumentIndex(redirect)
+    : undefined;
   if (trailing === undefined) return [redirect];
 
   const kept: TSNode[] = [];
   const words: TSNode[] = [];
   for (let i = 0; i < redirect.childCount; i++) {
     const child = redirect.child(i);
-    if (child) (i < trailing ? kept : words).push(child);
+    if (!child) continue;
+    const isWord = i >= trailing && LITERAL_NODE_TYPES.has(child.type);
+    (isWord ? words : kept).push(child);
   }
   const end = kept.at(-1)?.endIndex ?? redirect.startIndex;
   return [
@@ -139,8 +141,9 @@ function splitRedirect(redirect: TSNode, source: Source): TSNode[] {
 
 /**
  * `body` with `moved` appended to its rightmost command: the command itself,
- * or the last element of a `list` or `pipeline`, recursively. Each node on the way grows to
- * the end of the last moved node.
+ * or the last element of a `list` or `pipeline`, recursively. Each node on the
+ * way grows to the furthest end among the moved nodes, which is a heredoc's
+ * when one moved, since its body is written after the words that follow it.
  */
 function appendToRightmostCommand(
   body: TSNode,
@@ -148,7 +151,7 @@ function appendToRightmostCommand(
   source: Source,
 ): TSNode {
   const children = childrenOf(body);
-  const end = moved.at(-1)?.endIndex ?? body.endIndex;
+  const end = Math.max(body.endIndex, ...moved.map((node) => node.endIndex));
   if (body.type === "command") {
     return rewrittenNode(
       body,
@@ -165,121 +168,4 @@ function appendToRightmostCommand(
     appendToRightmostCommand(last, moved, source),
   );
   return rewrittenNode(body, replaced, body.startIndex, end, source);
-}
-
-/** A node the correction built, reading its text from the statement's source. */
-function rewrittenNode(
-  original: TSNode,
-  children: readonly TSNode[],
-  startIndex: number,
-  endIndex: number,
-  source: Source,
-): TSNode {
-  return adoptingView(
-    {
-      type: original.type,
-      isNamed: original.isNamed,
-      startIndex,
-      endIndex,
-      text: source(startIndex, endIndex),
-    },
-    children,
-    false,
-  );
-}
-
-/**
- * A view whose children are views too, so each one's `previousSibling` is its
- * neighbor in the corrected tree rather than the one the grammar gave it.
- */
-function adoptingView(
-  fields: NodeFields,
-  children: readonly TSNode[],
-  hasError: boolean,
-): TSNode {
-  return new NodeView(fields, children.map(asView), hasError);
-}
-
-/** A slice of the command by absolute offsets. */
-type Source = (startIndex: number, endIndex: number) => string;
-
-/** The source slicer for every node within `statement`. */
-function sourceOf(statement: TSNode): Source {
-  return (startIndex, endIndex) =>
-    statement.text.slice(
-      startIndex - statement.startIndex,
-      endIndex - statement.startIndex,
-    );
-}
-
-function childrenOf(node: TSNode): TSNode[] {
-  const children: TSNode[] = [];
-  for (let i = 0; i < node.childCount; i++) {
-    const child = node.child(i);
-    if (child) children.push(child);
-  }
-  return children;
-}
-
-function lastNamedChild(node: TSNode): TSNode | undefined {
-  return childrenOf(node).findLast((child) => child.isNamed);
-}
-
-/**
- * `node` as a view, so a new parent can give it a new previous sibling.
- *
- * Its own children stay the grammar's nodes: nothing beneath it moved, so their
- * siblings are still the grammar's too.
- */
-function asView(node: TSNode): TSNode {
-  return node instanceof NodeView
-    ? node
-    : new NodeView(node, childrenOf(node), parseUnresolvedWithin(node));
-}
-
-/** The fields a {@link NodeView} copies from the node it stands for. */
-interface NodeFields {
-  readonly type: string;
-  readonly isNamed: boolean;
-  readonly startIndex: number;
-  readonly endIndex: number;
-  readonly text: string;
-}
-
-/**
- * A parse-tree node the correction presents in place of the grammar's.
- *
- * Adopting its children sets each view child's `previousSibling` to the child
- * before it, which is what lets a redirect moved into a command ask
- * `parseUnresolvedAt` about its new neighbor.
- */
-class NodeView implements TSNode {
-  readonly type: string;
-  readonly isNamed: boolean;
-  readonly startIndex: number;
-  readonly endIndex: number;
-  readonly text: string;
-  readonly childCount: number;
-  previousSibling: TSNode | null = null;
-
-  constructor(
-    fields: NodeFields,
-    private readonly children: readonly TSNode[],
-    readonly hasError: boolean,
-  ) {
-    this.type = fields.type;
-    this.isNamed = fields.isNamed;
-    this.startIndex = fields.startIndex;
-    this.endIndex = fields.endIndex;
-    this.text = fields.text;
-    this.childCount = children.length;
-    children.forEach((child, i) => {
-      if (child instanceof NodeView)
-        child.previousSibling = children[i - 1] ?? null;
-    });
-  }
-
-  child(index: number): TSNode | null {
-    return this.children[index] ?? null;
-  }
 }

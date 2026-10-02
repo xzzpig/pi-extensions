@@ -29,14 +29,30 @@ const HOME_PREFIXES = ["~", "$HOME", "${HOME}"] as const;
  * All other patterns are returned unchanged.
  */
 export function expandHomePath(pattern: string): string {
-  for (const prefix of HOME_PREFIXES) {
-    if (pattern === prefix) return homedir();
-    if (!pattern.startsWith(prefix)) continue;
+  const rest = afterHomePrefix(pattern);
+  if (rest === undefined) return pattern;
+  return rest === "" ? homedir() : join(homedir(), rest.slice(1));
+}
 
-    const rest = pattern.slice(prefix.length);
-    if (rest.startsWith("/") || rest.startsWith("\\")) {
-      return join(homedir(), rest.slice(1));
+/**
+ * Whether {@link expandHomePath} reads `value` as starting at the home
+ * directory.
+ */
+export function hasHomePrefix(value: string): boolean {
+  return afterHomePrefix(value) !== undefined;
+}
+
+/**
+ * What follows a recognized home prefix (`""`, or a separator and the rest),
+ * or `undefined` when `value` has none.
+ */
+function afterHomePrefix(value: string): string | undefined {
+  for (const prefix of HOME_PREFIXES) {
+    if (!value.startsWith(prefix)) continue;
+    const rest = value.slice(prefix.length);
+    if (rest === "" || rest.startsWith("/") || rest.startsWith("\\")) {
+      return rest;
     }
   }
-  return pattern;
+  return undefined;
 }

@@ -10,9 +10,16 @@
  */
 
 import { proveCommandEffect } from "./command-effects";
+import type { ArgWord } from "./node-text";
 
-/** One word of a command unit: its text, and its offset into the unit's text. */
-export interface CommandWord {
+/**
+ * One word of a command unit: its source text and its offset into the unit's
+ * text, beside the value the program receives once the shell removes quotes.
+ *
+ * The source text is what unwrapping and slicing read; the value is what a
+ * capability proof reads, since `'-o'` reaches `sort` as `-o`.
+ */
+export interface CommandWord extends ArgWord {
   readonly text: string;
   readonly offset: number;
 }
@@ -172,8 +179,7 @@ export function isTransparentWrapper(
   if (unwrapped.kind === "opaque" || unwrapped.layers === 0) return false;
 
   const head = unwrapped.words.at(0)?.text ?? "";
-  const args = unwrapped.words.slice(1).map((word) => word.text);
-  return proveCommandEffect(head, args).effect === "read";
+  return proveCommandEffect(head, unwrapped.words.slice(1)).effect === "read";
 }
 
 // ── Unwrapping ───────────────────────────────────────────────────────────────
@@ -354,7 +360,7 @@ function rebase(
   const origin = words[start].offset;
   return words
     .slice(start, end)
-    .map((word) => ({ text: word.text, offset: word.offset - origin }));
+    .map((word) => ({ ...word, offset: word.offset - origin }));
 }
 
 /** True for a `NAME=value` environment prefix. */

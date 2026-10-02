@@ -1,5 +1,6 @@
 import type { BashCommandContext, FloorExemption } from "#src/types";
 import { EXECUTION_HOST_TYPES, forEachExecutionIn } from "./nested-execution";
+import type { WordReader } from "./node-text";
 import { parseUnresolvedWithin } from "./parse-health";
 import type { TSNode } from "./parser";
 import { REDIRECT_NODE_TYPES, redirectMayWriteFile } from "./redirect-analysis";
@@ -117,14 +118,22 @@ interface UnitScope {
    * everything found inside a salvaged region is salvaged.
    */
   readonly salvaged: boolean;
+  /**
+   * How the program's shell expands an argument word. Relayed unchanged: a
+   * program's variables are the same wherever in it a word sits.
+   */
+  readonly words: WordReader;
 }
 
 /** A top-level command in the current shell, writing no file, fully parsed. */
-const TOP_LEVEL_SCOPE: UnitScope = {
-  writesViaRedirect: false,
-  parseUnresolved: false,
-  salvaged: false,
-};
+function topLevelScope(words: WordReader): UnitScope {
+  return {
+    writesViaRedirect: false,
+    parseUnresolved: false,
+    salvaged: false,
+    words,
+  };
+}
 
 /**
  * The scope a salvaged region's own units run under.
@@ -135,11 +144,14 @@ const TOP_LEVEL_SCOPE: UnitScope = {
  * {@link collectHostedCommands} resets it: a redirect established outside the
  * region is the enclosing statement's, not the region's.
  */
-const SALVAGED_SCOPE: UnitScope = {
-  writesViaRedirect: false,
-  parseUnresolved: true,
-  salvaged: true,
-};
+function salvagedScope(words: WordReader): UnitScope {
+  return {
+    writesViaRedirect: false,
+    parseUnresolved: true,
+    salvaged: true,
+    words,
+  };
+}
 
 // ── Node-type vocabulary ─────────────────────────────────────────────────────
 
@@ -270,12 +282,13 @@ let activeParseProgram: ParseProgram | undefined;
 
 export function collectCommands(
   node: TSNode,
+  words: WordReader,
   options?: { parseProgram?: ParseProgram },
 ): BashCommand[] {
   const out: BashCommand[] = [];
   activeParseProgram = options?.parseProgram;
   try {
-  collectCommandsInto(node, TOP_LEVEL_SCOPE, out);
+    collectCommandsInto(node, topLevelScope(words), out);
   } finally {
     activeParseProgram = undefined;
   }
@@ -292,9 +305,12 @@ export function collectCommands(
  * explicit `deny` fires — while its `allow` is still floored to `ask` by the
  * verdict fold (#840).
  */
-export function collectSalvagedCommands(node: TSNode): BashCommand[] {
+export function collectSalvagedCommands(
+  node: TSNode,
+  words: WordReader,
+): BashCommand[] {
   const out: BashCommand[] = [];
-  collectCommandsInto(node, SALVAGED_SCOPE, out);
+  collectCommandsInto(node, salvagedScope(words), out);
   return out;
 }
 
@@ -314,10 +330,17 @@ export function collectSalvagedCommands(node: TSNode): BashCommand[] {
  * (`python3 -c`, `node -e`) out: its payload is another language, so re-parsing
  * it as bash would read a secret out of embedded Python.
  */
-export function inlineShellPayloadNode(command: TSNode): TSNode | null {
+export function inlineShellPayloadNode(
+  command: TSNode,
+  words: WordReader,
+): TSNode | null {
   const nodes = commandWordNodes(command);
   const index = inlineShellPayloadIndex(
-    nodes.map((node) => ({ text: node.text, offset: node.startIndex })),
+    nodes.map((node) => ({
+      ...words.argWord(node),
+      text: node.text,
+      offset: node.startIndex,
+    })),
   );
   return index === -1 ? null : (nodes.at(index) ?? null);
 }
@@ -471,7 +494,7 @@ function makeCommandUnit(
   scope: UnitScope,
   out: BashCommand[],
 ): void {
-  const { text, words } = readCommandUnit(node);
+  const { text, words } = readCommandUnit(node, scope.words);
   const classification = classifyWrapperCommand(
     node,
     text,
@@ -481,7 +504,7 @@ function makeCommandUnit(
   if (classification === undefined) {
     out.push(
       makeUnit(text, scope, {
-    executedUnit: executedUnitOf(text, words) ?? undefined,
+        executedUnit: executedUnitOf(text, words) ?? undefined,
       }),
     );
     return;
@@ -563,7 +586,10 @@ function redirectedScope(node: TSNode, scope: UnitScope): UnitScope {
  * A pure assignment (`FOO=bar`, no `command_name`) runs no command, has no
  * words, and keeps its whole text.
  */
-function readCommandUnit(node: TSNode): {
+function readCommandUnit(
+  node: TSNode,
+  reader: WordReader,
+): {
   text: string;
   words: CommandWord[];
 } {
@@ -576,7 +602,11 @@ function readCommandUnit(node: TSNode): {
   let previous: TSNode | undefined;
   for (const word of nodes) {
     if (previous) text += gapBetween(node, previous, word, redirects);
-    words.push({ text: word.text, offset: text.length });
+    words.push({
+      ...reader.argWord(word),
+      text: word.text,
+      offset: text.length,
+    });
     text += word.text;
     previous = word;
   }
@@ -707,6 +737,7 @@ function collectHostedCommands(
         writesViaRedirect: false,
         parseUnresolved: false,
         salvaged: scope.salvaged,
+        words: scope.words,
       },
       out,
     );

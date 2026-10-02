@@ -6,6 +6,7 @@ import {
   resetWarmBashParser,
   warmBashParser,
 } from "#src/access-intent/bash/parser";
+import { shape } from "#test/helpers/bash-parse-tree";
 
 describe("getParser", () => {
   it("parses a simple bash command and returns a non-null root node", async () => {
@@ -70,6 +71,77 @@ describe("the words after a redirect's target", () => {
       firstStatement(await getGrammarParser(), "git 2>/dev/null push --force"),
     ).resolves.toEqual(["redirected_statement", "command", "file_redirect"]);
   });
+
+  it("are the command's own words after a heredoc, through getParser", async () => {
+    await expect(
+      firstStatement(await getParser(), "git <<EOF push --force\nb\nEOF"),
+    ).resolves.toEqual([
+      "command",
+      "command_name",
+      "heredoc_redirect",
+      "word",
+      "word",
+    ]);
+  });
+
+  it("join a piped statement after a heredoc, through getParser", async () => {
+    await expect(
+      firstStatement(await getParser(), "cat <<EOF | rm -rf /tmp/x\nb\nEOF"),
+    ).resolves.toEqual(["pipeline", "redirected_statement", "command"]);
+  });
+
+  it("stay in the heredoc through getGrammarParser", async () => {
+    await expect(
+      firstStatement(
+        await getGrammarParser(),
+        "cat <<EOF | rm -rf /tmp/x\nb\nEOF",
+      ),
+    ).resolves.toEqual(["redirected_statement", "command", "heredoc_redirect"]);
+  });
+});
+
+describe("the rest of a heredoc's line, through getParser", () => {
+  /** `command`'s corrected shape, with its redirect rendered as `redirect`. */
+  async function correctedShape(
+    command: string,
+    redirect: string,
+  ): Promise<string> {
+    const parser = await getParser();
+    const tree = parser.parse(command);
+    if (!tree) throw new Error("parser.parse returned null");
+    try {
+      return shape(tree.rootNode).replace(redirect, "REDIRECT");
+    } finally {
+      tree.delete();
+    }
+  }
+
+  it.each([
+    "git <<EOF push --force",
+    "cat <<EOF ~/x/in",
+    "cat <<EOF > /tmp/o",
+    "cat <<EOF 2>/dev/null arg",
+    "cat <<EOF | rm -rf /tmp/x",
+    "cat <<EOF && rm -rf /tmp/x",
+    "cat <<EOF > a && rm x",
+    "cat <<EOF | a && cd /tmp",
+    "x && git <<EOF 2>/dev/null push",
+  ])(
+    "reaches what the same line with `< in` in place of `<<EOF` reaches: %s",
+    async (line) => {
+      await expect(
+        correctedShape(
+          `${line}\nb\nEOF`,
+          '(heredoc_redirect "EOF" "b\\n" "EOF")',
+        ),
+      ).resolves.toBe(
+        await correctedShape(
+          line.replace("<<EOF", "< in"),
+          '(file_redirect "in")',
+        ),
+      );
+    },
+  );
 });
 
 describe("warm parser", () => {

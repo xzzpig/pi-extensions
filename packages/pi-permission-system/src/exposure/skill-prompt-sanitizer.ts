@@ -38,8 +38,6 @@ export type SkillPromptEntry = {
 };
 
 export type SkillPromptSection = {
-  start: number;
-  end: number;
   entries: ParsedSkillPromptEntry[];
 };
 
@@ -50,15 +48,6 @@ function decodeXml(value: string): string {
     .replace(/&quot;/g, '"')
     .replace(/&apos;/g, "'")
     .replace(/&amp;/g, "&");
-}
-
-function encodeXml(value: string): string {
-  return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
 }
 
 function parseSkillEntries(sectionBody: string): ParsedSkillPromptEntry[] {
@@ -115,8 +104,6 @@ export function parseAllSkillPromptSections(
       closeStart,
     );
     sections.push({
-      start,
-      end,
       entries: parseSkillEntries(sectionBody),
     });
     searchStart = end;
@@ -160,95 +147,56 @@ function createResolvedSkillEntry(
   };
 }
 
-function renderAvailableSkillsSection(
-  entries: readonly SkillPromptEntry[],
-): string {
-  return [
-    AVAILABLE_SKILLS_OPEN_TAG,
-    ...entries.flatMap((entry) => [
-      "  <skill>",
-      `    <name>${encodeXml(entry.name)}</name>`,
-      `    <description>${encodeXml(entry.description)}</description>`,
-      `    <location>${encodeXml(entry.location)}</location>`,
-      "  </skill>",
-    ]),
-    AVAILABLE_SKILLS_CLOSE_TAG,
-  ].join("\n");
-}
-
-function removePromptRange(prompt: string, start: number, end: number): string {
-  const beforeSection = prompt.slice(0, start).replace(/\n+$/, "");
-  const afterSection = prompt.slice(end);
-  return `${beforeSection}${afterSection}`;
-}
-
-export function resolveSkillPromptEntries(
+/**
+ * The skills listed in the prompt's `<available_skills>` catalogues that
+ * policy does not deny, in catalogue order: what skill path matching may
+ * treat as a skill's files. Edits no prompt text.
+ */
+export function visibleSkillPromptEntries(
   prompt: string,
   permissionManager: SkillPermissionChecker,
   agentName: string | null,
   normalizer: PathNormalizer,
-): { prompt: string; entries: SkillPromptEntry[] } {
-  const sections = parseAllSkillPromptSections(prompt);
-  if (sections.length === 0) {
-    return { prompt, entries: [] };
-  }
-
+): SkillPromptEntry[] {
   const permissionCache = new Map<string, PermissionState>();
-  const visibleEntries: SkillPromptEntry[] = [];
-  const replacements: Array<{ start: number; end: number; content: string }> =
-    [];
+  return parseAllSkillPromptSections(prompt)
+    .flatMap((section) => section.entries)
+    .map((entry) =>
+      createResolvedSkillEntry(
+        entry,
+        resolvePermissionState(
+          entry.name,
+          permissionManager,
+          agentName,
+          permissionCache,
+        ),
+        normalizer,
+      ),
+    )
+    .filter((entry) => entry.state !== "deny");
+}
 
-  for (const section of sections) {
-    const resolvedEntries = section.entries.map((entry) => {
-      const state = resolvePermissionState(
-        entry.name,
+/**
+ * The skills policy does not deny, judged by name, in their original order.
+ *
+ * Judging the skill list itself, rather than a catalogue rendered from it,
+ * keeps the answer independent of whether that catalogue has been rendered yet.
+ */
+export function withoutDeniedSkills<T extends { readonly name: string }>(
+  skills: readonly T[],
+  permissionManager: SkillPermissionChecker,
+  agentName: string | null,
+): T[] {
+  const permissionCache = new Map<string, PermissionState>();
+  return skills.filter(
+    (skill) =>
+      resolvePermissionState(
+        skill.name,
         permissionManager,
         agentName,
         permissionCache,
-      );
-      return createResolvedSkillEntry(entry, state, normalizer);
-    });
-
-    const visibleSectionEntries = resolvedEntries.filter(
-      (entry) => entry.state !== "deny",
-    );
-    visibleEntries.push(...visibleSectionEntries);
-
-    if (visibleSectionEntries.length === resolvedEntries.length) {
-      continue;
-    }
-
-    replacements.push({
-      start: section.start,
-      end: section.end,
-      content:
-        visibleSectionEntries.length > 0
-          ? renderAvailableSkillsSection(visibleSectionEntries)
-          : "",
-    });
-  }
-
-  if (replacements.length === 0) {
-    return { prompt, entries: visibleEntries };
-  }
-
-  let sanitizedPrompt = prompt;
-  for (let i = replacements.length - 1; i >= 0; i--) {
-    const replacement = replacements[i];
-    sanitizedPrompt =
-      replacement.content.length > 0
-        ? `${sanitizedPrompt.slice(0, replacement.start)}${replacement.content}${sanitizedPrompt.slice(replacement.end)}`
-        : removePromptRange(
-            sanitizedPrompt,
-            replacement.start,
-            replacement.end,
-          );
-  }
-
-  return {
-    prompt: sanitizedPrompt,
-    entries: visibleEntries,
-  };
+      ) !== "deny",
+  );
 }
 
 export function findSkillPathMatch(

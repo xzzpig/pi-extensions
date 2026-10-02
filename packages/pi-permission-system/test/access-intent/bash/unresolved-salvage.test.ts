@@ -35,13 +35,16 @@ async function salvagedTextOf(command: string): Promise<string[]> {
 describe("withSalvagedRoots", () => {
   describe("a region the primary parse could not resolve", () => {
     it("salvages the redirect holding the command tree-sitter dropped", async () => {
-      expect(await salvagedTextOf(REPORTED)).toEqual(["2>&1 | rm -rf /tmp/x"]);
+      expect(await salvagedTextOf(REPORTED)).toEqual([
+        "2>&1 | rm -rf /tmp/x",
+        "git add -A . && git commit -F - 2>&1 | rm -rf /tmp/x",
+      ]);
     });
 
     it("salvages a region whose dropped command reads a path", async () => {
       expect(
         await salvagedTextOf("cat <<'MSG' 2>&1 | cat /etc/shadow\nmsg\nMSG"),
-      ).toEqual(["2>&1 | cat /etc/shadow"]);
+      ).toEqual(["2>&1 | cat /etc/shadow", "cat 2>&1 | cat /etc/shadow"]);
     });
 
     it("salvages the innermost unresolved node, not an enclosing one", async () => {
@@ -50,7 +53,32 @@ describe("withSalvagedRoots", () => {
       // again for the same reason and salvages nothing.
       const salvaged = await salvagedTextOf(REPORTED);
       expect(salvaged).not.toContain(REPORTED);
-      expect(salvaged).toEqual(["2>&1 | rm -rf /tmp/x"]);
+      expect(salvaged[0]).toBe("2>&1 | rm -rf /tmp/x");
+    });
+  });
+
+  describe("a heredoc line the primary parse could not resolve", () => {
+    it("salvages the line spelled without its heredoc", async () => {
+      // The innermost unresolved node is the heredoc redirect itself, whose
+      // own text fails again, so only the heredoc-free spelling recovers `rm`.
+      expect(await salvagedTextOf("cat <<EOF ; rm -rf x\nb\nEOF")).toEqual([
+        "cat ; rm -rf x",
+      ]);
+    });
+
+    it("salvages nothing from a heredoc-free spelling whose re-parse fails", async () => {
+      // The grammar lexes `<<B` as `< <B`, so it is no heredoc to cut, and the
+      // spelling `cat <<B ; rm -rf x` fails again; only the region salvage
+      // recovers `rm -rf x` here.
+      expect(
+        await salvagedTextOf("cat <<A <<B ; rm -rf x\na\nA\nb\nB"),
+      ).toEqual(["<B ; rm -rf x"]);
+    });
+
+    it("offers the regions ahead of the heredoc-free lines", async () => {
+      expect(
+        await salvagedTextOf("cat <<EOF > /tmp/o | rm -rf x\nb\nEOF"),
+      ).toEqual(["> /tmp/o | rm -rf x", "cat > /tmp/o | rm -rf x"]);
     });
   });
 
@@ -70,11 +98,15 @@ describe("withSalvagedRoots", () => {
   });
 
   describe("a failure the whole program carries", () => {
+    it("salvages an unterminated heredoc's line and nothing from its body", async () => {
+      // The body re-parses as garbage, and the heredoc-free spelling of the
+      // line ends before it.
+      expect(await salvagedTextOf("cat <<'EOF'\nsee `rm -rf x` here")).toEqual([
+        "cat",
+      ]);
+    });
+
     it.each([
-      [
-        "an unterminated heredoc whose body re-parses as garbage",
-        "cat <<'EOF'\nsee `rm -rf x` here",
-      ],
       ["an unbalanced quote", 'echo "$(rm x)'],
       ["an unterminated control-flow statement", "for f in a; do rm $f"],
       ["an unterminated brace group", "{ echo hi"],
@@ -201,7 +233,8 @@ describe("withSalvagedRoots", () => {
       } finally {
         tree.delete();
       }
-      expect(deleted).toBe(1);
+      // One tree per admitted candidate: the region and the heredoc-free line.
+      expect(deleted).toBe(2);
     });
   });
 });

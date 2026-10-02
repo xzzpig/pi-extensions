@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { memoizeAsyncWithRetry } from "./async-cache";
+import { hoistHeredocTails } from "./heredoc-tails";
 import { reattachRedirectArguments } from "./redirect-arguments";
 
 /**
@@ -69,11 +70,19 @@ async function initParser(): Promise<TSParser> {
 /**
  * The parser every consumer reads the bash grammar through.
  *
- * Its trees are the grammar's with one correction applied where they enter the
- * package: a word `tree-sitter-bash` hung on a redirect is handed back to the
- * command it belongs to (`reattachRedirectArguments`, #977). Every walker, the
- * salvage re-parse, and the log masker read that corrected tree, so none of
- * them has to learn the grammar's quirk on its own.
+ * Its trees are the grammar's with two corrections applied where they enter the
+ * package, each moving command-line material `tree-sitter-bash` hangs on a
+ * redirect to where bash gives it:
+ *
+ * 1. `hoistHeredocTails` moves the redirects and the `| …` / `&& …` statement
+ *    written after a heredoc's delimiter out of the heredoc (#979).
+ * 2. `reattachRedirectArguments` hands the words a redirect carries, a file
+ *    redirect's or a heredoc's, back to the command (#977).
+ *
+ * The order matters: a redirect hoisted out of a heredoc can itself carry the
+ * command's words (`cat <<EOF 2>/dev/null arg`), which the second pass then
+ * hands back. Every walker, the salvage re-parse, and the log masker read the
+ * corrected tree, so none of them has to learn the grammar's quirks on its own.
  */
 export const getParser = memoizeAsyncWithRetry(async () =>
   correctingParser(await getGrammarParser()),
@@ -85,7 +94,7 @@ function correctingParser(grammar: TSParser): TSParser {
       const tree = grammar.parse(input);
       if (!tree) return null;
       return {
-        rootNode: reattachRedirectArguments(tree.rootNode),
+        rootNode: reattachRedirectArguments(hoistHeredocTails(tree.rootNode)),
         delete: () => {
           tree.delete();
         },

@@ -1,3 +1,4 @@
+import { heredocFreeLinesWithin } from "./heredoc-free-lines";
 import { parseUnresolvedWithin } from "./parse-health";
 import type { BashReparser, TSNode } from "./parser";
 
@@ -19,6 +20,12 @@ import type { BashReparser, TSNode } from "./parser";
  * grammar gap is in the *combination* — `2>&1 | rm -rf /tmp/x` parses
  * perfectly on its own.
  *
+ * A heredoc tail the grammar cannot parse at all (`cat <<EOF ; rm -rf x`)
+ * leaves no region whose own text re-parses: the innermost unresolved node is
+ * the heredoc redirect, whose text fails the same way. So each such heredoc's
+ * line is offered too, spelled without its heredoc operators
+ * (`heredoc-free-lines.ts`), after the regions.
+ *
  * The roots are handed to a callback rather than returned because each belongs
  * to a tree that must outlive its use and be released afterwards, exactly as
  * the primary parse's caller already does for its own tree.
@@ -33,14 +40,20 @@ export function withSalvagedRoots<T>(
 ): T {
   const trees: { rootNode: TSNode; delete(): void }[] = [];
   try {
-    for (const candidate of unresolvedRegionsWithin(primary)) {
-      const tree = reparser.parse(candidate.text);
+    const candidates = [
+      ...unresolvedRegionsWithin(primary).map((region) => region.text),
+      ...heredocFreeLinesWithin(primary),
+    ];
+    for (const text of candidates) {
+      const tree = reparser.parse(text);
       if (!tree) continue;
       // The whole safety argument: tree-sitter's error recovery *invents* the
       // structure inside an unresolved region (#742), and invented structure
       // does not re-parse. Without this check `cat <> rw.txt` salvages a
       // command unit whose text is `">"`, matched against the bash rules like
-      // any real command.
+      // any real command. A heredoc-free line is derived rather than sliced,
+      // but only by removing the operators the scanner tokenized, and it is
+      // held to the same condition.
       if (parseUnresolvedWithin(tree.rootNode)) {
         tree.delete();
         continue;

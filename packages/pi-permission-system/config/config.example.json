@@ -12,6 +12,7 @@
     "deny": "n",
     "denyWithReason": "r"
   },
+  "promptNotifications": [],
 
   "forwardingTimeoutMs": 600000,
 

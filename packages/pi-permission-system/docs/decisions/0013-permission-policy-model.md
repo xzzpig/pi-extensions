@@ -127,6 +127,49 @@ Every salvageable region of the one grammar gap this package has met is a `file_
 It is rejected anyway, for the reason the 2026-09-04 amendment already gave about the marker: a node-type trigger silently drops the next gap that lands somewhere else.
 A stub-node test pins the distinction the corpus cannot.
 
+### Amendment, 2026-09-28 — a salvage candidate may be a heredoc-free spelling
+
+The amendment above admits a region's own source text.
+That text cannot recover a heredoc tail the grammar has no production for: `cat <<EOF ; rm -rf x`, the `&` form, `cat <<EOF arg > /tmp/o`, and `cat 0<<EOF | rm -rf x` are valid bash (`bash -n` exits 0), yet the innermost unresolved node is the heredoc redirect itself or a top-level `ERROR`, and the redirect's text fails to re-parse the same way.
+Under `bash: {"*": "allow", "rm *": "deny"}` each asked where its heredoc-free spelling is denied, and approving the prompt ran `rm`.
+
+**After the regions, the salvage also offers each unresolved heredoc's line spelled without its heredoc operators, admitted by the same clean re-parse** ([#985]).
+The line runs from the heredoc's host `redirected_statement`, or its line start when an `ERROR` hosts it, to the end of the line.
+The cut removes the `<<`/`<<-` token, a `file_descriptor` before it, the delimiter, and the blanks before them.
+
+This is not the "heredoc pre-pass introducing a second notion of what a bash program is" that the residual paragraph set aside.
+The primary parse is untouched, the floor still clamps every recovered unit, and the trigger is still the parse's health: only a host that failed to parse is spelled.
+The safety argument gains one clause.
+The candidate is derived rather than sliced, but the derivation only removes spans the scanner tokenized as heredoc operators, so it cannot introduce a word the command lacks; the metamorphic anti-invention property now checks exactly that, word by word.
+
+Measured over the local review log against the pre-change code, 9156 distinct intact `bash` commands: 7 change, all the `git commit -F - <<'MSG' 2>&1 | tail -N` shape the region salvage already handled.
+Each gains only duplicated units, and no decision changes; the fail-open forms above occur nowhere in that log, so the change closes a spelling an agent could produce rather than one it has.
+
+### Amendment, 2026-09-29 — a core word may be guarded by a proof over its script
+
+§7 excluded `sed` and `awk` outright: their script or program writes as surely as an option does (`sed 'w out'`, `awk '{print > FILENAME}'`), so no option-spelling guard can speak for them.
+
+**A core word may instead be admitted behind a proof over its whole command line — options and script alike — when that proof is an allowlist** ([#924]).
+The proof names what it accepts and withdraws the claim for everything else: an option outside its list, a script command outside its grammar, an argument whose value only the shell decides (it could spell `-i`), and any shape two implementations read differently.
+`sed`'s grammar refuses a delimiter inside a bracket expression for that last reason, since BSD reads `[/]` as a bracket where GNU ends the regex at its `/`.
+`awk`'s proof is a scan rather than a grammar, so it over-retracts a comparison such as `NR>=100`; the cost is relief, never a write.
+
+This keeps the admission bar rather than lowering it.
+The bar asks for effects stable under argument content, and a guarded word meets it only for the argument lists the guard proves; everywhere else it consults both surfaces, exactly as it did outside the core.
+Measured over the local review log, 901 of 1013 `sed` invocations prove read-only, and 134 of 218 `awk` invocations did under the prototype scan.
+
+### Amendment, 2026-09-29 — an option guard sees a computed word
+
+The `find`, `fd`, and `sort` guards matched each argument's source text against their options, so a word only the shell decides (`A=-delete; find ~/other $A`) carried a withdrawing option past them.
+
+**A computed argument withdraws an option-guarded word's claim whenever it may reach the program beginning with `-`** ([#992]).
+Every guarded option has that shape, and a computed word's source text is not what the program receives, so the guard asks only that question of it.
+The answer is `false` only when a literal leading character survives every rewrite the shell applies (globbing, brace expansion, and escape removal each keep a literal prefix) and no expansion can split the word, so `packages/*/docs` and `\(` leave the claim standing.
+An unquoted expansion splits, and so may a quoted parameter expansion: `$@` and `${arr[@]}` yield one word per element, and any variable may be a nameref (`declare -n s='arr[@]'`) with nothing in its spelling to show it, so `"x$y"` withdraws too; only a quoted command substitution or arithmetic expansion stays one word.
+`sed` and `awk` keep the stricter rule above, since a computed word there can be the script itself.
+
+Measured over 70,961 unique bash commands from session transcripts and the review log, 96 `find` units that proved a read withdraw under the rule before the nameref clause, and 3 more with it, against 625 under a rule withdrawing on any computed word; none of them wrote.
+
 ## Context
 
 ### The reported gap
@@ -736,4 +779,7 @@ Issue [#620] carries the judgment slice the chain retains under §7.
 [#814]: https://github.com/gotgenes/pi-packages/issues/814
 [#840]: https://github.com/gotgenes/pi-packages/issues/840
 [#875]: https://github.com/gotgenes/pi-packages/issues/875
+[#924]: https://github.com/gotgenes/pi-packages/issues/924
+[#985]: https://github.com/gotgenes/pi-packages/issues/985
+[#992]: https://github.com/gotgenes/pi-packages/issues/992
 [openai/codex#28732]: https://github.com/openai/codex/issues/28732

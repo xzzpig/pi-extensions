@@ -158,6 +158,10 @@ export function selectAuthorizer(
           dialogs: deps.dialogs,
           getPromptPreferences: deps.getPromptPreferences,
           requestPermissionDecision: deps.requestPermissionDecision,
+          describeSession: () => ({
+            name: ctx.sessionManager.getSessionName(),
+            cwd: ctx.cwd,
+          }),
         }),
         adjudicatesLocally: true,
       };

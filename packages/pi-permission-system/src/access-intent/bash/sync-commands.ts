@@ -3,7 +3,9 @@ import {
   collectCommands,
   collectSalvagedCommands,
 } from "./command-enumeration";
+import { WordReader } from "./node-text";
 import { getWarmBashParser } from "./parser";
+import { ShellVariables } from "./shell-variable-expansion";
 import { withSalvagedRoots } from "./unresolved-salvage";
 import { makeParseProgram } from "./wrapper-parse";
 
@@ -29,10 +31,15 @@ export function parseBashCommandsSync(command: string): BashCommand[] | null {
   if (!tree) return [];
   try {
     const parseProgram = makeParseProgram(parser);
-    return withSalvagedRoots(tree.rootNode, parser, (salvaged) => [
-      ...collectCommands(tree.rootNode, { parseProgram }),
-      ...salvaged.flatMap(collectSalvagedCommands),
-    ]);
+    return withSalvagedRoots(tree.rootNode, parser, (salvaged) => {
+      const words = new WordReader(
+        ShellVariables.scan([tree.rootNode, ...salvaged]),
+      );
+      return [
+        ...collectCommands(tree.rootNode, words, { parseProgram }),
+        ...salvaged.flatMap((root) => collectSalvagedCommands(root, words)),
+      ];
+    });
   } finally {
     tree.delete();
   }

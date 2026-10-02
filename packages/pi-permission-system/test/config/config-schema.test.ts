@@ -334,6 +334,30 @@ describe("unifiedConfigSchema", () => {
       expect(result.success).toBe(true);
     });
   });
+
+  describe("promptNotifications field", () => {
+    it("accepts every channel", () => {
+      const result = unifiedConfigSchema.safeParse({
+        promptNotifications: ["bell", "osc9", "osc777"],
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it("accepts an empty list, which turns notifications off", () => {
+      const result = unifiedConfigSchema.safeParse({ promptNotifications: [] });
+      expect(result.success).toBe(true);
+    });
+
+    it("rejects an unknown channel, naming the entry", () => {
+      const result = unifiedConfigSchema.safeParse({
+        promptNotifications: ["bell", "beep"],
+      });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues.map((issue) => issue.path)).toEqual([
+        ["promptNotifications", 1],
+      ]);
+    });
+  });
 });
 
 describe("inferred types match the hand-written domain types", () => {

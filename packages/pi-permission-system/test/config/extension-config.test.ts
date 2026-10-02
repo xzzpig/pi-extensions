@@ -220,6 +220,18 @@ describe("normalizePermissionSystemConfig", () => {
     const result = normalizePermissionSystemConfig({});
     expect("permissionDialogKeys" in result).toBe(false);
   });
+
+  it("includes promptNotifications when provided", () => {
+    const result = normalizePermissionSystemConfig({
+      promptNotifications: ["bell", "osc777"],
+    });
+    expect(result.promptNotifications).toEqual(["bell", "osc777"]);
+  });
+
+  it("omits promptNotifications when absent", () => {
+    const result = normalizePermissionSystemConfig({});
+    expect("promptNotifications" in result).toBe(false);
+  });
 });
 
 describe("ensurePermissionSystemLogsDirectory", () => {

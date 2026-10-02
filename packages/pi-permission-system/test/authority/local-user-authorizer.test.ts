@@ -4,6 +4,7 @@ import { LocalUserAuthorizer } from "#src/authority/local-user-authorizer";
 import type { PermissionPromptDecision } from "#src/authority/permission-dialog";
 import type { requestPermissionDecision } from "#src/authority/permission-prompt-component";
 import type { PromptPermissionDetails } from "#src/authority/permission-prompter";
+import type { NotificationSession } from "#src/presentation/prompt-notification";
 import { DECIDED_BY_HUMAN } from "#test/helpers/decision-fixtures";
 import {
   makePromptDetails,
@@ -73,6 +74,9 @@ function makeDeps(
     requestPermissionDecision?: typeof requestPermissionDecision;
   } = {},
 ) {
+  const describeSession = vi.fn(
+    (): NotificationSession => ({ name: "refactor-auth", cwd: "/w/repo" }),
+  );
   const events = overrides.events ?? makeEvents();
   const dialogs = overrides.dialogs ?? new AskDialogQueue();
   const ui = makePromptUi();
@@ -91,7 +95,9 @@ function makeDeps(
       dialogs,
       getPromptPreferences: () => makePromptPreferences(),
       requestPermissionDecision: decisionFn,
+      describeSession,
     },
+    describeSession,
     events,
     dialogs,
     ui,
@@ -156,11 +162,45 @@ describe("LocalUserAuthorizer", () => {
     await authorizer.authorize(details);
 
     expect(decisionFn).toHaveBeenCalledWith(
-      { mode: "tui", ui, ...makePromptPreferences() },
+      {
+        mode: "tui",
+        ui,
+        ...makePromptPreferences(),
+        notice: {
+          title: "pi \u2014 refactor-auth",
+          body: "Permission Required: read",
+        },
+      },
       "Permission Required",
       details.payload,
       undefined,
     );
+  });
+
+  describe("notification notice", () => {
+    it("reads the session when each prompt opens, not when the authorizer is built", async () => {
+      const { deps, describeSession, decisionFn, ui } = makeDeps();
+      const authorizer = new LocalUserAuthorizer(deps);
+
+      await authorizer.authorize(makeDetails());
+      describeSession.mockReturnValue({ name: "renamed", cwd: "/w/repo" });
+      await authorizer.authorize(makeDetails());
+
+      expect(decisionFn).toHaveBeenLastCalledWith(
+        {
+          mode: "tui",
+          ui,
+          ...makePromptPreferences(),
+          notice: {
+            title: "pi \u2014 renamed",
+            body: "Permission Required: read",
+          },
+        },
+        "Permission Required",
+        expect.anything(),
+        undefined,
+      );
+    });
   });
 
   it("passes the sessionLabel option when present", async () => {
@@ -246,8 +286,17 @@ describe("LocalUserAuthorizer", () => {
 
       await authorizer.authorize(details);
 
+      // The notice carries the same forwarded title the dialog does.
       expect(decisionFn).toHaveBeenCalledWith(
-        { mode: "tui", ui, ...makePromptPreferences() },
+        {
+          mode: "tui",
+          ui,
+          ...makePromptPreferences(),
+          notice: {
+            title: "pi \u2014 refactor-auth",
+            body: "Permission Required (Subagent): read",
+          },
+        },
         "Permission Required (Subagent)",
         details.payload,
         undefined,

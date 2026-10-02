@@ -329,8 +329,11 @@ describe("redirectTargetIndex", () => {
 
 describe("trailingArgumentIndex", () => {
   /** The text of the child `trailingArgumentIndex` names, or `undefined`. */
-  function trailingText(command: string): Promise<string | undefined> {
-    return withRedirect(command, "file_redirect", (redirect) => {
+  function trailingText(
+    command: string,
+    type = "file_redirect",
+  ): Promise<string | undefined> {
+    return withRedirect(command, type, (redirect) => {
       const index = trailingArgumentIndex(redirect);
       return index === undefined ? undefined : redirect.child(index)?.text;
     });
@@ -355,5 +358,27 @@ describe("trailingArgumentIndex", () => {
         await expect(trailingText(command)).resolves.toBeUndefined();
       },
     );
+  });
+
+  describe("a heredoc the grammar hung the command's words on", () => {
+    it.each([
+      ["git <<EOF push --force\nb\nEOF", "push"],
+      ['cat <<EOF $(rm x) "q s"\nb\nEOF', "$(rm x)"],
+    ])(
+      "names the first word after the delimiter in %j",
+      async (command, text) => {
+        await expect(trailingText(command, "heredoc_redirect")).resolves.toBe(
+          text,
+        );
+      },
+    );
+
+    it("names nothing for a heredoc whose line ends at the delimiter", async () => {
+      // The body follows the delimiter as the next named child, and it is not
+      // a word of the command.
+      await expect(
+        trailingText("cat <<EOF\nb\nEOF", "heredoc_redirect"),
+      ).resolves.toBeUndefined();
+    });
   });
 });

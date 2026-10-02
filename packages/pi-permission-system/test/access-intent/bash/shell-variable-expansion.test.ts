@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { getParser, type TSNode } from "#src/access-intent/bash/parser";
-import { resolvePlainVariableExpansion } from "#src/access-intent/bash/shell-variable-expansion";
+import { ShellVariables } from "#src/access-intent/bash/shell-variable-expansion";
 import { makeTSNode } from "#test/helpers/fake-ts-node";
 
 /** `$NAME` as tree-sitter-bash builds it: a `$` delimiter plus the name. */
@@ -31,16 +31,18 @@ function findNodeOfType(node: TSNode, type: string): TSNode | null {
   return null;
 }
 
-describe("resolvePlainVariableExpansion", () => {
+describe("ShellVariables.resolveReference", () => {
+  const variables = ShellVariables.UNREBOUND;
+
   describe("resolvable variables", () => {
     it("resolves $HOME to the OS home directory", () => {
-      expect(resolvePlainVariableExpansion(simpleExpansion("HOME"))).toBe(
+      expect(variables.resolveReference(simpleExpansion("HOME"))).toBe(
         homedir(),
       );
     });
 
     it("resolves ${HOME} to the OS home directory", () => {
-      expect(resolvePlainVariableExpansion(bracedExpansion("HOME"))).toBe(
+      expect(variables.resolveReference(bracedExpansion("HOME"))).toBe(
         homedir(),
       );
     });
@@ -49,11 +51,11 @@ describe("resolvePlainVariableExpansion", () => {
       // The shell's working directory is the projection's effective base, so
       // the base-relative form resolves correctly after any `cd` folding
       // without threading a base into this pure function.
-      expect(resolvePlainVariableExpansion(simpleExpansion("PWD"))).toBe(".");
+      expect(variables.resolveReference(simpleExpansion("PWD"))).toBe(".");
     });
 
     it("resolves ${PWD} to the base-relative marker", () => {
-      expect(resolvePlainVariableExpansion(bracedExpansion("PWD"))).toBe(".");
+      expect(variables.resolveReference(bracedExpansion("PWD"))).toBe(".");
     });
   });
 
@@ -61,8 +63,8 @@ describe("resolvePlainVariableExpansion", () => {
     it.each(["HOMEDIR", "CURRENT", "PATH", "PWDX", "TMPDIR"])(
       "leaves $%s unresolved",
       (name) => {
-        expect(resolvePlainVariableExpansion(simpleExpansion(name))).toBeNull();
-        expect(resolvePlainVariableExpansion(bracedExpansion(name))).toBeNull();
+        expect(variables.resolveReference(simpleExpansion(name))).toBeNull();
+        expect(variables.resolveReference(bracedExpansion(name))).toBeNull();
       },
     );
   });
@@ -76,7 +78,7 @@ describe("resolvePlainVariableExpansion", () => {
         makeTSNode("word", "/tmp"),
         makeTSNode("}", "}"),
       ]);
-      expect(resolvePlainVariableExpansion(node)).toBeNull();
+      expect(variables.resolveReference(node)).toBeNull();
     });
 
     it("leaves ${#HOME} unresolved", () => {
@@ -86,14 +88,14 @@ describe("resolvePlainVariableExpansion", () => {
         makeTSNode("variable_name", "HOME"),
         makeTSNode("}", "}"),
       ]);
-      expect(resolvePlainVariableExpansion(node)).toBeNull();
+      expect(variables.resolveReference(node)).toBeNull();
     });
   });
 
   describe("nodes that are not a plain variable reference", () => {
     it("returns null for a node with no children", () => {
       expect(
-        resolvePlainVariableExpansion(makeTSNode("simple_expansion", "$HOME")),
+        variables.resolveReference(makeTSNode("simple_expansion", "$HOME")),
       ).toBeNull();
     });
 
@@ -102,7 +104,7 @@ describe("resolvePlainVariableExpansion", () => {
         makeTSNode("${", "${"),
         makeTSNode("}", "}"),
       ]);
-      expect(resolvePlainVariableExpansion(node)).toBeNull();
+      expect(variables.resolveReference(node)).toBeNull();
     });
 
     it("returns null for a variable_assignment naming a resolvable variable", () => {
@@ -112,7 +114,7 @@ describe("resolvePlainVariableExpansion", () => {
         makeTSNode("=", "="),
         makeTSNode("word", "/tmp"),
       ]);
-      expect(resolvePlainVariableExpansion(node)).toBeNull();
+      expect(variables.resolveReference(node)).toBeNull();
     });
   });
 
@@ -134,10 +136,140 @@ describe("resolvePlainVariableExpansion", () => {
         const node = findNodeOfType(tree.rootNode, nodeType);
         expect(node).not.toBeNull();
         if (!node) return;
-        expect(resolvePlainVariableExpansion(node)).toBe(expected);
+        expect(variables.resolveReference(node)).toBe(expected);
       } finally {
         tree.delete();
       }
     });
+  });
+});
+
+describe("ShellVariables.scan", () => {
+  /** Which of HOME and PWD `command` rebinds, read through a plain reference. */
+  async function reboundIn(command: string): Promise<string[]> {
+    const parser = await getParser();
+    const tree = parser.parse(command);
+    if (!tree) throw new Error("parser.parse returned null");
+    try {
+      const variables = ShellVariables.scan([tree.rootNode]);
+      return ["HOME", "PWD"].filter(
+        (name) => variables.resolveReference(simpleExpansion(name)) === null,
+      );
+    } finally {
+      tree.delete();
+    }
+  }
+
+  describe("a variable_name outside a plain reference rebinds it", () => {
+    it.each([
+      ["HOME=/etc", ["HOME"]],
+      ["HOME+=/x", ["HOME"]],
+      ["HOME=/etc cat x", ["HOME"]],
+      ["export HOME=/etc", ["HOME"]],
+      ["local HOME", ["HOME"]],
+      ["readonly PWD=/etc", ["PWD"]],
+      ["for HOME in /etc; do :; done", ["HOME"]],
+      ["unset HOME", ["HOME"]],
+      ["(( HOME = 1 ))", ["HOME"]],
+      ["echo ${HOME:=/etc}", ["HOME"]],
+      ["f() { PWD=/; }; HOME=/etc", ["HOME", "PWD"]],
+    ])("%s rebinds %j", async (command, expected) => {
+      expect(await reboundIn(command)).toEqual(expected);
+    });
+  });
+
+  describe("a builtin that binds a name it is given as a word rebinds it", () => {
+    it.each([
+      ["read HOME", ["HOME"]],
+      ["printf -v PWD x", ["PWD"]],
+      ["declare -n r=HOME; r=/etc", ["HOME"]],
+      ['read "HOME"', ["HOME"]],
+      ["read -r HOME", ["HOME"]],
+      ["mapfile HOME", ["HOME"]],
+      ["getopts ab HOME", ["HOME"]],
+      ['export "HOME=/etc"', ["HOME"]],
+      ["declare 'HOME=/etc'", ["HOME"]],
+      ["let HOME=1", ["HOME"]],
+      ["let 'PWD=1'", ["PWD"]],
+      ["let HOME++", ["HOME"]],
+    ])("%s rebinds %j", async (command, expected) => {
+      expect(await reboundIn(command)).toEqual(expected);
+    });
+  });
+
+  describe("a command that runs code it cannot see rebinds both", () => {
+    it.each([
+      "eval x",
+      "source f",
+      ". f",
+      '"eval" x',
+      "e\\val x",
+      "trap 'HOME=/etc' DEBUG",
+    ])("%s", async (command) => {
+      expect(await reboundIn(command)).toEqual(["HOME", "PWD"]);
+    });
+  });
+
+  describe("a program that only reads them rebinds nothing", () => {
+    it.each([
+      'cat "$HOME/x" $PWD',
+      "echo ${HOME} ${PWD}",
+      'env -i HOME="$HOME" cmd',
+      "HOMEDIR=/etc MY_PWD=/x cmd",
+      "echo HOMEDIR",
+      "echo HOME",
+      "grep HOME ~/.bashrc",
+      "printf HOME",
+      "git log -- PWD",
+      "find . -name x",
+      "echo eval source",
+    ])("%s", async (command) => {
+      expect(await reboundIn(command)).toEqual([]);
+    });
+  });
+
+  describe("a path token spelled from a rebound HOME", () => {
+    async function spellsReboundHome(
+      command: string,
+      token: string,
+    ): Promise<boolean> {
+      const parser = await getParser();
+      const tree = parser.parse(command);
+      if (!tree) throw new Error("parser.parse returned null");
+      try {
+        return ShellVariables.scan([tree.rootNode]).spellsReboundHome(token);
+      } finally {
+        tree.delete();
+      }
+    }
+
+    it.each(["$HOME", "$HOME/x", "${HOME}", "${HOME}/x", "~", "~/x"])(
+      "%s is, once HOME is rebound",
+      async (token) => {
+        expect(await spellsReboundHome("HOME=/etc", token)).toBe(true);
+        expect(await spellsReboundHome("PWD=/etc", token)).toBe(false);
+      },
+    );
+
+    it.each(["$HOMEDIR/x", "~user/x", "/etc/x", "x/$HOME"])(
+      "%s is not, even once HOME is rebound",
+      async (token) => {
+        expect(await spellsReboundHome("HOME=/etc", token)).toBe(false);
+      },
+    );
+  });
+
+  it("reads every root it is given", async () => {
+    const parser = await getParser();
+    const first = parser.parse("cat x");
+    const second = parser.parse("HOME=/etc");
+    if (!first || !second) throw new Error("parser.parse returned null");
+    try {
+      const variables = ShellVariables.scan([first.rootNode, second.rootNode]);
+      expect(variables.resolveReference(simpleExpansion("HOME"))).toBeNull();
+    } finally {
+      first.delete();
+      second.delete();
+    }
   });
 });

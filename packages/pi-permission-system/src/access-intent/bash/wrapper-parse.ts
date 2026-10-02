@@ -3,7 +3,9 @@ import {
   collectCommands,
   type ParseProgram,
 } from "./command-enumeration";
+import { WordReader } from "./node-text";
 import type { TSNode } from "./parser";
+import { ShellVariables } from "./shell-variable-expansion";
 
 /**
  * Parse a bash source string (an opaque wrapper payload) into command units,
@@ -30,7 +32,11 @@ function parseCommandUnits(
   const tree = parser.parse(source);
   if (!tree || tree.rootNode.hasError) return null;
   try {
-    return collectCommands(tree.rootNode, { parseProgram });
+    return collectCommands(
+      tree.rootNode,
+      new WordReader(ShellVariables.scan([tree.rootNode])),
+      { parseProgram },
+    );
   } finally {
     tree.delete();
   }
