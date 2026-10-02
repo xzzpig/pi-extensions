@@ -181,6 +181,7 @@ interface AsyncExecutionContext {
 	permissions?: PermissionConfig;
 	currentModelProvider?: string;
 	currentModel?: ParentModel;
+	scopedModelIds?: string[];
 	/** Optional model-scope enforcement resolved from subagent settings. */
 	modelScope?: ModelScopeConfig;
 /** Parent-authoritative trust state for profile-aware project config merging. */
@@ -1081,7 +1082,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 		const taskText = `${readInstructions.prefix}${taskTemplate}${progressInstructions.suffix}`;
 		const task = namespaceOutputPath ? taskText : injectSingleOutputInstruction(taskText, outputPath, a);
 
-		const modelScopes = resolveModelScopesForAgent(ctx.modelScope, a.name, ctx.currentModel);
+		const modelScopes = resolveModelScopesForAgent(ctx.modelScope, a.name, ctx.currentModel, ctx.scopedModelIds);
 		const modelOrigin = resolveModelOrigin({ explicitModel: s.model, agentModel: a.model, parentModel: ctx.currentModel });
 		const primaryModelFromParent = modelOrigin === "inherited";
 		const primaryModel = externalRunner ? undefined : resolveEffectiveSubagentModel(
@@ -1194,6 +1195,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			subagentOnlyExtensions: a.subagentOnlyExtensions,
 			...(!externalRunner ? { requiredExtensions } : {}),
 			mcpDirectTools: a.mcpDirectTools,
+			...(toolPlan.builtinMcpTools ? { builtinMcpTools: toolPlan.builtinMcpTools } : {}),
 			mutationTools: a.mutationTools,
 			...(a.sandbox ? { sandbox: a.sandbox } : {}),
 			systemPrompt,
@@ -1524,6 +1526,7 @@ export function executeAsyncChain(
 				piPackageRoot,
 				childSessionFactoryModule: childSessionFactoryModule(),
 				inheritedChildRuntime: inheritedChildRuntime(ctx.childRuntime),
+				projectTrusted: ctx.projectTrusted,
 				worktreeSetupHook,
 				worktreeSetupHookTimeoutMs,
 				worktreeBaseDir,
@@ -1863,7 +1866,7 @@ export function executeAsyncSingle(
 		? `[Read from: ${readPaths.join(", ")}]\n\n`
 		: "";
 	const taskText = readsInstruction + taskWithOutputInstruction;
-	const modelScopes = resolveModelScopesForAgent(ctx.modelScope, agentConfig.name, ctx.currentModel);
+	const modelScopes = resolveModelScopesForAgent(ctx.modelScope, agentConfig.name, ctx.currentModel, ctx.scopedModelIds);
 	const modelOrigin = resolveModelOrigin({
 		fromParent: params.modelOverrideFromParent,
 		storedOrigin: params.modelOrigin,
@@ -2098,6 +2101,7 @@ export function executeAsyncSingle(
 						subagentOnlyExtensions: agentConfig.subagentOnlyExtensions,
 						...(!externalRunner ? { requiredExtensions } : {}),
 						mcpDirectTools: agentConfig.mcpDirectTools,
+						...(toolPlan.builtinMcpTools ? { builtinMcpTools: toolPlan.builtinMcpTools } : {}),
 						mutationTools: agentConfig.mutationTools,
 						...(sandbox ? { sandbox } : {}),
 						systemPrompt,
@@ -2144,6 +2148,7 @@ export function executeAsyncSingle(
 				...(capabilityCeiling ? { capabilityCeiling } : {}),
 				piPackageRoot,
 				childSessionFactoryModule: childSessionFactoryModule(),
+				projectTrusted: ctx.projectTrusted,
 				inheritedChildRuntime: inheritedChildRuntime(ctx.childRuntime),
 				worktreeSetupHook,
 				worktreeSetupHookTimeoutMs,

@@ -1044,7 +1044,10 @@ async function runSingleAttempt(
 			jsonlWriter.writeLine(JSON.stringify(projectChildSessionEventForJson(evt)));
 			shared.transcriptWriter?.writeChildEvent(evt);
 			shared.orcaProgressTab?.event(evt);
-			if (evt.type === "compaction_start") compactionStartedReceived = true;
+			if (evt.type === "compaction_start") {
+				compactionStartedReceived = true;
+				if (agentSettledReceived) afterCompactionSettlement = true;
+			}
 			if (evt.type === "compaction_end" && evt.willRetry === true) {
 				compactionStartedReceived = false;
 				afterCompactionSettlement = false;
@@ -1364,6 +1367,8 @@ async function runSingleAttempt(
 			if (!closeError && (abortedBySignal || session?.shutDown) && !result.interrupted && !result.timedOut) {
 				closeError = session?.shutDown ? "Subagent stopped because the parent session shut down." : STOPPED_BEFORE_COMPLETION_ERROR;
 			}
+			// A workflow child ended by the workflow's abort signal was stopped, not failed.
+			if (options.abortedAsStopped && abortedBySignal && !session?.shutDown && !result.interrupted && !result.timedOut) result.stopped = true;
 			if (!closeError && forced && !forcedDrainAfterFinalSuccess) {
 				closeError = "Subagent session did not settle after it was aborted.";
 			}

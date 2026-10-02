@@ -2996,10 +2996,11 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 				events.toolStart("write", { path: "side-effect.txt", content: "done" }),
 				events.toolEnd("write"),
 				events.toolResult("write", "Wrote side-effect.txt"),
-				{ type: "compaction_start" },
-				{ type: "message_end", message: { role: "assistant", content: [], model: "openai/gpt-5-mini", stopReason: "aborted", usage: { input: 10, output: 0, cacheRead: 2, cacheWrite: 1, cost: { total: 0.01 } } } },
+				{ type: "message_end", message: { role: "assistant", content: [], model: "openai/gpt-5-mini", stopReason: "error", errorMessage: "This operation was aborted", usage: { input: 10, output: 0, cacheRead: 2, cacheWrite: 1, cost: { total: 0.01 } } } },
 				{ type: "agent_settled" },
+				{ type: "compaction_start" },
 			],
+			omitImplicitFinalEvents: true,
 			writeFiles: [{ path: "side-effect.txt", content: "done" }, { path: sessionFile, content: "{}\n" }],
 			keepAliveAfterFinalMessageMs: 5_000,
 			exitCode: 0,
@@ -3910,6 +3911,41 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(childTimeout.isError, true);
 		assert.equal(childTimeout.details.workflow?.receipt?.terminalOutcome, undefined);
 		assert.deepEqual(childTimeout.details.workflow?.receipt?.entries["slow-child"]?.terminalOutcome, { state: "partial", reason: "timeout" });
+	});
+
+	it("rejects workflow-script timeouts above the maximum schedulable timer delay before launch", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const executor = makeExecutor([makeAgent("echo")]);
+		const cases = [
+			{ name: "timeoutMs", params: { timeoutMs: 2_147_483_648 } },
+			{ name: "maxRuntimeMs", params: { maxRuntimeMs: 2_147_483_648 } },
+			{ name: "maxRuntimeMs", params: { timeoutMs: 1_000, maxRuntimeMs: 2_147_483_648 } },
+		] as const;
+		for (const { name, params } of cases) {
+			const result = await executor.execute(
+				`workflow-overflow-${name}`,
+				{ async: false, ...params, workflowScript: `return await runs.run("never", { agent: "echo", task: "Never launch" });` },
+				new AbortController().signal,
+				undefined,
+				makeMinimalCtx(tempDir),
+			);
+			assert.equal(result.isError, true);
+			assert.match(result.content[0]?.text ?? "", new RegExp(`${name} must be a positive integer no larger than 2147483647`));
+		}
+		assert.equal(readAllCallArgs().length, 0, "invalid workflow timeout must be rejected before child launch");
+	});
+
+	it("rejects resume timeouts above the maximum schedulable timer delay before launch", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const executor = makeExecutor([makeAgent("echo")]);
+		const result = await executor.execute(
+			"resume-overflow",
+			{ action: "resume", id: "missing-run", message: "continue", timeoutMs: 2_147_483_648 },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		assert.equal(result.isError, true);
+		assert.match(result.content[0]?.text ?? "", /timeoutMs must be a positive integer no larger than 2147483647/);
+		assert.equal(readAllCallArgs().length, 0);
 	});
 
 	it("runs omitted async launches in the background when the global default is enabled", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {

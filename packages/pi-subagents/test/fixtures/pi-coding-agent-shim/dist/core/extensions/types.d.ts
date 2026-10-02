@@ -23,7 +23,7 @@ import type { ModelRegistry } from "../model-registry.ts";
 import type { BranchSummaryEntry, CompactionEntry, CustomEntry, ReadonlySessionManager, SessionEntry, SessionManager } from "../session-manager.ts";
 import type { SlashCommandInfo } from "../slash-commands.ts";
 import type { SourceInfo } from "../source-info.ts";
-import type { BuildSystemPromptOptions } from "../system-prompt.ts";
+import type { BuildSystemPromptOptions, NormalizedBuildSystemPromptOptions } from "../system-prompt.ts";
 import type { BashOperations } from "../tools/bash.ts";
 import type { EditToolDetails } from "../tools/edit.ts";
 import type { BashToolDetails, BashToolInput, EditToolInput, FindToolDetails, FindToolInput, GrepToolDetails, GrepToolInput, LsToolDetails, LsToolInput, ReadToolDetails, ReadToolInput, WriteToolInput } from "../tools/index.ts";
@@ -222,6 +222,8 @@ export interface ExtensionContext {
     modelRegistry: ModelRegistry;
     /** Current model (may be undefined) */
     model: Model<any> | undefined;
+    /** Resolved scoped-model snapshot for /scoped-models; optional for older hosts */
+    scopedModels?: ReadonlyArray<{ model: Model<any>; thinkingLevel?: ThinkingLevel }>;
     /** Whether the agent is idle (not streaming) */
     isIdle(): boolean;
     /** Whether project-local trust is active for this context. */
@@ -521,8 +523,8 @@ export interface BeforeAgentStartEvent {
     images?: ImageContent[];
     /** The fully assembled system prompt string. */
     systemPrompt: string;
-    /** Structured options used to build the system prompt. Extensions can inspect this to understand what Pi loaded without re-discovering resources. */
-    systemPromptOptions: BuildSystemPromptOptions;
+    /** Structured options used to build the system prompt. Extensions can inspect this to understand what Pi loaded without re-discovering resources. Pi 1.0.0 carries the normalized shape: selectedTools and sections are always present. */
+    systemPromptOptions: NormalizedBuildSystemPromptOptions;
 }
 /** Fired when an agent loop starts */
 export interface AgentStartEvent {

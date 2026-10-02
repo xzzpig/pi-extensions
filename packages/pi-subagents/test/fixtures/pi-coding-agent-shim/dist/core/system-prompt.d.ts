@@ -23,6 +23,13 @@ export interface BuildSystemPromptOptions {
     /** Pre-loaded skills. */
     skills?: Skill[];
 }
+/** Pi 1.0.0: the normalized, collection-complete options shape carried by the
+ * before_agent_start event's `systemPromptOptions` (selectedTools and sections
+ * always present). Mirrors the real host's NormalizedBuildSystemPromptOptions. */
+export type NormalizedBuildSystemPromptOptions = BuildSystemPromptOptions & {
+    selectedTools: string[];
+    sections: Record<string, string>;
+};
 /** Build the system prompt with tools, guidelines, and context */
 export declare function buildSystemPrompt(options: BuildSystemPromptOptions): string;
 //# sourceMappingURL=system-prompt.d.ts.map

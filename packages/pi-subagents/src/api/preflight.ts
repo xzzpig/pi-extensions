@@ -15,7 +15,7 @@ import { assertThinkingWithinCeiling, intersectThinkingCeilings, type ThinkingLe
 import { SUBAGENT_LIFECYCLE_ARTIFACT_VERSION, type ArtifactDirPreference, type ArtifactPaths, type IntercomBridgeConfig, type IntercomBridgeMode, type JsonSchemaObject, type OutputMode } from "../shared/types.ts";
 import { capabilityCeilingAgentRestrictionMessage, intersectSubagentCapabilityCeilings, type ResolvedSubagentCapabilityCeiling, type SubagentCapabilityAudit } from "../runs/shared/capability-ceiling.ts";
 import { resolvePermissionRules } from "../runs/shared/permissions.ts";
-import type { ResolvedMcpDirectToolSelection } from "../runs/shared/mcp-direct-tool-allowlist.ts";
+import type { McpRuntimeSnapshotHost, ResolvedMcpDirectToolSelection } from "../runs/shared/mcp-direct-tool-allowlist.ts";
 import { resolveStepBehavior } from "../shared/settings.ts";
 import { canPreferForkFromSnapshot, resolveSubagentLaunchContext } from "../shared/fork-context.ts";
 import { loadConfig } from "../extension/config.ts";
@@ -72,6 +72,8 @@ export interface SubagentLaunchContractInput {
 	thinkingCeiling?: ThinkingLevel;
 	inheritedThinkingCeiling?: ThinkingLevel;
 	parentModel?: ParentModel;
+	/** Scoped-model snapshot (`provider/id` strings); drives the `scoped` allow token. Omitting it degrades `scoped` to `inherit`, so callers comparing preflight with execution must pass the session snapshot. */
+	scopedModelIds?: readonly string[];
 	availableModels?: ReadonlyArray<AvailableModelInfo | { provider: string; id: string; fullId?: string; reasoning?: boolean }>;
 	preferredProvider?: string;
 	skill?: string | string[] | boolean;
@@ -100,6 +102,8 @@ export interface SubagentLaunchContractInput {
 	trustedProjectCwd?: string;
 	/** Builtin tool names the host runtime provides; used to intersect agent-declared tools. */
 	hostAvailableBuiltins?: readonly string[];
+	/** The calling extension's `pi`, so `mcp:` selectors resolve against the MCP the launch uses. Without it, preflight cannot see Pi's built-in MCP and resolves through pi-mcp-adapter's configuration. */
+	runtimeSnapshotHost?: McpRuntimeSnapshotHost;
 	/** Per-launch bridge config; replaces the global `intercomBridge` config exactly as the tool and delegation overrides do. */
 	intercomBridge?: IntercomBridgeConfig;
 	/**
@@ -414,7 +418,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 	}
 	const availableModels = normalizeAvailableModels(input.availableModels);
 	const preferredProvider = agent.modelProvider ?? input.preferredProvider ?? input.parentModel?.provider;
-	const modelScopes = resolveModelScopesForAgent(discovered.modelScope, agent.name, input.parentModel);
+	const modelScopes = resolveModelScopesForAgent(discovered.modelScope, agent.name, input.parentModel, input.scopedModelIds);
 	const modelOrigin = resolveModelOrigin({ explicitModel: input.model, agentModel: agent.model, parentModel: input.parentModel });
 	const primaryModel = externalRunner
 		? undefined
@@ -466,6 +470,7 @@ export async function resolveSubagentLaunchContract(input: SubagentLaunchContrac
 			sandbox: agent.sandbox,
 			permissionProfile: agent.permissionProfile,
 			hostAvailableBuiltins: input.hostAvailableBuiltins,
+			runtimeSnapshotHost: input.runtimeSnapshotHost,
 		});
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
