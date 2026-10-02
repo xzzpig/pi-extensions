@@ -1,4 +1,8 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  ExtensionToolContext,
+} from "@earendil-works/pi-coding-agent";
 
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -35,7 +39,7 @@ function session(cwd: string) {
       setStatus: () => {},
       theme: { fg: (_color: string, text: string) => text },
     },
-  } as unknown as ExtensionContext;
+  } as unknown as ExtensionToolContext;
   extension(api);
   return {
     async start() {

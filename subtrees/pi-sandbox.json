@@ -37,6 +37,7 @@
     }
   ],
   "reapplyOnSync": [
+    "the session-isolation test's ExtensionToolContext mock cast (Pi 1.0.0 moved tools/executeTool onto ExtensionToolContext; the mock ctx passed to registerTool's execute must be cast to ExtensionToolContext, which still extends ExtensionContext for the event-handler calls)",
     "the sandboxManagerFactory seam, the tool-display decoration, the profile layer, the inherit-not-force rule for network.disabled/filesystem.disabled (an unprovided switch follows the baseline; validateProfileConfig still rejects a profile that sets disabled: true) and protectNonexistentFiles, and the filesystem.allowRead union rule (a profile's allowRead extends the inherited list in both merge paths — single profile and same-name project profile — because replacing it made every path outside the project unreadable)",
     "the root index.ts export block's re-export of registerSandboxProfiles/type SandboxProfileDefinition from the fork-only src/fork-profile-registry.ts (upstream index.ts only exports the default)",
     "the profile-config module split",

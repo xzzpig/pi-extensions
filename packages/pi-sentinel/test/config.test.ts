@@ -329,9 +329,9 @@ describe("rule validation details", () => {
 });
 
 describe("KNOWN_CORE_EVENTS", () => {
-  test("lists 39 unique host event names", () => {
-    expect(KNOWN_CORE_EVENTS).toHaveLength(39);
-    expect(new Set(KNOWN_CORE_EVENTS).size).toBe(39);
+  test("lists 41 unique host event names", () => {
+    expect(KNOWN_CORE_EVENTS).toHaveLength(41);
+    expect(new Set(KNOWN_CORE_EVENTS).size).toBe(41);
   });
 
   test("contains representative host events", () => {

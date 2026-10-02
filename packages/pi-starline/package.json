@@ -35,9 +35,9 @@
 		"prepublishOnly": "npm run verify && npm run pack:check"
 	},
 	"peerDependencies": {
-		"@earendil-works/pi-ai": ">=0.86.0 <0.88",
-		"@earendil-works/pi-coding-agent": ">=0.86.0 <0.88",
-		"@earendil-works/pi-tui": ">=0.86.0 <0.88",
+		"@earendil-works/pi-ai": ">=1.0.0 <2",
+		"@earendil-works/pi-coding-agent": ">=1.0.0 <2",
+		"@earendil-works/pi-tui": ">=1.0.0 <2",
 		"@xzzpig/pi-mouse-events": ">=0.2.0 <3"
 	},
 	"pi": {
@@ -51,9 +51,9 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.5.0",
-		"@earendil-works/pi-ai": "^0.87.1",
-		"@earendil-works/pi-coding-agent": "^0.87.1",
-		"@earendil-works/pi-tui": "^0.87.1",
+		"@earendil-works/pi-ai": "catalog:",
+		"@earendil-works/pi-coding-agent": "catalog:",
+		"@earendil-works/pi-tui": "catalog:",
 		"@types/node": "^26.0.0",
 		"typescript": "^7.0.2",
 		"vitest": "^4.1.8",

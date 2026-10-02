@@ -30,7 +30,7 @@
     },
     {
       "kind": "test",
-      "reason": "test:smoke:tool-activation fails locally: TypeError: SettingsManager.inMemory is not a function. The package devDependency aliases @earendil-works/pi-coding-agent to the test shim (test/fixtures/pi-coding-agent-shim, 0.87.0), whose SettingsManager and DefaultResourceLoader are empty stubs, so this smoke script needs an environment where the real pi package resolves; it is not part of test:unit or test:all. The unit suite is green.",
+      "reason": "test:smoke:tool-activation fails locally: TypeError: SettingsManager.inMemory is not a function. The package devDependency aliases @earendil-works/pi-coding-agent to the test shim (test/fixtures/pi-coding-agent-shim, 1.0.0 since the 2026-10-02 Pi 1.0.0 baseline), whose SettingsManager and DefaultResourceLoader are empty stubs, so this smoke script needs an environment where the real pi package resolves; it is not part of test:unit or test:all. The unit suite is green.",
       "recordedAt": "2026-09-28T02:09:09+08:00",
       "path": "packages/pi-subagents/test/smoke/tool-activation.test.ts"
     },
@@ -90,12 +90,17 @@
     },
     {
       "kind": "test",
-      "path": "packages/pi-subagents/test/unit/herdr-native-placement.test.ts",
-      "reason": "'preserves canonical contact_supervisor progress and structured-interview semantics' failed once in a full `test:unit` run while passing in isolation and in a solo full run, so it is timing/resource sensitive (observed while another heavy suite ran in parallel). Pre-existing flake, not tied to a fork change.",
-      "recordedAt": "2026-09-28T05:55:00+08:00"
+      "path": "packages/pi-subagents/test/unit/global-npm-root.test.ts",
+      "reason": "resolveGlobalNpmRoot and 'terminates the owned npm process on timeout' flap under parallel full test:unit load (npm spawn + owned-kill timing); both pass solo and in single-file runs. Same family as the 2026-09-27 SIGTERM-on-spawnSync flakes, not tied to a fork change.",
+      "recordedAt": "2026-10-02T22:30:00+08:00"
     }
   ],
   "reapplyOnSync": [
+    "Pi 1.0.0 baseline (2026-10-02): child-session.ts ChildSession wrappers call .then(() => undefined) on session.steer/followUp (Pi 1.0.0 returns Promise<QueuedInputDisposition>; the fork API stays Promise<void>). The shim fixture version is 1.0.0, so TypeScript's package-id dedup unifies it with the real 1.0.0 host inside consumer programs (pi-goal-x, pi-openspec-x) and those programs typecheck the fork sources against real 1.0.0 types — keep the .then wrappers when re-applying",
+    "Pi 1.0.0 baseline (2026-10-02): runner-aliases.ts best-effort subpath aliases — in resolveHostPeerAliases, when the peer package resolves but the subpath is no longer declared by its exports (pi-agent-core 1.0.0 dropped ./node), skip the alias instead of failing the launch; a declared-but-missing target stays a fatal missing",
+    "Pi 1.0.0 baseline (2026-10-02): host-peer-runtime-imports.test.ts final loop iterates resolved.aliases entries and asserts the root (subpath \".\") HOST_PEER_ALIASES specifiers instead of every table entry, because dropped subpaths are best-effort",
+    "Pi 1.0.0 baseline (2026-10-02): herdr-native-placement.test.ts 'preserves canonical contact_supervisor progress' replaces its fixed 30ms/10ms sleeps with a waitForFrame poll (under the isolated-HOME preload the configure handler runs agent discovery and the configured frame arrives ~300ms in)",
+    "Pi 1.0.0 baseline (2026-10-02): package-manifest.test.ts expectedHostPeerRanges pi-ai >=1.0.0 <2 and expectedHostDevVersions agent-core/pi-ai/pi-tui exact 1.0.0, matching the fork manifest's Pi 1.0.0 SDK pins",
     "sandbox/permission-profile threading (RunnerSubagentStep.sandbox/permissionProfile, LaunchBindingSource fields, resolveSandboxExtension, preflight untrusted_project validation)",
     "tool-budget blocked detection (isToolBudgetBlockedMessage) inside fork-only handleToolResult in execution.ts, rebuilding the message_end role=toolResult dedup wrapper around upstream's usage-completeness body",
     "restore getHostBuiltinToolNames to child-tool-plan.ts (upstream dropped it)",
@@ -112,7 +117,7 @@
   "doNotReintroduce": [
     "do not re-port the fork multi-model loop onto execution.ts or subagent-runner.ts",
     "do not re-add the streamFn option-naming divergence (upstream ships agentStreamOptions())",
-    "do not bump the SDK pins to 0.87.1 without fixture work (a 0.87.1-paired runner child crashes on the chord BACKGROUND_CONTEXT stub)",
+    "do not bump the SDK pins without fixture work: after every pnpm install re-copy the touched fixture to node_modules/@earendil-works/pi-coding-agent and rm -rf the re-copied chord stub (a paired runner child crashes on the chord BACKGROUND_CONTEXT stub; the 1.0.0 bump additionally needs the runner-aliases best-effort subpath adaptation)",
     "do not wrap agent-management.jsonDetails in try/catch (it is at upstream bytes)",
     "keep the .oxlintrc.json overrides broad and the pi-lens findings on upstream-original code unfixed (declared in knownDebt)"
   ]

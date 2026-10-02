@@ -38,13 +38,14 @@ export type TriggerType = (typeof TRIGGER_TYPES)[number];
  * Host extension event names a `core:`-prefixed trigger may subscribe.
  *
  * Enumerated from `ExtensionAPI.on()`'s per-event overloads of the pinned
- * host version (0.87.1). The `satisfies` clause proves every entry is a real
+ * host version (1.0.0). The `satisfies` clause proves every entry is a real
  * host event name; the `KNOWN_CORE_EVENTS_COMPLETE` guard fails to compile
  * when the host union gains events the table does not list yet.
  */
 export const KNOWN_CORE_EVENTS = [
   "project_trust",
   "resources_discover",
+  "mcp_servers_change",
   "session_start",
   "session_info_changed",
   "session_before_switch",
@@ -61,6 +62,7 @@ export const KNOWN_CORE_EVENTS = [
   "before_provider_request",
   "before_provider_headers",
   "after_provider_response",
+  "provider_stream_event",
   "before_agent_start",
   "agent_start",
   "agent_end",

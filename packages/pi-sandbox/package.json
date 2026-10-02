@@ -54,7 +54,7 @@
     "@xzzpig/sandbox-runtime"
   ],
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.80.0 <0.88",
+    "@earendil-works/pi-coding-agent": ">=1.0.0 <2",
     "@earendil-works/pi-tui": "*",
     "@xzzpig/pi-tool-display": ">=0.1.1"
   },

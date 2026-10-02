@@ -131,6 +131,26 @@ function findPeerPackageDir(piPackageRoot: string, pkg: string, hostName: unknow
 	return candidates.find((candidate) => readManifest(candidate)?.name === pkg);
 }
 
+/** Whether the package's `exports` map (or `main`) declares `subpath`, even if the target file is missing. */
+function exportsDeclareSubpath(packageDir: string, subpath: string): boolean {
+	const manifest = readManifest(packageDir);
+	if (!manifest) return false;
+	const exportsField = manifest.exports;
+	if (exportsField === undefined || exportsField === null) return subpath === ".";
+	const map: Record<string, unknown> = typeof exportsField === "string" || Array.isArray(exportsField) || (exportsField && typeof exportsField === "object" && !Object.keys(exportsField as object).some((key) => key.startsWith(".")))
+		? { ".": exportsField }
+		: exportsField as Record<string, unknown>;
+	if (subpath in map) return true;
+	for (const pattern of Object.keys(map)) {
+		const star = pattern.indexOf("*");
+		if (star === -1) continue;
+		const prefix = pattern.slice(0, star);
+		const suffix = pattern.slice(star + 1);
+		if (subpath.startsWith(prefix) && subpath.endsWith(suffix) && subpath.length >= prefix.length + suffix.length) return true;
+	}
+	return false;
+}
+
 /** The alias map the runner needs, or the specifiers that could not be resolved. */
 export function resolveHostPeerAliases(piPackageRoot: string): { aliases: Record<string, string>; missing: string[] } {
 	const aliases: Record<string, string> = {};
@@ -145,8 +165,16 @@ export function resolveHostPeerAliases(piPackageRoot: string): { aliases: Record
 		const packageDir = findPeerPackageDir(piPackageRoot, pkg, hostManifest?.name);
 		const target = packageDir ? resolvePackageSubpath(packageDir, subpath) : undefined;
 		// Native loaders short-circuit resolution, so aliases must retain the real package's dependency scope.
-		if (target && fs.existsSync(target)) aliases[specifier] = fs.realpathSync(target);
-		else missing.push(specifier);
+		if (target && fs.existsSync(target)) {
+			aliases[specifier] = fs.realpathSync(target);
+			continue;
+		}
+		// Host API drift: the installed peer no longer exports the subpath at all
+		// (pi 1.0.0's pi-agent-core dropped ./node), so the runner cannot import
+		// it on this host either — the alias is best-effort. A subpath that is
+		// declared but missing on disk stays a broken install.
+		if (packageDir && subpath !== "." && !exportsDeclareSubpath(packageDir, subpath)) continue;
+		missing.push(specifier);
 	}
 	return { aliases, missing };
 }

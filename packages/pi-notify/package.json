@@ -49,10 +49,10 @@
     "dotenv-expand": "13.0.0"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": ">=0.84.4"
+    "@earendil-works/pi-coding-agent": ">=1.0.0 <2"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.85.1",
+    "@earendil-works/pi-coding-agent": "catalog:",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
