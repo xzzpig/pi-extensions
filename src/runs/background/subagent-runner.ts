@@ -12,7 +12,7 @@ import { createCapacityResilientJsonWriter } from "../../shared/capacity-resilie
 import { isStorageCapacityError } from "../../shared/file-system-retry.ts";
 import { updateActiveRunIndex } from "./active-run-index.ts";
 import { createChildTranscriptWriter, type ChildTranscriptWriter } from "../../shared/child-transcript.ts";
-import { closeSteerInbox, consumeInterruptRequest, consumeSteerRequests, consumeStopRequestPayloads, deliverInterruptRequest, deliverStopRequest, deliverTimeoutRequest, watchAsyncControlInbox, type SteerRequest, type StopRequest } from "./control-channel.ts";
+import { closeSteerInbox, closeStopInbox, consumeInterruptRequest, consumeSteerRequests, consumeStopRequestPayloads, deliverInterruptRequest, deliverStopRequest, deliverTimeoutRequest, watchAsyncControlInbox, type SteerRequest, type StopRequest } from "./control-channel.ts";
 import { appendJsonl as appendRawJsonl, formatOutputArtifactContent, getArtifactPaths, writeArtifact, writeMetadata } from "../../shared/artifacts.ts";
 import { PI_CODING_AGENT_PACKAGE, resolveInstalledPiPackageRoot } from "../shared/pi-spawn.ts";
 import { preflightLaunchCwd } from "../shared/launch-cwd.ts";
@@ -188,6 +188,8 @@ export interface SubagentRunConfig {
 	childSessionFactoryModule?: string;
 	/** The launching executor's own child runtime when it was itself an in-process child. */
 	inheritedChildRuntime?: InheritedChildRuntime;
+	/** The launching session's project trust; undefined keeps Pi's default for hosts without trust. */
+	projectTrusted?: boolean;
 	worktreeSetupHook?: string;
 	worktreeSetupHookTimeoutMs?: number;
 	worktreeBaseDir?: string;
@@ -669,6 +671,7 @@ interface SingleStepContext {
 	childSessions: ChildSessionFactory;
 	/** The launching executor's own child runtime; nested route, depth, and ceilings come from here. */
 	inheritedChildRuntime?: InheritedChildRuntime;
+	projectTrusted?: boolean;
 	registerInterrupt?: (interrupt: (() => void) | undefined) => void;
 	registerTimeout?: (interrupt: (() => void) | undefined) => void;
 	registerStop?: (stop: (() => void) | undefined) => void;
@@ -815,6 +818,7 @@ export async function runSingleStepInner(
 			fast: step.fast,
 			model: step.model,
 			mcpDirectTools: step.mcpDirectTools,
+			builtinMcpTools: step.builtinMcpTools,
 			cwd: step.cwd ?? ctx.cwd,
 			requireReadTool: Boolean(step.skills?.length),
 			structuredOutput: Boolean(effectiveStructuredOutput),
@@ -1149,6 +1153,7 @@ export async function runSingleStepInner(
 				fast: step.fast,
 				model: step.model,
 				mcpDirectTools: step.mcpDirectTools,
+				builtinMcpTools: step.builtinMcpTools,
 				cwd: step.cwd ?? ctx.cwd,
 				requireReadTool: Boolean(step.skills?.length),
 				structuredOutput: Boolean(effectiveStructuredOutput),
@@ -3717,6 +3722,7 @@ export async function runSubagent(
 					artifactsDir, artifactConfig, id,
 					flatIndex: fi, flatStepCount: Math.max(statusPayload.steps.length, 1),
 					outputFile: path.join(asyncDir, `output-${fi}.log`),
+					projectTrusted: config.projectTrusted,
 					piPackageRoot: config.piPackageRoot,
 					childSessions,
 					inheritedChildRuntime: config.inheritedChildRuntime,
@@ -4129,6 +4135,7 @@ export async function runSubagent(
 							sessionDir: taskSessionDir,
 							artifactsDir, artifactConfig, id,
 							flatIndex: fi, flatStepCount: Math.max(statusPayload.steps.length, 1),
+							projectTrusted: config.projectTrusted,
 							outputFile: path.join(asyncDir, `output-${fi}.log`),
 							piPackageRoot: config.piPackageRoot,
 							childSessions,
@@ -4517,6 +4524,7 @@ export async function runSubagent(
 				outputs: statusPayload.mode === "single" ? undefined : outputs,
 				sessionDir: config.sessionDir,
 				artifactsDir, artifactConfig, id,
+				projectTrusted: config.projectTrusted,
 				flatIndex, flatStepCount: Math.max(statusPayload.steps.length, 1),
 				outputFile: path.join(asyncDir, `output-${flatIndex}.log`),
 				piPackageRoot: config.piPackageRoot,
@@ -4863,6 +4871,12 @@ export async function runSubagent(
 		timedOut = true;
 	}
 	disposeControlInbox();
+	try {
+		closeStopInbox(asyncDir);
+	} catch (error) {
+		// Result publication must not depend on the marker; without it a late stop is accepted as before.
+		appendJsonl(eventsPath, JSON.stringify({ type: "subagent.run.stop_inbox_close_failed", ts: Date.now(), runId: id, message: error instanceof Error ? error.message : String(error) }));
+	}
 	for (const request of consumeStopRequestPayloads(asyncDir)) stopChildStep(request);
 	const signalTerminated = !stopped && !timedOut && !interrupted && results.some((result) => result.exitCode !== 0 && isUnexplainedProcessSignal(omitUndefinedProperties({
 		processSignal: result.processSignal,
