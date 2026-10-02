@@ -2,6 +2,23 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.9.0] — 2026-10-02 (fork release)
+
+### Changed
+
+- **Synced upstream `v0.31.9` → `v0.32.3`**: Pi 1.0.0 support (peer floors
+  widened upstream; the fork baseline is `>=1.0.0 <2`), `session_compact_failed`
+  handling, removal of the next-actions mechanism (`{ kind: "ready" }` without
+  `next_action`), no invented token budgets in drafting, dashboard keyboard
+  navigation fixes (configurable dashboard keybindings read at event time,
+  Kitty single-press handling, componentRef viewport scrolling), and
+  `Provider finish_reason: error` classified as a transient failure.
+- The fork's Escape/foreign-ui-prompt guard and hold-to-scroll semantics are
+  preserved on top: repeats still reach the compact task-list scroll (the
+  upstream single-press kitty guard was not adopted; its release filtering is
+  covered by the fork's `isKeyRelease` guard), and the auditor settings group
+  maps the new `showAutonomousRuns` flat key.
+
 ## [0.8.3] — 2026-09-27 (fork release)
 
 ### Changed

@@ -4,11 +4,11 @@
   "prefix": "packages/pi-goal-x",
   "source": "https://github.com/tmonk/pi-goal-x.git",
   "remote": "upstream-pi-goal-x",
-  "ref": "v0.31.9",
-  "version": "0.31.9",
-  "upstreamCommit": "a5bdf61bed449735132a61da983c3f6a5ae82222",
+  "ref": "v0.32.3",
+  "version": "v0.32.3",
+  "upstreamCommit": "64c5ace87f3400c0b55ef87f2d2912167f53dbaa",
   "squash": true,
-  "lastSyncedAt": "2026-09-25T17:38:31+08:00",
+  "lastSyncedAt": "2026-10-02T23:50:15+08:00",
   "notes": "Forked from the pi-goal-x upstream. Capability contracts live in openspec (spec goal-completion-auditing; the goal-persisted-event-channels spec for the persisted message channels; the S1/S2 auditor seams for pi-openspec-x live in openspec change add-pi-openspec-x, design D10) and in the package-local spec specs/2026-09-12-escape-foreign-ui-prompt-guard for the Escape/ui-prompt guard.",
   "knownDebt": [
     {
