@@ -2,6 +2,39 @@
 
 All notable changes to this project are documented here.
 
+## Unreleased
+
+## [0.7.1] - 2026-10-01
+
+Supports Pi 0.85.1 through 1.x. Tested with Pi 0.99.2 and 1.0.0.
+
+### Maintenance
+- Widened Pi peer dependency ranges to support Pi 1.x. All 144 tests and the
+  typecheck pass with Pi 1.0.0; the minimum supported Pi remains 0.85.1. (#54)
+
+## [0.7.0] - 2026-09-30
+
+Requires Pi 0.85.1 or newer. Tested with Pi 0.99.2.
+
+### Maintenance
+- Updated Pi development dependencies to 0.99.2 and Vitest to 4.1.11, with a
+  refreshed dependency lockfile. The minimum supported Pi remains 0.85.1.
+- CI now checks locked, minimum, and latest Pi versions, including weekly
+  compatibility checks. Real SDK tests cover BTW commands, context inheritance,
+  follow-ups, extension tool execution, read-only tools, and summarization.
+
+### Added
+- Opt-in headless extension tools for `/btw`, `/side`, and `/btw:tangent`, via
+  global/project `btw.json` extension allowlists. Sources are selected before
+  initialization, remote packages use a separate BTW cache, and extension
+  startup/shutdown are handled with the child lifecycle. `/btw:ask` remains
+  restricted to its built-in read-only tools; summarize remains tool-free. (#50)
+
+### Fixed
+- BTW child prompts now state their actual tool capabilities, overriding tool
+  claims inherited from the main session. This includes the restricted
+  `/btw:ask` tool set and the tool-free `/btw:summarize` session. (#50)
+
 ## [0.6.1] - 2026-09-23
 
 Requires Pi 0.85.1 or newer.
