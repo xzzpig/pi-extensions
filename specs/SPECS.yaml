@@ -51,3 +51,17 @@ specs:
     focused: true
     last_audit: null
     updated: 2026-08-04
+  - id: 2026-10-02-dashboard-keyboard-navigation
+    path: specs/2026-10-02-dashboard-keyboard-navigation
+    title: Dashboard keyboard navigation and single-press handling
+    status: completed
+    focused: false
+    last_audit: null
+    updated: 2026-10-02
+  - id: 2026-10-02-network-protocol-error-retry
+    path: specs/2026-10-02-network-protocol-error-retry
+    title: Network recovery for HTTP/2 PROTOCOL_ERROR
+    status: completed
+    focused: false
+    last_audit: null
+    updated: 2026-10-02

@@ -82,20 +82,26 @@ export function makeGoalWidgetFactory(opts: {
 	getExpanded?: () => boolean;
 	getLedgerEvents?: () => GoalLedgerEvent[];
 	getAuditResult?: () => AuditResultView | null;
+	/** Receives the live widget so terminal shortcuts can scroll its viewports. */
+	componentRef?: { current: GoalWidgetComponent | null };
 }) {
-	return (tui: TUI, theme: Theme) => new GoalWidgetComponent({
-		tui,
-		theme,
-		getGoal: opts.getGoal,
-		getOpenGoalCount: opts.getOpenGoalCount,
-		getAuditorProgress: opts.getAuditorProgress,
-		getSettings: opts.getSettings,
-		getDebugMode: opts.getDebugMode,
-		getStalled: opts.getStalled,
-		getExpanded: opts.getExpanded,
-		getLedgerEvents: opts.getLedgerEvents,
-		getAuditResult: opts.getAuditResult,
-	});
+	return (tui: TUI, theme: Theme) => {
+		const component = new GoalWidgetComponent({
+			tui,
+			theme,
+			getGoal: opts.getGoal,
+			getOpenGoalCount: opts.getOpenGoalCount,
+			getAuditorProgress: opts.getAuditorProgress,
+			getSettings: opts.getSettings,
+			getDebugMode: opts.getDebugMode,
+			getStalled: opts.getStalled,
+			getExpanded: opts.getExpanded,
+			getLedgerEvents: opts.getLedgerEvents,
+			getAuditResult: opts.getAuditResult,
+		});
+		if (opts.componentRef) opts.componentRef.current = component;
+		return component;
+	};
 }
 
 export interface AuditorWidgetProgress {
@@ -623,6 +629,7 @@ export class GoalWidgetComponent implements Component {
 	 * list. Returns true when the key was consumed.
 	 */
 	handleCompactScrollKey(key: "up" | "down" | "pageUp" | "pageDown" | "home" | "end"): boolean {
+		if (this.getExpanded()) return false;
 		const settings = this.getSettings();
 		const goal = this.getGoal();
 		const model = goal ? deriveGoalDashboardModel(goal as GoalRecord | null, {
@@ -632,6 +639,7 @@ export class GoalWidgetComponent implements Component {
 			tasksDisabled: settings.disableTasks === true,
 			maxAutonomousRuns: settings.maxAutonomousRuns,
 		}) : null;
+		this.maybeReanchor(model);
 		const list = model?.taskTree.filter((n) => n.depth === 0) ?? [];
 		const rows = compactTaskViewportRows(this.lastRenderWidth);
 		if (list.length <= rows) return false;
@@ -667,11 +675,12 @@ export class GoalWidgetComponent implements Component {
 			tasksDisabled: settings.disableTasks === true,
 			maxAutonomousRuns: settings.maxAutonomousRuns,
 		}) : null;
+		this.maybeReanchor(model);
 		const list = model?.taskTree ?? [];
 		if (list.length === 0) return false;
 		const rows = expandedTaskViewportRows(this.lastRenderWidth);
 		const maxO = maxScrollOffset(list.length, rows);
-		if (maxO <= 0) return false;
+		if (maxO <= 0) return true;
 		let offset = clampScrollOffset(this.expandedScrollOffset, list.length, rows);
 		if (key === "up") offset -= 1;
 		else if (key === "down") offset += 1;

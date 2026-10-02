@@ -681,6 +681,7 @@ export function createGoalCore(
 						getExpanded: () => dashboardExpanded,
 						getLedgerEvents: () => state.goal ? goalActivityEvents(storage, state.goal.id) : [],
 						getAuditResult: () => auditResult,
+						componentRef: goalWidgetComponentRef,
 					}),
 					{ placement: "aboveEditor" },
 				);
@@ -711,6 +712,7 @@ export function createGoalCore(
 					getExpanded: () => dashboardExpanded,
 					getLedgerEvents: () => state.goal ? goalActivityEvents(storage, state.goal.id) : [],
 					getAuditResult: () => auditResult,
+					componentRef: goalWidgetComponentRef,
 				}),
 				{ placement: "aboveEditor" },
 			);

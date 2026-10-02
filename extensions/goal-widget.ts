@@ -9,6 +9,10 @@ import type { GoalCore } from "./goal-state.ts";
 
 const DEBUG_GOALS_DIR = ".pi/goals/debug";
 
+function isKittyRepeatOrRelease(data: string): boolean {
+	return data.startsWith("\x1b[") && /^[0-9:;]+:[23][u~ABCDHF]$/.test(data.slice(2));
+}
+
 /**
  * Terminal input keybindings (Escape pause/abort-audit, Ctrl+Shift+T dashboard
  * overlay, and the hidden debug-mode bindings) plus the debug goal/task/audit
@@ -111,8 +115,7 @@ export async function toggleTaskViaService(core: GoalCore, ctx: ExtensionContext
 export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): void {
 		if (!ctx.hasUI) return;
 		core.terminalInputUnsubscribe?.();
-		const settings = loadGoalSettings(typeof ctx.cwd === "string" ? ctx.cwd : process.cwd());
-		const keybindings = settings.keybindings?.dashboard ?? DEFAULT_GOAL_KEYBINDINGS.dashboard;
+		const goalCwd = typeof ctx.cwd === "string" ? ctx.cwd : process.cwd();
 		core.terminalInputUnsubscribe = ctx.ui.onTerminalInput((data) => {
 			// If an audit is running, Escape aborts the audit instead of pausing.
 			// Must return { consume: true } so the TUI doesn't also process the key
@@ -128,6 +131,15 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 			// before the dialog could process it (bn-l pattern). Depth counter so
 			// nested goal modals remain guarded.
 			if (core.goalModalDepth > 0) return undefined;
+			const keybindings = loadGoalSettings(goalCwd).keybindings?.dashboard ?? DEFAULT_GOAL_KEYBINDINGS.dashboard;
+			if (isKittyRepeatOrRelease(data)) {
+				const goalShortcut = matchesKey(data, keybindings.toggleExpand) || matchesKey(data, "ctrl+shift+a") ||
+					(matchesKey(data, "escape") && (core.isDashboardExpanded() || core.state.goal !== null)) ||
+					(core.isDashboardExpanded() && (["up", "down", "pageUp", "pageDown", "home", "end"] as const).some(key => matchesKey(data, key))) ||
+					(!core.isDashboardExpanded() && core.goalWidgetComponentRef.current !== null &&
+						([keybindings.scrollUp, keybindings.scrollDown, "ctrl+shift+pageUp", "ctrl+shift+pageDown", "ctrl+shift+home", "ctrl+shift+end"] as const).some(key => matchesKey(data, key)));
+				return goalShortcut ? { consume: true } : undefined;
+			}
 			if (matchesKey(data, "escape") && core.auditProgress) {
 				core.abortAudit(ctx);
 				return { consume: true };

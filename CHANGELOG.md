@@ -4,6 +4,42 @@ All notable changes to pi-goal-x are documented here.
 
 ## [Unreleased]
 
+## [0.32.3] — 2026-10-02
+
+### Fixed
+
+- Generic `Provider finish_reason: error` failures are now classified as transient provider failures, so an active auto-continue goal recovers via the existing goal-level backoff ladder instead of being stranded. Quota and billing errors are still checked first and are never retried.
+
+## [0.32.2] — 2026-10-02
+
+### Fixed
+
+- Dashboard keyboard navigation works again. The live widget component reference was never assigned, so the expanded-dashboard arrow keys and the compact Ctrl+Shift scroll chords did nothing, and a widget refresh after a state change was silently skipped. The reference is now passed to the widget factory at both registration sites and cleared when the widget is torn down.
+- One physical key press acts once. With the Kitty keyboard protocol active, holding or releasing a Goal shortcut (dashboard toggle, auditor toggle, Escape while the dashboard is expanded, navigation keys) no longer toggles or scrolls repeatedly.
+- A dashboard keybinding change made through the settings applies without restarting the session; the bindings are read when a key arrives.
+- The expanded dashboard anchors its viewport before the first scroll, keeps compact scroll chords away from the hidden task list, and owns the plain arrow keys even when the task list fits.
+- HTTP/2 `PROTOCOL_ERROR` provider failures are classified as transient, so an active goal run uses the existing network backoff instead of stopping on a stream error such as `stream error: stream ID 1; PROTOCOL_ERROR; received from peer`. Quota and billing errors are still checked first and are never retried.
+
+## [0.32.1] — 2026-10-01
+
+### Documentation
+
+- Remove the pi compatibility line from the README. It restated the supported host range that the `peerDependencies` in `package.json` already declare, and commit 4c65316 had already removed it once. The widening to pi 1.0.0 in 0.32.0 is unaffected; the supported range lives in `package.json`.
+
+## [0.32.0] — 2026-10-01
+
+### Changed
+
+- **pi 1.0.0 support.** The supported host range widens to `>=0.83.0 <2.0.0`, so pi 1.0.0 is supported alongside the 0.83-0.87 range that 0.31.7 added, rather than replacing it. Development and verification move to 1.0.0. No existing extension code needed changing: comparing the 0.84.1 and 1.0.0 type declarations across the three SDK packages, every declaration file that was removed is unused here, and `ExtensionAPI.on()` returning an unsubscribe function is not used, because every handler is registered once at activation.
+- Stop reporting the autonomous-run allowance when there is none. The `Autonomous runs: used/limit` line is left out when `maxAutonomousRuns` is unlimited, because an unlimited allowance has no limit to report. A finite allowance is reported as before and can be hidden with the new `showAutonomousRuns` setting, which defaults to on. Enforcement is unchanged.
+- Remove next actions. A ready disposition no longer carries a `nextAction`, the model declares `{ kind: "ready" }` without a `next_action` argument, and the `Next action:` line is gone from the dashboard, `/goal-status`, `get_goal`, and the agent prompt. `decision.purpose` is unchanged, so dispatch, repair, kickoff, and recovery behave as before. Goals saved before this change still load, with the field stripped during normalization. A repair or recovery dispatch no longer carries per-run text; a missing declaration still costs one repair and then pauses.
+- Stop the drafting tool from inventing token budgets. A drafted goal carries no budget unless the user asked for one. Goals have always started budgetless, and the drafting tool had a schema description but no prompt guideline, so the model could set one that was never requested.
+
+### Added
+
+- Handle the `session_compact_failed` event, which is new in pi 1.0.0. `session_before_compact` already charges the goal and `session_compact` re-arms the compaction reminder, so a failed compaction passed without notice and left the goal uncompacted. The handler is registered through a local type alias because the event does not exist before 1.0.0; on hosts that never emit it, it is never called.
+- `scripts/live-session-check.mjs` drives a pi `--mode rpc` session through draft, confirm, execute, audit, and archival. `createAgentSession` and `createExtensionRuntime` are stubbed or injected in every test, so the auditor's session construction was typechecked but never run.
+
 ## [0.31.9] — 2026-09-24
 
 ### Documentation
