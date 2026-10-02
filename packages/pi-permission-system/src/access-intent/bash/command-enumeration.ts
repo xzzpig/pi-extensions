@@ -288,7 +288,7 @@ export function collectCommands(
   const out: BashCommand[] = [];
   activeParseProgram = options?.parseProgram;
   try {
-    collectCommandsInto(node, topLevelScope(words), out);
+  collectCommandsInto(node, topLevelScope(words), out);
   } finally {
     activeParseProgram = undefined;
   }
@@ -504,7 +504,7 @@ function makeCommandUnit(
   if (classification === undefined) {
     out.push(
       makeUnit(text, scope, {
-        executedUnit: executedUnitOf(text, words) ?? undefined,
+    executedUnit: executedUnitOf(text, words) ?? undefined,
       }),
     );
     return;

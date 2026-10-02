@@ -5,11 +5,11 @@
   "upstreamPath": "packages/pi-permission-system",
   "source": "https://github.com/gotgenes/pi-packages.git",
   "remote": "upstream-pi-permission-system",
-  "ref": "pi-permission-system-v35.0.0",
-  "version": "35.0.0",
-  "upstreamCommit": "284e0a317f7d99f3fa0300c3817f9003c2549fc6",
+  "ref": "pi-permission-system-v37.0.0",
+  "version": "pi-permission-system-v37.0.0",
+  "upstreamCommit": "7a32def799093efdf888d17661ee54397b4e42fc",
   "squash": true,
-  "lastSyncedAt": "2026-09-27T21:26:28+08:00",
+  "lastSyncedAt": "2026-10-03T01:36:07+08:00",
   "notes": "Forked from gotgenes/pi-packages; wrapper-floor rework (fallback mode) intentionally diverges from upstream — behavior contract lives in the bash-wrapper-floors spec.",
   "knownDebt": [
     {
@@ -41,6 +41,12 @@
       "path": "packages/pi-permission-system/test/composition-root.test.ts",
       "reason": "Diff-alignment artifact: the fork's guard or try wrapping indents these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
+    },
+    {
+      "kind": "noise",
+      "path": "packages/pi-permission-system/test/access-intent/bash/program.test.ts",
+      "reason": "Diff-alignment artifact: the fork's inner-unit expectations on upstream v37's heredoc/redirect test cases and the #875 salvaged case indent the expectation entries against upstream's rewritten blocks, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without losing the fork expectations.",
+      "recordedAt": "2026-10-03T02:00:00+08:00"
     }
   ],
   "reapplyOnSync": [
@@ -50,7 +56,10 @@
     "loadProjectConfig profiles spread",
     "makeCommandUnit keeps the spec-driven classifyWrapperCommand emission (wrapper + inner units) but reads words via readCommandUnit and floors against redirectedScope(node, scope)",
     "wrapper-floors readWrapperCommand skips REDIRECT_NODE_TYPES children",
-    "program.test.ts leading/hosted-redirect assertions adapted to the fork inner-unit emission (wrapper_payload/wrapper_indirection expectations plus a fork comment)"
+    "program.test.ts leading/hosted-redirect assertions adapted to the fork inner-unit emission (wrapper_payload/wrapper_indirection expectations plus a fork comment)",
+    "v37 sync (2026-10-02): collectCommands takes upstream's (node, words: WordReader, options.parseProgram) — the fork keeps the activeParseProgram global for classifyWrapperCommand and its call sites pass words + parseProgram; collectSalvagedCommands keeps upstream's (node, words) signature",
+    "v37 sync (2026-10-02): wrapper-floors innerCommandText slices the inner unit from the unit text (word-joined, heredoc-body free) by mapping the inner token offset through the wrapper args, instead of node.text.slice(start)",
+    "v37 sync (2026-10-02): program.test.ts/sync-commands.test.ts expectations carry the fork inner-unit emission on upstream v37 test cases (the heredoc/redirect core-reader family and the #875 salvaged duplication)"
   ],
   "doNotReintroduce": [
     "do not re-inline the wrapper-classification block into command-enumeration.ts on sync",

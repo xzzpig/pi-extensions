@@ -1,6 +1,6 @@
 {
   "name": "@xzzpig/pi-permission-system",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "description": "Permission enforcement extension for the Pi coding agent. Fork of @gotgenes/pi-permission-system (v35.0.0) with configurable wrapper-floor behavior.",
   "type": "module",
   "exports": {

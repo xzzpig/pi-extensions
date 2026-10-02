@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-10-02
+
+### Changed
+
+- **Synced the fork with upstream pi-permission-system v35.0.0 → v37.0.0**
+  (upstream majors 36–37) while preserving the configurable wrapper-floor
+  (fallback/always) divergence. Adopted upstream: the computed-word rules that
+  withdraw find/fd/sort read claims (#992), the `$HOME`/`$PWD` rebinding
+  resolution fixes (#995), prompt notifications with the session and requested
+  tool named and the terminal bell (#906/#996), the prompt rewrite moving to
+  Pi 1.0.0's `systemPromptOptions` (#999 — other extensions' sections such as
+  `<mcp_servers>` and later sections after a denied skill are preserved), and
+  the Pi ≥ 1.0.0 peer floor (#970).
+- The wrapper-floor classifier reads words through upstream's WordReader
+  (`collectCommands(node, words, { parseProgram })`) and slices an indirection
+  wrapper's inner unit from the unit's word-joined text, so a heredoc hung on
+  the wrapper no longer glues its body onto the inner unit. The fork's
+  wrapper-floors spec-driven emission and `wrapperFloors` config knob are
+  unchanged.
+- Peer ranges follow the workspace Pi 1.0.0 baseline (`>=1.0.0 <2`).
+
 ## [1.4.1] — 2026-09-29
 
 ### Fixed
@@ -140,110 +161,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Synced the fork with upstream pi-permission-system v27.0.1 → v31.0.2 (upstream majors 28–31) while preserving the configurable wrapper-floor (fallback/always) divergence. Adopted upstream: directional path surfaces with a read/write capability axis and wrapper transparency (#806/#807/#803), glob-bearing path token projection (#821), flag/arity parse fixes (#823), command gating in control-flow bodies, function definitions, declarations and assignments (#742), decision attribution with the shared `resolutionFor` decider map and the new `authorizer_allowed` / `authorizer_denied` resolutions (#772), deny-reason forwarding (#844), removal of the process-root service accessors (#796), the unguarded-subagent-child alarm (#792), extractor/formatter exposure with fact-shaping inheritance (#793), named permission surfaces (#808), per-pattern session approval surfaces and direction-proven external path grants (#810), `isToolFullyDenied` cross-extension pre-filtering (#815), both-directions session grants with `sessionGrantWidth` on the wire (#813), statement-operand gating for case subjects and for/select operands (#839), unresolved-redirect handling (#814), and the fail-closed prompt for unresolvable bash parses (#840).
 - Fork features kept: the spec-driven wrapper classifier that re-parses opaque payloads (`eval`/`bash -c`/`flock -c`/`env -S`) and slices indirection inner commands into their own gated units, `payloadUnresolved` fail-closed flooring, payload-less (inert) wrapper adjudication, `wrapperFloors` config knob (config default `"fallback"`; a caller that passes no option to the gate gets the upstream blanket floor), the `permissions:forwarded_decision` broadcast with its `user_approved_for_serving_session` resolution, the injectable response writer, and terminal permission notifications. Wrapper transparency (#803) is honored in both wrapper-floor modes. Fixed the `/permission-system` modal silently dropping `wrapperFloors` when persisting config.
-## [37.0.0](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v36.2.1...pi-permission-system-v37.0.0) (2026-10-02)
-
-
-### Features
-
-* **pi-permission-system:** **breaking:** require Pi 1.0.0 or later ([9c76ae3](https://github.com/gotgenes/pi-packages/commit/9c76ae30dd58b0a94524f753f7c72ff356231294)), closes [#970](https://github.com/gotgenes/pi-packages/issues/970)
-
-### Bug Fixes
-
-* **pi-permission-system:** keep prompt sections other extensions add, such as <mcp_servers> ([1abdfe4](https://github.com/gotgenes/pi-packages/commit/1abdfe4901a27cb8ff3d85a965fc07b3be874624)), closes [#999](https://github.com/gotgenes/pi-packages/issues/999)
-* **pi-permission-system:** keep later prompt sections when a skill is denied ([dafd83b](https://github.com/gotgenes/pi-packages/commit/dafd83b075b01ef39335822f8b5122c56ee00b97)), closes [#999](https://github.com/gotgenes/pi-packages/issues/999)
-
-### Documentation
-
-* **pi-permission-system:** note the Pi 1.0.0 requirement under Upgrading ([5bc932c](https://github.com/gotgenes/pi-packages/commit/5bc932cf9936728c0e3c551fdbea6a7009108958)), closes [#970](https://github.com/gotgenes/pi-packages/issues/970)
-* **pi-permission-system:** record prompt changes through systemPromptOptions ([b11051f](https://github.com/gotgenes/pi-packages/commit/b11051f1365a635b67e70dea126c8a49ff9ef31b)), closes [#999](https://github.com/gotgenes/pi-packages/issues/999)
-
-## [36.2.1](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v36.2.0...pi-permission-system-v36.2.1) (2026-10-01)
-
-
-### Bug Fixes
-
-* **pi-permission-system:** a reassigned $HOME or $PWD is no longer resolved to its startup value ([#995](https://github.com/gotgenes/pi-packages/issues/995)) ([956fa32](https://github.com/gotgenes/pi-packages/commit/956fa32ecbe6ee3b2954cebbfed8d9a44857c617)), closes [#995](https://github.com/gotgenes/pi-packages/issues/995)
-* **pi-permission-system:** a name read, printf -v, nameref, eval, or source counts as reassigning $HOME ([#995](https://github.com/gotgenes/pi-packages/issues/995)) ([a05a6d3](https://github.com/gotgenes/pi-packages/commit/a05a6d391eb0281d5977a2264aa69958ce8d7549))
-* **pi-permission-system:** ~ is no longer read as the home directory after the command reassigns HOME ([#995](https://github.com/gotgenes/pi-packages/issues/995)) ([998d51b](https://github.com/gotgenes/pi-packages/commit/998d51b36989bf0397beb4028d76e75d3e37666d))
-* **pi-permission-system:** ~ may spell an option when the inherited HOME begins with a dash ([#995](https://github.com/gotgenes/pi-packages/issues/995)) ([f1ee69a](https://github.com/gotgenes/pi-packages/commit/f1ee69a19b3f6880228da88ad2683f9b1f79a980))
-* **pi-permission-system:** a quoted export, let, trap, or quoted eval counts as reassigning $HOME ([#995](https://github.com/gotgenes/pi-packages/issues/995)) ([4406ef4](https://github.com/gotgenes/pi-packages/commit/4406ef429706aa0b7cd77ba9608d0bcb1c2982bc))
-
-### Documentation
-
-* **pi-permission-system:** record that a reassigned $HOME or $PWD is not resolved ([#995](https://github.com/gotgenes/pi-packages/issues/995)) ([e7c8b88](https://github.com/gotgenes/pi-packages/commit/e7c8b88167f05531507cdfaf584dd9e4905a0387))
-
-## [36.2.0](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v36.1.0...pi-permission-system-v36.2.0) (2026-09-30)
-
-
-### Features
-
-* name the session and the requested tool in prompt notifications ([#996](https://github.com/gotgenes/pi-packages/issues/996)) ([eb49c64](https://github.com/gotgenes/pi-packages/commit/eb49c6494d12749f71130d74b75c578530c89afa)), closes [#996](https://github.com/gotgenes/pi-packages/issues/996)
-
-### Documentation
-
-* describe the session and tool in prompt notifications ([#996](https://github.com/gotgenes/pi-packages/issues/996)) ([c5c74db](https://github.com/gotgenes/pi-packages/commit/c5c74db43235297a39bbe94303225ac50baf0ca4))
-
-## [36.1.0](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v36.0.0...pi-permission-system-v36.1.0) (2026-09-30)
-
-
-### Features
-
-* **pi-permission-system:** ring the terminal when a permission prompt opens ([b92ede8](https://github.com/gotgenes/pi-packages/commit/b92ede819523aa2bd776acb2d2ce6dac11622571)), closes [#906](https://github.com/gotgenes/pi-packages/issues/906)
-
-### Documentation
-
-* **pi-permission-system:** document prompt notifications and the notifier recipe ([9ce9b32](https://github.com/gotgenes/pi-packages/commit/9ce9b32c82cca97c3fa73ff377f5f773673821f7)), closes [#906](https://github.com/gotgenes/pi-packages/issues/906)
-
-## [36.0.0](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v35.0.3...pi-permission-system-v36.0.0) (2026-09-29)
-
-
-### Bug Fixes
-
-* **pi-permission-system:** a digit argument no longer withdraws sed's or awk's read claim ([18df901](https://github.com/gotgenes/pi-packages/commit/18df9012843b5811746098bcd106c52d1bc15510)), closes [#992](https://github.com/gotgenes/pi-packages/issues/992)
-* **pi-permission-system:** **breaking:** a computed argument that may spell an option withdraws find's, fd's, and sort's read claim ([8116d72](https://github.com/gotgenes/pi-packages/commit/8116d725b7d74ec610ef97cfb26e6a2df64a839d)), closes [#992](https://github.com/gotgenes/pi-packages/issues/992)
-* **pi-permission-system:** a quoted "$@" after a literal withdraws find's, fd's, and sort's read claim ([45da982](https://github.com/gotgenes/pi-packages/commit/45da9825f80ce4fe2955081f2692a1bc678ddb26)), closes [#992](https://github.com/gotgenes/pi-packages/issues/992)
-* **pi-permission-system:** a quoted indirect expansion after a literal withdraws find's, fd's, and sort's read claim ([dd78839](https://github.com/gotgenes/pi-packages/commit/dd78839f6327e7de51b1024b07ea21653e34b680)), closes [#992](https://github.com/gotgenes/pi-packages/issues/992)
-* **pi-permission-system:** a quoted variable after a literal withdraws find's, fd's, and sort's read claim ([7727223](https://github.com/gotgenes/pi-packages/commit/7727223ec01b5dd0e8560248dd965e7f638930ae)), closes [#992](https://github.com/gotgenes/pi-packages/issues/992)
-
-### Documentation
-
-* **pi-permission-system:** document the computed-word rule for find, fd, and sort ([9f7deb9](https://github.com/gotgenes/pi-packages/commit/9f7deb9ca270a17c99a820f79e40fa64afc444d0))
-* **pi-permission-system:** name a quoted "$@" among the words that split ([1595490](https://github.com/gotgenes/pi-packages/commit/15954901cc61154ad5548f3b5553b60bb48ab4d6))
-* **pi-permission-system:** name an indirect expansion among the words that split ([7d875c3](https://github.com/gotgenes/pi-packages/commit/7d875c37d4130d06ae1969b4739f030b5ce79dd7))
-* **pi-permission-system:** a quoted variable may split, since it may be a nameref ([0df4871](https://github.com/gotgenes/pi-packages/commit/0df4871f2ca42d4df6639f9bcf7d11d0647b3e31))
-
-## [35.0.3](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v35.0.2...pi-permission-system-v35.0.3) (2026-09-29)
-
-
-### Bug Fixes
-
-* **pi-permission-system:** a quoted withdrawing option keeps a wrapped find, fd, or sort floored ([d60653a](https://github.com/gotgenes/pi-packages/commit/d60653a3e53847851e889e8133a7fdab143b8cbb)), closes [#924](https://github.com/gotgenes/pi-packages/issues/924)
-* **pi-permission-system:** sed that only prints resolves on the read surface ([274ba89](https://github.com/gotgenes/pi-packages/commit/274ba8963d899f97306bfcfd2ece10ca2720d29d)), closes [#924](https://github.com/gotgenes/pi-packages/issues/924)
-* **pi-permission-system:** sed substitutions and regex addresses resolve on the read surface ([fbbc940](https://github.com/gotgenes/pi-packages/commit/fbbc94099fd7f0b31155b73c5c46b99359482ab9)), closes [#924](https://github.com/gotgenes/pi-packages/issues/924)
-* **pi-permission-system:** awk that only reads its input resolves on the read surface ([136c739](https://github.com/gotgenes/pi-packages/commit/136c739e2025d3d47bfcfc72929533411e515232)), closes [#924](https://github.com/gotgenes/pi-packages/issues/924)
-* **pi-permission-system:** a brace-expanded argument withdraws sed's and awk's read claim ([5b38dd3](https://github.com/gotgenes/pi-packages/commit/5b38dd3fb6e87ffa011dd25a80df372a955b4696)), closes [#924](https://github.com/gotgenes/pi-packages/issues/924)
-
-### Documentation
-
-* **pi-permission-system:** document sed and awk as presumed readers ([d3d0314](https://github.com/gotgenes/pi-packages/commit/d3d0314bf1a2940db237f384d1f377f727a3ea66)), closes [#924](https://github.com/gotgenes/pi-packages/issues/924)
-* **pi-permission-system:** name brace expansion among the computed spellings ([e4fee09](https://github.com/gotgenes/pi-packages/commit/e4fee09286705c898dd211ed5618ab4c040472d1)), closes [#924](https://github.com/gotgenes/pi-packages/issues/924)
-
-## [35.0.2](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v35.0.1...pi-permission-system-v35.0.2) (2026-09-28)
-
-
-### Bug Fixes
-
-* **pi-permission-system:** deny a command written after a heredoc the grammar cannot parse ([8a01239](https://github.com/gotgenes/pi-packages/commit/8a012390b49605ec52ff4379a8f452d3ec48a69e)), closes [#985](https://github.com/gotgenes/pi-packages/issues/985)
-
-## [35.0.1](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v35.0.0...pi-permission-system-v35.0.1) (2026-09-27)
-
-
-### Bug Fixes
-
-* **pi-permission-system:** check the words after a heredoc against the command's own rules ([0a88264](https://github.com/gotgenes/pi-packages/commit/0a882643bb5b1be1f546842e75ca3fac5cff1930)), closes [#979](https://github.com/gotgenes/pi-packages/issues/979)
-* **pi-permission-system:** gate the commands and redirects written after a heredoc ([b7b2709](https://github.com/gotgenes/pi-packages/commit/b7b27095606c07f684eca353c253b59ebdec4cb4)), closes [#979](https://github.com/gotgenes/pi-packages/issues/979)
-
-## [35.0.0](https://github.com/gotgenes/pi-packages/compare/pi-permission-system-v34.0.1...pi-permission-system-v35.0.0) (2026-09-26)
 
 ### Fixed
 
