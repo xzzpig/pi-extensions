@@ -59,13 +59,13 @@ describe("child tool plan with Pi built-in MCP", () => {
 		assert.deepEqual(plan.effectiveMcpTools, ["mcp__srv__a_b_df0974cd"]);
 	});
 
-	it("does not apply the adapter's legacy underscore ceiling names to built-in tools", () => {
+	it("resolves a raw hyphenated selector to the name and namespace Pi gives the tool", () => {
 		const plan = resolvePiLaunchToolPlan({
-			mcpDirectTools: ["my-docs/fetch"],
-			capabilityCeiling: { version: 1, allowedTools: ["mcp__my_docs__fetch"], sources: ["test"] },
-			runtimeSnapshotHost: mcpHost("builtin:mcp", [{ name: "mcp__my-docs__fetch", exposure: "codemode", namespace: { name: "mcp__my-docs" } }]),
+			mcpDirectTools: ["my-docs/get-item"],
+			capabilityCeiling: { version: 1, allowedTools: ["mcp__my_docs__get_item"], sources: ["test"] },
+			runtimeSnapshotHost: mcpHost("builtin:mcp", [{ name: "mcp__my_docs__get_item", exposure: "codemode", namespace: { name: "mcp__my_docs" } }]),
 		});
-		assert.deepEqual(plan.builtinMcpTools, []);
+		assert.deepEqual(plan.builtinMcpTools, [{ name: "mcp__my_docs__get_item", selector: "my-docs/get-item" }]);
 	});
 
 	it("fails a launch whose selector matches no offered tool", () => {
@@ -129,6 +129,21 @@ describe("child tool plan declared tools", () => {
 		assert.deepEqual(plan.effectiveToolAllowlist, ["read", "grep", "find", "ls", "bash"]);
 		assert.deepEqual(plan.requiredChildTools, ["read", "grep", "find", "ls", "bash"]);
 		assert.deepEqual(plan.warnings, []);
+	});
+
+	it("grants command observation only when explicitly declared", () => {
+		const automatic = resolvePiLaunchToolPlan({ tools: ["bash"] });
+		assert.deepEqual(automatic.effectiveToolAllowlist, ["bash"]);
+		assert.deepEqual(automatic.requiredChildTools, ["bash"]);
+		const explicit = resolvePiLaunchToolPlan({ tools: ["bash", "subagent_command"] });
+		assert.deepEqual(explicit.requiredChildTools, ["bash", "subagent_command"]);
+	});
+
+	it("does not enable command controls through a ceiling alone and honors explicit exclusions", () => {
+		const ceiling = { version: 1 as const, allowedTools: ["bash", "subagent_command"], denyExtensions: false, sources: ["test"] };
+		assert.deepEqual(resolvePiLaunchToolPlan({ capabilityCeiling: ceiling }).effectiveToolAllowlist, ["bash"]);
+		assert.deepEqual(resolvePiLaunchToolPlan({ tools: ["bash", "subagent_command"], excludeTools: ["subagent_command"] }).effectiveToolAllowlist, ["bash"]);
+		assert.deepEqual(resolvePiLaunchToolPlan({ tools: ["bash", "subagent_command"], capabilityCeiling: { ...ceiling, allowedTools: ["bash"] } }).effectiveToolAllowlist, ["bash"]);
 	});
 
 	it("adds read for lazy skill loading without an explicit declaration", () => {
