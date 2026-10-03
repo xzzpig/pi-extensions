@@ -24,7 +24,7 @@ import { posixPathFlavor, win32PathFlavor } from "#src/path/path-flavor";
 import {
   resolveReadPath,
   resolveToCwd,
-} from "../../node_modules/@earendil-works/pi-coding-agent/dist/core/tools/path-utils.js";
+} from "../../../../node_modules/@earendil-works/pi-coding-agent/dist/core/tools/path-utils.js";
 
 /* eslint-enable local-rules/no-parent-relative-imports */
 

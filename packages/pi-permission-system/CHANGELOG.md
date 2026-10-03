@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Synced upstream `v37.0.0` → `v39.0.2`**: Pi's built-in MCP tools are now gated
+  on the `mcp` surface instead of top-level `mcp__` keys (legacy top-level keys keep
+  working and trigger a port notice; server names also read from the trusted
+  project's `.pi/mcp.json`), path rules apply to the file a built-in tool opens no
+  matter how it is spelled (including file URLs), directory session approvals are
+  scoped to that directory (not its parent) and share one glob label, and the
+  breaking v39.0.0 narrowing of the Pi-infrastructure read bypass (targeted
+  `external_directory` denies now block infrastructure reads; the bypass covers only
+  Pi's harness entries — no longer the permission logs or all of `~/.pi/agent`);
+  plus config/default-allowed bash external paths no longer logged as session
+  approvals. Upstream CHANGELOG sections ([38.x]/[39.x]) are not adopted per
+  doNotReintroduce. The fork's dual-layer profile-scope layer
+  (`resolveProfileScopes`/`invalidProfileName`/`warnings`) was merged beside
+  upstream's `legacyMcpToolKeys` relocation in `permission-manager.ts`, and the
+  generated schema was regenerated with `gen:schema` over the fork sources.
+
 ## [1.5.0] — 2026-10-02
 
 ### Changed

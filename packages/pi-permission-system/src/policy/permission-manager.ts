@@ -76,6 +76,7 @@ type ResolvedPermissions = {
    * by {@link getConfigIssues} alongside the fail-closed diagnostics.
    */
   warnings: readonly string[];
+  /**
    * Top-level permission keys naming Pi MCP tools, relocated onto the `mcp`
    * surface; they drive the port notice in {@link getConfigIssues}.
    */

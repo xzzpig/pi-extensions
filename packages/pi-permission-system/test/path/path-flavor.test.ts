@@ -9,7 +9,7 @@ import {
 // Pi's `exports` map publishes only `.`, so the parity oracle reads the pinned
 // dependency's compiled module by path.
 // eslint-disable-next-line local-rules/no-parent-relative-imports -- no alias reaches a dependency's unexported module
-import { normalizeWindowsShellPath } from "../../node_modules/@earendil-works/pi-coding-agent/dist/utils/paths.js";
+import { normalizeWindowsShellPath } from "../../../../node_modules/@earendil-works/pi-coding-agent/dist/utils/paths.js";
 
 describe("win32PathFlavor", () => {
   it("exposes the win32 path implementation", () => {
