@@ -4,6 +4,21 @@
 
 ### Changed
 
+- **Synced upstream `v0.74.0` → `v0.75.0`**: background subagents work on Pi 1.0.0
+  again (upstream's own fix for the dropped `@earendil-works/pi-agent-core/node`;
+  the fork's best-effort `resolveHostPeerAliases` already covered this), per-launch
+  Claude Code `model`/`thinking` (`:level`/`--effort`, enforced by
+  `subagents.maxThinking`/`modelScope`), `registerRequiredChildExtensions`
+  `requireForAllRunners`, child launches on extension-registered virtual models with
+  corrected verification (`session?.virtualModelId`), failing config load on invalid
+  `authorityPolicy`/`permissions`/`toolBudget` values, async runs recorded in
+  `run-history.jsonl`, MCP tool-name `-`→`_` conversion, parent-side bash
+  `command.status`/`yield`/`cancel` for native children, and Windows npm-installed
+  external CLIs. The fork's projectTrusted threading, `hostAvailableBuiltins`
+  (`getHostBuiltinToolNames`), `sandbox`/`permission-profile` agent fields,
+  env-capture restore, `.then(() => undefined)` steer/followUp wrappers, and the
+  `projectScopedProfileTrustError` import were re-applied beside upstream's changes.
+
 - **Synced upstream `v0.72.0` → `v0.74.0`**: fenced ```` ```js workflow ```` blocks
   replacing `workflowScript`/`workflowScriptPath` (`workflow: true`), `toolActivation`
   (eager/dynamic/auto) and `disabledFeatures` config, Pi built-in MCP selections

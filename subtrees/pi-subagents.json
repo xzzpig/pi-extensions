@@ -4,11 +4,11 @@
   "prefix": "packages/pi-subagents",
   "source": "https://github.com/nicobailon/pi-subagents.git",
   "remote": "upstream-pi-subagents",
-  "ref": "v0.74.0",
-  "version": "v0.74.0",
-  "upstreamCommit": "b6bda32f03b7f549623bc404c9be14dca298ddc4",
+  "ref": "v0.75.0",
+  "version": "v0.75.0",
+  "upstreamCommit": "ad56bf92fe01a2a5abd962938c619eb2a22ca47d",
   "squash": true,
-  "lastSyncedAt": "2026-10-03T00:58:06+08:00",
+  "lastSyncedAt": "2026-10-03T13:56:15+08:00",
   "notes": "Forked from nicobailon/pi-subagents. Capability contracts live in openspec (specs fleet-native-transcript and subagent-context-injection; the changes under openspec/changes/ for the rest); fork doc chapters live in docs/fork-extensions.md.",
   "knownDebt": [
     {
@@ -120,7 +120,11 @@
     "retain PI_BUILTIN_TOOL_NAMES for hostAvailableBuiltins",
     "re-apply the 'as StreamFn' casts at prompt-audit.ts:72, review.ts:280 and permission-arbiter.ts",
     "take package-lock.json as upstream bytes and keep the fork-only CHANGELOG sections",
-    "after every pnpm install, rm -rf the re-copied shim's node_modules/@earendil-works/chord so resolveHostPeerAliases walks up to the hoisted chord, and re-copy the pnpm file: dependency manually after touching the fixture"
+    "after every pnpm install, rm -rf the re-copied shim's node_modules/@earendil-works/chord so resolveHostPeerAliases walks up to the hoisted chord, and re-copy the pnpm file: dependency manually after touching the fixture",
+    "v0.75.0 sync (2026-10-03): agents.ts validateExternalRunnerProfile keeps the fork sandbox/permission-profile entries inside upstream Claude Code adapter-accepts overrides list (adapterAcceptsOverrides + isClaudeCodeAdapterId)",
+    "v0.75.0 sync (2026-10-03): async-execution.ts keeps fork hostAvailableBuiltins = getHostBuiltinToolNames(ctx.pi) beside upstream requiredExtensions params/registeredExtensions expression in both chain and single paths, and keeps the fork sandbox const beside upstream claudeCodeAdapter in the single path",
+    "v0.75.0 sync (2026-10-03): preflight.ts imports keep fork projectScopedProfileTrustError beside upstream assertRequiredChildExtensionsAdmitted",
+    "v0.75.0 sync (2026-10-03): child-session.ts keeps fork restoreProcessEnv(savedTransientEnv) beside upstream requiredStartupErrors/binding, and fork .then(() => undefined) steer/followUp wrappers beside upstream finishCommands spread"
   ],
   "doNotReintroduce": [
     "do not re-port the fork multi-model loop onto execution.ts or subagent-runner.ts",
