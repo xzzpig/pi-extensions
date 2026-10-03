@@ -61,12 +61,6 @@
     },
     {
       "kind": "noise",
-      "path": "packages/pi-goal-x/extensions/widgets/goal-widget.ts",
-      "reason": "Diff-alignment artifact: the fork's code move and try-block wrapping indent these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
-      "recordedAt": "2026-09-28T05:40:00+08:00"
-    },
-    {
-      "kind": "noise",
       "path": "packages/pi-goal-x/tests/goal-auditor.test.ts",
       "reason": "Diff-alignment artifact: the fork's code move and try-block wrapping indent these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
