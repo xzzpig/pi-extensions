@@ -17,6 +17,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -2603,5 +2604,168 @@ describe("configured prompt preferences reach the inline dialog", () => {
 
       rmSync(cwd, { recursive: true, force: true });
     });
+  });
+});
+
+describe("Pi's built-in MCP tools are gated on the mcp surface", () => {
+  const wipe = "mcp__danger_srv__wipe";
+  const other = "mcp__danger_srv__list";
+
+  function writeGlobalMcpConfig(servers: Record<string, unknown>): void {
+    writeFileSync(
+      join(agentDir, "mcp.json"),
+      JSON.stringify({ mcpServers: servers }),
+      "utf8",
+    );
+  }
+
+  async function callTool(
+    pi: ReturnType<typeof makeFakePi>,
+    ctx: unknown,
+    toolName: string,
+  ): Promise<{ block?: true; reason?: string } | undefined> {
+    return (await pi.fire(
+      "tool_call",
+      { toolName, toolCallId: `${toolName}-call`, input: { target: "prod" } },
+      ctx,
+    )) as { block?: true; reason?: string } | undefined;
+  }
+
+  it("denies a call when an mcp rule denies its server by its mcp.json name", async () => {
+    writeGlobalConfig({
+      permission: { "*": "allow", mcp: { "*": "allow", "danger-srv": "deny" } },
+    });
+    writeGlobalMcpConfig({ "danger-srv": { command: "danger" } });
+    const cwd = mkdtempSync(join(tmpdir(), "pi-perm-mcp-tool-cwd-"));
+    const pi = makeFakePi({ toolNames: [wipe] });
+    piPermissionSystemExtension(pi as unknown as ExtensionAPI);
+    const ctx = makeChildCtx(cwd, "mcp-tool-deny");
+    await fireSessionStart(pi, ctx);
+
+    const result = await callTool(pi, ctx, wipe);
+    expect(result?.block).toBe(true);
+
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("approves exactly the asked tool for the session", async () => {
+    writeGlobalConfig({ permission: { "*": "allow", mcp: { "*": "ask" } } });
+    writeGlobalMcpConfig({ "danger-srv": { command: "danger" } });
+    const cwd = mkdtempSync(join(tmpdir(), "pi-perm-mcp-tool-cwd-"));
+    const pi = makeFakePi({ toolNames: [wipe, other] });
+    piPermissionSystemExtension(pi as unknown as ExtensionAPI);
+    const prompted: string[] = [];
+    const ctx = makeBaseCtx(cwd, "mcp-tool-session", {
+      select: async (
+        title: string,
+        options: string[],
+      ): Promise<string | undefined> => {
+        prompted.push(title);
+        return options[1];
+      },
+    });
+    await fireSessionStart(pi, ctx);
+
+    expect((await callTool(pi, ctx, wipe))?.block).toBeUndefined();
+    expect((await callTool(pi, ctx, wipe))?.block).toBeUndefined();
+    expect(prompted).toHaveLength(1);
+
+    await callTool(pi, ctx, other);
+    expect(prompted).toHaveLength(2);
+
+    rmSync(cwd, { recursive: true, force: true });
+  });
+});
+
+describe("Pi infrastructure reads", () => {
+  // The infrastructure list is not canonicalized (#1018), while the gate checks
+  // the canonical path, so a tmpdir behind a symlink (macOS `/var`) would never
+  // match: run against the real path.
+  beforeEach(() => {
+    agentDir = realpathSync(agentDir);
+    vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
+  });
+
+  async function readOutcome(
+    permission: Record<string, unknown>,
+    target: string,
+  ): Promise<{ block?: true; reason?: string } | undefined> {
+    const cwd = mkdtempSync(join(tmpdir(), "pi-perm-infra-cwd-"));
+    writeGlobalConfig({ permission });
+    const pi = makeFakePi({ events: createEventBus() });
+    piPermissionSystemExtension(pi as unknown as ExtensionAPI);
+    const ctx = makeChildCtx(cwd, `infra-${basename(target)}`);
+    await fireSessionStart(pi, ctx);
+    const result = (await pi.fire(
+      "tool_call",
+      { name: "read", input: { path: target }, toolCallId: "tc-infra" },
+      ctx,
+    )) as { block?: true; reason?: string } | undefined;
+    rmSync(cwd, { recursive: true, force: true });
+    return result;
+  }
+
+  describe("under a targeted external_directory deny", () => {
+    it("blocks a read the bypass would otherwise allow", async () => {
+      const skill = join(agentDir, "git", "x", "SKILL.md");
+      const result = await readOutcome(
+        { "*": "allow", external_directory_read: { [skill]: "deny" } },
+        skill,
+      );
+      expect(result?.block).toBe(true);
+      expect(result?.reason).toContain("external_directory_read");
+    });
+
+    it("keeps the bypass under a catch-all deny", async () => {
+      const skill = join(agentDir, "git", "x", "SKILL.md");
+      const result = await readOutcome(
+        { "*": "allow", external_directory: { "*": "deny" } },
+        skill,
+      );
+      expect(result?.block).toBeUndefined();
+    });
+  });
+
+  describe("the package's own logs", () => {
+    it("gates a read of the review log", async () => {
+      const reviewLog = join(getGlobalLogsDir(agentDir), REVIEW_LOG_FILENAME);
+      const result = await readOutcome(
+        { "*": "allow", external_directory_read: { "*": "deny" } },
+        reviewLog,
+      );
+      expect(result?.block).toBe(true);
+    });
+
+    it("still auto-allows the package's config beside them", async () => {
+      const result = await readOutcome(
+        { "*": "allow", external_directory_read: { "*": "deny" } },
+        getGlobalConfigPath(agentDir),
+      );
+      expect(result?.block).toBeUndefined();
+    });
+  });
+
+  describe("under a catch-all external_directory_read deny", () => {
+    const DENY_ALL = { "*": "allow", external_directory_read: { "*": "deny" } };
+
+    it.each([
+      ["auth.json"],
+      ["sessions/s.jsonl"],
+      ["mcp-oauth/t.json"],
+      // Share a harness entry's prefix without being inside it.
+      ["settings.json.bak"],
+      ["skills-old/x/SKILL.md"],
+    ])("gates a read of %s, outside Pi's harness entries", async (entry) => {
+      const result = await readOutcome(DENY_ALL, join(agentDir, entry));
+      expect(result?.block).toBe(true);
+    });
+
+    it.each([["skills/x/SKILL.md"], ["settings.json"], ["APPEND_SYSTEM.md"]])(
+      "auto-allows a read of %s, one of Pi's harness entries",
+      async (entry) => {
+        const result = await readOutcome(DENY_ALL, join(agentDir, entry));
+        expect(result?.block).toBeUndefined();
+      },
+    );
   });
 });

@@ -6,6 +6,8 @@ import {
   type ShellInvocation,
 } from "#src/access-intent/tool-kind";
 import {
+  type SessionApprovalSuggestion,
+  suggestExactSessionPattern,
   suggestPathSessionPattern,
   suggestSessionPattern,
 } from "#src/presentation/pattern-suggest";
@@ -32,7 +34,7 @@ import type { ToolCallContext } from "./types";
  */
 export interface ToolPathAccess {
   readonly path: AccessPath;
-  readonly approvalPattern: string;
+  readonly approvalPatterns: readonly string[];
 }
 
 /**
@@ -40,7 +42,7 @@ export interface ToolPathAccess {
  *
  * Bash → command string; MCP → qualified target; everything else → catch-all
  * wildcard. A path-bearing tool that resolved a path never reaches here — its
- * suggestion comes from the already-derived {@link ToolPathAccess} pattern.
+ * suggestion comes from the already-derived {@link ToolPathAccess} patterns.
  */
 function deriveSuggestionValue(
   toolName: string,
@@ -57,6 +59,79 @@ function deriveSuggestionValue(
 }
 
 /**
+ * The surface a tool call is gated on.
+ *
+ * A shell invocation (native `bash` or an aliased shell tool) is gated on the
+ * `bash` surface, and a Pi MCP tool on the `mcp` surface — their session rule,
+ * decision value, and suggestion are shaped by that surface — while the
+ * invoked tool name is preserved in the prompt and review log so a user sees
+ * which tool actually ran (#574).
+ */
+function gateSurfaceOf(
+  toolName: string,
+  shell: ShellInvocation | null | undefined,
+): string {
+  if (shell) return "bash";
+  if (classifyToolKind(toolName) === "mcp-tool") return "mcp";
+  return toolName;
+}
+
+/** A session option: the approval to record and the label offering it. */
+interface SessionOption {
+  readonly approval: SessionApproval;
+  readonly label: string;
+}
+
+/** The session option for a path-bearing tool, from its derived patterns. */
+function pathSessionOption(
+  gateSurface: string,
+  approvalPatterns: readonly string[],
+): SessionOption {
+  const suggestion = suggestPathSessionPattern(gateSurface, approvalPatterns);
+  return {
+    approval: SessionApproval.forPatterns(
+      suggestion.surface,
+      suggestion.patterns,
+    ),
+    label: suggestion.label,
+  };
+}
+
+/** The session option for a gate whose value is not a path. */
+function valueSessionOption(
+  toolName: string,
+  gateSurface: string,
+  check: PermissionCheckResult,
+): SessionOption {
+  const suggestion = suggestValueSessionPattern(toolName, gateSurface, check);
+  return {
+    approval: SessionApproval.single(suggestion.surface, suggestion.pattern),
+    label: suggestion.label,
+  };
+}
+
+/**
+ * The session approval for a gate whose value is not a path.
+ *
+ * A Pi MCP tool is approved by its own full name, which is one of its `mcp`
+ * candidates: exactly the tool asked about, never the wider server prefix the
+ * proxy target heuristic would suggest.
+ */
+function suggestValueSessionPattern(
+  toolName: string,
+  gateSurface: string,
+  check: PermissionCheckResult,
+): SessionApprovalSuggestion {
+  if (classifyToolKind(toolName) === "mcp-tool") {
+    return suggestExactSessionPattern(gateSurface, toolName.trim());
+  }
+  return suggestSessionPattern(
+    gateSurface,
+    deriveSuggestionValue(gateSurface, check),
+  );
+}
+
+/**
  * Build a pure descriptor for the normal tool permission gate.
  *
  * Takes a pre-computed PermissionCheckResult (from checkPermission) and
@@ -69,11 +144,7 @@ export function describeToolGate(
   pathAccess?: ToolPathAccess,
   shell?: ShellInvocation | null,
 ): GateDescriptor {
-  // A shell invocation (native `bash` or an aliased shell tool) is gated on the
-  // `bash` surface — its session rule, decision value, and suggestion are
-  // bash-shaped — while the invoked tool name is preserved in the prompt and
-  // review log so a user sees which tool actually ran (#574).
-  const gateSurface = shell ? "bash" : tcc.toolName;
+  const gateSurface = gateSurfaceOf(tcc.toolName, shell);
 
   const permissionLogContext = formatter.getPermissionLogContext(
     check,
@@ -81,13 +152,10 @@ export function describeToolGate(
     PATH_BEARING_TOOLS,
   );
 
-  // Compute session approval suggestion for the "for this session" option.
-  const suggestion = pathAccess
-    ? suggestPathSessionPattern(gateSurface, pathAccess.approvalPattern)
-    : suggestSessionPattern(
-        gateSurface,
-        deriveSuggestionValue(gateSurface, check),
-      );
+  // The session approval and label for the "for this session" option.
+  const sessionOption = pathAccess
+    ? pathSessionOption(gateSurface, pathAccess.approvalPatterns)
+    : valueSessionOption(tcc.toolName, gateSurface, check);
 
   const payload = buildToolAskPayload({
     check,
@@ -114,16 +182,13 @@ export function describeToolGate(
     surface: gateSurface,
     input: tcc.input,
     payload,
-    sessionApproval: SessionApproval.single(
-      suggestion.surface,
-      suggestion.pattern,
-    ),
+    sessionApproval: sessionOption.approval,
     promptDetails: {
       source: "tool_call",
       agentName: tcc.agentName,
       toolCallId: tcc.toolCallId,
       toolName: tcc.toolName,
-      sessionLabel: suggestion.label,
+      sessionLabel: sessionOption.label,
       accessIntent,
       ...permissionLogContext,
     },

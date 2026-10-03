@@ -219,6 +219,86 @@ describe("LocalUserAuthorizer", () => {
     );
   });
 
+  describe("session label for a path ask that proves no direction", () => {
+    it("names a bare external_directory directory approval by its contents glob", async () => {
+      const { deps, decisionFn } = makeDeps();
+      const authorizer = new LocalUserAuthorizer(deps);
+
+      await authorizer.authorize(
+        makeDetails({
+          sessionApproval: {
+            grants: [
+              { surface: "external_directory", pattern: "/r/a" },
+              { surface: "external_directory", pattern: "/r/a/*" },
+            ],
+          },
+        }),
+      );
+
+      expect(decisionFn).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.any(String),
+        expect.anything(),
+        { sessionLabel: 'Yes, allow access to "/r/a/*" for this session' },
+      );
+    });
+
+    it("names a bare path approval by its pattern", async () => {
+      const { deps, decisionFn } = makeDeps();
+      const authorizer = new LocalUserAuthorizer(deps);
+
+      await authorizer.authorize(
+        makeDetails({
+          sessionApproval: { grants: [{ surface: "path", pattern: "/r/*" }] },
+        }),
+      );
+
+      expect(decisionFn).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.any(String),
+        expect.anything(),
+        { sessionLabel: 'Yes, allow access to "/r/*" for this session' },
+      );
+    });
+
+    it("keeps a gate-supplied label over the fallback", async () => {
+      const { deps, decisionFn } = makeDeps();
+      const authorizer = new LocalUserAuthorizer(deps);
+
+      await authorizer.authorize(
+        makeDetails({
+          sessionLabel: 'Yes, allow edit "/r/*" for this session',
+          sessionApproval: { grants: [{ surface: "path", pattern: "/r/*" }] },
+        }),
+      );
+
+      expect(decisionFn).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.any(String),
+        expect.anything(),
+        { sessionLabel: 'Yes, allow edit "/r/*" for this session' },
+      );
+    });
+
+    it("adds no label for a grant on a non-path surface", async () => {
+      const { deps, decisionFn } = makeDeps();
+      const authorizer = new LocalUserAuthorizer(deps);
+
+      await authorizer.authorize(
+        makeDetails({
+          sessionApproval: { grants: [{ surface: "bash", pattern: "git *" }] },
+        }),
+      );
+
+      expect(decisionFn).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.any(String),
+        expect.anything(),
+        undefined,
+      );
+    });
+  });
+
   it("emits the UI event before calling requestPermissionDecision", async () => {
     const calls: string[] = [];
     const decisionFn = vi.fn<typeof requestPermissionDecision>(() => {
@@ -440,7 +520,7 @@ describe("LocalUserAuthorizer", () => {
           { surface: "external_directory_read", pattern: "/outside/a/*" },
           { surface: "external_directory_write", pattern: "/outside/b/*" },
         ],
-        undefined,
+        { sessionLabel: "Yes, allow access to 2 paths for this session" },
       );
     });
 

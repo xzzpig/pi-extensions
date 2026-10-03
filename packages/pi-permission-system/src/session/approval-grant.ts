@@ -75,3 +75,36 @@ export function provenDirectionOf(
     ? direction
     : null;
 }
+
+/**
+ * The distinct targets an approval covers, for naming it in a prompt.
+ *
+ * A directory approval is recorded as two grants on one surface — the
+ * directory itself (`D`) and its contents (`D/*`) — because no single wildcard
+ * matches both without also matching a sibling like `D-evil`. Here the exact
+ * grant folds into its contents grant, so the pair reads as the one target
+ * `D/*`. Identical patterns (two paths in one directory) collapse to one.
+ */
+export function grantTargets(grants: readonly ApprovalGrant[]): string[] {
+  const targets = grants
+    .filter((grant) => !hasContentsSibling(grant, grants))
+    .map((grant) => grant.pattern);
+  return [...new Set(targets)];
+}
+
+/** Whether `grants` also holds `grant`'s contents pattern on the same surface. */
+function hasContentsSibling(
+  grant: ApprovalGrant,
+  grants: readonly ApprovalGrant[],
+): boolean {
+  return grants.some(
+    (other) =>
+      other.surface === grant.surface &&
+      CONTENTS_SUFFIXES.some(
+        (suffix) => other.pattern === `${grant.pattern}${suffix}`,
+      ),
+  );
+}
+
+/** A separator (either alphabet) followed by the wildcard. */
+const CONTENTS_SUFFIXES = ["/*", "\\*"] as const;

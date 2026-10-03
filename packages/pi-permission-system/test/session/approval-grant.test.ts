@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   type ApprovalGrant,
+  grantTargets,
   provenDirectionOf,
   widenGrant,
 } from "#src/session/approval-grant";
@@ -79,5 +80,52 @@ describe("provenDirectionOf", () => {
 
   it("answers null for no grants at all", () => {
     expect(provenDirectionOf([])).toBeNull();
+  });
+});
+
+describe("grantTargets", () => {
+  it("names one target per distinct pattern", () => {
+    expect(
+      grantTargets([
+        { surface: "external_directory_read", pattern: "/r/*" },
+        { surface: "external_directory_read", pattern: "/r/*" },
+      ]),
+    ).toEqual(["/r/*"]);
+  });
+
+  it("folds a directory's exact grant into its contents grant", () => {
+    expect(
+      grantTargets([
+        { surface: "external_directory_read", pattern: "/r/a" },
+        { surface: "external_directory_read", pattern: "/r/a/*" },
+      ]),
+    ).toEqual(["/r/a/*"]);
+  });
+
+  it("folds a win32 directory pair spelled with backslashes", () => {
+    expect(
+      grantTargets([
+        { surface: "path", pattern: "C:\\r\\a" },
+        { surface: "path", pattern: "C:\\r\\a\\*" },
+      ]),
+    ).toEqual(["C:\\r\\a\\*"]);
+  });
+
+  it("keeps a pair apart when the two grants name different surfaces", () => {
+    expect(
+      grantTargets([
+        { surface: "path_read", pattern: "/r/a" },
+        { surface: "path_write", pattern: "/r/a/*" },
+      ]),
+    ).toEqual(["/r/a", "/r/a/*"]);
+  });
+
+  it("keeps an exact grant whose sibling is not its own contents", () => {
+    expect(
+      grantTargets([
+        { surface: "path_read", pattern: "/r/a" },
+        { surface: "path_read", pattern: "/r/ab/*" },
+      ]),
+    ).toEqual(["/r/a", "/r/ab/*"]);
   });
 });

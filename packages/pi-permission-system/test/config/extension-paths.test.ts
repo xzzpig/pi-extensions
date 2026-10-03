@@ -47,47 +47,52 @@ describe("computeExtensionPaths", () => {
     expect(paths.globalLogsDir).toBe(getGlobalLogsDir("/test/agent"));
   });
 
-  it("includes agentDir in piInfrastructureDirs", () => {
+  it("excludes the package's own logs dir from infrastructure reads", () => {
     const paths = computeExtensionPaths("/test/agent");
-    expect(paths.piInfrastructureDirs).toContain("/test/agent");
+    expect(paths.piInfrastructureExcludedDirs).toEqual([
+      getGlobalLogsDir("/test/agent"),
+    ]);
   });
 
-  it("includes agentDir/git in piInfrastructureDirs", () => {
-    const paths = computeExtensionPaths("/test/agent");
-    expect(paths.piInfrastructureDirs).toContain("/test/agent/git");
+  /** Pi's harness entries under agentDir, in the order the list carries them. */
+  const HARNESS_ENTRIES = [
+    "/test/agent/agents",
+    "/test/agent/extensions",
+    "/test/agent/git",
+    "/test/agent/npm",
+    "/test/agent/prompts",
+    "/test/agent/skills",
+    "/test/agent/themes",
+    "/test/agent/settings.json",
+    "/test/agent/SYSTEM.md",
+    "/test/agent/APPEND_SYSTEM.md",
+    "/test/agent/AGENTS.md",
+  ];
+
+  it("lists Pi's harness entries, the discovered root, and piPackageDir", () => {
+    const paths = computeExtensionPaths("/test/agent", "/pi/install");
+    expect(paths.piInfrastructureDirs).toEqual([
+      ...HARNESS_ENTRIES,
+      "/mock/global/node_modules",
+      "/pi/install",
+    ]);
   });
 
-  it("includes discovered global node_modules root in piInfrastructureDirs", () => {
+  it("does not list agentDir itself, so its other entries are not infrastructure", () => {
     const paths = computeExtensionPaths("/test/agent");
-    expect(paths.piInfrastructureDirs).toContain("/mock/global/node_modules");
+    expect(paths.piInfrastructureDirs).not.toContain("/test/agent");
   });
 
   it("omits global node_modules from piInfrastructureDirs when discovery returns null", () => {
     mockDiscoverGlobalNodeModulesRoot.mockReturnValue(null);
     const paths = computeExtensionPaths("/test/agent");
-    expect(paths.piInfrastructureDirs).toHaveLength(2);
-    expect(paths.piInfrastructureDirs).toContain("/test/agent");
-    expect(paths.piInfrastructureDirs).toContain("/test/agent/git");
+    expect(paths.piInfrastructureDirs).toEqual(HARNESS_ENTRIES);
   });
 
-  it("all entries in piInfrastructureDirs are strings (no null)", () => {
-    mockDiscoverGlobalNodeModulesRoot.mockReturnValue(null);
-    const paths = computeExtensionPaths("/test/agent");
-    for (const dir of paths.piInfrastructureDirs) {
-      expect(typeof dir).toBe("string");
-    }
-  });
-
-  it("includes piPackageDir in piInfrastructureDirs when provided", () => {
-    const paths = computeExtensionPaths("/test/agent", "/pi/install");
-    expect(paths.piInfrastructureDirs).toContain("/pi/install");
-  });
-
-  it("omits piPackageDir when not provided (current behavior preserved)", () => {
+  it("omits piPackageDir when not provided", () => {
     const paths = computeExtensionPaths("/test/agent");
     expect(paths.piInfrastructureDirs).toEqual([
-      "/test/agent",
-      "/test/agent/git",
+      ...HARNESS_ENTRIES,
       "/mock/global/node_modules",
     ]);
   });

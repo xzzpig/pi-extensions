@@ -13,16 +13,21 @@ import { isGateBypass, isGateDescriptor } from "#src/handlers/gates/descriptor";
 import type { ToolCallContext } from "#src/handlers/gates/types";
 import { pathFlavorForPlatform } from "#src/path/path-flavor";
 import { PathNormalizer } from "#src/path/path-normalizer";
-import type { ScopedPermissionResolver } from "#src/policy/permission-resolver";
+import {
+  PermissionResolver,
+  type ScopedPermissionResolver,
+} from "#src/policy/permission-resolver";
 import {
   allEvidence,
   findEvidence,
   type PromptPayload,
 } from "#src/presentation/prompt-payload";
+import { SessionRules } from "#src/session/session-rules";
 import type { PermissionCheckResult } from "#src/types";
 import { getNonEmptyString, toRecord } from "#src/value-guards";
 
 import { makeResolver } from "#test/helpers/gate-fixtures";
+import { createManagerWithConfig } from "#test/helpers/manager-harness";
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
@@ -216,9 +221,17 @@ describe("describeBashExternalDirectoryGate", () => {
     expect(isGateBypass(result)).toBe(true);
     const bypass = result as GateBypass;
     expect(bypass.action).toBe("allow");
-    expect(bypass.log).toMatchObject({
+    expect(bypass.log).toEqual({
       event: "permission_request.session_approved",
-      details: expect.objectContaining({ resolution: "session_approved" }),
+      details: {
+        source: "tool_call",
+        toolCallId: "tc-1",
+        toolName: "bash",
+        agentName: null,
+        command: "cat /outside/project/file.ts",
+        externalPaths: ["/outside/project/file.ts"],
+        resolution: "session_approved",
+      },
     });
     expect(bypass.decidedBy).toEqual({
       kind: "session_approval",
@@ -239,19 +252,50 @@ describe("describeBashExternalDirectoryGate", () => {
     expect(desc.sessionApproval.grants.length).toBeGreaterThan(0);
   });
 
-  it("returns GateBypass when all external paths are config-level allowed", async () => {
-    // Config-level allow (source: "special") should suppress the prompt,
-    // not just session-level allow. This was the bug: source !== "session"
-    // kept config-allowed paths in the uncovered set.
+  it("writes no entry when every external path is config-rule allowed", async () => {
+    // A config allow suppresses the prompt just as a session allow does, but
+    // no session grant decided it, so no session_approved entry is written —
+    // the same silence every other gate gives a policy allow.
     const resolver = makeResolver();
     resolver.resolve.mockImplementation((intent) =>
       intentValues(intent).length > 0
-        ? makeCheckResult("allow", { source: "special" })
+        ? makeCheckResult("allow", {
+            source: "special",
+            matchedPattern: "/outside/*",
+          })
         : makeCheckResult("ask"),
     );
     const result = await describeGate(makeTcc(), resolver);
-    expect(result).not.toBeNull();
+    expect(result).toBeNull();
+  });
+
+  it("writes no entry when every external path is allowed by the universal fallback", async () => {
+    const result = await describeGate(
+      makeTcc(),
+      makeResolver(makeCheckResult("allow")),
+    );
+    expect(result).toBeNull();
+  });
+
+  it("lists only the session-covered paths when the rest are config-allowed", async () => {
+    const resolver = makeResolver();
+    resolver.resolve.mockImplementation((intent) =>
+      intentValues(intent).includes("/outside/a.ts")
+        ? makeCheckResult("allow", { source: "session" })
+        : makeCheckResult("allow", { matchedPattern: "/outside/*" }),
+    );
+    const result = await describeGate(
+      makeTcc({ input: { command: "diff /outside/a.ts /outside/b.ts" } }),
+      resolver,
+    );
     expect(isGateBypass(result)).toBe(true);
+    const bypass = result as GateBypass;
+    expect(bypass.decidedBy).toEqual({
+      kind: "session_approval",
+      surface: "external_directory",
+      pattern: null,
+    });
+    expect(bypass.log?.details.externalPaths).toEqual(["/outside/a.ts"]);
   });
 
   it("uses worst-check state from uncovered paths for preCheck (config deny > catch-all ask)", async () => {
@@ -490,6 +534,44 @@ describe("describeBashExternalDirectoryGate", () => {
     expect(desc.sessionApproval).toBeDefined();
     if (!desc.sessionApproval) return;
     expect(desc.sessionApproval.grants.length).toBe(1);
+  });
+});
+
+describe("describeBashExternalDirectoryGate — review-log provenance through the real resolver", () => {
+  const command = "head -1 /etc/hostname";
+
+  async function describeWithConfig(
+    permission: Record<string, unknown>,
+    sessionRules: SessionRules,
+  ): Promise<GateResult> {
+    const { manager, cleanup } = createManagerWithConfig(permission);
+    try {
+      manager.configureForCwd("/test/project");
+      return await describeGate(
+        makeTcc({ input: { command } }),
+        new PermissionResolver(manager, sessionRules),
+      );
+    } finally {
+      cleanup();
+    }
+  }
+
+  it("writes no entry when the universal fallback allows the path", async () => {
+    const result = await describeWithConfig(
+      { "*": "allow" },
+      new SessionRules(),
+    );
+    expect(result).toBeNull();
+  });
+
+  it("records a session approval when a session grant covers the path", async () => {
+    const sessionRules = new SessionRules();
+    sessionRules.approve("external_directory_read", "/etc/*");
+    const result = await describeWithConfig({ "*": "allow" }, sessionRules);
+    expect(isGateBypass(result)).toBe(true);
+    const bypass = result as GateBypass;
+    expect(bypass.log?.event).toBe("permission_request.session_approved");
+    expect(bypass.log?.details.externalPaths).toEqual(["/etc/hostname"]);
   });
 });
 

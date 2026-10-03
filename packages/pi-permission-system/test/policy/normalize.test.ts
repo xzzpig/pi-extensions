@@ -2,7 +2,9 @@ import { describe, expect, test } from "vitest";
 import {
   expandDirectionalSugar,
   normalizeFlatConfig,
+  relocateMcpToolKeyRules,
 } from "#src/policy/normalize";
+import type { Rule } from "#src/policy/rule";
 import type { FlatPermissionConfig } from "#src/types";
 
 describe("normalizeFlatConfig", () => {
@@ -366,5 +368,91 @@ describe("expandDirectionalSugar", () => {
     const read = expanded.path_read as Record<string, unknown>;
     read.injected = "allow";
     expect(expanded.path_write).toEqual({ "*": "ask" });
+  });
+});
+
+describe("relocateMcpToolKeyRules", () => {
+  const rule = (
+    surface: string,
+    pattern: string,
+    action: Rule["action"],
+    extra: Partial<Rule> = {},
+  ): Rule => ({
+    surface,
+    pattern,
+    action,
+    layer: "config",
+    origin: "global",
+    ...extra,
+  });
+
+  test("copies a Pi MCP tool key onto the mcp surface, after every other rule", () => {
+    const legacy = rule("mcp__danger_srv__wipe", "*", "deny", {
+      origin: "project",
+      reason: "no wiping",
+    });
+    const result = relocateMcpToolKeyRules([
+      legacy,
+      rule("mcp", "*", "allow"),
+      rule("bash", "*", "ask"),
+    ]);
+
+    expect(result).toEqual({
+      rules: [
+        legacy,
+        rule("mcp", "*", "allow"),
+        rule("bash", "*", "ask"),
+        rule("mcp", "mcp__danger_srv__wipe", "deny", {
+          origin: "project",
+          reason: "no wiping",
+        }),
+      ],
+      relocatedKeys: ["mcp__danger_srv__wipe"],
+    });
+  });
+
+  test("copies wildcard keys too, keeping their relative order", () => {
+    const result = relocateMcpToolKeyRules([
+      rule("mcp__a__*", "*", "deny"),
+      rule("read", "*", "allow"),
+      rule("mcp__*", "*", "allow"),
+    ]);
+
+    expect(result.rules).toEqual([
+      rule("mcp__a__*", "*", "deny"),
+      rule("read", "*", "allow"),
+      rule("mcp__*", "*", "allow"),
+      rule("mcp", "mcp__a__*", "deny"),
+      rule("mcp", "mcp__*", "allow"),
+    ]);
+    expect(result.relocatedKeys).toEqual(["mcp__a__*", "mcp__*"]);
+  });
+
+  test("leaves a key that can name no Pi MCP tool on its own surface only", () => {
+    const rules = [rule("mcp__foo", "*", "deny"), rule("mcp__a__", "*", "ask")];
+    expect(relocateMcpToolKeyRules(rules)).toEqual({
+      rules,
+      relocatedKeys: [],
+    });
+  });
+
+  test("leaves a non-catch-all pattern on an mcp__ key in place, inert as before", () => {
+    const inert = rule("mcp__a__x", "foo", "deny");
+    expect(relocateMcpToolKeyRules([inert])).toEqual({
+      rules: [inert],
+      relocatedKeys: [],
+    });
+  });
+
+  test("leaves the mcp surface and other surfaces untouched", () => {
+    const rules = [
+      rule("mcp", "mcp__a__x", "deny"),
+      rule("mcp_server", "*", "deny"),
+      rule("bash", "*", "ask"),
+    ];
+    expect(relocateMcpToolKeyRules(rules)).toEqual({
+      rules,
+      relocatedKeys: [],
+    });
   });
 });

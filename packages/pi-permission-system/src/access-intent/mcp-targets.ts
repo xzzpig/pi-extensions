@@ -1,4 +1,5 @@
 import { getNonEmptyString, toRecord } from "#src/value-guards";
+import { PI_MCP_TOOL_PREFIX } from "./tool-kind";
 
 /**
  * An ordered accumulator that owns the uniqueness invariant.
@@ -221,4 +222,74 @@ export function createMcpPermissionTargets(
 
   targets.add("mcp_status");
   return targets.toArray();
+}
+
+/**
+ * Derive the ordered MCP permission-lookup candidates for a tool Pi's built-in
+ * MCP registered under its own name, `mcp__<server>__<tool>`.
+ *
+ * The candidates mirror a proxied call's (`<server>_<tool>`, `<server>:<tool>`,
+ * `<server>`, `<tool>`, `mcp_call`) plus the full Pi name, so an `mcp` rule
+ * written for either client names the same call. Pi rewrites every character
+ * outside `[A-Za-z0-9_]` to `_` in the name, so the server is emitted in both
+ * spellings: the configured one from `mcp.json` (`danger-srv`) and the one in
+ * the name (`danger_srv`). Pi rejects two servers that differ only in `-` and
+ * `_`, which is what makes treating the two spellings as one server safe.
+ *
+ * The server is the longest configured name whose sanitized form prefixes the
+ * tool name; with none, the name splits at its first `__`.
+ */
+export function createPiMcpToolTargets(
+  toolName: string,
+  configuredServerNames: readonly string[],
+): string[] {
+  const rest = toolName.trim().slice(PI_MCP_TOOL_PREFIX.length);
+  const { spellings, tool } = resolvePiMcpServer(rest, configuredServerNames);
+
+  const targets = new McpTargetList();
+  for (const server of spellings) {
+    targets.add(`${server}_${tool}`);
+    targets.add(`${server}:${tool}`);
+    targets.add(server);
+  }
+  targets.add(tool);
+  targets.add(toolName.trim());
+  targets.add("mcp_call");
+  return targets.toArray();
+}
+
+/** The server spellings and tool a Pi MCP tool name (prefix removed) holds. */
+function resolvePiMcpServer(
+  rest: string,
+  configuredServerNames: readonly string[],
+): { spellings: string[]; tool: string } {
+  let sanitizedServer: string | null = null;
+  let configured: string[] = [];
+
+  for (const serverName of configuredServerNames) {
+    const trimmed = serverName.trim();
+    const sanitized = sanitizePiMcpName(trimmed);
+    if (!trimmed || !rest.startsWith(`${sanitized}__`)) continue;
+    if (sanitizedServer === null || sanitized.length > sanitizedServer.length) {
+      sanitizedServer = sanitized;
+      configured = [trimmed];
+    } else if (sanitized === sanitizedServer) {
+      configured.push(trimmed);
+    }
+  }
+
+  if (sanitizedServer === null) {
+    const separator = rest.indexOf("__");
+    sanitizedServer = rest.slice(0, separator);
+  }
+
+  return {
+    spellings: [...new Set([...configured, sanitizedServer])],
+    tool: rest.slice(sanitizedServer.length + 2),
+  };
+}
+
+/** Pi's MCP name sanitization: every character outside `[A-Za-z0-9_]` becomes `_`. */
+function sanitizePiMcpName(name: string): string {
+  return name.replace(/[^A-Za-z0-9_]/g, "_");
 }

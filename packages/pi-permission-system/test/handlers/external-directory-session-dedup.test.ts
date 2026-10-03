@@ -7,7 +7,8 @@
  * stateful approval-tracking path is exercised end-to-end.
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describeGrantTarget } from "#src/presentation/pattern-suggest";
 import {
   makeApprovingPrompter,
   makeDeduplicatingHandler,
@@ -17,6 +18,7 @@ import {
   makeWideSessionApprovingPrompter,
 } from "#test/helpers/external-directory-fixtures";
 import { makeCtx } from "#test/helpers/handler-fixtures";
+import { createTmpFixture } from "#test/helpers/tmp-fixture";
 
 // ── SDK stub ───────────────────────────────────────────────────────────────
 vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
@@ -267,5 +269,107 @@ describe("session shutdown clears external-directory approvals", () => {
     // Third access: session rules cleared — must re-prompt.
     await handler.handleToolCall({ ...event, toolCallId: "tc-3" }, ctx);
     expect(vi.mocked(prompter.escalate)).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("session approval of an external directory", () => {
+  // Real filesystem: the grant's scope depends on whether the path names a
+  // directory, which is fs state.
+  const tmp = createTmpFixture();
+  let projectA: string;
+  let projectB: string;
+
+  beforeEach(() => {
+    const projects = tmp.subdir(tmp.dir("pi-perm-dir-approval-"), "projects");
+    projectA = tmp.subdir(projects, "project-a");
+    tmp.file(projectA, "x.txt", "a");
+    projectB = tmp.subdir(projects, "project-b");
+    tmp.file(projectB, "sample.txt", "b");
+  });
+
+  afterEach(() => {
+    tmp.cleanup();
+  });
+
+  it("does not cover a sibling directory after approving ls of one", async () => {
+    const { handler, prompter } = makeDeduplicatingHandler();
+    const ctx = makeCtx();
+
+    await handler.handleToolCall(
+      makeExtDirToolEvent("ls", projectA, "tc-1"),
+      ctx,
+    );
+    await handler.handleToolCall(
+      makeExtDirToolEvent("read", `${projectB}/sample.txt`, "tc-2"),
+      ctx,
+    );
+
+    expect(prompter.escalate).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cover a sibling directory after approving an extension tool on one", async () => {
+    const { handler, prompter } = makeDeduplicatingHandler();
+    const ctx = makeCtx();
+
+    await handler.handleToolCall(
+      makeExtDirToolEvent("add_directory", projectA, "tc-1"),
+      ctx,
+    );
+    await handler.handleToolCall(
+      makeExtDirToolEvent("read", `${projectB}/sample.txt`, "tc-2"),
+      ctx,
+    );
+
+    expect(prompter.escalate).toHaveBeenCalledTimes(2);
+  });
+
+  it("covers the approved directory itself and its contents", async () => {
+    const { handler, prompter } = makeDeduplicatingHandler();
+    const ctx = makeCtx();
+
+    await handler.handleToolCall(
+      makeExtDirToolEvent("ls", projectA, "tc-1"),
+      ctx,
+    );
+    await handler.handleToolCall(
+      makeExtDirToolEvent("read", `${projectA}/x.txt`, "tc-2"),
+      ctx,
+    );
+    await handler.handleToolCall(
+      makeExtDirToolEvent("ls", projectA, "tc-3"),
+      ctx,
+    );
+
+    expect(prompter.escalate).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers the directory approval as its contents glob", async () => {
+    const { handler, prompter } = makeDeduplicatingHandler();
+
+    await handler.handleToolCall(
+      makeExtDirToolEvent("ls", projectA, "tc-1"),
+      makeCtx(),
+    );
+
+    const grants =
+      vi.mocked(prompter.escalate).mock.calls[0]?.[0].sessionApproval?.grants ??
+      [];
+    expect(describeGrantTarget(grants)).toBe(`"${projectA}/*"`);
+  });
+
+  it("does not cover a sibling directory after approving a bash ls of one", async () => {
+    const { handler, prompter } = makeDeduplicatingHandler();
+    const ctx = makeCtx();
+
+    await handler.handleToolCall(
+      makeExtDirBashEvent(`ls ${projectA}`, "tc-1"),
+      ctx,
+    );
+    await handler.handleToolCall(
+      makeExtDirBashEvent(`cat ${projectB}/sample.txt`, "tc-2"),
+      ctx,
+    );
+
+    expect(prompter.escalate).toHaveBeenCalledTimes(2);
   });
 });

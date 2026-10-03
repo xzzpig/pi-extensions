@@ -18,8 +18,9 @@ export function formatUnknownToolReason(
   const availableList =
     preview.length > 0 ? `${preview.join(", ")}${suffix}` : "none";
 
+  const kind = classifyToolKind(toolName);
   const mcpHint =
-    classifyToolKind(toolName) === "mcp"
+    kind === "mcp" || kind === "mcp-tool"
       ? ""
       : ' If this was intended as an MCP server tool, call the registered \'mcp\' tool when available (for example: {"tool":"server:tool"}).';
 

@@ -465,13 +465,13 @@ Omitting `"*"` defaults to `"ask"` (least privilege).
 Any registered tool name can be a surface key.
 A string value is a catch-all for that surface.
 
-| Surface example                               | Description                         |
-| --------------------------------------------- | ----------------------------------- |
-| `read`, `write`, `edit`, `grep`, `find`, `ls` | Canonical Pi built-in file tools    |
-| `bash`                                        | Shell command execution             |
-| `mcp`                                         | Registered MCP proxy tool           |
-| `task`                                        | Delegation tool                     |
-| `third_party_tool`                            | Any other registered extension tool |
+| Surface example                               | Description                                                 |
+| --------------------------------------------- | ----------------------------------------------------------- |
+| `read`, `write`, `edit`, `grep`, `find`, `ls` | Canonical Pi built-in file tools                            |
+| `bash`                                        | Shell command execution                                     |
+| `mcp`                                         | MCP calls: Pi's built-in MCP tools and the `mcp` proxy tool |
+| `task`                                        | Delegation tool                                             |
+| `third_party_tool`                            | Any other registered extension tool                         |
 
 ```jsonc
 {
@@ -647,7 +647,11 @@ To deliberately opt into permissive bash, set `"bash": { "*": "allow" }` explici
 
 ### `mcp` Surface
 
-MCP permissions match against derived targets from tool input:
+MCP permissions match against targets derived from each MCP call.
+Two kinds of tool make MCP calls, and both resolve on this one surface:
+
+- **Pi's built-in MCP** registers each server tool as its own tool, `mcp__<server>__<tool>` (for example `mcp__github__search_code`); see [Pi's built-in MCP tools](#pis-built-in-mcp-tools).
+- **The `mcp` proxy tool** (for example pi-mcp-adapter's) takes the call as input, `{"tool": …, "server": …}`.
 
 | Target type       | Examples                                                              |
 | ----------------- | --------------------------------------------------------------------- |
@@ -677,7 +681,7 @@ In that example `mcp_status` and `mcp_list` allow discovery, `myServer:*` prompt
 #### How a call becomes targets
 
 One MCP call is looked up under several names, and a rule may name any of them.
-When the call carries no explicit `server`, the server is derived from the tool name against the servers in your MCP config, in this order — the first convention that matches settles the name:
+When a proxied call carries no explicit `server`, the server is derived from the tool name against the servers in your MCP config (`~/.pi/agent/mcp.json`, plus `<project>/.pi/mcp.json` in a trusted project), in this order — the first convention that matches settles the name:
 
 1. **Qualified** — `server:tool` splits directly.
 2. **Prefix** — the **longest** configured server that is the leading segment of `<server>_<tool>`.
@@ -697,6 +701,29 @@ An explicit `server` argument skips derivation entirely.
 Deriving a server from a name is a heuristic, and it can attach the wrong rule: with `git` configured, a `git_lab_issues` tool from a different server derives `git`.
 Longest-match only helps when both servers are configured.
 Where the distinction matters, pass an explicit `server` argument or use a qualified `server:tool` name.
+
+#### Pi's built-in MCP tools
+
+Pi names each tool `mcp__<server>__<tool>`, replacing every character outside `[A-Za-z0-9_]` with `_`, so a server named `danger-srv` in `mcp.json` appears as `danger_srv` in the tool name.
+A call to such a tool is looked up under the same targets a proxied call gets, plus the tool's full Pi name, and the server is named in **both** spellings: the one in your `mcp.json` and the one in the tool name.
+Pi refuses two servers whose names differ only in `-` and `_`, so the two spellings always name the same server.
+
+| Call (`danger-srv` in `mcp.json`) | Targets                                                                                                                                             |
+| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mcp__danger_srv__wipe`           | `danger-srv_wipe`, `danger-srv:wipe`, `danger-srv`, `danger_srv_wipe`, `danger_srv:wipe`, `danger_srv`, `wipe`, `mcp__danger_srv__wipe`, `mcp_call` |
+| `mcp__github__search` (`github`)  | `github_search`, `github:search`, `github`, `search`, `mcp__github__search`, `mcp_call`                                                             |
+
+So `"danger-srv": "deny"`, `"danger_srv": "deny"`, `"danger-srv:*": "deny"`, and `"mcp__danger_srv__*": "deny"` each deny every tool of that server.
+The server is the longest configured name whose Pi spelling starts the tool name; a server no `mcp.json` names, such as one an extension registers in code, is split at the first `__` and gets only Pi's spelling.
+A tool name over 64 characters, or two of a server's tools that sanitize to the same name, gets an 8-character hash suffix from Pi; the suffix is part of the tool target, so a server-level rule is the reliable way to name such a tool.
+
+The tool's arguments are its own input, unlike the proxy's: the ask prompt and the review log show them, and the [`path` and `external_directory`](#path-surface) gates read a top-level `path` argument.
+Approving such a tool "for this session" records its full Pi name on the `mcp` surface, so the approval covers exactly that tool.
+A Pi MCP tool is withheld from the model when its targets resolve to `deny`.
+
+> **Migrating:** a top-level key naming a Pi MCP tool (`"mcp__danger_srv__wipe": "deny"`) still applies, as an `mcp` rule, and raises a notice at session start asking you to move it under `mcp`.
+> A top-level wildcard of another shape (`"*__wipe"`) no longer reaches these tools.
+> See [the migration guide](migration/1001-pi-mcp-tools-on-mcp-surface.md).
 
 #### Which rule shape to write
 
@@ -763,6 +790,12 @@ The path gate runs before the external-directory and tool gates.
 If it denies, the command is blocked without reaching subsequent gates — no wasted prompts.
 
 Path patterns match both the path **as the agent references it** and its canonical (symlink-resolved) form, so a deny on a sensitive spelling cannot be evaded through a symlink alias (see Symlinked paths below).
+
+For Pi's built-in file tools (`read`, `write`, `edit`, `ls`, `find`, `grep`), the path the agent references is the file the tool opens, not the literal argument.
+Pi resolves that argument itself before touching the disk: it decodes a `file://` URL, turns Unicode spaces into ordinary spaces, translates a Git Bash, Cygwin, or WSL drive path (`/c/…`, `/cygdrive/c/…`, `/mnt/c/…`) on Windows, and for `read` alone falls back to the macOS screenshot (`\u202FPM`), NFD, and curly-quote (`’`) spellings of a name that does not exist.
+The gates match the file that resolution names, so a deny keyed on the file on disk fires however it was spelled, and an ask shows the file under "resolves to" when the spelling was rewritten.
+Pi does not expand `$HOME` or strip quotes from a tool's path, so neither do these gates: `read $HOME/.ssh/config` names `<cwd>/$HOME/.ssh/config`, the file the tool would open.
+Extension and MCP tool paths keep their literal spelling.
 
 For bash commands, the extension extracts path-candidate tokens from the command (dot-files like `.env`, relative paths like `src/foo.ts`, and absolute paths) and evaluates each against the path rules.
 The most restrictive result across all tokens determines the outcome.
@@ -860,6 +893,9 @@ Use a pattern map to allow specific directories without opening all external acc
 For example, `read: "allow"` can permit ordinary reads while `external_directory: "ask"` still requires confirmation before reading `../outside.txt` or an absolute path outside `ctx.cwd`.
 Optional-path search tools (`find`, `grep`, `ls`) skip this check when no `path` is provided.
 
+When no `external_directory` key is present, the universal fallback (`permission["*"]`) applies.
+So `"*": "allow"` lets every outside-CWD access through with no prompt and, like any policy allow, no review-log entry; the examples on this page set `"*": "ask"` inside `external_directory` so the boundary asks regardless of the fallback.
+
 #### Allow an outside-CWD cache directory
 
 When an agent keeps reading a local cache outside the working tree — `~/.cargo/registry`, `~/.npm`, `~/go/pkg/mod` — and you want to stop confirming it every time, allow that directory on the `external_directory` surface:
@@ -902,7 +938,7 @@ The governing record is [ADR 0009](https://github.com/gotgenes/pi-packages/blob/
 
 #### Symlinked paths
 
-A `path`, `external_directory`, or per-tool file-pattern rule (`read`/`write`/`edit`/`grep`/`find`/`ls`) matches the path **as the agent references it** and the OS-resolved (symlink-followed) path.
+A `path`, `external_directory`, or per-tool file-pattern rule (`read`/`write`/`edit`/`grep`/`find`/`ls`) matches the path **as the agent references it** (for a built-in file tool, the file Pi opens) and the OS-resolved (symlink-followed) path.
 This matters on macOS, where `/tmp` is a symlink to `/private/tmp`: a rule keyed on `/tmp/*` allows access via `/tmp` even though the access resolves to `/private/tmp`, and a rule keyed on `/private/tmp/*` works too.
 
 ```jsonc
@@ -921,15 +957,22 @@ For `external_directory`, the decision of whether a path is outside the working 
 
 #### Pi Infrastructure Read Auto-Allow
 
-Read-only tools (`read`, `find`, `grep`, `ls`) targeting Pi infrastructure directories are automatically allowed without triggering the gate, even when `external_directory` is `ask` or `deny`.
-Infrastructure directories include:
+Read-only tools (`read`, `find`, `grep`, `ls`) targeting Pi infrastructure paths are automatically allowed without triggering the gate, even when `external_directory` is `ask` or a catch-all `deny`.
+Infrastructure paths include:
 
-1. The agent config directory (`~/.pi/agent/` or `$PI_CODING_AGENT_DIR`)
-2. Git-cloned global packages (`<agentDir>/git/`)
-3. The global `node_modules` root (auto-discovered from the extension's own install path; falls back to `npm root -g` when running from a local development checkout)
-4. Pi's own install directory (auto-discovered via the coding-agent `getPackageDir()` API, so Pi's bundled docs and examples are readable regardless of install layout)
-5. Project-local Pi packages (`<cwd>/.pi/npm/` and `<cwd>/.pi/git/`)
-6. Any paths listed in `piInfrastructureReadPaths`
+1. Pi's harness entries under the agent config directory (`~/.pi/agent/` or `$PI_CODING_AGENT_DIR`): the directories `agents/`, `extensions/`, `git/`, `npm/`, `prompts/`, `skills/`, and `themes/`, and the files `settings.json`, `SYSTEM.md`, `APPEND_SYSTEM.md`, and `AGENTS.md`
+2. The global `node_modules` root (auto-discovered from the extension's own install path; falls back to `npm root -g` when running from a local development checkout)
+3. Pi's own install directory (auto-discovered via the coding-agent `getPackageDir()` API, so Pi's bundled docs and examples are readable regardless of install layout)
+4. Project-local Pi packages (`<cwd>/.pi/npm/` and `<cwd>/.pi/git/`)
+5. Any paths listed in `piInfrastructureReadPaths`
+
+Everything else under the agent config directory, such as `auth.json`, `models.json`, `mcp-oauth/`, and `sessions/`, goes through the gate like any other outside path.
+This package's own logs directory (`extensions/pi-permission-system/logs/`) is never auto-allowed, even when a `piInfrastructureReadPaths` entry covers it.
+
+A deny rule on `external_directory` or `external_directory_read` whose pattern names an infrastructure path outranks the auto-allow and blocks the read.
+A catch-all `"*"` deny and the universal `permission["*"]` fallback do not, so a deny-by-default policy keeps its skill and package reads.
+Rules are last-match-wins, so write the catch-all before the targeted deny.
+See [the migration guide](migration/0955-pi-infrastructure-read-narrowed.md) for the change from earlier releases.
 
 Write tools (`write`, `edit`) to infrastructure paths are **not** auto-allowed and still go through the gate.
 
@@ -1177,8 +1220,9 @@ A prefix is recognized only when it stands alone or precedes a separator, so a l
 
 The pattern is stored and displayed as written (e.g. `~/development/*`) in logs and approval dialogs.
 
-Path **values** supplied by tool calls and bash commands are expanded the same way.
-This means `~/...`, `$HOME/...`, `${HOME}/...`, and the fully-expanded absolute form all match a single home-anchored pattern: a `read` tool called with path `~/.ssh/config`, `$HOME/.ssh/config`, `${HOME}/.ssh/config`, or `/Users/me/.ssh/config` is all caught by a `"~/.ssh/*": "deny"` rule.
+Path **values** supplied by bash commands and extension tools are expanded the same way.
+This means `~/...`, `$HOME/...`, `${HOME}/...`, and the fully-expanded absolute form all match a single home-anchored pattern: `cat ~/.ssh/config`, `cat $HOME/.ssh/config`, or `cat /Users/me/.ssh/config` is caught by a `"~/.ssh/*": "deny"` rule.
+Pi's built-in file tools expand only `~`, as Pi itself does: a `read` of `~/.ssh/config` or `/Users/me/.ssh/config` is caught, while a `read` of `$HOME/.ssh/config` opens `<cwd>/$HOME/.ssh/config` and is matched as that file.
 
 ---
 
@@ -1443,9 +1487,9 @@ Additional behaviors:
   A skill listed in text pi did not render, such as your own `SYSTEM.md`, is not edited out; using it is still gated.
 - The prompt options are recomputed on every turn but are stable across turns for a stable policy/agent, so the provider's prompt cache is preserved rather than rewritten each turn.
   A policy change is an intentional cache transition, as a mid-session agent switch already is.
-- Extension-provided tools like `task`, `mcp`, and third-party tools are handled by exact registered name
+- Extension-provided tools like `task`, `mcp`, and third-party tools are handled by exact registered name; Pi's built-in MCP tools (`mcp__<server>__<tool>`) resolve on the `mcp` surface instead (see [Pi's built-in MCP tools](#pis-built-in-mcp-tools))
 - Generic extension-tool approval prompts include a bounded input preview; built-in file tools use concise human-readable summaries
-- Permission review logs include `toolInputPreview` values for non-bash/non-MCP tool calls, with sensitive-keyed values masked and every value bounded by `reviewLogFieldMaxWidth` (see [Log file sensitivity](#log-file-sensitivity))
+- Permission review logs include `toolInputPreview` values for tool calls other than bash and the `mcp` proxy, with sensitive-keyed values masked and every value bounded by `reviewLogFieldMaxWidth` (see [Log file sensitivity](#log-file-sensitivity))
 - A tool whose path came from an extractor registered in an **ancestor** session rather than this one records `extractorSource: "inherited"` beside the decision; the field is absent for every path this session resolved itself.
   This happens in a subagent child when the extractor's provider was kept out of the child but the tool's own package was not — the child borrows the declaration so its `path` and `external_directory` gates still see the path (see [Subagent Integration](https://github.com/gotgenes/pi-packages/blob/main/packages/pi-permission-system/docs/subagent-integration.md#loading-asymmetry))
 

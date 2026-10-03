@@ -182,4 +182,90 @@ describe("selectUncoveredExternalPaths", () => {
 
     expect(worstCheck?.state).toBe("deny");
   });
+
+  describe("session coverage", () => {
+    const session = access("/outside/session.ts");
+    const config = access("/outside/config.ts");
+    const fallback = access("/outside/default.ts");
+    const asked = access("/outside/ask.ts");
+
+    /** One check per path, keyed on the path's typed value. */
+    function resolverByPath() {
+      const byPath = new Map<string, PermissionCheckResult>([
+        [
+          "/outside/session.ts",
+          makeCheckResult("allow", {
+            source: "session",
+            matchedPattern: "/outside/*",
+            origin: "session",
+          }),
+        ],
+        [
+          "/outside/config.ts",
+          makeCheckResult("allow", { matchedPattern: "/outside/*" }),
+        ],
+        ["/outside/default.ts", makeCheckResult("allow")],
+        ["/outside/ask.ts", makeCheckResult("ask")],
+      ]);
+      const resolver = makeResolver();
+      resolver.resolve.mockImplementation((intent) => {
+        const check =
+          intent.kind === "access-path"
+            ? byPath.get(intent.path.value())
+            : undefined;
+        return check ?? makeCheckResult("ask");
+      });
+      return resolver;
+    }
+
+    it("collects a session-granted allow as session-covered, not uncovered", () => {
+      const { uncovered, sessionCovered } = selectUncoveredExternalPaths(
+        [session],
+        resolverByPath(),
+        undefined,
+      );
+
+      expect(uncovered).toEqual([]);
+      expect(sessionCovered.map((path) => path.value())).toEqual([
+        "/outside/session.ts",
+      ]);
+    });
+
+    it("does not count a config-rule allow as session-covered", () => {
+      const { uncovered, sessionCovered } = selectUncoveredExternalPaths(
+        [config],
+        resolverByPath(),
+        undefined,
+      );
+
+      expect(uncovered).toEqual([]);
+      expect(sessionCovered).toEqual([]);
+    });
+
+    it("does not count a universal-fallback allow as session-covered", () => {
+      const { uncovered, sessionCovered } = selectUncoveredExternalPaths(
+        [fallback],
+        resolverByPath(),
+        undefined,
+      );
+
+      expect(uncovered).toEqual([]);
+      expect(sessionCovered).toEqual([]);
+    });
+
+    it("splits a mixed set three ways", () => {
+      const { uncovered, sessionCovered } = selectUncoveredExternalPaths(
+        [session, config, fallback, asked],
+        resolverByPath(),
+        undefined,
+      );
+
+      expect(uncovered.map(({ path }) => path.value())).toEqual([
+        "/outside/ask.ts",
+      ]);
+      expect(sessionCovered.map((path) => path.value())).toEqual([
+        "/outside/session.ts",
+      ]);
+    });
+  });
 });

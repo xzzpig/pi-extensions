@@ -247,14 +247,15 @@ export function makeDedupWiring(prompter?: AskEscalator) {
   const handler = new PermissionGateHandler(
     session,
     makeToolRegistry({
-      getAll: vi
-        .fn()
-        .mockReturnValue([
-          { name: "read" },
-          { name: "write" },
-          { name: "edit" },
-          { name: "bash" },
-        ]),
+      getAll: vi.fn().mockReturnValue([
+        { name: "read" },
+        { name: "write" },
+        { name: "edit" },
+        { name: "ls" },
+        { name: "bash" },
+        // An extension tool whose path argument names a directory.
+        { name: "add_directory" },
+      ]),
     }),
     new ToolCallGatePipeline(resolver, session),
     new SkillInputGatePipeline(resolver),

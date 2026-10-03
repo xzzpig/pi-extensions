@@ -1,4 +1,7 @@
-import { classifyToolKind, isMcpCheck } from "#src/access-intent/tool-kind";
+import {
+  classifyToolKind,
+  isProxyMcpCheck,
+} from "#src/access-intent/tool-kind";
 import type { PermissionCheckResult } from "#src/types";
 import { getNonEmptyString, toRecord } from "#src/value-guards";
 import type { ToolInputFormatterLookup } from "./tool-input-formatter-registry";
@@ -157,7 +160,10 @@ export class ToolPreviewFormatter {
     input: unknown,
     pathBearingTools: ReadonlySet<string>,
   ): string | undefined {
-    if (classifyToolKind(result.toolName) === "bash" || isMcpCheck(result)) {
+    if (
+      classifyToolKind(result.toolName) === "bash" ||
+      isProxyMcpCheck(result)
+    ) {
       return undefined;
     }
 

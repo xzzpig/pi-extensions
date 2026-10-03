@@ -1,5 +1,6 @@
 import type { PlatformPath } from "node:path";
 import { posix as posixPath, win32 as winPath } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   type BashTokenShape,
@@ -66,6 +67,20 @@ export interface PathFlavor {
    * every token is an ordinary path, so the shape is always `{ kind: "plain" }`.
    */
   bashTokenShape(token: string): BashTokenShape;
+  /**
+   * The drive translation Pi's built-in file tools apply to their `path`
+   * argument: on win32, a Git Bash / MSYS / Cygwin / WSL drive path (`/c/x`,
+   * `/mnt/c/x`, `/cygdrive/c/x`) becomes `C:\x`; on POSIX the value is
+   * unchanged. Mirrors Pi's `normalizeWindowsShellPath`, which recognizes more
+   * mount spellings than a bash token's {@link bashTokenShape}.
+   */
+  toolShellPath(value: string): string;
+  /**
+   * Decode a `file://` URL into this platform's path, as Pi's built-in file
+   * tools do. Throws like Node's `fileURLToPath` for a URL the platform
+   * cannot express (a POSIX URL naming a host).
+   */
+  fileUrlToPath(url: string): string;
 }
 
 class PlatformPathFlavor implements PathFlavor {
@@ -85,6 +100,14 @@ class PlatformPathFlavor implements PathFlavor {
 
   fold(value: string): string {
     return this.windows ? value.toLowerCase() : value;
+  }
+
+  toolShellPath(value: string): string {
+    return this.windows ? toWindowsDrivePath(value) : value;
+  }
+
+  fileUrlToPath(url: string): string {
+    return fileURLToPath(url, { windows: this.windows });
   }
 
   comparable(pathValue: string, base: string): string {
@@ -131,4 +154,27 @@ export const win32PathFlavor: PathFlavor = new PlatformPathFlavor(
 /** The one win32-vs-POSIX platform decision in the package. */
 export function pathFlavorForPlatform(platform: NodeJS.Platform): PathFlavor {
   return platform === "win32" ? win32PathFlavor : posixPathFlavor;
+}
+
+/** A drive path as Pi's file tools spell it: optional WSL/Cygwin mount, a letter, an optional tail. */
+const TOOL_DRIVE_PATH_PATTERN = /^\/(?:mnt\/|cygdrive\/)?([a-z])(?:\/(.*))?$/i;
+
+/**
+ * Pi's `normalizeWindowsShellPath`: a UNC (`//…`) or backslashed value is
+ * already native and passes through, as does anything not shaped like a drive.
+ */
+function toWindowsDrivePath(value: string): string {
+  if (
+    !value.startsWith("/") ||
+    value.startsWith("//") ||
+    value.includes("\\")
+  ) {
+    return value;
+  }
+  const match = TOOL_DRIVE_PATH_PATTERN.exec(value);
+  if (!match) return value;
+  const [, letter] = match;
+  // The tail group is optional, so it is absent for a bare drive (`/c`).
+  const tail = match.at(2) ?? "";
+  return `${letter.toUpperCase()}:\\${tail.replaceAll("/", "\\")}`;
 }

@@ -23,10 +23,14 @@ import { makeCheckResult } from "#test/helpers/handler-fixtures";
 const realpathSync = vi.hoisted(() =>
   vi.fn<(path: string) => string>((p) => p),
 );
-vi.mock("node:fs", () => ({
-  realpathSync,
-  default: { realpathSync },
-}));
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  return {
+    ...actual,
+    realpathSync,
+    default: { ...actual, realpathSync },
+  };
+});
 
 // Mock the advisory bash resolver so the service test asserts delegation; the
 // decomposition behavior itself is covered in bash-advisory-check.test.ts.

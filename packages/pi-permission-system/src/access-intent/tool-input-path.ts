@@ -62,6 +62,7 @@ export function getToolInputPath(
     case "mcp":
       return byConvention(getNonEmptyString(toRecord(record.arguments).path));
     case "skill":
+    case "mcp-tool":
     case "extension": {
       const custom = extractors?.resolve(toolName);
       if (custom) {

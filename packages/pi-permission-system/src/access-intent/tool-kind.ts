@@ -22,23 +22,55 @@ import { PATH_BEARING_TOOLS } from "./path-surfaces";
  * (`docs/decisions/0002-path-values-string-boundary.md`).
  *
  * - `bash` — its own token-based path gates; extraction product is the command.
- * - `mcp` — extraction product is the qualified target.
+ * - `mcp` — the `mcp` proxy tool (e.g. pi-mcp-adapter), whose input names the
+ *   MCP call (`{ tool, server, args }`); extraction product is the qualified
+ *   target.
+ * - `mcp-tool` — one MCP server tool registered under its own name,
+ *   `mcp__<server>__<tool>` (Pi's built-in MCP); its input is the MCP
+ *   arguments themselves, so it shares the extension tools' input shape while
+ *   resolving on the `mcp` surface.
  * - `skill` — a distinct surface `normalizeInput`/`deriveSource` treat specially.
  * - `path` — a path-bearing built-in (`read`/`write`/`edit`/`grep`/`find`/`ls`);
  *   extraction product is `input.path`.
  * - `extension` — every other tool, plus the `external_directory`/`path` special
  *   surfaces that reach `deriveSource` as normalized names.
  */
-export type ToolKind = "bash" | "mcp" | "skill" | "path" | "extension";
+export type ToolKind =
+  | "bash"
+  | "mcp"
+  | "mcp-tool"
+  | "skill"
+  | "path"
+  | "extension";
 
 /** Classify a tool name into its {@link ToolKind}. */
 export function classifyToolKind(toolName: string): ToolKind {
   const name = toolName.trim();
   if (name === "bash") return "bash";
   if (name === "mcp") return "mcp";
+  if (isPiMcpToolName(name)) return "mcp-tool";
   if (name === "skill") return "skill";
   if (PATH_BEARING_TOOLS.has(name)) return "path";
   return "extension";
+}
+
+/** The prefix Pi's built-in MCP gives every server tool it registers. */
+export const PI_MCP_TOOL_PREFIX = "mcp__";
+
+/**
+ * True when a tool name has the shape Pi's built-in MCP registers a server
+ * tool under: `mcp__<server>__<tool>`, with non-empty server and tool parts.
+ *
+ * Pi builds the name with every character outside `[A-Za-z0-9_]` replaced by
+ * `_`, and codemode scripts call the tool by the same identifier, so the name
+ * itself is the stable contract (`extensions/mcp/tools.ts`,
+ * `createMcpToolName`).
+ */
+export function isPiMcpToolName(toolName: string): boolean {
+  if (!toolName.startsWith(PI_MCP_TOOL_PREFIX)) return false;
+  const rest = toolName.slice(PI_MCP_TOOL_PREFIX.length);
+  const separator = rest.indexOf("__");
+  return separator > 0 && separator + 2 < rest.length;
 }
 
 /** A shell invocation's effective command and optional working directory. */
@@ -101,12 +133,25 @@ interface McpKindFields {
 }
 
 /**
- * True when a resolved check concerns an MCP call — either the invoked tool is
- * `mcp`, or the winning rule matched on the `mcp` surface (`source`). The
- * `source` disjunct is why this cannot reduce to `classifyToolKind(toolName)`:
- * `deriveSource` can set `source` to `mcp` on a result whose `toolName` is a
- * server-qualified string.
+ * True when a resolved check concerns an MCP call — the invoked tool is the
+ * `mcp` proxy or a Pi MCP tool, or the winning rule matched on the `mcp`
+ * surface (`source`). The `source` disjunct is why this cannot reduce to
+ * `classifyToolKind(toolName)`: `deriveSource` can set `source` to `mcp` on a
+ * result whose `toolName` is a server-qualified string.
  */
 export function isMcpCheck(check: McpKindFields): boolean {
-  return check.source === "mcp" || classifyToolKind(check.toolName) === "mcp";
+  if (check.source === "mcp") return true;
+  const kind = classifyToolKind(check.toolName);
+  return kind === "mcp" || kind === "mcp-tool";
+}
+
+/**
+ * True when a check concerns an MCP call whose tool input is a request *about*
+ * the call (the proxy's `{ tool, server, args }`) rather than the MCP
+ * arguments themselves. Such input is not previewed — the target already
+ * names the call — while a Pi MCP tool's arguments are shown like any other
+ * tool's input.
+ */
+export function isProxyMcpCheck(check: McpKindFields): boolean {
+  return isMcpCheck(check) && classifyToolKind(check.toolName) !== "mcp-tool";
 }

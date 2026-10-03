@@ -5,9 +5,10 @@ import {
 import {
   type CapabilityDirection,
   PATH_BEARING_TOOLS,
+  surfaceFamilyMembers,
   surfaceFamilyOf,
 } from "#src/access-intent/path-surfaces";
-import type { ApprovalGrant } from "#src/session/approval-grant";
+import { type ApprovalGrant, grantTargets } from "#src/session/approval-grant";
 
 /** The suggestion returned for a "Yes, for this session" dialog option. */
 export interface SessionApprovalSuggestion {
@@ -80,15 +81,16 @@ export interface ForwardedScopeLabels {
 /**
  * What an approval's grants cover, as one phrase.
  *
- * A single grant names its pattern; several name their count, because only the
- * external-directory gate aggregates an ask over many paths and there is no
- * pattern that describes them all. Requires at least one grant — an approval
+ * A single target names its pattern; several name their count, because only
+ * the external-directory gate aggregates an ask over many paths and there is
+ * no pattern that describes them all. Targets, not grants: a directory's
+ * two-grant approval and two paths sharing one glob each count once
+ * ({@link grantTargets}). Requires at least one grant — an approval
  * with none is never offered as a session option.
  */
 export function describeGrantTarget(grants: readonly ApprovalGrant[]): string {
-  return grants.length === 1
-    ? `"${grants[0].pattern}"`
-    : `${grants.length} paths`;
+  const targets = grantTargets(grants);
+  return targets.length === 1 ? `"${targets[0]}"` : `${targets.length} paths`;
 }
 
 /** The two session-option labels for an ask whose grants prove one direction. */
@@ -118,6 +120,25 @@ export function buildDirectionalSessionLabels(
     sessionLabel: `Yes, allow ${DIRECTION_NOUNS[direction]} to ${target} for this session`,
     widenedLabel: `Yes, allow ${DIRECTION_NOUNS.read} and ${DIRECTION_NOUNS.write} to ${target} for this session`,
   };
+}
+
+/**
+ * Label a session grant on the `path` / `external_directory` families that
+ * proves no direction (an extension tool, `edit`), so the option still names
+ * its scope instead of the dialog's bare default. Returns `null` when any
+ * grant lies outside those families — their gates supply their own label.
+ */
+export function buildPathAccessSessionLabel(
+  grants: readonly ApprovalGrant[],
+): string | null {
+  const allPathFamily =
+    grants.length > 0 &&
+    grants.every(
+      (grant) => surfaceFamilyMembers(surfaceFamilyOf(grant.surface)) !== null,
+    );
+  return allPathFamily
+    ? `Yes, allow access to ${describeGrantTarget(grants)} for this session`
+    : null;
 }
 
 /**
@@ -221,21 +242,46 @@ export function suggestSessionPattern(
   return { surface, pattern, label: buildLabel(pattern, surface) };
 }
 
+/** The suggestion for a path surface: every pattern to record, one label. */
+export interface PathSessionSuggestion {
+  /** The permission surface this approval applies to. */
+  surface: string;
+  /** The wildcard patterns to store as session rules. */
+  patterns: readonly string[];
+  /** Human-readable label for the "for session" dialog option. */
+  label: string;
+}
+
 /**
- * Build the suggestion for a path surface from a pattern the caller already
+ * Build the suggestion for a path surface from patterns the caller already
  * derived through its `PathNormalizer` (#655).
  *
  * The derivation belongs to the normalizer, which owns the session's
  * `PathFlavor`; this module labels the result and must not re-interpret the
- * separators it is handed.
+ * separators it is handed. The label names the approval's target
+ * ({@link grantTargets}), so a directory's pair reads as its contents glob.
  */
 export function suggestPathSessionPattern(
   surface: string,
-  approvalPattern: string,
-): SessionApprovalSuggestion {
+  approvalPatterns: readonly string[],
+): PathSessionSuggestion {
+  const targets = grantTargets(
+    approvalPatterns.map((pattern) => ({ surface, pattern })),
+  );
   return {
     surface,
-    pattern: approvalPattern,
-    label: buildLabel(approvalPattern, surface),
+    patterns: approvalPatterns,
+    label: buildLabel(targets.join('", "'), surface),
   };
+}
+
+/**
+ * Build the suggestion for a pattern the caller already holds verbatim, such
+ * as a Pi MCP tool's full name on the `mcp` surface: no wildcard is derived.
+ */
+export function suggestExactSessionPattern(
+  surface: string,
+  pattern: string,
+): SessionApprovalSuggestion {
+  return { surface, pattern, label: buildLabel(pattern, surface) };
 }

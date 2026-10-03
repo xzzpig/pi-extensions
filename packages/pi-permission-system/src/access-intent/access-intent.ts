@@ -15,11 +15,13 @@ export interface ToolAccessIntent {
 }
 
 /**
- * Precomputed equivalent policy values for a path-shaped surface.
+ * Precomputed equivalent policy values for a surface, evaluated as-is.
  *
  * Not gate-emitted: the resolver produces it internally by unwrapping an
  * `access-path` intent via `matchValues()`, keeping the low-level manager
  * string-based (it never imports `AccessPath`). See {@link ResolvedAccessIntent}.
+ * A forwarded or service `mcp` query also arrives in this form, carrying the
+ * MCP target it names; the name predates that second use.
  *
  * This string seam is a deliberate, formalized boundary — not transitional
  * scaffolding to collapse into the manager (ADR-0002,
@@ -27,7 +29,7 @@ export interface ToolAccessIntent {
  */
 export interface PathValuesAccessIntent {
   kind: "path-values";
-  /** `"path"` or `"external_directory"`. */
+  /** A path-shaped surface (`path`, `external_directory`, a path tool) or `mcp`. */
   surface: string;
   values: readonly string[];
   agentName?: string;

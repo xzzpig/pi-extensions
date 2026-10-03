@@ -39,6 +39,33 @@ describe("classifyToolKind", () => {
     expect(classifyToolKind("external_directory")).toBe("extension");
   });
 
+  describe("Pi MCP tool names", () => {
+    test.each([
+      "mcp__a__b",
+      "mcp__danger_srv__wipe",
+      "mcp__a__b__c",
+      "mcp__srv__get_x_1a2b3c4d",
+    ])("classifies %s as mcp-tool", (name) => {
+      expect(classifyToolKind(name)).toBe("mcp-tool");
+    });
+
+    test.each([
+      "mcp",
+      "mcp__",
+      "mcp__a",
+      "mcp__a__",
+      "mcp____b",
+      "mcp_a__b",
+      "xmcp__a__b",
+    ])("does not classify %s as mcp-tool", (name) => {
+      expect(classifyToolKind(name)).not.toBe("mcp-tool");
+    });
+
+    test("trims surrounding whitespace before classifying", () => {
+      expect(classifyToolKind(" mcp__a__b ")).toBe("mcp-tool");
+    });
+  });
+
   test("trims surrounding whitespace before classifying", () => {
     expect(classifyToolKind(" bash ")).toBe("bash");
     expect(classifyToolKind("\tmcp\n")).toBe("mcp");

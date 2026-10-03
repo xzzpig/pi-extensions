@@ -257,6 +257,34 @@ describe("buildToolAskPayload", () => {
     });
   });
 
+  describe("a Pi MCP tool (mcp__<server>__<tool>)", () => {
+    const toolName = "mcp__danger_srv__wipe";
+
+    test.each(["mcp", "default"] as const)(
+      "is an mcp ask valued by its target, whose input is the MCP arguments (source %s)",
+      (source) => {
+        const payload = buildPayload({
+          check: makePermissionCheckResult(toolName, {
+            source,
+            target: "danger-srv",
+          }),
+          input: { target: "prod" },
+          formatter: makeFormatter(),
+        });
+
+        expect(payload.kind).toBe("mcp");
+        expect(payload.request.value).toBe("danger-srv");
+        expect(payload.evidence).toEqual([
+          {
+            label: "input",
+            text: 'with input {"target":"prod"}',
+            detail: null,
+          },
+        ]);
+      },
+    );
+  });
+
   describe("generic tools", () => {
     test("carries the real input preview as evidence", () => {
       expect(
