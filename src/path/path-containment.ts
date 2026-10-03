@@ -5,7 +5,7 @@ import { isSafeSystemPath } from "./safe-system-paths";
  * Pure geometry: is `canonicalPath` outside `canonicalCwd`?
  *
  * Both operands must already be canonical (symlink-resolved, win32-lowercased)
- * — the caller prepares them (see {@link PathNormalizer.isOutsideWorkingDirectory}).
+ * — the caller prepares them (see {@link PathNormalizer.isBoundaryOutsideWorkingDirectory}).
  * This predicate touches no filesystem and does no derivation; the containment
  * geometry lives on {@link PathFlavor.isWithin}.
  */

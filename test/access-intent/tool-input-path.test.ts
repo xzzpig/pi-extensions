@@ -71,6 +71,17 @@ describe("getToolInputPath", () => {
     expect(getToolInputPath("mcp", {}).path).toBeNull();
   });
 
+  test("returns a Pi MCP tool's top-level path, not arguments.path", () => {
+    expect(
+      getToolInputPath("mcp__fs__read_file", { path: "/etc/hosts" }),
+    ).toEqual({ path: "/etc/hosts", source: "convention" });
+    expect(
+      getToolInputPath("mcp__fs__read_file", {
+        arguments: { path: "/etc/hosts" },
+      }).path,
+    ).toBeNull();
+  });
+
   test("defaults to input.path for an unregistered extension tool", () => {
     expect(getToolInputPath("my-ext", { path: "/work/file.txt" })).toEqual({
       path: "/work/file.txt",

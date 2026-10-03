@@ -29,6 +29,20 @@ describe("buildPathAskPayload", () => {
     expect(payload.evidence).toEqual([]);
   });
 
+  test("discloses the file a rewritten spelling resolves to", () => {
+    expect(
+      buildPathAskPayload({
+        toolName: "read",
+        pathValue: "/x/d'x.txt",
+        resolvedPath: "/x/d\u2019x.txt",
+        agentName: null,
+        surface: "path_read",
+      }).evidence,
+    ).toEqual([
+      { label: "resolves to", text: "/x/d\u2019x.txt", detail: null },
+    ]);
+  });
+
   test("leaves the requester unnamed when no agent is active", () => {
     expect(
       buildPathAskPayload({

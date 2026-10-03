@@ -13,6 +13,7 @@ import type { ToolCallContext } from "#src/handlers/gates/types";
 import type { DecisionReporter } from "#src/logging/decision-reporter";
 import { pathFlavorForPlatform } from "#src/path/path-flavor";
 import { PathNormalizer } from "#src/path/path-normalizer";
+import type { InfrastructureReadScope } from "#src/path/pi-infrastructure-read";
 import type { ScopedPermissionResolver } from "#src/policy/permission-resolver";
 import type { SessionApprovalRecorder } from "#src/session/session-approval-recorder";
 import type { ToolPreviewFormatterOptions } from "#src/tool-input/tool-preview-formatter";
@@ -252,7 +253,7 @@ export function makeGateCheckResult(
 export function makeGateInputs(
   overrides: {
     getActiveSkillEntries?: () => SkillPromptEntry[];
-    getInfrastructureReadDirs?: () => string[];
+    getInfrastructureReadScope?: () => InfrastructureReadScope;
     getToolPreviewLimits?: () => ToolPreviewFormatterOptions;
     getPathNormalizer?: () => PathNormalizer;
     getShellToolAliases?: () => ShellToolsConfig | undefined;
@@ -262,8 +263,12 @@ export function makeGateInputs(
     getActiveSkillEntries:
       overrides.getActiveSkillEntries ??
       vi.fn<() => SkillPromptEntry[]>(() => []),
-    getInfrastructureReadDirs:
-      overrides.getInfrastructureReadDirs ?? vi.fn<() => string[]>(() => []),
+    getInfrastructureReadScope:
+      overrides.getInfrastructureReadScope ??
+      vi.fn<() => InfrastructureReadScope>(() => ({
+        dirs: [],
+        excludedDirs: [],
+      })),
     getToolPreviewLimits:
       overrides.getToolPreviewLimits ??
       vi.fn<() => ToolPreviewFormatterOptions>(() => ({

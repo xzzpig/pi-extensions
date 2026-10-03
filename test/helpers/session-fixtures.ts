@@ -39,6 +39,7 @@ export function makePaths(
     forwardingDir: "/test/agent/sessions/permission-forwarding",
     globalLogsDir: "/test/agent/logs",
     piInfrastructureDirs: ["/test/agent", "/test/agent/git"],
+    piInfrastructureExcludedDirs: ["/test/agent/logs"],
     ...overrides,
   };
 }

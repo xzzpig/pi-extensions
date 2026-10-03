@@ -337,6 +337,17 @@ describe("ToolPreviewFormatter.getToolInputPreviewForLog", () => {
     ).toBeUndefined();
   });
 
+  test("previews a Pi MCP tool's arguments, which are its own input", () => {
+    mockedStringify.mockImplementation((value: unknown) =>
+      JSON.stringify(value),
+    );
+    const f = makeFormatter();
+    const result = makeResult("mcp__danger_srv__wipe", { source: "mcp" });
+    expect(
+      f.getToolInputPreviewForLog(result, { target: "prod" }, pathBearingTools),
+    ).toBe('input {"target":"prod"}');
+  });
+
   test("returns path-based preview for path-bearing tools", () => {
     const f = makeFormatter();
     const preview = f.getToolInputPreviewForLog(

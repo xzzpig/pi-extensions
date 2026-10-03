@@ -24,6 +24,19 @@ export class SessionApproval {
   }
 
   /**
+   * Create an approval whose patterns were all proven on one surface — a
+   * directory approval records the directory and its contents as two patterns.
+   */
+  static forPatterns(
+    surface: string,
+    patterns: readonly string[],
+  ): SessionApproval {
+    return new SessionApproval(
+      patterns.map((pattern) => ({ surface, pattern })),
+    );
+  }
+
+  /**
    * Create an approval from grants that may name different surfaces (e.g. a
    * bash external-directory ask whose uncovered paths proved different
    * directions). Returns a defensive copy.

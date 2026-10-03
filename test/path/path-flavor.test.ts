@@ -1,12 +1,15 @@
 import { posix as posixPath, win32 as winPath } from "node:path";
 
 import { describe, expect, it } from "vitest";
-
 import {
   pathFlavorForPlatform,
   posixPathFlavor,
   win32PathFlavor,
 } from "#src/path/path-flavor";
+// Pi's `exports` map publishes only `.`, so the parity oracle reads the pinned
+// dependency's compiled module by path.
+// eslint-disable-next-line local-rules/no-parent-relative-imports -- no alias reaches a dependency's unexported module
+import { normalizeWindowsShellPath } from "../../node_modules/@earendil-works/pi-coding-agent/dist/utils/paths.js";
 
 describe("win32PathFlavor", () => {
   it("exposes the win32 path implementation", () => {
@@ -181,5 +184,60 @@ describe("pathFlavorForPlatform", () => {
   it("selects the posix flavor for every other platform", () => {
     expect(pathFlavorForPlatform("linux")).toBe(posixPathFlavor);
     expect(pathFlavorForPlatform("darwin")).toBe(posixPathFlavor);
+  });
+});
+
+describe("Pi built-in tool path conversions", () => {
+  // Pi's own conversion from the pinned dependency: the parity oracle.
+  const SHELL_PATHS = [
+    "/c/x/y",
+    "/C",
+    "/c/",
+    "/mnt/d/a",
+    "/cygdrive/e/b/c",
+    "//server/share",
+    "/c\\x",
+    "/tmp/x",
+    "/cc/x",
+    "c:\\x",
+    "relative/x",
+  ];
+
+  describe("toolShellPath", () => {
+    it.each(SHELL_PATHS)(
+      "matches Pi's normalizeWindowsShellPath on win32 for %s",
+      (value) => {
+        expect(win32PathFlavor.toolShellPath(value)).toBe(
+          normalizeWindowsShellPath(value),
+        );
+      },
+    );
+
+    it("translates the WSL and Cygwin mounts", () => {
+      expect(win32PathFlavor.toolShellPath("/mnt/d/a")).toBe("D:\\a");
+      expect(win32PathFlavor.toolShellPath("/cygdrive/e/b/c")).toBe("E:\\b\\c");
+    });
+
+    it.each(SHELL_PATHS)("leaves %s unchanged on POSIX", (value) => {
+      expect(posixPathFlavor.toolShellPath(value)).toBe(value);
+    });
+  });
+
+  describe("fileUrlToPath", () => {
+    it("decodes a POSIX file URL", () => {
+      expect(posixPathFlavor.fileUrlToPath("file:///tmp/s%65cret")).toBe(
+        "/tmp/secret",
+      );
+    });
+
+    it("decodes a win32 drive file URL", () => {
+      expect(win32PathFlavor.fileUrlToPath("file:///C:/x/y%20z")).toBe(
+        "C:\\x\\y z",
+      );
+    });
+
+    it("rejects a POSIX file URL naming a host", () => {
+      expect(() => posixPathFlavor.fileUrlToPath("file://host/x")).toThrow();
+    });
   });
 });

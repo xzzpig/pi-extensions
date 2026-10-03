@@ -1,14 +1,19 @@
-import { lstatSync } from "node:fs";
+import { existsSync, lstatSync, statSync } from "node:fs";
 import { AccessPath } from "#src/access-intent/access-path";
 import {
   canonicalNormalizePathForComparison,
   normalizePathForComparison,
   normalizePathPolicyLiteral,
 } from "#src/access-intent/path-normalization";
-import { deriveApprovalPattern } from "./approval-pattern";
+import { classifyToolKind } from "#src/access-intent/tool-kind";
+import { deriveApprovalPatterns } from "./approval-pattern";
+import { resolveNativeToolTarget } from "./native-tool-target";
 import { isPathOutsideWorkingDirectory } from "./path-containment";
 import type { PathFlavor } from "./path-flavor";
-import { isPiInfrastructureRead } from "./pi-infrastructure-read";
+import {
+  type InfrastructureReadScope,
+  isPiInfrastructureRead,
+} from "./pi-infrastructure-read";
 
 /**
  * The interpreted effect of a literal `cd` target on the effective base, under
@@ -60,6 +65,33 @@ export class PathNormalizer {
     });
   }
 
+  /**
+   * Build an AccessPath for a tool call's path argument.
+   *
+   * A built-in file tool (`read`/`write`/`edit`/`ls`/`find`/`grep`) resolves
+   * the argument through Pi's own resolver, which rewrites some spellings and,
+   * for `read`, tries variant spellings that exist; the AccessPath is the file
+   * the tool opens ({@link resolveNativeToolTarget}). Every other tool's path
+   * is its own to interpret, so it keeps {@link forPath}.
+   *
+   * The variant probe is `existsSync` (`access(F_OK)`, following symlinks),
+   * matching Pi's; unlike {@link entryExists}'s `lstat`, a dangling symlink
+   * at the typed spelling does not count, so Pi tries the variants and so do we.
+   */
+  forToolPath(toolName: string, rawPath: string): AccessPath {
+    if (classifyToolKind(toolName) !== "path") return this.forPath(rawPath);
+    const native = resolveNativeToolTarget(rawPath, {
+      cwd: this.cwd,
+      flavor: this.flavor,
+      readFallbacks: toolName.trim() === "read",
+      exists: (absolutePath) => existsSync(absolutePath),
+    });
+    return AccessPath.forNativeTarget(native, {
+      cwd: this.cwd,
+      flavor: this.flavor,
+    });
+  }
+
   /** Build a literal-only AccessPath (unknown base after a non-literal `cd`). */
   forLiteral(literal: string): AccessPath {
     return AccessPath.forLiteral(literal);
@@ -99,17 +131,41 @@ export class PathNormalizer {
   }
 
   /**
-   * The session-approval glob for an accessed path: its directory scope plus
-   * `*`, derived through the baked flavor.
+   * The session-approval globs for an accessed path, derived through the baked
+   * flavor: an existing directory's own scope (itself and its contents), else
+   * the enclosing directory's scope plus `*`.
    *
    * Takes the already-built {@link AccessPath} — the lexical form is what a
-   * later tool call is matched on, so the pattern must be derived from the
+   * later tool call is matched on, so the patterns must be derived from the
    * same representation the decision displayed (#438). Deriving it here rather
    * than at each gate keeps the platform's separator alphabet with the object
    * that owns the flavor, instead of an ambient `node:path` read (#655).
    */
-  approvalPatternFor(accessPath: AccessPath): string {
-    return deriveApprovalPattern(accessPath.value(), this.flavor);
+  approvalPatternsFor(accessPath: AccessPath): readonly string[] {
+    return deriveApprovalPatterns(
+      accessPath.value(),
+      this.flavor,
+      this.namesDirectory(accessPath),
+    );
+  }
+
+  /**
+   * Whether an accessed path names an existing directory, so its session grant
+   * covers that directory rather than its parent.
+   *
+   * Uses `stat`, following symlinks: a link to a directory is what `ls` lists.
+   * A literal-only path (no canonical form — an unknown base, or a win32
+   * non-mount POSIX absolute) is never probed, since `stat` would resolve it
+   * against the process cwd or a fabricated drive. Any error answers `false`,
+   * which keeps the parent-directory grant callers had before this probe.
+   */
+  private namesDirectory(accessPath: AccessPath): boolean {
+    if (!accessPath.boundaryValue()) return false;
+    try {
+      return statSync(accessPath.value()).isDirectory();
+    } catch {
+      return false;
+    }
   }
 
   /** Platform-aware absoluteness (`win32` vs `posix` rules). */
@@ -157,28 +213,13 @@ export class PathNormalizer {
     return this.flavor.isWithin(pathValue, directory);
   }
 
-  /** Canonical (symlink-resolved) outside-cwd test against the baked cwd. */
-  isOutsideWorkingDirectory(pathValue: string): boolean {
-    const canonicalPath = canonicalNormalizePathForComparison(
-      pathValue,
-      this.cwd,
-      this.flavor,
-    );
-    return isPathOutsideWorkingDirectory(
-      canonicalPath,
-      this.canonicalCwd,
-      this.flavor,
-    );
-  }
-
   /**
    * Outside-cwd test for an already-canonical boundary value (from
    * {@link AccessPath.boundaryValue}), against the baked cwd.
    *
-   * Unlike {@link isOutsideWorkingDirectory}, it does not re-derive the
-   * canonical form — the caller passes a value the {@link AccessPath} already
-   * canonicalized, so a device's preserved `/dev/null` reaches the pure check's
-   * `isSafeSystemPath` exclusion intact.
+   * It does not re-derive the canonical form — the caller passes a value the
+   * {@link AccessPath} already canonicalized, so a device's preserved
+   * `/dev/null` reaches the pure check's `isSafeSystemPath` exclusion intact.
    */
   isBoundaryOutsideWorkingDirectory(canonicalPath: string): boolean {
     return isPathOutsideWorkingDirectory(
@@ -205,14 +246,15 @@ export class PathNormalizer {
   isInfrastructureRead(
     toolName: string,
     accessPath: AccessPath,
-    infraDirs: readonly string[],
+    scope: InfrastructureReadScope,
   ): boolean {
     return isPiInfrastructureRead(
       toolName,
       accessPath.boundaryValue(),
-      infraDirs,
+      scope.dirs,
       this.cwd,
       this.flavor,
+      scope.excludedDirs,
     );
   }
 

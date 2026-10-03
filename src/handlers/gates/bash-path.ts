@@ -130,10 +130,10 @@ export function describeBashPathGate(
   // All tokens evaluate to allow — no restriction.
   if (!worstCheck || !worstToken || !worstEntry) return null;
 
-  // Derive the pattern from the lexical absolute form (the cd-aware resolved
-  // path), so it matches the values a later call produces. For an unknown base
+  // Derive the patterns from the lexical absolute form (the cd-aware resolved
+  // path), so they match the values a later call produces. For an unknown base
   // (`forLiteral`) `value()` is the raw token.
-  const pattern = normalizer.approvalPatternFor(worstEntry.path);
+  const patterns = normalizer.approvalPatternsFor(worstEntry.path);
   const surface = worstEntry.surface;
   const payload = buildPathAskPayload({
     toolName: tcc.toolName,
@@ -147,7 +147,7 @@ export function describeBashPathGate(
     surface,
     input: { path: worstToken },
     payload,
-    sessionApproval: SessionApproval.single(surface, pattern),
+    sessionApproval: SessionApproval.forPatterns(surface, patterns),
     promptDetails: {
       source: "tool_call",
       agentName: tcc.agentName,

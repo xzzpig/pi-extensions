@@ -5,10 +5,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const realpathSync = vi.hoisted(() =>
   vi.fn<(path: string) => string>((p) => p),
 );
-vi.mock("node:fs", () => ({
-  realpathSync,
-  default: { realpathSync },
-}));
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  return {
+    ...actual,
+    realpathSync,
+    default: { ...actual, realpathSync },
+  };
+});
 
 import { AccessPath } from "#src/access-intent/access-path";
 import type { GateDescriptor } from "#src/handlers/gates/descriptor";

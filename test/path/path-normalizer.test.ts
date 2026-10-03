@@ -84,44 +84,63 @@ describe("PathNormalizer", () => {
       expect(normalizer.isWithinDirectory("/a/x", "/a/b")).toBe(false);
     });
 
-    test("isOutsideWorkingDirectory tests against the baked cwd", () => {
-      expect(normalizer.isOutsideWorkingDirectory("/projects/my-app/src")).toBe(
-        false,
-      );
-      expect(normalizer.isOutsideWorkingDirectory("/etc/hosts")).toBe(true);
-    });
-
-    test("isOutsideWorkingDirectory expands a home-relative token", () => {
-      expect(normalizer.isOutsideWorkingDirectory("~/secrets")).toBe(true);
-    });
-
-    test("isOutsideWorkingDirectory resolves a relative token inside cwd", () => {
-      expect(normalizer.isOutsideWorkingDirectory("src/index.ts")).toBe(false);
-    });
-
-    test("isOutsideWorkingDirectory follows an in-cwd symlink to an external target", () => {
-      // ./link -> /etc: realpathSync resolves the full token in one call.
-      realpathSync.mockImplementation((p: string) => {
-        if (p === "/projects/my-app/link/hosts") return "/etc/hosts";
-        return p;
+    describe("outside-cwd boundary through an AccessPath's boundary value", () => {
+      test("keeps a path inside the baked cwd", () => {
+        const ap = normalizer.forPath("/projects/my-app/src");
+        expect(
+          normalizer.isBoundaryOutsideWorkingDirectory(ap.boundaryValue()),
+        ).toBe(false);
       });
-      expect(normalizer.isOutsideWorkingDirectory("./link/hosts")).toBe(true);
-    });
 
-    test("isOutsideWorkingDirectory keeps a path inside a symlinked cwd", () => {
-      // /tmp -> /private/tmp on macOS; cwd reported as the resolved /private/tmp.
-      realpathSync.mockImplementation((p: string) => {
-        if (p.startsWith("/tmp/")) return `/private/tmp${p.slice(4)}`;
-        if (p === "/tmp") return "/private/tmp";
-        return p;
+      test("flags an absolute path outside cwd", () => {
+        const ap = normalizer.forPath("/etc/hosts");
+        expect(
+          normalizer.isBoundaryOutsideWorkingDirectory(ap.boundaryValue()),
+        ).toBe(true);
       });
-      const symlinkNormalizer = new PathNormalizer(
-        posixPathFlavor,
-        "/private/tmp",
-      );
-      expect(
-        symlinkNormalizer.isOutsideWorkingDirectory("/tmp/workspace/file.ts"),
-      ).toBe(false);
+
+      test("expands a home-relative token", () => {
+        const ap = normalizer.forPath("~/secrets");
+        expect(
+          normalizer.isBoundaryOutsideWorkingDirectory(ap.boundaryValue()),
+        ).toBe(true);
+      });
+
+      test("resolves a relative token inside cwd", () => {
+        const ap = normalizer.forPath("src/index.ts");
+        expect(
+          normalizer.isBoundaryOutsideWorkingDirectory(ap.boundaryValue()),
+        ).toBe(false);
+      });
+
+      test("follows an in-cwd symlink to an external target", () => {
+        realpathSync.mockImplementation((p: string) => {
+          if (p === "/projects/my-app/link/hosts") return "/etc/hosts";
+          return p;
+        });
+        const ap = normalizer.forPath("./link/hosts");
+        expect(
+          normalizer.isBoundaryOutsideWorkingDirectory(ap.boundaryValue()),
+        ).toBe(true);
+      });
+
+      test("keeps a path inside a symlinked cwd", () => {
+        realpathSync.mockImplementation((p: string) => {
+          if (p.startsWith("/tmp/")) return `/private/tmp${p.slice(4)}`;
+          if (p === "/tmp") return "/private/tmp";
+          return p;
+        });
+        const symlinkNormalizer = new PathNormalizer(
+          posixPathFlavor,
+          "/private/tmp",
+        );
+        const ap = symlinkNormalizer.forPath("/tmp/workspace/file.ts");
+        expect(
+          symlinkNormalizer.isBoundaryOutsideWorkingDirectory(
+            ap.boundaryValue(),
+          ),
+        ).toBe(false);
+      });
     });
 
     test("comparableValue returns the lexical absolute form (no FS)", () => {
@@ -164,16 +183,16 @@ describe("PathNormalizer", () => {
       });
     });
 
-    test("approvalPatternFor scopes a resolved path to its directory", () => {
+    test("approvalPatternsFor scopes a resolved path to its directory", () => {
       expect(
-        normalizer.approvalPatternFor(normalizer.forPath("src/foo.ts")),
-      ).toBe("/projects/my-app/src/*");
+        normalizer.approvalPatternsFor(normalizer.forPath("src/foo.ts")),
+      ).toEqual(["/projects/my-app/src/*"]);
     });
 
-    test("approvalPatternFor scopes an absolute path outside the cwd", () => {
+    test("approvalPatternsFor scopes an absolute path outside the cwd", () => {
       expect(
-        normalizer.approvalPatternFor(normalizer.forPath("/other/pkg/x.ts")),
-      ).toBe("/other/pkg/*");
+        normalizer.approvalPatternsFor(normalizer.forPath("/other/pkg/x.ts")),
+      ).toEqual(["/other/pkg/*"]);
     });
   });
 
@@ -211,11 +230,15 @@ describe("PathNormalizer", () => {
       ).toBe(true);
     });
 
-    test("isOutsideWorkingDirectory case-folds against the baked cwd", () => {
+    test("the boundary value case-folds against the baked cwd", () => {
+      const inside = normalizer.forPath("c:\\projects\\app\\src");
+      const outside = normalizer.forPath("C:\\Other\\dir");
       expect(
-        normalizer.isOutsideWorkingDirectory("c:\\projects\\app\\src"),
+        normalizer.isBoundaryOutsideWorkingDirectory(inside.boundaryValue()),
       ).toBe(false);
-      expect(normalizer.isOutsideWorkingDirectory("C:\\Other\\dir")).toBe(true);
+      expect(
+        normalizer.isBoundaryOutsideWorkingDirectory(outside.boundaryValue()),
+      ).toBe(true);
     });
 
     test("comparableValue case-folds the lexical absolute form", () => {
@@ -304,60 +327,74 @@ describe("PathNormalizer", () => {
       ).toBe(true);
     });
 
-    test("approvalPatternFor scopes a native windows path with backslashes", () => {
+    test("approvalPatternsFor scopes a native windows path with backslashes", () => {
       expect(
-        normalizer.approvalPatternFor(normalizer.forPath("src\\foo.ts")),
-      ).toBe("c:\\projects\\app\\src\\*");
+        normalizer.approvalPatternsFor(normalizer.forPath("src\\foo.ts")),
+      ).toEqual(["c:\\projects\\app\\src\\*"]);
     });
 
-    test("approvalPatternFor keeps a Git Bash device token POSIX-shaped", () => {
+    test("approvalPatternsFor keeps a Git Bash device token POSIX-shaped", () => {
       expect(
-        normalizer.approvalPatternFor(normalizer.forBashToken("/dev/null")),
-      ).toBe("/dev/*");
+        normalizer.approvalPatternsFor(normalizer.forBashToken("/dev/null")),
+      ).toEqual(["/dev/*"]);
     });
 
-    test("approvalPatternFor scopes a POSIX-absolute directory token to itself", () => {
+    test("approvalPatternsFor scopes a POSIX-absolute directory token to itself", () => {
       // A trailing separator names the directory, so the grant must not widen
       // to its parent — the win32 defect #655 fixes.
       expect(
-        normalizer.approvalPatternFor(normalizer.forBashToken("/tmp/logs/")),
-      ).toBe("/tmp/logs/*");
+        normalizer.approvalPatternsFor(normalizer.forBashToken("/tmp/logs/")),
+      ).toEqual(["/tmp/logs/*"]);
     });
 
-    test("approvalPatternFor scopes a POSIX-absolute file token to its parent", () => {
+    test("approvalPatternsFor scopes a POSIX-absolute file token to its parent", () => {
       expect(
-        normalizer.approvalPatternFor(normalizer.forBashToken("/tmp/logs")),
-      ).toBe("/tmp/*");
+        normalizer.approvalPatternsFor(normalizer.forBashToken("/tmp/logs")),
+      ).toEqual(["/tmp/*"]);
     });
   });
 
   describe("isInfrastructureRead", () => {
     const normalizer = new PathNormalizer(posixPathFlavor, "/projects/my-app");
+    const INFRA_SCOPE = { dirs: ["/infra"], excludedDirs: [] };
+    const EMPTY_SCOPE = { dirs: [], excludedDirs: [] };
 
     test("allows a read-only tool targeting a configured infra dir", () => {
       const ap = normalizer.forPath("/infra/git/pkg/SKILL.md");
-      expect(normalizer.isInfrastructureRead("read", ap, ["/infra"])).toBe(
+      expect(normalizer.isInfrastructureRead("read", ap, INFRA_SCOPE)).toBe(
         true,
       );
     });
 
     test("does not allow a write tool targeting an infra dir", () => {
       const ap = normalizer.forPath("/infra/git/pkg/file.ts");
-      expect(normalizer.isInfrastructureRead("write", ap, ["/infra"])).toBe(
+      expect(normalizer.isInfrastructureRead("write", ap, INFRA_SCOPE)).toBe(
         false,
       );
     });
 
     test("does not allow a read-only tool outside any infra dir", () => {
       const ap = normalizer.forPath("/elsewhere/file.ts");
-      expect(normalizer.isInfrastructureRead("read", ap, ["/infra"])).toBe(
+      expect(normalizer.isInfrastructureRead("read", ap, INFRA_SCOPE)).toBe(
         false,
       );
     });
 
     test("allows a read targeting the project-local .pi/npm dir (from baked cwd)", () => {
       const ap = normalizer.forPath("/projects/my-app/.pi/npm/dep/index.js");
-      expect(normalizer.isInfrastructureRead("read", ap, [])).toBe(true);
+      expect(normalizer.isInfrastructureRead("read", ap, EMPTY_SCOPE)).toBe(
+        true,
+      );
+    });
+
+    test("does not allow a read inside one of the scope's excluded dirs", () => {
+      const ap = normalizer.forPath("/infra/logs/review.jsonl");
+      expect(
+        normalizer.isInfrastructureRead("read", ap, {
+          dirs: ["/infra"],
+          excludedDirs: ["/infra/logs"],
+        }),
+      ).toBe(false);
     });
   });
 
@@ -417,6 +454,105 @@ describe("PathNormalizer", () => {
       const win32Normalizer = new PathNormalizer(win32PathFlavor, root);
       expect(win32Normalizer.entryExists(file)).toBe(true);
       expect(win32Normalizer.entryExists(join(root, "nope.txt"))).toBe(false);
+    });
+  });
+
+  describe("approvalPatternsFor over the filesystem", () => {
+    // Real filesystem: whether a path names a directory is fs state.
+    const tmp = createTmpFixture();
+    let projects: string;
+    let normalizer: PathNormalizer;
+
+    beforeEach(() => {
+      const root = tmp.dir("pi-perm-approval-");
+      projects = tmp.subdir(root, "projects");
+      normalizer = new PathNormalizer(
+        posixPathFlavor,
+        tmp.subdir(root, "workspace"),
+      );
+    });
+
+    afterEach(() => {
+      tmp.cleanup();
+    });
+
+    test("an existing directory → the directory and its contents", () => {
+      const dir = tmp.subdir(projects, "project-a");
+      expect(normalizer.approvalPatternsFor(normalizer.forPath(dir))).toEqual([
+        dir,
+        `${dir}/*`,
+      ]);
+    });
+
+    test("an existing file → its parent directory", () => {
+      const file = tmp.file(projects, "notes.txt");
+      expect(normalizer.approvalPatternsFor(normalizer.forPath(file))).toEqual([
+        `${projects}/*`,
+      ]);
+    });
+
+    test("a missing path → its parent directory", () => {
+      expect(
+        normalizer.approvalPatternsFor(
+          normalizer.forPath(join(projects, "missing")),
+        ),
+      ).toEqual([`${projects}/*`]);
+    });
+
+    test("a literal-only path is never probed → its parent directory", () => {
+      const dir = tmp.subdir(projects, "project-a");
+      expect(
+        normalizer.approvalPatternsFor(normalizer.forLiteral(dir)),
+      ).toEqual([`${projects}/*`]);
+    });
+  });
+
+  describe("forToolPath", () => {
+    // Real filesystem: `read`'s variant spellings are tried by existence.
+    const tmp = createTmpFixture();
+    let root: string;
+    let normalizer: PathNormalizer;
+
+    beforeEach(() => {
+      root = tmp.dir("pi-perm-tool-path-");
+      normalizer = new PathNormalizer(posixPathFlavor, root);
+    });
+
+    afterEach(() => {
+      tmp.cleanup();
+    });
+
+    test("read opens the curly-quote file a straight quote names", () => {
+      const curly = tmp.file(root, "d\u2019x.txt");
+      expect(normalizer.forToolPath("read", "d'x.txt").value()).toBe(curly);
+    });
+
+    test("write tries no variant spelling", () => {
+      tmp.file(root, "d\u2019x.txt");
+      expect(normalizer.forToolPath("write", "d'x.txt").value()).toBe(
+        join(root, "d'x.txt"),
+      );
+    });
+
+    test("read follows a dangling symlink to the variant Pi opens", () => {
+      tmp.symlink(root, "dang'x.txt", join(root, "gone.txt"));
+      const curly = tmp.file(root, "dang\u2019x.txt");
+      expect(normalizer.forToolPath("read", "dang'x.txt").value()).toBe(curly);
+    });
+
+    test("every built-in tool reads a file URL as the file it names", () => {
+      const file = tmp.file(root, "secret.txt");
+      for (const tool of ["read", "write", "edit", "ls", "find", "grep"]) {
+        expect(normalizer.forToolPath(tool, `file://${file}`).value()).toBe(
+          file,
+        );
+      }
+    });
+
+    test("an extension tool keeps forPath's resolution", () => {
+      expect(normalizer.forToolPath("my-ext", "$HOME/x")).toEqual(
+        normalizer.forPath("$HOME/x"),
+      );
     });
   });
 });

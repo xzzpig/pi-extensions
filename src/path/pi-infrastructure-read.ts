@@ -4,6 +4,18 @@ import { wildcardMatch } from "#src/policy/wildcard-matcher";
 import { expandHomePath } from "./expand-home";
 import type { PathFlavor } from "./path-flavor";
 
+/**
+ * Where Pi infrastructure reads are auto-allowed: the roots a read-only tool
+ * may read without the `external_directory` gate, and the directories never
+ * auto-allowed even inside a root.
+ */
+export interface InfrastructureReadScope {
+  /** Roots (directories, files, or glob patterns) whose reads are auto-allowed. */
+  readonly dirs: readonly string[];
+  /** Directories never auto-allowed, even inside a root; wins over `dirs`. */
+  readonly excludedDirs: readonly string[];
+}
+
 function containsGlobChars(value: string): boolean {
   return value.includes("*") || value.includes("?");
 }
@@ -14,12 +26,15 @@ function containsGlobChars(value: string): boolean {
  *
  * A path qualifies when:
  * 1. The tool is read-only (in READ_ONLY_PATH_BEARING_TOOLS).
- * 2. The normalized path is within one of the provided `infrastructureDirs`
+ * 2. The normalized path is not within any of `excludedDirs`.
+ * 3. The normalized path is within one of the provided `infrastructureDirs`
  *    OR within the project-local Pi package directories
  *    (`<cwd>/.pi/npm/` or `<cwd>/.pi/git/`).
  *
- * `infrastructureDirs` entries may be absolute paths or patterns containing
- * `~`/`$HOME` (expanded at call time) or glob characters (`*`, `?`).
+ * `infrastructureDirs` entries may be absolute paths (a directory, or a file,
+ * which admits only itself) or patterns containing `~`/`$HOME` (expanded at
+ * call time) or glob characters (`*`, `?`). `excludedDirs` entries are
+ * directory prefixes with the same `~`/`$HOME` expansion.
  * Project-local paths are computed fresh from `cwd` on each call so they
  * follow working-directory changes without a runtime rebuild.
  */
@@ -29,9 +44,14 @@ export function isPiInfrastructureRead(
   infrastructureDirs: readonly string[],
   cwd: string,
   flavor: PathFlavor,
+  excludedDirs: readonly string[] = [],
 ): boolean {
   if (!READ_ONLY_PATH_BEARING_TOOLS.has(toolName)) {
     return false;
+  }
+
+  for (const dir of excludedDirs) {
+    if (flavor.isWithin(normalizedPath, expandHomePath(dir))) return false;
   }
 
   // On Windows the path value is canonicalized + lowercased; the flavor's match

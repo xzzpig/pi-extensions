@@ -1,8 +1,15 @@
 import { stripBashCommentLines } from "#src/access-intent/bash/bash-arity";
 import type { PathNormalizer } from "#src/path/path-normalizer";
 import { getNonEmptyString, toRecord } from "#src/value-guards";
-import type { AccessIntent, ResolvedAccessIntent } from "./access-intent";
-import { createMcpPermissionTargets } from "./mcp-targets";
+import type {
+  AccessIntent,
+  PathValuesAccessIntent,
+  ResolvedAccessIntent,
+} from "./access-intent";
+import {
+  createMcpPermissionTargets,
+  createPiMcpToolTargets,
+} from "./mcp-targets";
 import { PATH_SURFACES, surfaceFamilyOf } from "./path-surfaces";
 import { classifyToolKind } from "./tool-kind";
 
@@ -14,24 +21,31 @@ import { classifyToolKind } from "./tool-kind";
  * For a path-shaped surface (`path`, `external_directory`, or a path-bearing
  * tool) carrying a non-empty value, it builds an `AccessPath` and emits an
  * `access-path` intent, so the resolver matches the lexical aliases ∪ canonical
- * (symlink-resolved) set — at parity with the gates (#486, #502). Every other
- * surface, and any value-less surface-level query, keeps the `tool` intent so
- * the manager's `normalizeInput` `["*"]` fallback is preserved.
+ * (symlink-resolved) set — at parity with the gates (#486, #502); a built-in
+ * tool surface resolves the value to the file that tool would open. An `mcp`
+ * query carrying a value evaluates that value as-is: an MCP target is already
+ * a candidate name, and rebuilding proxy input from it would derive only the
+ * status probe `mcp_status`. Every other surface, and any value-less
+ * surface-level query, keeps the `tool` intent so the manager's
+ * `normalizeInput` `["*"]` fallback is preserved.
  */
 export function buildAccessIntentForSurface(
   surface: string,
   value: string | undefined,
   normalizer: PathNormalizer,
   agentName: string | undefined,
-): AccessIntent {
+): AccessIntent | PathValuesAccessIntent {
   const pathValue = getNonEmptyString(value);
   if (pathValue !== null && PATH_SURFACES.has(surface)) {
     return {
       kind: "access-path",
       surface,
-      path: normalizer.forPath(pathValue),
+      path: normalizer.forToolPath(surface, pathValue),
       agentName,
     };
+  }
+  if (pathValue !== null && surface === "mcp") {
+    return { kind: "path-values", surface, values: [pathValue], agentName };
   }
   return {
     kind: "tool",
@@ -48,9 +62,11 @@ export function buildAccessIntentForSurface(
  *
  * Unlike {@link buildAccessIntentForSurface}, this never touches a
  * `PathNormalizer` and never rebuilds an `AccessPath` — a path-shaped surface
- * gets a `path-values` intent carrying `matchValues` as-is (the values the
- * child already fixed), and every other surface gets a `tool` intent built
- * from its single portable value. `agentName` is always the requester's
+ * or `mcp` gets a `path-values` intent carrying `matchValues` as-is (the values
+ * the child already fixed), and every other surface gets a `tool` intent built
+ * from its single portable value. An `mcp` request carries the child's target;
+ * evaluating it alone can only be stricter than the child, since what the
+ * serving node adds is session grants. `agentName` is always the requester's
  * `principal.agentName` (ADR 0008 §3, agent-scoped serving).
  */
 export function buildResolvedIntentFromMatchValues(
@@ -58,7 +74,7 @@ export function buildResolvedIntentFromMatchValues(
   matchValues: readonly string[],
   agentName: string,
 ): ResolvedAccessIntent {
-  if (PATH_SURFACES.has(surface)) {
+  if (PATH_SURFACES.has(surface) || surface === "mcp") {
     return {
       kind: "path-values",
       surface,
@@ -134,8 +150,8 @@ export interface NormalizedInput {
  *
  * @param toolName - Normalized (trimmed) tool name from the tool-call event.
  * @param input    - Raw input payload from the tool-call event.
- * @param configuredMcpServerNames - Ordered list of MCP server names from the
- *   global MCP config, used to derive server-qualified MCP targets.
+ * @param configuredMcpServerNames - Ordered list of MCP server names from
+ *   Pi's `mcp.json` files, used to derive server-qualified MCP targets.
  */
 export function normalizeInput(
   toolName: string,
@@ -172,18 +188,16 @@ export function normalizeInput(
     }
 
     // --- MCP ---
-    case "mcp": {
-      const mcpTargets = [
-        ...createMcpPermissionTargets(input, configuredMcpServerNames),
-        "mcp",
-      ];
-      const fallbackTarget = mcpTargets[0] ?? "mcp";
-      return {
-        surface: "mcp",
-        values: mcpTargets,
-        resultExtras: { target: fallbackTarget },
-      };
-    }
+    case "mcp":
+      return normalizeMcpTargets(
+        createMcpPermissionTargets(input, configuredMcpServerNames),
+      );
+
+    // A Pi MCP tool's identity is its name; its input is the MCP arguments.
+    case "mcp-tool":
+      return normalizeMcpTargets(
+        createPiMcpToolTargets(toolName, configuredMcpServerNames),
+      );
 
     // --- All other surfaces (path-bearing tools and extension tools) ---
     // Path-bearing tools with a present path never reach here — the gate emits
@@ -197,4 +211,18 @@ export function normalizeInput(
         resultExtras: {},
       };
   }
+}
+
+/**
+ * The `mcp` surface's normalized form: the derived candidates, then the
+ * surface-wide `mcp` name, reported under the most specific candidate until a
+ * rule match names the one it matched.
+ */
+function normalizeMcpTargets(targets: readonly string[]): NormalizedInput {
+  const values = [...targets, "mcp"];
+  return {
+    surface: "mcp",
+    values,
+    resultExtras: { target: values[0] },
+  };
 }

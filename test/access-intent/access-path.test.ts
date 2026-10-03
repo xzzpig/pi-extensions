@@ -298,3 +298,109 @@ describe("AccessPath.forLiteral", () => {
     expect(AccessPath.forLiteral("").value()).toBe("");
   });
 });
+
+describe("AccessPath.forNativeTarget", () => {
+  const cwd = "/projects/my-app";
+  const options = { cwd, flavor: posixPathFlavor };
+
+  beforeEach(() => {
+    realpathSync.mockReset();
+    realpathSync.mockImplementation((p: string) => p);
+  });
+
+  describe("matchValues()", () => {
+    test("equals forPath's for an unrewritten relative spelling", () => {
+      const native = AccessPath.forNativeTarget(
+        {
+          target: "/projects/my-app/.env",
+          rewritten: false,
+          relativeSpelling: ".env",
+        },
+        options,
+      );
+      expect(native).toEqual(AccessPath.forPath(".env", options));
+      expect(native.matchValues()).toEqual(["/projects/my-app/.env", ".env"]);
+    });
+
+    test("keeps a relative spelling that escapes cwd", () => {
+      expect(
+        AccessPath.forNativeTarget(
+          {
+            target: "/projects/other/x",
+            rewritten: false,
+            relativeSpelling: "../other/x",
+          },
+          options,
+        ).matchValues(),
+      ).toEqual(["/projects/other/x", "../other/x"]);
+    });
+
+    test("adds the symlink-resolved alias", () => {
+      realpathSync.mockImplementation((p: string) =>
+        p.startsWith("/tmp") ? `/private${p}` : p,
+      );
+      expect(
+        AccessPath.forNativeTarget(
+          { target: "/tmp/x", rewritten: false },
+          options,
+        ).matchValues(),
+      ).toEqual(["/tmp/x", "/private/tmp/x"]);
+    });
+  });
+
+  describe("value()", () => {
+    test.each([
+      ["a trailing quote", "/projects/my-app/x'"],
+      ["a trailing space", "/projects/my-app/x "],
+      ["a $HOME segment", "/projects/my-app/$HOME/x"],
+    ])("keeps %s the tool opens", (_label, target) => {
+      expect(
+        AccessPath.forNativeTarget(
+          { target, rewritten: false },
+          options,
+        ).value(),
+      ).toBe(target);
+    });
+
+    test("folds case under the win32 flavor", () => {
+      expect(
+        AccessPath.forNativeTarget(
+          { target: "C:\\Proj\\A.txt", rewritten: false },
+          { cwd: "C:\\Proj", flavor: win32PathFlavor },
+        ).value(),
+      ).toBe("c:\\proj\\a.txt");
+    });
+  });
+
+  describe("resolvedAlias()", () => {
+    test("discloses a rewritten target", () => {
+      expect(
+        AccessPath.forNativeTarget(
+          { target: "/x/d\u2019x.txt", rewritten: true },
+          options,
+        ).resolvedAlias(),
+      ).toBe("/x/d\u2019x.txt");
+    });
+
+    test("discloses the canonical form when it differs", () => {
+      realpathSync.mockImplementation((p: string) =>
+        p.startsWith("/tmp") ? `/private${p}` : p,
+      );
+      expect(
+        AccessPath.forNativeTarget(
+          { target: "/tmp/x", rewritten: true },
+          options,
+        ).resolvedAlias(),
+      ).toBe("/private/tmp/x");
+    });
+
+    test("discloses nothing for an unrewritten target", () => {
+      expect(
+        AccessPath.forNativeTarget(
+          { target: "/x/a.txt", rewritten: false },
+          options,
+        ).resolvedAlias(),
+      ).toBeUndefined();
+    });
+  });
+});

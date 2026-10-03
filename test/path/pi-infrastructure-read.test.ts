@@ -436,4 +436,90 @@ describe("isPiInfrastructureRead on win32", () => {
       ),
     ).toBe(false);
   });
+
+  test("an excluded dir excludes a case-different path", () => {
+    expect(
+      isPiInfrastructureRead(
+        "read",
+        "c:\\users\\foo\\.pi\\agent\\logs\\review.jsonl",
+        ["C:\\Users\\Foo\\.pi\\agent"],
+        "C:\\proj",
+        win32PathFlavor,
+        ["C:\\Users\\Foo\\.pi\\agent\\Logs"],
+      ),
+    ).toBe(false);
+  });
+});
+
+// ── isPiInfrastructureRead with excluded directories ───────────────────────
+
+describe("isPiInfrastructureRead with excluded directories", () => {
+  const CWD = "/projects/my-app";
+  const DIRS = ["/a"];
+  const EXCLUDED = ["/a/x/logs"];
+
+  test("does not admit a file inside an excluded dir within a root", () => {
+    expect(
+      isPiInfrastructureRead(
+        "read",
+        "/a/x/logs/review.jsonl",
+        DIRS,
+        CWD,
+        posixPathFlavor,
+        EXCLUDED,
+      ),
+    ).toBe(false);
+  });
+
+  test("does not admit the excluded dir itself", () => {
+    expect(
+      isPiInfrastructureRead(
+        "ls",
+        "/a/x/logs",
+        DIRS,
+        CWD,
+        posixPathFlavor,
+        EXCLUDED,
+      ),
+    ).toBe(false);
+  });
+
+  test("still admits a sibling of the excluded dir", () => {
+    expect(
+      isPiInfrastructureRead(
+        "read",
+        "/a/x/config.json",
+        DIRS,
+        CWD,
+        posixPathFlavor,
+        EXCLUDED,
+      ),
+    ).toBe(true);
+  });
+
+  test("wins over a root that names the excluded dir explicitly", () => {
+    expect(
+      isPiInfrastructureRead(
+        "read",
+        "/a/x/logs/review.jsonl",
+        [...DIRS, "/a/x/logs"],
+        CWD,
+        posixPathFlavor,
+        EXCLUDED,
+      ),
+    ).toBe(false);
+  });
+
+  test("expands a ~-prefixed excluded dir", () => {
+    expect(
+      isPiInfrastructureRead(
+        "read",
+        join(homedir(), ".pi", "agent", "logs", "review.jsonl"),
+        [join(homedir(), ".pi", "agent")],
+        CWD,
+        posixPathFlavor,
+        ["~/.pi/agent/logs"],
+      ),
+    ).toBe(false);
+  });
 });

@@ -234,7 +234,9 @@ describe("handleToolCall decision events — infrastructure_auto_allowed", () =>
     const { handler, events } = makeHandler({
       session: {
         checkPermission: vi.fn().mockReturnValue(makeCheckResult()),
-        getInfrastructureReadDirs: vi.fn().mockReturnValue([infraDir]),
+        getInfrastructureReadScope: vi
+          .fn()
+          .mockReturnValue({ dirs: [infraDir], excludedDirs: [] }),
       },
     });
 

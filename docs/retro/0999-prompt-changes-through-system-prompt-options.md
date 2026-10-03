@@ -75,3 +75,68 @@ The plan's marker is `**Release:** ship now — batch "pi-1.0 prompt options" ta
 
 - The plan's end-to-end check (fresh Pi session, one `codemode` MCP server, count `<mcp_servers>` in the first request) has not run; do it before or at `/ship`.
 - The accepted pre-completion WARN is the relaxation-turn gap in skill path-match entries, recorded in the TDD stage note.
+
+## Stage: Final Retrospective (2026-10-02T05:00:26Z)
+
+### Session summary
+
+The peer worktree planned and implemented the fix across one session (Opus for planning and TDD, Sonnet for sync), and the root shipped it cleanly: fast-forward merge, both pre-push gates, CI, close comment, and pi-permission-system 37.0.0 as the tail of the "pi-1.0 prompt options" batch.
+The handler now never returns `systemPrompt`; every prompt change goes through `systemPromptOptions`, and ADR 0015 supersedes ADR 0014.
+The plan's end-to-end check (one `codemode` MCP server, count `<mcp_servers>` in the first request) never ran in any stage, including `/ship`.
+
+### Observations
+
+#### What went well
+
+- The pre-completion reviewer found a real regression the change introduced: on the turn `read`/`bash` return from a full denial, the prompt the handler reads predates the turn's tool changes, so denied skills went unfiltered.
+  The peer verified the mechanism against Pi 1.0's source before presenting it, then gave the operator five priced options; the fix was folded into the skill commit so the changelog never announces a regression that no release carried.
+- Mutation testing caught a weak test: step 4's "drop `isSubagent`" mutation killed only the handler test, and the composition-root test gained a `sections` assertion until it killed there too.
+- Before/after prompt-layout diagrams settled the planning gate after a first text-only `ask_user` bounced.
+
+#### What caused friction (agent side)
+
+- `other` (deferred verification dropped) — the TDD and sync notes both said to run the end-to-end check "before or at `/ship`", and `/ship` carried the note into its final report but closed the issue and released 37.0.0 without asking the operator to run it.
+  `/ship` step 2.3 reads the retro for close targets only, so nothing turns an unrun manual check into a decision point.
+  Impact: the close comment states the user-visible fix (`<mcp_servers>` survives) on unit and composition-root evidence alone; no rework yet.
+- `instruction-violation` (self-identified) — TDD step 2 ran `cp … /tmp/green.ts` in the same batch as the mutating `Edit`, so the green copy captured the mutation; the `/tdd-plan` template already warns against this.
+  Impact: a hand restore and a re-run, about 3 tool calls.
+- `instruction-violation` (self-identified) — the sync stage note was first written with literal `\u2014` escapes in the `Edit` body; one sat in a code span, where the gate allows it.
+  Impact: a scripted substitution and a re-check, 2 tool calls.
+- `other` — an `Edit` whose `oldText` spanned an em-dash failed in step 4, and the handler was rewritten whole with `Write` instead; one mutation also read green once because the formatter raced the edit.
+  Impact: no rework, but a whole-file `Write` makes the step's diff harder to review.
+
+#### What caused friction (user side)
+
+- The branch was planned before its prerequisites (#970, #1009) landed, so the TDD session started by rebasing the planning commits and re-reading #970's retro, which changed two plan facts (the header-layout deletion moved here, and the batch-tail Release marker).
+  Planning after the prerequisites land, or a re-plan pass, would have caught both at planning time.
+
+### Diagnostic details
+
+- **Model-performance correlation** — planning and TDD ran on `claude-opus-5-5` (judgment-heavy: the forced-prompt mechanism, the review regression); sync ran on `claude-sonnet-5-5` (mechanical).
+  All three subagents (the tidy-first assessor and both pre-completion reviews) ran on `claude-sonnet-5-5`, read from their own transcripts; the review that found the timing regression shows Sonnet is adequate for that reviewer.
+- **Feedback-loop gap analysis** — the targeted vitest files and `pnpm run check` ran after every step, with the full suite, lint, and `fallow` at each commit; the one verification left to the end was the manual end-to-end check, and it was never run.
+
+### End-to-end verification (2026-10-02T05:12:12Z)
+
+Run after the retro commit, at the operator's request.
+Each arm is a fresh `pi -p --approve --no-session` in its own `/tmp/mcp-e2e/<arm>` directory, with one `github` server (`https://api.githubcopilot.com/mcp/`) in the project's `.pi/mcp.json` and a `before_provider_request` probe that saves the payload and exits before sending.
+
+| Arm       | pi-permission-system                                             | `colgrep` (project policy `deny`) | `<mcp_servers>` |
+| --------- | ---------------------------------------------------------------- | --------------------------------- | --------------- |
+| baseline  | disabled                                                         | n/a                               | 1               |
+| control   | npm 36.2.1                                                       | withheld                          | 0               |
+| treatment | local source, `src/` identical to `pi-permission-system-v37.0.0` | withheld                          | 1               |
+
+- The first three runs showed 0 in every arm, baseline included, because two other global extensions also return `systemPrompt`: `@gotgenes/pi-nocd` (#1000) and `@eko24ive/pi-ask` 1.2.0 (unconditional, every run).
+  Both are disabled in every arm above.
+  A baseline arm is what exposed this; without it, the control and treatment would both have read 0 and the fix would have looked broken.
+- Isolating Pi first (`-ne -e builtin:mcp -e builtin:codemode`) confirmed the section renders from config alone, without a live connection, which is what made a remote server with no install a valid choice.
+- The tool lists alone could not prove the extension loaded (the global policy fully denies nothing); the project `colgrep: deny` supplied that signal.
+- The upstream report already exists as eko24ive/pi-ask#16 (same cause, thinking-block and cache symptom); the `<mcp_servers>` symptom goes there as a comment rather than a new issue.
+- Practical consequence: the operator's real sessions still lack `<mcp_servers>` until #1000 ships and pi-ask drops its handler.
+
+### Changes made
+
+1. `.pi/prompts/ship.md` step 2.3: an unrun manual or end-to-end check named in the stage notes is now an operator decision before the close, recorded in the close comment.
+2. Posted the end-to-end result on #999 (comment 5945994697), noting #1000 and eko24ive/pi-ask#16 as the remaining causes.
+3. Commented on eko24ive/pi-ask#16 (comment 5946014302) with the `<mcp_servers>` symptom and an isolated reproduction (section present without pi-ask, absent with it), verified before posting.

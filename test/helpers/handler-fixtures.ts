@@ -299,7 +299,7 @@ export function makeBashCommandCheck(opts: {
  *
  * The `session` override bag maps to the real collaborators:
  * - `checkPermission` → applied to `permissionManager.checkPermission`
- * - `getActiveSkillEntries`, `getInfrastructureReadDirs`, `getToolPreviewLimits`
+ * - `getActiveSkillEntries`, `getInfrastructureReadScope`, `getToolPreviewLimits`
  *   → applied as vi.spyOn overrides on the real session
  * - `resolveAgentName` → applied as a vi.spyOn override on the real session
  *
@@ -370,9 +370,9 @@ export function makeHandler(overrides?: {
       so.getActiveSkillEntries,
     );
   }
-  if (so?.getInfrastructureReadDirs) {
-    vi.spyOn(session, "getInfrastructureReadDirs").mockImplementation(
-      so.getInfrastructureReadDirs,
+  if (so?.getInfrastructureReadScope) {
+    vi.spyOn(session, "getInfrastructureReadScope").mockImplementation(
+      so.getInfrastructureReadScope,
     );
   }
   if (so?.getToolPreviewLimits) {

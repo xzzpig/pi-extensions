@@ -133,6 +133,12 @@ export interface PolicyLoaderOptions {
   projectGlobalConfigPath?: string;
   projectAgentsDir?: string;
   globalMcpConfigPath?: string;
+  /**
+   * The project's `.pi/mcp.json`, read beside the global file the way Pi's
+   * built-in MCP reads it. Set only for a trusted project: the manager derives
+   * it from a cwd, and an untrusted project's cwd is withheld.
+   */
+  projectMcpConfigPath?: string;
   mcpServerNames?: readonly string[];
 }
 
@@ -150,6 +156,7 @@ export class FilePolicyLoader implements PolicyLoader {
   private readonly projectGlobalConfigPath: string | null;
   private readonly projectAgentsDir: string | null;
   private readonly globalMcpConfigPath: string;
+  private readonly projectMcpConfigPath: string | null;
   private readonly configuredMcpServerNamesOverride: readonly string[] | null;
 
   private globalConfigCache: FileCacheEntry<ScopeConfig> | null = null;
@@ -175,6 +182,7 @@ export class FilePolicyLoader implements PolicyLoader {
     this.projectAgentsDir = options.projectAgentsDir ?? null;
     this.globalMcpConfigPath =
       options.globalMcpConfigPath ?? defaultGlobalMcpConfigPath();
+    this.projectMcpConfigPath = options.projectMcpConfigPath ?? null;
     this.configuredMcpServerNamesOverride = options.mcpServerNames
       ? [
           ...new Set(
@@ -316,7 +324,9 @@ export class FilePolicyLoader implements PolicyLoader {
       return this.configuredMcpServerNamesOverride;
     }
 
-    const paths = [this.globalMcpConfigPath];
+    const paths = this.projectMcpConfigPath
+      ? [this.globalMcpConfigPath, this.projectMcpConfigPath]
+      : [this.globalMcpConfigPath];
     const stamp = paths
       .map((path) => `${path}:${getFileStamp(path)}`)
       .join("|");

@@ -1,23 +1,30 @@
 import { describe, expect, it } from "vitest";
 
-import { deriveApprovalPattern } from "#src/path/approval-pattern";
+import { deriveApprovalPatterns } from "#src/path/approval-pattern";
 import type { PathFlavor } from "#src/path/path-flavor";
 import { posixPathFlavor, win32PathFlavor } from "#src/path/path-flavor";
 import { evaluate } from "#src/policy/rule";
 import { SessionRules } from "#src/session/session-rules";
 
-/** Record the derived pattern as a session grant, as the gates do. */
+/** Record the derived patterns as session grants, as the gates do. */
 function grantFor(
   surface: string,
   pathValue: string,
   flavor: PathFlavor,
+  isDirectory = false,
 ): SessionRules {
   const session = new SessionRules();
-  session.approve(surface, deriveApprovalPattern(pathValue, flavor));
+  for (const pattern of deriveApprovalPatterns(
+    pathValue,
+    flavor,
+    isDirectory,
+  )) {
+    session.approve(surface, pattern);
+  }
   return session;
 }
 
-describe("deriveApprovalPattern", () => {
+describe("deriveApprovalPatterns", () => {
   describe("posix flavor", () => {
     it.each([
       ["/other/project/src/foo.ts", "/other/project/src/*"],
@@ -29,18 +36,24 @@ describe("deriveApprovalPattern", () => {
       ["C:/foo/bar.ts", "C:/foo/*"],
       ["src/.env", "src/*"],
     ])("derives %s -> %s", (value, expected) => {
-      expect(deriveApprovalPattern(value, posixPathFlavor)).toBe(expected);
+      expect(deriveApprovalPatterns(value, posixPathFlavor, false)).toEqual([
+        expected,
+      ]);
     });
 
     it("treats a backslash as an ordinary filename character", () => {
-      expect(deriveApprovalPattern("C:\\foo\\bar.ts", posixPathFlavor)).toBe(
-        "./*",
-      );
+      expect(
+        deriveApprovalPatterns("C:\\foo\\bar.ts", posixPathFlavor, false),
+      ).toEqual(["./*"]);
     });
 
     it("falls back to the current directory for a separator-free value", () => {
-      expect(deriveApprovalPattern("index.html", posixPathFlavor)).toBe("./*");
-      expect(deriveApprovalPattern("", posixPathFlavor)).toBe("./*");
+      expect(
+        deriveApprovalPatterns("index.html", posixPathFlavor, false),
+      ).toEqual(["./*"]);
+      expect(deriveApprovalPatterns("", posixPathFlavor, false)).toEqual([
+        "./*",
+      ]);
     });
   });
 
@@ -50,7 +63,9 @@ describe("deriveApprovalPattern", () => {
       ["C:\\", "C:\\*"],
       ["C:/foo/bar.ts", "C:/foo/*"],
     ])("derives a native windows path %s -> %s", (value, expected) => {
-      expect(deriveApprovalPattern(value, win32PathFlavor)).toBe(expected);
+      expect(deriveApprovalPatterns(value, win32PathFlavor, false)).toEqual([
+        expected,
+      ]);
     });
 
     it.each([
@@ -62,16 +77,64 @@ describe("deriveApprovalPattern", () => {
     ])(
       "keeps a Git Bash token's own separator: %s -> %s",
       (value, expected) => {
-        expect(deriveApprovalPattern(value, win32PathFlavor)).toBe(expected);
+        expect(deriveApprovalPatterns(value, win32PathFlavor, false)).toEqual([
+          expected,
+        ]);
       },
     );
 
     it("falls back to the windows current directory for a separator-free value", () => {
-      expect(deriveApprovalPattern("index.html", win32PathFlavor)).toBe(".\\*");
+      expect(
+        deriveApprovalPatterns("index.html", win32PathFlavor, false),
+      ).toEqual([".\\*"]);
+    });
+  });
+
+  describe("a directory", () => {
+    it.each([
+      [
+        "/r/projects/project-a",
+        ["/r/projects/project-a", "/r/projects/project-a/*"],
+      ],
+      ["/", ["/", "/*"]],
+    ])("posix: scopes %s to itself and its contents", (value, expected) => {
+      expect(deriveApprovalPatterns(value, posixPathFlavor, true)).toEqual(
+        expected,
+      );
+    });
+
+    it.each([
+      ["C:\\r\\a", ["C:\\r\\a", "C:\\r\\a\\*"]],
+      ["C:\\", ["C:\\", "C:\\*"]],
+      ["C:/r/a", ["C:/r/a", "C:/r/a/*"]],
+    ])("win32: scopes %s with its own separator", (value, expected) => {
+      expect(deriveApprovalPatterns(value, win32PathFlavor, true)).toEqual(
+        expected,
+      );
     });
   });
 
   describe("session-grant round trip", () => {
+    it("grants an approved directory and its contents, not its siblings", () => {
+      const session = grantFor(
+        "external_directory_read",
+        "/r/projects/project-a",
+        posixPathFlavor,
+        true,
+      );
+      const actionFor = (value: string) =>
+        evaluate(
+          "external_directory_read",
+          value,
+          session.getRuleset(),
+          posixPathFlavor,
+        ).action;
+      expect(actionFor("/r/projects/project-a")).toBe("allow");
+      expect(actionFor("/r/projects/project-a/src/x.ts")).toBe("allow");
+      expect(actionFor("/r/projects/project-b/sample.txt")).toBe("ask");
+      expect(actionFor("/r/projects/project-a-evil/x.ts")).toBe("ask");
+    });
+
     it("grants siblings of the approved file", () => {
       const session = grantFor(
         "external_directory_read",

@@ -321,26 +321,25 @@ describe("PermissionSession", () => {
   });
 
   describe("infrastructure paths", () => {
-    it("getInfrastructureReadDirs combines piInfrastructureDirs and piInfrastructureReadPaths", () => {
+    it("getInfrastructureReadScope combines piInfrastructureDirs and piInfrastructureReadPaths", () => {
       const configStore = makeConfigStore({
         current: vi.fn().mockReturnValue({
           piInfrastructureReadPaths: ["/extra/path"],
         }),
       });
       const { session } = createSession({ configStore });
-      expect(session.getInfrastructureReadDirs()).toEqual([
-        "/test/agent",
-        "/test/agent/git",
-        "/extra/path",
-      ]);
+      expect(session.getInfrastructureReadScope()).toEqual({
+        dirs: ["/test/agent", "/test/agent/git", "/extra/path"],
+        excludedDirs: ["/test/agent/logs"],
+      });
     });
 
-    it("getInfrastructureReadDirs returns only piInfrastructureDirs when config omits the field", () => {
+    it("getInfrastructureReadScope holds only piInfrastructureDirs when config omits the field", () => {
       const { session } = createSession();
-      expect(session.getInfrastructureReadDirs()).toEqual([
-        "/test/agent",
-        "/test/agent/git",
-      ]);
+      expect(session.getInfrastructureReadScope()).toEqual({
+        dirs: ["/test/agent", "/test/agent/git"],
+        excludedDirs: ["/test/agent/logs"],
+      });
     });
   });
 

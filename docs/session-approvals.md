@@ -59,6 +59,14 @@ The suggested pattern is surface-specific:
 | tool with path (read, write, …) | `read` for `src/foo.ts`      | `src/*`                   |
 | tool catch-all                  | `read` (no extractable path) | `*`                       |
 | external_directory              | `/other/project/src/foo.ts`  | `/other/project/src/*`    |
+| external_directory (directory)  | `ls /other/project`          | `/other/project/*`        |
+
+A path that names an existing directory (`ls`, `find`, `grep`, or an extension tool's directory argument) is scoped to that directory, not its parent.
+The approval records two rules — the directory itself and `<dir>/*` — so a repeated `ls` of the directory and every file beneath it are covered, while a sibling directory such as `/other/project-b` still asks.
+The dialog names the pair by its contents glob, `"/other/project/*"`.
+A path that does not exist yet, or a bash token whose base directory is unknown, keeps the parent-directory scope.
+
+When a path ask proves no read/write direction (an extension tool, or `edit`), the session option names its scope as `Yes, allow access to "<pattern>" for this session`.
 
 ## Bash Arity Table
 

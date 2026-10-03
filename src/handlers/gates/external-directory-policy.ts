@@ -16,9 +16,18 @@ export interface UncoveredExternalPath {
   check: PermissionCheckResult;
 }
 
-/** The uncovered external paths plus the most restrictive check among them. */
-export interface UncoveredExternalPaths {
+/**
+ * How a set of external paths resolved: the uncovered ones, the worst among
+ * them, and which allowed paths a session grant covered.
+ */
+export interface ExternalPathCoverage {
   uncovered: UncoveredExternalPath[];
+  /**
+   * Allowed paths whose winning rule was a session grant. A path allowed by a
+   * config rule or the universal fallback is in neither list, so a caller can
+   * stamp `session_approval` only where a grant actually decided.
+   */
+  sessionCovered: AccessPath[];
   /** Worst check among uncovered paths; `undefined` only when none are uncovered. */
   worstCheck: PermissionCheckResult | undefined;
 }
@@ -60,14 +69,16 @@ export function resolveExternalDirectoryPolicy(
  * not "allow" are collected (filtering on state, not source, so config-level
  * allow rules suppress the prompt just as session-level allow rules do), and
  * the most restrictive uncovered check is returned so a config "deny" is not
- * downgraded to the catch-all "ask".
+ * downgraded to the catch-all "ask". Allowed entries a session rule decided
+ * are reported apart, as the provenance a whole-command bypass records.
  */
 export function selectUncoveredExternalPaths(
   accesses: readonly BashExternalPath[],
   resolver: ScopedPermissionResolver,
   agentName: string | undefined,
-): UncoveredExternalPaths {
+): ExternalPathCoverage {
   const uncovered: UncoveredExternalPath[] = [];
+  const sessionCovered: AccessPath[] = [];
   for (const { path, effect } of accesses) {
     const surface = capabilitySurfaceForEffect(
       "external_directory",
@@ -81,10 +92,13 @@ export function selectUncoveredExternalPaths(
     );
     if (check.state !== "allow") {
       uncovered.push({ path, surface, effect, check });
+    } else if (check.source === "session") {
+      sessionCovered.push(path);
     }
   }
   return {
     uncovered,
+    sessionCovered,
     worstCheck: pickMostRestrictive(uncovered.map(({ check }) => check)),
   };
 }

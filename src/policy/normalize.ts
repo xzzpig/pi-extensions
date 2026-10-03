@@ -1,4 +1,8 @@
 import { surfaceFamilyMembers } from "#src/access-intent/path-surfaces";
+import {
+  isPiMcpToolName,
+  PI_MCP_TOOL_PREFIX,
+} from "#src/access-intent/tool-kind";
 import type { FlatPermissionConfig, PatternValue } from "#src/types";
 import { isDenyWithReason, isPermissionState } from "#src/types";
 import type { Rule, Ruleset } from "./rule";
@@ -114,4 +118,47 @@ export function normalizeFlatConfig(permission: FlatPermissionConfig): Ruleset {
     }
   }
   return rules;
+}
+
+/** The rules with relocated copies appended, and the keys that were copied. */
+export interface McpToolKeyRelocation {
+  rules: Ruleset;
+  /** Each relocated surface key, in rule order. */
+  relocatedKeys: string[];
+}
+
+/**
+ * Copy the catch-all rule of every top-level key that can name a Pi MCP tool
+ * onto the `mcp` surface, with the key as its pattern.
+ *
+ * A Pi MCP tool (`mcp__<server>__<tool>`) once resolved on its own name, so a
+ * top-level key naming it (or a surface wildcard such as `mcp__srv__*`) was the
+ * only rule that reached it. The tool now resolves on `mcp`, where its full
+ * name is one of its candidates, so the same key is the same rule there.
+ *
+ * The copies are appended after every other rule, in their original order:
+ * the key was the only rule that applied to the tool before, so it keeps the
+ * final say over the `mcp` rules that newly reach it. The original rule stays
+ * where it was, because a key such as `mcp__*` also matches tools that still
+ * resolve on their own name (`mcp__foo`), and moving it would drop them. A key
+ * that can name no Pi MCP tool (`mcp__foo`) is not copied, and a non-`*`
+ * pattern under any key never matched (a tool surface is evaluated with `*`).
+ */
+export function relocateMcpToolKeyRules(rules: Ruleset): McpToolKeyRelocation {
+  const relocated = rules
+    .filter((rule) => rule.pattern === "*" && canNamePiMcpTool(rule.surface))
+    .map((rule): Rule => ({ ...rule, surface: "mcp", pattern: rule.surface }));
+  return {
+    rules: [...rules, ...relocated],
+    relocatedKeys: relocated.map((rule) => rule.pattern),
+  };
+}
+
+/**
+ * Whether a top-level surface key can match a Pi MCP tool name: the name
+ * itself, or an `mcp__`-prefixed wildcard.
+ */
+function canNamePiMcpTool(surfaceKey: string): boolean {
+  if (isPiMcpToolName(surfaceKey)) return true;
+  return surfaceKey.startsWith(PI_MCP_TOOL_PREFIX) && /[*?]/.test(surfaceKey);
 }

@@ -22,6 +22,7 @@ vi.mock("node:fs", () => ({
 
 import {
   canonicalNormalizePathForComparison,
+  cwdRelativePolicyValues,
   getPathPolicyValues,
   normalizePathForComparison,
   normalizePathPolicyLiteral,
@@ -241,5 +242,39 @@ describe("getPathPolicyValues", () => {
 
   test("returns empty for blank input", () => {
     expect(getPathPolicyValues("   ", { cwd }, posixPathFlavor)).toEqual([]);
+  });
+});
+
+describe("cwdRelativePolicyValues", () => {
+  const cwd = "/projects/my-app";
+
+  test("aliases an absolute path inside cwd relative to it", () => {
+    expect(
+      cwdRelativePolicyValues(
+        "/projects/my-app/src/a.ts",
+        cwd,
+        posixPathFlavor,
+      ),
+    ).toEqual(["src/a.ts"]);
+  });
+
+  test("has no alias for cwd itself", () => {
+    expect(cwdRelativePolicyValues(cwd, cwd, posixPathFlavor)).toEqual([]);
+  });
+
+  test("has no alias for a path outside cwd", () => {
+    expect(cwdRelativePolicyValues("/etc/hosts", cwd, posixPathFlavor)).toEqual(
+      [],
+    );
+  });
+
+  test("folds the cwd under the win32 flavor", () => {
+    expect(
+      cwdRelativePolicyValues(
+        "c:\\proj\\src\\a.ts",
+        "C:\\Proj",
+        win32PathFlavor,
+      ),
+    ).toEqual(["src\\a.ts"]);
   });
 });

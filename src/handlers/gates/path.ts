@@ -41,8 +41,9 @@ export function describePathGate(
 
   // Emit an access-path intent so the resolver matches the lexical aliases
   // *and* the canonical (symlink-resolved) form, the same set
-  // `external_directory` matches (#418, #486).
-  const accessPath = normalizer.forPath(filePath);
+  // `external_directory` matches (#418, #486). A built-in tool's path is the
+  // file Pi's resolver opens, not the spelling the model typed.
+  const accessPath = normalizer.forToolPath(tcc.toolName, filePath);
   const check = resolver.resolve({
     kind: "access-path",
     surface,
@@ -57,13 +58,14 @@ export function describePathGate(
   // "path" key should not trigger path-level prompts (#58).
   if (check.matchedPattern === undefined) return null;
 
-  // Derive the approval pattern from the lexical absolute form so it matches
+  // Derive the approval patterns from the lexical absolute form so they match
   // the policy values a later call produces.
-  const pattern = normalizer.approvalPatternFor(accessPath);
+  const patterns = normalizer.approvalPatternsFor(accessPath);
 
   const payload = buildPathAskPayload({
     toolName: tcc.toolName,
     pathValue: filePath,
+    resolvedPath: accessPath.resolvedAlias(),
     agentName: tcc.agentName,
     matchedPattern: check.matchedPattern,
     surface,
@@ -73,7 +75,7 @@ export function describePathGate(
     surface,
     input: { path: filePath },
     payload,
-    sessionApproval: SessionApproval.single(surface, pattern),
+    sessionApproval: SessionApproval.forPatterns(surface, patterns),
     promptDetails: buildPathGatePromptDetails(
       tcc,
       filePath,

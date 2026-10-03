@@ -1,4 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -537,6 +543,61 @@ describe("FilePolicyLoader.getConfiguredMcpServerNames", () => {
       globalMcpConfigPath: "/nonexistent/mcp.json",
     });
     expect(loader.getConfiguredMcpServerNames()).toEqual([]);
+  });
+
+  it("merges server names from the global and project mcp.json, longest first", () => {
+    const baseDir = makeTempDir();
+    try {
+      const globalMcp = join(baseDir, "global-mcp.json");
+      const projectMcp = join(baseDir, "project-mcp.json");
+      writeFileSync(
+        globalMcp,
+        JSON.stringify({ mcpServers: { exa: {}, shared: {} } }),
+      );
+      writeFileSync(
+        projectMcp,
+        JSON.stringify({ mcpServers: { "danger-srv": {}, shared: {} } }),
+      );
+
+      const loader = new FilePolicyLoader({
+        globalConfigPath: "/nonexistent/config.json",
+        agentsDir: "/nonexistent/agents",
+        globalMcpConfigPath: globalMcp,
+        projectMcpConfigPath: projectMcp,
+      });
+      expect(loader.getConfiguredMcpServerNames()).toEqual([
+        "danger-srv",
+        "shared",
+        "exa",
+      ]);
+    } finally {
+      rmSync(baseDir, { recursive: true, force: true });
+    }
+  });
+
+  it("re-reads the project mcp.json after it changes", () => {
+    const baseDir = makeTempDir();
+    try {
+      const projectMcp = join(baseDir, "project-mcp.json");
+      writeFileSync(projectMcp, JSON.stringify({ mcpServers: { exa: {} } }));
+
+      const loader = new FilePolicyLoader({
+        globalConfigPath: "/nonexistent/config.json",
+        agentsDir: "/nonexistent/agents",
+        globalMcpConfigPath: "/nonexistent/mcp.json",
+        projectMcpConfigPath: projectMcp,
+      });
+      expect(loader.getConfiguredMcpServerNames()).toEqual(["exa"]);
+
+      writeFileSync(
+        projectMcp,
+        JSON.stringify({ mcpServers: { exa: {}, research: {} } }),
+      );
+      utimesSync(projectMcp, new Date(), new Date(Date.now() + 5000));
+      expect(loader.getConfiguredMcpServerNames()).toEqual(["research", "exa"]);
+    } finally {
+      rmSync(baseDir, { recursive: true, force: true });
+    }
   });
 
   it("caches MCP server names across calls", () => {

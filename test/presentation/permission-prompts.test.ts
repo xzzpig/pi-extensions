@@ -25,6 +25,11 @@ describe("formatUnknownToolReason", () => {
     expect(result).toContain("mcp");
   });
 
+  test("omits the proxy MCP hint for a Pi MCP tool name", () => {
+    const result = formatUnknownToolReason("mcp__srv__gone", []);
+    expect(result).not.toContain("call the registered 'mcp' tool");
+  });
+
   test("omits MCP hint when tool name is 'mcp'", () => {
     const result = formatUnknownToolReason("mcp", []);
     expect(result).not.toContain("call the registered 'mcp' tool");

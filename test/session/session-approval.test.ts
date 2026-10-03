@@ -15,6 +15,19 @@ describe("SessionApproval", () => {
     });
   });
 
+  describe("forPatterns", () => {
+    it("stores one grant per pattern, all on the given surface", () => {
+      const approval = SessionApproval.forPatterns("path_read", [
+        "/r/a",
+        "/r/a/*",
+      ]);
+      expect(approval.grants).toEqual([
+        { surface: "path_read", pattern: "/r/a" },
+        { surface: "path_read", pattern: "/r/a/*" },
+      ]);
+    });
+  });
+
   describe("forGrants", () => {
     it("stores every grant in order", () => {
       const approval = SessionApproval.forGrants([

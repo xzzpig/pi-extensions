@@ -57,7 +57,7 @@ function pathAccessFor(
   n: PathNormalizer = normalizer,
 ): ToolPathAccess {
   const path = n.forPath(pathValue);
-  return { path, approvalPattern: n.approvalPatternFor(path) };
+  return { path, approvalPatterns: n.approvalPatternsFor(path) };
 }
 
 // ── tests ──────────────────────────────────────────────────────────────────
@@ -145,6 +145,51 @@ describe("describeToolGate", () => {
     expect(desc.surface).toBe("mcp");
     expect(desc.decision.surface).toBe("mcp");
     expect(desc.decision.value).toBe("server:tool");
+  });
+
+  describe("a Pi MCP tool (mcp__<server>__<tool>)", () => {
+    const toolName = "mcp__danger_srv__wipe";
+    const check = makeCheckResult("ask", {
+      toolName,
+      source: "mcp",
+      target: "danger-srv",
+      matchedPattern: "danger-srv",
+    });
+    const describeMcpTool = () =>
+      describeToolGate(
+        makeTcc({ toolName, input: { target: "prod" } }),
+        check,
+        makeFormatter(),
+      );
+
+    it("gates on the mcp surface with the target as the decision value", () => {
+      const desc = describeMcpTool();
+      expect(desc.surface).toBe("mcp");
+      expect(desc.decision).toEqual({ surface: "mcp", value: "danger-srv" });
+      expect(desc.promptDetails.accessIntent).toEqual({
+        surface: "mcp",
+        matchValues: ["danger-srv"],
+        boundaryValue: null,
+      });
+    });
+
+    it("approves exactly this tool for the session, on the mcp surface", () => {
+      const desc = describeMcpTool();
+      expect(desc.sessionApproval?.grants).toEqual([
+        { surface: "mcp", pattern: toolName },
+      ]);
+    });
+
+    it("keeps the invoked tool name and shows its arguments", () => {
+      const desc = describeMcpTool();
+      expect(desc.logContext.toolName).toBe(toolName);
+      expect(desc.logContext.toolInputPreview).toBe('input {"target":"prod"}');
+      expect(desc.payload.kind).toBe("mcp");
+      expect(desc.payload.request.value).toBe("danger-srv");
+      expect(desc.payload.evidence).toEqual([
+        { label: "input", text: 'with input {"target":"prod"}', detail: null },
+      ]);
+    });
   });
 
   it("carries the checked tool and its matched rule on the payload", () => {

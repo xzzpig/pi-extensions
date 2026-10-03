@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createMcpPermissionTargets,
+  createPiMcpToolTargets,
   McpTargetList,
   parseQualifiedMcpToolName,
 } from "#src/access-intent/mcp-targets";
@@ -362,5 +363,122 @@ describe("McpTargetList", () => {
       first.push("mutated");
       expect(list.toArray()).toEqual(["exa"]);
     });
+  });
+});
+
+describe("createPiMcpToolTargets", () => {
+  it("emits the configured and sanitized server spellings, most specific first", () => {
+    expect(
+      createPiMcpToolTargets("mcp__danger_srv__wipe", ["danger-srv"]),
+    ).toEqual([
+      "danger-srv_wipe",
+      "danger-srv:wipe",
+      "danger-srv",
+      "danger_srv_wipe",
+      "danger_srv:wipe",
+      "danger_srv",
+      "wipe",
+      "mcp__danger_srv__wipe",
+      "mcp_call",
+    ]);
+  });
+
+  it("emits one spelling when the configured name needs no sanitizing", () => {
+    expect(createPiMcpToolTargets("mcp__github__search", ["github"])).toEqual([
+      "github_search",
+      "github:search",
+      "github",
+      "search",
+      "mcp__github__search",
+      "mcp_call",
+    ]);
+  });
+
+  it("splits an unconfigured server at the first separator", () => {
+    expect(createPiMcpToolTargets("mcp__srv__get__x", [])).toEqual([
+      "srv_get__x",
+      "srv:get__x",
+      "srv",
+      "get__x",
+      "mcp__srv__get__x",
+      "mcp_call",
+    ]);
+  });
+
+  it("resolves the longest configured server whose sanitized name prefixes the tool", () => {
+    // Both `a` and `a--b` (sanitized `a__b`) prefix `mcp__a__b__x`; the
+    // longer one owns it, whatever the configured order.
+    const expected = [
+      "a--b_x",
+      "a--b:x",
+      "a--b",
+      "a__b_x",
+      "a__b:x",
+      "a__b",
+      "x",
+      "mcp__a__b__x",
+      "mcp_call",
+    ];
+    expect(createPiMcpToolTargets("mcp__a__b__x", ["a", "a--b"])).toEqual(
+      expected,
+    );
+    expect(createPiMcpToolTargets("mcp__a__b__x", ["a--b", "a"])).toEqual(
+      expected,
+    );
+  });
+
+  it("resolves a configured server whose name holds a separator Pi rewrote", () => {
+    expect(createPiMcpToolTargets("mcp__my_srv__x", ["my.srv"])).toEqual([
+      "my.srv_x",
+      "my.srv:x",
+      "my.srv",
+      "my_srv_x",
+      "my_srv:x",
+      "my_srv",
+      "x",
+      "mcp__my_srv__x",
+      "mcp_call",
+    ]);
+  });
+
+  it("resolves a configured server whose sanitized name contains the separator", () => {
+    expect(createPiMcpToolTargets("mcp__a__b__x", ["a--b"])).toEqual([
+      "a--b_x",
+      "a--b:x",
+      "a--b",
+      "a__b_x",
+      "a__b:x",
+      "a__b",
+      "x",
+      "mcp__a__b__x",
+      "mcp_call",
+    ]);
+  });
+
+  it("still qualifies a tool whose own name starts with its server", () => {
+    expect(createPiMcpToolTargets("mcp__github__github_x", ["github"])).toEqual(
+      [
+        "github_github_x",
+        "github:github_x",
+        "github",
+        "github_x",
+        "mcp__github__github_x",
+        "mcp_call",
+      ],
+    );
+  });
+
+  it("keeps every configured name that sanitizes to the same server", () => {
+    expect(createPiMcpToolTargets("mcp__a_b__x", ["a.b", "a_b"])).toEqual([
+      "a.b_x",
+      "a.b:x",
+      "a.b",
+      "a_b_x",
+      "a_b:x",
+      "a_b",
+      "x",
+      "mcp__a_b__x",
+      "mcp_call",
+    ]);
   });
 });

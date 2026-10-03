@@ -12,10 +12,14 @@ vi.mock("node:os", () => ({
 const realpathSync = vi.hoisted(() =>
   vi.fn<(path: string) => string>((p) => p),
 );
-vi.mock("node:fs", () => ({
-  realpathSync,
-  default: { realpathSync },
-}));
+vi.mock("node:fs", async () => {
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  return {
+    ...actual,
+    realpathSync,
+    default: { ...actual, realpathSync },
+  };
+});
 
 import {
   buildAccessIntentForSurface,
@@ -254,6 +258,41 @@ describe("normalizeInput — MCP surface", () => {
   });
 });
 
+describe("normalizeInput — a Pi MCP tool (mcp__<server>__<tool>)", () => {
+  it("resolves on the mcp surface under the Pi-name candidates, then 'mcp'", () => {
+    expect(
+      normalizeInput("mcp__danger_srv__wipe", { target: "prod" }, [
+        "danger-srv",
+      ]),
+    ).toEqual({
+      surface: "mcp",
+      values: [
+        "danger-srv_wipe",
+        "danger-srv:wipe",
+        "danger-srv",
+        "danger_srv_wipe",
+        "danger_srv:wipe",
+        "danger_srv",
+        "wipe",
+        "mcp__danger_srv__wipe",
+        "mcp_call",
+        "mcp",
+      ],
+      resultExtras: { target: "danger-srv_wipe" },
+    });
+  });
+
+  it("ignores the tool's input, which is the MCP arguments", () => {
+    expect(
+      normalizeInput(
+        "mcp__srv__x",
+        { tool: "other:thing", server: "other" },
+        [],
+      ).values,
+    ).toEqual(["srv_x", "srv:x", "srv", "x", "mcp__srv__x", "mcp_call", "mcp"]);
+  });
+});
+
 describe("buildAccessIntentForSurface", () => {
   const normalizer = new PathNormalizer(posixPathFlavor, "/test/project");
 
@@ -301,6 +340,30 @@ describe("buildAccessIntentForSurface", () => {
       expect(intent.surface).toBe("read");
       expect(intent.path.value()).toBe("/test/project/.env");
     }
+  });
+
+  it("resolves a built-in tool surface's value to the file the tool opens", () => {
+    const intent = buildAccessIntentForSurface(
+      "read",
+      "file:///test/project/.env",
+      normalizer,
+      undefined,
+    );
+    expect(intent.kind === "access-path" && intent.path.value()).toBe(
+      "/test/project/.env",
+    );
+  });
+
+  it("keeps the path surface's value as typed", () => {
+    const intent = buildAccessIntentForSurface(
+      "path",
+      "file:///test/project/.env",
+      normalizer,
+      undefined,
+    );
+    expect(intent.kind === "access-path" && intent.path.value()).toBe(
+      "/test/project/file:/test/project/.env",
+    );
   });
 
   it("emits a tool intent for a non-path surface (bash)", () => {
@@ -419,5 +482,45 @@ describe("buildResolvedIntentFromMatchValues", () => {
   it("threads an empty agentName through for agent-neutral resolution", () => {
     const intent = buildResolvedIntentFromMatchValues("bash", ["ls"], "");
     expect(intent.agentName).toBe("");
+  });
+});
+
+describe("a value-bearing mcp query evaluates its value as-is", () => {
+  // Building `{}` for an mcp value derives only the status probe
+  // `mcp_status`, which the MCP baseline allows whenever any mcp allow exists,
+  // so a forwarded or service mcp query must carry its own value instead.
+  const normalizer = new PathNormalizer(posixPathFlavor, "/test/project");
+
+  it("serves a forwarded mcp request from its child-fixed values", () => {
+    expect(
+      buildResolvedIntentFromMatchValues("mcp", ["danger_wipe"], "Explore"),
+    ).toEqual({
+      kind: "path-values",
+      surface: "mcp",
+      values: ["danger_wipe"],
+      agentName: "Explore",
+    });
+  });
+
+  it("answers a service mcp query from the value it names", () => {
+    expect(
+      buildAccessIntentForSurface("mcp", "danger", normalizer, "Explore"),
+    ).toEqual({
+      kind: "path-values",
+      surface: "mcp",
+      values: ["danger"],
+      agentName: "Explore",
+    });
+  });
+
+  it("keeps a value-less mcp query on the tool intent", () => {
+    expect(
+      buildAccessIntentForSurface("mcp", undefined, normalizer, "Explore"),
+    ).toEqual({
+      kind: "tool",
+      surface: "mcp",
+      input: {},
+      agentName: "Explore",
+    });
   });
 });

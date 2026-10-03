@@ -1,4 +1,7 @@
-import type { AccessIntent } from "#src/access-intent/access-intent";
+import type {
+  AccessIntent,
+  PathValuesAccessIntent,
+} from "#src/access-intent/access-intent";
 import { buildAccessIntentForSurface } from "#src/access-intent/input-normalizer";
 import type { Authorizer } from "#src/authority/authorizer";
 import type { AuthorizerRegistrar } from "#src/authority/authorizer-registry";
@@ -23,7 +26,7 @@ import { resolveBashAdvisoryCheck } from "./bash-advisory-check";
  * `PermissionResolver` satisfies it.
  */
 interface ResolverForService {
-  resolve(intent: AccessIntent): PermissionCheckResult;
+  resolve(intent: AccessIntent | PathValuesAccessIntent): PermissionCheckResult;
   getToolPermission(toolName: string, agentName?: string): PermissionState;
   isToolFullyDenied(toolName: string, agentName?: string): boolean;
 }

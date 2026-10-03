@@ -15,6 +15,7 @@ import {
 import type { ToolCallGateInputs } from "#src/handlers/gates/tool-call-gate-pipeline";
 import type { PathFlavor } from "#src/path/path-flavor";
 import { PathNormalizer } from "#src/path/path-normalizer";
+import type { InfrastructureReadScope } from "#src/path/pi-infrastructure-read";
 import type { ScopedPermissionManager } from "#src/policy/permission-manager";
 import {
   resolveToolPreviewLimits,
@@ -237,14 +238,17 @@ export class PermissionSession implements ToolCallGateInputs {
   // ── Infrastructure paths ───────────────────────────────────────────────
 
   /**
-   * Combined infrastructure read directories: static paths from
-   * `ExtensionPaths` plus config-derived paths.
+   * Where infrastructure reads are auto-allowed: the static roots from
+   * `ExtensionPaths` plus the config-derived `piInfrastructureReadPaths`.
    */
-  getInfrastructureReadDirs(): string[] {
-    return [
-      ...this.paths.piInfrastructureDirs,
-      ...(this.config.piInfrastructureReadPaths ?? []),
-    ];
+  getInfrastructureReadScope(): InfrastructureReadScope {
+    return {
+      dirs: [
+        ...this.paths.piInfrastructureDirs,
+        ...(this.config.piInfrastructureReadPaths ?? []),
+      ],
+      excludedDirs: this.paths.piInfrastructureExcludedDirs,
+    };
   }
 
   /**
