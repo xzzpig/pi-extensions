@@ -10,6 +10,8 @@ A foreground child is a pi session created inside the parent Pi process, not a s
 
 A background child is a pi session created inside the detached runner process. The runner mirrors session events into `events.jsonl`, `output-<index>.log`, and the transcript. Interrupt and stop abort the child session; steer requests are delivered with the session's `steer` or `followUp`.
 
+Long-open `bash` attention notices identify the exact tool call and include status and child-specific transcript commands. Each distinct long-open call notifies once. Inspect the running command and recent output before intervening: development servers and watch commands may intentionally never return, while builds and tests may legitimately take time. A queued steer does not cancel the shell command. For local native Pi children explicitly granted `subagent_command`, `command.yield` returns control while the selected command remains managed; `command.cancel` stops that command without interrupting the child. Query `command.status` to confirm its terminal state. Unsupported children require the existing run-scoped interrupt/resume path, which may affect siblings. See [command controls](tool-reference.md#command-controls).
+
 Live progress shows compact detail for single, chain, and parallel modes: a bounded one-line task, current tool, recent output, token counts, aggregate cost, duration, activity freshness, current-tool duration, and chain graph metadata when available. Workflow `label` metadata wins over raw task text in compact multi-child cards.
 
 Press Pi's configured expand key (`Ctrl+O` by default) to expand the full streaming view with complete output per step.
@@ -53,9 +55,11 @@ or keyboard shortcuts is needed. The summary counts the widget's tracked runs,
 including workflow parents and children, rather than unique agents.
 
 Folding stays in effect across progress updates and does not change Pi's global
-expand setting, run execution, or completion notifications. Task rows, drag and
-wheel events, and modifier clicks are left unhandled. The state resets when the
-widget is removed or Pi reloads. Regular mode keeps the existing keyboard controls.
+expand setting, run execution, or completion notifications. Set
+`asyncWidgetCollapsed: true` in the extension configuration to start each newly
+mounted widget folded. Task rows, drag and wheel events, and modifier clicks are left
+unhandled. The state resets when the widget is removed or Pi reloads. Regular mode
+keeps the existing keyboard controls.
 
 ### Reducing status display noise
 
@@ -74,6 +78,7 @@ For compact chat results with FleetView as the only live editor surface, merge t
 - `inlineToolDisplay: "summary"` keeps one static result row per call, alongside its call heading. A completed status query is not proof that the queried child has finished.
 - `fleetView: true` retains live progress. Open `/subagents-fleet` for details instead of repeatedly requesting status just to watch progress. Pi's expand key does not expand summary results; keep `"rich"` if you want expandable inline output.
 - `asyncWidget: false` hides only the additional under-editor async widget, leaving FleetView available. This configuration reduces visible surfaces; it does not guarantee ordering relative to other extensions.
+- `asyncWidgetCollapsed: true` starts each newly mounted async widget as a one-line live status summary; click its header to expand it.
 
 Thanks to [DraconDev](https://github.com/DraconDev) for reporting the display noise and suggesting summary mode in [#1931](https://github.com/nicobailon/pi-subagents/issues/1931).
 

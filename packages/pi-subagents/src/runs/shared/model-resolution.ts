@@ -10,15 +10,23 @@ export interface ModelSelectionEvidence {
 
 export { splitThinkingSuffix };
 
-/** Aliases apply only to the resolved launch candidate (without its thinking suffix) and the exact raw response ID. */
+/**
+ * Aliases apply only to the resolved launch candidate (without its thinking suffix) and the exact raw response ID.
+ * When the child's live selection is a Pi virtual model, assistant messages name the physical model it dispatched
+ * to, so the virtual selection's provider/id is compared exactly with the launch candidate instead.
+ */
 export function formatSubagentModelVerificationError(
 	expectedModel: string,
 	observedModel: string,
 	availableModels: AvailableModelInfo[] | undefined,
 	modelResponseAliases?: Record<string, string[]>,
+	observedVirtualModel?: string,
 ): string | undefined {
 	if (!availableModels || availableModels.length === 0) return undefined;
 	const expectedBase = splitThinkingSuffix(expectedModel).baseModel;
+	if (observedVirtualModel !== undefined) {
+		return observedVirtualModel === expectedBase ? undefined : `model_verification_failed: native Pi child selected virtual model '${observedVirtualModel}', but the launch candidate was '${expectedModel}'. modelResponseAliases does not apply to a virtual-model selection.`;
+	}
 	if (modelResponseAliases && Object.hasOwn(modelResponseAliases, expectedBase)
 		&& modelResponseAliases[expectedBase]?.includes(observedModel)) return undefined;
 	const observedBase = splitThinkingSuffix(observedModel).baseModel;

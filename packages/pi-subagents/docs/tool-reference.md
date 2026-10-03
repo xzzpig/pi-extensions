@@ -75,8 +75,8 @@ The complete plain-JSON inventory is validated before the first launch (maximum 
 | `topic` | `overview \| workflows \| agents \| missions \| observability \| tool-reference \| configuration \| models \| watchdog \| extension-api \| council` | `overview` | Packaged guide topic for `action: "guide"`. |
 | `config` | object/string | - | Agent config for management create/update. |
 | `context` | `fresh \| fork \| profile` | global or per-agent default, else `fresh` | Explicit `fresh` or `fork` overrides every workflow child. `profile` requires the selected agent's declared `defaultContext` and ignores config `defaultSubagentContext`; missing agent defaults fail. When omitted, [`defaultSubagentContext`](configuration.md#defaultsubagentcontext) wins over each agent's `defaultContext`; implicit fork falls back to fresh without a persisted parent session and leaf. Explicit fork is strict. Packaged `worker` defaults to `fresh`; packaged `oracle` and `advisor` default to `fork`. |
-| `model` | string | agent default | Call `{action:"models"}` first and copy an exact `provider/id`; bare ids resolve only if unique, and agent names are not model ids. A suffix such as `provider/id:high` (`off/minimal/low/medium/high/xhigh/max`) overrides agent thinking. The `thinking` field is only for `watchdog.configure`, ignored on dispatch. |
-| `missionId` | string | - | Attach a workflow to an existing project mission instead of creating its default enclosing mission. |
+| `model` | string | agent default | Call `{action:"models"}` first and copy an exact `provider/id`; bare ids resolve only if unique, and agent names are not model ids. A suffix such as `provider/id:high` (`off/minimal/low/medium/high/xhigh/max`) overrides agent thinking. The `thinking` field is only for `watchdog.configure`, ignored on dispatch. On the `claude-code` and `claude-code-writer` adapters the model is Claude Code's own alias or id, and the same suffix becomes its `--effort`, bounded by `subagents.maxThinking` and by an enforced `subagents.modelScope`. |
+| `missionId` | string | - | Attach a workflow, including each fire of `schedule.create`, to an existing project mission. Scheduled attachment uses ordinary lifecycle and retention rules. |
 | `mission` | object/false | auto-create | Override the default enclosing mission with `{ title \| summary, objective?, goal?, budget?, labels? }`. Set exactly one non-empty `title` or `summary`; `objective` and `labels` are optional. `goal` may only be `true`, requires `budget.tokens`, and enables continuation notices. Pass `false` for an intentionally ephemeral workflow with no mission for it or its children and no `state` global. Explicit mission persistence failures are strict. |
 | `handoffPath` | string | - | Aggregate handoff manifest for `action: "worktree.discard"` or lane evidence actions, or optional explicit metadata for `action: "worktree.cleanup"`. |
 | `repo` | string | runtime cwd | Repository path for `action: "worktree.cleanup"`; plan mode only. The configured worktree base filters candidates by their per-project folder under it but never discovers them. |
@@ -246,7 +246,7 @@ Rules:
 
 ### Schedule controls
 
-Use `schedule.create` with `workflow: true` or a script path, not a direct child. `at` accepts a delay like `+10m` or an ISO timestamp with timezone; `every` accepts fixed intervals. `sessionOnly:true` binds restoration/execution to the creating session file; omitted/false is project-wide. Recurring `quiet:true` keeps successful automatic fires visible without a parent turn; failed, stopped or paused runs still wake the parent. One-shot `at` and manual `schedule.run` stay noisy unless that launch passes `quiet:true`. See [missions and schedules](missions.md#schedules) for examples and list/show/history/pause/resume/run/run-due/delete. Calendar selectors (`on`, `timezone`) and schedule mission attachment are deferred. `baseRef` resolves only at worktree allocation and still requires a clean source checkout.
+Use `schedule.create` with `workflow: true` or a script path, not a direct child. `at` accepts a delay like `+10m` or an ISO timestamp with timezone; `every` accepts fixed intervals. `sessionOnly:true` binds restoration/execution to the creating session file; omitted/false is project-wide. Recurring `quiet:true` keeps successful automatic fires visible without a parent turn; failed, stopped or paused runs still wake the parent. One-shot `at` and manual `schedule.run` stay noisy unless that launch passes `quiet:true`. An optional `missionId` attaches an existing mission on every fire and exposes its workflow state, using ordinary mission lifecycle and retention rules; `mission.close` does not pause the schedule. See [missions and schedules](missions.md#schedules) for examples and list/show/history/pause/resume/run/run-due/delete. Calendar selectors (`on`, `timezone`) are deferred. `baseRef` resolves only at worktree allocation and still requires a clean source checkout.
 
 ## Lane merge evidence and cleanup eligibility
 
@@ -319,6 +319,31 @@ subagent({ action: "doctor" })
 - Nested status shows the root/parent path, nested children, session/artifact paths when known, and nested control commands.
 - Inside child-safe fanout mode, bare `status` requires an id when no local foreground run is active, so children cannot enumerate unrelated top-level async runs.
 - Bare `interrupt` still targets only the visible top-level run; interrupting a nested run requires its explicit nested id.
+
+### Command controls
+
+Command controls target direct local native Pi children that explicitly select both `bash` and `subagent_command`, in foreground or async runs. They require the owning parent session, a run `id`, an explicit `index` for multi-child runs, and the exact `toolCallId` for mutations. Nested, external, and custom shell backends do not expose this controller. Custom bash extensions keep their own registered `subagent_command` tool. If a custom bash backend does not provide that tool, an explicitly required `subagent_command` remains available and reports an unsupported-backend error. Native supervisor command controls are unavailable for custom backends.
+
+```ts
+subagent({ action: "command.status", id: "<run-id>", index: 0 })
+subagent({ action: "command.yield", id: "<run-id>", index: 0, toolCallId: "<call-id>" })
+subagent({ action: "command.cancel", id: "<run-id>", index: 0, toolCallId: "<call-id>" })
+subagent({ action: "command.status", id: "<run-id>", index: 0, toolCallId: "<call-id>" })
+```
+
+`command.yield` releases the selected blocking tool call without restarting the process. `command.cancel` aborts only that command through Pi's native bash cancellation; the child receives a tool error and can continue. `cancel_requested` acknowledges the request, while `cancelled` confirms the backend settled. A stale id never targets a later command. Run-scoped `interrupt` remains separate.
+
+Enable command controls by including both `bash` and `subagent_command` in the agent or call's `tools` allowlist. Tool ceilings and `excludeTools` still apply. Without this explicit selection, bash keeps its original tool schema and backend; no command controller, inbox watcher, or command-state writes are added. Inside an enabled child:
+
+```ts
+bash({ command: "npm run dev", yieldTimeMs: 1000 })
+subagent_command({ action: "status", toolCallId: "<returned-call-id>", waitMs: 1000 })
+subagent_command({ action: "cancel", toolCallId: "<returned-call-id>", waitMs: 1000 })
+```
+
+`yieldTimeMs` and `waitMs` range from 0 to 30,000 milliseconds. Omitting `yieldTimeMs` preserves completion-waiting behavior. Yielded handles are not successful exits. Status includes running/yielded/cancel-requested states and completed/failed/cancelled terminal states, a bounded output tail, and Pi's full-output file path when available. Recent terminal history retains 20 commands; active commands remain tracked.
+
+Commands remain owned by the child session. Normal completion with unfinished commands cancels them and fails the run. Interrupt, stop, timeout, and disposal clean up owned commands. Controls do not transfer processes out of the child or create detached services. Native bash `timeout` remains command-scoped; `toolTimeoutMs` covers an open tool call and does not become a yielded process deadline.
 
 ### resume
 

@@ -1277,6 +1277,8 @@ export interface SingleResult {
 	index: number;
 	/** Workflow child key that owns this result when returned from workflow details. */
 	workflowKey?: string;
+	/** Workflow child run id that produced this result; resumed rounds share a session file but not a run id. */
+	runId?: string;
 	agent: string;
 	task: string;
 	/** Human-readable display name for the child's own session (agent + task
@@ -1439,6 +1441,7 @@ export interface AgentCapabilityRow {
 }
 
 export interface Details {
+	commands?: import("../runs/shared/child-commands.ts").ChildCommandSnapshot[];
 	mode: SubagentResultMode | "management";
 	workflowReceiptPath?: string;
 	runId?: string;
@@ -2699,6 +2702,8 @@ export interface ExtensionConfig {
 	fleetKeybindings?: FleetKeybindingsConfig;
 	/** Show the under-editor async runs widget. Defaults to true, including when FleetView is enabled. */
 	asyncWidget?: boolean;
+	/** Start the under-editor async runs widget folded. Defaults to false. */
+	asyncWidgetCollapsed?: boolean;
 	/** Exact provider/model candidates mapped to operator-declared equivalent response IDs. Empty arrays add no accepted IDs. */
 	modelResponseAliases?: Record<string, string[]>;
 	/** Tool description variant registered for the parent-facing subagent tool. Defaults to split metadata. */
@@ -2892,7 +2897,7 @@ export const POLL_INTERVAL_MS = 250;
 export const WIDGET_ANIMATION_INTERVAL_MS = 1000;
 export const MAX_WIDGET_JOBS = 4;
 export const DEFAULT_SUBAGENT_MAX_DEPTH = 2;
-export const SUBAGENT_ACTIONS = ["list", "get", "models", "children.list", "guide", "validate", "create", "update", "delete", "eject", "disable", "enable", "reset", "mission.create", "mission.list", "mission.show", "mission.update", "mission.resolve-decision", "mission.attach-run", "mission.close", "worktree.discard", "worktree.cleanup", "lane.status", "lane.recordMerge", "lane.recordSupersession", "refine", "refine.show", "refine.rollback", "inspector.open", "inspector.command", "inspector.status", "inspector.close", "project.open", "project.status", "project.close", "status", "debug.run", "grant-spawn-budget", "interrupt", "resume", "steer", "stop", "dismiss", "doctor", "watchdog.status", "watchdog.check", "watchdog.configure", "watchdog.recommend-model", "schedule.create", "schedule.list", "schedule.show", "schedule.history", "schedule.pause", "schedule.resume", "schedule.run", "schedule.run-due", "schedule.delete"] as const;
+export const SUBAGENT_ACTIONS = ["list", "get", "models", "children.list", "guide", "validate", "create", "update", "delete", "eject", "disable", "enable", "reset", "mission.create", "mission.list", "mission.show", "mission.update", "mission.resolve-decision", "mission.attach-run", "mission.close", "worktree.discard", "worktree.cleanup", "lane.status", "lane.recordMerge", "lane.recordSupersession", "refine", "refine.show", "refine.rollback", "inspector.open", "inspector.command", "inspector.status", "inspector.close", "project.open", "project.status", "project.close", "status", "debug.run", "grant-spawn-budget", "interrupt", "resume", "steer", "stop", "command.status", "command.yield", "command.cancel", "dismiss", "doctor", "watchdog.status", "watchdog.check", "watchdog.configure", "watchdog.recommend-model", "schedule.create", "schedule.list", "schedule.show", "schedule.history", "schedule.pause", "schedule.resume", "schedule.run", "schedule.run-due", "schedule.delete"] as const;
 
 export const DEFAULT_FORK_PREAMBLE =
 	"You are a delegated subagent running from a fork of the parent session. " +
