@@ -26,7 +26,7 @@ import goalExtension from "../extensions/goal.ts";
 import { createGoal, goalFocusDetails, normalizeGoalRecord } from "../extensions/goal-record.ts";
 import { parseGoalFile, writeActiveGoalFile } from "../extensions/storage/goal-files.ts";
 import { goalLedgerPath } from "../extensions/goal-ledger.ts";
-import { STATE_ENTRY } from "../extensions/goal-format.ts";
+import { detailedSummary, STATE_ENTRY } from "../extensions/goal-format.ts";
 
 interface HarnessOptions {
 	cwd: string;
@@ -201,7 +201,9 @@ test("create_goal accepts token_budget and sisyphus mode", async () => {
 		const parsed = parseGoalFile(path.join(cwd, ".pi", "goals", active[0]!));
 		assert.ok(parsed, "goal must parse");
 		assert.equal(parsed.tokenBudget, 5000, "token_budget must be persisted");
-		assert.match(JSON.stringify(result.content), /Budget: 5000 tokens/);
+		const createdText = result.content?.[0]?.text ?? "";
+		assert.match(createdText, /Budget: 5000 tokens/, "the real lifetime budget remains model-visible");
+		assert.doesNotMatch(createdText, /Time spent:|Tokens used:/, "creation output omits unbudgeted lifetime counters");
 		assert.equal(parsed.sisyphus, true, "sisyphus mode must be persisted");
 	} finally {
 		try { rmSync(cwd, { recursive: true, force: true }); } catch { /* best-effort; failure must not fail the test */ }
@@ -267,6 +269,9 @@ test("get_goal returns the complete stable snapshot", async () => {
 			sessionEntries: [{ type: "custom", customType: "pi-goal-focus", data: goalFocusDetails(goal.id, "created") }],
 		});
 		await start(h);
+		for (const tool of h.tools.values()) {
+			assert.equal((tool as any).outputSchema, undefined, `${tool.name} must not expose telemetry through structuredContent`);
+		}
 		const get = h.tools.get("get_goal")!;
 		// PR E: the concise default omits verbose-only sections; pass verbose to
 		// pin the complete stable snapshot.
@@ -277,6 +282,9 @@ test("get_goal returns the complete stable snapshot", async () => {
 		assert.ok(text.includes("Mode: sisyphus"), "mode present");
 		assert.ok(text.includes("Budget:"), "budget present");
 		assert.ok(text.includes("750 remaining"), "remaining budget present");
+		assert.match(text, /250\/1000 used/, "real lifetime budget spending remains visible");
+		assert.doesNotMatch(text, /Time spent:|Tokens used: 250/, "unbudgeted usage detail is not model-facing");
+		assert.equal(result.details?.goal?.usage?.tokensUsed, 250, "internal tool details remain intact");
 		assert.ok(text.includes("Tasks:"), "task summary present");
 		assert.ok(text.includes("Verification contract:"), "contract present");
 		assert.ok(text.includes(`Path: ${written.activePath}`), "path present");
@@ -341,10 +349,16 @@ test("update_goal(complete) runs the auditor without a verification-summary para
 			runCompletionAuditor: async (args: any) => { auditArgs = args; return approved; },
 		});
 		await start(h);
+		h.core.state.goal!.usage.activeSeconds = 61;
+		h.core.state.goal!.usage.tokensUsed = 321;
+		h.core.persist(h.ctx);
 		appendGoalEvent(h.ctx, { type: "audit_result", goalId: h.core.state.goal!.id, verdict: "disapproved", report: "Missing boundary test " + "x".repeat(1000), at: new Date().toISOString() });
 		const update = h.tools.get("update_goal")!;
-		await (update.execute as any)("update-1", { status: "complete" }, undefined, undefined, h.ctx);
+		const completionResult = await (update.execute as any)("update-1", { status: "complete" }, undefined, undefined, h.ctx);
 		assert.ok(auditArgs, "auditor must run");
+		assert.equal(auditArgs.detailedSummary, detailedSummary(auditArgs.goal), "independent auditor receives the unchanged authoritative summary");
+		assert.match(auditArgs.detailedSummary, /Time spent:|Tokens used: 321/, "auditor input keeps its existing usage format");
+		assert.doesNotMatch(completionResult.content?.[0]?.text ?? "", /Time spent:|Tokens used: 321/, "model-facing completion output uses the minimized summary");
 		assert.equal(auditArgs.verificationSummary, undefined, "no verification-summary paperwork");
 		assert.equal(auditArgs.completionSummary, undefined, "no completion claim required");
 		assert.match(auditArgs.warmContext, /Previous rejection.*Missing boundary test/);

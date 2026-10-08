@@ -91,7 +91,7 @@ Worktrees pointing to the same root share goals, archives, ledger and locks; foc
 
 `hideUnfocusedPrompt: true` suppresses ordinary unfocused reminders to the model independently of `hideUnfocusedBanner`; neither changes focus or bypasses stale-checkpoint checks.
 
-Token usage shown in the dashboard is cumulative across goal turns. The model receives a separate context snapshot when Pi can supply one; unavailable context is never reported as zero. Retained snapshots are bounded and newer snapshots supersede older ones.
+dashboard 显示跨回合累计消费；新生成的主模型内容只保留有效 lifetime spending cap 与执行约束，不提供上下文占用/容量/百分比。已持久化的旧消息与工具返回不处理，宿主压缩独立运行；边界见[主模型新生成内容](main-model-view.md)。
 
 ## Diagnostics and recovery
 

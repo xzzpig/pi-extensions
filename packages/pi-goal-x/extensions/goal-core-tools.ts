@@ -4,9 +4,14 @@ import { taskIndex } from "./goal-task-index.ts";
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { defineTool, type AgentToolResult, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { formatDuration, formatTokenValue, statusLabel, truncateText } from "./goal-core.ts";
+import { statusLabel, truncateText } from "./goal-core.ts";
 import { extractVerificationContract } from "./goal-contract.ts";
-import { detailedSummary, goalDetails, renderGoalResult } from "./goal-format.ts";
+import { goalDetails, renderGoalResult } from "./goal-format.ts";
+import {
+	excludeGoalModelAuditUsage,
+	goalModelDetailedSummary,
+	projectGoalModelLedgerEvents,
+} from "./goal-model-view.ts";
 import { modelBudgetLine } from "./goal-accounting.ts";
 import { buildGoalCreatedReport, buildTaskSummary, findTaskInTree, validateGoalAgentPause, validateGoalBlock } from "./goal-policy.ts";
 import { buildUnfocusedOpenGoalsSummary, otherOpenGoalCount } from "./goal-pool.ts";
@@ -83,7 +88,8 @@ pi.registerTool(defineTool({
   if (params.section && params.section !== "summary") {
    if (!["objective", "tasks", "history"].includes(params.section)) return {content: [{type: "text", text: "Unknown goal section."}], details: goalDetails(view)};
    const history = params.section === "history" ? readGoalLedger(ctx) : undefined;
-   const page = goalDetailPage(view, {section: params.section, task_id: params.task_id, cursor: params.cursor}, history?.events, history?.revision);
+   const events = history ? projectGoalModelLedgerEvents(history.events, view.tokenBudget) : [];
+   const page = goalDetailPage(view, {section: params.section, task_id: params.task_id, cursor: params.cursor}, events);
    return {content: [{type: "text", text: page.text}], details: {...goalDetails(view), ...(page.ok ? {page: {content: page.content, nextCursor: page.nextCursor, totalChars: page.totalChars}} : {})}};
   }
   if (params.cursor || params.task_id) return {content: [{type: "text", text: "Use section=objective, tasks, or history for detail retrieval; task_id requires tasks."}], details: goalDetails(view)};
@@ -97,10 +103,6 @@ pi.registerTool(defineTool({
 				const steps = sisyphusStepProgress(view);
 				if (steps) lines.push(`At step: ${steps.current} of ${steps.total}`);
 			}
-			const usageBits: string[] = [];
-			if (view.usage.activeSeconds > 0) usageBits.push(formatDuration(view.usage.activeSeconds));
-			if (view.usage.tokensUsed > 0) usageBits.push(formatTokenValue(view.usage.tokensUsed));
-			lines.push(`Cumulative goal usage (not context occupancy): ${usageBits.length > 0 ? usageBits.join(" · ") : "none"}`);
 			const budget = modelBudgetLine(view);
 			if (budget) lines.push(`Budget: ${budget}`);
 			if (view.taskList) {
@@ -121,7 +123,7 @@ pi.registerTool(defineTool({
 			lines.push("Lifecycle: call update_goal({status: \"complete\"}) only when every requirement is satisfied — the independent auditor verifies from actual evidence. Call update_goal({status: \"blocked\"}) only after the same blocker recurs on three consecutive goal turns. User commands handle pause/resume/clear/focus.");
 			// E1: goal history (last audit verdict + recent lifecycle events).
 			if (includeHistory) {
-				const history = buildGoalHistoryBlock(view, readGoalLedger(ctx).events);
+				const history = buildGoalHistoryBlock(view, excludeGoalModelAuditUsage(readGoalLedger(ctx).events));
 				if (history) lines.push("", history);
 			}
 			return {
@@ -152,7 +154,7 @@ pi.registerTool(defineTool({
 			lines.push(`Blocker: ${view.pauseReason}`);
 		}
   if (params.include_history) {
-   const history = buildGoalHistoryBlock(view, readGoalLedger(ctx).events);
+   const history = buildGoalHistoryBlock(view, excludeGoalModelAuditUsage(readGoalLedger(ctx).events));
    if (history) lines.push(history);
   }
 		return {
@@ -229,7 +231,7 @@ pi.registerTool(defineTool({
 			? `\n\nThe objective contains ${derived.length} ordered step${derived.length === 1 ? "" : "s"}; propose them as the task tree with set_goal_tasks if the user wants tracked milestones.`
 			: "";
 		return {
-			content: [{ type: "text", text: `${buildGoalCreatedReport({ objective: created?.objective ?? objective, detailedSummary: detailedSummary(created), tokenBudget: created?.tokenBudget })}${bootstrapLine}${otherLine}` }],
+			content: [{ type: "text", text: `${buildGoalCreatedReport({ objective: created?.objective ?? objective, detailedSummary: goalModelDetailedSummary(created), tokenBudget: created?.tokenBudget })}${bootstrapLine}${otherLine}` }],
 			details: goalDetails(created),
 			terminate: true,
 		};

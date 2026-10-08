@@ -1,5 +1,6 @@
 import { type Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import { restoreDisplayUsage } from "./goal-model-display.ts";
 import {
 	formatDuration,
 	formatTokenValue,
@@ -119,10 +120,13 @@ export function renderGoalResult(result: { details?: unknown; content: Array<{ t
 	const first = result.content.find((item) => item.type === "text" && typeof item.text === "string");
 	const firstText = first?.text ?? "";
 	const details = result.details as GoalStateEntry | undefined;
+	const displayText = details && typeof details === "object" && details.goal
+		? restoreDisplayUsage(firstText, details.goal, usageLines(details.goal).join("\n"))
+		: firstText;
 	if (details && typeof details === "object" && "resultDetail" in details && details.resultDetail && options?.expanded) {
 		// E7: the collapsed heading stays byte-identical; the full reason is one
 		// keystroke away in the expanded tool-result detail view.
-		return new Text(`${firstText}\n${details.resultDetail}`, 0, 0);
+		return new Text(`${displayText}\n${details.resultDetail}`, 0, 0);
 	}
 	if (!details || typeof details !== "object" || !("goal" in details)) {
 		return new Text(firstText, 0, 0);
@@ -155,7 +159,7 @@ export function renderGoalResult(result: { details?: unknown; content: Array<{ t
 		|| firstText.startsWith("Goal aborted.")
 		|| firstText.startsWith("Goal confirmed and created.")
 	) {
-		return new Text(firstText, 0, 0);
+		return new Text(displayText, 0, 0);
 	}
 	return new Text(theme.fg("accent", "Goal ") + theme.fg("muted", oneLineSummary(details.goal)), 0, 0);
 }

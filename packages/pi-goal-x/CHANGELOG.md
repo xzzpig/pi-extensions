@@ -2,6 +2,14 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## Unreleased
+
+## [0.9.1] — 2026-10-09 (fork release)
+
+### Changed
+
+- 新生成的主模型内容不再提供上下文占用、累计耗时、无预算累计消费或插件审计花费，保留真实预算和运行约束。旧会话消息/工具返回不处理，允许历史遥测原样重放；UI、账本、内部计费与独立审计输入不变。
+
 ## [0.9.0] — 2026-10-02 (fork release)
 
 ### Changed

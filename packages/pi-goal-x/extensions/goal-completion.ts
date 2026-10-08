@@ -1,5 +1,6 @@
 import { type AgentToolResult, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { GOAL_AUDIT_ENTRY, detailedSummary, formatAuditUsage, goalDetails } from "./goal-format.ts";
+import { goalModelAuditRejectionText, goalModelDetailedSummary } from "./goal-model-view.ts";
 import {
 	buildCompletionReport,
 	buildTaskSummary,
@@ -160,7 +161,7 @@ function commitGoalCompletion(core: GoalCore, ctx: ExtensionContext, opts: {
 	if (completeResult.goal) deleteChangeBaseline(ctx, completeResult.goal.id);
 	core.updateUI(ctx);
 	const text = buildCompletionReport({
-		detailedSummary: detailedSummary(core.state.goal),
+		detailedSummary: goalModelDetailedSummary(core.state.goal),
 		auditorReport: opts.auditorReport,
 		auditSkippedReason: opts.auditSkippedReason,
 		taskSummary: core.state.goal?.taskList ? buildTaskSummary(core.state.goal.taskList) : null,
@@ -571,7 +572,7 @@ if (auditorSettings?.disabled === true) {
 			details: { phase: "rejected", goalId: auditTarget.id, auditor: auditor.model },
 		});
 		return withAuditorUsage({
-			content: [{ type: "text", text: rejectionText }],
+			content: [{ type: "text", text: goalModelAuditRejectionText(rejectionText) }],
 			details: goalDetails(core.state.goal),
 		}, auditor.usage);
 	}

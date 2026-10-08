@@ -1,7 +1,7 @@
 /** Capture a real SDK provider payload before dispatch; no HTTP request is sent. */
 import assert from 'node:assert/strict';
 import * as piAI from '@earendil-works/pi-ai';
-import {stream as streamResponses} from '../../node_modules/@earendil-works/pi-ai/dist/api/openai-responses.js';
+import {stream as streamResponses} from '../../../../node_modules/@earendil-works/pi-ai/dist/api/openai-responses.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -25,7 +25,7 @@ for(const supportsStrictMode of [undefined,false,true]) {
  assert.ok(payload);
  for(const original of responseTools){
   const wire=payload.tools.find(tool=>tool.name===original.name);
-  assert.deepEqual(wire.parameters,JSON.parse(JSON.stringify(original.parameters)));
+  assert.deepEqual(wire.parameters,original.parameters);
   assert.equal(wire.strict,supportsStrictMode === true ? false : undefined);
   assert.equal(Object.hasOwn(wire,'strict'),supportsStrictMode === true);
  }
@@ -61,7 +61,7 @@ try {
   const defs=payload.tools.map(t=>t.function);
   assert.deepEqual(defs.filter(t=>expected.tools.some(x=>x.name===t.name)).map(t=>t.name).sort(),expected.tools.map(t=>t.name).sort());
   for(const tool of expected.tools){const wire=defs.find(t=>t.name===tool.name);assert.equal(wire.description,tool.description);assert.deepEqual(wire.parameters,JSON.parse(JSON.stringify(tool.schema)));}
-  const sdkRoot=fs.realpathSync(path.resolve('node_modules/@earendil-works/pi-coding-agent'));
+  const sdkRoot=fs.realpathSync(new URL('../../../../node_modules/@earendil-works/pi-coding-agent',import.meta.url));
   const actualSystem=payload.messages.filter(m=>m.role==='system'||m.role==='developer').map(m=>m.content).join('\n').replaceAll(sdkRoot,'/sdk').replaceAll(cwd,'/fixture');
   const expectedSystem=expected.baseSystem+expected.extensionSystem;
   if(actualSystem!==expectedSystem){fs.writeFileSync(path.join(work,'actual.txt'),actualSystem);fs.writeFileSync(path.join(work,'expected.txt'),expectedSystem);}

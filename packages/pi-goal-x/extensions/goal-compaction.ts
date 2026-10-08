@@ -1,9 +1,4 @@
-import {
-  formatDuration,
-  formatTokenValue,
-  statusLabel,
-  truncateText,
-} from "./goal-core.ts";
+import { statusLabel, truncateText } from "./goal-core.ts";
 import {
   latestAuditorResultForGoal,
   latestEventsForGoal,
@@ -13,6 +8,8 @@ import {
 } from "./goal-ledger.ts";
 import { type GoalRecord } from "./goal-record.ts";
 import { taskIndex } from "./goal-task-index.ts";
+import { modelBudgetLine } from "./goal-accounting.ts";
+import { excludeGoalModelAuditUsage } from "./goal-model-view.ts";
 
 export function buildGoalCompactSummary(
   goal: GoalRecord,
@@ -22,14 +19,10 @@ export function buildGoalCompactSummary(
   const lines: string[] = [];
   lines.push(`Goal ${goal.id} — ${statusLabel(goal)}`);
   lines.push(`  Objective: ${truncateText(goal.objective, 200)}`);
-  if (goal.usage.tokensUsed > 0) {
-    lines.push(`  Cumulative goal usage (not context occupancy): ${formatTokenValue(goal.usage.tokensUsed)}`);
-  }
-  if (goal.usage.activeSeconds > 0) {
-    lines.push(`  Time: ${formatDuration(goal.usage.activeSeconds)}`);
-  }
+  const budget = modelBudgetLine(goal);
+  if (budget) lines.push(`  ${budget}`);
 
-  const recent = latestEventsForGoal(events, goal.id, 5);
+  const recent = latestEventsForGoal(excludeGoalModelAuditUsage(events), goal.id, 5);
   if (recent.length > 0) {
     lines.push("  Recent events:");
     for (const event of recent) {
@@ -51,9 +44,6 @@ export function buildGoalCompactSummary(
           break;
         case "audit_result":
           lines.push(`    - auditor ${event.verdict}${event.verdict === "disapproved" ? `: ${truncateText(event.report, 80)}` : ""}`);
-          break;
-        case "audit_usage":
-          lines.push(`    - audit cost: $${event.costUsd.toFixed(4)} (${event.tokens.toLocaleString("en-US")} tokens)`);
           break;
         case "goal_completed":
           lines.push("    - completed");
@@ -109,8 +99,8 @@ export function buildCompactionSummary(args: {
   const openGoals = Array.from(goalsById.values()).filter((g) => g.status !== "complete");
   const reconstructed = ledgerState?.state ?? reconstructGoalLedger(ledgerEvents);
   const recentEventsFor = (goalId: string, cap: number): GoalLedgerEvent[] => {
-    if (ledgerState) return (ledgerState.recentEventsByGoal.get(goalId) ?? []).slice(0, cap);
-    return latestEventsForGoal(ledgerEvents, goalId, cap);
+    if (ledgerState) return excludeGoalModelAuditUsage(ledgerState.recentEventsByGoal.get(goalId) ?? []).slice(0, cap);
+    return latestEventsForGoal(excludeGoalModelAuditUsage(ledgerEvents), goalId, cap);
   };
 
   if (focusedGoalId && goalsById.has(focusedGoalId)) {
@@ -173,7 +163,7 @@ export function buildPostCompactionGoalDelta(args: {
     }
   }
   // Bounded recent-event tail.
-  const recent = latestEventsForGoal(ledgerEvents, goal.id, 5);
+  const recent = latestEventsForGoal(excludeGoalModelAuditUsage(ledgerEvents), goal.id, 5);
   if (recent.length > 0) {
     lines.push("Recent events:");
     for (const event of recent) {

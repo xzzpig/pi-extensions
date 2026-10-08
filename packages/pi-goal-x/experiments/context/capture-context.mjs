@@ -13,8 +13,8 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { createCodingToolDefinitions as createCodingTools, createReadOnlyToolDefinitions as createReadOnlyTools } from "../../node_modules/@earendil-works/pi-coding-agent/dist/core/tools/index.js";
-import { buildSystemPrompt } from "../../node_modules/@earendil-works/pi-coding-agent/dist/core/system-prompt.js";
+import { createCodingToolDefinitions as createCodingTools, createReadOnlyToolDefinitions as createReadOnlyTools } from "../../../../node_modules/@earendil-works/pi-coding-agent/dist/core/tools/index.js";
+import { buildSystemPrompt } from "../../../../node_modules/@earendil-works/pi-coding-agent/dist/core/system-prompt.js";
 import { runGoalCompletionAuditor } from "../../extensions/goal-auditor.ts";
 import { runBlockerOracle } from "../../extensions/goal-oracle.ts";
 import piGoalExtension from "../../extensions/goal.ts";
@@ -27,7 +27,7 @@ const ALL_HOST_TOOLS = [...HOST_TOOLS, ...createReadOnlyTools("/tmp/goal-context
 export function sdkSystem(definitions, customPrompt) {
  const raw = buildSystemPrompt({ customPrompt, cwd: "/fixture", skills: [], contextFiles: [], selectedTools: definitions.map(t => t.name), toolSnippets: Object.fromEntries(definitions.map(t => [t.name, t.promptSnippet ?? ""])), promptGuidelines: definitions.flatMap(t => t.promptGuidelines ?? []) });
  // SDK installation location is not extension overhead and differs in CI.
- return raw.replaceAll(fs.realpathSync(new URL("../../node_modules/@earendil-works/pi-coding-agent", import.meta.url)), "/sdk");
+ return raw.replaceAll(fs.realpathSync(new URL("../../../../node_modules/@earendil-works/pi-coding-agent", import.meta.url)), "/sdk");
 }
 const BASE_SYSTEM = sdkSystem(HOST_TOOLS);
 const CAPTURE_CWD = "/tmp/goal-context-capture";

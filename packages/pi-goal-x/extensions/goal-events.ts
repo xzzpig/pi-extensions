@@ -27,11 +27,11 @@ import { checkpointTriggerPrompt } from "./prompts/goal-prompts.ts";
 import { consumeOracleFollowupMarker, hasPendingOracleAdviceForFocusedGoal } from "./goal-oracle.ts";
 import { LiveTailRetention } from "./goal-live-retention.ts";
 import {
-	goalPromptParts,
 	staleContinuationPrompt,
 	unfocusedOpenGoalsPrompt,
 	untrustedObjectiveBlock,
 } from "./prompts/goal-prompts.ts";
+import { goalModelPromptParts } from "./goal-model-view.ts";
 import { hasActiveDraft, rehydrateDraft } from "./goal-drafting.ts";
 import { syncTerminalInputPause } from "./goal-widget.ts";
 import type { GoalCore } from "./goal-state.ts";
@@ -377,7 +377,9 @@ export function registerGoalEvents(core: GoalCore): void {
 	// emitted, so the registration is typed loosely enough to compile against
 	// every supported host. On those hosts the handler is simply never called.
 	type CompactFailedOn = (event: "session_compact_failed", handler: (event: SessionCompactFailed, ctx: ExtensionContext) => unknown) => unknown;
-	(pi.on as unknown as CompactFailedOn)("session_compact_failed", async (event, ctx) => {
+	// SAFETY: pi 0.83–0.87 excludes this Pi 1.0 event from its public union; supported handlers use the declared shape.
+	const registerCompactFailed = pi.on as unknown as CompactFailedOn;
+	registerCompactFailed("session_compact_failed", async (event, ctx) => {
 		// `session_before_compact` already charged progress to the goal, so
 		// flush the buffered transaction and persist first. Otherwise the goal
 		// record and the ledger can disagree about a compaction that never
@@ -422,7 +424,10 @@ export function registerGoalEvents(core: GoalCore): void {
 			if (!core.isActionableContinuationGoal(incomingGoalId)) {
 				try {
 					ctx.abort?.();
-				} catch {}
+				} catch (error) {
+					// Abort is best-effort; the stale-checkpoint response remains the guard.
+					void error;
+				}
 				core.updateUI(ctx);
 				return;
 			}
@@ -509,7 +514,7 @@ export function registerGoalEvents(core: GoalCore): void {
   }
 		const activeGoal = core.state.goal;
 		const settings = loadGoalSettings(ctx.cwd);
-		const { state: policy, counters } = goalPromptParts(activeGoal, settings, ctx.getContextUsage?.());
+		const { state: policy, counters } = goalModelPromptParts(activeGoal, settings);
 		// Rare transitional steering rides in the stable block; per-turn usage and
 		// scheduling counters stay in the volatile block so retention grows slowly.
 		let state = policy;

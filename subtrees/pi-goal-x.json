@@ -9,7 +9,7 @@
   "upstreamCommit": "64c5ace87f3400c0b55ef87f2d2912167f53dbaa",
   "squash": true,
   "lastSyncedAt": "2026-10-02T23:50:15+08:00",
-  "notes": "Forked from the pi-goal-x upstream. Capability contracts live in openspec (spec goal-completion-auditing; the goal-persisted-event-channels spec for the persisted message channels; the S1/S2 auditor seams for pi-openspec-x live in openspec change add-pi-openspec-x, design D10) and in the package-local spec specs/2026-09-12-escape-foreign-ui-prompt-guard for the Escape/ui-prompt guard.",
+  "notes": "Forked from the pi-goal-x upstream. Capability contracts live in openspec (spec goal-completion-auditing; the goal-persisted-event-channels spec for the persisted message channels; the S1/S2 auditor seams for pi-openspec-x live in openspec change add-pi-openspec-x, design D10; and openspec change minimize-goal-model-telemetry / goal-lifecycle for the main-model view boundary) and in the package-local spec specs/2026-09-12-escape-foreign-ui-prompt-guard for the Escape/ui-prompt guard.",
   "knownDebt": [
     {
       "kind": "lint",
@@ -88,6 +88,21 @@
       "path": "packages/pi-goal-x/tests/integration/extension.test.ts",
       "reason": "Diff-alignment artifact: the fork's code move and try-block wrapping indent these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
+    },
+    {
+      "kind": "test",
+      "path": "packages/pi-goal-x/tests/integration/extension.test.ts",
+      "reason": "User-approved verification exception for minimize-goal-model-telemetry: test:all reports the nine settings/profile failures listed in that change's validation.md. This change does not alter the current constant tool surface or nested settings contract; removing the debt requires a separately authorized integration-test reconciliation."
+    },
+    {
+      "kind": "test",
+      "path": "packages/pi-goal-x/experiments/context/run-gate.mjs",
+      "reason": "User-approved verification exception for minimize-goal-model-telemetry: context:gate retains the currently observed 24-fixture baseline/semantic drift, legacy Goal snapshot/tail checks, and existing capture/profile mismatches documented in validation.md. Do not rewrite the baseline or weaken the gate to remove the failure; separately authorized harness/baseline maintenance is required."
+    },
+    {
+      "kind": "test",
+      "path": "packages/pi-goal-x/experiments/context/provider-crosscheck.mjs",
+      "reason": "User-approved verification exception for minimize-goal-model-telemetry: provider-check's current active-regular-no-tasks SDK system prompt comparison differs only in get_goal/create_goal tool-line order; adapter capture succeeds without network dispatch. Remove only after separately authorized order-aware harness maintenance."
     }
   ],
   "reapplyOnSync": [
@@ -99,11 +114,24 @@
     "re-apply the agents/goal-auditor.md deletion if upstream re-adds it",
     "re-apply the goal-completion S1 seam: the completion-audit settings read point calls loadGoalSettingsWithAuditorOverride(ctx.cwd, auditTarget.id) from the fork-only extensions/goal-auditor-override.ts (per-goal auditor override merged over the global settings; no override returns the global settings unchanged). goal-auditor-override.ts's THINKING_LEVELS literal mirrors goal-settings.ts's ThinkingLevel union for read-time validation — re-align it whenever upstream adds a thinking level",
     "regenerate tests/.test-manifest.json with `node scripts/run-unit-tests.mjs --write-manifest` so fork-only test files stay pinned (test:selfcheck fails otherwise)",
-    "keep the fork section on top of the upstream history in CHANGELOG.md and README.md and re-apply the fork wording (every sync conflicts on both)"
+    "keep the fork section on top of the upstream history in CHANGELOG.md and README.md and re-apply the fork wording (every sync conflicts on both)",
+    "在 goal-events.ts active 生成边界调用 goalModelPromptParts，不读宿主上下文用量；context handler 保留既有 display-only 过滤/checkpoint 规范化，不新增旧消息遥测投影",
+    "retain the existing Pi 1.0 session_compact_failed typed registration bridge and explicit best-effort abort catch handling in goal-events.ts",
+    "re-apply the goal-core-tools.ts model-view call sites for create_goal, get_goal summary/history and projected detail pages; keep UI notification and independent auditor detailedSummary inputs authoritative",
+    "保留 goal-detail.ts 接受新历史查询的执行字段视图（unknown rows/asRecord）的最小接缝；新返回先选字段再分页，使用原内容 hash/cursor，不重引入投影版本或 revision-token 缓存",
+    "re-apply goal-compaction.ts filtering of audit_usage and model-view budget boundaries for compaction helpers and the live post-compaction delta",
+    "re-apply goal-completion.ts model-view summaries and rejection-only generated audit-cost stripping while preserving raw display cards, auditor input and internal usage",
+    "保留 goal-format.ts 的 UI-only import/调用：restoreDisplayUsage 位于 fork-only goal-model-display.ts，以该 goal 的精确生成摘要文本 goalModelDetailedSummary(goal) 作为唯一锚点定位真实生成块，并用由记录重建的 header（objective 可多行，禁止按物理行计数）计算插入位置，恢复权威 usageLines；objective、任务标题或 auditor 引用即使内嵌同样 header/摘要文本也不会误选或拆开原文，无匹配则原样返回，模型 content 不变",
+    "在 prompts/goal-prompts.ts 的新 context/state/budget gate/reminder 使用 modelBudgetLine 明确 lifetime spending cap；schedulerSummary 透传 showAutonomousRuns，保持真实执行 gate",
+    "重放上游 goal-compaction、goal-context-usage、goal-core-tools、goal-golden、goal-scheduler 中既有用例的必要断言调整（新查询字段选择、预算/运行约束文案、UI 统计与 details 不变）；fork 新生成行为的独立用例放在 fork-only tests/goal-new-generation.test.ts，不塞进上游用例集",
+    "repoint experiments/context/capture-context.mjs and provider-crosscheck.mjs SDK imports to workspace-root node_modules for pnpm workspace execution; keep provider payload capture pre-dispatch and schema comparison structural",
+    "重放 docs/advanced-usage.md 与 CHANGELOG Unreleased 的新内容边界：新生成主模型内容精简，旧 session/工具返回不处理；保持 dashboard/ledger/auditor 统计，不改版本"
   ],
   "doNotReintroduce": [
     "do not restore the temp-dir PI_SUBAGENT_EXTRA_AGENT_DIRS materialization",
     "do not adopt upstream's auditor checklist rewording, its <approved/> verdict protocol, or its runGoalQuestionnaire flow (the fork keeps baseChecklist/auditor.checklist, structured_output and the fork questionnaire UI)",
-    "do not revert the tsconfig target from ES2023 (ES2022 breaks typecheck)"
+    "do not revert the tsconfig target from ES2023 (ES2022 breaks typecheck)",
+    "do not reintroduce context occupancy/window/percentage, cumulative elapsed time, unbudgeted lifetime token totals, or plugin-added audit cost/token/turn telemetry into the main-model view; keep real budgets, finite run constraints, execution state and recovery guidance",
+    "不重引入已持久化旧 Goal-X 消息/旧工具结果的请求时遥测清洗、JSON 碎片解析或 cursor 链重组；新输出精简不改变 delegated auditor/Oracle 的既有隔离"
   ]
 }

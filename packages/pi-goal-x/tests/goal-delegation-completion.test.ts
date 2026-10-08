@@ -531,7 +531,13 @@ test("usage: rejected and bypassed audits still charge the ledger account", asyn
 				await start(harness);
 				const updateGoal = harness.tools.get("update_goal")!;
 				const result = await (updateGoal.execute as any)(`complete-usage-${verdict}`, { status: "complete" }, new AbortController().signal, undefined, harness.ctx);
-				assert.match(result.content[0]?.text ?? "", /Audit cost: \$0\.0077/, "rejected audits still report their spend");
+				assert.doesNotMatch(result.content[0]?.text ?? "", /Audit cost: \$0\.0077/, "model-facing rejection text omits plugin audit spend");
+				assert.match(result.content[0]?.text ?? "", /Incomplete\./, "the auditor's substantive report remains model-facing");
+				await harness.handlers.get("agent_settled")?.({}, harness.ctx);
+				const rejectionCard = harness.messages
+					.map(message => (message as { content?: unknown }).content)
+					.find(content => typeof content === "string" && content.includes("Goal completion rejected by independent auditor"));
+				assert.match(String(rejectionCard), /Audit cost: \$0\.0077 · 4\.5K \(4,498\) tokens · 1 turn/, "the user-facing audit card retains complete spend");
 			}
 			const usageEvent = ledgerEvents(cwd).find((entry) => entry.type === "audit_usage") as Record<string, unknown> | undefined;
 			assert.ok(usageEvent, `${verdict} must record the child spend`);

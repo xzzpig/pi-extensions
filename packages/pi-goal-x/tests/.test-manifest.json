@@ -47,8 +47,10 @@
     ".tests/goal-ledger.test.ts",
     ".tests/goal-live-retention.test.ts",
     ".tests/goal-modal-escape.test.ts",
+    ".tests/goal-model-view.test.ts",
     ".tests/goal-mutation-boundary.test.ts",
     ".tests/goal-network-recovery.test.ts",
+    ".tests/goal-new-generation.test.ts",
     ".tests/goal-notifications.test.ts",
     ".tests/goal-optimization.test.ts",
     ".tests/goal-oracle.test.ts",
@@ -101,6 +103,7 @@
   "e2eFiles": [
     ".tests/e2e/goal-draft-rejection.test.ts",
     ".tests/e2e/goal-lifecycle-dashboard.test.ts",
+    ".tests/e2e/goal-model-view-sdk.test.ts",
     ".tests/e2e/goal-prompt-cache-sdk.test.ts",
     ".tests/e2e/goal-scheduler-sdk.test.ts",
     ".tests/e2e/goal-session-safety.test.ts",

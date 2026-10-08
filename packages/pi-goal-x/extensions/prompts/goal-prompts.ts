@@ -5,7 +5,7 @@ import { promptSafeObjective } from "../goal-contract.ts";
 import type { GoalRecord, GoalTask } from "../goal-record.ts";
 import { countTaskSubtree } from "../goal-task-count.ts";
 import type { GoalSettings } from "../goal-settings.ts";
-import { budgetLine, budgetRemaining, modelBudgetLine, contextUsageLine, type GoalContextUsage } from "../goal-accounting.ts";
+import { budgetRemaining, modelBudgetLine, contextUsageLine, type GoalContextUsage } from "../goal-accounting.ts";
 import { findTaskInTree } from "../goal-policy.ts";
 
 /** Hard cap for the complete injected prompt fragment (TECH Stage 6). */
@@ -184,7 +184,7 @@ ${capped}
 
 /** Standing wrap-up gate for token-budget-limited goals (status-conditional). */
 export function budgetLimitedGateBlock(goal: GoalRecord): string {
-	const budget = budgetLine(goal);
+	const budget = modelBudgetLine(goal);
 	const remaining = budgetRemaining(goal);
 	const balanceText = typeof remaining === "number"
 		? remaining < 0
@@ -204,7 +204,7 @@ export function pausedGateBlock(): string {
 
 /** One-time wrap-up steering armed when the budget transition fires. */
 export function budgetReachedReminderNote(goal: GoalRecord): string {
-	const budget = budgetLine(goal);
+	const budget = modelBudgetLine(goal);
 	const remaining = budgetRemaining(goal);
 	const balanceText = typeof remaining === "number"
 		? remaining < 0
@@ -244,7 +244,7 @@ export interface GoalStateSnapshotOptions {
  */
 export function goalStateSnapshotPrompt(goal: GoalRecord, settings?: GoalSettings, options?: GoalStateSnapshotOptions): string {
 	const mode = options?.mode ?? "continuation";
-	const budget = budgetLine(goal);
+	const budget = modelBudgetLine(goal);
 	const lines: string[] = [];
 	lines.push(`[PI GOAL STATE goalId=${goal.id}]`);
 	lines.push(`Status: ${statusLabel(goal)}${budget ? `\n${budget}` : ""}`);
@@ -443,7 +443,7 @@ export function objectiveEditedPrompt(goal: GoalRecord): string {
  * provider prompt cache prefix stays stable.
  */
 export function goalContextMessagePrompt(goal: GoalRecord, settings?: GoalSettings): string {
-	const budget = budgetLine(goal);
+	const budget = modelBudgetLine(goal);
 	let prompt = `[PI GOAL CONTEXT goalId=${goal.id}]
 Authoritative goal context, auto-injected when the goal is created and re-sent after every compaction. If an older copy appears above, this one is current.
 Status: ${statusLabel(goal)}${budget ? `\n${budget}` : ""}
@@ -455,7 +455,7 @@ Available work tools for pursuing the active goal include write, read, bash, and
 
 ${lifecyclePolicyBlock(settings?.maxAutonomousRuns !== 0, settings?.strictExecutionContract === true || !!goal.scheduler?.wait)}
 ${sisyphusDisciplineBlock(goal)}
-Scheduling: ${schedulerSummary(goal.scheduler, settings?.maxAutonomousRuns)}
+Scheduling: ${schedulerSummary(goal.scheduler, settings?.maxAutonomousRuns, settings?.showAutonomousRuns)}
 `;
 	const taskBlock = taskListBlock(goal, settings);
 	if (taskBlock) prompt = inject(prompt, taskBlock);

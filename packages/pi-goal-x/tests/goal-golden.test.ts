@@ -264,7 +264,7 @@ test("golden: legacy paused+autoContinue:true record stays paused through markdo
 		assert.equal(parsed.status, "paused", "parsed legacy record must stay paused");
 		assert.equal(parsed.autoContinue, true, "autoContinue flag survives as data");
 	} finally {
-		try { rmSync(cwd, { recursive: true, force: true }); } catch {}
+		try { rmSync(cwd, { recursive: true, force: true }); } catch (error) { void error; }
 	}
 });
 
@@ -365,8 +365,6 @@ test("golden: compaction summary text for a focused active goal", () => {
 			"[FOCUSED GOAL]",
 			"Goal golden_fixture_goal — running",
 			"  Objective: Golden fixture goal objective",
-			"  Cumulative goal usage (not context occupancy): 123K (123,456) tokens",
-			"  Time: 1h00m00s",
 			"",
 			"[INSTRUCTION]",
 			"Continue from the focused goal above, or ask the user to run /goal-focus.",

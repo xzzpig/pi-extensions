@@ -19,7 +19,7 @@ function goal(overrides: Partial<GoalRecord> = {}): GoalRecord {
   };
 }
 
-test("buildGoalCompactSummary includes status, objective, usage, and recent events", () => {
+test("buildGoalCompactSummary includes status, objective, and recent events without unbudgeted usage", () => {
   const g = goal({ id: "g1" });
   const events: GoalLedgerEvent[] = [
     { type: "goal_created", goalId: "g1", objective: "o1", sisyphus: false, autoContinue: true, at: "2024-01-01T00:00:00.000Z" },
@@ -31,7 +31,7 @@ test("buildGoalCompactSummary includes status, objective, usage, and recent even
   assert.match(summary, /g1/);
   assert.match(summary, /running/);
   assert.match(summary, /Build tests/);
-  assert.match(summary, /5K \(5,000\) tokens/);
+  assert.doesNotMatch(summary, /Cumulative goal usage|Time:|5K \(5,000\) tokens/);
   assert.match(summary, /paused: missing tests/);
   assert.match(summary, /resumed: user/);
 });

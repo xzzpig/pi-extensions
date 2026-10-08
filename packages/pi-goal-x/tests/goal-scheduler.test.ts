@@ -556,8 +556,10 @@ test("a goal saved with decision.nextAction loads and strips the field", () => {
 	assert.equal(normalizeGoalScheduler({ ...legacy, decision: { kind: "ready", purpose: "bogus" } })?.phase, "interrupted", "an invalid decision is still rejected");
 });
 
-test("prompt cache: normal and custom runs preserve history while refreshing all live goal state", async t => {
+test("prompt cache: normal and custom runs preserve history while refreshing budgeted state", async t => {
  const h = await fixture(t);
+ h.core.state.goal!.tokenBudget = 100000;
+ h.core.state.goal!.usage.tokensUsed = 20;
  const history: any[] = [{role: "user", content: "Work on the goal", timestamp: 1}];
  const original = structuredClone(history);
  const request = async () => (await h.handlers.context!({messages: history}, h.ctx)).messages;
@@ -567,7 +569,7 @@ test("prompt cache: normal and custom runs preserve history while refreshing all
  assert.deepEqual(first.slice(0, -2), original, "stable policy and volatile counters ride as two request-only tails");
  assert.equal(first.filter((m: any) => m.customType === "pi-goal-live-context").length, 2);
  assert.match(first.at(-2).content, /PI GOAL ACTIVE/);
- assert.match(first.at(-1).content, /Goal snapshot:/);
+ assert.match(first.at(-1).content, /Lifetime token budget:.*20\/100000 used/);
  const wire: any = {messages: [{role: "user", content: "Work on the goal"}, {role: "user", content: [{type: "text", text: first.at(-2).content}]}, {role: "user", content: [{type: "text", text: first.at(-1).content, cache_control: {type: "ephemeral"}}]}]};
  await h.handlers.before_provider_request!({payload: wire}, h.ctx);
  assert.equal(wire.messages[0].content[0].cache_control.type, "ephemeral", "registered provider hook places the breakpoint on history");
@@ -583,7 +585,7 @@ test("prompt cache: normal and custom runs preserve history while refreshing all
  assert.deepEqual(second.slice(3, 5), [toolCall, toolResult], "tool call and result stay adjacent");
  assert.match(second[1].content, /PI GOAL ACTIVE/);
  assert.equal(second.filter((m: any) => m.customType === "pi-goal-live-context").length, 3, "changed counters append one small tail; the policy block is retained, not resent");
- assert.match(second.at(-1).content, /12345 tokens/);
+ assert.match(second.at(-1).content, /12345\/100000 used/);
  assert.doesNotMatch(second.at(-1).content, /Autonomous runs/, "an unlimited allowance reports no runs line");
  // An objective edit changes the stable policy block: retention resets once so no
  // stale objective lingers mid-history, and the fresh pair anchors the new prefix.
@@ -592,7 +594,7 @@ test("prompt cache: normal and custom runs preserve history while refreshing all
  assert.equal(third.filter((m: any) => m.customType === "pi-goal-live-context").length, 2);
  assert.deepEqual(third.slice(0, 3), history);
  assert.match(third.at(-2).content, /Changed objective/);
- assert.match(third.at(-1).content, /Goal snapshot:/);
+ assert.match(third.at(-1).content, /12345\/100000 used/);
  h.core.scheduler.begin(h.ctx); // Custom-message run bypassing preflight.
  for (let i = 0; i < 4; i++) {
   history.push({role: "custom", customType: "pi-goal-event", content: "legacy full prompt", details: {goalId: h.core.state.goal!.id, kind: "checkpoint"}, timestamp: i + 4});
@@ -614,6 +616,8 @@ test("prompt cache: normal and custom runs preserve history while refreshing all
 
 test("prompt cache: interleaved sessions keep per-session transient sets", async t => {
 	const h = await fixture(t);
+	h.core.state.goal!.tokenBudget = 100000;
+	h.core.state.goal!.usage.tokensUsed = 1;
 	const history: any[] = [{role: "user", content: "Work on the goal", timestamp: 1}];
 	const ctxB = {...h.ctx, sessionManager: {...h.ctx.sessionManager, getSessionId: () => "owner-B"}} as unknown as ExtensionContext;
 	const first: any[] = (await h.handlers.context!({messages: history}, h.ctx)).messages;
@@ -643,8 +647,9 @@ test("prompt cache: cleared scheduling instructions vanish from retained history
 });
 
 
-test("prompt cache: model changes and missing identities cannot replay another request's counters", async t => {
+test("prompt cache: model changes and missing identities cannot replay another request's budget counters", async t => {
  const h = await fixture(t);
+ h.core.state.goal!.tokenBudget = 200000;
  const history = [{role: "user", content: "inspect", timestamp: 1}];
  const request = async (ctx: ExtensionContext) => (await h.handlers.context!({messages: history}, ctx)).messages as any[];
  const initial = {...h.ctx, model: {provider: "provider-a", id: "model-a"}} as ExtensionContext;
@@ -653,16 +658,16 @@ test("prompt cache: model changes and missing identities cannot replay another r
  for (const model of [{provider: "provider-a", id: "model-b"}, {provider: "provider-b", id: "model-b"}]) {
   const out = await request({...h.ctx, model} as ExtensionContext);
   assert.equal(out.filter(m => m.customType === "pi-goal-live-context").length, 2);
-  assert.match(out.at(-1).content, /123456 tokens/);
+  assert.match(out.at(-1).content, /123456\/200000 used/);
  }
  const unknown = {...h.ctx, sessionManager: {...h.ctx.sessionManager, getSessionId: () => undefined}} as unknown as ExtensionContext;
  await request(unknown);
  h.core.state.goal!.usage.tokensUsed = 234567;
  const next = await request(unknown);
  assert.equal(next.filter(m => m.customType === "pi-goal-live-context").length, 2);
- assert.ok(!JSON.stringify(next).includes("123456 tokens"));
+ assert.ok(!JSON.stringify(next).includes("123456/200000 used"));
  await h.handlers.session_shutdown!({}, initial);
  const restarted = await request(initial);
  assert.equal(restarted.filter(m => m.customType === "pi-goal-live-context").length, 2);
- assert.match(restarted.at(-1).content, /234567 tokens/);
+ assert.match(restarted.at(-1).content, /234567\/200000 used/);
 });

@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { taskIndex } from "./goal-task-index.ts";
-import type { GoalRecord } from "./goal-record.ts";
-import type { GoalLedgerEvent } from "./goal-ledger.ts";
+import { asRecord, type GoalRecord } from "./goal-record.ts";
 
 export const GOAL_DETAIL_PAGE_CHARS = 4000;
 export type GoalDetailSection = "objective" | "tasks" | "history";
@@ -12,7 +11,7 @@ interface DetailSource { source: string; key: string }
 const detailCache: Array<{inputs: readonly unknown[]; result: DetailSource}> = [];
 let detailCacheChars = 0;
 
-function compiledSource(goal: GoalRecord, query: GoalDetailQuery, events: readonly GoalLedgerEvent[], revision?: object): DetailSource | undefined {
+function compiledSource(goal: GoalRecord, query: GoalDetailQuery, events: readonly unknown[], revision?: unknown): DetailSource | undefined {
  const index = query.section === "tasks" ? taskIndex(goal.taskList?.tasks) : undefined;
  const inputs = [goal.id, query.section, query.task_id, ...(query.section === "objective" ? [goal.objective, goal.verificationContract]
   : query.section === "tasks" ? [index, goal.currentTaskId] : [revision])];
@@ -24,7 +23,7 @@ function compiledSource(goal: GoalRecord, query: GoalDetailQuery, events: readon
  }
  let source: string;
  if (query.section === "objective") source = `${goal.objective}${goal.verificationContract ? `\n\nVerification contract:\n${goal.verificationContract}` : ""}`;
- else if (query.section === "history") source = events.filter(e => "goalId" in e && e.goalId === goal.id).map(e => JSON.stringify(e)).join("\n");
+ else if (query.section === "history") source = events.filter(event => asRecord(event)?.goalId === goal.id).map(event => JSON.stringify(event)).join("\n");
  else {
   const rows = index!.ordered;
   const selected = query.task_id ? rows.find(row => row.task.id === query.task_id) : undefined;
@@ -42,7 +41,7 @@ function compiledSource(goal: GoalRecord, query: GoalDetailQuery, events: readon
 }
 
 /** Stable, lossless detail text. Ledger revisions are opaque generations, never timestamps. */
-export function goalDetailPage(goal: GoalRecord, query: GoalDetailQuery, events: readonly GoalLedgerEvent[] = [], historyRevision?: object): GoalDetailPage {
+export function goalDetailPage(goal: GoalRecord, query: GoalDetailQuery, events: readonly unknown[] = [], historyRevision?: unknown): GoalDetailPage {
  if (query.task_id !== undefined && query.section !== "tasks") return {ok: false, text: "task_id requires section=tasks."};
  const compiled = compiledSource(goal, query, events, historyRevision);
  if (!compiled) return {ok: false, text: `Task "${query.task_id}" not found.`};

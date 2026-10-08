@@ -18,6 +18,8 @@ import assert from "node:assert/strict";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import goalExtension from "../extensions/goal.ts";
 import { createGoal, goalFocusDetails } from "../extensions/goal-record.ts";
+import { appendGoalEvent } from "../extensions/goal-ledger.ts";
+import { LIVE_CONTEXT_TYPE } from "../extensions/goal-live-retention.ts";
 import { writeActiveGoalFile } from "../extensions/storage/goal-files.ts";
 
 interface SentMessage {
@@ -158,19 +160,40 @@ test("session load without any compaction re-supplies only for legacy sessions w
 	}
 });
 
-test("session_compact re-sends the context message with reason=compacted", async () => {
+test("session_compact re-sends authoritative context and the next model request resumes without telemetry", async () => {
 	const f = fixture();
 	try {
+		f.goal.tokenBudget = 100;
+		f.goal.usage = { activeSeconds: 60, tokensUsed: 25 };
+		f.goal.verificationContract = "Run the package tests.";
+		f.goal.currentTaskId = "t1";
+		f.goal.taskList = { tasks: [{ id: "t1", title: "Finish verification", status: "pending", verificationContract: "All tests pass." }], blockCompletion: true, proposedAt: "2026-10-07T00:00:00.000Z" };
+		writeActiveGoalFile({ cwd: f.cwd }, f.goal);
 		const sessionEntries = [
 			{ type: "custom", customType: "pi-goal-focus", data: goalFocusDetails(f.goal.id, "created") },
 		];
 		const { handlers, ctx, contextMessages } = createHarness(f.cwd, sessionEntries);
+		appendGoalEvent(ctx, { type: "audit_usage", goalId: f.goal.id, tokens: 77, inputTokens: 33, outputTokens: 44, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0.1234, turns: 1, at: "2026-10-07T00:00:01.000Z" });
+		appendGoalEvent(ctx, { type: "completion_requested", goalId: f.goal.id, summary: "verify", at: "2026-10-07T00:00:02.000Z" });
+		appendGoalEvent(ctx, { type: "audit_result", goalId: f.goal.id, verdict: "disapproved", report: "The verification evidence is missing.", at: "2026-10-07T00:00:03.000Z" });
 		await handlers.get("session_start")?.({ reason: "start" }, ctx);
 		const before = contextMessages().length;
 		await handlers.get("session_compact")?.({}, ctx);
 		const after = contextMessages();
 		assert.equal(after.length, before + 1, "compaction triggers exactly one re-send");
 		assert.equal(after.at(-1)!.details?.reason, "compacted");
+		assert.match(after.at(-1)!.content, /Token budget|token budget|100/);
+		assert.doesNotMatch(after.at(-1)!.content, /Time spent:|Tokens used: 25|Context snapshot:/);
+
+		const result = await handlers.get("context")?.({ messages: [{ role: "user", content: "compacted summary", timestamp: 1 }] }, ctx);
+		const messages = (result as { messages?: Array<{ role?: string; customType?: string; content?: string }> } | undefined)?.messages ?? [];
+		const liveContext = messages.find(message => message.role === "custom" && message.customType === LIVE_CONTEXT_TYPE && message.content?.startsWith(`[PI GOAL ACTIVE goalId=${f.goal.id}]`));
+		assert.ok(liveContext, "active policy is re-injected after compaction");
+		assert.match(liveContext.content ?? "", /Finish verification/);
+		assert.match(liveContext.content ?? "", /All tests pass/);
+		assert.match(liveContext.content ?? "", /The verification evidence is missing/);
+		assert.match(liveContext.content ?? "", /Lifetime token budget cap: 100 tokens/);
+		assert.doesNotMatch(liveContext.content ?? "", /audit_usage|Audit cost:|Time spent:|Tokens used: 25|Context snapshot:|Goal snapshot:/);
 	} finally {
 		f.cleanup();
 	}
