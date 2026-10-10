@@ -84,6 +84,7 @@ export interface NativeFleetBuildInput {
 }
 
 export interface NativeFleetBuildResult {
+	readFailed?: true;
 	lines: string[];
 	conversationState: string;
 	truncated: boolean;
@@ -370,6 +371,7 @@ export function buildNativeFleetTranscript(
 			truncated: read.truncated,
 			...(read.warning ? { warning: read.warning } : {}),
 			entryCount: 0,
+			...(read.readFailed ? { readFailed: true } : {}),
 		};
 	}
 
