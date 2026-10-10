@@ -272,8 +272,8 @@ async function linuxGetMandatoryDenyPaths(
   abortSignal?: AbortSignal,
   denyCwdFiles: boolean = true,
   protectNonexistentFiles: boolean = true,
+  cwd: string = process.cwd(),
 ): Promise<string[]> {
-  const cwd = process.cwd()
   // Use provided signal or create a fallback controller
   const fallbackController = new AbortController()
   const signal = abortSignal ?? fallbackController.signal
@@ -1030,6 +1030,7 @@ async function generateFilesystemArgs(
         abortSignal,
         writeConfig.denyMandatoryCwdFiles ?? true,
         protectNonexistentFiles,
+        writeConfig.cwd,
       )),
     ]
 

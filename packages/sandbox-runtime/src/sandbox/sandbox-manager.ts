@@ -167,6 +167,7 @@ export interface ISandboxManager {
     binShell?: string,
     customConfig?: Partial<SandboxRuntimeConfig>,
     abortSignal?: AbortSignal,
+    cwd?: string,
   ): Promise<string>
   wrapWithSandboxArgv(
     command: string,
@@ -1274,6 +1275,7 @@ function createManager(legacySingleton: boolean): ISandboxManager {
     binShell?: string,
     customConfig?: Partial<SandboxRuntimeConfig>,
     abortSignal?: AbortSignal,
+    cwd?: string,
   ): Promise<string> {
     const platform = getPlatform()
 
@@ -1337,6 +1339,7 @@ function createManager(legacySingleton: boolean): ISandboxManager {
             config?.filesystem.denyWrite ??
             [],
         ),
+        cwd,
         // getFsWriteConfig() also returns this field, but it is not on the
         // wrapWithSandbox() path — the platform wrappers are handed the
         // writeConfig built here, so the flag was always undefined by the time
@@ -1541,7 +1544,7 @@ function createManager(legacySingleton: boolean): ISandboxManager {
    *   as the spawn `{cwd:}` option (there is no `--cwd` flag), and
    *   the `safe.directory` git-config injection derives from this — so
    *   pass the same value here as to `spawn({cwd})`. Defaults to
-   *   `process.cwd()`. Currently unused on macOS/Linux.
+   *   `process.cwd()`. Also scopes mandatory filesystem protections on macOS/Linux.
    */
   async function wrapWithSandboxArgv(
     command: string,
@@ -1674,6 +1677,7 @@ function createManager(legacySingleton: boolean): ISandboxManager {
       binShell,
       customConfig,
       abortSignal,
+      cwd,
     )
     const shell = binShell ?? '/bin/bash'
     return { argv: [shell, '-c', wrapped], env: process.env }

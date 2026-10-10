@@ -54,7 +54,9 @@
     "forward native network.disabled together with allowedDomains to the fork runtime; preserve the domain-prompt and NODE_USE_ENV_PROXY guards, and suppress SSH proxy injection for both bash and user_bash when network.disabled is true, including hot-switches with a retained SOCKS listener",
     "thread session cwd through profile refresh/reinitialization and the live SandboxService, and apply resolved project trust to both profile and no-profile config loading and shell settings; profile-config.ts mirrors the upstream JSONC reader via stripJsonComments",
     "the upstream network.disabled runtime test asserts the fork's native disabled flag and retained allowlist rather than upstream's omitted-allowedDomains implementation",
-    "keep the extension warning call through fork-ui-warnings.ts so the upstream Linux unenforced-glob notice retains the fork headless/cosmetic-failure guarantee"
+    "keep the extension warning call through fork-ui-warnings.ts so the upstream Linux unenforced-glob notice retains the fork headless/cosmetic-failure guarantee",
+    "keep the sandbox-runtime.ts pattern seam delegating to fork-filesystem-paths.ts so all glob syntax is anchored to baseCwd without being canonicalized as a literal; preserve the runtime call forwarding the execution cwd and abort signal",
+    "the upstream sandbox-runtime test expects denyWrite globs anchored to the process/session cwd rather than raw relative text"
   ],
   "doNotReintroduce": [
     "do not introduce gratuitous upstream-file formatting drift; keep fork behavior tests in fork-only files, with only necessary upstream assertion adaptations for the native network.disabled contract and @xzzpig package identity",
