@@ -1057,6 +1057,125 @@ describe.if(isSupportedPlatform)(
         })
       },
     )
+
+    describe.if(isLinux)('denyMandatoryCwdFiles (Linux only)', () => {
+      // Denying a mandatory filename that does not exist requires bwrap to
+      // mount /dev/null over it, which surfaces the name in readdir as a
+      // zero-length char device for the lifetime of the command. Callers
+      // that need a clean working tree can opt out via
+      // filesystem.denyMandatoryCwdFiles: false. The ripgrep depth scan is
+      // unaffected, so these names are still denied where they exist.
+      const CWD_TEST_DIR = join(tmpdir(), `mandatory-cwd-files-${Date.now()}`)
+      let savedCwd: string
+
+      beforeAll(() => {
+        savedCwd = process.cwd()
+        mkdirSync(join(CWD_TEST_DIR, 'sub'), { recursive: true })
+      })
+
+      // Runs after the outer beforeEach, which chdirs to the shared TEST_DIR.
+      beforeEach(() => {
+        process.chdir(CWD_TEST_DIR)
+      })
+
+      afterAll(() => {
+        process.chdir(savedCwd)
+        rmSync(CWD_TEST_DIR, { recursive: true, force: true })
+      })
+
+      async function wrapInCwd(
+        command: string,
+        denyMandatoryCwdFiles?: boolean,
+      ): Promise<string> {
+        return wrapCommandWithSandboxLinux({
+          command,
+          needsNetworkRestriction: false,
+          readConfig: undefined,
+          writeConfig: {
+            allowOnly: ['.'],
+            denyWithinAllow: [],
+            denyMandatoryCwdFiles,
+          },
+          enableWeakerNestedSandbox: true,
+        })
+      }
+
+      it('masks mandatory filenames in cwd by default', async () => {
+        const cmd = await wrapInCwd('true')
+
+        expect(cmd).toContain(`--ro-bind /dev/null ${CWD_TEST_DIR}/.bashrc`)
+        expect(cmd).toContain(`--ro-bind /dev/null ${CWD_TEST_DIR}/.gitconfig`)
+      })
+
+      it('does not mask mandatory filenames in cwd when opted out', async () => {
+        const cmd = await wrapInCwd('true', false)
+
+        expect(cmd).not.toContain(`--ro-bind /dev/null ${CWD_TEST_DIR}/.bashrc`)
+        expect(cmd).not.toContain(
+          `--ro-bind /dev/null ${CWD_TEST_DIR}/.gitconfig`,
+        )
+      })
+
+      it('still denies a mandatory filename that exists when opted out', async () => {
+        writeFileSync(join(CWD_TEST_DIR, 'sub', '.gitconfig'), 'ORIGINAL')
+
+        const cmd = await wrapInCwd(`echo MODIFIED > sub/.gitconfig`, false)
+        const result = spawnSync(cmd, { shell: true, encoding: 'utf8' })
+
+        expect(result.status).not.toBe(0)
+        expect(
+          readFileSync(join(CWD_TEST_DIR, 'sub', '.gitconfig'), 'utf8'),
+        ).toBe('ORIGINAL')
+      })
+
+      // The cases above call wrapCommandWithSandboxLinux() directly, so they
+      // pass a writeConfig that already carries the flag and cannot catch the
+      // flag being dropped on the way from SandboxRuntimeConfig to the
+      // wrapper. These go through the manager's wrapWithSandbox() instead,
+      // which is the path every real caller takes.
+      describe('via SandboxManager.wrapWithSandbox()', () => {
+        async function wrapViaManager(
+          denyMandatoryCwdFiles?: boolean,
+        ): Promise<string> {
+          const manager = createSandboxManager()
+          await manager.initialize({
+            network: { allowedDomains: [], deniedDomains: [] },
+            filesystem: {
+              denyRead: [],
+              allowWrite: ['.'],
+              denyWrite: [],
+              denyMandatoryCwdFiles,
+            },
+          })
+
+          try {
+            return await manager.wrapWithSandbox('true')
+          } finally {
+            await manager.reset()
+          }
+        }
+
+        it('masks mandatory filenames in cwd by default', async () => {
+          const cmd = await wrapViaManager()
+
+          expect(cmd).toContain(`--ro-bind /dev/null ${CWD_TEST_DIR}/.bashrc`)
+          expect(cmd).toContain(
+            `--ro-bind /dev/null ${CWD_TEST_DIR}/.gitconfig`,
+          )
+        })
+
+        it('does not mask mandatory filenames in cwd when opted out', async () => {
+          const cmd = await wrapViaManager(false)
+
+          expect(cmd).not.toContain(
+            `--ro-bind /dev/null ${CWD_TEST_DIR}/.bashrc`,
+          )
+          expect(cmd).not.toContain(
+            `--ro-bind /dev/null ${CWD_TEST_DIR}/.gitconfig`,
+          )
+        })
+      })
+    })
   },
 )
 
