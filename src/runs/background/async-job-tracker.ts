@@ -6,6 +6,7 @@ import { formatControlNoticeMessage } from "../shared/subagent-control.ts";
 import {
 	type AsyncJobState,
 	type AsyncStartedEvent,
+	type AsyncWidgetLayout,
 	type ControlEvent,
 	type SteeringNotice,
 	type SubagentChildStatusEvent,
@@ -36,13 +37,17 @@ interface AsyncJobTrackerOptions {
 	resultsDir?: string;
 	widgetEnabled?: boolean;
 	widgetCollapsed?: boolean;
+	widgetLayout?: AsyncWidgetLayout;
 	platform?: NodeJS.Platform;
-	onJobTerminal?: () => void;
+	onJobTerminal?: (job: AsyncJobState) => void;
+	onJobCleanup?: (asyncId: string) => void;
 	watch?: typeof fs.watch;
 	kill?: (pid: number, signal?: NodeJS.Signals | 0) => boolean;
 	now?: () => number;
 	/** Resolve native supervisor requests without scanning supervisor mailboxes. */
 	supervisorRequestState?: (event: ControlEvent) => "pending" | "resolved" | "unknown";
+	/** Called whenever the tracked jobs changed enough to re-render the widget. */
+	onJobsChanged?: () => void;
 }
 
 const CONTROL_EVENT_READ_CHUNK_BYTES = 64 * 1024;
@@ -104,8 +109,9 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 		}, run);
 	};
 	const rerenderWidget = (ctx: ExtensionContext, jobs = Array.from(state.asyncJobs.values())) => {
+		options.onJobsChanged?.();
 		if (state.widgetsSuspended) return;
-		renderWidget(ctx, options.widgetEnabled === false ? [] : jobs, options.widgetCollapsed);
+		renderWidget(ctx, options.widgetEnabled === false ? [] : jobs, options.widgetCollapsed, options.widgetLayout);
 		(ctx.ui as { requestRender?: () => void }).requestRender?.();
 	};
 	const rerenderLastWidget = (jobs = Array.from(state.asyncJobs.values())) => {
@@ -125,7 +131,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			if (state.widgetsSuspended) return;
 			const requestRender = (ctx.ui as { requestRender?: () => void }).requestRender;
 			if (requestRender) requestRender.call(ctx.ui);
-			else renderWidget(ctx, Array.from(state.asyncJobs.values()), options.widgetCollapsed);
+			else renderWidget(ctx, Array.from(state.asyncJobs.values()), options.widgetCollapsed, options.widgetLayout);
 		});
 	};
 	const refreshWidget = (ctx: ExtensionContext) => rerenderWidget(ctx);
@@ -220,6 +226,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			const job = state.asyncJobs.get(asyncId);
 			retainNestedLookupRoute(state, job?.nestedRoute, job?.sessionId);
 			state.asyncJobs.delete(asyncId);
+			options.onJobCleanup?.(asyncId);
 			rerenderLastWidget();
 		}, completionRetentionMs);
 		state.cleanupTimers.set(asyncId, timer);
@@ -560,7 +567,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 						} else cancelCleanup(job.asyncId);
 					}
 					// Scan on close too: publication may have raced the payload check.
-					if (!isTerminalJobStatus(previousStatus) || (wasPending && !publication?.pending)) options.onJobTerminal?.();
+					if (!isTerminalJobStatus(previousStatus) || (wasPending && !publication?.pending)) options.onJobTerminal?.(job);
 					rememberFleetJob(state, job);
 					if (!publication?.pending && !nestedRefreshFailed && !hasLiveNestedDescendants(job.nestedChildren) && (previousStatus !== job.status || !state.cleanupTimers.has(job.asyncId))) {
 						scheduleCleanup(job.asyncId);

@@ -770,7 +770,7 @@ export default function() {
 
 	it("background single runs support outputSchema", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		const expectedStructuredOutput = { ok: true, note: "async" };
-		mockPi.onCall({ output: "", structuredOutput: expectedStructuredOutput });
+		mockPi.onCall({ output: "Enough; writing up.", structuredOutput: expectedStructuredOutput });
 		const id = `async-single-schema-${Date.now().toString(36)}`;
 		const outputPath = path.join(tempDir, `${id}.json`);
 
@@ -1976,6 +1976,48 @@ syncBuiltinESMExports();
 		} finally {
 			fs.rmSync(asyncDir, { recursive: true, force: true });
 			fs.rmSync(budget.directory, { recursive: true, force: true });
+		}
+	});
+
+	it("append-step queues only agents whose launcher matches the running runner's, refusing before progress files are written", { skip: !createSubagentExecutor ? "executor not available" : undefined }, async () => {
+		const budget = (runId: string) => createRunFanoutBudget(runId, 8);
+		const progressPath = path.join(tempDir, "progress.md");
+		const agents = [makeAgent("worker"), makeAgent("netA", { launcher: "a" }), makeAgent("netA2", { launcher: "a" }), makeAgent("netB", { launcher: "b" })];
+		const executor = makeAsyncExecutor(agents, { runnerLaunchers: { a: ["true"], b: ["true"] } });
+		const cases: Array<[{ name: string; argv: string[] } | undefined, string, boolean]> = [
+			[{ name: "a", argv: ["true"] }, "netA2", true],
+			[{ name: "a", argv: ["true"] }, "netB", false],
+			[{ name: "a", argv: ["true"] }, "worker", false],
+			[undefined, "netA", false],
+		];
+		for (const [index, [launcher, agent, admitted]] of cases.entries()) {
+			const runId = `append-launcher-${index}-${Date.now().toString(36)}`;
+			const asyncDir = path.join(ASYNC_DIR, runId);
+			const runBudget = budget(runId);
+			try {
+				fs.mkdirSync(asyncDir, { recursive: true });
+				fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({
+					runId, sessionId: "session-123", mode: "chain", state: "running", startedAt: 100, lastUpdate: 200, cwd: tempDir, chainStepCount: 1,
+					...(launcher ? { launcher } : {}), steps: [{ agent: launcher ? "netA" : "worker", status: "running" }],
+				}));
+				writeRunFanoutBudgetDescriptor(asyncDir, runBudget);
+				fs.writeFileSync(progressPath, "existing progress\n");
+				const result = await executor.execute(`append-launcher-${index}`, { action: "append-step", id: runId, step: { parallel: [{ agent, task: "Work", progress: true }] } }, new AbortController().signal, undefined, makeMinimalCtx(tempDir)) as AsyncExecutionResult;
+				if (admitted) {
+					assert.equal(result.isError, undefined, result.content[0]?.text);
+					assert.equal(readPendingChainAppendRequests(asyncDir).length, 1);
+					assert.deepEqual(getRunFanoutBudgetSnapshot(runBudget), { used: 1, limit: 8, remaining: 7 });
+				} else {
+					assert.equal(result.isError, true, `case ${index}`);
+					assert.match(result.content[0]?.text ?? "", /its runner uses (?:launcher '\w+'|no launcher), but the appended agents use/);
+					assert.equal(readPendingChainAppendRequests(asyncDir).length, 0);
+					assert.deepEqual(getRunFanoutBudgetSnapshot(runBudget), { used: 0, limit: 8, remaining: 8 });
+					assert.equal(fs.readFileSync(progressPath, "utf-8"), "existing progress\n");
+				}
+			} finally {
+				fs.rmSync(asyncDir, { recursive: true, force: true });
+				fs.rmSync(runBudget.directory, { recursive: true, force: true });
+			}
 		}
 	});
 
