@@ -10,7 +10,7 @@ import {
   collectSalvagedCommands,
 } from "./command-enumeration";
 import { WordReader } from "./node-text";
-import { getParser } from "./parser";
+import { type BashReparser, getParser, getWarmBashParser } from "./parser";
 import { ShellVariables } from "./shell-variable-expansion";
 import { withSalvagedRoots } from "./unresolved-salvage";
 
@@ -58,7 +58,33 @@ export class BashProgram {
     normalizer: PathNormalizer,
     options?: { workdir?: string },
   ): Promise<BashProgram> {
-    const parser = await getParser();
+    return BashProgram.build(await getParser(), command, normalizer, options);
+  }
+
+  /**
+   * Parse a bash command synchronously over the warmed parser, or answer `null`
+   * in the pre-warm window so the caller can fall back rather than block.
+   *
+   * Builds exactly the program {@link parse} builds; the service's advisory
+   * query uses it so its answer resolves the same slices the gate does (#309).
+   */
+  static parseSync(
+    command: string,
+    normalizer: PathNormalizer,
+    options?: { workdir?: string },
+  ): BashProgram | null {
+    const parser = getWarmBashParser();
+    if (!parser) return null;
+    return BashProgram.build(parser, command, normalizer, options);
+  }
+
+  /** Parse `command` with `parser` and resolve every slice synchronously. */
+  private static build(
+    parser: BashReparser,
+    command: string,
+    normalizer: PathNormalizer,
+    options?: { workdir?: string },
+  ): BashProgram {
     const tree = parser.parse(command);
     if (!tree) return new BashProgram(command, [], [], []);
 
@@ -67,15 +93,15 @@ export class BashProgram {
         const words = new WordReader(
           ShellVariables.scan([tree.rootNode, ...salvaged]),
         );
-        const { externalAccesses, ruleCandidates } = new BashPathResolver(
-          normalizer,
-          words,
-          options?.workdir,
-        ).resolve(tree.rootNode, salvaged);
+        const { externalAccesses, ruleCandidates, argumentSpellings } =
+          new BashPathResolver(normalizer, words, options?.workdir).resolve(
+            tree.rootNode,
+            salvaged,
+          );
         return new BashProgram(
           command,
           [
-            ...collectCommands(tree.rootNode, words),
+            ...collectCommands(tree.rootNode, words, argumentSpellings),
             ...salvaged.flatMap((root) => collectSalvagedCommands(root, words)),
           ],
           externalAccesses,

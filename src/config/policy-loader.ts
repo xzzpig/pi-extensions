@@ -81,8 +81,8 @@ export interface ResolvedPolicyPaths {
 
 /**
  * Abstraction over file I/O for loading permission policy from disk.
- * Implementations handle caching, path resolution, and config-issue
- * accumulation.  `PermissionManager` depends on this interface so that
+ * Implementations handle caching, path resolution, and marking a rejected
+ * scope `invalid`.  `PermissionManager` depends on this interface so that
  * merge + evaluation logic can be tested with an in-memory stub.
  */
 export interface PolicyLoader {
@@ -93,8 +93,6 @@ export interface PolicyLoader {
   getConfiguredMcpServerNames(): readonly string[];
   /** Combined mtime stamp for cache invalidation. */
   getCacheStamp(agentName?: string): string;
-  /** Accumulated config-parse issues across all loads. */
-  getConfigIssues(): string[];
   /** Resolved paths for the /permission-system show command. */
   getResolvedPolicyPaths(): ResolvedPolicyPaths;
 }
@@ -172,7 +170,6 @@ export class FilePolicyLoader implements PolicyLoader {
   private configuredMcpServerNamesCache: FileCacheEntry<
     readonly string[]
   > | null = null;
-  private accumulatedConfigIssues: string[] = [];
 
   constructor(options: PolicyLoaderOptions = {}) {
     this.globalConfigPath =
@@ -194,21 +191,11 @@ export class FilePolicyLoader implements PolicyLoader {
       : null;
   }
 
-  // ── Config issue accumulation ────────────────────────────────────────
-
-  private accumulateConfigIssues(issues: string[]): void {
-    for (const issue of issues) {
-      if (!this.accumulatedConfigIssues.includes(issue)) {
-        this.accumulatedConfigIssues.push(issue);
-      }
-    }
-  }
-
-  getConfigIssues(): string[] {
-    return [...this.accumulatedConfigIssues];
-  }
-
   // ── Scope loaders ────────────────────────────────────────────────────
+  //
+  // A config file's schema errors are not kept here: `ConfigStore` loads the
+  // same files through the same `loadUnifiedConfig` and reports them, so this
+  // loader reads them only to decide whether a scope fails closed (#953).
 
   loadGlobalConfig(): ScopeConfig {
     const stamp = getFileStamp(this.globalConfigPath);
@@ -216,8 +203,7 @@ export class FilePolicyLoader implements PolicyLoader {
       return this.globalConfigCache.value;
     }
 
-    const { config, issues } = loadUnifiedConfig(this.globalConfigPath);
-    this.accumulateConfigIssues(issues);
+    const { config } = loadUnifiedConfig(this.globalConfigPath);
 
     const value: ScopeConfig = {
       permission: config.permission,
@@ -238,7 +224,6 @@ export class FilePolicyLoader implements PolicyLoader {
     }
 
     const { config, issues } = loadUnifiedConfig(this.projectGlobalConfigPath);
-    this.accumulateConfigIssues(issues);
 
     // A present-but-rejected file yields issues (parse error or schema
     // rejection); an absent file yields none. Fail closed on the former.

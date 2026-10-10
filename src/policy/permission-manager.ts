@@ -1,6 +1,9 @@
 import { join } from "node:path";
 import type { ResolvedAccessIntent } from "#src/access-intent/access-intent";
-import { normalizeInput } from "#src/access-intent/input-normalizer";
+import {
+  normalizeBashCommand,
+  normalizeInput,
+} from "#src/access-intent/input-normalizer";
 import { surfaceFamilyOf } from "#src/access-intent/path-surfaces";
 import { classifyToolKind } from "#src/access-intent/tool-kind";
 import {
@@ -59,12 +62,12 @@ type ResolvedPermissions = {
   /**
    * Non-global scopes whose config file failed to load or validate. When
    * non-empty the composed ruleset has been floored allow→ask (#646); the
-   * names also drive the fail-closed notice in {@link getConfigIssues}.
+   * names also drive the fail-closed notice in {@link getPolicyIssues}.
    */
   failClosedScopes: RuleOrigin[];
   /**
    * Top-level permission keys naming Pi MCP tools, relocated onto the `mcp`
-   * surface; they drive the port notice in {@link getConfigIssues}.
+   * surface; they drive the port notice in {@link getPolicyIssues}.
    */
   legacyMcpToolKeys: string[];
 };
@@ -89,7 +92,7 @@ export interface ScopedPermissionManager {
   ): PermissionCheckResult;
   getToolPermission(toolName: string, agentName?: string): PermissionState;
   isToolFullyDenied(toolName: string, agentName?: string): boolean;
-  getConfigIssues(agentName?: string): string[];
+  getPolicyIssues(agentName?: string): string[];
 }
 
 export interface PermissionManagerOptions extends PolicyLoaderOptions {
@@ -155,11 +158,20 @@ export class PermissionManager implements ScopedPermissionManager {
     this.resolvedPermissionsCache.clear();
   }
 
-  getConfigIssues(agentName?: string): string[] {
-    // Trigger a load/resolve to ensure issues are collected.
+  /**
+   * What composing `agentName`'s policy revealed: the fail-closed notice for
+   * a rejected non-global scope and the port notice for relocated MCP tool
+   * keys. Recomputed on every resolve, so a notice disappears once its cause is
+   * fixed.
+   *
+   * A config file's own schema errors are not here: `ConfigStore` loads the
+   * same files through the same `loadUnifiedConfig` and owns reporting them,
+   * so listing them here too showed the operator each one twice (#953).
+   */
+  getPolicyIssues(agentName?: string): string[] {
     const { failClosedScopes, legacyMcpToolKeys } =
       this.resolvePermissions(agentName);
-    const issues = [...this.loader.getConfigIssues()];
+    const issues: string[] = [];
     if (failClosedScopes.length > 0) {
       issues.push(
         `Invalid ${failClosedScopes.join(", ")} configuration detected — ` +
@@ -321,9 +333,11 @@ export class PermissionManager implements ScopedPermissionManager {
    * extension surfaces). Path-bearing surfaces arrive as `"path-values"` via
    * the access-path gate (#502) or service/RPC builder (#503).
    * `"path-values"` → evaluates the precomputed values directly.
+   * `"bash-command"` → evaluates a bash command unit and its spellings as
+   * aliases through `normalizeBashCommand`.
    *
    * The manager stays string-based by design: it consumes `ResolvedAccessIntent`
-   * (`tool | path-values`) and never imports `AccessPath`. This deliberate
+   * (`tool | path-values | bash-command`) and never imports `AccessPath`. This deliberate
    * boundary is formalized in ADR-0002
    * (`docs/decisions/0002-path-values-string-boundary.md`) and guarded by a
    * `no-restricted-imports` lint rule on this file.
@@ -355,6 +369,28 @@ export class PermissionManager implements ScopedPermissionManager {
         fullRules,
         this.flavor,
       );
+    }
+
+    if (intent.kind === "bash-command") {
+      const { surface, values, resultExtras } = normalizeBashCommand(
+        intent.command,
+        intent.spellings,
+      );
+      const { result, matchedValue } = evaluateCheck(
+        surface,
+        values,
+        resultExtras,
+        surface,
+        surface,
+        fullRules,
+        this.flavor,
+      );
+      // `values[0]` is the unit as typed, and the evaluator reports the first
+      // value the winning rule matches, so any other value is a spelling the
+      // typed text did not match.
+      return matchedValue === values[0]
+        ? result
+        : { ...result, matchedSpelling: matchedValue };
     }
 
     // kind === "tool"
@@ -393,6 +429,30 @@ function buildCheckResult(
   fullRules: Ruleset,
   flavor: PathFlavor,
 ): PermissionCheckResult {
+  return evaluateCheck(
+    surface,
+    values,
+    resultExtras,
+    normalizedToolName,
+    toolName,
+    fullRules,
+    flavor,
+  ).result;
+}
+
+/**
+ * {@link buildCheckResult}, plus the candidate value the decision was reported
+ * under — for a caller that knows what that value means on its own surface.
+ */
+function evaluateCheck(
+  surface: string,
+  values: string[],
+  resultExtras: Record<string, unknown>,
+  normalizedToolName: string,
+  toolName: string,
+  fullRules: Ruleset,
+  flavor: PathFlavor,
+): { result: PermissionCheckResult; matchedValue: string } {
   const { rule, value } = evaluateAnyValue(surface, values, fullRules, flavor);
 
   // For MCP, replace the normalizer's fallback target with the actual
@@ -403,16 +463,19 @@ function buildCheckResult(
       : resultExtras;
 
   return {
-    toolName,
-    state: rule.action,
-    reason: rule.reason,
-    matchedPattern:
-      rule.layer === "config" || rule.layer === "session"
-        ? rule.pattern
-        : undefined,
-    source: deriveSource(rule, normalizedToolName),
-    origin: rule.origin,
-    ...extras,
+    result: {
+      toolName,
+      state: rule.action,
+      reason: rule.reason,
+      matchedPattern:
+        rule.layer === "config" || rule.layer === "session"
+          ? rule.pattern
+          : undefined,
+      source: deriveSource(rule, normalizedToolName),
+      origin: rule.origin,
+      ...extras,
+    },
+    matchedValue: value,
   };
 }
 

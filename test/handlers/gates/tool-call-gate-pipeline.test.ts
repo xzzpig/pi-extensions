@@ -366,9 +366,12 @@ describe("ToolCallGatePipeline", () => {
       const bashCall = resolver.resolve.mock.calls.find(
         ([intent]) => intent.surface === "bash",
       );
-      expect(bashCall?.[0]).toMatchObject({
+      expect(bashCall?.[0]).toEqual({
+        kind: "bash-command",
         surface: "bash",
-        input: { command: "npm install" },
+        command: "npm install",
+        spellings: [],
+        agentName: undefined,
       });
       const aliasCall = resolver.resolve.mock.calls.find(
         ([intent]) => intent.surface === "exec_command",

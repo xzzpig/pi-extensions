@@ -38,8 +38,7 @@ Filed that as a separate architecture issue, #510, and rebased #508's plan to la
 
 ### Session summary
 
-## 510 and #511 are closed; the platform/path-semantics seam landed as `PathNormalizer` (`src/path-normalizer.ts`), and the old `cwd-projection.ts` is now the class-based `bash-path-resolver.ts` holding `this.normalizer`
-
+#510 and #511 are closed; the platform/path-semantics seam landed as `PathNormalizer` (`src/path-normalizer.ts`), and the old `cwd-projection.ts` is now the class-based `bash-path-resolver.ts` holding `this.normalizer`.
 Refreshed the #508 plan from its abstract "injected flavor" wording to the concrete API and confirmed the scope reduction the plan anticipated.
 
 ### Observations

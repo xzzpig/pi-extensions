@@ -1,16 +1,41 @@
 ---
 status: accepted
 date: 2026-07-24
-amended: 2026-09-27
+amended: 2026-10-03
 ---
 
 # 0009 — The bash path projection is a completeness contract, not a best-effort heuristic
 
 ## Status
 
-Accepted, as amended 2026-09-30.
+Accepted, as amended 2026-10-03.
 This decision states the contract the bash path projection upholds, and settles how a "the gate missed my path" report is triaged.
 It is the framing for [#645], which closes two gaps the contract names as in-scope; it composes with `docs/decisions/0003-git-bash-posix-path-semantics.md` (win32 token shapes) and `docs/decisions/0007-model-judge-authorizer-chain-adr.md` (the judge that absorbs false positives).
+
+### Amendment, 2026-10-03: the command-pattern surface reads the same `HOME`
+
+A `bash` rule written with a leading `~`, `$HOME`, or `${HOME}` had its prefix expanded on the pattern side only, so it never matched a command unit typed with that prefix ([#981]).
+That was the same inconsistency [#694]'s `$HOME` half closed for path tokens, met this time on the command surface: the package resolved `HOME` for patterns and not for the text it matched them against.
+A command unit whose text opens with one of the three prefixes now carries a home **spelling**, `os.homedir()` followed by the rest of its text verbatim, and the manager matches the typed text and the spelling as aliases of one invocation.
+
+This is not a widening of the resolvable set.
+The spelling comes from `ShellVariables` under the rebinding rule of the 2026-09-30 amendment below: a program that rebinds `HOME` gets no spelling, and its command matches as typed.
+The rest of the text is never path-normalized, because `expandHomePath`'s `join` would collapse `..` across the command's arguments and spell `~/evil /x/../../safe` as `<home>/safe`.
+Only the unit's leading prefix is spelled, which is what the pattern side expands; an argument keeps its typed text on this surface.
+The mechanism, a gate-emitted intent carrying a unit's spellings, is the seam [#917] proposed for relative and absolute argument spellings.
+
+The spelling inherits the rebinding scan's residuals, and on this surface a residual can now resolve an `allow`.
+A program that rebinds `HOME` in a way the scan cannot see keeps the startup-home spelling, so a home-anchored allow matches a command that runs from the rebound home.
+Measured with a real parse, manager, and resolver: under `{"*": "ask", "n=*": "allow", "read *": "allow", "~/bin/tool": "allow"}`, the program `n=HOME; read $n <<< /tmp/x; ~/bin/tool` resolves `allow`, where it asked before.
+The residual is accepted.
+Every escaping form is written to evade a rule rather than to get work done.
+Under a non-`allow` catch-all, explicit rules must also allow each rebinding statement, since that statement is a unit of its own.
+An agent that would compose commands this way belongs in a sandbox, not behind a command-pattern rule.
+A guard was considered and declined.
+One listing the rebinding forms keeps leaking, as the two forms below show; one granting the spelling only to programs built from plain syntax adds classification machinery to a contract that declines program-flow tracking.
+
+Probing the scan for this amendment found two forms the residual list did not name, both verified to rebind `HOME` in `/bin/bash`, and both escaping the path projection as well: an arithmetic assignment through a run-time-built name (`n=HOME; (( $n = 5 ))`), and an arithmetic operand of `[[ … -eq … ]]` (`[[ 1 -eq HOME=7 ]]`).
+They join the residual list below on the same terms.
 
 ### Amendment, 2026-09-30 — a `HOME` or `PWD` the program rebinds is not resolved
 
@@ -24,7 +49,7 @@ A leading `~` follows a rebound `HOME` too: bash 3.2, which Pi runs as `/bin/bas
 Unrebound, a `~` leads with whatever the inherited `HOME` does, which `os.homedir()` returns verbatim.
 
 The scan holds which names are rebound, never their values: tracking what a program assigns is the same-program dataflow this ADR declines below.
-A name the program builds at run time is a residual: `declare "$n=/etc"`, `read "$n"`, `declare -n r=$n`, and a name-binding or code-running builtin reached through a wrapper or keyword (`builtin eval`, `command export`, `time eval x`).
+A name the program builds at run time is a residual: `declare "$n=/etc"`, `read "$n"`, `declare -n r=$n`, a name-binding or code-running builtin reached through a wrapper or keyword (`builtin eval`, `command export`, `time eval x`), and an assignment made by arithmetic evaluation, through a built name (`(( $n = 5 ))`) or inside `[[ … ]]`'s arithmetic operands (`[[ 1 -eq HOME=7 ]]`).
 So are the spellings that bind a name outside an argument the scan reads as one: an attached `printf -vHOME`, an ANSI-C `read $'HOME'`, `coproc HOME { …; }`, and `exec {HOME}>f`.
 In the other direction, `printf -- -v HOME` counts as a rebinding although `--` ends its options, which only drops that program's `~` projection.
 Measured over 10,226 distinct commands of a real review log, none changes its projection, command units, or effects; the shapes above that do change are absent from that log.
@@ -431,6 +456,8 @@ Cost is ~0.04 ms p95 per command, ~19% of the already-paid tree-sitter parse.
 [#645]: https://github.com/gotgenes/pi-packages/issues/645
 [#694]: https://github.com/gotgenes/pi-packages/issues/694
 [#995]: https://github.com/gotgenes/pi-packages/issues/995
+[#981]: https://github.com/gotgenes/pi-packages/issues/981
+[#917]: https://github.com/gotgenes/pi-packages/pull/917
 [#306]: https://github.com/gotgenes/pi-packages/issues/306
 [#741]: https://github.com/gotgenes/pi-packages/issues/741
 [#742]: https://github.com/gotgenes/pi-packages/issues/742

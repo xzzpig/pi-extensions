@@ -81,7 +81,7 @@ describe("isUnconditionalDeny", () => {
     expect(isUnconditionalDeny(descriptor)).toBe(false);
   });
 
-  it("rejects a session-sourced deny, which the runner's fast path allows", () => {
+  it("accepts a session-sourced deny, which the runner blocks", () => {
     const descriptor = makeDescriptor({
       preCheck: makeCheckResult({
         state: "deny",
@@ -90,7 +90,7 @@ describe("isUnconditionalDeny", () => {
       }),
     });
 
-    expect(isUnconditionalDeny(descriptor)).toBe(false);
+    expect(isUnconditionalDeny(descriptor)).toBe(true);
   });
 
   it("rejects a descriptor that resolves nothing of its own", () => {

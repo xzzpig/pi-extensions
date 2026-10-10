@@ -1,5 +1,6 @@
-import { parseBashCommandsSync } from "#src/access-intent/bash/sync-commands";
+import { BashProgram } from "#src/access-intent/bash/program";
 import { resolveBashCommandCheck } from "#src/handlers/gates/bash-command";
+import type { PathNormalizer } from "#src/path/path-normalizer";
 import type { ScopedPermissionResolver } from "#src/policy/permission-resolver";
 import type { PermissionCheckResult } from "#src/types";
 
@@ -14,7 +15,11 @@ import type { PermissionCheckResult } from "#src/types";
  * sentinels — `<unparseable-bash-command>` (#452) and `<unparsed-bash-subtree>`
  * (#840) — at parity with the gate.
  *
- * In the pre-warm window (`parseBashCommandsSync` returns `null`) it falls back
+ * The command is parsed by `BashProgram.parseSync` over the session's
+ * `normalizer`, the same builder the gate's program comes from, so every slice
+ * the gate resolves a unit with is resolved here too.
+ *
+ * In the pre-warm window (`parseSync` returns `null`) it falls back
  * to the pre-#309 whole-string match, so the advisory answer is never *weaker*
  * than before — only strengthened once warm.
  *
@@ -25,9 +30,10 @@ export function resolveBashAdvisoryCheck(
   command: string,
   agentName: string | undefined,
   resolver: ScopedPermissionResolver,
+  normalizer: PathNormalizer,
 ): PermissionCheckResult {
-  const commands = parseBashCommandsSync(command);
-  if (commands === null) {
+  const program = BashProgram.parseSync(command, normalizer);
+  if (program === null) {
     return resolver.resolve({
       kind: "tool",
       surface: "bash",
@@ -35,5 +41,10 @@ export function resolveBashAdvisoryCheck(
       agentName,
     });
   }
-  return resolveBashCommandCheck(command, commands, agentName, resolver);
+  return resolveBashCommandCheck(
+    command,
+    program.commands(),
+    agentName,
+    resolver,
+  );
 }

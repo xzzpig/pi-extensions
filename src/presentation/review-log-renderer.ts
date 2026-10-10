@@ -25,6 +25,7 @@ export function renderReviewLogFacts(
   return {
     surface: request.surface,
     ...present("matchedPattern", request.matchedPattern),
+    ...present("matchedSpelling", request.matchedSpelling),
     ...present("executedUnit", request.executedUnit),
     ...present("commandContext", request.commandContext),
     ...present("invokedToolName", request.invokedToolName),

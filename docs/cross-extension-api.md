@@ -428,16 +428,17 @@ Forwarding is orthogonal to origin: a forwarded subagent prompt keeps its origin
 The facts every render of the ask shows, that no renderer's budget may elide.
 Nested rather than flattened so the event and the prompt payload share one shape: a fact added here reaches the bus without a second hand-maintained declaration.
 
-| Field             | Type                         | Description                                                                                      |
-| ----------------- | ---------------------------- | ------------------------------------------------------------------------------------------------ |
-| `requester`       | `PromptRequester`            | Who is asking, and whether the ask arrived from a subagent                                       |
-| `surface`         | `string`                     | The **gate** surface the rule fired on — `"external_directory"`, `"path"`, `"bash"`, a tool name |
-| `toolName`        | `string \| null`             | The gated tool name; `null` when the ask is not tool-shaped                                      |
-| `invokedToolName` | `string \| null`             | The invoked name when a shell alias re-exposes bash under another name                           |
-| `value`           | `string`                     | The decision-relevant value: the command, path, MCP target, or skill name                        |
-| `matchedPattern`  | `string \| null`             | The matched rule, including a sentinel such as `<indirection-bash-wrapper>`                      |
-| `commandContext`  | `BashCommandContext \| null` | Where the offending bash unit runs, when it came from a substitution or subshell                 |
-| `executedUnit`    | `string \| null`             | For bash, the unit that will actually run, including inside an unstrippable wrapper              |
+| Field             | Type                         | Description                                                                                        |
+| ----------------- | ---------------------------- | -------------------------------------------------------------------------------------------------- |
+| `requester`       | `PromptRequester`            | Who is asking, and whether the ask arrived from a subagent                                         |
+| `surface`         | `string`                     | The **gate** surface the rule fired on — `"external_directory"`, `"path"`, `"bash"`, a tool name   |
+| `toolName`        | `string \| null`             | The gated tool name; `null` when the ask is not tool-shaped                                        |
+| `invokedToolName` | `string \| null`             | The invoked name when a shell alias re-exposes bash under another name                             |
+| `value`           | `string`                     | The decision-relevant value: the command, path, MCP target, or skill name                          |
+| `matchedPattern`  | `string \| null`             | The matched rule, including a sentinel such as `<indirection-bash-wrapper>`                        |
+| `matchedSpelling` | `string \| null`             | For bash, the spelling of the command the rule matched, when it did not match the command as typed |
+| `commandContext`  | `BashCommandContext \| null` | Where the offending bash unit runs, when it came from a substitution or subshell                   |
+| `executedUnit`    | `string \| null`             | For bash, the unit that will actually run, including inside an unstrippable wrapper                |
 
 `PromptRequester` carries `agentName` (`string | null`), `forwarded` (`boolean`), and `sessionId` (`string | null`, the requesting session for a forwarded ask).
 

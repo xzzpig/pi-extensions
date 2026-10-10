@@ -7,6 +7,8 @@ import {
 import { normalizePathPolicyLiteral } from "#src/access-intent/path-normalization";
 import type { PathNormalizer } from "#src/path/path-normalizer";
 import { isSafeSystemPath } from "#src/path/safe-system-paths";
+import type { ArgumentSpeller } from "./command-enumeration";
+import { timedSubshellOf } from "./nested-execution";
 import {
   ARG_NODE_TYPES,
   SKIP_SUBTREE_TYPES,
@@ -26,6 +28,7 @@ import {
   collectRedirectTokens,
   extractCommandName,
   type PathToken,
+  type SourceSpan,
   type TokenRole,
 } from "./token-collection";
 
@@ -46,15 +49,13 @@ type EffectiveBase =
   | { readonly kind: "unknown" };
 
 /**
- * A path-candidate token paired with the effective working directory projected
- * onto the point in the command stream where it appears, the effect its
- * position proved, and the role its collector gave it.
+ * A collected {@link PathToken} — its text, the effect its position proved,
+ * the role its collector gave it, and its source span when it is a whole
+ * argument — paired with the effective working directory projected onto the
+ * point in the command stream where it appears.
  */
-interface PathCandidate {
-  readonly token: string;
+interface PathCandidate extends PathToken {
   readonly base: EffectiveBase;
-  readonly effect: TokenEffect;
-  readonly role: TokenRole;
 }
 
 /** A promoted bare token and its resolved path, before an effect is attached. */
@@ -89,6 +90,12 @@ export interface ResolvedBashPaths {
   readonly externalAccesses: readonly BashExternalPath[];
   /** Every path-rule token paired with its cd-aware policy values (#393). */
   readonly ruleCandidates: readonly BashPathRuleCandidate[];
+  /**
+   * The absolute spelling of each primary-tree argument node a rule candidate
+   * resolved to an absolute path, for the command enumerator to spell a unit
+   * with (#910). See {@link BashPathResolver.resolve} for what is left out.
+   */
+  readonly argumentSpellings: ArgumentSpeller;
 }
 
 // ── Walk-time constants ──────────────────────────────────────────────────────
@@ -155,6 +162,11 @@ export class BashPathResolver {
    * A token spelled from a `HOME` the program rebinds leaves both slices before
    * projection: path normalization would otherwise expand its `~`/`$HOME` prefix
    * to the startup home, naming a directory the shell never touches.
+   *
+   * The argument spellings come from the same projection as the rule
+   * candidates, keyed by the source span of a whole-argument token. A salvaged
+   * fragment's tokens carry no span, because its indices are its own re-parse's
+   * and would collide with the primary tree's.
    */
   resolve(
     rootNode: TSNode,
@@ -166,16 +178,21 @@ export class BashPathResolver {
         : this.deriveBaseFromCdTarget(CWD_BASE, this.workdir);
     const collected = this.collectPathCandidates(rootNode, initialBase);
     for (const salvaged of salvagedRoots) {
-      this.walkForCandidates(salvaged, UNKNOWN_BASE, collected);
+      const fragment: PathCandidate[] = [];
+      this.walkForCandidates(salvaged, UNKNOWN_BASE, fragment);
+      collected.push(...fragment.map(withoutSpan));
     }
     const candidates = collected.filter(
       ({ token }) => !this.words.spellsReboundHome(token),
     );
+    const { ruleCandidates, argumentSpellings } =
+      this.projectRuleCandidates(candidates);
     return {
       externalAccesses: this.withWorkdirExternal(
         this.projectExternalPaths(candidates),
       ),
-      ruleCandidates: this.projectRuleCandidates(candidates),
+      ruleCandidates,
+      argumentSpellings,
     };
   }
 
@@ -222,6 +239,8 @@ export class BashPathResolver {
    * does not update the running directory; subshell and brace-group interiors
    * inherit the enclosing base without folding their own `cd`s (a conservative
    * first tier).
+   * A subshell timed by `time`, which the grammar reads as the argument of a
+   * command named `time`, is walked as a bare subshell is.
    */
   private collectPathCandidates(
     rootNode: TSNode,
@@ -247,9 +266,14 @@ export class BashPathResolver {
       case "list":
       case "redirected_statement":
         return this.walkCurrentShellSequence(node, base, out);
-      case "command":
+      case "command": {
+        const timed = timedSubshellOf(node);
+        if (timed !== null) {
+          return this.walkTimedSubshell(node, timed, base, out);
+        }
         tagTokens(collectCommandTokens(node, this.words), base, out);
         return this.foldCd(node, base);
+      }
       case "pipeline":
         // tree-sitter-bash mis-groups a redirect-bearing `&&`/`;` list as the
         // first stage of a pipeline (`cd a && pnpm x 2>&1 | tail` parses as
@@ -276,6 +300,30 @@ export class BashPathResolver {
         tagTokens(collectPathCandidateTokens(node, this.words), base, out);
         return base;
     }
+  }
+
+  /**
+   * Walk `time ( … )`, returning the base in force after it, which is `base`.
+   *
+   * The subshell is walked as a subshell, so its `cd`s fold for the commands
+   * after them inside it and reset on exit. Every other named child but the
+   * `time` name, such as a redirect the command hosts (`2>err time ( … )`),
+   * is collected against `base`.
+   */
+  private walkTimedSubshell(
+    command: TSNode,
+    subshell: TSNode,
+    base: EffectiveBase,
+    out: PathCandidate[],
+  ): EffectiveBase {
+    for (let i = 0; i < command.childCount; i++) {
+      const child = command.child(i);
+      if (!child?.isNamed || child.type === "command_name") continue;
+      if (child.startIndex === subshell.startIndex) continue;
+      tagTokens(collectPathCandidateTokens(child, this.words), base, out);
+    }
+    this.walkForCandidates(subshell, base, out);
+    return base;
   }
 
   /**
@@ -575,13 +623,15 @@ export class BashPathResolver {
    * A token after a non-literal `cd` keeps only its literal value so no
    * spurious absolute rule can match (#393).
    */
-  private projectRuleCandidates(
-    candidates: readonly PathCandidate[],
-  ): BashPathRuleCandidate[] {
+  private projectRuleCandidates(candidates: readonly PathCandidate[]): {
+    ruleCandidates: BashPathRuleCandidate[];
+    argumentSpellings: ArgumentSpeller;
+  } {
     const seen = new Map<string, number>();
     const result: BashPathRuleCandidate[] = [];
+    const spellings = new Map<string, string>();
 
-    for (const { token, base, effect, role } of candidates) {
+    for (const { token, base, effect, role, span } of candidates) {
       const shaped = admittedByRole(role)
         ? token
         : classifyTokenAsRuleCandidate(token, this.normalizer.flavor);
@@ -593,6 +643,11 @@ export class BashPathResolver {
 
       const matchValues = probed.path.matchValues();
       if (matchValues.length === 0) continue;
+
+      // Recorded per occurrence, ahead of the fold below, so `cp a/x a/x`
+      // spells both words rather than the first.
+      const spelling = span && this.absoluteSpellingOf(token, probed.path);
+      if (spelling) spellings.set(spanKey(span), spelling);
 
       const key = matchValues.join("\0");
       const index = seen.get(key);
@@ -611,7 +666,35 @@ export class BashPathResolver {
       result.push({ ...probed, effect });
     }
 
-    return result;
+    return {
+      ruleCandidates: result,
+      argumentSpellings: {
+        absoluteSpellingOf: (node) =>
+          spellings.get(
+            spanKey({ start: node.startIndex, end: node.endIndex }),
+          ),
+      },
+    };
+  }
+
+  /**
+   * The absolute spelling of a whole-argument token, or `undefined` when giving
+   * one would invent rather than resolve.
+   *
+   * Absolute only: a token after a non-literal `cd` resolves to its literal,
+   * which is not absolute, so the check that keeps the spelling absolute is
+   * also what keeps that token unspelled (#393). A glob is never spelled,
+   * quoted or not — what it names is decided by expanding it (#822) — and a
+   * token already spelled as it resolves needs no second spelling.
+   */
+  private absoluteSpellingOf(
+    token: string,
+    path: AccessPath,
+  ): string | undefined {
+    if (GLOB_CHARACTERS.test(token)) return undefined;
+    const spelling = path.value();
+    if (!spelling || spelling === token) return undefined;
+    return this.normalizer.isAbsolute(spelling) ? spelling : undefined;
   }
 
   /**
@@ -683,6 +766,24 @@ export class BashPathResolver {
 
 // ── Pure AST/string helpers ──────────────────────────────────────────────────
 
+/** A character that makes the shell expand a word against the filesystem. */
+const GLOB_CHARACTERS = /[*?[]/;
+
+/** The key an argument spelling is filed under: its node's source span. */
+function spanKey({ start, end }: SourceSpan): string {
+  return `${start}:${end}`;
+}
+
+/** A salvaged candidate, which carries no span in the primary tree's coordinates. */
+function withoutSpan({
+  token,
+  effect,
+  role,
+  base,
+}: PathCandidate): PathCandidate {
+  return { token, effect, role, base };
+}
+
 /**
  * True when the statement at `index` is immediately followed by the background
  * operator (`&`) — distinct from the `&&` / `||` / `;` current-shell
@@ -699,8 +800,8 @@ function tagTokens(
   base: EffectiveBase,
   out: PathCandidate[],
 ): void {
-  for (const { token, effect, role } of tokens) {
-    out.push({ token, base, effect, role });
+  for (const token of tokens) {
+    out.push({ ...token, base });
   }
 }
 

@@ -1,5 +1,6 @@
 import type { BashCommandContext } from "#src/types";
 import type { TSNode } from "./parser";
+import { REDIRECT_NODE_TYPES } from "./redirect-analysis";
 
 /**
  * AST node types whose interior commands really execute when the shell runs the
@@ -46,6 +47,50 @@ export const EXECUTION_HOST_TYPES: ReadonlySet<string> = new Set([
   "herestring_redirect",
   "heredoc_body",
 ]);
+
+/**
+ * The word nodes of a `command` node, in source order: every named child except
+ * a prefix assignment and a hosted redirect.
+ *
+ * Shared so every consumer that reads a command's words, whether as words (the
+ * command enumerator's unit text) or as nodes (the log's command masker, which
+ * offsets a re-parse by the payload node's `startIndex`), walks the identical
+ * filtered list. Two walks over the same children with the same filter,
+ * written twice, is how the two come to disagree about which word is at which
+ * index.
+ */
+export function commandWordNodes(node: TSNode): TSNode[] {
+  const nodes: TSNode[] = [];
+  for (let i = 0; i < node.childCount; i++) {
+    const child = node.child(i);
+    if (!child?.isNamed) continue;
+    if (child.type === "variable_assignment") continue;
+    if (REDIRECT_NODE_TYPES.has(child.type)) continue;
+    nodes.push(child);
+  }
+  return nodes;
+}
+
+/**
+ * The subshell a `command` node times, or `null` when it is not `time ( … )`.
+ *
+ * `tree-sitter-bash` has no `time` keyword, so `time (rm x)` parses as a
+ * command named `time` whose only argument is a `subshell`. Bash runs that
+ * subshell's commands as surely as a bare `( … )`'s, so both bash surfaces read
+ * the shape through this one recognizer rather than each re-deciding it.
+ *
+ * The words must be exactly a `time` spelled literally (a quoted `"time"` is
+ * not the keyword) and one subshell. Anything between them (`time -p ( … )`,
+ * whose `-p` the grammar cannot place) leaves the shape unrecognized, so it
+ * keeps whatever floor the enumerator gives it.
+ */
+export function timedSubshellOf(command: TSNode): TSNode | null {
+  const words = commandWordNodes(command);
+  if (words.length !== 2) return null;
+  const [name, argument] = words;
+  if (argument.type !== "subshell") return null;
+  return name.type === "command_name" && name.text === "time" ? argument : null;
+}
 
 /**
  * Visit every execution context `node` *is or contains*, in source order.

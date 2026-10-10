@@ -48,12 +48,16 @@ export type BashCommandContext =
  * core, so it is read-only for any argument feed and the floor's reason (an
  * unknown direction behind the wrapper) does not hold.
  *
+ * `"execution-modifier"` — every wrapper layer (`time`, `timeout`, `nice`,
+ * `stdbuf`, `setsid`) changes only how the visible inner command runs, so the
+ * unit is decided by that command's own rule whatever it does (#963).
+ *
  * A named reason rather than a boolean, so the review log states *why* a
  * wrapper was let through, and so a later source (a chain verdict, a user
  * declaration) is an added member rather than a second flag. ADR 0013 §11
- * keeps v1 at the audited core alone.
+ * keeps both reasons package-audited; user declarations do not lift the floor.
  */
-export type FloorExemption = "core-reader";
+export type FloorExemption = "core-reader" | "execution-modifier";
 
 export interface PermissionCheckResult {
   toolName: string;
@@ -76,15 +80,45 @@ export interface PermissionCheckResult {
    * The command the winning bash unit actually runs, when it is a wrapper whose
    * inner command differs from the unit text (#713). Display-only: the gate
    * decides on `command`, and on `executedUnit`'s rules only when
-   * {@link floorExemption} says the inner command is a proven pure reader.
+   * {@link floorExemption} says the wrapper's floor has no reason to hold.
    */
   executedUnit?: string;
   /**
+   * The spelling of the bash unit the winning rule matched, when the rule did
+   * not also match the unit as typed — the absolute spelling of a relative
+   * path argument, say (#910). Display-only: absent whenever the typed text
+   * decided, and dropped by a floor that replaces {@link matchedPattern}.
+   */
+  matchedSpelling?: string;
+  /**
    * Set when the winning bash unit is a wrapper the floor no longer covers,
-   * naming why (#803). Recorded in the review log so an allow the floor would
+   * naming why (#803, #963). Recorded in the review log so an allow the floor would
    * once have prompted for is auditable to the reason that let it through.
    */
   floorExemption?: FloorExemption;
+  /**
+   * The synthetic pattern of a floor that raised this ask on the bash chain —
+   * on the deciding unit, or on another asking unit of the same command. Only
+   * the child's parse knows it, so a forwarded ask carries it for the serving
+   * node to clamp its own `allow` with.
+   */
+  floor?: string;
+  /**
+   * Every unit of the bash chain that resolved to `ask` and was not
+   * session-granted, in chain order, each with its own floor. Set only on an
+   * asking chain winner: the serving node of a forwarded ask judges each one,
+   * since the winner alone would approve commands it never saw.
+   */
+  askingUnits?: readonly AskingBashUnit[];
+}
+
+/**
+ * One unit of a bash chain the gate left asking, as the serving node of a
+ * forwarded ask needs it: the unit as typed, and the floor that raised it.
+ */
+export interface AskingBashUnit {
+  command: string;
+  floor?: string;
 }
 
 export function isPermissionState(value: unknown): value is PermissionState {

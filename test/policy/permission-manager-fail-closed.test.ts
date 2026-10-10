@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import { PermissionManager } from "#src/policy/permission-manager";
 import type { ScopeConfig } from "#src/types";
-import { createInMemoryPolicyLoader } from "#test/helpers/manager-harness";
+import {
+  createInMemoryPolicyLoader,
+  createManagerWithProject,
+} from "#test/helpers/manager-harness";
 
 /**
  * Fail-closed clamp (#646): when a non-global config scope (project / agent /
@@ -100,7 +103,7 @@ describe("PermissionManager fail-closed clamp on invalid non-global scope", () =
       global: { permission: { bash: "allow" } },
       project: { invalid: true },
     });
-    expect(manager.getConfigIssues()).toEqual([
+    expect(manager.getPolicyIssues()).toEqual([
       "Invalid project configuration detected — failing closed: 'allow' rules " +
         "are clamped to 'ask' for this session until the configuration is corrected.",
     ]);
@@ -111,6 +114,42 @@ describe("PermissionManager fail-closed clamp on invalid non-global scope", () =
       global: { permission: { bash: "allow" } },
       project: { permission: { read: "allow" } },
     });
-    expect(manager.getConfigIssues()).toEqual([]);
+    expect(manager.getPolicyIssues()).toEqual([]);
+  });
+});
+
+// A rejected config file's own schema errors are `ConfigStore`'s to report:
+// it loads the same file through the same `loadUnifiedConfig`. The policy side
+// answers only what composing policy reveals, so the operator hears each fact
+// once (#953).
+describe("PermissionManager.getPolicyIssues over a rejected config file", () => {
+  const unknownKey = { bogusKey: 1 } as unknown as ScopeConfig;
+
+  it("answers only the fail-closed notice for a rejected project file", () => {
+    const { manager, cleanup } = createManagerWithProject(
+      { permission: { bash: "allow" } },
+      {},
+      { projectConfig: { permission: { read: "allow" }, ...unknownKey } },
+    );
+    try {
+      expect(manager.getPolicyIssues()).toEqual([
+        "Invalid project configuration detected — failing closed: 'allow' rules " +
+          "are clamped to 'ask' for this session until the configuration is corrected.",
+      ]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("answers nothing for a rejected global file, which is never clamped", () => {
+    const { manager, cleanup } = createManagerWithProject({
+      permission: { bash: "allow" },
+      ...unknownKey,
+    });
+    try {
+      expect(manager.getPolicyIssues()).toEqual([]);
+    } finally {
+      cleanup();
+    }
   });
 });

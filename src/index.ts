@@ -1,7 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { getAgentDir, getPackageDir } from "@earendil-works/pi-coding-agent";
 import { warmBashParser } from "#src/access-intent/bash/parser";
-import { buildResolvedIntentFromMatchValues } from "#src/access-intent/input-normalizer";
 import { AskDialogQueue } from "#src/authority/ask-dialog-queue";
 import { AuthorizerChainAudit } from "#src/authority/authorizer-chain-audit";
 import {
@@ -10,10 +9,7 @@ import {
 } from "#src/authority/authorizer-registry";
 import { AuthorizerSelection } from "#src/authority/authorizer-selection";
 import { ChildNodeAudit } from "#src/authority/child-node-audit";
-import {
-  ForwardedRequestServer,
-  type ServingPolicy,
-} from "#src/authority/forwarded-request-server";
+import { ForwardedRequestServer } from "#src/authority/forwarded-request-server";
 import {
   ForwardingLivenessJudge,
   ServingHeartbeatStore,
@@ -41,6 +37,7 @@ import { ConfigStore } from "#src/config/config-store";
 import { resolveDialogKeys } from "#src/config/dialog-keys";
 import { isYoloModeEnabled } from "#src/config/extension-config";
 import { computeExtensionPaths } from "#src/config/extension-paths";
+import { PolicyIssueReporter } from "#src/config/policy-issue-reporter";
 import { GateRunner } from "#src/handlers/gates/runner";
 import { SkillInputGatePipeline } from "#src/handlers/gates/skill-input-gate-pipeline";
 import { ToolCallGatePipeline } from "#src/handlers/gates/tool-call-gate-pipeline";
@@ -51,6 +48,7 @@ import { PermissionSessionLogger } from "#src/logging/session-logger";
 import { pathFlavorForPlatform } from "#src/path/path-flavor";
 import { PermissionManager } from "#src/policy/permission-manager";
 import { PermissionResolver } from "#src/policy/permission-resolver";
+import { ResolverServingPolicy } from "#src/policy/serving-policy";
 import { resolveRenderBudget } from "#src/presentation/dialog-renderer";
 import { LocalPermissionsService } from "#src/service/permissions-service";
 import { PermissionServiceLifecycle } from "#src/service/service-lifecycle";
@@ -197,16 +195,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
   // composed ruleset, agent-scoped to the requester (§3) — the match values
   // are used as fixed by the child, never re-derived through this session's
   // PathNormalizer/cwd (#597).
-  const servingPolicy: ServingPolicy = {
-    resolve: (intent) =>
-      resolver.resolve(
-        buildResolvedIntentFromMatchValues(
-          intent.surface,
-          intent.matchValues,
-          intent.principal.agentName,
-        ),
-      ),
-  };
+  const servingPolicy = new ResolverServingPolicy(resolver, isYoloEnabled);
 
   // Constructed here rather than beside the gate runner below: the serving
   // side broadcasts its own decisions, so both readers share one reporter over
@@ -322,9 +311,12 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
   // was recorded as delivered and never shown (#933). Driven at session_start
   // and on every turn; the latch keeps an unchanged issue quiet.
   const configIssueReporter = new ConfigIssueReporter(configStore, logger);
+  // What composing policy revealed (a fail-closed clamp, a port notice) is
+  // agent-scoped, so each driver hands over the agent name it resolved (#953).
+  const policyIssueReporter = new PolicyIssueReporter(resolver, logger);
   const lifecycle = new SessionLifecycleHandler(
     session,
-    resolver,
+    policyIssueReporter,
     serviceLifecycle,
     logger,
     audit,
@@ -346,6 +338,7 @@ export default function piPermissionSystemExtension(pi: ExtensionAPI): void {
     toolRegistry,
     logger,
     subagentDetection,
+    policyIssueReporter,
   );
 
   const gateRunner = new GateRunner(

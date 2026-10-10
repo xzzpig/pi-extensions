@@ -4,6 +4,7 @@ import type {
   NormalizedBuildSystemPromptOptions,
 } from "@earendil-works/pi-coding-agent";
 import type { SubagentDetector } from "#src/authority/subagent-detection";
+import type { PolicyIssueReporting } from "#src/config/policy-issue-reporter";
 import {
   visibleSkillPromptEntries,
   withoutDeniedSkills,
@@ -78,6 +79,10 @@ export function shouldExposeTool(
  * - `logger` — records each change to the effective tool surface
  * - `detector` — tells a subagent child from a root, which decides whether a
  *   custom prompt gets this node's tool surface
+ * - `policyIssues` — reports what composing policy revealed for the agent the
+ *   prompt names; driven here rather than in turn prep because the
+ *   `<active_agent>` tag, the only name a pi-subagents child has, is read here
+ *   (#953)
  *
  * The active set is recomputed from the session's pre-filter tool surface
  * every turn, so relaxing a rule restores the tool it had withheld (#873).
@@ -90,6 +95,7 @@ export class AgentPrepHandler {
     private readonly toolRegistry: ToolRegistry,
     private readonly logger: DebugLogger,
     private readonly detector: SubagentDetector,
+    private readonly policyIssues: PolicyIssueReporting,
   ) {}
 
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -105,6 +111,9 @@ export class AgentPrepHandler {
         ? event.systemPrompt
         : event.systemPrompt.join("\n");
     const agentName = this.session.resolveAgentName(ctx, systemPrompt);
+    // Policy is re-read by mtime, so this turn may compose a clamp the file
+    // just caused; say so for the agent this turn runs as.
+    this.policyIssues.report(agentName ?? undefined);
     const registered = readRegisteredTools(this.toolRegistry.getAll());
     const surface = this.session.resolveExposedTools(
       this.observeToolSurface(registered),

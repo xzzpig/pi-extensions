@@ -84,6 +84,7 @@ describe("buildUiPrompt", () => {
         value: "git push",
         matchedPattern: "git *",
         commandContext: "subshell",
+        matchedSpelling: null,
         executedUnit: "git push --force",
       },
       evidence: [{ label: "full command", text: "secret-ish", detail: null }],
@@ -107,6 +108,7 @@ describe("buildUiPrompt", () => {
       value: "git push",
       matchedPattern: "git *",
       commandContext: "subshell",
+      matchedSpelling: null,
       executedUnit: "git push --force",
     });
     // The bus is the narrowest renderer (ADR 0011 §6): no evidence reaches it.

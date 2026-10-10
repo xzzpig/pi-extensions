@@ -154,7 +154,7 @@ describe("checkPermission", () => {
     });
   });
 
-  it("routes a bash query through the advisory decomposition resolver", () => {
+  it("routes a bash query through the advisory decomposition resolver against the session's normalizer", () => {
     const { service, resolver } = makeService();
     const expected = makeCheckResult({ state: "deny", toolName: "bash" });
     resolveBashAdvisoryCheck.mockReturnValue(expected);
@@ -167,6 +167,7 @@ describe("checkPermission", () => {
       "cd /repo && npm install x",
       "my-agent",
       resolver,
+      normalizer,
     );
     expect(result).toBe(expected);
   });
@@ -178,6 +179,7 @@ describe("checkPermission", () => {
       "",
       undefined,
       resolver,
+      normalizer,
     );
   });
 

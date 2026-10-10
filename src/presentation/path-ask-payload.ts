@@ -82,6 +82,7 @@ export function buildBashExternalDirectoryAskPayload(
       value: facts.command,
       matchedPattern: facts.matchedPattern ?? null,
       commandContext: null,
+      matchedSpelling: null,
       executedUnit: null,
     },
     evidence: [
@@ -113,6 +114,7 @@ function pathPayload(
       value: facts.pathValue,
       matchedPattern: facts.matchedPattern ?? null,
       commandContext: null,
+      matchedSpelling: null,
       executedUnit: null,
     },
     evidence,

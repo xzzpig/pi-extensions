@@ -101,7 +101,7 @@ export class ConfigStore
    *
    * This store answers; `ConfigIssueReporter` decides whether the operator has
    * heard it yet (#933). Not to be confused with
-   * `PermissionResolver.getConfigIssues(agentName?)`, which answers for the
+   * `PermissionResolver.getPolicyIssues(agentName?)`, which answers for the
    * *policy* files rather than the extension config.
    */
   getConfigIssues(): readonly string[] {

@@ -125,10 +125,10 @@ export interface NormalizedInput {
   surface: string;
   /**
    * Alternative lookup names for this one access, most-specific first.
-   * MCP is the only surface producing more than one; every other surface
-   * produces a single-element array. Order does not decide which rule wins
-   * (rule position does) — it decides which name the decision is reported
-   * under when the winning rule matches several.
+   * MCP targets and a bash command's spellings are the only sources of more
+   * than one; every other surface produces a single-element array. Order does
+   * not decide which rule wins (rule position does); it decides which name the
+   * decision is reported under when the winning rule matches several.
    */
   values: string[];
   /**
@@ -175,16 +175,7 @@ export function normalizeInput(
     case "bash": {
       const record = toRecord(input);
       const command = typeof record.command === "string" ? record.command : "";
-      // Strip leading shell comment lines so pattern matching operates on the
-      // actual command, not a `# description` prefix agents often prepend.
-      // Fall back to the raw command when stripping leaves nothing, so an
-      // all-comment command still evaluates against its literal text.
-      const matchValue = stripBashCommentLines(command) || command;
-      return {
-        surface: "bash",
-        values: [matchValue],
-        resultExtras: { command },
-      };
+      return normalizeBashCommand(command, []);
     }
 
     // --- MCP ---
@@ -224,5 +215,28 @@ function normalizeMcpTargets(targets: readonly string[]): NormalizedInput {
     surface: "mcp",
     values,
     resultExtras: { target: values[0] },
+  };
+}
+
+/**
+ * The `bash` surface's normalized form: the command as typed, then the other
+ * spellings the shell runs identically, matched as aliases of one invocation.
+ *
+ * Leading shell comment lines are stripped from the typed command so pattern
+ * matching operates on the actual command, not a `# description` prefix agents
+ * often prepend; when stripping leaves nothing, an all-comment command still
+ * evaluates against its literal text. A spelling comes from the program
+ * analysis and is matched as given. `command` stays the typed text, because the
+ * prompt, the decision value, and the session-approval suggestion read it.
+ */
+export function normalizeBashCommand(
+  command: string,
+  spellings: readonly string[],
+): NormalizedInput {
+  const matchValue = stripBashCommentLines(command) || command;
+  return {
+    surface: "bash",
+    values: [...new Set([matchValue, ...spellings])],
+    resultExtras: { command },
   };
 }

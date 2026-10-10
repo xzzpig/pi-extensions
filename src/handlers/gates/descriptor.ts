@@ -138,13 +138,10 @@ export function preResolvedCheckOf(
  * a semantic one, and it is why the same treatment is *not* extended to `ask`
  * (#915): two asking gates ask two different questions.
  *
- * Subordinate to {@link GateRunner.runDescriptor}'s own precedence, which
- * tests `source === "session"` before the deny/ask/allow gate is reached — a
- * session-sourced check is allowed there, so it is not pre-emptive here.
- * `SessionRules` records only allows, so that combination is unreachable
- * today; the clause is kept so the predicate is correct on its own terms
- * rather than by way of a distant invariant, and it errs toward today's
- * behavior by declining to pre-empt.
+ * A session-sourced `deny` counts too: {@link GateRunner.runDescriptor}'s
+ * session fast path takes only a session `allow`, so any other session-sourced
+ * check reaches the deny/ask/allow gate and a `deny` blocks there. `SessionRules`
+ * records only allows, so that combination is unreachable today.
  *
  * Yolo needs no clause: `resolveYoloGrant` matches an `allow` of origin
  * `yolo` and an `ask`, never a `deny`.
@@ -154,7 +151,7 @@ export function isUnconditionalDeny(gate: GateResult): boolean {
     return false;
   }
   const check = preResolvedCheckOf(gate);
-  return check !== null && check.state === "deny" && check.source !== "session";
+  return check !== null && check.state === "deny";
 }
 
 /**

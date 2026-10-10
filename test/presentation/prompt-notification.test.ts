@@ -29,6 +29,7 @@ function makeRequest(
     value: "git status",
     matchedPattern: null,
     commandContext: null,
+    matchedSpelling: null,
     executedUnit: null,
     ...overrides,
   };

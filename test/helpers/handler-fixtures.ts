@@ -130,6 +130,16 @@ export function makeConfigIssueReporter() {
   return { report: vi.fn<() => void>() };
 }
 
+/**
+ * A `PolicyIssueReporting` double for the session-start and agent-prep
+ * handlers, which each hand it the agent name they resolved.
+ *
+ * Unannotated return type so callers keep full `vi.fn()` access on `report`.
+ */
+export function makePolicyIssueReporter() {
+  return { report: vi.fn<(agentName: string | undefined) => void>() };
+}
+
 export function makeToolCallEvent(
   toolName: string,
   extraFields: Record<string, unknown> = {},
@@ -348,20 +358,31 @@ export function makeHandler(overrides?: {
     // paths via the single manager entry point (#478).
     vi.mocked(permissionManager.check).mockImplementation(
       (intent: ResolvedAccessIntent, sessionRules) => {
-        if (intent.kind === "path-values") {
-          return surfaceCheck(
-            intent.surface,
-            { path: intent.values[0] ?? "*" },
-            intent.agentName,
-            sessionRules,
-          );
+        switch (intent.kind) {
+          case "path-values":
+            return surfaceCheck(
+              intent.surface,
+              { path: intent.values[0] ?? "*" },
+              intent.agentName,
+              sessionRules,
+            );
+          case "tool":
+            return surfaceCheck(
+              intent.surface,
+              intent.input,
+              intent.agentName,
+              sessionRules,
+            );
+          case "bash-command":
+            return surfaceCheck(
+              "bash",
+              { command: intent.command },
+              intent.agentName,
+              sessionRules,
+            );
+          default:
+            return unhandledIntent(intent);
         }
-        return surfaceCheck(
-          intent.surface,
-          intent.input,
-          intent.agentName,
-          sessionRules,
-        );
       },
     );
   }
@@ -432,6 +453,11 @@ export function makeHandler(overrides?: {
     permissionManager,
     forwarding,
   };
+}
+
+/** Fails the type check when the manager gains an intent kind the adapter does not map. */
+function unhandledIntent(intent: never): never {
+  throw new Error(`unhandled intent: ${JSON.stringify(intent)}`);
 }
 
 // ── Decision-event helper ─────────────────────────────────────────────────

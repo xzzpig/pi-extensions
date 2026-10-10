@@ -42,6 +42,16 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * Compile `pattern` once for repeated matching.
+ *
+ * A leading `~` / `$HOME` / `${HOME}` is expanded on the pattern only. The value
+ * side is not expanded here, because what a home prefix means depends on where
+ * the value came from: a bash program can rebind `HOME`. A value arrives
+ * already spelled by the producer that knows, as an alias matched alongside the
+ * typed text (`AccessPath.matchValues()` for a path, a bash command unit's
+ * `spellings`).
+ */
 export function compileWildcardPattern<TState>(
   pattern: string,
   state: TState,

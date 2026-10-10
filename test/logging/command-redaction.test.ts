@@ -381,12 +381,14 @@ describe("maskCommandFields", () => {
         toolName: "bash",
         command: 'KEY="sk-abc" curl https://x',
         executedUnit: "TOKEN=sk-def deploy",
+        matchedSpelling: 'KEY="sk-abc" curl /tmp/x',
         matchedPattern: "curl *",
       }),
     ).toEqual({
       toolName: "bash",
       command: `KEY=${MASK} curl https://x`,
       executedUnit: `TOKEN=${MASK} deploy`,
+      matchedSpelling: `KEY=${MASK} curl /tmp/x`,
       matchedPattern: "curl *",
     });
   });

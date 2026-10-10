@@ -56,10 +56,15 @@ export interface InboxProcessor {
  * (`principal.agentName`, ADR 0008 §3) — the child-fixed `matchValues` are
  * used as-is, never re-derived through this session's `PathNormalizer`/cwd.
  *
+ * The answer honors the floor the child raised (`intent.floor`): a serving
+ * `allow` rule does not answer an ask the child's own gate floored. A bash
+ * chain is judged on every unit the child left asking (`intent.askingUnits`),
+ * each with its own floor, since this answer approves the whole tool call.
+ *
  * Narrow by design (ISP): the server needs one decision, not the whole
- * resolver. The composition root satisfies it with
- * `buildResolvedIntentFromMatchValues` plus `resolver.resolve`, the same
- * `resolve` entry point `LocalPermissionsService` composes.
+ * resolver. The composition root satisfies it with `ResolverServingPolicy`
+ * (`src/policy/serving-policy.ts`), over the same `resolve` entry point
+ * `LocalPermissionsService` composes.
  */
 export interface ServingPolicy {
   resolve(intent: ForwardedAccessIntent): PermissionCheckResult;
@@ -151,6 +156,10 @@ function toAccessFacts(intent: ForwardedAccessIntent): ForwardedAccessFacts {
     surface: intent.surface,
     matchValues: intent.matchValues,
     boundaryValue: intent.boundaryValue,
+    ...(intent.floor === undefined ? {} : { floor: intent.floor }),
+    ...(intent.askingUnits === undefined
+      ? {}
+      : { askingUnits: intent.askingUnits }),
   };
 }
 
@@ -465,7 +474,13 @@ export class ForwardedRequestServer implements InboxProcessor {
         : { ...createDeniedPermissionDecision(check.reason), decidedBy };
     }
 
-    this.logger.review("forwarded_permission.prompted", logDetails);
+    // The child's floor is why an ask this node's `allow` would once have
+    // answered reached a human instead, so the entry says so.
+    const floor = request.accessIntent?.floor;
+    this.logger.review(
+      "forwarded_permission.prompted",
+      floor === undefined ? logDetails : { ...logDetails, floor },
+    );
     const details = buildForwardedAskDetails(request);
     const decision = await this.escalateAsk(details);
     // Announced before the grant-scope translation and before the response is

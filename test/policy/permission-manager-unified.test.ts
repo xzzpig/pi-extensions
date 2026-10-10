@@ -835,7 +835,11 @@ describe("checkPermission — rule origin provenance", () => {
 // In-memory PolicyLoader stub tests — no filesystem required
 // ---------------------------------------------------------------------------
 
-import type { PermissionCheckResult, ScopeConfig } from "#src/types";
+import type {
+  PermissionCheckResult,
+  PermissionState,
+  ScopeConfig,
+} from "#src/types";
 
 describe("PermissionManager with in-memory PolicyLoader", () => {
   describe("universal fallback", () => {
@@ -1668,7 +1672,7 @@ describe("PermissionManager — configureForCwd and agentDir option", () => {
     expect(typeof scoped.check).toBe("function");
     expect(typeof scoped.getToolPermission).toBe("function");
     expect(typeof scoped.isToolFullyDenied).toBe("function");
-    expect(typeof scoped.getConfigIssues).toBe("function");
+    expect(typeof scoped.getPolicyIssues).toBe("function");
   });
 
   it("construction with { agentDir } reads global config from getGlobalConfigPath(agentDir)", () => {
@@ -2902,26 +2906,26 @@ test("PermissionManager reads config from PI_CODING_AGENT_DIR when set", () => {
 });
 
 // ---------------------------------------------------------------------------
-// getConfigIssues — moved from catch-all (#342)
+// getPolicyIssues — moved from catch-all (#342)
 // ---------------------------------------------------------------------------
 
-test("PermissionManager.getConfigIssues returns empty array for clean config", () => {
+test("PermissionManager.getPolicyIssues returns empty array for clean config", () => {
   const config: ScopeConfig = {
     permission: { "*": "ask", external_directory: "ask" },
   };
   const { manager, cleanup } = createManager(config);
   try {
-    const issues = manager.getConfigIssues();
+    const issues = manager.getPolicyIssues();
     expect(issues.length).toBe(0);
   } finally {
     cleanup();
   }
 });
 
-test("PermissionManager.getConfigIssues returns empty array for empty config", () => {
+test("PermissionManager.getPolicyIssues returns empty array for empty config", () => {
   const { manager, cleanup } = createManager({});
   try {
-    const issues = manager.getConfigIssues();
+    const issues = manager.getPolicyIssues();
     expect(issues.length).toBe(0);
   } finally {
     cleanup();
@@ -3937,7 +3941,7 @@ describe("a top-level mcp__ key keeps applying to the Pi MCP tool it names", () 
 
   it("asks the operator to port the key", () => {
     withManager({ "*": "allow", [toolName]: "deny" }, (manager) => {
-      expect(manager.getConfigIssues()).toEqual([portNotice]);
+      expect(manager.getPolicyIssues()).toEqual([portNotice]);
     });
   });
 
@@ -3956,13 +3960,13 @@ describe("a top-level mcp__ key keeps applying to the Pi MCP tool it names", () 
 
   it("raises no notice for a key that can name no Pi MCP tool", () => {
     withManager({ "*": "allow", mcp__foo: "deny" }, (manager) => {
-      expect(manager.getConfigIssues()).toEqual([]);
+      expect(manager.getPolicyIssues()).toEqual([]);
     });
   });
 
   it("raises no notice when no such key exists", () => {
     withManager({ "*": "allow", mcp: { "danger-srv": "deny" } }, (manager) => {
-      expect(manager.getConfigIssues()).toEqual([]);
+      expect(manager.getPolicyIssues()).toEqual([]);
     });
   });
 });
@@ -4039,5 +4043,132 @@ describe("a forwarded mcp request resolves its own target", () => {
     const result = serve(["danger_wipe"]);
     expect(result.state).toBe("ask");
     expect(result.target).toBe("danger_wipe");
+  });
+});
+
+describe("check — a bash command evaluated with its spellings", () => {
+  const home = homedir();
+
+  function checkCommand(
+    bash: Record<string, PermissionState>,
+    command: string,
+    spellings: readonly string[],
+    sessionRules?: Ruleset,
+  ): PermissionCheckResult {
+    const manager = createInMemoryManager({
+      global: { permission: { bash } },
+    });
+    return manager.check(
+      { kind: "bash-command", surface: "bash", command, spellings },
+      sessionRules,
+    );
+  }
+
+  it("matches a home-anchored rule through the spelling, reporting the command as typed", () => {
+    const result = checkCommand({ "*": "ask", "~/bin/x": "allow" }, "~/bin/x", [
+      `${home}/bin/x`,
+    ]);
+    expect(result.state).toBe("allow");
+    expect(result.matchedPattern).toBe("~/bin/x");
+    expect(result.command).toBe("~/bin/x");
+  });
+
+  it("matches only the typed text when there are no spellings", () => {
+    const result = checkCommand(
+      { "*": "ask", "~/bin/x": "allow" },
+      "~/bin/x",
+      [],
+    );
+    expect(result.state).toBe("ask");
+    expect(result.matchedPattern).toBe("*");
+  });
+
+  it("lets rule position decide, not which spelling a rule matched", () => {
+    const result = checkCommand({ "~/bin/x": "allow", "*": "ask" }, "~/bin/x", [
+      `${home}/bin/x`,
+    ]);
+    expect(result.state).toBe("ask");
+    expect(result.matchedPattern).toBe("*");
+  });
+
+  it("lets a later rule matching only the spelling override an earlier one matching only the typed text", () => {
+    // `?/bin/x` matches the typed `~/bin/x` and not the spelling, so a
+    // first-value-wins evaluation would stop at its allow.
+    const result = checkCommand(
+      { "*": "ask", "?/bin/x": "allow", "~/bin/x": "deny" },
+      "~/bin/x",
+      [`${home}/bin/x`],
+    );
+    expect(result.state).toBe("deny");
+    expect(result.matchedPattern).toBe("~/bin/x");
+  });
+
+  it("reaches a home-anchored deny through the spelling", () => {
+    const result = checkCommand(
+      { "*": "allow", "~/bin/danger *": "deny" },
+      "~/bin/danger --now",
+      [`${home}/bin/danger --now`],
+    );
+    expect(result.state).toBe("deny");
+    expect(result.matchedPattern).toBe("~/bin/danger *");
+  });
+
+  it("matches a session grant recorded for the typed command", () => {
+    const result = checkCommand(
+      { "*": "ask" },
+      "~/bin/x",
+      [`${home}/bin/x`],
+      [sessionRule("bash", "~/bin/x")],
+    );
+    expect(result.state).toBe("allow");
+    expect(result.source).toBe("session");
+  });
+
+  describe("the spelling the winning rule matched", () => {
+    it("is reported when the rule matched only a spelling", () => {
+      const result = checkCommand(
+        { "*": "ask", "rm /tmp/a/*": "allow" },
+        "rm a/x",
+        ["rm /tmp/a/x"],
+      );
+      expect(result.state).toBe("allow");
+      expect(result.matchedSpelling).toBe("rm /tmp/a/x");
+    });
+
+    it("is not reported when the rule also matched the command as typed", () => {
+      const result = checkCommand({ "*": "ask", "rm *": "allow" }, "rm a/x", [
+        "rm /tmp/a/x",
+      ]);
+      expect(result.state).toBe("allow");
+      expect("matchedSpelling" in result).toBe(false);
+    });
+
+    it("is not reported when no rule matched", () => {
+      const result = checkCommand({}, "rm a/x", ["rm /tmp/a/x"]);
+      expect("matchedSpelling" in result).toBe(false);
+    });
+
+    it("is never reported for an MCP target matched under a later candidate", () => {
+      const manager = createInMemoryManager(
+        { global: { permission: { mcp: { "*": "ask", github: "deny" } } } },
+        ["github"],
+      );
+      const result = manager.check({
+        kind: "tool",
+        surface: "mcp",
+        input: { tool: "github_search" },
+      });
+      expect(result.state).toBe("deny");
+      expect("matchedSpelling" in result).toBe(false);
+    });
+
+    it("is never reported for a path matched under a later alias", () => {
+      const manager = createInMemoryManager({
+        global: { permission: { path: { "*": "ask", "src/*": "deny" } } },
+      });
+      const result = checkPathValues(manager, ["/repo/src/x", "src/x"]);
+      expect(result.state).toBe("deny");
+      expect("matchedSpelling" in result).toBe(false);
+    });
   });
 });

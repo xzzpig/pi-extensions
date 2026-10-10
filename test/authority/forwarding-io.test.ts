@@ -273,6 +273,77 @@ describe("readForwardedPermissionRequest — accessIntent field", () => {
     expect(parsed?.accessIntent).toBeUndefined();
   });
 
+  it("round-trips the floor that raised a bash ask", () => {
+    const accessIntent: ForwardedAccessIntent = {
+      surface: "bash",
+      matchValues: ["sudo rm x"],
+      boundaryValue: null,
+      floor: "<indirection-bash-wrapper>",
+      requesterCwd: "/repo",
+      principal: { sessionId: "child-session", agentName: "reviewer" },
+    };
+    const parsed = writeAndRead({ ...baseRequest(), accessIntent });
+    expect(parsed?.accessIntent).toEqual(accessIntent);
+  });
+
+  it("drops an access intent whose floor is not a string, so the ask escalates", () => {
+    const parsed = writeAndRead({
+      ...baseRequest(),
+      accessIntent: {
+        surface: "bash",
+        matchValues: ["sudo rm x"],
+        boundaryValue: null,
+        floor: 42,
+        requesterCwd: "/repo",
+        principal: { sessionId: "child-session", agentName: "reviewer" },
+      },
+    });
+    expect(parsed?.accessIntent).toBeUndefined();
+  });
+
+  describe("askingUnits", () => {
+    function bashIntent(askingUnits: unknown): Record<string, unknown> {
+      return {
+        surface: "bash",
+        matchValues: ["ls"],
+        boundaryValue: null,
+        askingUnits,
+        requesterCwd: "/repo",
+        principal: { sessionId: "child-session", agentName: "reviewer" },
+      };
+    }
+
+    it("round-trips every unit the child left asking, with each one's floor", () => {
+      const accessIntent: ForwardedAccessIntent = {
+        surface: "bash",
+        matchValues: ["ls"],
+        boundaryValue: null,
+        askingUnits: [
+          { command: "ls" },
+          { command: "sudo rm y", floor: "<indirection-bash-wrapper>" },
+        ],
+        requesterCwd: "/repo",
+        principal: { sessionId: "child-session", agentName: "reviewer" },
+      };
+      const parsed = writeAndRead({ ...baseRequest(), accessIntent });
+      expect(parsed?.accessIntent).toStrictEqual(accessIntent);
+    });
+
+    it.each([
+      ["not an array", "ls"],
+      ["an empty list", []],
+      ["a unit whose command is not a string", [{ command: 42 }]],
+      ["a unit whose floor is not a string", [{ command: "ls", floor: 42 }]],
+      ["a unit that is not an object", [null]],
+    ])("drops the access intent for %s, so the ask escalates", (_, units) => {
+      const parsed = writeAndRead({
+        ...baseRequest(),
+        accessIntent: bashIntent(units),
+      });
+      expect(parsed?.accessIntent).toBeUndefined();
+    });
+  });
+
   it("drops a malformed access intent to undefined (missing principal)", () => {
     const parsed = writeAndRead({
       ...baseRequest(),
@@ -413,12 +484,23 @@ describe("readForwardedPermissionRequest — payload field", () => {
         value: "git push",
         matchedPattern: "git *",
         commandContext: null,
+        matchedSpelling: null,
         executedUnit: null,
       },
       evidence: [{ label: "command", text: "git push", detail: null }],
     });
     const parsed = writeAndRead({ ...baseRequest(), payload });
     expect(parsed?.payload).toEqual(payload);
+  });
+
+  it("reads request facts without a matched spelling as having none (version skew)", () => {
+    const payload = makePromptPayload();
+    const { matchedSpelling: _absent, ...olderRequest } = payload.request;
+    const parsed = writeAndRead({
+      ...baseRequest(),
+      payload: { ...payload, request: olderRequest },
+    });
+    expect(parsed?.payload?.request.matchedSpelling).toBeNull();
   });
 
   it("reads a request with no payload as undefined (version skew)", () => {

@@ -223,10 +223,10 @@ describe("GateRunner — descriptor path", () => {
     );
   });
 
-  it("honours a session grant that survived the unparsed-subtree floor", async () => {
-    // The floor clamps state and leaves `source` alone, and this fast path
-    // tests the source before the state — which is what keeps a grant the
-    // user already gave for this exact command from re-prompting (#840).
+  it("escalates a session-sourced ask instead of approving it", async () => {
+    // `SessionRules` records only allows, so a session-sourced ask means
+    // something clamped a grant; approving it would let the grant speak for
+    // a verdict it never gave.
     const { runner, deps } = makeGateRunner({
       resolveResult: makeCheckResult({
         state: "ask",
@@ -236,13 +236,12 @@ describe("GateRunner — descriptor path", () => {
       }),
     });
 
-    const result = await runner.run(makeDescriptor(), null);
+    await runner.run(makeDescriptor(), null);
 
-    expect(result).toEqual({ action: "allow" });
-    expect(deps.escalate).not.toHaveBeenCalled();
-    expect(deps.reporter.writeReviewLog).toHaveBeenCalledWith(
+    expect(deps.escalate).toHaveBeenCalledOnce();
+    expect(deps.reporter.writeReviewLog).not.toHaveBeenCalledWith(
       "permission_request.session_approved",
-      expect.objectContaining({ resolution: "session_approved" }),
+      expect.anything(),
     );
   });
 

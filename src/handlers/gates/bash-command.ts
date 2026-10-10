@@ -68,6 +68,12 @@ const WRAPPER_SENTINEL: Record<WrapperKind, string> = {
  */
 const UNPARSED_SUBTREE_SENTINEL = "<unparsed-bash-subtree>";
 
+/**
+ * The synthetic `matchedPattern` recorded when a command the parse matched
+ * nothing in is floored to `ask` (#452).
+ */
+const UNPARSEABLE_COMMAND_SENTINEL = "<unparseable-bash-command>";
+
 export function resolveBashCommandCheck(
   command: string,
   commands: BashCommand[],
@@ -75,7 +81,7 @@ export function resolveBashCommandCheck(
   resolver: ScopedPermissionResolver,
 ): PermissionCheckResult {
   if (isTriviallyEmptyCommand(command)) {
-    return resolveOnBashSurface(command, agentName, resolver);
+    return resolveOnBashSurface(command, [], agentName, resolver);
   }
 
   if (!commands.some((cmd) => cmd.salvaged !== true)) {
@@ -86,7 +92,7 @@ export function resolveBashCommandCheck(
     // from the wreckage: `> f <<'M' 2>&1 | rm -rf /tmp/x` has zero primary
     // units and one salvaged one, and keying the check on the combined list
     // would silently drop a `deny` the pre-salvage gate reached (#875).
-    const whole = resolveOnBashSurface(command, agentName, resolver);
+    const whole = resolveOnBashSurface(command, [], agentName, resolver);
     if (whole.state === "deny") {
       return whole;
     }
@@ -97,7 +103,8 @@ export function resolveBashCommandCheck(
         source: "bash",
         origin: "builtin",
         command,
-        matchedPattern: "<unparseable-bash-command>",
+        matchedPattern: UNPARSEABLE_COMMAND_SENTINEL,
+        floor: UNPARSEABLE_COMMAND_SENTINEL,
       };
     }
   }
@@ -105,10 +112,51 @@ export function resolveBashCommandCheck(
   const results = commands.map((cmd) =>
     resolveCommandUnit(cmd, command, agentName, resolver),
   );
-  return (
+  const winner =
     pickMostRestrictive(results) ??
-    resolveOnBashSurface(command, agentName, resolver)
-  );
+    resolveOnBashSurface(command, [], agentName, resolver);
+  return withAskingUnits(withChainFloor(winner, results), results);
+}
+
+/**
+ * List on an asking winner every unit of the chain the gate left asking.
+ *
+ * The winner names one command, but a forwarded ask's answer approves the
+ * whole tool call, so the serving node has to judge every unit the child could
+ * not resolve, each with its own floor (#1030). A unit the child's rules or
+ * the session allowed stays home.
+ */
+function withAskingUnits(
+  winner: PermissionCheckResult,
+  results: readonly PermissionCheckResult[],
+): PermissionCheckResult {
+  if (winner.state !== "ask") return winner;
+  const askingUnits = results
+    .filter((result) => result.state === "ask")
+    .map((result) => ({
+      command: result.command ?? "",
+      ...(result.floor === undefined ? {} : { floor: result.floor }),
+    }));
+  return askingUnits.length === 0 ? winner : { ...winner, askingUnits };
+}
+
+/**
+ * Carry onto an asking winner the floor another asking unit of the chain
+ * raised.
+ *
+ * The winner is the first of the most restrictive units, so in
+ * `git push x && sudo rm y` a `git push *: ask` rule wins the tie and the
+ * wrapper's floor would otherwise go unrecorded. A forwarded ask is judged on
+ * the winner's value alone, so the floor has to ride the result for the
+ * serving node to keep it (#1029).
+ */
+function withChainFloor(
+  winner: PermissionCheckResult,
+  results: readonly PermissionCheckResult[],
+): PermissionCheckResult {
+  if (winner.state !== "ask" || winner.floor !== undefined) return winner;
+  const floored = results.find((result) => result.floor !== undefined);
+  return floored ? { ...winner, floor: floored.floor } : winner;
 }
 
 /**
@@ -122,9 +170,14 @@ function resolveCommandUnit(
   agentName: string | undefined,
   resolver: ScopedPermissionResolver,
 ): PermissionCheckResult {
-  const base = resolveOnBashSurface(cmd.text, agentName, resolver);
+  const base = resolveOnBashSurface(
+    cmd.text,
+    cmd.spellings ?? [],
+    agentName,
+    resolver,
+  );
   const floored =
-    cmd.wrapperKind && base.state === "allow"
+    cmd.wrapperKind && base.state === "allow" && !isSessionGrant(base)
       ? resolveWrapperUnit(cmd, cmd.wrapperKind, base, agentName, resolver)
       : base;
   const unparsed = floorUnparsedUnit(cmd, command, floored);
@@ -153,21 +206,51 @@ function resolveCommandUnit(
  * decides instead — and a wrapper unit already floored to `ask` keeps its own,
  * more specific sentinel.
  *
- * The result is built by spreading `resolved`, so a `source: "session"` grant
- * survives to `GateRunner`'s session fast path, which tests the source before
- * the state. A grant the user gave for this exact command still holds.
+ * A session grant is never floored: the user approved this exact command, and
+ * an `ask` carrying it would tie with a sibling unit's real ask and could
+ * approve the whole chain through `GateRunner`'s session fast path (#1033).
  */
 function floorUnparsedUnit(
   cmd: BashCommand,
   command: string,
   resolved: PermissionCheckResult,
 ): PermissionCheckResult {
-  if (!cmd.parseUnresolved || resolved.state !== "allow") return resolved;
+  if (
+    !cmd.parseUnresolved ||
+    resolved.state !== "allow" ||
+    isSessionGrant(resolved)
+  ) {
+    return resolved;
+  }
+  return { ...floorToAsk(resolved, UNPARSED_SUBTREE_SENTINEL), command };
+}
+
+/**
+ * True when the session layer decided the check. `SessionRules` records only
+ * `allow`s, so this is a grant the user gave for the command it matched.
+ */
+function isSessionGrant(check: PermissionCheckResult): boolean {
+  return check.source === "session";
+}
+
+/**
+ * Clamp a resolved check up to a synthetic `ask` naming the floor that raised
+ * it.
+ *
+ * Never handed a session grant: both floors leave one unfloored. Drops
+ * `matchedSpelling`: it names what the replaced rule matched, and beside the
+ * sentinel it would name a match that did not decide.
+ */
+function floorToAsk(
+  resolved: PermissionCheckResult,
+  sentinel: string,
+): PermissionCheckResult {
+  const { matchedSpelling: _replaced, ...unspelled } = resolved;
   return {
-    ...resolved,
+    ...unspelled,
     state: "ask",
-    command,
-    matchedPattern: UNPARSED_SUBTREE_SENTINEL,
+    matchedPattern: sentinel,
+    floor: sentinel,
   };
 }
 
@@ -178,7 +261,8 @@ function floorUnparsedUnit(
  * is clamped up to a synthetic `ask` naming the kind that caused it — unless
  * the enumerator established that the floor has no reason left to hold, in
  * which case the unit is resolved by the rules of the command it runs (ADR 0013
- * §11, #803).
+ * §11): its inner command is a proven pure reader (#803), or every wrapper
+ * layer only modifies how that command runs (#963).
  *
  * Only an `allow` reaches here, which is what makes the exemption unable to
  * weaken anything: an explicit `deny` or `ask` on the wrapper is decided before
@@ -193,18 +277,14 @@ function resolveWrapperUnit(
 ): PermissionCheckResult {
   const inner = cmd.floorExemption && cmd.executedUnit;
   if (!inner) {
-    return {
-      ...base,
-      state: "ask",
-      matchedPattern: WRAPPER_SENTINEL[wrapperKind],
-    };
+    return floorToAsk(base, WRAPPER_SENTINEL[wrapperKind]);
   }
   // The inner command's rule decides, but the unit is still what runs: the
   // prompt, the decision value, and the session-approval suggestion all read
   // `command`, and naming a fragment of the command line there would offer a
   // grant that does not cover what the user is looking at.
   return {
-    ...resolveOnBashSurface(inner, agentName, resolver),
+    ...resolveOnBashSurface(inner, [], agentName, resolver),
     command: base.command,
     floorExemption: cmd.floorExemption,
   };
@@ -225,21 +305,26 @@ function isTriviallyEmptyCommand(command: string): boolean {
 }
 
 /**
- * Resolve one command string against the `bash` surface's rules.
+ * Resolve one command string, and the other spellings the shell runs it by,
+ * against the `bash` surface's rules.
  *
  * Three callers share it: each command unit of the chain, the whole command
  * when the chain yields no units, and the inner command of a wrapper the floor
- * no longer covers.
+ * no longer covers. Only a unit has spellings: they come from the program
+ * analysis that produced it, and the whole command or a wrapper's inner text
+ * has no unit of its own to carry them.
  */
 function resolveOnBashSurface(
   command: string,
+  spellings: readonly string[],
   agentName: string | undefined,
   resolver: ScopedPermissionResolver,
 ): PermissionCheckResult {
   return resolver.resolve({
-    kind: "tool",
+    kind: "bash-command",
     surface: "bash",
-    input: { command },
+    command,
+    spellings,
     agentName,
   });
 }
