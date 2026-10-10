@@ -4,7 +4,7 @@ import type {
   ExtensionToolContext,
 } from "@earendil-works/pi-coding-agent";
 
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -15,7 +15,7 @@ import extension from "../src/extension.ts";
 
 type Handler = (event: any, ctx: ExtensionContext) => any;
 
-function session(cwd: string) {
+function session(cwd: string, projectTrusted = true) {
   const handlers = new Map<string, Handler>();
   let bash: Parameters<ExtensionAPI["registerTool"]>[0] | undefined;
   const errors: string[] = [];
@@ -32,6 +32,7 @@ function session(cwd: string) {
   const ctx = {
     cwd,
     hasUI: false,
+    isProjectTrusted: () => projectTrusted,
     ui: {
       notify: (message: string, level: string) => {
         if (level === "error") errors.push(message);
@@ -78,6 +79,98 @@ function session(cwd: string) {
     },
   };
 }
+
+test("bash executes in the session working directory", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "pi-sandbox-cwd-"));
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  mkdirSync(process.env.PI_CODING_AGENT_DIR);
+  // The cwd fix applies to the unsandboxed bash path too, so disable the sandbox
+  // to keep this test deterministic across platforms (no bwrap/sandbox-exec needed).
+  writeFileSync(
+    join(process.env.PI_CODING_AGENT_DIR, "sandbox.json"),
+    JSON.stringify({ enabled: false }),
+  );
+  const current = session(root);
+  t.after(async () => {
+    await current.shutdown();
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  await current.start();
+
+  assert.equal((await current.bash("pwd")).trim(), realpathSync(root));
+});
+
+test("untrusted project settings cannot select the bash executable", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "pi-sandbox-trust-"));
+  const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const originalCwd = process.cwd();
+  process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+  mkdirSync(process.env.PI_CODING_AGENT_DIR);
+  mkdirSync(join(root, ".pi"));
+  writeFileSync(
+    join(process.env.PI_CODING_AGENT_DIR, "sandbox.json"),
+    JSON.stringify({ enabled: false }),
+  );
+  writeFileSync(
+    join(root, ".pi", "settings.json"),
+    JSON.stringify({ shellPath: join(root, "untrusted-shell") }),
+  );
+  process.chdir(root);
+  const current = session(root, false);
+  process.chdir(originalCwd);
+  t.after(async () => {
+    await current.shutdown();
+    process.chdir(originalCwd);
+    if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  await current.start();
+
+  assert.equal((await current.bash("printf trusted")).trim(), "trusted");
+});
+
+test(
+  "sandboxed bash respects shellCommandPrefix",
+  {
+    skip: process.platform !== "darwin",
+    timeout: 15_000,
+  },
+  async (t) => {
+    const root = mkdtempSync(join(tmpdir(), "pi-sandbox-prefix-"));
+    const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = join(root, "agent");
+    mkdirSync(process.env.PI_CODING_AGENT_DIR);
+    const prefixPath = join(root, "prefix.sh");
+    writeFileSync(prefixPath, 'export PI_SANDBOX_PREFIX_TEST="prefix-ran"\n');
+    writeFileSync(
+      join(process.env.PI_CODING_AGENT_DIR, "settings.json"),
+      JSON.stringify({ shellCommandPrefix: `source ${JSON.stringify(prefixPath)}` }),
+    );
+    writeFileSync(
+      join(process.env.PI_CODING_AGENT_DIR, "sandbox.json"),
+      JSON.stringify({
+        enabled: true,
+        network: { allowedDomains: ["localhost"], deniedDomains: [] },
+        filesystem: { denyRead: [], allowRead: [], allowWrite: [root], denyWrite: [] },
+      }),
+    );
+    const current = session(root);
+    t.after(async () => {
+      await current.shutdown();
+      if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+      rmSync(root, { recursive: true, force: true });
+    });
+    await current.start();
+    assert.equal(await current.bash(`printf '%s' "$PI_SANDBOX_PREFIX_TEST"`), "prefix-ran");
+  },
+);
 
 test(
   "a subagent shutdown does not stop its parent's bash or user shell",

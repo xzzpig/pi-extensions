@@ -1,4 +1,5 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { mock, type TestContext } from "node:test";
@@ -7,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { SandboxManager } from "@xzzpig/sandbox-runtime";
 import assert from "node:assert/strict";
 
-import { DEFAULT_CONFIG } from "../src/config.ts";
+import { DEFAULT_CONFIG, mergeConfigLayers } from "../src/config.ts";
 import { canonicalizePath } from "../src/policy.ts";
 import {
   buildRuntimeConfig,
@@ -84,6 +85,99 @@ test("buildRuntimeConfig adds session allowances without mutating config", () =>
   assert.equal(DEFAULT_CONFIG.network?.allowedDomains?.includes("example.com"), false);
 });
 
+function withSshAuthSock<T>(value: string | undefined, fn: () => T): T {
+  const previous = process.env.SSH_AUTH_SOCK;
+  if (value === undefined) delete process.env.SSH_AUTH_SOCK;
+  else process.env.SSH_AUTH_SOCK = value;
+  try {
+    return fn();
+  } finally {
+    if (previous === undefined) delete process.env.SSH_AUTH_SOCK;
+    else process.env.SSH_AUTH_SOCK = previous;
+  }
+}
+
+test("buildRuntimeConfig does not allow SSH_AUTH_SOCK unless allowSSHAgentSocket is enabled", () => {
+  withSshAuthSock("/tmp/ssh-agent.sock", () => {
+    const runtime = buildRuntimeConfig(DEFAULT_CONFIG);
+    assert.equal(runtime.network?.allowUnixSockets, undefined);
+  });
+});
+
+test("buildRuntimeConfig adds the real SSH_AUTH_SOCK path when allowSSHAgentSocket is enabled", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-sandbox-ssh-agent-"));
+  const realDir = join(root, "real");
+  const linkDir = join(root, "var");
+  mkdirSync(realDir);
+  symlinkSync(realDir, linkDir);
+  const socketPath = join(realDir, "Listeners");
+  const symlinkPath = join(linkDir, "Listeners");
+  const existing = ["/existing.sock"];
+  const config = {
+    ...DEFAULT_CONFIG,
+    network: {
+      ...DEFAULT_CONFIG.network!,
+      allowSSHAgentSocket: true,
+      allowUnixSockets: existing,
+    },
+  };
+  const server = createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socketPath, resolve);
+  });
+
+  try {
+    withSshAuthSock(symlinkPath, () => {
+      const runtime = buildRuntimeConfig(config);
+      const resolved = realpathSync(socketPath);
+      assert.deepEqual(runtime.network?.allowUnixSockets, ["/existing.sock", resolved]);
+      assert.deepEqual(config.network?.allowUnixSockets, existing);
+    });
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("buildRuntimeConfig does not allow a directory SSH_AUTH_SOCK", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-sandbox-ssh-agent-dir-"));
+  const config = {
+    ...DEFAULT_CONFIG,
+    network: {
+      ...DEFAULT_CONFIG.network!,
+      allowSSHAgentSocket: true,
+      allowUnixSockets: ["/existing.sock"],
+    },
+  };
+
+  try {
+    withSshAuthSock(root, () => {
+      const runtime = buildRuntimeConfig(config);
+      assert.deepEqual(runtime.network?.allowUnixSockets, ["/existing.sock"]);
+      assert.equal(runtime.network?.allowUnixSockets?.includes(realpathSync(root)), false);
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("buildRuntimeConfig does not allow a missing SSH_AUTH_SOCK path", () => {
+  const config = {
+    ...DEFAULT_CONFIG,
+    network: {
+      ...DEFAULT_CONFIG.network!,
+      allowSSHAgentSocket: true,
+      allowUnixSockets: ["/existing.sock"],
+    },
+  };
+
+  withSshAuthSock("/tmp/pi-sandbox-missing-ssh-agent.sock", () => {
+    const runtime = buildRuntimeConfig(config);
+    assert.deepEqual(runtime.network?.allowUnixSockets, ["/existing.sock"]);
+  });
+});
+
 test("buildRuntimeConfig canonicalizes non-glob filesystem paths", () => {
   const runtime = buildRuntimeConfig({
     ...DEFAULT_CONFIG,
@@ -100,6 +194,39 @@ test("buildRuntimeConfig canonicalizes non-glob filesystem paths", () => {
   assert.equal(runtime.filesystem?.allowRead?.includes(canonicalizePath("/tmp")), true);
   assert.deepEqual(runtime.filesystem?.allowWrite, [canonicalizePath("/tmp")]);
   assert.deepEqual(runtime.filesystem?.denyWrite, ["*.key"]);
+});
+
+test("buildRuntimeConfig forwards denyMandatoryCwdFiles to the runtime", () => {
+  // The filesystem object is rebuilt field by field, so a config key that is
+  // not listed here is silently dropped before reaching the runtime.
+  // Not in the released runtime type until sandbox-runtime PR #21 lands.
+  type MandatoryCwdFlag = { denyMandatoryCwdFiles?: boolean };
+  const read = (fs: unknown) => (fs as MandatoryCwdFlag).denyMandatoryCwdFiles;
+
+  const optedOut = buildRuntimeConfig({
+    ...DEFAULT_CONFIG,
+    filesystem: { ...DEFAULT_CONFIG.filesystem!, denyMandatoryCwdFiles: false },
+  });
+  assert.equal(read(optedOut.filesystem), false);
+
+  const optedIn = buildRuntimeConfig({
+    ...DEFAULT_CONFIG,
+    filesystem: { ...DEFAULT_CONFIG.filesystem!, denyMandatoryCwdFiles: true },
+  });
+  assert.equal(read(optedIn.filesystem), true);
+
+  // Unset must stay unset so the runtime applies its own default.
+  const unset = buildRuntimeConfig(DEFAULT_CONFIG);
+  assert.equal(read(unset.filesystem), undefined);
+});
+
+test("denyMandatoryCwdFiles survives the config layer merge", () => {
+  const merged = mergeConfigLayers(
+    DEFAULT_CONFIG,
+    { filesystem: { denyMandatoryCwdFiles: true } },
+    { filesystem: { denyMandatoryCwdFiles: false } },
+  );
+  assert.equal(merged.filesystem?.denyMandatoryCwdFiles, false);
 });
 
 test("buildRuntimeConfig exposes the bundled seccomp helper on Linux", () => {
@@ -215,4 +342,26 @@ test("exec rejects when an in-flight command is aborted", async (t) => {
     exec("sleep 5", cwd, { onData: () => {}, signal: controller.signal }),
     new Error("aborted"),
   );
+});
+
+test("buildRuntimeConfig forwards credentials verbatim", () => {
+  const credentials = {
+    envVars: [{ name: "GITHUB_TOKEN", mode: "deny" as const }],
+    files: [{ path: "~/.pi/agent/auth.json", mode: "deny" as const }],
+  };
+
+  assert.deepEqual(buildRuntimeConfig({ ...DEFAULT_CONFIG, credentials }).credentials, credentials);
+  assert.equal(buildRuntimeConfig(DEFAULT_CONFIG).credentials, undefined);
+});
+
+test("network.disabled is forwarded to the fork runtime with its allowlist intact", () => {
+  const runtime = buildRuntimeConfig({
+    ...DEFAULT_CONFIG,
+    network: { ...DEFAULT_CONFIG.network!, disabled: true },
+  });
+  assert.deepEqual(runtime.network?.allowedDomains, DEFAULT_CONFIG.network?.allowedDomains);
+  assert.equal(runtime.network?.disabled, true);
+  assert.deepEqual(runtime.network?.deniedDomains, []);
+  const normal = buildRuntimeConfig(DEFAULT_CONFIG);
+  assert.equal(Array.isArray(normal.network?.allowedDomains), true);
 });

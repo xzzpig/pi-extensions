@@ -29,12 +29,13 @@ export async function applySandboxConfigChange(
   manager: ISandboxManager,
   config: SandboxConfig,
   allowances: SessionAllowances,
+  baseCwd: string = process.cwd(),
 ): Promise<void> {
   const networkRestricted = !isNetworkUnrestricted(config);
   if (networkRestricted && !(await manager.waitForNetworkInitialization())) {
     await manager.reset();
-    await initializeSandbox(manager, config, allowances);
+    await initializeSandbox(manager, config, allowances, baseCwd);
     return;
   }
-  updateSandboxConfig(manager, config, allowances);
+  updateSandboxConfig(manager, config, allowances, baseCwd);
 }

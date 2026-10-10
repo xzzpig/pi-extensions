@@ -68,6 +68,7 @@ import {
   showPermissionPrompt,
   promptWriteBlock,
   warnIfAllDomainsAllowed,
+  warnIfLinuxUnenforcedGlobs,
 } from "./ui.ts";
 
 export default function (pi: ExtensionAPI) {
@@ -78,12 +79,14 @@ export default function (pi: ExtensionAPI) {
     default: false,
   });
 
-  const localCwd = process.cwd();
-  const userShellPath = SettingsManager.create(localCwd).getShellPath();
-  const localBash = createBashToolDefinition(localCwd, { shellPath: userShellPath });
+  // localBash supplies the tool metadata (name, description, params) via the spread
+  // below. Its execute method is always overridden, and each invocation rebuilds the
+  // bash tool against the session cwd, so this cwd is never used to run commands.
+  const localBash = createBashToolDefinition(process.cwd());
 
   let sandboxEnabled = false;
   let sandboxInitialized = false;
+  let sessionCwd = process.cwd();
   // Not a constant: an in-process extension can select a profile for the live
   // session through the SandboxService, exactly like a child launch selects one
   // from the environment before the session starts.
@@ -164,7 +167,6 @@ export default function (pi: ExtensionAPI) {
   });
 
   const resolvedProfileTrust = (ctx?: ExtensionContext): boolean => {
-    if (!selectedSandboxProfile) return true;
     // Trust is resolved once at session_start from the launch env window (or
     // the host context) and then fixed for the session; the launcher restores
     // the transient trust env after the child session is created.
@@ -211,7 +213,6 @@ export default function (pi: ExtensionAPI) {
   };
 
   const resolveSandboxConfig = (cwd: string): SandboxConfig => {
-    if (!selectedSandboxProfile) return loadConfig(cwd);
     return loadConfig(cwd, {
       profileName: selectedSandboxProfile,
       projectTrusted: profileProjectTrusted,
@@ -264,7 +265,7 @@ export default function (pi: ExtensionAPI) {
     try {
       // Fork seam: applying a profile can turn network restriction on for a
       // manager initialized without a proxy; the helper re-initializes then.
-      await applySandboxConfigChange(sandboxManager, resolveSandboxConfig(cwd), allowances);
+      await applySandboxConfigChange(sandboxManager, resolveSandboxConfig(cwd), allowances, cwd);
     } catch (error) {
       recordProfileStartupFailure(error);
       if (selectedSandboxProfile) {
@@ -291,7 +292,7 @@ export default function (pi: ExtensionAPI) {
         try {
           // Validate before touching state: a rejected selection must leave the
           // session exactly as it was.
-          loadConfig(localCwd, {
+          loadConfig(sessionCwd, {
             profileName,
             projectTrusted: profileProjectTrusted,
             onWarning: reportProfileWarning,
@@ -315,7 +316,7 @@ export default function (pi: ExtensionAPI) {
         };
       }
       try {
-        await refreshSandbox(localCwd);
+        await refreshSandbox(sessionCwd);
       } catch (error) {
         // Nothing changed: the profile was never applied, so the selection goes
         // back to the one the session was actually running. The recorded startup
@@ -329,7 +330,7 @@ export default function (pi: ExtensionAPI) {
     },
     getProfile: () => selectedSandboxProfile,
     listProfiles: () =>
-      listGlobalSandboxProfiles(localCwd, { projectTrusted: profileProjectTrusted }),
+      listGlobalSandboxProfiles(sessionCwd, { projectTrusted: profileProjectTrusted }),
   };
 
   async function applyChoice(
@@ -341,15 +342,21 @@ export default function (pi: ExtensionAPI) {
     const { globalPath, projectPath } = getConfigPaths(cwd);
     const target = choice === "project" ? projectPath : globalPath;
 
-    if (kind === "domain") {
-      if (!allowances.domains.includes(value)) allowances.domains.push(value);
-      if (choice !== "session") addDomainToConfig(target, value);
-    } else if (kind === "read") {
-      if (!allowances.readPaths.includes(value)) allowances.readPaths.push(value);
-      if (choice !== "session") addReadPathToConfig(target, value);
-    } else {
-      if (!allowances.writePaths.includes(value)) allowances.writePaths.push(value);
-      if (choice !== "session") addWritePathToConfig(target, value);
+    try {
+      if (kind === "domain") {
+        if (!allowances.domains.includes(value)) allowances.domains.push(value);
+        if (choice !== "session") addDomainToConfig(target, value);
+      } else if (kind === "read") {
+        if (!allowances.readPaths.includes(value)) allowances.readPaths.push(value);
+        if (choice !== "session") addReadPathToConfig(target, value);
+      } else {
+        if (!allowances.writePaths.includes(value)) allowances.writePaths.push(value);
+        if (choice !== "session") addWritePathToConfig(target, value);
+      }
+    } catch (error) {
+      // The grant still applies for this session (allowances updated above);
+      // only persistence failed. Surface it instead of wiping the config.
+      console.error(`Warning: ${error instanceof Error ? error.message : error}`);
     }
     await refreshSandbox(cwd);
     refreshStatus();
@@ -418,7 +425,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     try {
-      await initializeSandbox(sandboxManager, config, allowances);
+      await initializeSandbox(sandboxManager, config, allowances, ctx.cwd);
       writeProfileStartupAcknowledgement();
       if (
         setProxyEnvironment &&
@@ -443,6 +450,7 @@ export default function (pi: ExtensionAPI) {
     // Cosmetic UI runs only after the sandbox state is committed, so a missing
     // theme or a failing notification can never invalidate a working sandbox.
     warnIfAllDomainsAllowed(ctx, config);
+    warnIfLinuxUnenforcedGlobs(ctx, config);
     lastStatusContext = ctx;
     updateStatus(ctx, config);
     return true;
@@ -512,8 +520,15 @@ export default function (pi: ExtensionAPI) {
         lastBlockedWrites = [];
         const profileFailure = profileBlockReason();
         if (profileFailure) return blockedSandboxResult(profileFailure);
+        const settings = SettingsManager.create(ctx.cwd, undefined, {
+          projectTrusted: profileProjectTrusted,
+        });
+        const userShellPath = settings.getShellPath();
         if (!sandboxEnabled || !sandboxInitialized) {
-          return localBash.execute(id, params, signal, onUpdate, ctx);
+          return createBashToolDefinition(ctx.cwd, {
+            shellPath: userShellPath,
+            commandPrefix: settings.getShellCommandPrefix(),
+          }).execute(id, params, signal, onUpdate, ctx);
         }
         let config: SandboxConfig;
         try {
@@ -525,15 +540,16 @@ export default function (pi: ExtensionAPI) {
               profileScopedReason("sandbox configuration could not be loaded."),
           );
         }
-        return createBashToolDefinition(localCwd, {
+        return createBashToolDefinition(ctx.cwd, {
           operations: createSandboxedBashOps(
             sandboxManager,
             userShellPath,
-            config.network?.sshProxy !== false,
+            !isNetworkUnrestricted(config) && config.network?.sshProxy !== false,
             ({ blockedWrites }) => {
               lastBlockedWrites = blockedWrites;
             },
           ),
+          commandPrefix: settings.getShellCommandPrefix(),
           shellPath: userShellPath,
         }).execute(id, params, signal, onUpdate, ctx);
       };
@@ -590,7 +606,7 @@ export default function (pi: ExtensionAPI) {
           );
         }
         const denyWrite = config.filesystem?.denyWrite ?? [];
-        const pathIsDeniedByConfig = (path: string) => matchesPattern(path, denyWrite);
+        const pathIsDeniedByConfig = (path: string) => matchesPattern(path, denyWrite, ctx.cwd);
         // denyWrite paths are never prompted; pick the first promptable one
         // and let the notice name the explicitly denied ones.
         const promptablePath =
@@ -604,11 +620,12 @@ export default function (pi: ExtensionAPI) {
         };
 
         if (promptablePath !== undefined && ctx?.hasUI) {
-          const path = canonicalizePath(promptablePath);
+          const path = canonicalizePath(promptablePath, ctx.cwd);
           const writePermission = await resolveWritePermission({
             path,
             allowWrite: effectiveWritePaths(ctx.cwd),
             denyWrite,
+            baseCwd: ctx.cwd,
             prompt: (path) =>
               promptWriteBlock(pi, ctx, path, config.permissionPromptTimeoutSeconds),
             saveWritePermission: (choice, value) => applyChoice(choice, "write", value, ctx.cwd),
@@ -678,6 +695,9 @@ export default function (pi: ExtensionAPI) {
     }
     if (!sandboxEnabled || !sandboxInitialized) return;
 
+    const userShellPath = SettingsManager.create(ctx.cwd, undefined, {
+      projectTrusted: profileProjectTrusted,
+    }).getShellPath();
     let config: SandboxConfig;
     try {
       config = resolveSandboxConfig(ctx.cwd);
@@ -722,7 +742,7 @@ export default function (pi: ExtensionAPI) {
       operations: createSandboxedBashOps(
         sandboxManager,
         userShellPath,
-        config.network?.sshProxy !== false,
+        !isNetworkUnrestricted(config) && config.network?.sshProxy !== false,
       ),
     };
   });
@@ -772,14 +792,14 @@ export default function (pi: ExtensionAPI) {
     }
 
     if (isToolCallEventType("read", event)) {
-      const path = canonicalizePath(event.input.path);
-      if (selectedSandboxProfile && matchesPattern(path, config.filesystem?.denyRead ?? [])) {
+      const path = canonicalizePath(event.input.path, ctx.cwd);
+      if (selectedSandboxProfile && matchesPattern(path, config.filesystem?.denyRead ?? [], ctx.cwd)) {
         return {
           block: true,
           reason: profileScopedReason(`Sandbox: read access denied for "${path}" (in denyRead).`),
         };
       }
-      if (!matchesPattern(path, effectiveReadPaths(ctx.cwd))) {
+      if (!matchesPattern(path, effectiveReadPaths(ctx.cwd), ctx.cwd)) {
         const choice = await promptReadBlock(pi, ctx, path, config.permissionPromptTimeoutSeconds);
         if (choice.action === "abort") {
           return {
@@ -793,11 +813,12 @@ export default function (pi: ExtensionAPI) {
     }
 
     if (isToolCallEventType("write", event) || isToolCallEventType("edit", event)) {
-      const path = canonicalizePath((event.input as { path: string }).path);
+      const path = canonicalizePath((event.input as { path: string }).path, ctx.cwd);
       const writePermission = await resolveWritePermission({
         path,
         allowWrite: effectiveWritePaths(ctx.cwd),
         denyWrite: config.filesystem?.denyWrite ?? [],
+        baseCwd: ctx.cwd,
         prompt: (path) => promptWriteBlock(pi, ctx, path, config.permissionPromptTimeoutSeconds),
         saveWritePermission: (choice, value) => applyChoice(choice, "write", value, ctx.cwd),
       });
@@ -837,6 +858,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    sessionCwd = ctx.cwd;
     disposeSandboxService?.();
     // Non-fatal profile notices surface through this session's UI (dedup means
     // the first config resolution wins).
@@ -851,7 +873,7 @@ export default function (pi: ExtensionAPI) {
     } catch {
       disposeSandboxService = undefined;
     }
-    if (selectedSandboxProfile) profileProjectTrusted = resolvedProfileTrust(ctx);
+    profileProjectTrusted = resolvedProfileTrust(ctx);
     if (pi.getFlag("no-sandbox") as boolean) {
       sandboxEnabled = false;
       if (selectedSandboxProfile) {
@@ -917,7 +939,7 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      const target = kind === "domain" ? targetArg : canonicalizePath(targetArg);
+      const target = kind === "domain" ? targetArg : canonicalizePath(targetArg, ctx.cwd);
       let config: SandboxConfig;
       try {
         config = resolveSandboxConfig(ctx.cwd);
@@ -939,7 +961,9 @@ export default function (pi: ExtensionAPI) {
         (value) => {
           if (!value) return "Rule cannot be empty.";
           const matches =
-            kind === "domain" ? domainIsAllowed(target, [value]) : matchesPattern(target, [value]);
+            kind === "domain"
+              ? domainIsAllowed(target, [value])
+              : matchesPattern(target, [value], ctx.cwd);
           return matches ? null : `Rule must match "${target}".`;
         },
         config.permissionPromptTimeoutSeconds,

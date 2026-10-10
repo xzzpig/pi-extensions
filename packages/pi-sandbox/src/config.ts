@@ -1,10 +1,21 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { type SandboxRuntimeConfig } from "@xzzpig/sandbox-runtime";
+import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 
-export type SandboxConfig = Omit<SandboxRuntimeConfig, "network"> & {
+export type SandboxConfig = Omit<SandboxRuntimeConfig, "network" | "filesystem"> & {
+  /**
+   * `denyMandatoryCwdFiles` is added to @carderne/sandbox-runtime by PR #21.
+   * Drop it from this type once a released runtime type carries the field.
+   *
+   * When false, the runtime does not deny the built-in mandatory filenames
+   * (.gitconfig, .bashrc, .mcp.json, ...) at the working directory root, which
+   * avoids them appearing in the working tree as zero-length character devices.
+   */
+  filesystem?: NonNullable<SandboxRuntimeConfig["filesystem"]> & {
+    denyMandatoryCwdFiles?: boolean;
+  };
   enabled?: boolean;
   sandboxUserShell?: boolean;
   permissionPromptTimeoutSeconds?: number;
@@ -13,11 +24,19 @@ export type SandboxConfig = Omit<SandboxRuntimeConfig, "network"> & {
     /** Route ordinary `ssh` commands through the sandbox SOCKS proxy. */
     sshProxy?: boolean;
     /**
-     * Disable all network restrictions: no domain prompts, no OS-level
-     * network isolation, no local proxy. Filesystem rules still apply.
-     * Defaults to false.
+     * Disable network sandboxing entirely (no `--unshare-net`, no proxy) while
+     * keeping filesystem sandboxing. The sandboxed process gets direct network
+     * access via the host's routing/DNS/VPN. Opt-in; reduces protection.
      */
     disabled?: boolean;
+    /**
+     * Allow the current SSH agent socket (`SSH_AUTH_SOCK`) inside the sandbox.
+     * Disabled by default. When enabled, the resolved existing socket path is
+     * added to `allowUnixSockets` at sandbox-build time so macOS `/var` →
+     * `/private/var` and the per-boot launchd directory are handled without a
+     * broad allowlist. Non-sockets and unresolved paths are ignored.
+     */
+    allowSSHAgentSocket?: boolean;
   };
 };
 
@@ -163,31 +182,90 @@ export function mergeConfigLayers(
   };
 }
 
+/**
+ * Strip `//` line and `/* *\/` block comments while preserving them inside
+ * strings, so the JSONC examples in the README parse as written.
+ */
+export function stripJsonComments(input: string): string {
+  let out = "";
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (inString) {
+      out += ch;
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      out += ch;
+      continue;
+    }
+    if (ch === "/" && input[i + 1] === "/") {
+      while (i < input.length && input[i] !== "\n") i++;
+      if (i < input.length) out += "\n";
+      continue;
+    }
+    if (ch === "/" && input[i + 1] === "*") {
+      i += 2;
+      while (i < input.length && !(input[i] === "*" && input[i + 1] === "/")) i++;
+      i++;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
+function parseConfig(configPath: string): SandboxConfigFile {
+  const parsed: unknown = JSON.parse(stripJsonComments(readFileSync(configPath, "utf-8")));
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    throw new Error("configuration must be a JSON object");
+  }
+  return parsed as SandboxConfigFile;
+}
+
 function readJsonConfig(configPath: string, warn: boolean): SandboxConfigFile {
   if (!existsSync(configPath)) return {};
   try {
-    const parsed: unknown = JSON.parse(readFileSync(configPath, "utf-8"));
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      throw new Error("configuration must be a JSON object");
-    }
-    return parsed as SandboxConfigFile;
+    return parseConfig(configPath);
   } catch (error) {
     if (warn) console.error(`Warning: Could not parse ${configPath}: ${error}`);
     return {};
   }
 }
 
+/**
+ * Read a config for the purpose of writing it back. If the file exists but
+ * cannot be parsed, throw instead of returning `{}` — otherwise a permission
+ * grant would silently overwrite (and destroy) the user's existing config.
+ */
+function readConfigForWrite(configPath: string): SandboxConfigFile {
+  if (!existsSync(configPath)) return {};
+  try {
+    return parseConfig(configPath);
+  } catch (error) {
+    throw new Error(
+      `Refusing to overwrite ${configPath}: existing file could not be parsed (${error}). ` +
+        `Fix the file manually, then retry.`,
+    );
+  }
+}
+
 export function getConfigPaths(cwd: string): { globalPath: string; projectPath: string } {
   return {
     globalPath: join(getAgentDir(), "sandbox.json"),
-    projectPath: join(cwd, ".pi", "sandbox.json"),
+    projectPath: join(cwd, CONFIG_DIR_NAME, "sandbox.json"),
   };
 }
 
-export function loadConfig(cwd: string): SandboxConfig {
+export function loadConfig(cwd: string, projectTrusted = true): SandboxConfig {
   const { globalPath, projectPath } = getConfigPaths(cwd);
   const globalConfig = readJsonConfig(globalPath, true);
-  const projectConfig = readJsonConfig(projectPath, true);
+  const projectConfig = projectTrusted ? readJsonConfig(projectPath, true) : {};
   return mergeConfigLayers(DEFAULT_CONFIG, globalConfig, projectConfig);
 }
 
@@ -197,7 +275,7 @@ function writeConfigFile(configPath: string, config: SandboxConfigFile): void {
 }
 
 export function addDomainToConfig(configPath: string, domain: string): void {
-  const config = readJsonConfig(configPath, false);
+  const config = readConfigForWrite(configPath);
   const existing = stringArray(config.network?.allowedDomains) ?? [];
   if (existing.includes(domain)) return;
 
@@ -209,7 +287,7 @@ export function addDomainToConfig(configPath: string, domain: string): void {
 }
 
 export function addReadPathToConfig(configPath: string, pathToAdd: string): void {
-  const config = readJsonConfig(configPath, false);
+  const config = readConfigForWrite(configPath);
   const existing = stringArray(config.filesystem?.allowRead) ?? [];
   if (existing.includes(pathToAdd)) return;
 
@@ -221,7 +299,7 @@ export function addReadPathToConfig(configPath: string, pathToAdd: string): void
 }
 
 export function addWritePathToConfig(configPath: string, pathToAdd: string): void {
-  const config = readJsonConfig(configPath, false);
+  const config = readConfigForWrite(configPath);
   const existing = stringArray(config.filesystem?.allowWrite) ?? [];
   if (existing.includes(pathToAdd)) return;
 

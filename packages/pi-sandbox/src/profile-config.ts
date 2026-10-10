@@ -13,6 +13,7 @@ import {
   mergeConfigLayers as mergeUpstreamConfigLayers,
   mergeObjects,
   stringArray,
+  stripJsonComments,
   type SandboxConfig,
   type SandboxConfigFile,
   type SandboxConfigOverride,
@@ -799,7 +800,7 @@ function readJsonConfigResult(
 ): { config: SandboxConfigFile; error?: Error } {
   if (!existsSync(configPath)) return { config: {} };
   try {
-    const parsed: unknown = JSON.parse(readFileSync(configPath, "utf-8"));
+    const parsed: unknown = JSON.parse(stripJsonComments(readFileSync(configPath, "utf-8")));
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       throw new Error("configuration must be a JSON object");
     }
@@ -866,7 +867,7 @@ export function loadConfig(cwd: string, options: SandboxConfigLoadOptions = {}):
     const globalPeek = readJsonConfigResult(globalPath, false);
     const projectPeek = readJsonConfigResult(projectPath, false);
     if (globalPeek.config.profiles === undefined && projectPeek.config.profiles === undefined) {
-      return loadUpstreamConfig(cwd);
+      return loadUpstreamConfig(cwd, options.projectTrusted ?? true);
     }
   }
 
@@ -880,7 +881,11 @@ export function loadConfig(cwd: string, options: SandboxConfigLoadOptions = {}):
   const projectProfileWarning = untrustedProjectProfilesWarning(projectRead.config, projectTrusted);
   if (projectProfileWarning !== undefined) options.onWarning?.(projectProfileWarning);
   if (profileName === undefined)
-    return mergeConfigLayers(DEFAULT_CONFIG, globalRead.config, projectRead.config);
+    return mergeConfigLayers(
+      DEFAULT_CONFIG,
+      globalRead.config,
+      projectTrusted === false ? {} : projectRead.config,
+    );
 
   validateSandboxProfileName(profileName);
   if (globalRead.error) {
