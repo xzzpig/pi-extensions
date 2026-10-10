@@ -3,7 +3,7 @@ import { logForDebugging } from '../utils/debug.js'
 import { whichSync } from '../utils/which.js'
 import { randomBytes } from 'node:crypto'
 import * as fs from 'fs'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import path, { join } from 'node:path'
@@ -268,6 +268,7 @@ async function linuxGetMandatoryDenyPaths(
   ripgrepConfig: { command: string; args?: string[] } = { command: 'rg' },
   maxDepth: number = DEFAULT_MANDATORY_DENY_SEARCH_DEPTH,
   abortSignal?: AbortSignal,
+  denyCwdFiles: boolean = true,
 ): Promise<string[]> {
   const cwd = process.cwd()
   // Use provided signal or create a fallback controller
@@ -277,8 +278,13 @@ async function linuxGetMandatoryDenyPaths(
 
   // Note: Settings files are added at the callsite in sandbox-manager.ts
   const denyPaths = [
-    // Dangerous files in CWD
-    ...DANGEROUS_FILES.map(f => path.resolve(cwd, f)),
+    // Dangerous files in CWD. Denying a path that does not exist requires
+    // mounting /dev/null over it, which makes the name visible to readdir
+    // and leaves a zero-length char device in the working tree for the
+    // lifetime of the command. Opt out via denyMandatoryCwdFiles: false.
+    // The ripgrep scan below is unaffected and still denies these names at
+    // any depth when they already exist.
+    ...(denyCwdFiles ? DANGEROUS_FILES.map(f => path.resolve(cwd, f)) : []),
     // Dangerous directories in CWD
     ...dangerousDirectories.map(d => path.resolve(cwd, d)),
   ]
@@ -465,6 +471,60 @@ export type LinuxDependencyOptions = {
   seccompConfig?: SeccompConfig
   bwrapPath?: string
   socatPath?: string
+  /**
+   * When false (the default secure mode), dependency checks probe whether
+   * bwrap can mount a private /proc. This fails in unprivileged containers
+   * (e.g. Docker's default), where the fix is to enable the weaker nested
+   * sandbox. Skip the probe when the weaker mode is already requested.
+   */
+  enableWeakerNestedSandbox?: boolean
+}
+
+// Probing spawns bwrap, so cache the result per resolved binary for the
+// lifetime of the process.
+const procMountProbeCache = new Map<string, boolean>()
+
+/**
+ * Probe whether bwrap can mount a private /proc with the same namespace flags
+ * the secure path uses (`--unshare-user --cap-drop ALL --unshare-pid --proc
+ * /proc`). Returns true when the mount succeeds. In unprivileged containers
+ * this fails with "Can't mount proc on /newroot/proc: Operation not
+ * permitted", which otherwise surfaces cryptically on every command.
+ */
+export function canMountPrivateProc(bwrapPath?: string): boolean {
+  const bwrap = bwrapPath ?? 'bwrap'
+  const cached = procMountProbeCache.get(bwrap)
+  if (cached !== undefined) return cached
+
+  const trueBin = whichSync('true') ?? '/bin/true'
+  const result = spawnSync(
+    bwrap,
+    [
+      '--ro-bind',
+      '/',
+      '/',
+      '--unshare-user',
+      '--cap-drop',
+      'ALL',
+      '--unshare-pid',
+      '--proc',
+      '/proc',
+      '--',
+      trueBin,
+    ],
+    { stdio: ['ignore', 'ignore', 'pipe'], timeout: 5000, encoding: 'utf8' },
+  )
+
+  // On spawn failure (e.g. bwrap missing) don't claim a proc-mount problem;
+  // the missing-binary check reports that separately.
+  const ok =
+    result.error !== undefined
+      ? true
+      : result.status === 0 ||
+        !/Operation not permitted|Can't mount proc/i.test(result.stderr ?? '')
+
+  procMountProbeCache.set(bwrap, ok)
+  return ok
 }
 
 function isExecutable(p: string): boolean {
@@ -525,6 +585,24 @@ export function checkLinuxDependencies(
     getApplySeccompBinaryPath(seccompConfig?.applyPath) === null
   ) {
     warnings.push('seccomp not available - unix socket access not restricted')
+  }
+
+  // Secure mode mounts a private /proc (--proc /proc). In unprivileged
+  // containers that EPERMs, and every sandboxed command then fails with an
+  // opaque "bwrap: Can't mount proc on /newroot/proc". Probe once and point
+  // at the fix instead. Only when bwrap is actually present.
+  if (
+    !opts?.enableWeakerNestedSandbox &&
+    errors.length === 0 &&
+    !canMountPrivateProc(bwrapPath)
+  ) {
+    errors.push(
+      'bubblewrap cannot mount a private /proc, which is expected in ' +
+        "unprivileged containers (e.g. Docker's default). Set " +
+        '"enableWeakerNestedSandbox": true in the sandbox config to run here ' +
+        '(note: this weakens isolation), or grant the container the required ' +
+        'namespace privileges.',
+    )
   }
 
   return { warnings, errors }
@@ -963,6 +1041,7 @@ async function generateFilesystemArgs(
         ripgrepConfig,
         mandatoryDenySearchDepth,
         abortSignal,
+        writeConfig.denyMandatoryCwdFiles ?? true,
     )
     // When the caller opted out of protecting non-existent dangerous
     // files, drop the entries that do not exist on the host yet. Only

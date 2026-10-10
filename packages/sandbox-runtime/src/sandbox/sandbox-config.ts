@@ -745,6 +745,16 @@ export const FilesystemConfigSchema = z.object({
         'inside allowed write paths. Existing dangerous files and user-configured denyWrite paths ' +
         'remain protected regardless of this setting. macOS and Windows are unaffected.',
     ),
+  denyMandatoryCwdFiles: z
+    .boolean()
+    .optional()
+    .describe(
+      'Deny writes to the built-in mandatory filenames (.gitconfig, .bashrc, .mcp.json, ...) at the ' +
+        'working directory root. Defaults to true. Denying a path that does not exist requires mounting ' +
+        '/dev/null over it, so each denied name is visible to readdir and appears in the working tree as ' +
+        'a zero-length character device that cannot be read, written or removed while the command runs. ' +
+        'Set false to avoid that; these names are still denied at any depth when they already exist.',
+    ),
 })
 
 /**
