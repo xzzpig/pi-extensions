@@ -9,11 +9,10 @@ issue_title: "MCP permission targets: prefix-named tools derive no server; proxy
 
 **Release:** ship independently
 
-## 928 appears in no step of `docs/architecture/architecture.md`, so it carries no `Release:` tag and belongs to no batch
-
+#928 appears in no step of `docs/architecture/architecture.md`, so it carries no `Release:` tag and belongs to no batch.
 It is a fail-open fix in the `mcp` surface with no dependency on an unshipped sibling.
 
-### Problem Statement
+## Problem Statement
 
 The `mcp` permission surface does not honor the package's own documented rule policy, and it cannot see the server a prefix-named tool belongs to.
 Two independent causes produce one symptom — a configured rule that silently never fires.
@@ -37,7 +36,7 @@ Measured on `main` through the real `PermissionManager`:
 
 The last row already emits a bare `dangerousServer` candidate on `main` and still fails: a documented `deny` masked by the catch-all above it.
 
-### Goals
+## Goals
 
 - Honor last-match-wins on the `mcp` surface: rule position decides, not candidate position.
 - Collapse the two evaluators to one — `evaluateAnyValue` — and delete `evaluateFirst`.
@@ -52,7 +51,7 @@ A `mcp: {"*": "allow", "github": "deny"}` config starts denying (a fail-open clo
 Both are the answers last-match-wins already specifies, but neither is today's behavior.
 Commit messages use `fix!:` / `feat!:` with a `BREAKING CHANGE:` footer.
 
-### Non-Goals
+## Non-Goals
 
 - **Gap 2 of #928** — routing arbitrary proxy tool names to the `mcp` surface (`registerMcpProxy`, PR #930).
   Tracked separately as [#946]; #928 closes on gap 1 alone.
@@ -68,9 +67,9 @@ Commit messages use `fix!:` / `feat!:` with a `BREAKING CHANGE:` footer.
 - `src/exposure/` — predicted unchanged.
   `isSurfaceFullyDenied` probes each configured pattern through `evaluate` directly and never calls either multi-value evaluator.
 
-### Background
+## Background
 
-#### Relevant modules
+### Relevant modules
 
 - `src/policy/rule.ts` — `evaluate` (last-match-wins over one value, `findLast`), `evaluateFirst` (first-non-default across candidates), `evaluateAnyValue` (last-match-wins across candidates), `evaluateMostRestrictive`, `isSurfaceFullyDenied`.
 - `src/policy/permission-manager.ts` — `buildCheckResult` (line 363) selects the evaluator on `PATH_SURFACES` membership; `check` feeds it from both the `tool` and `path-values` branches.
@@ -78,7 +77,7 @@ Commit messages use `fix!:` / `feat!:` with a `BREAKING CHANGE:` footer.
 - `src/access-intent/mcp-targets.ts` — `McpTargetList`, `parseQualifiedMcpToolName`, `addDerivedMcpServerTargets`, `pushMcpToolPermissionTargets`, `createMcpPermissionTargets`.
 - `src/config/policy-loader.ts` — `getConfiguredMcpServerNamesFromPaths` sorts the server list longest-first before returning it.
 
-#### Why one evaluator suffices
+### Why one evaluator suffices
 
 `normalizeInput`'s `switch` is exhaustive over `ToolKind` and gives every non-`mcp` arm a **single-element** `values` array — `skill` → `[lookupValue]`, `bash` → `[matchValue]`, `path` and `extension` → `["*"]`.
 For a single-element array the two evaluators provably agree: `evaluateFirst` skips a `layer: "default"` match and then falls back to `evaluate(values[0])`, which returns that same default rule.
@@ -87,23 +86,23 @@ The `path-values` branch of `check` passes multiple values, but every surface it
 So `mcp` is the only surface where the two differ, and deleting `evaluateFirst` is behavior-preserving everywhere else.
 This licenses removing the discriminator rather than widening it to `PATH_SURFACES.has(surface) || surface === "mcp"`, which would leave a second evaluator alive with only degenerate callers.
 
-#### Archaeology
+### Archaeology
 
 `evaluateFirst` was introduced in `55029597` (2026-05-04) as a step of #81, whose plan (`docs/plans/0081-unify-checkpermission-surface-branching.md`) declares "Pure refactor: no change to permission decisions" and lists changing decision output as a Non-Goal.
 It is a verbatim lift of the pre-#81 MCP branch's loop (`git show 55029597^:src/permission-manager.ts`, lines 575–578).
 It was never a designed matching policy and has no ADR.
 `evaluateAnyValue` arrived five weeks later (`2b7d2409`, #393) to fix the same masking, discovered first on path aliases; that plan's Non-Goals recorded "MCP keeps `evaluateFirst` (its candidates are genuinely different targets, not aliases of one path)" — a distinction that does not survive contact with the documented config above, where the masked candidates are different targets and the mask is still wrong.
 
-#### Constraints from AGENTS.md and the package skill
+### Constraints from AGENTS.md and the package skill
 
 - Default to least privilege; a configured `deny` that does not fire is the defect class this fixes.
 - Keep config files the source of truth; prefer config patterns over new runtime mechanisms.
 - `*` already crosses directory boundaries; write `~/dev/*`, never `~/dev/**`.
 - Treat any declared config field not read at runtime as a maintenance trap.
 
-### Design Overview
+## Design Overview
 
-#### One evaluator
+### One evaluator
 
 `buildCheckResult` loses its ternary:
 
@@ -117,7 +116,7 @@ const { rule, value } = evaluateAnyValue(surface, values, fullRules, flavor);
 The semantic this establishes, stated once for the docs: **a rule's position in the config decides, and the candidate list decides only which name the decision is reported under.**
 `PermissionCheckResult.target` remains the matched candidate (`permission-manager.ts:380`); `evaluateAnyValue` picks the first candidate the winning rule matches.
 
-#### Longest-prefix derivation owns its own invariant
+### Longest-prefix derivation owns its own invariant
 
 ```ts
 function findLongestPrefixServer(
@@ -144,7 +143,7 @@ Tool-name-first matches what `main` already produces for a qualified name or an 
 A prefix-named tool *is* that candidate[0] form.
 Under one evaluator this ordering no longer affects any decision; it decides only the reported `target`, and naming the tool is strictly more informative than naming its server.
 
-#### No redundant re-prefixing
+### No redundant re-prefixing
 
 `pushMcpToolPermissionTargets` guards the explicit-`server` branch:
 
@@ -158,15 +157,15 @@ targets.add(resolvedServer);
 
 `{ tool: "github_search_code", server: "github" }` today produces `github_github_search_code` and `github:github_search_code` as candidates 0 and 1 — strings no rule can usefully name, which also become the reported `target` when nothing matches.
 
-#### The derivation is heuristic, and the docs must say so
+### The derivation is heuristic, and the docs must say so
 
 A configured server `git` attaches to `git_lab_issues` from a different server (measured: candidates `["git_lab_issues", "git", "mcp_call"]`).
 Longest-match narrows this only when both servers are configured.
 This is a fail-open when the matching rule is `allow`, and it is inherent to deriving identity from a name; `docs/configuration.md` states the limit and recommends an explicit `server` argument or a qualified `server:tool` name where the distinction matters.
 
-### Module-Level Changes
+## Module-Level Changes
 
-#### Source
+### Source
 
 - `src/policy/rule.ts` — delete `evaluateFirst` (lines 220–249, including its doc comment).
   Reword `evaluateAnyValue`'s doc comment, which opens "Unlike `evaluateFirst()`" (line 254), to state its contract without the removed sibling.
@@ -175,7 +174,7 @@ This is a fail-open when the matching rule is `allow`, and it is inherent to der
 - `src/access-intent/input-normalizer.ts` — doc comment at line 105 says "feed a single `evaluateFirst()` call"; update the name.
   No code change.
 
-#### Tests
+### Tests
 
 - `test/policy/rule.test.ts` — delete `describe("evaluateFirst")` (line 480, seven cases) and the `evaluateFirst` import (line 7).
   The cases that express a still-live behavior (empty candidate list, default-layer fallback) are re-expressed against `evaluateAnyValue` rather than dropped.
@@ -183,7 +182,7 @@ This is a fail-open when the matching rule is `allow`, and it is inherent to der
 - `test/access-intent/mcp-targets.test.ts` — new prefix-derivation cases; existing suffix cases unchanged.
 - `test/policy/permission-manager-unified.test.ts` — new end-to-end matcher cases, including the documented-config regression.
 
-#### Docs
+### Docs
 
 - `docs/configuration.md` — under the `mcp` surface section (line ~500): a derivation walkthrough (qualified → longest prefix → suffix), a which-rule-shape-to-write table, the statement that rule position decides, and the heuristic's fail-open limit.
   The existing example at line 510 keeps its text — it starts working — but gains a sentence naming what each rule now does.
@@ -192,7 +191,7 @@ This is a fail-open when the matching rule is `allow`, and it is inherent to der
 - `README.md:134` already states last-match-wins for the `mcp` surface and becomes true; predicted unchanged.
 - `.pi/skills/package-pi-permission-system/SKILL.md` — grep for `evaluateFirst` returns zero hits; predicted unchanged.
 
-#### Predicted-unchanged files in the blast radius
+### Predicted-unchanged files in the blast radius
 
 | File                                    | Claim                                                                                                                              |
 | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
@@ -201,7 +200,7 @@ This is a fail-open when the matching rule is `allow`, and it is inherent to der
 | `src/service/permissions-service.ts`    | Routes through `PermissionResolver`/`PermissionManager.check`; inherits the change with no edit.                                   |
 | `src/handlers/gates/*`                  | Consume `PermissionCheckResult`; its shape is unchanged.                                                                           |
 
-### Test Impact Analysis
+## Test Impact Analysis
 
 **What the change enables.**
 Nothing was previously untestable; the gap is that nothing was tested.
@@ -222,7 +221,7 @@ Measured by forcing the path branch onto `evaluateFirst`, which turns five red i
 
 These are the regression net for the deletion: they already prove `evaluateAnyValue` is correct for a multi-candidate surface.
 
-### Invariants at risk
+## Invariants at risk
 
 - **Baseline discovery auto-allow** (`synthesizeBaseline`, `docs/configuration.md`: "Baseline discovery targets auto-allow when any explicit `mcp: allow` rule exists").
   Constituency: a user who grants one MCP server and expects discovery to stop prompting.
@@ -241,7 +240,7 @@ These are the regression net for the deletion: they already prove `evaluateAnyVa
   This is the claim that licenses deleting `evaluateFirst`.
   It is structural (`normalizeInput`'s exhaustive `switch`) rather than empirical, so it is pinned directly rather than inferred from a green suite.
 
-### TDD Order
+## TDD Order
 
 The Tidy-First assessor read `rule.ts`, `permission-manager.ts`, `mcp-targets.ts`, and the four test files and recommended **no** preparatory refactorings: the deletion is a clean single-call-site removal with no shared helpers or exports to untangle, `buildCheckResult`'s signature is untouched by the edit, and both test files already nest unit-then-scenario behind a capable harness (`createManagerWithConfig`, `checkTool`), so the new cases drop in without a new fixture.
 Its one correction to the design summary is folded in above: `addDerivedMcpServerTargets` has no early exit today, so the current defect is unbounded fan-out across every suffix-matching server, not merely a fragile dependence on the caller's sort order.
@@ -292,7 +291,7 @@ Its one correction to the design summary is folded in above: `addDerivedMcpServe
 
 The `BREAKING CHANGE:` footer belongs on steps 2 and 3, naming both directions: a `deny` after a permissive catch-all begins to fire, and an `allow` after a restrictive one does too.
 
-### Risks and Mitigations
+## Risks and Mitigations
 
 - **A user's permissive config tightens on upgrade and breaks a working setup.**
   A `mcp: {"*": "allow", "github": "deny"}` config silently allowed everything and now denies github calls.
@@ -312,7 +311,7 @@ The `BREAKING CHANGE:` footer belongs on steps 2 and 3, naming both directions: 
   Measured: both changes together leave 4413/4413 passing.
   Mitigation: every step names a killing mutation, and step 2's is the whole point — restoring the ternary must turn the new cases red.
 
-### Open Questions
+## Open Questions
 
 - Should `mcp` eventually adopt `evaluateMostRestrictive` instead, so a `deny` on any candidate wins regardless of position?
   That is a different policy from last-match-wins and would contradict `README.md:134`; not proposed here.

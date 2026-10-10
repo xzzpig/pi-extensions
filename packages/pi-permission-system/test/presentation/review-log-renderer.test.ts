@@ -43,6 +43,22 @@ describe("renderReviewLogFacts", () => {
     });
   });
 
+  it("records the spelling the rule matched, when not the command as typed", () => {
+    expect(
+      renderReviewLogFacts(
+        payload({
+          surface: "bash",
+          matchedPattern: "rm /tmp/a/*",
+          matchedSpelling: "rm /tmp/a/x",
+        }),
+      ),
+    ).toEqual({
+      surface: "bash",
+      matchedPattern: "rm /tmp/a/*",
+      matchedSpelling: "rm /tmp/a/x",
+    });
+  });
+
   it("records the nested context an offending bash unit ran in", () => {
     expect(
       renderReviewLogFacts(

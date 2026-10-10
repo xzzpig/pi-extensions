@@ -1,10 +1,10 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AskDialogRelease } from "#src/authority/ask-dialog-queue";
 import type { ConfigIssueReporting } from "#src/config/config-issue-reporter";
+import type { PolicyIssueReporting } from "#src/config/policy-issue-reporter";
 import { PERMISSION_SYSTEM_STATUS_KEY } from "#src/config/status";
 import type { DecisionSummaryWriter } from "#src/logging/decision-audit";
 import type { SessionLogger } from "#src/logging/session-logger";
-import type { PermissionResolver } from "#src/policy/permission-resolver";
 import type { ServiceLifecycle } from "#src/service/service-lifecycle";
 import type { PermissionSession } from "#src/session/permission-session";
 
@@ -41,7 +41,9 @@ export const UNTRUSTED_PROJECT_MESSAGE =
  *
  * Constructor deps:
  * - `session` — encapsulates all mutable session state and lifecycle operations
- * - `resolver` — owns permission-query surface: `getConfigIssues`
+ * - `policyIssues` — reports what composing policy revealed (a fail-closed clamp,
+ *   a port notice) for the agent the session names, latched per notice; driven
+ *   here and on every turn, so a clamp caused mid-session is explained (#953)
  * - `serviceLifecycle` — owns the process-global service publication;
  *   `activate` publishes (skipped for registered subagent children) and emits
  *   the ready event; `teardown` unsubscribes all session listeners and unpublishes
@@ -56,7 +58,7 @@ export const UNTRUSTED_PROJECT_MESSAGE =
 export class SessionLifecycleHandler {
   constructor(
     private readonly session: PermissionSession,
-    private readonly resolver: PermissionResolver,
+    private readonly policyIssues: PolicyIssueReporting,
     private readonly serviceLifecycle: ServiceLifecycle,
     private readonly logger: SessionLogger,
     private readonly audit: DecisionSummaryWriter,
@@ -84,10 +86,7 @@ export class SessionLifecycleHandler {
     }
 
     const agentName = this.session.resolveAgentName(ctx);
-    const policyIssues = this.resolver.getConfigIssues(agentName ?? undefined);
-    for (const issue of policyIssues) {
-      this.logger.warn(issue);
-    }
+    this.policyIssues.report(agentName ?? undefined);
 
     if (event.reason === "reload") {
       this.logger.debug("lifecycle.reload", {

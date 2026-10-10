@@ -273,3 +273,70 @@ describe("ShellVariables.scan", () => {
     }
   });
 });
+
+describe("ShellVariables.spellHomeAtStart", () => {
+  /** The spelling `text` gets inside the program `command`. */
+  async function spellingIn(
+    command: string,
+    text: string,
+  ): Promise<string | undefined> {
+    const parser = await getParser();
+    const tree = parser.parse(command);
+    if (!tree) throw new Error("parser.parse returned null");
+    try {
+      return ShellVariables.scan([tree.rootNode]).spellHomeAtStart(text);
+    } finally {
+      tree.delete();
+    }
+  }
+
+  describe("a leading home prefix is spelled as the startup home", () => {
+    const variables = ShellVariables.UNREBOUND;
+
+    it.each([
+      ["~/bin/x", "/bin/x"],
+      ["~", ""],
+      ["$HOME/bin/x --y", "/bin/x --y"],
+      ["${HOME}/bin/x", "/bin/x"],
+      ["$HOME", ""],
+    ])("%s", (text, rest) => {
+      expect(variables.spellHomeAtStart(text)).toBe(`${homedir()}${rest}`);
+    });
+
+    it("keeps the rest of the text verbatim rather than normalizing it as a path", () => {
+      expect(variables.spellHomeAtStart("~/evil /x/../../safe")).toBe(
+        `${homedir()}/evil /x/../../safe`,
+      );
+    });
+  });
+
+  describe("text bash does not expand from HOME gets no spelling", () => {
+    const variables = ShellVariables.UNREBOUND;
+
+    it.each([
+      "~\\bin\\x",
+      "~user/x",
+      "$HOMEDIR/x",
+      "${HOME:-/tmp}/x",
+      "echo ~/x",
+      '"~/bin/x"',
+      "/abs/bin/x",
+    ])("%s", (text) => {
+      expect(variables.spellHomeAtStart(text)).toBeUndefined();
+    });
+  });
+
+  describe("a program that rebinds HOME gets no spelling", () => {
+    it.each(["HOME=/tmp; ~/x", "export HOME=/tmp", "HOME=/tmp ~/x"])(
+      "%s",
+      async (command) => {
+        expect(await spellingIn(command, "~/x")).toBeUndefined();
+        expect(await spellingIn(command, "$HOME/x")).toBeUndefined();
+      },
+    );
+
+    it("spells it when the program rebinds only PWD", async () => {
+      expect(await spellingIn("PWD=/tmp; ~/x", "~/x")).toBe(`${homedir()}/x`);
+    });
+  });
+});

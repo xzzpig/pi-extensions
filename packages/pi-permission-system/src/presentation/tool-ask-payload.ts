@@ -44,6 +44,7 @@ export function buildToolAskPayload(facts: ToolAskFacts): PromptPayload {
       invokedToolName: distinctInvokedName(facts),
       value: askValue(check, bash, mcp),
       matchedPattern: check.matchedPattern ?? null,
+      matchedSpelling: check.matchedSpelling ?? null,
       commandContext: check.commandContext ?? null,
       executedUnit: check.executedUnit ?? null,
     },

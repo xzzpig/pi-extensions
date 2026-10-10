@@ -17,7 +17,7 @@
  * See `docs/decisions/0009-bash-path-projection-completeness-contract.md`.
  */
 import { homedir } from "node:os";
-import { hasHomePrefix } from "#src/path/expand-home";
+import { hasHomePrefix, splitHomePrefix } from "#src/path/expand-home";
 
 import type { TSNode } from "./parser";
 
@@ -85,6 +85,24 @@ export class ShellVariables {
    */
   spellsReboundHome(token: string): boolean {
     return this.rebound.has("HOME") && hasHomePrefix(token);
+  }
+
+  /**
+   * `text` with a leading `~` / `$HOME` / `${HOME}` spelled as the startup
+   * home, or `undefined` when it opens with none or the program rebinds `HOME`.
+   *
+   * The complement of {@link spellsReboundHome}: the spelling a command-pattern
+   * rule written with a home prefix is compiled to, so the rule matches the
+   * command as the shell runs it. The rest is kept verbatim, never
+   * path-normalized, because `..` in an argument is not a path step of the
+   * command's name. A backslash after the prefix gets none, because bash does
+   * not expand a tilde prefix holding a quoted character.
+   */
+  spellHomeAtStart(text: string): string | undefined {
+    if (this.rebound.has("HOME")) return undefined;
+    const rest = splitHomePrefix(text);
+    if (rest === undefined || rest.startsWith("\\")) return undefined;
+    return homedir() + rest;
   }
 
   /**

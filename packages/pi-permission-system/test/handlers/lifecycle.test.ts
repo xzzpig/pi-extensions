@@ -11,12 +11,9 @@ import type { ServiceLifecycle } from "#src/service/service-lifecycle";
 import {
   makeConfigIssueReporter,
   makeCtx,
+  makePolicyIssueReporter,
 } from "#test/helpers/handler-fixtures";
-import {
-  makeLogger,
-  makeRealResolver,
-  makeRealSession,
-} from "#test/helpers/session-fixtures";
+import { makeLogger, makeRealSession } from "#test/helpers/session-fixtures";
 
 // ── status stub ────────────────────────────────────────────────────────────
 vi.mock("#src/config/status", () => ({
@@ -27,15 +24,8 @@ vi.mock("#src/config/status", () => ({
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
-function makeSetup(opts?: { configIssues?: string[] }) {
-  const { session, permissionManager, sessionRules, forwarding, configStore } =
-    makeRealSession();
-  const { resolver } = makeRealResolver(permissionManager, sessionRules);
-  if (opts?.configIssues) {
-    vi.mocked(permissionManager.getConfigIssues).mockReturnValue(
-      opts.configIssues,
-    );
-  }
+function makeSetup() {
+  const { session, forwarding, configStore } = makeRealSession();
   const serviceLifecycle: ServiceLifecycle = {
     activate: vi.fn<ServiceLifecycle["activate"]>(),
     teardown: vi.fn<ServiceLifecycle["teardown"]>(),
@@ -45,10 +35,11 @@ function makeSetup(opts?: { configIssues?: string[] }) {
   const logger = makeLogger();
   const audit = { writeSummary: vi.fn<(logger: unknown) => void>() };
   const configIssues = makeConfigIssueReporter();
+  const policyIssues = makePolicyIssueReporter();
   const dialogs = { releaseAll: vi.fn<AskDialogRelease["releaseAll"]>() };
   const handler = new SessionLifecycleHandler(
     session,
-    resolver,
+    policyIssues,
     serviceLifecycle,
     logger,
     audit,
@@ -58,8 +49,7 @@ function makeSetup(opts?: { configIssues?: string[] }) {
   return {
     handler,
     session,
-    resolver,
-    permissionManager,
+    policyIssues,
     logger,
     forwarding,
     configStore,
@@ -136,16 +126,31 @@ describe("handleSessionStart", () => {
     expect(spy).toHaveBeenCalledWith(ctx);
   });
 
-  it("notifies each policy issue", async () => {
-    const { handler, logger } = makeSetup({
-      configIssues: ["issue A", "issue B"],
+  it("drives the policy-issue report for the agent the session names", async () => {
+    const ctx = makeCtx({
+      sessionManager: {
+        ...makeCtx().sessionManager,
+        getEntries: vi.fn().mockReturnValue([
+          {
+            type: "custom",
+            customType: "active_agent",
+            data: { name: "reviewer" },
+          },
+        ]),
+      } as unknown as ReturnType<typeof makeCtx>["sessionManager"],
     });
-    await handler.handleSessionStart({ reason: "startup" }, makeCtx());
-    expect(logger.warn).toHaveBeenCalledWith("issue A");
-    expect(logger.warn).toHaveBeenCalledWith("issue B");
+    const { handler, policyIssues } = makeSetup();
+    await handler.handleSessionStart({ reason: "startup" }, ctx);
+    expect(policyIssues.report).toHaveBeenCalledExactlyOnceWith("reviewer");
   });
 
-  it("does not warn when there are no policy issues", async () => {
+  it("drives the policy-issue report for no agent when none is named", async () => {
+    const { handler, policyIssues } = makeSetup();
+    await handler.handleSessionStart({ reason: "startup" }, makeCtx());
+    expect(policyIssues.report).toHaveBeenCalledExactlyOnceWith(undefined);
+  });
+
+  it("does not warn on its own when there is nothing to report", async () => {
     const { handler, logger } = makeSetup();
     await handler.handleSessionStart({ reason: "startup" }, makeCtx());
     expect(logger.warn).not.toHaveBeenCalled();

@@ -29,7 +29,7 @@ const HOME_PREFIXES = ["~", "$HOME", "${HOME}"] as const;
  * All other patterns are returned unchanged.
  */
 export function expandHomePath(pattern: string): string {
-  const rest = afterHomePrefix(pattern);
+  const rest = splitHomePrefix(pattern);
   if (rest === undefined) return pattern;
   return rest === "" ? homedir() : join(homedir(), rest.slice(1));
 }
@@ -39,14 +39,18 @@ export function expandHomePath(pattern: string): string {
  * directory.
  */
 export function hasHomePrefix(value: string): boolean {
-  return afterHomePrefix(value) !== undefined;
+  return splitHomePrefix(value) !== undefined;
 }
 
 /**
  * What follows a recognized home prefix (`""`, or a separator and the rest),
  * or `undefined` when `value` has none.
+ *
+ * Exported so a caller that must not path-normalize the rest (a bash command
+ * string, which {@link expandHomePath}'s `join` would rewrite across its
+ * arguments) reads the same prefix table.
  */
-function afterHomePrefix(value: string): string | undefined {
+export function splitHomePrefix(value: string): string | undefined {
   for (const prefix of HOME_PREFIXES) {
     if (!value.startsWith(prefix)) continue;
     const rest = value.slice(prefix.length);

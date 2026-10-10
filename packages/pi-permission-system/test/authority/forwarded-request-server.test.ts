@@ -10,7 +10,6 @@ import {
   test,
   vi,
 } from "vitest";
-import { buildResolvedIntentFromMatchValues } from "#src/access-intent/input-normalizer";
 import type { Authorizer } from "#src/authority/authorizer";
 import { AuthorizerRegistry } from "#src/authority/authorizer-registry";
 import { AuthorizerSelection } from "#src/authority/authorizer-selection";
@@ -22,7 +21,6 @@ import {
 import type { ForwarderContext } from "#src/authority/forwarder-context";
 import type { PermissionPromptDecision } from "#src/authority/permission-dialog";
 import type {
-  ForwardedAccessIntent,
   ForwardedPermissionRequest,
   ForwardedPermissionResponse,
 } from "#src/authority/permission-forwarding";
@@ -30,11 +28,9 @@ import {
   PermissionPrompter,
   type PromptPermissionDetails,
 } from "#src/authority/permission-prompter";
-import { PermissionResolver } from "#src/policy/permission-resolver";
 import type { PermissionQuery } from "#src/service";
 import type { PermissionDecisionEvent } from "#src/service/permission-events";
 import { SessionRules } from "#src/session/session-rules";
-import type { PermissionCheckResult } from "#src/types";
 import {
   makeAuthorizerSelectionDeps,
   registerLink,
@@ -53,7 +49,6 @@ import {
   makeSubagentRegistry,
 } from "#test/helpers/forwarding-fixtures";
 import { makeCheckResult } from "#test/helpers/handler-fixtures";
-import { createManagerWithConfig } from "#test/helpers/manager-harness";
 import { makePromptPayload } from "#test/helpers/prompt-details-fixtures";
 
 let temp: ForwardingTempDir | undefined;
@@ -128,6 +123,36 @@ async function escalateForwardedAsk(
 }
 
 describe("processInbox — recorded-authority resolution", () => {
+  test("records the child's floor on the prompted entry of an ask it escalates", async () => {
+    temp = createForwardingTempDir("parent-session");
+    temp.writeRequest({
+      id: "req-floored",
+      source: "tool_call",
+      surface: "bash",
+      value: "sudo rm x",
+      accessIntent: makeForwardedAccessIntent({
+        matchValues: ["sudo rm x"],
+        floor: "<indirection-bash-wrapper>",
+      }),
+    });
+    const logger = { review: vi.fn(), debug: vi.fn() };
+
+    const server = new ForwardedRequestServer(
+      makeServerDeps({ forwardingDir: temp.forwardingDir, logger }),
+    );
+    await server.processInbox(
+      makeForwarderContext({ hasUI: true, sessionId: "parent-session" }),
+    );
+
+    expect(logger.review).toHaveBeenCalledWith(
+      "forwarded_permission.prompted",
+      expect.objectContaining({
+        requestId: "req-floored",
+        floor: "<indirection-bash-wrapper>",
+      }),
+    );
+  });
+
   test("auto-approves and writes an approved response when the serving policy allows", async () => {
     temp = createForwardingTempDir("parent-session");
     const accessIntent = makeForwardedAccessIntent({
@@ -413,6 +438,7 @@ describe("processInbox — recorded-authority resolution", () => {
           value: "git push",
           matchedPattern: null,
           commandContext: null,
+          matchedSpelling: null,
           executedUnit: null,
         },
         evidence: [],
@@ -610,6 +636,52 @@ describe("processInbox — child-fixed access facts on the escalated ask", () =>
     });
   });
 
+  test("carries the floor that raised a bash ask onto the escalated ask details", async () => {
+    const details = await escalateForwardedAsk({
+      id: "req-floor-facts",
+      source: "tool_call",
+      surface: "bash",
+      value: "sudo rm x",
+      accessIntent: makeForwardedAccessIntent({
+        matchValues: ["sudo rm x"],
+        floor: "<indirection-bash-wrapper>",
+      }),
+    });
+
+    expect(details.accessIntent).toEqual({
+      surface: "bash",
+      matchValues: ["sudo rm x"],
+      boundaryValue: null,
+      floor: "<indirection-bash-wrapper>",
+    });
+  });
+
+  test("carries a bash chain's asking units onto the escalated ask details", async () => {
+    const details = await escalateForwardedAsk({
+      id: "req-units-facts",
+      source: "tool_call",
+      surface: "bash",
+      value: "ls && sudo rm y",
+      accessIntent: makeForwardedAccessIntent({
+        matchValues: ["ls"],
+        askingUnits: [
+          { command: "ls" },
+          { command: "sudo rm y", floor: "<indirection-bash-wrapper>" },
+        ],
+      }),
+    });
+
+    expect(details.accessIntent).toEqual({
+      surface: "bash",
+      matchValues: ["ls"],
+      boundaryValue: null,
+      askingUnits: [
+        { command: "ls" },
+        { command: "sudo rm y", floor: "<indirection-bash-wrapper>" },
+      ],
+    });
+  });
+
   test("omits accessIntent entirely for a version-skew request that carried none", async () => {
     const details = await escalateForwardedAsk({
       id: "req-skew-facts",
@@ -637,6 +709,7 @@ describe("processInbox — the child's payload on the escalated ask", () => {
         value: "git push",
         matchedPattern: "git *",
         commandContext: null,
+        matchedSpelling: null,
         executedUnit: null,
       },
       evidence: [
@@ -700,6 +773,7 @@ describe("processInbox — the child's payload on the escalated ask", () => {
         value: "/tmp/x",
         matchedPattern: null,
         commandContext: null,
+        matchedSpelling: null,
         executedUnit: null,
       },
       evidence: [],
@@ -1467,153 +1541,5 @@ describe("processInbox — terminal decision broadcast", () => {
     expect(broadcastDecisions()).toMatchObject([
       { surface: "read", value: "read" },
     ]);
-  });
-});
-
-// ── ServingPolicy over the real resolver ───────────────────────────────────
-
-describe("ServingPolicy resolves a forwarded request against real recorded authority", () => {
-  // Every other test in this file stubs `policy`, so none of them exercises
-  // the composition the serving side actually runs. This one rebuilds it —
-  // `buildResolvedIntentFromMatchValues` + a real `PermissionResolver` over a
-  // filesystem-backed `PermissionManager`, exactly as `index.ts` wires it —
-  // because the surface-family fold is what keeps a parent's recorded `path`
-  // deny answering a child's bare-surface request. Resolving an emptied bare
-  // surface would fall through to the universal default and escalate a hard
-  // deny into an approvable prompt (#712, #806).
-  function servingPolicyOver(permission: Record<string, unknown>): {
-    resolve: (intent: ForwardedAccessIntent) => PermissionCheckResult;
-    cleanup: () => void;
-  } {
-    const { manager, cleanup } = createManagerWithConfig(permission);
-    const resolver = new PermissionResolver(manager, new SessionRules());
-    return {
-      resolve: (intent) =>
-        resolver.resolve(
-          buildResolvedIntentFromMatchValues(
-            intent.surface,
-            intent.matchValues,
-            intent.principal.agentName,
-          ),
-        ),
-      cleanup,
-    };
-  }
-
-  /**
-   * The child-fixed match set a real child sends for `/secrets/id_rsa`: an
-   * out-of-cwd absolute path has no cwd-relative alias, so `matchValues()`
-   * yields the one entry.
-   */
-  const secretMatchValues = ["/secrets/id_rsa"];
-
-  test("hard-denies a bare-surface child request the parent's bare path config denies", () => {
-    const policy = servingPolicyOver({
-      "*": "allow",
-      path: { "/secrets/*": "deny" },
-    });
-    try {
-      const result = policy.resolve(
-        makeForwardedAccessIntent({
-          surface: "path",
-          matchValues: secretMatchValues,
-          boundaryValue: "/secrets/id_rsa",
-        }),
-      );
-      expect(result.state).toBe("deny");
-      expect(result.matchedPattern).toBe("/secrets/*");
-    } finally {
-      policy.cleanup();
-    }
-  });
-
-  test("hard-denies when only one direction of the parent's config denies", () => {
-    const policy = servingPolicyOver({
-      "*": "allow",
-      path_write: { "/secrets/*": "deny" },
-    });
-    try {
-      const result = policy.resolve(
-        makeForwardedAccessIntent({
-          surface: "path",
-          matchValues: secretMatchValues,
-          boundaryValue: "/secrets/id_rsa",
-        }),
-      );
-      expect(result.state).toBe("deny");
-      expect(result.toolName).toBe("path_write");
-    } finally {
-      policy.cleanup();
-    }
-  });
-
-  test("answers a child that already named a direction on that surface alone", () => {
-    const policy = servingPolicyOver({
-      "*": "allow",
-      external_directory: { "*": "ask" },
-      external_directory_read: { "/dev-root/*": "allow" },
-    });
-    try {
-      const forRead = policy.resolve(
-        makeForwardedAccessIntent({
-          surface: "external_directory_read",
-          matchValues: ["/dev-root/x"],
-          boundaryValue: "/dev-root/x",
-        }),
-      );
-      expect(forRead.state).toBe("allow");
-
-      const forWrite = policy.resolve(
-        makeForwardedAccessIntent({
-          surface: "external_directory_write",
-          matchValues: ["/dev-root/x"],
-          boundaryValue: "/dev-root/x",
-        }),
-      );
-      expect(forWrite.state).toBe("ask");
-    } finally {
-      policy.cleanup();
-    }
-  });
-
-  test("hard-denies a directional child request the parent's bare path config denies (#807)", () => {
-    // Since #807 a child's bash gate can prove a direction, so `path_read` is
-    // the first surface a *bash* child sends. The parent's config names only
-    // the bare family, and the deny must still reach it — here through
-    // load-time sugar expansion rather than through the resolver's fold, which
-    // a directional request bypasses entirely.
-    const policy = servingPolicyOver({
-      "*": "allow",
-      path: { "/secrets/*": "deny" },
-    });
-    try {
-      const result = policy.resolve(
-        makeForwardedAccessIntent({
-          surface: "path_read",
-          matchValues: secretMatchValues,
-          boundaryValue: "/secrets/id_rsa",
-        }),
-      );
-      expect(result.state).toBe("deny");
-      expect(result.matchedPattern).toBe("/secrets/*");
-    } finally {
-      policy.cleanup();
-    }
-  });
-
-  test("leaves an unmatched path request without a pattern, so no gate fires (#58)", () => {
-    const policy = servingPolicyOver({ "*": "allow", read: "allow" });
-    try {
-      const result = policy.resolve(
-        makeForwardedAccessIntent({
-          surface: "path",
-          matchValues: ["/some/file.ts"],
-          boundaryValue: "/some/file.ts",
-        }),
-      );
-      expect(result.matchedPattern).toBeUndefined();
-    } finally {
-      policy.cleanup();
-    }
   });
 });

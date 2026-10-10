@@ -384,6 +384,68 @@ describe("describeToolGate", () => {
     });
   });
 
+  it("carries the floor that raised a bash ask on promptDetails", () => {
+    const check = makeCheckResult("ask", {
+      toolName: "bash",
+      command: "sudo rm x",
+      matchedPattern: "<indirection-bash-wrapper>",
+      floor: "<indirection-bash-wrapper>",
+    });
+    const desc = describeToolGate(
+      makeTcc({ toolName: "bash", input: { command: "sudo rm x" } }),
+      check,
+      makeFormatter(),
+    );
+    expect(desc.promptDetails.accessIntent).toEqual({
+      surface: "bash",
+      matchValues: ["sudo rm x"],
+      boundaryValue: null,
+      floor: "<indirection-bash-wrapper>",
+    });
+  });
+
+  it("carries a bash chain's asking units on promptDetails", () => {
+    const check = makeCheckResult("ask", {
+      toolName: "bash",
+      command: "ls",
+      askingUnits: [
+        { command: "ls" },
+        { command: "sudo rm y", floor: "<indirection-bash-wrapper>" },
+      ],
+    });
+    const desc = describeToolGate(
+      makeTcc({ toolName: "bash", input: { command: "ls && sudo rm y" } }),
+      check,
+      makeFormatter(),
+    );
+    expect(desc.promptDetails.accessIntent).toStrictEqual({
+      surface: "bash",
+      matchValues: ["ls"],
+      boundaryValue: null,
+      askingUnits: [
+        { command: "ls" },
+        { command: "sudo rm y", floor: "<indirection-bash-wrapper>" },
+      ],
+    });
+  });
+
+  it("leaves the asking-units key off a bash ask that carries none", () => {
+    const check = makeCheckResult("ask", {
+      toolName: "bash",
+      command: "git status",
+    });
+    const desc = describeToolGate(
+      makeTcc({ toolName: "bash", input: { command: "git status" } }),
+      check,
+      makeFormatter(),
+    );
+    expect(desc.promptDetails.accessIntent).toStrictEqual({
+      surface: "bash",
+      matchValues: ["git status"],
+      boundaryValue: null,
+    });
+  });
+
   it("populates logContext with tool input preview fields", () => {
     const check = makeCheckResult("ask", { toolName: "bash", command: "ls" });
     const desc = describeToolGate(

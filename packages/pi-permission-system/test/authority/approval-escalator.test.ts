@@ -380,6 +380,7 @@ describe("ParentAuthorizer", () => {
           value: "git push",
           matchedPattern: "git *",
           commandContext: null,
+          matchedSpelling: null,
           executedUnit: null,
         },
         evidence: [{ label: "command", text: "git push", detail: null }],

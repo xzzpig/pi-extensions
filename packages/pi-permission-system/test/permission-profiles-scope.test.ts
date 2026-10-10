@@ -211,7 +211,7 @@ describe("profile fail-closed", () => {
     expect(read.state).toBe("ask");
     expect(read.origin).toBe("fail-closed");
 
-    const issues = manager.getConfigIssues("worker");
+    const issues = manager.getPolicyIssues("worker");
     expect(
       issues.some((issue) => issue.includes("Invalid profile configuration")),
     ).toBe(true);
@@ -235,7 +235,7 @@ describe("profile fail-closed", () => {
     expect(read.state).toBe("ask");
     expect(read.origin).toBe("fail-closed");
 
-    const issues = manager.getConfigIssues("worker");
+    const issues = manager.getPolicyIssues("worker");
     expect(
       issues.some((issue) => issue.includes("Permission profile 'empty'")),
     ).toBe(true);
@@ -265,7 +265,7 @@ describe("project-scoped profile selection end-to-end (trusted / untrusted)", ()
     const read = manager.check({ ...readCheck(), agentName: "worker" });
     expect(read.state).toBe("ask");
     expect(read.origin).toBe("profile-project");
-    expect(manager.getConfigIssues("worker")).toEqual([]);
+    expect(manager.getPolicyIssues("worker")).toEqual([]);
   });
 
   it("degrades a same-named selection to the global profile when untrusted", () => {
@@ -288,7 +288,7 @@ describe("project-scoped profile selection end-to-end (trusted / untrusted)", ()
     expect(read.state).toBe("allow");
     expect(read.origin).toBe("profile-global");
 
-    const issues = manager.getConfigIssues("worker");
+    const issues = manager.getPolicyIssues("worker");
     expect(
       issues.some((issue) =>
         issue.includes(
@@ -313,7 +313,7 @@ describe("project-scoped profile selection end-to-end (trusted / untrusted)", ()
     expect(read.state).toBe("ask");
     expect(read.origin).toBe("fail-closed");
 
-    const issues = manager.getConfigIssues("worker");
+    const issues = manager.getPolicyIssues("worker");
     expect(
       issues.some((issue) =>
         issue.includes(
@@ -331,10 +331,10 @@ describe("project-scoped profile selection end-to-end (trusted / untrusted)", ()
   });
 });
 
-describe("untrusted project profiles warning via getConfigIssues", () => {
+describe("untrusted project profiles warning via getPolicyIssues", () => {
   // projectTrusted=false forces resolveProfileScopes to treat the project
   // registry as empty and emit the «N not applied» warning; the manager path
-  // reaches it through ResolvedPermissions.warnings → getConfigIssues.
+  // reaches it through ResolvedPermissions.warnings → getPolicyIssues.
   function untrustedManager() {
     const manager = createInMemoryManager({
       global: {
@@ -354,7 +354,7 @@ describe("untrusted project profiles warning via getConfigIssues", () => {
   }
 
   it("reports the project profile count with singular/plural wording", () => {
-    const issues = untrustedManager().getConfigIssues("worker");
+    const issues = untrustedManager().getPolicyIssues("worker");
     expect(
       issues.some((issue) =>
         issue.includes(
@@ -371,7 +371,7 @@ describe("untrusted project profiles warning via getConfigIssues", () => {
       agent: { worker: { profileName: "dev" } },
     });
     manager.configureForCwd(undefined);
-    const issues = manager.getConfigIssues("worker");
+    const issues = manager.getPolicyIssues("worker");
     expect(
       issues.some((issue) =>
         issue.includes(
@@ -388,7 +388,7 @@ describe("untrusted project profiles warning via getConfigIssues", () => {
       agent: { worker: { profileName: "dev" } },
     });
     manager.configureForCwd("/trusted/project");
-    const issues = manager.getConfigIssues("worker");
+    const issues = manager.getPolicyIssues("worker");
     expect(
       issues.some((issue) => issue.includes("not applied (project is not trusted)")),
     ).toBe(false);
@@ -400,7 +400,7 @@ describe("untrusted project profiles warning via getConfigIssues", () => {
       project: { profiles: { dev: { permission: { read: "ask" } } } },
       agent: { worker: { profileName: "dev" } },
     });
-    const issues = manager.getConfigIssues("worker");
+    const issues = manager.getPolicyIssues("worker");
     expect(
       issues.some((issue) => issue.includes("not applied (project is not trusted)")),
     ).toBe(false);
@@ -412,7 +412,7 @@ describe("untrusted project profiles warning via getConfigIssues", () => {
       agent: { worker: { profileName: "dev" } },
     });
     manager.configureForCwd(undefined);
-    const issues = manager.getConfigIssues("worker");
+    const issues = manager.getPolicyIssues("worker");
     expect(
       issues.some((issue) => issue.includes("not applied (project is not trusted)")),
     ).toBe(false);

@@ -14,7 +14,7 @@ import {
 import { buildToolAskPayload } from "#src/presentation/tool-ask-payload";
 import { SessionApproval } from "#src/session/session-approval";
 import type { ToolPreviewFormatter } from "#src/tool-input/tool-preview-formatter";
-import type { PermissionCheckResult } from "#src/types";
+import type { AskingBashUnit, PermissionCheckResult } from "#src/types";
 import type { GateDescriptor } from "./descriptor";
 import {
   accessFactsFromPath,
@@ -173,10 +173,15 @@ export function describeToolGate(
   );
 
   // A path-bearing tool carries the AccessPath's alias set; every other surface
-  // (bash command, MCP target, plain tool) carries its already-portable value.
+  // (bash command, MCP target, plain tool) carries its already-portable value,
+  // and a bash ask the floor that raised it.
   const accessIntent = pathAccess
     ? accessFactsFromPath(gateSurface, pathAccess.path)
-    : accessFactsFromValue(gateSurface, decisionValue);
+    : {
+        ...accessFactsFromValue(gateSurface, decisionValue),
+        ...floorFact(check),
+        ...askingUnitsFact(check),
+      };
 
   return {
     surface: gateSurface,
@@ -225,4 +230,28 @@ function floorExemptionFact(
   return check.floorExemption === undefined
     ? {}
     : { floorExemption: check.floorExemption };
+}
+
+/**
+ * The floor that raised a bash ask, as a child-fixed fact for the wire.
+ *
+ * Only the child's parse knows a unit was a wrapper or failed to parse, so the
+ * serving node of a forwarded ask cannot recompute it (ADR 0008). Absent when
+ * no floor was raised, so every other ask's facts keep their exact shape.
+ */
+function floorFact(check: PermissionCheckResult): { floor?: string } {
+  return check.floor === undefined ? {} : { floor: check.floor };
+}
+
+/**
+ * Every unit of a bash chain the child left asking, as a child-fixed fact for
+ * the wire, so the serving node judges each command rather than the winner
+ * alone (#1030). Absent when the check lists none.
+ */
+function askingUnitsFact(check: PermissionCheckResult): {
+  askingUnits?: AskingBashUnit[];
+} {
+  return check.askingUnits === undefined
+    ? {}
+    : { askingUnits: [...check.askingUnits] };
 }

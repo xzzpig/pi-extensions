@@ -18,6 +18,10 @@ vi.mock("node:fs", async () => {
   };
 });
 
+import {
+  resetWarmBashParser,
+  warmBashParser,
+} from "#src/access-intent/bash/parser";
 import { BashProgram } from "#src/access-intent/bash/program";
 import { UNPROVEN_EFFECT } from "#src/access-intent/effect";
 import { pathFlavorForPlatform, win32PathFlavor } from "#src/path/path-flavor";
@@ -122,6 +126,36 @@ describe("BashProgram", () => {
 
       it("does not admit a redirect the parse could not resolve", async () => {
         expect(await ruleTokensOf("cat <> rw.txt")).toEqual([]);
+      });
+    });
+
+    describe("a subshell timed by time", () => {
+      /** Each rule candidate's token, effect, and policy match values. */
+      async function ruleCandidatesOf(command: string) {
+        const program = await BashProgram.parse(command, normalizer);
+        return program.pathRuleCandidates().map(({ token, effect, path }) => ({
+          token,
+          effect: effect.effect,
+          matchValues: path.matchValues(),
+        }));
+      }
+
+      it("resolves a token after the subshell's cd as the bare subshell does", async () => {
+        const timed = await ruleCandidatesOf("time ( cd sub && cat ./x )");
+        expect(timed).toEqual(await ruleCandidatesOf("( cd sub && cat ./x )"));
+        expect(timed.map(({ matchValues }) => matchValues[0])).toEqual([
+          join(cwd, "sub/x"),
+        ]);
+      });
+
+      it("projects the target of a redirect the time command hosts", async () => {
+        expect(await ruleCandidatesOf("2>err.txt time (rm x)")).toEqual([
+          {
+            token: "err.txt",
+            effect: "write",
+            matchValues: [join(cwd, "err.txt"), "err.txt"],
+          },
+        ]);
       });
     });
 
@@ -597,6 +631,8 @@ describe("BashProgram", () => {
             text: "bash -c 'rm -rf /tmp/x'",
             wrapperKind: "opaque-payload",
             executedUnit: "rm -rf /tmp/x",
+            // The path projection reads the payload as a relative path.
+            spellings: ["bash -c /projects/my-app/rm -rf /tmp/x"],
           },
           { text: "rm -rf /tmp/x", context: "wrapper_payload" },
         ]);
@@ -1189,6 +1225,128 @@ describe("BashProgram", () => {
       ]);
     });
 
+    describe("a subshell timed by time", () => {
+      // The grammar has no `time` keyword: `time ( … )` parses as a command
+      // named `time` whose argument is the subshell, so the enumerator reads
+      // the shape itself and descends it as it descends a bare subshell.
+      it("emits the time unit whole and descends into the subshell", async () => {
+        const program = await BashProgram.parse(
+          "time (rm -rf /tmp/x)",
+          normalizer,
+        );
+        expect(program.commands()).toEqual([
+          {
+            text: "time (rm -rf /tmp/x)",
+            wrapperKind: "indirection",
+            executedUnit: "(rm -rf /tmp/x)",
+            floorExemption: "execution-modifier",
+          },
+          { text: "rm -rf /tmp/x", context: "subshell" },
+        ]);
+      });
+
+      it("descends into the subshell's pipeline", async () => {
+        const program = await BashProgram.parse(
+          "time (grep -l foo a | wc -l)",
+          normalizer,
+        );
+        expect(program.commands()).toEqual([
+          {
+            text: "time (grep -l foo a | wc -l)",
+            wrapperKind: "indirection",
+            executedUnit: "(grep -l foo a | wc -l)",
+            floorExemption: "execution-modifier",
+          },
+          { text: "grep -l foo a", context: "subshell" },
+          { text: "wc -l", context: "subshell" },
+        ]);
+      });
+
+      it("emits a substitution inside the subshell once", async () => {
+        const program = await BashProgram.parse(
+          "time (echo $(rm x))",
+          normalizer,
+        );
+        expect(program.commands()).toEqual([
+          {
+            text: "time (echo $(rm x))",
+            wrapperKind: "indirection",
+            executedUnit: "(echo $(rm x))",
+            floorExemption: "execution-modifier",
+          },
+          { text: "echo $(rm x)", context: "subshell" },
+          { text: "rm x", context: "command_substitution" },
+        ]);
+      });
+
+      it("still emits a substitution in a redirect the command hosts", async () => {
+        const program = await BashProgram.parse(
+          "2>$(rm y) time (rm x)",
+          normalizer,
+        );
+        expect(program.commands()).toEqual([
+          {
+            text: "time (rm x)",
+            wrapperKind: "indirection",
+            executedUnit: "(rm x)",
+            floorExemption: "execution-modifier",
+          },
+          { text: "rm y", context: "command_substitution" },
+          { text: "rm x", context: "subshell" },
+        ]);
+      });
+
+      it("descends a subshell nested inside the timed one", async () => {
+        const program = await BashProgram.parse("time ( (rm x) )", normalizer);
+        expect(program.commands()).toEqual([
+          {
+            text: "time ( (rm x) )",
+            wrapperKind: "indirection",
+            executedUnit: "( (rm x) )",
+            floorExemption: "execution-modifier",
+          },
+          { text: "(rm x)", context: "subshell" },
+          { text: "rm x", context: "subshell" },
+        ]);
+      });
+
+      it.each(["sudo (rm x)", "nice (rm x)"])(
+        "does not descend a subshell another command takes: %s",
+        async (command) => {
+          // Bash rejects these as syntax errors; only `time` takes a compound.
+          const program = await BashProgram.parse(command, normalizer);
+          expect(program.commands()).toEqual([
+            {
+              text: command,
+              wrapperKind: "indirection",
+              executedUnit: "(rm x)",
+            },
+          ]);
+        },
+      );
+
+      it("leaves a word after the subshell to the unresolved-parse floor", async () => {
+        // The grammar wraps `time (rm x)` in an ERROR, emitted whole and floored.
+        const program = await BashProgram.parse("time (rm x) y", normalizer);
+        expect(program.commands()).toEqual([
+          { text: "time (rm x)", parseUnresolved: true },
+          { text: "y" },
+        ]);
+      });
+
+      it("leaves time -p ( … ) to the unresolved-parse floor", async () => {
+        const program = await BashProgram.parse("time -p (rm x)", normalizer);
+        expect(program.commands()).toEqual([
+          {
+            text: "time -p (rm x)",
+            wrapperKind: "indirection",
+            executedUnit: "(rm x)",
+            parseUnresolved: true,
+          },
+        ]);
+      });
+    });
+
     it("descends recursively through nested contexts", async () => {
       const program = await BashProgram.parse("echo $( ( rm x ) )", normalizer);
       expect(program.commands()).toEqual([
@@ -1269,7 +1427,14 @@ describe("BashProgram", () => {
       ])("flags %s as opaque and re-parses its payload as an inner unit", async (command, text, inner) => {
         const program = await BashProgram.parse(command, normalizer);
         expect(program.commands()).toEqual([
-          { text, wrapperKind: "opaque-payload", executedUnit: inner },
+          {
+            text,
+            wrapperKind: "opaque-payload",
+            executedUnit: inner,
+            // The path projection reads the payload as a relative path, so
+            // the unit carries its absolute spelling; the floor holds anyway.
+            spellings: [text.replace('"rm -rf /"', "/projects/my-app/rm -rf ")],
+          },
           { text: inner, context: "wrapper_payload" },
         ]);
       });
@@ -1284,6 +1449,7 @@ describe("BashProgram", () => {
             text: 'bash -c "rm -rf /"',
             wrapperKind: "opaque-payload",
             executedUnit: "rm -rf /",
+            spellings: ["bash -c /projects/my-app/rm -rf "],
           },
           { text: "rm -rf /", context: "wrapper_payload" },
         ]);
@@ -1345,16 +1511,11 @@ describe("BashProgram", () => {
         ["sudo aws s3 ls", "sudo aws s3 ls", "aws s3 ls"],
         ["env FOO=bar aws s3 ls", "env FOO=bar aws s3 ls", "aws s3 ls"],
         ["xargs rm -rf", "xargs rm -rf", "rm -rf"],
-        ["time aws s3 ls", "time aws s3 ls", "aws s3 ls"],
         ["nohup aws s3 ls", "nohup aws s3 ls", "aws s3 ls"],
-        ["timeout 10 aws s3 ls", "timeout 10 aws s3 ls", "aws s3 ls"],
-        ["nice -n 10 aws s3 ls", "nice -n 10 aws s3 ls", "aws s3 ls"],
         ["/usr/bin/sudo aws s3 ls", "/usr/bin/sudo aws s3 ls", "aws s3 ls"],
         // Exec-capable rewrites and prefix wrappers (#575).
         ["parallel rm ::: x", "parallel rm ::: x", "rm ::: x"],
         ["doas aws s3 ls", "doas aws s3 ls", "aws s3 ls"],
-        ["setsid aws s3 ls", "setsid aws s3 ls", "aws s3 ls"],
-        ["stdbuf -oL aws s3 ls", "stdbuf -oL aws s3 ls", "aws s3 ls"],
         ["flock /tmp/lock aws s3 ls", "flock /tmp/lock aws s3 ls", "aws s3 ls"],
       ])("flags %s as an indirection wrapper and emits its inner command", async (command, text, inner) => {
           const program = await BashProgram.parse(command, normalizer);
@@ -1488,19 +1649,33 @@ describe("BashProgram", () => {
         ["fd --exec-batch rm", "rm", "rm"],
       ])("flags %s as an indirection wrapper and emits the exec'd command", async (command, inner, executedUnit) => {
           const program = await BashProgram.parse(command, normalizer);
+          // `find`'s `.` resolves to the working directory.
+          const spellings = command.startsWith("find .")
+            ? { spellings: [command.replace(".", "/projects/my-app")] }
+            : {};
           expect(program.commands()).toEqual([
-            { text: command, wrapperKind: "indirection", executedUnit },
+            {
+              text: command,
+              wrapperKind: "indirection",
+              executedUnit,
+              ...spellings,
+            },
           { text: inner, context: "wrapper_indirection" },
           ]);
       });
 
-      it.each(["find . -name foo", "fd pattern", "fd -H -t f pattern"])(
-        "does not flag a bare %s search",
-        async (command) => {
-          const program = await BashProgram.parse(command, normalizer);
-          expect(program.commands()).toEqual([{ text: command }]);
-        },
-      );
+      it.each([
+        ["find . -name foo", ["find /projects/my-app -name foo"]],
+        ["fd pattern", undefined],
+        ["fd -H -t f pattern", undefined],
+      ])("does not flag a bare %s search", async (command, spellings) => {
+        const program = await BashProgram.parse(command, normalizer);
+        expect(program.commands()).toEqual([
+          spellings === undefined
+            ? { text: command }
+            : { text: command, spellings },
+        ]);
+      });
     });
 
     describe("executed unit", () => {
@@ -1509,6 +1684,8 @@ describe("BashProgram", () => {
         ["sudo aws s3 rm", "aws s3 rm"],
         ["sudo -u root aws s3 rm", "aws s3 rm"],
         ["timeout 10 grep foo", "grep foo"],
+        ["timeout -- 5 sudo rm x", "rm x"],
+        ["timeout -s KILL -- 5 rm x", "rm x"],
         ["find . -name x -exec grep foo {} \\;", "grep foo {}"],
         ["sudo timeout 5 xargs grep foo", "grep foo"],
       ])("names what %s actually runs", async (command, executedUnit) => {
@@ -1573,6 +1750,45 @@ describe("BashProgram", () => {
         ["xargs awk -f p.awk", "`-f` withdraws awk's read claim"],
       ])("does not exempt %s (%s)", async (command) => {
         await expect(exemptions(command)).resolves.toEqual([undefined]);
+      });
+
+      it("exempts an execution modifier whose statement redirects to a file", async () => {
+        await expect(
+          exemptions("time pnpm run lint >/tmp/lintout.txt 2>&1"),
+        ).resolves.toEqual(["execution-modifier"]);
+      });
+
+      it("exempts a timed subshell, whose commands are units of their own", async () => {
+        await expect(exemptions("time (rm -rf /tmp/x)")).resolves.toEqual([
+          "execution-modifier",
+          undefined,
+        ]);
+      });
+
+      it.each([
+        ["timeout --sig KILL 5 rm -rf /", "an abbreviation hides its value"],
+        ["time sudo rm -rf x", "a peeled layer changes who runs it"],
+        ["timeout {5,sudo} rm x", "brace expansion adds a word"],
+        ["timeout $D rm x", "an unquoted expansion may split"],
+        ['timeout "$D" rm x', "a computed operand is not proven"],
+        ["timeout $(echo 5 sudo) rm x", "a substitution may split"],
+        ["timeout * rm x", "a glob may expand to several words"],
+        ["nice -n $N rm x", "an option value may split"],
+        ["nice -n$N rm x", "an attached value may split"],
+        ["stdbuf -o$M rm x", "an attached value may split"],
+      ])("does not exempt the modifier unit of %s (%s)", async (command) => {
+        const [first] = await exemptions(command);
+        expect(first).toBeUndefined();
+      });
+
+      it("does not exempt a brace group after time", async () => {
+        // The grammar has no `time` keyword: the group's words become the
+        // `time` unit's arguments and the closing brace a unit of its own,
+        // so the group is not recovered and keeps the floor (#1043).
+        await expect(exemptions("time { rm -rf /tmp/x; }")).resolves.toEqual([
+          undefined,
+          undefined,
+        ]);
       });
 
       describe("a withdrawing option spelled with quotes", () => {
@@ -1707,6 +1923,28 @@ describe("BashProgram", () => {
         });
       });
 
+      describe("a statement that redirects to the discard device", () => {
+        it.each([
+          ["rg -l x | xargs ls -1t 2>/dev/null", [undefined, "core-reader"]],
+          ["xargs grep -l x >/dev/null 2>&1", ["core-reader"]],
+          ["2>/dev/null xargs grep -l x", ["core-reader"]],
+        ])("keeps the exemption for %s", async (command, expected) => {
+          await expect(exemptions(command)).resolves.toEqual(expected);
+        });
+
+        it.each([
+          ["xargs grep x 2>/dev/null > out.txt", "another redirect writes"],
+          ["xargs grep -l x 2>/dev/stdout", "a stream device reopens its file"],
+          ['xargs grep -l x 2>"/dev/null"', "a quoted spelling stays unproven"],
+          [
+            "xargs pnpm test 2>/dev/null",
+            "the inner command is not in the core",
+          ],
+        ])("withholds it for %s (%s)", async (command) => {
+          await expect(exemptions(command)).resolves.toEqual([undefined]);
+        });
+      });
+
       it("gives a nested execution its own scope", async () => {
         // The redirect belongs to the enclosing statement, not to the command
         // substitution hosted in its destination.
@@ -1729,7 +1967,11 @@ describe("BashProgram", () => {
           normalizer,
         );
         expect(program.commands()).toEqual([
-          { text: "git add -A .", parseUnresolved: true },
+          {
+            text: "git add -A .",
+            parseUnresolved: true,
+            spellings: ["git add -A /projects/my-app"],
+          },
           { text: "git commit -F", parseUnresolved: true },
           { text: "rm -rf /tmp/x", parseUnresolved: true, salvaged: true },
           { text: "git add -A .", parseUnresolved: true, salvaged: true },
@@ -2029,6 +2271,18 @@ describe("BashProgram", () => {
       ]);
     });
 
+    it("carries a shell no-op's read onto its external access", async () => {
+      const program = await BashProgram.parse("true /etc/hosts", normalizer);
+      expect(
+        program.externalAccesses().map(({ path, effect }) => ({
+          path: path.value(),
+          effect,
+        })),
+      ).toEqual([
+        { path: "/etc/hosts", effect: { effect: "read", source: "core" } },
+      ]);
+    });
+
     it("carries a core word's read onto its rule candidate", async () => {
       const program = await BashProgram.parse("cat /etc/hosts", normalizer);
       expect(
@@ -2300,6 +2554,53 @@ describe("BashProgram", () => {
       expect(
         program.externalAccesses().map(({ path }) => path.value()),
       ).toEqual(["/etc/passwd"]);
+    });
+  });
+
+  describe("parseSync", () => {
+    const normalizer = new PathNormalizer(
+      pathFlavorForPlatform(process.platform),
+      "/projects/my-app",
+    );
+
+    beforeEach(() => {
+      resetWarmBashParser();
+      realpathSync.mockReset();
+      realpathSync.mockImplementation((p: string) => p);
+    });
+    afterEach(() => {
+      resetWarmBashParser();
+    });
+
+    it("answers null while the parser is cold", () => {
+      expect(BashProgram.parseSync("echo hi", normalizer)).toBeNull();
+    });
+
+    describe("once warm, builds the program parse builds", () => {
+      beforeEach(async () => {
+        await warmBashParser();
+      });
+
+      it.each([
+        ["a chain with a cd", "cd /tmp && rm a/x; cat ../secret", undefined],
+        [
+          "a command the parse could not resolve",
+          "> f <<'M' 2>&1 | rm -rf /tmp/x",
+          undefined,
+        ],
+        ["a seeded workdir", "cat notes.txt ../up.txt", "/elsewhere"],
+      ])("%s", async (_label, command, workdir) => {
+        const options = workdir === undefined ? undefined : { workdir };
+        const expected = await BashProgram.parse(command, normalizer, options);
+        const actual = BashProgram.parseSync(command, normalizer, options);
+        if (actual === null) throw new Error("parser not warm");
+        expect(actual.commandText()).toBe(command);
+        expect(actual.commands()).toEqual(expected.commands());
+        expect(actual.externalAccesses()).toEqual(expected.externalAccesses());
+        expect(actual.pathRuleCandidates()).toEqual(
+          expected.pathRuleCandidates(),
+        );
+      });
     });
   });
 });

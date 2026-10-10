@@ -24,6 +24,7 @@ vi.mock("node:fs", async () => {
 import {
   buildAccessIntentForSurface,
   buildResolvedIntentFromMatchValues,
+  normalizeBashCommand,
   normalizeInput,
 } from "#src/access-intent/input-normalizer";
 import { createMcpPermissionTargets } from "#src/access-intent/mcp-targets";
@@ -151,6 +152,35 @@ describe("normalizeInput — non-MCP surfaces", () => {
       const cmd = "# just a comment";
       const result = normalizeInput("bash", { command: cmd }, []);
       expect(result.values).toEqual(["# just a comment"]);
+    });
+  });
+
+  describe("normalizeBashCommand: a command's spellings", () => {
+    it("matches the typed command and each spelling as aliases, keeping the typed one as the command", () => {
+      expect(normalizeBashCommand("~/bin/x --y", ["/h/bin/x --y"])).toEqual({
+        surface: "bash",
+        values: ["~/bin/x --y", "/h/bin/x --y"],
+        resultExtras: { command: "~/bin/x --y" },
+      });
+    });
+
+    it("drops a spelling identical to the typed command", () => {
+      expect(normalizeBashCommand("/h/x", ["/h/x"]).values).toEqual(["/h/x"]);
+    });
+
+    it("strips comment lines from the typed command but not from a spelling", () => {
+      const cmd = "# why\n~/bin/x";
+      expect(normalizeBashCommand(cmd, ["# kept\n/h/bin/x"])).toEqual({
+        surface: "bash",
+        values: ["~/bin/x", "# kept\n/h/bin/x"],
+        resultExtras: { command: cmd },
+      });
+    });
+
+    it("is what the bash tool input normalizes through, with no spellings", () => {
+      expect(normalizeInput("bash", { command: "ls" }, [])).toEqual(
+        normalizeBashCommand("ls", []),
+      );
     });
   });
 

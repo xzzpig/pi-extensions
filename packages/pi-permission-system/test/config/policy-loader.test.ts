@@ -230,33 +230,6 @@ describe("FilePolicyLoader.loadProjectAgentConfig", () => {
 });
 
 // ---------------------------------------------------------------------------
-// getConfigIssues
-// ---------------------------------------------------------------------------
-
-describe("FilePolicyLoader.getConfigIssues", () => {
-  it("returns empty array before any loads", () => {
-    const loader = new FilePolicyLoader({
-      globalConfigPath: "/nonexistent/config.json",
-      agentsDir: "/nonexistent/agents",
-    });
-    expect(loader.getConfigIssues()).toEqual([]);
-  });
-
-  it("returns empty array for valid config", () => {
-    const baseDir = makeTempDir();
-    try {
-      const loader = makeLoader(baseDir, {
-        globalConfig: { permission: { "*": "ask" } },
-      });
-      loader.loadGlobalConfig();
-      expect(loader.getConfigIssues()).toEqual([]);
-    } finally {
-      rmSync(baseDir, { recursive: true, force: true });
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
 // getResolvedPolicyPaths
 // ---------------------------------------------------------------------------
 
@@ -615,57 +588,6 @@ describe("FilePolicyLoader.getConfiguredMcpServerNames", () => {
       const second = loader.getConfiguredMcpServerNames();
       // Same reference — cache hit
       expect(second).toBe(first);
-    } finally {
-      rmSync(baseDir, { recursive: true, force: true });
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Config issue accumulation
-// ---------------------------------------------------------------------------
-
-describe("FilePolicyLoader config issue accumulation", () => {
-  it("accumulates issues from malformed config files", () => {
-    const baseDir = makeTempDir();
-    try {
-      // Write invalid JSON to trigger a parse error issue
-      const globalConfigPath = join(baseDir, "config.json");
-      const agentsDir = join(baseDir, "agents");
-      mkdirSync(agentsDir, { recursive: true });
-      writeFileSync(globalConfigPath, "{ INVALID JSON");
-
-      const loader = new FilePolicyLoader({ globalConfigPath, agentsDir });
-      loader.loadGlobalConfig();
-      const issues = loader.getConfigIssues();
-      expect(issues.length).toBeGreaterThanOrEqual(1);
-      expect(issues[0]).toContain("Failed to read config");
-    } finally {
-      rmSync(baseDir, { recursive: true, force: true });
-    }
-  });
-
-  it("does not duplicate issues on repeated loads", () => {
-    const baseDir = makeTempDir();
-    try {
-      const globalConfigPath = join(baseDir, "config.json");
-      const agentsDir = join(baseDir, "agents");
-      mkdirSync(agentsDir, { recursive: true });
-      writeFileSync(globalConfigPath, "{ INVALID JSON");
-
-      const loader = new FilePolicyLoader({ globalConfigPath, agentsDir });
-      loader.loadGlobalConfig();
-      const issuesBefore = loader.getConfigIssues();
-
-      // Bust cache by waiting for mtime change
-      const now = Date.now();
-      while (Date.now() - now < 50) {
-        /* spin */
-      }
-      writeFileSync(globalConfigPath, "{ INVALID JSON");
-      loader.loadGlobalConfig();
-      const issuesAfter = loader.getConfigIssues();
-      expect(issuesAfter.length).toBe(issuesBefore.length);
     } finally {
       rmSync(baseDir, { recursive: true, force: true });
     }

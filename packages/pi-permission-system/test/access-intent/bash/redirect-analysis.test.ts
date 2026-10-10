@@ -281,6 +281,35 @@ describe("redirectMayWriteFile", () => {
       await expect(mayWrite(command)).resolves.toBe(true);
     });
   });
+
+  describe("a redirect to the discard device", () => {
+    // A write to `/dev/null` touches no file, so it is not the real output
+    // redirect ADR 0013 §11 withholds the floor exemption for.
+    it.each([
+      "pnpm x 2>/dev/null",
+      "cat a > /dev/null",
+      "cat a >> /dev/null",
+      "cat a >| /dev/null",
+      "cat a &> /dev/null",
+      "cat a &>> /dev/null",
+      "cat a >& /dev/null",
+    ])("answers false for %s", async (command) => {
+      await expect(mayWrite(command)).resolves.toBe(false);
+    });
+
+    it.each([
+      ['cat a 2>"/dev/null"', "a double-quoted spelling"],
+      ["cat a 2>'/dev/null'", "a single-quoted spelling"],
+      ["cat a 2>$NULL", "a computed destination"],
+      ["cat a 2>/dev/stdout", "a stream device, which reopens its file"],
+      ["cat a > /dev/stdin", "a stream device, which reopens its file"],
+      ["cat a > /dev/null.bak", "a file named after the device"],
+      ["cat a > /dev/null/x", "a path beneath the device"],
+      ["cat <> /dev/null", "a read-write open the grammar could not parse"],
+    ])("answers true for %s (%s)", async (command) => {
+      await expect(mayWrite(command)).resolves.toBe(true);
+    });
+  });
 });
 
 describe("redirectTargetIndex", () => {

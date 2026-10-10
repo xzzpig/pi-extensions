@@ -222,6 +222,9 @@ function coreFacts(payload: PromptPayload): Fact[] {
   if (request.matchedPattern !== null) {
     facts.push({ label: "rule", text: request.matchedPattern });
   }
+  if (request.matchedSpelling !== null) {
+    facts.push({ label: "matched as", text: request.matchedSpelling });
+  }
   if (request.value !== "" && request.value !== request.toolName) {
     facts.push({ label, text: request.value });
   }

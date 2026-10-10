@@ -13,10 +13,9 @@ The prompter's copy diverges subtly (`shouldAutoApprove: () => false`, a no-op `
 It is a relay bag the prompter builds only to hand to a free function — anemic design with no owner.
 
 This is step 2 of 3 in the forwarding lift-and-shift (#315 → #316 → #317).
+#315 has landed: `PermissionForwarder` exists in `src/forwarded-permissions/permission-forwarder.ts` with `requestApproval()` (currently unused by production) and `processInbox()`, plus a narrow `InboxProcessor` seam consumed by `ForwardingManager`.
 
-## 315 has landed: `PermissionForwarder` exists in `src/forwarded-permissions/permission-forwarder.ts` with `requestApproval()` (currently unused by production) and `processInbox()`, plus a narrow `InboxProcessor` seam consumed by `ForwardingManager`
-
-### Goals
+## Goals
 
 - Inject the single `PermissionForwarder` into `PermissionPrompter` through a narrow `ApprovalRequester` interface exposing only `requestApproval`.
 - Replace the `confirmPermission(ctx, …, this.buildForwardingDeps(), …)` call with `this.deps.forwarder.requestApproval(ctx, …)`.
@@ -25,14 +24,14 @@ This is step 2 of 3 in the forwarding lift-and-shift (#315 → #316 → #317).
 - Wire `index.ts` to inject the existing single forwarder into the prompter (no second forwarder, no second bag).
 - Behavior-preserving: this is a `refactor:`, not a `feat:`.
 
-### Non-Goals
+## Non-Goals
 
 - Inlining the `polling.ts` free-function bodies as methods on `PermissionForwarder` or deleting the `PermissionForwardingDeps` interface — that is #317 (step 3 of 3).
 - Changing the forwarding wire protocol, request/response file shapes, or the UI dialog flow.
 - Touching `ForwardingManager` or its `InboxProcessor` seam (settled in #315).
 - Altering yolo-mode handling — it stays at the prompter level, evaluated before `requestApproval` is reached.
 
-### Background
+## Background
 
 Relevant modules:
 
@@ -50,9 +49,9 @@ Constraints from AGENTS.md / package skill:
 - Markdown is enforced by `rumdl` (`pnpm run lint:md`), not `markdownlint` — the `MDxxx` IDs in conventions are for reference only (per #315 retro).
 - The seam type must be a **narrow interface**, never the concrete `PermissionForwarder` — concrete class types leak private fields into the structural checker and force test casts (code-design + design-review guidance, confirmed by #315's `InboxProcessor` win).
 
-### Design Overview
+## Design Overview
 
-#### The `ApprovalRequester` seam
+### The `ApprovalRequester` seam
 
 Define a one-method interface alongside `InboxProcessor` in `permission-forwarder.ts` and add it to the class's `implements` clause:
 
@@ -78,7 +77,7 @@ export class PermissionForwarder implements InboxProcessor, ApprovalRequester {
 
 `requestApproval` already has exactly this signature, so the class body is unchanged — only the `implements` clause and the new interface declaration are added.
 
-#### Prompter consumption (Tell-Don't-Ask call site)
+### Prompter consumption (Tell-Don't-Ask call site)
 
 `PermissionPrompter` depends on the seam, not the concrete forwarder:
 
@@ -105,7 +104,7 @@ const decision = await this.deps.forwarder.requestApproval(
 The prompter no longer reaches into a bag — it tells the forwarder.
 `PermissionPrompterDeps` drops from 7 fields to 4, and every remaining field is read by `prompt()` directly (passes design-review check 1: every consumer uses every field).
 
-#### Behavioral nuance: debug logging on the prompter's forwarding path
+### Behavioral nuance: debug logging on the prompter's forwarding path
 
 The deleted `buildForwardingDeps()` supplied a **no-op** `writeDebugLog` and `shouldAutoApprove: () => false`.
 The shared forwarder (built in `index.ts`) supplies the **real** `runtime.writeDebugLog` and the real yolo policy.
@@ -118,12 +117,12 @@ This is the intended convergence: the #315/#316 plan deferred "trace-level forwa
 The effect is strictly additive debug output on a path that previously logged nothing; no allow/deny/ask decision, review-log entry, or wire message changes.
 Flagged in Risks below.
 
-#### Edge cases
+### Edge cases
 
 - Yolo-mode short-circuit stays ahead of `requestApproval`; the forwarder is never consulted when `yoloMode` is on (existing test coverage preserved).
 - `sessionLabel` and the display fields (`source`/`surface`/`value`) are relayed unchanged through the new call — the four positional arguments map 1:1 to the old `confirmPermission` call.
 
-### Module-Level Changes
+## Module-Level Changes
 
 - `src/forwarded-permissions/permission-forwarder.ts`
   - Add `export interface ApprovalRequester { requestApproval(...) }` next to `InboxProcessor`.
@@ -154,7 +153,7 @@ Flagged in Risks below.
   - Mark Phase 3 Step 3 (#316) `✅` with a past-tense outcome and forward reference to #317 (following the #315 status-convention precedent).
   - Update the Track-B roadmap row / Mermaid status node if it tracks per-step completion.
 
-### Test Impact Analysis
+## Test Impact Analysis
 
 This is a seam swap, not a new extraction, so the test surface shifts rather than expands.
 
@@ -165,7 +164,7 @@ This is a seam swap, not a new extraction, so the test surface shifts rather tha
 3. **Tests that stay as-is** — `test/permission-forwarder.test.ts` already covers `requestApproval`'s delegation to `confirmPermission` (the layer being depended upon); it is untouched.
    `test/composition-root.test.ts` exercises real wiring and should stay green without edits (verify the forwarder-before-prompter reorder does not perturb it).
 
-### TDD Order
+## TDD Order
 
 1. **Swap the prompter onto the injected `ApprovalRequester` seam** (`refactor:`)
    - Test surface: `test/permission-prompter.test.ts`.
@@ -180,7 +179,7 @@ This is a seam swap, not a new extraction, so the test surface shifts rather tha
 
 Run after each step: `pnpm --filter @gotgenes/pi-permission-system run check`, `run lint`, `run test`, then `pnpm fallow dead-code` before handoff.
 
-### Risks and Mitigations
+## Risks and Mitigations
 
 - **Debug-log behavior change on the forwarding path** — the prompter's forwarding path gains real `writeDebugLog` output (was no-op).
   Mitigation: intended convergence (resolves the deferred debug open question); strictly additive debug-level output, no decision/log/wire change.
@@ -192,7 +191,7 @@ Run after each step: `pnpm --filter @gotgenes/pi-permission-system run check`, `
 - **Unused-import lint churn** — removing `buildForwardingDeps` orphans several imports.
   Mitigation: `run lint` (eslint auto-detects) catches and the implementer prunes them in the same commit.
 
-### Open Questions
+## Open Questions
 
 - Whether to keep `RequestPermissionOptions` imported in `permission-prompter.ts` depends on whether the inline `{ sessionLabel }` literal still references the type after the swap — defer to the type checker during implementation; prune if unused.
 - #317 will dismantle `PermissionForwardingDeps` and inline the `polling.ts` bodies as forwarder methods; nothing in this plan should pre-empt that (keep the delegation intact).

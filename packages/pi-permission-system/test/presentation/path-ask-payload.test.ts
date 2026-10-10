@@ -24,6 +24,7 @@ describe("buildPathAskPayload", () => {
       value: "/etc/passwd",
       matchedPattern: "/etc/*",
       commandContext: null,
+      matchedSpelling: null,
       executedUnit: null,
     });
     expect(payload.evidence).toEqual([]);

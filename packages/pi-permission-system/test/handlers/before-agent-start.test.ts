@@ -14,6 +14,7 @@ import { SessionTurnPrep } from "#src/handlers/session-turn-prep";
 import {
   makeCheckResult,
   makeCtx,
+  makePolicyIssueReporter,
   makePromptOptions,
   makeStatefulToolRegistry,
   makeToolRegistry,
@@ -108,6 +109,7 @@ function makeSetup(opts?: {
   const detector = {
     isSubagent: vi.fn(() => opts?.isSubagentChild ?? false),
   };
+  const policyIssues = makePolicyIssueReporter();
   const handler = new AgentPrepHandler(
     turnPrep,
     session,
@@ -115,10 +117,12 @@ function makeSetup(opts?: {
     toolRegistry,
     logger,
     detector,
+    policyIssues,
   );
   return {
     handler,
     detector,
+    policyIssues,
     turnPrep,
     session,
     resolver,
@@ -182,6 +186,24 @@ describe("AgentPrepHandler.handle", () => {
     const spy = vi.spyOn(session, "resolveAgentName");
     await handler.handle(makeEvent("<active_agent name='x'>"), ctx);
     expect(spy).toHaveBeenCalledWith(ctx, "<active_agent name='x'>");
+  });
+
+  // #953: a pi-subagents child is named only by this tag, which turn prep runs
+  // before; reporting here is what lets an agent-scope clamp reach its first
+  // turn rather than its second.
+  it("reports policy issues for the agent the prompt tag names", async () => {
+    const { handler, policyIssues } = makeSetup();
+    await handler.handle(
+      makeEvent('<active_agent name="reviewer"/>'),
+      makeCtx(),
+    );
+    expect(policyIssues.report).toHaveBeenCalledExactlyOnceWith("reviewer");
+  });
+
+  it("reports policy issues for no agent when none is named", async () => {
+    const { handler, policyIssues } = makeSetup();
+    await handler.handle(makeEvent(), makeCtx());
+    expect(policyIssues.report).toHaveBeenCalledExactlyOnceWith(undefined);
   });
 
   it("filters out denied tools from allowed list", async () => {

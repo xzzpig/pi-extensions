@@ -48,6 +48,7 @@ export function makePromptPayload(
       value: "read",
       matchedPattern: null,
       commandContext: null,
+      matchedSpelling: null,
       executedUnit: null,
     },
     evidence: [],

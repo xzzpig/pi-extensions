@@ -550,6 +550,43 @@ A quoted heredoc delimiter (`<<'EOF'` or `<<"EOF"`) does not interpolate, so its
 The enclosing command is still matched without its redirect, so a rule like `npm install` keeps matching `npm install > out.txt`.
 Control-flow bodies (`if`/`while`/`for`/`case`) and `{ … }` brace groups are not descended into; their contents are matched as part of the enclosing statement's text.
 
+A command that starts with `~`, `$HOME`, or `${HOME}` also matches a home-anchored pattern spelled any of those ways, or with the absolute home directory (see [Home Directory Expansion in Patterns](#home-directory-expansion-in-patterns)).
+
+A path argument also matches in its absolute spelling.
+Each command is matched as typed and with every path argument replaced by the absolute path it resolves to, against the working directory a literal `cd` earlier in the chain moved to.
+The last rule matching either text wins, as for any other pattern.
+
+```jsonc
+{
+  "permission": {
+    "bash": {
+      "*": "allow",
+      "rm *": "ask",
+      "rm /tmp/agent-builds/*": "allow"
+    }
+  }
+}
+```
+
+With this policy, `cd /tmp && rm agent-builds/x` runs, because `rm agent-builds/x` is also matched as `rm /tmp/agent-builds/x`.
+An absolute `deny` reaches the relative spelling the same way.
+An absolute `allow` written *before* the broader `ask` still loses to it.
+
+Some arguments get no absolute spelling and are matched as typed only:
+
+- an argument after a `cd` whose target is not literal (`cd "$DIR"`, `cd -`, a bare `cd`), since the directory is not known;
+- an argument holding a glob (`*`, `?`, `[`), quoted or not;
+- an argument a variable or substitution computes (`$DIR/x`, `$(pwd)/x`);
+- a bare name such as `config.json` that names nothing on disk;
+- a POSIX absolute path on Windows (`/tmp/x`), which is kept as typed.
+
+The absolute spelling replaces every path argument of a command at once, and it is separate from the home spelling above.
+A rule naming one argument absolute and another relative, or naming both the expanded home and an absolute argument, matches neither text.
+A quoted argument is spelled without its quotes (`rm "a b/c"` is also matched as `rm /tmp/a b/c`).
+Whether an argument is a path is decided by its shape, so a slash-bearing word that is not one is spelled too: `git push origin feature/x` is also matched as `git push origin <cwd>/feature/x`, which only a rule naming that absolute form would match.
+When the spelling is what a rule matched, the prompt shows it on a `matched as` line beside the rule, and the review log records it as `matchedSpelling`.
+A session approval still records the command as typed, so approving `rm agent-builds/x` does not cover a later `rm /tmp/agent-builds/x`.
+
 A leading environment-variable assignment prefix is stripped before matching, so the rule gates the underlying command rather than the prefix.
 So `AWS_PROFILE=prod aws ec2 …` is matched as `aws ec2 …` — a `aws *` rule applies even though the invocation begins with `AWS_PROFILE=`.
 Prefixes like `PGPASSWORD=` and `KUBECONFIG=` are handled the same way.
@@ -639,6 +676,11 @@ The bash gate fails closed: when in doubt it blocks or prompts, never silently a
 Every synthetic `ask` above — the two parse sentinels and both wrapper floors — is auto-approved under `yoloMode: true`, which is an explicit full-permissive opt-in rather than a rule that could ride through.
 An explicit `deny` still denies under yolo, and with yolo off the floors are unaffected.
 Approving one for the session works normally: the floors clamp the decision and leave the grant's provenance intact, so a command you have already approved does not prompt again.
+
+A subagent's floored ask keeps its floor when it is forwarded to the parent session.
+The parent's `allow` rule does not answer it, so `sudo rm x` from a subagent prompts in the parent even under a parent `bash: *` allow.
+The parent's `deny` still denies, and a grant for the whole parent session or the parent's `yoloMode` still approves.
+A subagent's chained command (`ls && rm -rf /tmp/x`) is judged by the parent command by command: every command the subagent's own policy left asking is forwarded with its floor, and the parent's `deny` or `ask` on any one of them decides, not only on the first.
 
 Because of this, set an explicit `bash` policy rather than relying on a permissive top-level `*`.
 A config whose top-level `*` is `"allow"` with no `bash` `*` policy lets every bash command silently inherit `allow`; the extension emits a startup warning in that case.
@@ -1071,7 +1113,7 @@ A path token owned by one of them consults the `_read` surface alone:
 
 <!-- BEGIN PURE_READER_CORE -->
 
-`awk`, `basename`, `cat`, `cd`, `diff`, `dirname`, `echo`, `egrep`, `fd`, `fgrep`, `find`, `grep`, `head`, `ls`, `pwd`, `realpath`, `rg`, `sed`, `sort`, `stat`, `tail`, `wc`, `which`
+`:`, `awk`, `basename`, `cat`, `cd`, `diff`, `dirname`, `echo`, `egrep`, `false`, `fd`, `fgrep`, `find`, `grep`, `head`, `ls`, `pwd`, `realpath`, `rg`, `sed`, `sort`, `stat`, `tail`, `true`, `wc`, `which`
 
 <!-- END PURE_READER_CORE -->
 
@@ -1120,7 +1162,12 @@ Two more shapes withdraw the claim:
 #### Wrapper transparency
 
 The [indirection-wrapper floor](#fail-closed-behavior) exists because a wrapper hides the command that should be gated.
-For one class the hiding is immaterial: a pure-reader command is read-only for **any** arguments, so `xargs grep -l foo` is provably a read even though what `xargs` feeds it is unknowable.
+Two kinds of wrapper unit have no reason to be floored: one running a [pure reader](#a-wrapper-running-a-pure-reader), and one that only [modifies how a command runs](#a-wrapper-that-only-modifies-execution).
+Each resolves by the inner command's own `bash` rules, and the review log records which reason applied as `floorExemption`.
+
+##### A wrapper running a pure reader
+
+For this class the hiding is immaterial: a pure-reader command is read-only for **any** arguments, so `xargs grep -l foo` is provably a read even though what `xargs` feeds it is unknowable.
 The floor guards unknowability of *scope*, and scope stays the path surfaces' job — for a wrapped command exactly as for a bare one.
 
 Such a unit is therefore **not** floored.
@@ -1136,7 +1183,7 @@ All four of these must hold, and each is a way the floor's reason could still ap
 4. The enclosing statement provably writes no file through a redirect.
    A destination the parse cannot resolve — `> $OUT`, `> $(mktemp)` — counts against the exemption rather than for it.
 
-So `xargs grep -l foo`, `xargs wc -l`, `xargs sed -n 1p`, and `find . -name '*.ts' -exec cat {} +` stop prompting under a matching `bash` allow, while `xargs rm`, `xargs sed -i`, `time pnpm test`, and `find . -exec sh -c '…' \;` still prompt.
+So `xargs grep -l foo`, `xargs wc -l`, `xargs sed -n 1p`, `find . -name '*.ts' -exec cat {} +`, and the no-op probe `sudo -n true` stop prompting under a matching `bash` allow, while `xargs rm`, `xargs sed -i`, and `find . -exec sh -c '…' \;` still prompt.
 
 Three things this does **not** change:
 
@@ -1148,10 +1195,36 @@ Three things this does **not** change:
   The exemption decides the `bash` surface only, and every path token the command projects still goes through `path` and `external_directory` with the direction its command proved.
   Clause 4 is what keeps that from being a weaker promise than it sounds: a redirect destination the parse cannot resolve (`> $OUT`, `> $(mktemp)`) is not projected onto those surfaces either, so the wrapper keeps its floor rather than relying on a gate that would not see the write.
 
+##### A wrapper that only modifies execution
+
+`time`, `timeout`, `nice`, `stdbuf`, and `setsid` change only *how* the same visible command runs: its timing, kill deadline, scheduling, buffering, or session.
+Every operand is on the command line, and the wrapper adds no privilege, environment, or argument feed, so the floor's reason does not hold whatever the inner command does.
+Such a unit resolves exactly as the command it runs, and the review log records `floorExemption: "execution-modifier"`.
+
+All four of these must hold, and each keeps the decision about the command that really runs:
+
+1. **Every** wrapper layer is one of the five.
+   `time sudo rm -rf x` and `sudo time pnpm test` stay floored, as do `nohup` (it may write `nohup.out`) and `flock` (it creates its lock file).
+2. Every option on each layer is one that wrapper is known to take, spelled in full, and every option, value, and operand is written literally (an environment assignment, which the shell does not split, may be computed).
+   A word the shell rewrites (`timeout $D …`, `timeout {5,sudo} …`) may become several, one of them a wrapper, so it keeps the floor.
+   So `timeout --sig KILL 5 …` (an abbreviation) and `nice -5 …` stay floored, and so do `time`'s file-writing `-o`, `--output`, and `-a`.
+   The admitted options are `time -p`/`-l`/`-h`/`-f`; `timeout -s`/`-k`/`-f`/`-p`/`-v` and their long forms; `nice -n`/`--adjustment`; and `stdbuf -i`/`-o`/`-e` and their long forms.
+3. The command it runs is not itself a wrapper or an inline shell, so `timeout 5 bash -c '…'` stays floored.
+4. The command it runs is named literally.
+   `time ( … )` is decided by the commands inside it, each on its own rule, so `time (rm -rf /tmp/x)` reaches an `rm *` deny.
+   `time { …; }` stays floored: the parser reads the group as `time`'s arguments, so the commands inside are not yet gated on their own rules.
+
+So under `bash: {"*": "allow", "git push *": "deny"}`, `time pnpm run lint >/tmp/lint.txt 2>&1` is allowed and `timeout 60 git push --force` is denied, exactly as without the wrapper.
+No redirect refusal applies here: the redirect destination goes through `path` and `external_directory` as it does for the bare command, and a destination the parse cannot resolve (`> $OUT`) is unprojected for both forms alike.
+When a unit qualifies for both exemptions (`time grep foo`), the review log records `core-reader`.
+
+##### Declarations and privilege
+
+Neither exemption is extended by configuration.
 A user `commandEffects` declaration participates in effect classification but does **not** lift the floor.
 The core's argument-independence is audited here; a claim about a wrapped command is not, and a wrong claim behind a wrapper fails open.
 
-`sudo` and `doas` are ordinary wrappers to this rule.
+`sudo` and `doas` are ordinary wrappers to the pure-reader rule, and never execution modifiers.
 The path surfaces gate `sudo cat /etc/shadow` exactly as they gate `cat /etc/shadow`, so nothing about the *file set* changes — what `sudo` adds is that the operating system would have refused, which this extension has never modelled.
 If you run a permissive `bash` policy and want privilege elevation to prompt regardless, say so directly:
 
@@ -1168,6 +1241,10 @@ If you run a permissive `bash` policy and want privilege elevation to prompt reg
 ```
 
 That rule matches the wrapper's own text, so it is decided before the exemption is ever consulted.
+
+`sudo`'s own options are read the way `sudo` reads them, so `sudo -nu cat rm x` runs `rm x`, not a pure reader named `cat`.
+A `sudo` mode in which the command it names is not what runs as named keeps the floor whatever that command is: `-e`/`--edit` (sudoedit edits its operands as files, as root), `-s`/`--shell` and `-i`/`--login` (a shell runs the operand), and `-D`/`--chdir` and `-R`/`--chroot` (relative operands resolve somewhere the path surfaces do not look).
+So does `-h`, whose meaning depends on what follows it, and any option `sudo`'s manual does not list; a mode that keeps the floor is approved at the prompt or under `yoloMode`.
 
 #### Which key to actually write
 
@@ -1223,6 +1300,21 @@ The pattern is stored and displayed as written (e.g. `~/development/*`) in logs 
 Path **values** supplied by bash commands and extension tools are expanded the same way.
 This means `~/...`, `$HOME/...`, `${HOME}/...`, and the fully-expanded absolute form all match a single home-anchored pattern: `cat ~/.ssh/config`, `cat $HOME/.ssh/config`, or `cat /Users/me/.ssh/config` is caught by a `"~/.ssh/*": "deny"` rule.
 Pi's built-in file tools expand only `~`, as Pi itself does: a `read` of `~/.ssh/config` or `/Users/me/.ssh/config` is caught, while a `read` of `$HOME/.ssh/config` opens `<cwd>/$HOME/.ssh/config` and is matched as that file.
+
+A `bash` command that **starts** with a home prefix matches a home-anchored command pattern the same way.
+With `"~/bin/tool *": "deny"`, the commands `~/bin/tool --now`, `$HOME/bin/tool --now`, `${HOME}/bin/tool --now`, and `/Users/me/bin/tool --now` are all denied, and an allow written with `~` covers each of those spellings too.
+The command is still shown, logged, and offered for session approval as typed.
+Three limits apply:
+
+- On Windows, a home-anchored `bash` pattern is compiled with backslash separators, so it matches only a command typed with the backslashed absolute path ([issue #1020](https://github.com/gotgenes/pi-packages/issues/1020)).
+- A command that reassigns `HOME` earlier in the same invocation (`HOME=/tmp/x; ~/bin/tool`, or a `HOME=/tmp/x` prefix) is matched only as typed, because its `~` no longer names your home directory.
+  A reassignment the parser cannot see, such as one through a variable holding the name (`n=HOME; read $n`), is not detected, so the command still matches your home-anchored rules.
+  Writing a command that way takes deliberate effort to evade a rule; run an agent you would not trust with that inside a sandbox rather than relying on command patterns.
+- A home prefix later in the command, in argument position, is matched as typed: a pattern `cat ~/notes` matches the command `cat ~/notes` but not `cat /Users/me/notes`.
+  Gate file access by any spelling on the `path` and `external_directory` surfaces instead.
+
+The `bash` surface matches text, so a `*` in a home-anchored pattern also matches `..`: `~/bin/*` allows `~/bin/../../tmp/x`, exactly as it allows `/Users/me/bin/../../tmp/x`.
+Anchor an allow on the full command (`~/bin/tool *`) rather than a directory wildcard when that matters.
 
 ---
 

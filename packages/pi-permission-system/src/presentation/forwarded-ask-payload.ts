@@ -56,6 +56,7 @@ function degradedForwardedPayload(
       value: request.value ?? "",
       matchedPattern: null,
       commandContext: null,
+      matchedSpelling: null,
       executedUnit: null,
     },
     // Nothing to carry: the wire no longer relays a sentence, and inventing

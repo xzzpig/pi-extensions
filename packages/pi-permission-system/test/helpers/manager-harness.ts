@@ -33,7 +33,6 @@ export function createInMemoryPolicyLoader(
   } = {},
   mcpServerNames: readonly string[] = [],
 ): PolicyLoader {
-  const issues: string[] = [];
   return {
     loadGlobalConfig: () => scopes.global ?? ({} as const),
     loadProjectConfig: () => scopes.project ?? ({} as const),
@@ -44,7 +43,6 @@ export function createInMemoryPolicyLoader(
       (name && scopes.projectAgent?.[name]) || {},
     getConfiguredMcpServerNames: () => mcpServerNames,
     getCacheStamp: () => "in-memory",
-    getConfigIssues: () => issues,
     getResolvedPolicyPaths: (): ResolvedPolicyPaths => ({
       globalConfigPath: "/in-memory/config.json",
       globalConfigExists: true,
