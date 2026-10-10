@@ -1,7 +1,7 @@
 import type { ISandboxManager, SandboxRuntimeConfig } from "@carderne/sandbox-runtime";
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import { type BashOperations, getShellConfig } from "@earendil-works/pi-coding-agent";
@@ -25,11 +25,31 @@ function unique(values: string[]): string[] {
   return [...new Set(values)];
 }
 
-const canonicalizeFilesystemPattern = (path: string) =>
-  path.includes("*") ? path : canonicalizePath(path);
+function resolveSshAgentSocketPath(sshAuthSock: string | undefined): string | undefined {
+  if (!sshAuthSock) return undefined;
+  try {
+    const resolved = realpathSync(sshAuthSock);
+    return statSync(resolved).isSocket() ? resolved : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
-const canonicalizeFilesystemPatterns = (paths: string[]) =>
-  unique(paths.map(canonicalizeFilesystemPattern));
+function resolveUnixSockets(config: SandboxConfig): string[] | undefined {
+  const sockets = [...(config.network?.allowUnixSockets ?? [])];
+  if (config.network?.allowSSHAgentSocket) {
+    const agentSocket = resolveSshAgentSocketPath(process.env.SSH_AUTH_SOCK);
+    if (agentSocket) sockets.push(agentSocket);
+  }
+  if (sockets.length === 0) return config.network?.allowUnixSockets;
+  return unique(sockets);
+}
+
+const canonicalizeFilesystemPattern = (path: string, baseCwd?: string) =>
+  path.includes("*") ? path : canonicalizePath(path, baseCwd);
+
+const canonicalizeFilesystemPatterns = (paths: string[], baseCwd?: string) =>
+  unique(paths.map((path) => canonicalizeFilesystemPattern(path, baseCwd)));
 
 function sandboxRuntimeReadPaths(platform: NodeJS.Platform): string[] {
   if (platform !== "linux") return [];
@@ -64,39 +84,64 @@ export function buildRuntimeConfig(
   config: SandboxConfig,
   allowances?: SessionAllowances,
   platform: NodeJS.Platform = process.platform,
+  baseCwd: string = process.cwd(),
 ): SandboxRuntimeConfig {
   const effective = resolveAllowances(config, allowances);
 
-  return {
+  // When network sandboxing is disabled, omit `allowedDomains` so the runtime's
+  // `needsNetworkRestriction` stays false: no `--unshare-net`, no proxy. The
+  // `network` object itself must remain present — the runtime reads other keys
+  // off it unconditionally (e.g. `network.parentProxy` at initialize). Filesystem
+  // policies are unaffected.
+  // Strip `allowedDomains` from the spread so the disabled branch can truly omit
+  // it (it is re-added below in the non-disabled branch).
+  const {
+    disabled: networkDisabled,
+    allowedDomains: _allowedDomains,
+    allowSSHAgentSocket: _allowSSHAgentSocket,
+    ...networkConfig
+  } = config.network ?? {};
+
+  const runtimeConfig: SandboxRuntimeConfig = {
     network: {
-      ...config.network,
-      allowedDomains: effective.domains,
+      ...networkConfig,
+      // Omit allowedDomains when disabled; the runtime treats `undefined` as
+      // "no network restriction configured".
+      ...(networkDisabled ? {} : { allowedDomains: effective.domains }),
       deniedDomains: config.network?.deniedDomains ?? [],
-    },
+      allowUnixSockets: resolveUnixSockets(config),
+    } as SandboxRuntimeConfig["network"],
     filesystem: {
       disabled: config.filesystem?.disabled,
-      denyRead: canonicalizeFilesystemPatterns(config.filesystem?.denyRead ?? []),
-      allowRead: canonicalizeFilesystemPatterns([
-        ...effective.readPaths,
-        ...sandboxRuntimeReadPaths(platform),
-      ]),
-      allowWrite: canonicalizeFilesystemPatterns(effective.writePaths),
-      denyWrite: canonicalizeFilesystemPatterns(config.filesystem?.denyWrite ?? []),
-    },
+      denyRead: canonicalizeFilesystemPatterns(config.filesystem?.denyRead ?? [], baseCwd),
+      allowRead: canonicalizeFilesystemPatterns(
+        [...effective.readPaths, ...sandboxRuntimeReadPaths(platform)],
+        baseCwd,
+      ),
+      allowWrite: canonicalizeFilesystemPatterns(effective.writePaths, baseCwd),
+      denyWrite: canonicalizeFilesystemPatterns(config.filesystem?.denyWrite ?? [], baseCwd),
+      // Forwarded for @carderne/sandbox-runtime PR #21. The cast is only
+      // needed until a released runtime type carries the field.
+      denyMandatoryCwdFiles: config.filesystem?.denyMandatoryCwdFiles,
+    } as SandboxRuntimeConfig["filesystem"],
     ignoreViolations: config.ignoreViolations,
+    credentials: config.credentials,
     enableWeakerNestedSandbox: config.enableWeakerNestedSandbox,
     allowBrowserProcess: config.allowBrowserProcess,
     allowPty: config.allowPty,
     enableWeakerNetworkIsolation: true,
   };
+
+  return runtimeConfig;
 }
 
 export async function initializeSandbox(
   manager: ISandboxManager,
   config: SandboxConfig,
   allowances?: SessionAllowances,
+  baseCwd: string = process.cwd(),
 ): Promise<void> {
-  const runtimeConfig = buildRuntimeConfig(config, allowances);
+  const runtimeConfig = buildRuntimeConfig(config, allowances, process.platform, baseCwd);
   // The runtime checks its live allowlist. Permission prompts happen before
   // execution; a callback capturing this initial list could re-allow removed domains.
   await manager.initialize(runtimeConfig);
@@ -106,10 +151,11 @@ export function updateSandboxConfig(
   manager: ISandboxManager,
   config: SandboxConfig,
   allowances: SessionAllowances,
+  baseCwd: string = process.cwd(),
 ): void {
   // Permission updates must not tear down the proxy used by concurrent commands.
   // Network rules apply immediately; new commands pick up filesystem rules when wrapped.
-  manager.updateConfig(buildRuntimeConfig(config, allowances));
+  manager.updateConfig(buildRuntimeConfig(config, allowances, process.platform, baseCwd));
 }
 
 export function supportsNodeEnvProxy(version: string): boolean {
