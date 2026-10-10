@@ -4,11 +4,11 @@
   "prefix": "packages/pi-subagents",
   "source": "https://github.com/nicobailon/pi-subagents.git",
   "remote": "upstream-pi-subagents",
-  "ref": "v0.75.0",
-  "version": "v0.75.0",
-  "upstreamCommit": "ad56bf92fe01a2a5abd962938c619eb2a22ca47d",
+  "ref": "v0.77.0",
+  "version": "v0.77.0",
+  "upstreamCommit": "1ac9b964eb9cda1662507c52f5277764637daccc",
   "squash": true,
-  "lastSyncedAt": "2026-10-03T13:56:15+08:00",
+  "lastSyncedAt": "2026-10-10T06:30:32+00:00",
   "notes": "Forked from nicobailon/pi-subagents. Capability contracts live in openspec (specs fleet-native-transcript and subagent-context-injection; the changes under openspec/changes/ for the rest); fork doc chapters live in docs/fork-extensions.md.",
   "knownDebt": [
     {
@@ -30,7 +30,7 @@
     },
     {
       "kind": "test",
-      "reason": "test:smoke:tool-activation fails locally: TypeError: SettingsManager.inMemory is not a function. The package devDependency aliases @earendil-works/pi-coding-agent to the test shim (test/fixtures/pi-coding-agent-shim, 1.0.0 since the 2026-10-02 Pi 1.0.0 baseline), whose SettingsManager and DefaultResourceLoader are empty stubs, so this smoke script needs an environment where the real pi package resolves; it is not part of test:unit or test:all. The unit suite is green.",
+      "reason": "test:smoke:tool-activation fails locally: TypeError: SettingsManager.inMemory is not a function. The package devDependency aliases @earendil-works/pi-coding-agent to the test shim (test/fixtures/pi-coding-agent-shim, 1.0.0 since the 2026-10-02 Pi 1.0.0 baseline), whose SettingsManager and DefaultResourceLoader are empty stubs, so this smoke script needs an environment where the real pi package resolves; it is not part of test:unit or test:all.",
       "recordedAt": "2026-09-28T02:09:09+08:00",
       "path": "packages/pi-subagents/test/smoke/tool-activation.test.ts"
     },
@@ -96,8 +96,32 @@
     },
     {
       "kind": "test",
-      "reason": "The spawn-family unit tests (nested-control.test.ts external-job follow-ups, background child-spawn timeouts, native fleet, subagent extension child mode) exceed their 10-40s waits under the default parallel `node --test` load on this WSL host — child processes start much slower than upstream CI and the suite grew with v0.74.0; every affected file passes solo and the whole unit suite passes with --test-concurrency=1. Verify releases with the serial run, not the parallel one, on this machine.",
+      "reason": "The spawn-family unit tests (nested-control.test.ts external-job follow-ups, background child-spawn timeouts, native fleet, subagent extension child mode) exceed their 10-40s waits under the default parallel `node --test` load on this WSL host — child processes start much slower than upstream CI and the suite grew with v0.74.0; every affected file passed solo and the whole unit suite passed with --test-concurrency=1 on that WSL baseline. Verify releases with the serial run, not the parallel one, on this machine.",
       "recordedAt": "2026-10-02T23:30:00+08:00"
+    },
+    {
+      "kind": "lint",
+      "path": "packages/pi-subagents/*.mjs",
+      "reason": "Oxlint 1.80.0 reports two pre-existing no-runtime-typeof errors in runner-peer-preload.mjs:14 and scripts/build-package.mjs:72. Both guards predate v0.77 sync; preserving existing runtime guards and upstream byte discipline rather than adding lint suppressions. Rechecked 2026-10-10.",
+      "recordedAt": "2026-10-10T06:47:00Z"
+    },
+    {
+      "kind": "test",
+      "path": "packages/pi-subagents/test/unit/herdr-*.test.ts",
+      "reason": "The 2026-10-10 execution host rejects Unix-domain server.listen with EPERM: eight existing Herdr unit assertions cannot reach their socket protocol. Keep production and assertions unchanged; rerun on a host allowing local Unix sockets. No test skips were added.",
+      "recordedAt": "2026-10-10T06:57:00Z"
+    },
+    {
+      "kind": "test",
+      "path": "packages/pi-subagents/test/**/orca-progress-tabs.test.ts",
+      "reason": "Three unit cases and one integration case assume each temporary cwd has no ancestor .git. The 2026-10-10 host mounts /tmp/.git, so unchanged resolveSequenceScope writes manifests under /tmp/.pi and shares sequence counters; direct createOrcaProgressTab confirmed that path and the second integration fixture receives title index 2 instead of 1. Both test files and production module are unchanged from pre-sync ffdfabd. Keep assertions/production unchanged and rerun on a clean temporary hierarchy.",
+      "recordedAt": "2026-10-10T06:57:00Z"
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-subagents/package-lock.json",
+      "reason": "The fork uses the root pnpm lock as its dependency contract. Its unconsumed package-local npm lock remains upstream-owned rather than tracking the independent fork name/version and Pi 1.0.0 SDK pins; regenerate mechanically if package-local npm installation becomes supported.",
+      "recordedAt": "2026-10-10T07:01:00Z"
     }
   ],
   "reapplyOnSync": [
@@ -110,7 +134,7 @@
     "Pi 1.0.0 baseline (2026-10-02): herdr-native-placement.test.ts 'preserves canonical contact_supervisor progress' replaces its fixed 30ms/10ms sleeps with a waitForFrame poll (under the isolated-HOME preload the configure handler runs agent discovery and the configured frame arrives ~300ms in)",
     "Pi 1.0.0 baseline (2026-10-02): package-manifest.test.ts expectedHostPeerRanges pi-ai >=1.0.0 <2 and expectedHostDevVersions agent-core/pi-ai/pi-tui exact 1.0.0, matching the fork manifest's Pi 1.0.0 SDK pins",
     "sandbox/permission-profile threading (RunnerSubagentStep.sandbox/permissionProfile, LaunchBindingSource fields, resolveSandboxExtension, preflight untrusted_project validation)",
-    "tool-budget blocked detection (isToolBudgetBlockedMessage) inside fork-only handleToolResult in execution.ts, rebuilding the message_end role=toolResult dedup wrapper around upstream's usage-completeness body",
+    "tool-budget blocked detection (isToolBudgetBlockedMessage) inside fork-only handleToolResult in execution.ts (resolve completion/message toolName before pending-tool fallback), rebuilding the message_end role=toolResult dedup wrapper around upstream's usage-completeness body",
     "restore getHostBuiltinToolNames to child-tool-plan.ts (upstream dropped it)",
     "merge allowedAgents alongside the fork fields in descriptor known-fields and the agents.ts unsupported list",
     "lazy openSubagentFleet call sites passing an inspectorPlugins getter with the fork's events: pi.events retained",
@@ -120,17 +144,26 @@
     "retain PI_BUILTIN_TOOL_NAMES for hostAvailableBuiltins",
     "re-apply the 'as StreamFn' casts at prompt-audit.ts:72, review.ts:280 and permission-arbiter.ts",
     "take package-lock.json as upstream bytes and keep the fork-only CHANGELOG sections",
-    "after every pnpm install, rm -rf the re-copied shim's node_modules/@earendil-works/chord so resolveHostPeerAliases walks up to the hoisted chord, and re-copy the pnpm file: dependency manually after touching the fixture",
+    "After pnpm install, check for a package-local shim node_modules/@earendil-works/chord stub and remove it if present so host-peer resolution reaches the hoisted chord. Refresh a copied file: fixture when necessary; pnpm 11 may hardlink the fixture and need no copy.",
     "v0.75.0 sync (2026-10-03): agents.ts validateExternalRunnerProfile keeps the fork sandbox/permission-profile entries inside upstream Claude Code adapter-accepts overrides list (adapterAcceptsOverrides + isClaudeCodeAdapterId)",
     "v0.75.0 sync (2026-10-03): async-execution.ts keeps fork hostAvailableBuiltins = getHostBuiltinToolNames(ctx.pi) beside upstream requiredExtensions params/registeredExtensions expression in both chain and single paths, and keeps the fork sandbox const beside upstream claudeCodeAdapter in the single path",
     "v0.75.0 sync (2026-10-03): preflight.ts imports keep fork projectScopedProfileTrustError beside upstream assertRequiredChildExtensionsAdmitted",
-    "v0.75.0 sync (2026-10-03): child-session.ts keeps fork restoreProcessEnv(savedTransientEnv) beside upstream requiredStartupErrors/binding, and fork .then(() => undefined) steer/followUp wrappers beside upstream finishCommands spread"
+    "v0.75.0 sync (2026-10-03): child-session.ts keeps fork restoreProcessEnv(savedTransientEnv) beside upstream requiredStartupErrors/binding, and fork .then(() => undefined) steer/followUp wrappers beside upstream finishCommands spread",
+    "v0.77.0: keep fork injectAgents alongside upstream disabledAgents in agent discovery, sandbox/permission-profile extension injection alongside runtime module resolution, and projectTrusted/trustedProjectCwd alongside runnerLaunchers/parentSessionFile. Preserve native/legacy Fleet render paths and propagate upstream readFailed through the native transcript reader so failed reads are not cached.",
+    "Pi 1.0.0 test fixture: mirror constrainedSampling, AgentBeforeSettleEvent/Result and their boundary/session projection types, unsubscribe-returning ExtensionAPI.on, and normalized contextFiles/skills collections from the real 1.0.0 SDK. New upstream tests consume these APIs; keep the SDK version pins unchanged.",
+    "v0.77.0: context injection discovery receives the session projectTrusted state; refresh both injection and the upstream advertised catalog on a trust-state transition, replacing stale injected blocks in untrusted turns while preserving session-stable trusted snapshots.",
+    "v0.77.0: keep the fork-test-environment preload in unit/integration scripts to route explicitly real-SDK suites to pinned workspace Pi 1.0.0 and bound project ancestor discovery at the isolated temp root. host-peer-runtime-imports.test.ts uses forkTestPackageDirectory for pnpm-hoisted dependencies. in-process-child.test.ts isolates the real resource-loader skill fixture cwd instead of inheriting repository skills.",
+    "v0.77.0: keep the compact combined fork-fields row in docs/agents.md and detailed policy in docs/fork-extensions.md so the frontmatter guide section stays within the upstream 8000-character response limit.",
+    "v0.77.0: async-execution.ts preserves the selected agent permissionProfile in both single/chain tool-plan inputs and serialized runner steps so native launcher routing cannot drop the existing forced permission extension or pinned profile environment.",
+    "Pi 1.0.0 command results: child-commands.ts passes fulfilled tool results through fork-command-result.ts before its existing success/failure handlers; isError results reject into the unchanged failed/cancelled state handling.",
+    "v0.77.0: external-cli-runner.test.ts startRunner/startRunnerWithStderr resolve the jiti CLI through the existing fork jitiCliPath helper rather than assuming a package-local node_modules directory in the hoisted pnpm workspace."
   ],
   "doNotReintroduce": [
     "do not re-port the fork multi-model loop onto execution.ts or subagent-runner.ts",
     "do not re-add the streamFn option-naming divergence (upstream ships agentStreamOptions())",
     "do not bump the SDK pins without fixture work: after every pnpm install re-copy the touched fixture to node_modules/@earendil-works/pi-coding-agent and rm -rf the re-copied chord stub (a paired runner child crashes on the chord BACKGROUND_CONTEXT stub; the 1.0.0 bump additionally needs the runner-aliases best-effort subpath adaptation)",
     "do not wrap agent-management.jsonDetails in try/catch (it is at upstream bytes)",
-    "keep the .oxlintrc.json overrides broad and the pi-lens findings on upstream-original code unfixed (declared in knownDebt)"
+    "keep the .oxlintrc.json overrides broad and the pi-lens findings on upstream-original code unfixed (declared in knownDebt)",
+    "Do not retain a trusted-project context-injection snapshot across a change to untrusted session state; untrusted discovery must preserve user agents instead of letting same-name project agents shadow them."
   ]
 }

@@ -562,7 +562,7 @@ describe("default child session factory", () => {
 				pi.DefaultResourceLoader = class extends host.DefaultResourceLoader {
 					constructor(options: ConstructorParameters<PiCodingAgentModule["DefaultResourceLoader"]>[0]) { super(options); loader = this; }
 				};
-				await createDefaultChildSessionFactory({ loadPiCodingAgent: async () => pi }).create({ ...stubLaunch, noSkills });
+				await createDefaultChildSessionFactory({ loadPiCodingAgent: async () => pi }).create({ ...stubLaunch, cwd: skillDir, noSkills });
 				// The same call Pi's session makes with an extension's resources_discover skillPaths.
 				loader!.extendResources({ skillPaths: [{ path: skillDir, metadata: { source: "ext", scope: "temporary", origin: "top-level" } }] });
 				assert.deepEqual(loader!.getSkills().skills.map((skill) => skill.name), noSkills ? [] : ["ext-skill"]);

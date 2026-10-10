@@ -54,6 +54,8 @@ describe("buildDoctorReport", () => {
 				cwd: root,
 				config: {},
 				state,
+				spawnBudget: { used: 0, configuredLimit: null, granted: 0, limit: null, remaining: null, grantRemaining: null, grantHistory: [] },
+				activeAsyncCapacity: { used: 0, limit: 0 },
 				deps: {
 					isAsyncAvailable: () => true,
 					discoverAgentsAll: () => ({

@@ -2,6 +2,30 @@
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-10 (fork)
+
+### Changed
+
+- Sync upstream `v0.75.0` → `v0.77.0`: slimmer tool declarations, bounded inline
+  result previews, opt-in native runner launchers, calendar schedules, reviewed
+  worktree cleanup, reliable parent wakes, and canonical mission storage paths.
+- Context injection now excludes untrusted project contributions and refreshes
+  across trust changes without retaining a stale project advertisement.
+- Preserve sandbox/permission profiles, context injection, native Fleet transcripts,
+  and the Pi 1.0.0 baseline; align the test fixture with the SDK APIs used upstream.
+
+### Fixed
+
+- Read each tool result's own tool name before the pending-call fallback, so an
+  overlapping blocked bash call is not attributed to an unfinished read.
+- Retry failed native Fleet transcript reads without caching the failure.
+- Preserve permission-profile enforcement when native launchers route children to
+  background runners, including explicit empty extension lists.
+- Treat Pi 1 command `isError` results as failures while retaining targeted
+  cancellation and run-abort semantics.
+
+## Previous fork changes
+
 ### Changed
 
 - **Synced upstream `v0.74.0` → `v0.75.0`**: background subagents work on Pi 1.0.0

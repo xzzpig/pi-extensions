@@ -28,7 +28,16 @@ export interface BuildSystemPromptOptions {
  * always present). Mirrors the real host's NormalizedBuildSystemPromptOptions. */
 export type NormalizedBuildSystemPromptOptions = BuildSystemPromptOptions & {
     selectedTools: string[];
+    toolSnippets: Record<string, string>;
+    toolGuidelines: Record<string, string[]>;
+    promptGuidelines: string[];
+    appendSystemPrompt: string;
     sections: Record<string, string>;
+    contextFiles: Array<{
+        path: string;
+        content: string;
+    }>;
+    skills: Skill[];
 };
 /** Build the system prompt with tools, guidelines, and context */
 export declare function buildSystemPrompt(options: BuildSystemPromptOptions): string;

@@ -714,13 +714,20 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 
 	registerPinnedTool(pi, tool);
 
-	pi.on("before_agent_start", (event) => {
+	pi.on("before_agent_start", (event, ctx) => {
 		if (process.env[SUBAGENT_CHILD_ENV] === "1") return undefined;
+		const projectTrusted = typeof ctx.isProjectTrusted !== "function" || ctx.isProjectTrusted() !== false;
+		const trustChanged = contextInjectionProjectTrusted !== projectTrusted;
+		if (trustChanged) {
+			refreshContextInjectionSnapshot(ctx);
+			beginAdvertisement(ctx);
+		}
 		const next = applyInjectionBlock({
 			systemPrompt: event.systemPrompt,
 			block: state.contextInjectionBlock ?? "",
+			replaceExisting: !projectTrusted || trustChanged,
 		});
-		return next ? { systemPrompt: next } : undefined;
+		return next !== undefined ? { systemPrompt: next } : undefined;
 	});
 
 	pi.on("before_agent_start", async (event, ctx) => {
@@ -949,6 +956,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	// Snapshot the injectable-agent advertisement once per session so the
 	// appended `<available_subagents>` block stays byte-identical across turns
 	// and provider prompt caching is never invalidated mid-session.
+	let contextInjectionProjectTrusted: boolean | undefined;
 	const refreshContextInjectionSnapshot = (ctx: ExtensionContext) => {
 		if (process.env[SUBAGENT_CHILD_ENV] === "1") return;
 		try {
@@ -958,7 +966,8 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 				state.contextInjectionUnknownNames = [];
 				return;
 			}
-			const discovery = discoverAgentsAll(cwd);
+			contextInjectionProjectTrusted = typeof ctx.isProjectTrusted !== "function" || ctx.isProjectTrusted() !== false;
+			const discovery = discoverAgentsAll(cwd, undefined, { projectTrusted: contextInjectionProjectTrusted });
 			const mergedAgents = mergeAgentsForScope("both", discovery.user, discovery.project, discovery.builtin, discovery.package);
 			const resolved = resolveInjectableAgents({
 				agents: mergedAgents,

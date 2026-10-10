@@ -89,8 +89,13 @@ export function resolveInjectableAgents(input: ResolveInjectableAgentsInput): Re
  * Returns `undefined` when nothing should change: empty block, or a prompt
  * that already carries the marker (forked/resumed chains replaying history).
  */
-export function applyInjectionBlock(input: { systemPrompt: string; block: string }): string | undefined {
+export function applyInjectionBlock(input: { systemPrompt: string; block: string; replaceExisting?: boolean }): string | undefined {
 	const { systemPrompt, block } = input;
+	if (input.replaceExisting) {
+		const base = systemPrompt.replace(/\n*<available_subagents>[\s\S]*<\/available_subagents>/g, "");
+		const next = block ? `${base}\n\n${block}` : base;
+		return next === systemPrompt ? undefined : next;
+	}
 	if (!block) return undefined;
 	if (systemPrompt.includes(SUBAGENT_INJECTION_MARKER)) return undefined;
 	return `${systemPrompt}\n\n${block}`;

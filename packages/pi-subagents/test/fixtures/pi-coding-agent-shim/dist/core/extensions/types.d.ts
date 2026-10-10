@@ -8,7 +8,7 @@
  * - Interact with the user via UI primitives
  */
 import type { AgentMessage, AgentToolResult, AgentToolUpdateCallback, ThinkingLevel, ToolExecutionMode } from "@earendil-works/pi-agent-core";
-import type { Api, AssistantMessageEvent, AssistantMessageEventStream, Context, ImageContent, Model, OAuthCredentials, OAuthLoginCallbacks, Provider, ProviderHeaders, RefreshModelsContext, SimpleStreamOptions, TextContent, ToolResultMessage, Usage } from "@earendil-works/pi-ai";
+import type { ConstrainedSamplingConfig, Message, Api, AssistantMessageEvent, AssistantMessageEventStream, Context, ImageContent, Model, OAuthCredentials, OAuthLoginCallbacks, Provider, ProviderHeaders, RefreshModelsContext, SimpleStreamOptions, TextContent, ToolResultMessage, Usage } from "@earendil-works/pi-ai";
 import type { AutocompleteItem, AutocompleteProvider, Component, EditorComponent, EditorTheme, KeyId, OverlayHandle, OverlayOptions, TUI } from "@earendil-works/pi-tui";
 import type { Static, TSchema } from "typebox";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
@@ -20,7 +20,7 @@ import type { ReadonlyFooterDataProvider } from "../footer-data-provider.ts";
 import type { KeybindingsManager } from "../keybindings.ts";
 import type { CustomMessage } from "../messages.ts";
 import type { ModelRegistry } from "../model-registry.ts";
-import type { BranchSummaryEntry, CompactionEntry, CustomEntry, ReadonlySessionManager, SessionEntry, SessionManager } from "../session-manager.ts";
+import type { ContextEditEntry, ProjectedSessionEntry, BranchSummaryEntry, CompactionEntry, CustomEntry, ReadonlySessionManager, SessionEntry, SessionManager } from "../session-manager.ts";
 import type { SlashCommandInfo } from "../slash-commands.ts";
 import type { SourceInfo } from "../source-info.ts";
 import type { BuildSystemPromptOptions, NormalizedBuildSystemPromptOptions } from "../system-prompt.ts";
@@ -349,6 +349,7 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
     promptGuidelines?: string[];
     /** Parameter schema (TypeBox) */
     parameters: TParams;
+    constrainedSampling?: false | ConstrainedSamplingConfig;
     /** Controls whether ToolExecutionComponent renders the standard colored shell or the tool renders its own framing. */
     renderShell?: "default" | "self";
     /** Optional compatibility shim to prepare raw tool call arguments before schema validation. Must return an object conforming to TParams. */
@@ -535,6 +536,55 @@ export interface AgentEndEvent {
     type: "agent_end";
     messages: AgentMessage[];
 }
+export type AgentActivityOutcome = "completed" | "aborted" | "error";
+export interface CustomEntryDraft {
+    type: "custom";
+    customType: string;
+    data?: unknown;
+}
+export interface CustomMessageEntryDraft {
+    type: "custom_message";
+    customType: string;
+    content: string | (TextContent | ImageContent)[];
+    display: boolean;
+    details?: unknown;
+}
+export interface ContextEditEntryDraft {
+    type: "context_edit";
+    targetId: string;
+    replacement: ContextEditEntry["replacement"];
+}
+export interface CompactionEntryDraft {
+    type: "compaction";
+    summary: string;
+    /** Null creates a self-retaining compaction that keeps no preceding entries. */
+    firstKeptEntryId: string | null;
+    details?: unknown;
+    usage?: Usage;
+}
+export type SessionBoundaryDraft = CustomEntryDraft | CustomMessageEntryDraft | ContextEditEntryDraft | CompactionEntryDraft;
+export interface BoundaryContextPreview {
+    contextEntries: ProjectedSessionEntry[];
+    contextMessages: AgentMessage[];
+    llmMessages: Message[];
+    pendingMessages: AgentMessage[];
+    canContinue: boolean;
+}
+export interface BoundaryState {
+    entries: SessionBoundaryDraft[];
+    continue: boolean;
+    context: BoundaryContextPreview;
+    outcome: AgentActivityOutcome;
+}
+export interface BoundaryResult {
+    entries?: SessionBoundaryDraft[];
+    continue?: boolean;
+}
+/** Fired before final settlement. May append entries and ensure one next provider request. */
+export interface AgentBeforeSettleEvent extends BoundaryState {
+    type: "agent_before_settle";
+}
+export type AgentBeforeSettleEventResult = BoundaryResult;
 /** Fired after an agent run has fully settled and no automatic retry, compaction, or queued continuation will run. */
 export interface AgentSettledEvent {
     type: "agent_settled";
@@ -764,7 +814,7 @@ export declare function isToolCallEventType<TName extends string, TInput extends
     input: TInput;
 };
 /** Union of all event types */
-export type ExtensionEvent = ProjectTrustEvent | ResourcesDiscoverEvent | SessionEvent | ContextEvent | BeforeProviderRequestEvent | BeforeProviderHeadersEvent | AfterProviderResponseEvent | BeforeAgentStartEvent | AgentStartEvent | AgentEndEvent | AgentSettledEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolExecutionEndEvent | ModelSelectEvent | ThinkingLevelSelectEvent | UserBashEvent | InputEvent | ToolCallEvent | ToolResultEvent;
+export type ExtensionEvent = ProjectTrustEvent | ResourcesDiscoverEvent | SessionEvent | ContextEvent | BeforeProviderRequestEvent | BeforeProviderHeadersEvent | AfterProviderResponseEvent | BeforeAgentStartEvent | AgentStartEvent | AgentEndEvent | AgentBeforeSettleEvent | AgentSettledEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolExecutionEndEvent | ModelSelectEvent | ThinkingLevelSelectEvent | UserBashEvent | InputEvent | ToolCallEvent | ToolResultEvent;
 export interface ContextEventResult {
     messages?: AgentMessage[];
 }
@@ -845,39 +895,40 @@ export type ExtensionHandler<E, R = undefined> = (event: E, ctx: ExtensionContex
  * ExtensionAPI passed to extension factory functions.
  */
 export interface ExtensionAPI {
-    on(event: "project_trust", handler: ProjectTrustHandler): void;
-    on(event: "resources_discover", handler: ExtensionHandler<ResourcesDiscoverEvent, ResourcesDiscoverResult>): void;
-    on(event: "session_start", handler: ExtensionHandler<SessionStartEvent>): void;
-    on(event: "session_info_changed", handler: ExtensionHandler<SessionInfoChangedEvent>): void;
-    on(event: "session_before_switch", handler: ExtensionHandler<SessionBeforeSwitchEvent, SessionBeforeSwitchResult>): void;
-    on(event: "session_before_fork", handler: ExtensionHandler<SessionBeforeForkEvent, SessionBeforeForkResult>): void;
-    on(event: "session_before_compact", handler: ExtensionHandler<SessionBeforeCompactEvent, SessionBeforeCompactResult>): void;
-    on(event: "session_compact", handler: ExtensionHandler<SessionCompactEvent>): void;
-    on(event: "session_shutdown", handler: ExtensionHandler<SessionShutdownEvent>): void;
-    on(event: "session_before_tree", handler: ExtensionHandler<SessionBeforeTreeEvent, SessionBeforeTreeResult>): void;
-    on(event: "session_tree", handler: ExtensionHandler<SessionTreeEvent>): void;
-    on(event: "context", handler: ExtensionHandler<ContextEvent, ContextEventResult>): void;
-    on(event: "before_provider_request", handler: ExtensionHandler<BeforeProviderRequestEvent, BeforeProviderRequestEventResult>): void;
-    on(event: "before_provider_headers", handler: ExtensionHandler<BeforeProviderHeadersEvent>): void;
-    on(event: "after_provider_response", handler: ExtensionHandler<AfterProviderResponseEvent>): void;
-    on(event: "before_agent_start", handler: ExtensionHandler<BeforeAgentStartEvent, BeforeAgentStartEventResult>): void;
-    on(event: "agent_start", handler: ExtensionHandler<AgentStartEvent>): void;
-    on(event: "agent_end", handler: ExtensionHandler<AgentEndEvent>): void;
-    on(event: "agent_settled", handler: ExtensionHandler<AgentSettledEvent>): void;
-    on(event: "turn_start", handler: ExtensionHandler<TurnStartEvent>): void;
-    on(event: "turn_end", handler: ExtensionHandler<TurnEndEvent>): void;
-    on(event: "message_start", handler: ExtensionHandler<MessageStartEvent>): void;
-    on(event: "message_update", handler: ExtensionHandler<MessageUpdateEvent>): void;
-    on(event: "message_end", handler: ExtensionHandler<MessageEndEvent, MessageEndEventResult>): void;
-    on(event: "tool_execution_start", handler: ExtensionHandler<ToolExecutionStartEvent>): void;
-    on(event: "tool_execution_update", handler: ExtensionHandler<ToolExecutionUpdateEvent>): void;
-    on(event: "tool_execution_end", handler: ExtensionHandler<ToolExecutionEndEvent>): void;
-    on(event: "model_select", handler: ExtensionHandler<ModelSelectEvent>): void;
-    on(event: "thinking_level_select", handler: ExtensionHandler<ThinkingLevelSelectEvent>): void;
-    on(event: "tool_call", handler: ExtensionHandler<ToolCallEvent, ToolCallEventResult>): void;
-    on(event: "tool_result", handler: ExtensionHandler<ToolResultEvent, ToolResultEventResult>): void;
-    on(event: "user_bash", handler: ExtensionHandler<UserBashEvent, UserBashEventResult>): void;
-    on(event: "input", handler: ExtensionHandler<InputEvent, InputEventResult>): void;
+    on(event: "project_trust", handler: ProjectTrustHandler): () => void;
+    on(event: "resources_discover", handler: ExtensionHandler<ResourcesDiscoverEvent, ResourcesDiscoverResult>): () => void;
+    on(event: "session_start", handler: ExtensionHandler<SessionStartEvent>): () => void;
+    on(event: "session_info_changed", handler: ExtensionHandler<SessionInfoChangedEvent>): () => void;
+    on(event: "session_before_switch", handler: ExtensionHandler<SessionBeforeSwitchEvent, SessionBeforeSwitchResult>): () => void;
+    on(event: "session_before_fork", handler: ExtensionHandler<SessionBeforeForkEvent, SessionBeforeForkResult>): () => void;
+    on(event: "session_before_compact", handler: ExtensionHandler<SessionBeforeCompactEvent, SessionBeforeCompactResult>): () => void;
+    on(event: "session_compact", handler: ExtensionHandler<SessionCompactEvent>): () => void;
+    on(event: "session_shutdown", handler: ExtensionHandler<SessionShutdownEvent>): () => void;
+    on(event: "session_before_tree", handler: ExtensionHandler<SessionBeforeTreeEvent, SessionBeforeTreeResult>): () => void;
+    on(event: "session_tree", handler: ExtensionHandler<SessionTreeEvent>): () => void;
+    on(event: "context", handler: ExtensionHandler<ContextEvent, ContextEventResult>): () => void;
+    on(event: "before_provider_request", handler: ExtensionHandler<BeforeProviderRequestEvent, BeforeProviderRequestEventResult>): () => void;
+    on(event: "before_provider_headers", handler: ExtensionHandler<BeforeProviderHeadersEvent>): () => void;
+    on(event: "after_provider_response", handler: ExtensionHandler<AfterProviderResponseEvent>): () => void;
+    on(event: "before_agent_start", handler: ExtensionHandler<BeforeAgentStartEvent, BeforeAgentStartEventResult>): () => void;
+    on(event: "agent_start", handler: ExtensionHandler<AgentStartEvent>): () => void;
+    on(event: "agent_end", handler: ExtensionHandler<AgentEndEvent>): () => void;
+    on(event: "agent_before_settle", handler: ExtensionHandler<AgentBeforeSettleEvent, AgentBeforeSettleEventResult>): () => void;
+    on(event: "agent_settled", handler: ExtensionHandler<AgentSettledEvent>): () => void;
+    on(event: "turn_start", handler: ExtensionHandler<TurnStartEvent>): () => void;
+    on(event: "turn_end", handler: ExtensionHandler<TurnEndEvent>): () => void;
+    on(event: "message_start", handler: ExtensionHandler<MessageStartEvent>): () => void;
+    on(event: "message_update", handler: ExtensionHandler<MessageUpdateEvent>): () => void;
+    on(event: "message_end", handler: ExtensionHandler<MessageEndEvent, MessageEndEventResult>): () => void;
+    on(event: "tool_execution_start", handler: ExtensionHandler<ToolExecutionStartEvent>): () => void;
+    on(event: "tool_execution_update", handler: ExtensionHandler<ToolExecutionUpdateEvent>): () => void;
+    on(event: "tool_execution_end", handler: ExtensionHandler<ToolExecutionEndEvent>): () => void;
+    on(event: "model_select", handler: ExtensionHandler<ModelSelectEvent>): () => void;
+    on(event: "thinking_level_select", handler: ExtensionHandler<ThinkingLevelSelectEvent>): () => void;
+    on(event: "tool_call", handler: ExtensionHandler<ToolCallEvent, ToolCallEventResult>): () => void;
+    on(event: "tool_result", handler: ExtensionHandler<ToolResultEvent, ToolResultEventResult>): () => void;
+    on(event: "user_bash", handler: ExtensionHandler<UserBashEvent, UserBashEventResult>): () => void;
+    on(event: "input", handler: ExtensionHandler<InputEvent, InputEventResult>): () => void;
     /** Register a tool that the LLM can call. */
     registerTool<TParams extends TSchema = TSchema, TDetails = unknown, TState = any>(tool: ToolDefinition<TParams, TDetails, TState>): void;
     /** Register a custom command. */

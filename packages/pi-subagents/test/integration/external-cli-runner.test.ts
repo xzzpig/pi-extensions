@@ -139,7 +139,7 @@ async function waitForStatus(file: string, predicate: (status: AsyncStatus) => b
 
 function startRunner(configPath: string, cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<number | null> {
 	const repo = path.resolve(import.meta.dirname, "../..");
-	const child = spawn(process.execPath, [path.join(repo, "node_modules/jiti/lib/jiti-cli.mjs"), path.join(repo, "src/runs/background/subagent-runner-bootstrap.ts"), configPath], { cwd, env, stdio: "inherit", shell: false });
+	const child = spawn(process.execPath, [jitiCliPath(), path.join(repo, "src/runs/background/subagent-runner-bootstrap.ts"), configPath], { cwd, env, stdio: "inherit", shell: false });
 	return trackRunner(child, new Promise<number | null>((resolve, reject) => {
 		child.once("error", reject);
 		child.once("close", resolve);
@@ -148,7 +148,7 @@ function startRunner(configPath: string, cwd: string, env: NodeJS.ProcessEnv = p
 
 function startRunnerWithStderr(configPath: string, cwd: string, env: NodeJS.ProcessEnv = process.env): Promise<{ exitCode: number | null; stderr: string }> {
 	const repo = path.resolve(import.meta.dirname, "../..");
-	const child = spawn(process.execPath, [path.join(repo, "node_modules/jiti/lib/jiti-cli.mjs"), path.join(repo, "src/runs/background/subagent-runner-bootstrap.ts"), configPath], { cwd, env, stdio: ["ignore", "ignore", "pipe"] });
+	const child = spawn(process.execPath, [jitiCliPath(), path.join(repo, "src/runs/background/subagent-runner-bootstrap.ts"), configPath], { cwd, env, stdio: ["ignore", "ignore", "pipe"] });
 	let stderr = "";
 	child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf-8"); });
 	return trackRunner(child, new Promise((resolve, reject) => {
