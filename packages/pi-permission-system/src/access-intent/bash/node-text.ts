@@ -102,6 +102,11 @@ export class WordReader {
   spellsReboundHome(token: string): boolean {
     return this.variables.spellsReboundHome(token);
   }
+
+  /** A command unit's text with its leading home prefix spelled out ({@link ShellVariables.spellHomeAtStart}). */
+  spellHomeAtStart(text: string): string | undefined {
+    return this.variables.spellHomeAtStart(text);
+  }
 }
 
 /**

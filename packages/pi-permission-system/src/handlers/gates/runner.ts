@@ -116,8 +116,10 @@ export class GateRunner {
     // context holds what every resolution of this gate shares, and who decided
     // is by definition not shared (#726).
 
-    // 2. Session-hit fast path
-    if (check.source === "session") {
+    // 2. Session-hit fast path: a session grant is an allow. `SessionRules`
+    // records nothing else, so a session-sourced ask or deny means something
+    // clamped a grant, and it takes the gate below instead of riding the grant.
+    if (check.source === "session" && check.state === "allow") {
       this.reporter.writeReviewLog("permission_request.session_approved", {
         ...logContext,
         resolution: "session_approved",

@@ -52,16 +52,48 @@ export interface AccessPathAccessIntent {
   agentName?: string;
 }
 
-/** What a gate emits — a raw tool input or an `AccessPath`. */
-export type AccessIntent = ToolAccessIntent | AccessPathAccessIntent;
+/** What a gate emits: a raw tool input, an `AccessPath`, or a bash command unit. */
+export type AccessIntent =
+  | ToolAccessIntent
+  | AccessPathAccessIntent
+  | BashCommandAccessIntent;
+
+/**
+ * One bash command unit, with the other spellings the shell runs identically.
+ *
+ * `command` is the unit as typed: the prompt, the decision value, and the
+ * session-approval suggestion read it. `spellings` come from the program
+ * analysis, the only party that knows what a spelling means in this program
+ * (a `~` names the startup home only while the program leaves `HOME` alone),
+ * and the manager evaluates them with `command` as aliases of one invocation:
+ * the last rule matching any of them decides.
+ *
+ * String-only, so it stays on the manager's side of the ADR-0002 boundary.
+ */
+export interface BashCommandAccessIntent {
+  kind: "bash-command";
+  /**
+   * Always `"bash"`. Typed `string` because the resolver re-surfaces every
+   * intent across a surface family (`{ ...intent, surface }`); `bash` is never
+   * a family, so that never happens to this one.
+   */
+  surface: string;
+  command: string;
+  spellings: readonly string[];
+  agentName?: string;
+}
 
 /**
  * What the manager consumes — the `access-path` variant has already been
- * unwrapped to `path-values` by the resolver via `path.matchValues()`.
+ * unwrapped to `path-values` by the resolver via `path.matchValues()`; a
+ * `bash-command` intent passes through as emitted.
  *
  * The manager stays string-based and never imports `AccessPath`: this is the
  * deliberate boundary formalized in ADR-0002
  * (`docs/decisions/0002-path-values-string-boundary.md`), guarded by a
  * `no-restricted-imports` lint rule on `permission-manager.ts`.
  */
-export type ResolvedAccessIntent = ToolAccessIntent | PathValuesAccessIntent;
+export type ResolvedAccessIntent =
+  | ToolAccessIntent
+  | PathValuesAccessIntent
+  | BashCommandAccessIntent;

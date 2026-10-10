@@ -39,6 +39,19 @@ export interface PathToken {
   readonly token: string;
   readonly effect: TokenEffect;
   readonly role: TokenRole;
+  /**
+   * The source span of the argument node, set only when {@link token} is that
+   * whole node's resolved text. A token read from part of an argument (an
+   * option's embedded value, a script file glued to its flag) carries none, so
+   * nothing keyed on the span can mistake it for the whole word.
+   */
+  readonly span?: SourceSpan;
+}
+
+/** Where a node sits in the parsed source: `startIndex` to `endIndex`. */
+export interface SourceSpan {
+  readonly start: number;
+  readonly end: number;
 }
 
 // ── Public surface ─────────────────────────────────────────────────────────
@@ -160,7 +173,7 @@ export function collectRedirectTokens(
           i === target && provesTarget(effect, child, token, words)
             ? "redirect-destination"
             : "operand";
-        tokens.push({ token, effect, role });
+        tokens.push(wholeArgumentToken(child, token, effect, role));
       }
     }
     tokens.push(...collectHostedExecutionTokens(child, words));
@@ -271,11 +284,9 @@ function collectStatementOperandTokens(
       tokens.push(...collectPathCandidateTokens(child, words));
       continue;
     }
-    tokens.push({
-      token: words.text(child),
-      effect: UNPROVEN_EFFECT,
-      role: "operand",
-    });
+    tokens.push(
+      wholeArgumentToken(child, words.text(child), UNPROVEN_EFFECT, "operand"),
+    );
     tokens.push(...collectHostedExecutionTokens(child, words));
   }
   return tokens;
@@ -833,7 +844,12 @@ function collectPatternCommandTokens(
         tokens.push(...collectPathCandidateTokens(child, words));
         continue;
       }
-      const discharge = dischargePendingConsumption(consumption, text, effect);
+      const discharge = dischargePendingConsumption(
+        consumption,
+        child,
+        text,
+        effect,
+      );
       if (discharge.token) tokens.push(discharge.token);
       if (discharge.consumed) continue;
     }
@@ -907,7 +923,7 @@ function collectPatternCommandTokens(
     if (!hasExplicitScript && positionalsSeen < patternPositionals) {
       positionalsSeen++; // Skip: this is an inline pattern/script.
     } else {
-      tokens.push({ token: text, effect, role: "operand" });
+      tokens.push(wholeArgumentToken(child, text, effect, "operand"));
     }
     // A quoted token that did not act as a flag above has its embedded value
     // split here instead.
@@ -957,6 +973,7 @@ interface ConsumptionDischarge {
 /** Apply a pending consumption to the argument text that follows its flag. */
 function dischargePendingConsumption(
   role: PatternFlagRole,
+  argument: TSNode,
   text: string,
   effect: TokenEffect,
 ): ConsumptionDischarge {
@@ -964,7 +981,7 @@ function dischargePendingConsumption(
     case "script-file":
       return {
         consumed: true,
-        token: { token: text, effect, role: "operand" },
+        token: wholeArgumentToken(argument, text, effect, "operand"),
       };
     case "script":
     case "value":
@@ -1015,7 +1032,9 @@ function collectGenericCommandTokens(
 
     // Argument nodes: resolve their text and collect.
     if (ARG_NODE_TYPES.has(child.type)) {
-      tokens.push({ token: words.text(child), effect, role: "operand" });
+      tokens.push(
+        wholeArgumentToken(child, words.text(child), effect, "operand"),
+      );
       continue;
     }
 
@@ -1024,4 +1043,22 @@ function collectGenericCommandTokens(
   }
 
   return tokens;
+}
+
+/**
+ * A token that is `node`'s whole resolved text, carrying the node's source span
+ * so a reader of the span knows the token stands for the entire word.
+ */
+function wholeArgumentToken(
+  node: TSNode,
+  token: string,
+  effect: TokenEffect,
+  role: TokenRole,
+): PathToken {
+  return {
+    token,
+    effect,
+    role,
+    span: { start: node.startIndex, end: node.endIndex },
+  };
 }

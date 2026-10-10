@@ -4,8 +4,8 @@ import {
   type CommandWord,
   classifyWrapperWords,
   executedUnitOf,
+  floorExemptionOf,
   inlineShellPayloadIndex,
-  isTransparentWrapper,
 } from "#src/access-intent/bash/wrapper-analysis";
 
 /**
@@ -180,6 +180,16 @@ describe("inlineShellPayloadIndex", () => {
     });
   });
 
+  describe("a sudo layer", () => {
+    it("finds the payload past a clustered value-taking option", () => {
+      expect(payloadIndex(`sudo -nu root bash -c 'x'`)).toBe(5);
+    });
+
+    it("answers -1 when sudo edits its operands as files", () => {
+      expect(payloadIndex(`sudo -e bash -c 'x'`)).toBe(-1);
+    });
+  });
+
   describe("a payload flag with nothing after it", () => {
     // The index still names where the payload *would* be; the caller decides
     // what an out-of-range index is worth, exactly as `opaquePayload` does.
@@ -274,6 +284,35 @@ describe("executedUnitOf", () => {
     });
   });
 
+  describe("a sudo layer", () => {
+    it.each([
+      ["sudo -nu cat rm x", "rm x"],
+      ["sudo --user cat rm x", "rm x"],
+      ["sudo --us root cat x", "cat x"],
+      ["sudo --user=root cat x", "cat x"],
+      ["sudo -uedward cat", "cat"],
+    ])(
+      "names the inner command of %s by sudo's option grammar",
+      (unit, expected) => {
+        expect(executedUnit(unit)).toBe(expected);
+      },
+    );
+
+    it.each([
+      ["sudo -e cat", "-e edits its operands as files"],
+      ["sudo --edit true", "--edit edits its operands as files"],
+      ["sudo -ne cat", "a cluster carrying e edits"],
+      ["sudo --ed cat", "an abbreviation of --edit edits"],
+      ["sudo -Z cat", "an unlisted option refuses"],
+    ])("returns null for %s (%s)", (unit) => {
+      expect(executedUnit(unit)).toBeNull();
+    });
+
+    it("names the refused sudo layer when an outer wrapper peels to it", () => {
+      expect(executedUnit("timeout 5 sudo -e cat")).toBe("sudo -e cat");
+    });
+  });
+
   describe("nothing to add", () => {
     it("returns null for an ordinary command", () => {
       expect(executedUnit("grep foo")).toBeNull();
@@ -285,10 +324,13 @@ describe("executedUnitOf", () => {
   });
 });
 
-describe("isTransparentWrapper", () => {
-  /** The predicate over a unit that carries no write-proving redirect. */
+describe("floorExemptionOf", () => {
+  /** Whether a unit with no write-proving redirect is exempt as a core reader. */
   function isTransparent(unitText: string): boolean {
-    return isTransparentWrapper(words(unitText), { writesViaRedirect: false });
+    return (
+      floorExemptionOf(words(unitText), { writesViaRedirect: false }) ===
+      "core-reader"
+    );
   }
 
   describe("a wrapper running a proven pure reader", () => {
@@ -302,6 +344,9 @@ describe("isTransparentWrapper", () => {
       "sudo grep foo /etc/hosts",
       "find . -name '*.ts' -exec wc -l {} +",
       "fd -e ts -x cat",
+      "sudo -n true",
+      "sudo -n :",
+      "xargs false",
     ])("is transparent: %s", (unit) => {
       expect(isTransparent(unit)).toBe(true);
     });
@@ -321,6 +366,9 @@ describe("isTransparentWrapper", () => {
       ["xargs sort -o /tmp/x", "`-o` withdraws sort's read claim"],
       ["xargs find . -delete", "`-delete` withdraws find's read claim"],
       ["xargs fd -x rm", "`-x` withdraws fd's read claim"],
+      ["sudo ./true", "a path-qualified head word is never core"],
+      ["sudo -n /bin/true", "a path-qualified head word is never core"],
+      ["sudo sh -c true", "an inline shell's payload is never peeled"],
     ])("is not transparent: %s (%s)", (unit) => {
       expect(isTransparent(unit)).toBe(false);
     });
@@ -368,19 +416,209 @@ describe("isTransparentWrapper", () => {
     });
 
     it("is not transparent for an empty word list", () => {
-      expect(isTransparentWrapper([], { writesViaRedirect: false })).toBe(
-        false,
-      );
+      expect(
+        floorExemptionOf([], { writesViaRedirect: false }),
+      ).toBeUndefined();
     });
   });
 
   describe("a write-proving redirect", () => {
     it("withholds the exemption from an otherwise transparent wrapper", () => {
       const unit = "xargs grep foo";
-      expect(isTransparent(unit)).toBe(true);
+      expect(floorExemptionOf(words(unit), { writesViaRedirect: false })).toBe(
+        "core-reader",
+      );
       expect(
-        isTransparentWrapper(words(unit), { writesViaRedirect: true }),
-      ).toBe(false);
+        floorExemptionOf(words(unit), { writesViaRedirect: true }),
+      ).toBeUndefined();
+    });
+  });
+
+  describe("an execution modifier", () => {
+    /** The exemption a unit earns, with or without a write-proving redirect. */
+    function exemptionOf(
+      unitText: string,
+      writesViaRedirect = false,
+    ): string | undefined {
+      return floorExemptionOf(words(unitText), { writesViaRedirect });
+    }
+
+    describe("running any visible command", () => {
+      it.each([
+        "time pnpm test",
+        "timeout 300 pnpm run lint",
+        "timeout -s KILL 10 pnpm test",
+        "timeout -sKILL -k5 10 pnpm test",
+        "timeout --signal=KILL 10 pnpm test",
+        "nice -n 5 pnpm test",
+        "nice --adjustment=5 pnpm test",
+        "stdbuf -oL pnpm test",
+        "stdbuf -o L pnpm test",
+        "setsid pnpm test",
+        "time timeout 5 pnpm test",
+        "time FOO=1 pnpm test",
+        "/usr/bin/time pnpm test",
+        "time ./scripts/x.sh",
+        "time -f %e pnpm test",
+        "time -- pnpm test",
+      ])("is exempt: %s", (unit) => {
+        expect(exemptionOf(unit)).toBe("execution-modifier");
+      });
+
+      it("stays exempt when the statement writes through a redirect", () => {
+        // The destination is gated by the path surfaces, as for the bare
+        // command; this clause inherits a verdict rather than proving a read.
+        expect(exemptionOf("time pnpm test", true)).toBe("execution-modifier");
+      });
+    });
+
+    describe("with a flag the modifier admits", () => {
+      it.each([
+        "time -p pnpm test",
+        "/usr/bin/time -l yarn make",
+        "/usr/bin/time -h pnpm test",
+        "timeout -v 5 pnpm test",
+        "timeout --verbose 5 pnpm test",
+        "timeout --foreground 5 pnpm test",
+        "timeout -f 5 pnpm test",
+        "timeout -p 5 pnpm test",
+        "timeout --preserve-status 5 pnpm test",
+      ])("is exempt: %s", (unit) => {
+        expect(exemptionOf(unit)).toBe("execution-modifier");
+      });
+
+      it.each([
+        ["setsid -f pnpm test", "setsid's flags are unverified here"],
+        ["time -pl pnpm test", "a flag cluster is not listed"],
+      ])("is not exempt: %s (%s)", (unit) => {
+        expect(exemptionOf(unit)).toBeUndefined();
+      });
+    });
+
+    describe("running a proven pure reader", () => {
+      it("records the core-reader reason first", () => {
+        expect(exemptionOf("time grep foo")).toBe("core-reader");
+      });
+
+      it("falls back to the modifier reason when a redirect writes", () => {
+        expect(exemptionOf("time grep foo", true)).toBe("execution-modifier");
+      });
+    });
+
+    describe("refused", () => {
+      it.each([
+        ["time sudo rm -rf x", "a peeled layer changes who runs it"],
+        ["sudo time pnpm test", "the outer layer changes who runs it"],
+        ["time env A=1 pnpm test", "a peeled layer changes the environment"],
+        ["time xargs pnpm test", "a peeled layer feeds hidden arguments"],
+        ["nohup pnpm test", "nohup may write nohup.out"],
+        ["flock /tmp/l pnpm test", "flock creates its lock file"],
+        ["watch pnpm test", "watch repeats the command"],
+        ["timeout 5 bash -c 'rm x'", "the payload is not re-parsed"],
+        ["time eval 'rm x'", "the payload is not re-parsed"],
+      ])("is not exempt: %s (%s)", (unit) => {
+        expect(exemptionOf(unit)).toBeUndefined();
+      });
+
+      it.each([
+        ["timeout --sig KILL 5 rm -rf /", "an abbreviation hides its value"],
+        ["nice --adj 5 rm -rf /", "an abbreviation hides its value"],
+        ["timeout --unknown 5 pnpm test", "an unlisted option"],
+        ["/usr/bin/time -o t.txt pnpm test", "-o writes a file"],
+        ["time --output=t.txt pnpm test", "--output writes a file"],
+        ["time -a -o t.txt pnpm test", "-a appends to a file"],
+        ["nice -5 pnpm test", "the legacy numeric form is not listed"],
+      ])("is not exempt: %s (%s)", (unit) => {
+        expect(exemptionOf(unit)).toBeUndefined();
+      });
+
+      it.each([
+        ["time { rm -rf /tmp/x; }", "a brace group is not a command"],
+        ["time (rm -rf /tmp/x)", "a subshell is not a command"],
+        ["time $(echo rm) -rf x", "a computed head is not a name"],
+        ['time "$CMD" x', "a computed head is not a name"],
+        ["time if true", "a reserved word is not a command"],
+        ["time -- -x", "a dash-led head is not a name"],
+      ])("is not exempt: %s (%s)", (unit) => {
+        expect(exemptionOf(unit)).toBeUndefined();
+      });
+
+      it.each([
+        ["time sudo --unknown-opt", "the peel stopped at a wrapper"],
+        ["time time time time time pnpm test", "the peel ran out of depth"],
+        ["time", "there is no inner command"],
+        ["timeout 5", "there is no inner command"],
+      ])("is not exempt: %s (%s)", (unit) => {
+        expect(exemptionOf(unit)).toBeUndefined();
+      });
+    });
+  });
+
+  describe("a sudo layer", () => {
+    it.each([
+      ["sudo -e cat", "-e edits its operands as files"],
+      ["sudo --edit true", "--edit edits its operands as files"],
+      ["sudo -ne cat", "a cluster carrying e edits"],
+      ["sudo --ed cat", "an abbreviation of --edit edits"],
+      ["sudo -Z cat", "an unlisted option refuses"],
+      ["timeout 5 sudo -e cat", "the refused layer is still a wrapper"],
+      ["sudo -nu cat rm x", "the cluster's -u takes cat as its value"],
+      ["sudo --user cat rm x", "--user takes cat as its value"],
+    ])("is not transparent: %s (%s)", (unit) => {
+      expect(isTransparent(unit)).toBe(false);
+    });
+
+    it.each([
+      ["sudo --us root cat x", "an abbreviation of --user takes root"],
+      ["sudo --user=root cat x", "an attached long value"],
+      ["sudo -uedward cat", "an attached short value ends the cluster"],
+    ])("is transparent: %s (%s)", (unit) => {
+      expect(isTransparent(unit)).toBe(true);
+    });
+
+    describe("a mode in which the named command is not what runs", () => {
+      it.each([
+        ["sudo -D /etc cat shadow", "-D moves where operands resolve"],
+        [
+          "sudo --chdir /etc cat shadow",
+          "--chdir moves where operands resolve",
+        ],
+        ["sudo -R /x cat y", "-R moves where operands resolve"],
+        ["sudo --chroot /x cat y", "--chroot moves where operands resolve"],
+        ["sudo -s cat x", "-s hands the operand to a shell"],
+        ["sudo --shell cat x", "--shell hands the operand to a shell"],
+        ["sudo -i cat x", "-i hands the operand to a login shell"],
+        ["sudo --lo cat x", "an abbreviation of --login"],
+        ["sudo -h host cat x", "-h is help or a host by context"],
+        ["sudo --host host cat x", "--host's arity is unsettled"],
+      ])("is not transparent: %s (%s)", (unit) => {
+        expect(isTransparent(unit)).toBe(false);
+      });
+
+      it.each([
+        ["sudo --l cat x", "--list and --login"],
+        ["sudo --pre cat x", "--preserve-env and --preserve-groups"],
+      ])("is not transparent for the ambiguous %s (%s)", (unit) => {
+        expect(isTransparent(unit)).toBe(false);
+      });
+    });
+
+    describe("a documented option that changes nothing the peel names", () => {
+      it.each([
+        "sudo -E cat x",
+        "sudo -H cat x",
+        "sudo -AbBkNPS cat x",
+        "sudo --preserve-env cat x",
+        "sudo --preserve-env=PATH cat x",
+        "sudo -T 5 cat x",
+        "sudo --command-timeout 5 cat x",
+        "sudo --close-from 3 cat x",
+        "sudo --other-user bob cat x",
+        "sudo --prompt pw cat x",
+        "sudo --non-interactive --set-home cat x",
+      ])("is transparent: %s", (unit) => {
+        expect(isTransparent(unit)).toBe(true);
+      });
     });
   });
 });

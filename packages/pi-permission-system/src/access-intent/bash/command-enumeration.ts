@@ -1,5 +1,10 @@
 import type { BashCommandContext, FloorExemption } from "#src/types";
-import { EXECUTION_HOST_TYPES, forEachExecutionIn } from "./nested-execution";
+import {
+  commandWordNodes,
+  EXECUTION_HOST_TYPES,
+  forEachExecutionIn,
+  timedSubshellOf,
+} from "./nested-execution";
 import type { WordReader } from "./node-text";
 import { parseUnresolvedWithin } from "./parse-health";
 import type { TSNode } from "./parser";
@@ -8,8 +13,8 @@ import { classifyWrapperCommand } from "./wrapper-floors";
 import {
   type CommandWord,
   executedUnitOf,
+  floorExemptionOf,
   inlineShellPayloadIndex,
-  isTransparentWrapper,
   type WrapperKind,
 } from "./wrapper-analysis";
 
@@ -70,6 +75,30 @@ export interface BashCommand {
    */
   readonly payloadUnresolved?: boolean;
   readonly salvaged?: true;
+  /**
+   * Other spellings of {@link text} the shell runs identically, matched with
+   * it as aliases of one invocation. Absent when there are none.
+   *
+   * Two producers supply them, each spelling the text on its own: the
+   * home-expanded spelling of a unit whose text opens with `~`, `$HOME`, or
+   * `${HOME}` in a program that leaves `HOME` alone
+   * ({@link WordReader.spellHomeAtStart}), and the argument spelling, in which
+   * every argument word the {@link ArgumentSpeller} resolved to an absolute
+   * path is replaced by that path (#910).
+   */
+  readonly spellings?: readonly string[];
+}
+
+/**
+ * What the enumerator asks about one argument word of a unit: the absolute
+ * spelling of the path it names, as the party that resolved the program's
+ * paths knows it, or `undefined` when there is none to give.
+ *
+ * Asked by node rather than by text, because only the node says which
+ * occurrence of a token a unit's word is.
+ */
+export interface ArgumentSpeller {
+  absoluteSpellingOf(node: TSNode): string | undefined;
 }
 
 /**
@@ -123,16 +152,27 @@ interface UnitScope {
    * program's variables are the same wherever in it a word sits.
    */
   readonly words: WordReader;
+  /**
+   * What an argument word's absolute spelling is, from the party that resolved
+   * the program's paths. Relayed unchanged, including into nested executions:
+   * it answers by node, so each unit asks about its own words. Absent for a
+   * salvaged region, whose nodes are not the primary tree's.
+   */
+  readonly speller?: ArgumentSpeller;
 }
 
 /** A top-level command in the current shell, writing no file, fully parsed. */
-function topLevelScope(words: WordReader): UnitScope {
-  return {
+function topLevelScope(
+  words: WordReader,
+  speller: ArgumentSpeller | undefined,
+): UnitScope {
+  const scope: UnitScope = {
     writesViaRedirect: false,
     parseUnresolved: false,
     salvaged: false,
     words,
   };
+  return speller === undefined ? scope : { ...scope, speller };
 }
 
 /**
@@ -247,7 +287,8 @@ const STATEMENT_TYPES = new Set([
  * substitution (`$(…)`, backticks), process substitution (`<(…)`/`>(…)`), and
  * subshells (`( … )`) — emitting each inner command as its own unit *in
  * addition to* the enclosing command, since those inner commands really execute
- * (#306).
+ * (#306). A subshell timed by `time`, which the grammar reads as the argument
+ * of a command named `time`, is descended the same way.
  * A compound statement (control flow, a function definition, a `{ … }` brace
  * group) is emitted whole and then descended for the statements it contains,
  * while its operand words — a loop variable, a word list, a `case` subject, a
@@ -283,12 +324,13 @@ let activeParseProgram: ParseProgram | undefined;
 export function collectCommands(
   node: TSNode,
   words: WordReader,
+  speller?: ArgumentSpeller,
   options?: { parseProgram?: ParseProgram },
 ): BashCommand[] {
   const out: BashCommand[] = [];
   activeParseProgram = options?.parseProgram;
   try {
-  collectCommandsInto(node, topLevelScope(words), out);
+  collectCommandsInto(node, topLevelScope(words, speller), out);
   } finally {
     activeParseProgram = undefined;
   }
@@ -358,6 +400,11 @@ function collectCommandsInto(
   const scope = unresolvedScope(node, inherited);
 
   if (node.type === "command") {
+    const timed = timedSubshellOf(node);
+    if (timed !== null) {
+      collectTimedSubshell(node, timed, scope, out);
+      return;
+    }
     makeCommandUnit(node, scope, out);
     // A command's text already contains any substitution; descend its subtree
     // to ALSO emit the inner commands of command/process substitutions.
@@ -418,6 +465,40 @@ function collectCommandsInto(
 }
 
 /**
+ * Enumerate `time ( … )`: the `time` unit whole, then the subshell's commands
+ * as units of their own, exactly as a bare subshell's are.
+ *
+ * The `time` unit is the never-weaker whole emit, and it is exempt from the
+ * wrapper floor: the floor exists because a wrapper hides the command that
+ * should be gated, and every command in this subshell is a unit gated on its
+ * own rules. It resolves by its executed unit, the subshell's text, which is
+ * how the bare subshell's whole unit resolves.
+ *
+ * Substitutions the command hosts outside the subshell (in a redirect) are
+ * still enumerated, and the subshell is left to the descent so a substitution
+ * inside it is emitted once.
+ */
+function collectTimedSubshell(
+  node: TSNode,
+  subshell: TSNode,
+  scope: UnitScope,
+  out: BashCommand[],
+): void {
+  makeCommandUnit(node, scope, out, "execution-modifier");
+  for (let i = 0; i < node.childCount; i++) {
+    const child = node.child(i);
+    if (child && child.startIndex !== subshell.startIndex) {
+      collectHostedCommands(child, scope, out);
+    }
+  }
+  descendCommandChildren(
+    subshell,
+    { ...redirectedScope(node, scope), context: "subshell" },
+    out,
+  );
+}
+
+/**
  * The scope `node`'s own subtree establishes, marking it unresolved when
  * tree-sitter could not parse a region within it (#840).
  *
@@ -440,21 +521,24 @@ function unresolvedScope(node: TSNode, scope: UnitScope): UnitScope {
     : scope;
 }
 
-/** The wrapper facts a `command` node's words establish about its unit. */
-interface WrapperFacts {
+/**
+ * The facts a `command` node's words establish about its unit: the three
+ * wrapper answers, and the other spellings its text has.
+ */
+interface UnitFacts {
   readonly wrapperKind?: WrapperKind;
   readonly executedUnit?: string;
   readonly floorExemption?: FloorExemption;
   readonly payloadUnresolved?: boolean;
+  readonly spellings?: readonly string[];
 }
 
 function makeUnit(
   text: string,
   scope: UnitScope,
-  wrapper: WrapperFacts = {},
+  facts: UnitFacts = {},
 ): BashCommand {
-  const { wrapperKind, executedUnit, floorExemption, payloadUnresolved } =
-    wrapper;
+  const { wrapperKind, executedUnit, floorExemption, spellings, payloadUnresolved } = facts;
   const scoped: BashCommand = scope.context
     ? { text, context: scope.context }
     : { text };
@@ -470,7 +554,10 @@ function makeUnit(
   const marked: BashCommand = scope.parseUnresolved
     ? { ...payloadMarked, parseUnresolved: true }
     : payloadMarked;
-  return scope.salvaged ? { ...marked, salvaged: true } : marked;
+  const salvaged: BashCommand = scope.salvaged
+    ? { ...marked, salvaged: true }
+    : marked;
+  return spellings === undefined ? salvaged : { ...salvaged, spellings };
 }
 
 /**
@@ -493,8 +580,10 @@ function makeCommandUnit(
   node: TSNode,
   scope: UnitScope,
   out: BashCommand[],
+  floorExemption?: FloorExemption,
 ): void {
-  const { text, words } = readCommandUnit(node, scope.words);
+  const { text, words, argumentSpelling } = readCommandUnit(node, scope);
+  const spellings = distinctSpellings(text, [scope.words.spellHomeAtStart(text), argumentSpelling]);
   const classification = classifyWrapperCommand(
     node,
     text,
@@ -504,6 +593,7 @@ function makeCommandUnit(
   if (classification === undefined) {
     out.push(
       makeUnit(text, scope, {
+      spellings,
     executedUnit: executedUnitOf(text, words) ?? undefined,
       }),
     );
@@ -511,14 +601,15 @@ function makeCommandUnit(
   }
   out.push(
     makeUnit(text, scope, {
+      spellings,
       wrapperKind: classification.kind,
       executedUnit: classification.executedUnit,
-    floorExemption: isTransparentWrapper(words, redirectedScope(node, scope))
-      ? "core-reader"
-      : undefined,
+    floorExemption:
+      floorExemption ?? floorExemptionOf(words, redirectedScope(node, scope)),
       payloadUnresolved: classification.unresolved || undefined,
     }),
   );
+  if (floorExemption !== undefined) return;
   const innerContext =
     classification.kind === "opaque-payload"
       ? "wrapper_payload"
@@ -535,7 +626,7 @@ function makeCommandUnit(
       // a payload's own wrappers retain their flooring facts.
       out.push(inner);
     } else {
-      out.push({ text: inner.text, context: innerContext });
+      out.push({ ...inner, context: innerContext });
     }
   }
 }
@@ -588,10 +679,11 @@ function redirectedScope(node: TSNode, scope: UnitScope): UnitScope {
  */
 function readCommandUnit(
   node: TSNode,
-  reader: WordReader,
+  scope: UnitScope,
 ): {
   text: string;
   words: CommandWord[];
+  argumentSpelling?: string;
 } {
   const nodes = commandWordNodes(node);
   if (nodes.length === 0) return { text: node.text, words: [] };
@@ -599,18 +691,47 @@ function readCommandUnit(
   const redirects = hostedRedirects(node);
   const words: CommandWord[] = [];
   let text = "";
+  let spelled = "";
+  let respelled = false;
   let previous: TSNode | undefined;
   for (const word of nodes) {
-    if (previous) text += gapBetween(node, previous, word, redirects);
-    words.push({
-      ...reader.argWord(word),
-      text: word.text,
-      offset: text.length,
-    });
+    if (previous) {
+      const gap = gapBetween(node, previous, word, redirects);
+      text += gap;
+      spelled += gap;
+    }
+    const argWord = scope.words.argWord(word);
+    words.push({ ...argWord, text: word.text, offset: text.length });
     text += word.text;
+    const spelling = argWord.computed
+      ? undefined
+      : scope.speller?.absoluteSpellingOf(word);
+    respelled ||= spelling !== undefined;
+    spelled += spelling ?? word.text;
     previous = word;
   }
-  return { text, words };
+  return respelled
+    ? { text, words, argumentSpelling: spelled }
+    : { text, words };
+}
+
+/**
+ * The spellings that differ from `text`, each once, or `undefined` when none
+ * does — so a unit with nothing to respell keeps the shape it had.
+ */
+function distinctSpellings(
+  text: string,
+  candidates: readonly (string | undefined)[],
+): readonly string[] | undefined {
+  const spellings = [
+    ...new Set(
+      candidates.filter(
+        (spelling): spelling is string =>
+          spelling !== undefined && spelling !== text,
+      ),
+    ),
+  ];
+  return spellings.length === 0 ? undefined : spellings;
 }
 
 /**
@@ -633,28 +754,6 @@ function gapBetween(
     before.endIndex - command.startIndex,
     after.startIndex - command.startIndex,
   );
-}
-
-/**
- * The nodes {@link readCommandUnit} reports words for, in the same order: every
- * named child except a prefix assignment and a hosted redirect.
- *
- * Split out so a consumer that needs a *node* rather than a word (the log's
- * command masker, which offsets a re-parse by the payload node's `startIndex`)
- * walks the identical filtered list. Two walks over the same children with the
- * same filter, written twice, is how the two come to disagree about which word
- * is at which index.
- */
-function commandWordNodes(node: TSNode): TSNode[] {
-  const nodes: TSNode[] = [];
-  for (let i = 0; i < node.childCount; i++) {
-    const child = node.child(i);
-    if (!child?.isNamed) continue;
-    if (child.type === "variable_assignment") continue;
-    if (REDIRECT_NODE_TYPES.has(child.type)) continue;
-    nodes.push(child);
-  }
-  return nodes;
 }
 
 /** The redirects a `command` node hosts among its own children. */
@@ -738,6 +837,7 @@ function collectHostedCommands(
         parseUnresolved: false,
         salvaged: scope.salvaged,
         words: scope.words,
+        speller: scope.speller,
       },
       out,
     );

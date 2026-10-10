@@ -1,4 +1,5 @@
 import { type TokenEffect, UNPROVEN_EFFECT } from "#src/access-intent/effect";
+import { isDiscardDevice } from "#src/path/safe-system-paths";
 import { redirectDestinationEffect } from "./command-effects";
 import { parseUnresolvedAt } from "./parse-health";
 import type { TSNode } from "./parser";
@@ -88,9 +89,15 @@ export function redirectEffectForDestination(
  * are the operator and a descriptor, so the loop finds nothing to refuse on and
  * clears the exemption for a form nobody understood (#814).
  *
- * Past that, only two things clear it: a descriptor duplication (`2>&1`), which
- * names no file, and an operator that proves a read — reading a file alongside
- * a pure reader leaves it a pure reader.
+ * Past that, only three things clear it: a descriptor duplication (`2>&1`),
+ * which names no file; a destination spelled exactly `/dev/null`, whose writes
+ * touch no file (ADR 0013 §11 withholds the exemption only for a *real* output
+ * redirect, #951); and an operator that proves a read — reading a file
+ * alongside a pure reader leaves it a pure reader.
+ *
+ * The device check reads the node's raw text, so a quoted or computed spelling
+ * stays unproven, and it answers only this refusal: the token collector's proof
+ * still attributes the device a write, which `path_write` rules match.
  */
 export function redirectMayWriteFile(redirect: TSNode): boolean {
   if (parseUnresolvedAt(redirect)) return true;
@@ -100,6 +107,8 @@ export function redirectMayWriteFile(redirect: TSNode): boolean {
     if (!child?.isNamed) continue;
     // A source or duplicated descriptor (`2`, `&1`) names no file.
     if (DESCRIPTOR_NODE_TYPES.has(child.type)) continue;
+    // A write to the discard device touches no file.
+    if (isDiscardDevice(child.text)) continue;
     if (redirectEffectForDestination(redirect, child)?.effect !== "read") {
       return true;
     }

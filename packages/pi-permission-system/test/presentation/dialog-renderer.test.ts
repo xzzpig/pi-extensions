@@ -164,6 +164,26 @@ describe("renderPromptDialog", () => {
       ]);
     });
 
+    it("renders the spelling the rule matched beside the rule", () => {
+      expect(
+        render({
+          kind: "bash",
+          request: requestFacts({
+            surface: "bash",
+            toolName: "bash",
+            value: "rm a/x",
+            matchedPattern: "rm /tmp/a/*",
+            matchedSpelling: "rm /tmp/a/x",
+          }),
+        }),
+      ).toEqual([
+        "tool       : bash",
+        "rule       : rm /tmp/a/*",
+        "matched as : rm /tmp/a/x",
+        "command    : rm a/x",
+      ]);
+    });
+
     it("names the nested context the offending unit ran in", () => {
       expect(
         render({

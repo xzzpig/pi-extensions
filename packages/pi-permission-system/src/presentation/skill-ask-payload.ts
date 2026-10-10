@@ -42,6 +42,7 @@ function skillPayload(
       value: skillName,
       matchedPattern: null,
       commandContext: null,
+      matchedSpelling: null,
       executedUnit: null,
     },
     evidence,

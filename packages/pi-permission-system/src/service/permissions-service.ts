@@ -72,9 +72,13 @@ export class LocalPermissionsService implements PermissionsService {
     // the enforcement gate enforces (#309). A cold parser falls back to the
     // whole-string match inside resolveBashAdvisoryCheck.
     if (surface === "bash") {
-      return resolveBashAdvisoryCheck(value ?? "", agentName, this.resolver, {
-        wrapperFloors: this.session.getWrapperFloors(),
-      });
+      return resolveBashAdvisoryCheck(
+        value ?? "",
+        agentName,
+        this.resolver,
+        this.session.getPathNormalizer(),
+        { wrapperFloors: this.session.getWrapperFloors() },
+      );
     }
     const intent = buildAccessIntentForSurface(
       surface,

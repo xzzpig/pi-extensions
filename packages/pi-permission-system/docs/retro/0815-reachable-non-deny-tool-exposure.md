@@ -87,8 +87,7 @@ The check that matters is `git merge-base --is-ancestor main HEAD`, not the `ori
 
 ### Session summary
 
-## 815 landed on `main` and released as `pi-permission-system` v30.1.0: tool exposure now asks `isToolFullyDenied` (backed by the `isSurfaceFullyDenied` probe) instead of `getToolPermission`'s catch-all lookup, so a surface with a `deny` catch-all and a reachable non-deny pattern is no longer hidden outright
-
+#815 landed on `main` and released as `pi-permission-system` v30.1.0: tool exposure now asks `isToolFullyDenied` (backed by the `isSurfaceFullyDenied` probe) instead of `getToolPermission`'s catch-all lookup, so a surface with a `deny` catch-all and a reachable non-deny pattern is no longer hidden outright.
 The land itself took two attempts — the first `git merge --ff-only` was rejected because local `main` carried an unpushed root commit that `origin/main` did not show, which is the [#549] hazard in its sharpest form.
 Every deterministic gate stayed green, CI passed on the first push, and the release ran clean through `prepare` → `publish` → `github-release`.
 
@@ -104,7 +103,7 @@ Every deterministic gate stayed green, CI passed on the first push, and the rele
   It named the ambiguity without supplying the answer, and the peer diagnosed and fixed the defect itself, then generalized the lesson unprompted.
   This is a markedly cheaper intervention shape than stating the fix.
 
-##### What caused friction (agent side)
+#### What caused friction (agent side)
 
 - `missing-context` — the root session misattributed the failed ff-merge.
   It ran `git log --oneline issue-815..main | wc -l` and got `1`, then narrated a cause from the nearby subjects in `git log -5 main`, reporting that "#810 landed and `pi-permission-system` released as 30.0.0 after the peer's rebase."
@@ -120,14 +119,14 @@ Every deterministic gate stayed green, CI passed on the first push, and the rele
   The peer amended that note during its second sync with the divergence paragraph and an explicit caveat that the push would carry the triage commit, so the root's picture of the handoff was frozen before the peer's most important finding existed.
   Impact: the final report omitted that the push included unrelated root work; no rework.
 
-##### What caused friction (user side)
+#### What caused friction (user side)
 
 - The `docs(triage)` commit was made on `main` at 06:20Z and left unpushed while a worktree branch was pending, six minutes before the #815 peer session started.
   [#549]'s rule in `AGENTS.md` covers the general hazard, but the unpushed variant is strictly worse than the one it describes: the peer rebases onto `origin/main`, cannot see the commit at all, and its rebase is a no-op — so the failure is guaranteed and the peer cannot self-correct.
   Pushing that commit, or landing #815 before making it, would have removed the whole detour.
   Framed as opportunity: the cheapest fix is mechanical, and both proposals below aim to make the condition self-announcing rather than relying on the discipline.
 
-#### Diagnostic details
+### Diagnostic details
 
 - **Model-performance correlation** — the peer session ran `anthropic/claude-opus-5` for planning, TDD, and the sync correction (152 turns) and `anthropic/claude-sonnet-5` for the initial sync stage (23 turns).
   The `origin/main`-only check slipped on a sonnet turn that followed the template's step 4 literally; the opus turn questioned the template once prompted and found the defect.

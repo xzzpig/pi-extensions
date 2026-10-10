@@ -64,6 +64,12 @@ export interface PromptRequestFacts {
   /** The matched rule, including a sentinel such as `<indirection-bash-wrapper>`. */
   readonly matchedPattern: string | null;
   /**
+   * For bash, the spelling of the unit the matched rule matched when it did not
+   * match {@link value} as typed — the absolute spelling of a relative path
+   * argument, say. `null` when the typed text decided.
+   */
+  readonly matchedSpelling: string | null;
+  /**
    * Where the offending bash unit runs, when it came from a substitution or a
    * subshell. A fact rather than a rendered clause: it is what makes the
    * matched rule intelligible, and how it reads is the renderer's choice.
@@ -172,6 +178,9 @@ function asPromptRequestFacts(value: unknown): PromptRequestFacts | undefined {
     candidate.commandContext,
     BASH_COMMAND_CONTEXTS,
   );
+  // Absent from a request a node built before the fact existed, which states
+  // no spelling rather than a malformed one.
+  const matchedSpelling = candidate.matchedSpelling ?? null;
   if (
     !requester ||
     commandContext === undefined ||
@@ -180,6 +189,7 @@ function asPromptRequestFacts(value: unknown): PromptRequestFacts | undefined {
     !isNullableString(candidate.toolName) ||
     !isNullableString(candidate.invokedToolName) ||
     !isNullableString(candidate.matchedPattern) ||
+    !isNullableString(matchedSpelling) ||
     !isNullableString(candidate.executedUnit)
   ) {
     return undefined;
@@ -192,6 +202,7 @@ function asPromptRequestFacts(value: unknown): PromptRequestFacts | undefined {
     invokedToolName: candidate.invokedToolName,
     value: candidate.value,
     matchedPattern: candidate.matchedPattern,
+    matchedSpelling,
     commandContext: commandContext.value,
     executedUnit: candidate.executedUnit,
   };

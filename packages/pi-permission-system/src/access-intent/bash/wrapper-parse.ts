@@ -35,6 +35,7 @@ function parseCommandUnits(
     return collectCommands(
       tree.rootNode,
       new WordReader(ShellVariables.scan([tree.rootNode])),
+      undefined,
       { parseProgram },
     );
   } finally {

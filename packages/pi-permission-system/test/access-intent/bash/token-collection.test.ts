@@ -1462,3 +1462,74 @@ describe("token role", () => {
     ]);
   });
 });
+
+describe("source spans", () => {
+  /** Each token with the source text its span covers, or `null` without one. */
+  async function spansOf(
+    command: string,
+  ): Promise<{ token: string; spanned: string | null }[]> {
+    const parser = await getParser();
+    const tree = parser.parse(command);
+    if (!tree) throw new Error("parse returned null");
+    try {
+      return collectPathCandidateTokens(tree.rootNode, words).map(
+        ({ token, span }) => ({
+          token,
+          spanned: span ? command.slice(span.start, span.end) : null,
+        }),
+      );
+    } finally {
+      tree.delete();
+    }
+  }
+
+  describe("a token that is a whole argument carries its node's span", () => {
+    it("for a generic command's argument", async () => {
+      expect(await spansOf("rm a/b")).toEqual([
+        { token: "a/b", spanned: "a/b" },
+      ]);
+    });
+
+    it("for a quoted argument, quotes included", async () => {
+      expect(await spansOf('rm "a b/c"')).toEqual([
+        { token: "a b/c", spanned: '"a b/c"' },
+      ]);
+    });
+
+    it("for a pattern-first command's operand", async () => {
+      expect(await spansOf("grep pat a/b")).toEqual([
+        { token: "a/b", spanned: "a/b" },
+      ]);
+    });
+
+    it("for a script file a flag consumed", async () => {
+      expect(await spansOf("sed -f s.sed f.txt")).toEqual([
+        { token: "s.sed", spanned: "s.sed" },
+        { token: "f.txt", spanned: "f.txt" },
+      ]);
+    });
+
+    it("for a redirect's target", async () => {
+      expect(await spansOf("cat a > out.txt")).toEqual([
+        { token: "a", spanned: "a" },
+        { token: "out.txt", spanned: "out.txt" },
+      ]);
+    });
+  });
+
+  describe("a token read from part of an argument carries none", () => {
+    it("for a script file glued to its flag", async () => {
+      expect(await spansOf("sed -fs.sed f.txt")).toEqual([
+        { token: "s.sed", spanned: null },
+        { token: "f.txt", spanned: "f.txt" },
+      ]);
+    });
+
+    it("for an option's embedded value", async () => {
+      expect(await spansOf("tool --out=a/b")).toEqual([
+        { token: "--out=a/b", spanned: "--out=a/b" },
+        { token: "a/b", spanned: null },
+      ]);
+    });
+  });
+});

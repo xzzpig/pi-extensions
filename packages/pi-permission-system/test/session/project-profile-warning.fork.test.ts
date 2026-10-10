@@ -15,7 +15,7 @@ import { makeRealSession } from "#test/helpers/session-fixtures";
 /**
  * Fork-only tests (project-permission-profiles): the «N project profiles not
  * applied (project is not trusted)» warning surfaces through two channels —
- * `getConfigIssues` (permission-profiles-scope.test.ts) and the session-level
+ * `getPolicyIssues` (permission-profiles-scope.test.ts) and the session-level
  * UI notify fired by `PermissionSession.refreshConfig` when the project is
  * untrusted. This file covers the UI-notify channel and the fork-only probe
  * helper behind it.

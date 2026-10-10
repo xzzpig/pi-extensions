@@ -4,6 +4,7 @@ import type {
   ResolvedAccessIntent,
 } from "#src/access-intent/access-intent";
 import { surfaceFamilyMembers } from "#src/access-intent/path-surfaces";
+import type { PolicyIssueSource } from "#src/config/policy-issue-reporter";
 import type { SkillPermissionChecker } from "#src/exposure/skill-prompt-sanitizer";
 import type { SessionRules } from "#src/session/session-rules";
 import type { PermissionCheckResult, PermissionState } from "#src/types";
@@ -64,7 +65,7 @@ function toResolvedIntent(
  * - `sessionRules` — narrowed to `getRuleset` (ISP: the resolver only reads, never records)
  */
 export class PermissionResolver
-  implements ScopedPermissionResolver, SkillPermissionChecker
+  implements ScopedPermissionResolver, SkillPermissionChecker, PolicyIssueSource
 {
   constructor(
     private readonly permissionManager: ScopedPermissionManager,
@@ -139,7 +140,7 @@ export class PermissionResolver
     return this.permissionManager.isToolFullyDenied(toolName, agentName);
   }
 
-  getConfigIssues(agentName?: string): string[] {
-    return this.permissionManager.getConfigIssues(agentName);
+  getPolicyIssues(agentName?: string): string[] {
+    return this.permissionManager.getPolicyIssues(agentName);
   }
 }

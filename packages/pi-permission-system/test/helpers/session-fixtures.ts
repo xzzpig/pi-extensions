@@ -110,7 +110,7 @@ export function makeFakePermissionManager() {
     isToolFullyDenied: vi
       .fn<(toolName: string, agentName?: string) => boolean>()
       .mockReturnValue(false),
-    getConfigIssues: vi.fn((): string[] => []),
+    getPolicyIssues: vi.fn((): string[] => []),
   };
 }
 

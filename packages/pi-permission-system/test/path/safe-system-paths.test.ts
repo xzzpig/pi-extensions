@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import {
+  isDiscardDevice,
   isSafeSystemPath,
   SAFE_SYSTEM_PATHS,
 } from "#src/path/safe-system-paths";
@@ -46,4 +47,26 @@ describe("isSafeSystemPath", () => {
   test("returns false for a relative path", () => {
     expect(isSafeSystemPath("dev/null")).toBe(false);
   });
+});
+
+describe("isDiscardDevice", () => {
+  test("returns true for /dev/null, whose writes are discarded", () => {
+    expect(isDiscardDevice("/dev/null")).toBe(true);
+  });
+
+  // On Linux a write open of a stream device reopens the descriptor's own
+  // file, truncating it, so these safe paths are not discard devices.
+  test.each(["/dev/stdin", "/dev/stdout", "/dev/stderr"])(
+    "returns false for the stream device %s",
+    (path) => {
+      expect(isDiscardDevice(path)).toBe(false);
+    },
+  );
+
+  test.each(["/dev/null/x", "/dev/nullx", "dev/null", ""])(
+    "returns false for %j, which only resembles /dev/null",
+    (path) => {
+      expect(isDiscardDevice(path)).toBe(false);
+    },
+  );
 });

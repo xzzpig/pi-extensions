@@ -273,6 +273,35 @@ describe("PermissionResolver", () => {
     });
   });
 
+  describe("resolve: bash-command intent", () => {
+    it("passes the command and its spellings to the manager unchanged, with the session ruleset", () => {
+      const pm = makePermissionManager();
+      const sessionRules = new SessionRules();
+      const { resolver } = makeResolver(pm, sessionRules);
+      sessionRules.recordSessionApproval(
+        SessionApproval.single("bash", "~/bin/x"),
+      );
+
+      resolver.resolve({
+        kind: "bash-command",
+        surface: "bash",
+        command: "~/bin/x",
+        spellings: ["/h/bin/x"],
+        agentName: "agent-x",
+      });
+
+      const [passedIntent, passedRules] = vi.mocked(pm.check).mock.calls[0];
+      expect(passedIntent).toEqual({
+        kind: "bash-command",
+        surface: "bash",
+        command: "~/bin/x",
+        spellings: ["/h/bin/x"],
+        agentName: "agent-x",
+      });
+      expect(passedRules?.map(({ pattern }) => pattern)).toEqual(["~/bin/x"]);
+    });
+  });
+
   describe("checkPermission (raw, off-interface)", () => {
     it("delegates to manager.check as a tool intent without session rules", () => {
       const { resolver, permissionManager } = makeResolver();
@@ -501,15 +530,15 @@ describe("PermissionResolver", () => {
     });
   });
 
-  describe("getConfigIssues", () => {
-    it("delegates to permissionManager.getConfigIssues", () => {
+  describe("getPolicyIssues", () => {
+    it("delegates to permissionManager.getPolicyIssues", () => {
       const pm = makePermissionManager();
-      vi.mocked(pm.getConfigIssues).mockReturnValue(["issue-1"]);
+      vi.mocked(pm.getPolicyIssues).mockReturnValue(["issue-1"]);
       const { resolver } = makeResolver(pm);
 
-      const result = resolver.getConfigIssues("agent-1");
+      const result = resolver.getPolicyIssues("agent-1");
 
-      expect(pm.getConfigIssues).toHaveBeenCalledWith("agent-1");
+      expect(pm.getPolicyIssues).toHaveBeenCalledWith("agent-1");
       expect(result).toEqual(["issue-1"]);
     });
   });

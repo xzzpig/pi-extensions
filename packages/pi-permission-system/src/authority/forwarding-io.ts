@@ -19,6 +19,7 @@ import {
   type ApprovalGrant,
   isSessionGrantWidth,
 } from "#src/session/approval-grant";
+import type { AskingBashUnit } from "#src/types";
 import { asDecisionSource } from "./decision-source";
 import { isPermissionDecisionState } from "./permission-dialog";
 import {
@@ -124,6 +125,8 @@ function asForwardedAccessIntent(
     surface?: unknown;
     matchValues?: unknown;
     boundaryValue?: unknown;
+    floor?: unknown;
+    askingUnits?: unknown;
     requesterCwd?: unknown;
     principal?: unknown;
   };
@@ -134,6 +137,15 @@ function asForwardedAccessIntent(
     !(
       candidate.boundaryValue === null ||
       typeof candidate.boundaryValue === "string"
+    ) ||
+    // A malformed floor drops the whole intent, which escalates: it must
+    // never read as "no floor".
+    !(candidate.floor === undefined || typeof candidate.floor === "string") ||
+    // Likewise a malformed unit list: it must never read as "no units", which
+    // would judge the chain's winner alone.
+    !(
+      candidate.askingUnits === undefined ||
+      isWellFormedAskingUnits(candidate.askingUnits)
     ) ||
     typeof candidate.requesterCwd !== "string" ||
     typeof candidate.principal !== "object" ||
@@ -155,12 +167,49 @@ function asForwardedAccessIntent(
     surface: candidate.surface,
     matchValues: [...candidate.matchValues],
     boundaryValue: candidate.boundaryValue,
+    ...(candidate.floor === undefined ? {} : { floor: candidate.floor }),
+    ...(isWellFormedAskingUnits(candidate.askingUnits)
+      ? { askingUnits: copyAskingUnits(candidate.askingUnits) }
+      : {}),
     requesterCwd: candidate.requesterCwd,
     principal: {
       sessionId: principal.sessionId,
       agentName: principal.agentName,
     },
   };
+}
+
+/**
+ * True for a non-empty list of `{ command: string, floor?: string }` units.
+ *
+ * Empty is malformed: a child stamps the list only when it holds a unit, so an
+ * empty one says nothing a well-formed request would.
+ */
+function isWellFormedAskingUnits(
+  value: unknown,
+): value is readonly { command: string; floor?: string }[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every(
+      (unit: unknown) =>
+        typeof unit === "object" &&
+        unit !== null &&
+        typeof (unit as { command?: unknown }).command === "string" &&
+        ((unit as { floor?: unknown }).floor === undefined ||
+          typeof (unit as { floor?: unknown }).floor === "string"),
+    )
+  );
+}
+
+/** Rebuild each unit field by field, so no unread key rides through. */
+function copyAskingUnits(
+  units: readonly { command: string; floor?: string }[],
+): AskingBashUnit[] {
+  return units.map((unit) => ({
+    command: unit.command,
+    ...(unit.floor === undefined ? {} : { floor: unit.floor }),
+  }));
 }
 
 export function formatUnknownErrorMessage(error: unknown): string {

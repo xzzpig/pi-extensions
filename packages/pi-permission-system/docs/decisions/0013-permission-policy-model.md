@@ -170,6 +170,33 @@ An unquoted expansion splits, and so may a quoted parameter expansion: `$@` and 
 
 Measured over 70,961 unique bash commands from session transcripts and the review log, 96 `find` units that proved a read withdraw under the rule before the nameref clause, and 3 more with it, against 625 under a rule withdrawing on any computed word; none of them wrote.
 
+### Amendment, 2026-10-05 — a wrapper that only modifies execution is transparent too
+
+§11 keyed transparency on the *inner command*: a core reader is read-only whatever its argument feed holds.
+A second class of wrapper defeats the floor's reason by its *own* nature instead.
+`time`, `timeout`, `nice`, `stdbuf`, and `setsid` change only how the same visible command runs (its timing, kill deadline, scheduling, buffering, or session); every operand is on the command line, and the wrapper adds no privilege, environment, or argument feed.
+
+**A wrapper unit whose every layer is an execution modifier inherits the inner command's verdict, whatever that command does** ([#963]).
+The clause is wrapper-keyed and package-audited per wrapper, like the core; it does not widen to user declarations.
+Four guards keep the inherited verdict naming the command that really runs; without the first, second, or fourth, a measured command resolves by the wrong command's rule:
+
+- **Every** peeled layer is a modifier, since the peel looks through `sudo` and `env` as well: `time sudo rm -rf x` peels to `rm -rf x`.
+- Every option on a modifier layer is on that wrapper's allowlist, with value-taking options drawn from the same table the inner-command search skips by.
+  The real tools accept long-option abbreviations that search does not know, so `timeout --sig KILL 5 rm -rf /` was read as running `5 rm -rf /`.
+  `time`'s file-writing options (`-o`, `--output`, `-a`) are never admitted.
+  Every option, value, and operand on a modifier layer must also be literal (an environment assignment, which does not split, is exempt), since the shell splits or expands a computed word into others before the modifier runs: `timeout {5,sudo} rm x` runs `timeout 5 sudo rm x`.
+  A `--` ends the options but not `timeout`'s duration, so `timeout -- 5 sudo rm x` peels to `sudo rm x`, not to a command named `5`.
+- The peel ends at an ordinary command, not a wrapper it could not see past.
+- The inner head is a literal command name, not shell syntax: `tree-sitter-bash` has no `time` keyword, so `time { rm …; }` and `time ( … )` reach the clause with `{` or a subshell where the name should be.
+  The command enumerator exempts the subshell form itself, since it descends that subshell and gates each command inside on its own rules ([#1027]); the brace-group form keeps the floor ([#1043]).
+
+Unlike the core-reader clause, this one carries **no redirect refusal**.
+The core-reader clause classifies the unit as a read, so a redirect that writes contradicts it; this clause classifies nothing and inherits a verdict, and a redirect destination is projected onto the path surfaces whatever the floor decides (`timeout 5 pnpm test > /tmp/x` gates `/tmp/x` as a syntax-proven write, as the bare command does).
+A destination the parse cannot resolve (`> $OUT`) is projected for neither form, so the wrapped decision still equals the bare one; it is ADR 0009's computed-path residual, unchanged by the wrapper.
+When both clauses hold, the core-reader reason is the one recorded.
+
+Measured over the local review log from 2026-07: 298 of 1027 prompts were floored, and 73 more are relieved by this clause alone, beside the 86 the core-reader clause relieves (`scripts/measure-wrapper-transparency.mjs`).
+
 ## Context
 
 ### The reported gap
@@ -624,7 +651,8 @@ Therefore:
 
 - A wrapper unit whose `executedUnitOf` head is a bare-basename core word, with no real output redirect on the unit, **inherits the inner command's verdict** — it classifies read and resolves by the inner unit's own rules instead of the synthetic floor `ask`.
 - Everything else keeps the floor untouched: interpreters, opaque payloads, mutators, and any wrapper whose inner command is unresolvable (`executedUnitOf` fails to `null`, and that discipline is retained).
-- **v1 exemption is on the built-in core only.**
+- A wrapper unit whose every layer only modifies how its inner command runs (`time`, `timeout`, `nice`, `stdbuf`, `setsid`) also inherits the inner verdict, whatever that command does (amendment of 2026-10-05).
+- **v1 exemption is package-audited only.**
   User `commandEffects` declarations participate in effect classification but do not lift the floor: the core's argument-independence is package-audited, a user's claim about a wrapped command is not, and a wrong claim behind a wrapper fails open.
   Widening to user declarations requires evidence, not symmetry.
 
@@ -782,4 +810,7 @@ Issue [#620] carries the judgment slice the chain retains under §7.
 [#924]: https://github.com/gotgenes/pi-packages/issues/924
 [#985]: https://github.com/gotgenes/pi-packages/issues/985
 [#992]: https://github.com/gotgenes/pi-packages/issues/992
+[#963]: https://github.com/gotgenes/pi-packages/issues/963
+[#1027]: https://github.com/gotgenes/pi-packages/issues/1027
+[#1043]: https://github.com/gotgenes/pi-packages/issues/1043
 [openai/codex#28732]: https://github.com/openai/codex/issues/28732

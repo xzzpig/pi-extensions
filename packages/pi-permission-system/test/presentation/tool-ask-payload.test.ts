@@ -68,6 +68,7 @@ describe("buildToolAskPayload", () => {
         value: "rm -rf foo",
         matchedPattern: "rm *",
         commandContext: "command_substitution",
+        matchedSpelling: null,
         executedUnit: null,
       });
     });
@@ -96,6 +97,19 @@ describe("buildToolAskPayload", () => {
       });
 
       expect(payload.request.executedUnit).toBe("grep foo");
+    });
+
+    test("carries the spelling the rule matched, when not the command as typed", () => {
+      const payload = buildPayload({
+        check: toolResult("bash", {
+          command: "rm a/x",
+          matchedPattern: "rm /tmp/a/*",
+          matchedSpelling: "rm /tmp/a/x",
+        }),
+        surface: "bash",
+      });
+
+      expect(payload.request.matchedSpelling).toBe("rm /tmp/a/x");
     });
 
     test("names the invoked tool when a shell alias re-exposes bash (#574)", () => {
