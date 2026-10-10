@@ -122,6 +122,12 @@
       "path": "packages/pi-subagents/package-lock.json",
       "reason": "The fork uses the root pnpm lock as its dependency contract. Its unconsumed package-local npm lock remains upstream-owned rather than tracking the independent fork name/version and Pi 1.0.0 SDK pins; regenerate mechanically if package-local npm installation becomes supported.",
       "recordedAt": "2026-10-10T07:01:00Z"
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-subagents/scripts/build-package.mjs",
+      "reason": "The unchanged compiled-only upstream build:pkg script assumes package-local node_modules/typescript (line 37) and private source metadata (line 59). The fork publishes public TypeScript source packages in the hoisted pnpm workspace, so this builder is not its release path. Its blob matches pre-sync ffdfabd. Direct tsc -p tsconfig.build.json and the existing source npm pack content check pass; reconcile the builder only if the fork deliberately changes its publishing design.",
+      "recordedAt": "2026-10-10T07:08:00Z"
     }
   ],
   "reapplyOnSync": [
