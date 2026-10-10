@@ -589,6 +589,7 @@ function makeCommandUnit(
     text,
     words,
     activeParseProgram,
+    scope.words,
   );
   if (classification === undefined) {
     out.push(

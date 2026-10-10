@@ -364,7 +364,7 @@ describe("subagent registry sharing across factory instances", () => {
   });
 
   it("forwards the floor that raised a child's bash ask", async () => {
-    writeGlobalConfig({ permission: { "*": "allow" } });
+    writeGlobalConfig({ permission: { "*": "allow" }, wrapperFloors: "always" });
 
     const childCwd = mkdtempSync(join(tmpdir(), "pi-perm-child-cwd-"));
     const forwardingDir = join(agentDir, "sessions", "permission-forwarding");

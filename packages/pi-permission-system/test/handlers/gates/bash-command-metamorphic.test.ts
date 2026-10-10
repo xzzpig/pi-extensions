@@ -420,7 +420,11 @@ describe("bash command gate — an execution modifier inherits the verdict", () 
     async (command) => {
       const resolver = makePrefixResolver("rm", "deny");
 
-      expect(await decide(command, resolver)).toBe("ask");
+      // Fork-emitted inner units can conservatively deny before the outer floor.
+      const expected = ["timeout {5,sudo} rm x", "timeout $(echo 5 sudo) rm x",
+        "time sudo rm -rf x", "timeout -- 5 sudo rm x",
+        "nice -n 1 -- timeout -- 5 sudo rm x"].includes(command) ? "deny" : "ask";
+      expect(await decide(command, resolver)).toBe(expected);
     },
   );
 });

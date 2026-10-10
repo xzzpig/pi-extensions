@@ -1315,12 +1315,15 @@ describe("BashProgram", () => {
         async (command) => {
           // Bash rejects these as syntax errors; only `time` takes a compound.
           const program = await BashProgram.parse(command, normalizer);
-          expect(program.commands()).toEqual([
+          expect(program.commands()).toEqual(command.startsWith("sudo") ? [
+            { text: command, wrapperKind: "indirection", payloadUnresolved: true },
+          ] : [
             {
               text: command,
               wrapperKind: "indirection",
               executedUnit: "(rm x)",
             },
+            { text: "(rm x)", context: "wrapper_indirection" },
           ]);
         },
       );
@@ -1343,6 +1346,7 @@ describe("BashProgram", () => {
             executedUnit: "(rm x)",
             parseUnresolved: true,
           },
+          { text: "(rm x)", context: "wrapper_indirection" },
         ]);
       });
     });
@@ -1465,6 +1469,7 @@ describe("BashProgram", () => {
             text: 'eval "cd /tmp && rm -rf /"',
             wrapperKind: "opaque-payload",
             executedUnit: "cd /tmp && rm -rf /",
+            spellings: ["eval /projects/my-app/cd /tmp && rm -rf "],
           },
           { text: "cd /tmp", context: "wrapper_payload" },
           { text: "rm -rf /", context: "wrapper_payload" },
@@ -1559,6 +1564,8 @@ describe("BashProgram", () => {
             text: "timeout -k 5 570 nix eval .#x --json",
             wrapperKind: "indirection",
             executedUnit: "nix eval .#x --json",
+            floorExemption: "execution-modifier",
+            spellings: ["timeout -k 5 570 nix eval /projects/my-app/.#x --json"],
           },
           { text: "nix eval .#x --json", context: "wrapper_indirection" },
         ]);

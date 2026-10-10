@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-10-10
+
+### Changed
+
+- Synced upstream `v39.0.2` → `v40.1.2`: bash command home/absolute
+  spellings, policy-issue reporting, per-unit forwarded asks and session grants,
+  timed-subshell descent, and stricter sudo reader-exemption grammar.
+- Adopted the upstream execution-modifier exemption in both wrapper-floor
+  modes: proven `time`/`timeout`/`nice`/`stdbuf`/`setsid` wrappers resolve by
+  the command they run. Explicit wrapper rules still take precedence.
+- Hardened fallback sudo parsing with upstream's option grammar: normal long/clustered
+  options locate the real inner command; edit, shell/login, chdir/chroot and
+  unknown/ambiguous or computed command forms keep the ask floor, including
+  literal quoted options and sudo layers inside recognized wrapper chains.
+- Preserved fork fallback inner-unit gating, permission profiles and decision
+  events. Synchronous advisory checks now use the shared `BashProgram.parseSync`
+  builder so the fork payload parser and upstream command spellings are retained.
+
+## [1.6.0] — 2026-10-03
+
 ### Changed
 
 - **Synced upstream `v37.0.0` → `v39.0.2`**: Pi's built-in MCP tools are now gated
