@@ -193,7 +193,7 @@ test("buildRuntimeConfig canonicalizes non-glob filesystem paths", () => {
   assert.deepEqual(runtime.filesystem?.denyRead, [canonicalizePath("/tmp")]);
   assert.equal(runtime.filesystem?.allowRead?.includes(canonicalizePath("/tmp")), true);
   assert.deepEqual(runtime.filesystem?.allowWrite, [canonicalizePath("/tmp")]);
-  assert.deepEqual(runtime.filesystem?.denyWrite, ["*.key"]);
+  assert.deepEqual(runtime.filesystem?.denyWrite, [join(process.cwd(), "*.key")]);
 });
 
 test("buildRuntimeConfig forwards denyMandatoryCwdFiles to the runtime", () => {

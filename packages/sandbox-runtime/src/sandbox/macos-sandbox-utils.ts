@@ -57,8 +57,7 @@ export interface MacOSSandboxParams {
  * Get mandatory deny patterns as glob patterns (no filesystem scanning).
  * macOS sandbox profile supports regex/glob matching directly via globToRegex().
  */
-export function macGetMandatoryDenyPatterns(): string[] {
-  const cwd = process.cwd()
+export function macGetMandatoryDenyPatterns(cwd = process.cwd()): string[] {
   const denyPaths: string[] = []
 
   // Dangerous files - static paths in CWD + glob patterns for subtree
@@ -399,7 +398,9 @@ function generateWriteRules(
   // Combine user-specified and mandatory deny patterns (no ripgrep needed on macOS)
   const denyPaths = [
     ...(config.denyWithinAllow || []),
-    ...macGetMandatoryDenyPatterns(),
+    ...macGetMandatoryDenyPatterns(config.cwd).map(p =>
+      path.resolve(config.cwd ?? process.cwd(), p),
+    ),
   ]
 
   for (const pathPattern of denyPaths) {

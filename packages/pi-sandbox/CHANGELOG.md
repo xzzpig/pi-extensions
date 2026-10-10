@@ -9,6 +9,7 @@ upstream.
 
 ### Changed
 
+- Fixed embedded-session filesystem policy when the host and session cwd differ: glob patterns keep their syntax while becoming session-relative, and both string/argv runtime wrappers scope Linux scans and macOS mandatory deny rules to the explicit per-command cwd without process-wide chdir.
 - Synced upstream `v0.6.8` → `v0.7.1`: project trust, JSONC config reads and safe persistence, session-relative bash/settings/filesystem rules, shell command prefixes, credential forwarding, Linux write-glob warnings, SSH-agent socket opt-in, and `denyMandatoryCwdFiles` forwarding.
 - Kept the fork runtime's native `network.disabled` switch and domain-prompt guard. Profile changes still recreate a missing proxy when network restrictions become active; disabled profiles now suppress macOS SSH proxy injection even when a previous profile left a live SOCKS proxy.
 - Profile configuration reads reuse upstream JSONC parsing and apply project trust even when no profile is selected. Live profile selection follows the session working directory.

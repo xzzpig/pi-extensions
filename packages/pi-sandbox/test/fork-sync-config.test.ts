@@ -96,7 +96,7 @@ test("ordinary pi-sandbox opt-out still filters nonexistent literal denyWrite en
       cwd,
     );
     assert.equal(runtime.filesystem.denyMandatoryCwdFiles, false);
-    assert.deepEqual(runtime.filesystem.denyWrite, ["*.secret"]);
+    assert.deepEqual(runtime.filesystem.denyWrite, [join(cwd, "*.secret")]);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }

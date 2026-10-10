@@ -46,10 +46,13 @@ test("default denyWrite drops non-existent literal entries when the opt-out is a
   try {
     // No .env in the project: the built-in default literal entry is dropped so
     // bwrap does not materialize a placeholder mount point for it. Glob
-    // patterns pass through untouched.
+    // syntax survives while patterns are anchored to the execution cwd.
     const runtime = buildRuntimeConfig(DEFAULT_CONFIG);
     assert.equal(runtime.filesystem?.denyWrite?.includes(canonicalizePath(".env")), false);
-    assert.deepEqual(runtime.filesystem?.denyWrite, [".env.*", "*.pem", "*.key"]);
+    assert.deepEqual(
+      runtime.filesystem?.denyWrite,
+      [".env.*", "*.pem", "*.key"].map((pattern) => join(tmp, pattern)),
+    );
 
     // An existing .env keeps full write protection.
     writeFileSync(join(tmp, ".env"), "TEST=1");

@@ -29,7 +29,8 @@
     "keep src/sandbox/fork-network.ts (isNetworkDisabled) as the consolidated network.disabled precedence with its two sandbox-manager.ts call sites",
     "keep pathEntryLstatExists exported (plus the root re-export) for the pi-sandbox fork, whose duplicate pathEntryExists was removed",
     "keep the protectNonexistentFiles tests in fork-only test/sandbox/protect-nonexistent-files.test.ts",
-    "pass denyMandatoryCwdFiles and protectNonexistentFiles independently into linuxGetMandatoryDenyPaths; filter its deduplicated mandatory result through the fork-only mandatoryDenyFilter without filtering explicit denyWithinAllow paths; keep the pathEntryLstatExists re-export from linux-sandbox-utils.ts and the package root"
+    "pass denyMandatoryCwdFiles and protectNonexistentFiles independently into linuxGetMandatoryDenyPaths; filter its deduplicated mandatory result through the fork-only mandatoryDenyFilter without filtering explicit denyWithinAllow paths; keep the pathEntryLstatExists re-export from linux-sandbox-utils.ts and the package root",
+    "keep the optional per-command cwd on ISandboxManager.wrapWithSandbox and its implementation, pass it through FsWriteRestrictionConfig to Linux mandatory scans and macOS mandatory static/glob rules, and forward the existing wrapWithSandboxArgv cwd into the string wrapper; omission still defaults to process.cwd without global chdir"
   ],
   "doNotReintroduce": [
     "package-lock.json preserves upstream bytes and dependency entries except the two root name fields (@xzzpig/sandbox-runtime) and two root version fields (the independent fork package version), updated mechanically from the upstream lock",

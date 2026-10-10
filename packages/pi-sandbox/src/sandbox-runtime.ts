@@ -11,7 +11,7 @@ import {
 } from "@xzzpig/sandbox-runtime";
 
 import { type SandboxConfig } from "./config.ts";
-import { canonicalizePath } from "./policy.ts";
+import { canonicalizeFilesystemPatternForCwd, isFilesystemGlob } from "./fork-filesystem-paths.ts";
 import { collectBlockedWritePaths, type BlockedWrite } from "./write-denial.ts";
 
 export interface SessionAllowances {
@@ -51,7 +51,7 @@ function resolveUnixSockets(config: SandboxConfig): string[] | undefined {
 }
 
 const canonicalizeFilesystemPattern = (path: string, baseCwd?: string) =>
-  path.includes("*") ? path : canonicalizePath(path, baseCwd);
+  canonicalizeFilesystemPatternForCwd(path, baseCwd);
 
 const canonicalizeFilesystemPatterns = (paths: string[], baseCwd?: string) =>
   unique(paths.map((path) => canonicalizeFilesystemPattern(path, baseCwd)));
@@ -105,7 +105,7 @@ export function buildRuntimeConfig(
   const canonicalDenyWrite = canonicalizeFilesystemPatterns(rawDenyWrite, baseCwd);
   const denyWrite =
     config.filesystem?.protectNonexistentFiles === false
-      ? canonicalDenyWrite.filter((path) => path.includes("*") || pathEntryLstatExists(path))
+      ? canonicalDenyWrite.filter((path) => isFilesystemGlob(path) || pathEntryLstatExists(path))
       : canonicalDenyWrite;
 
   const { allowSSHAgentSocket: _allowSSHAgentSocket, ...networkConfig } = config.network ?? {};
@@ -317,7 +317,13 @@ export function createSandboxedBashOps(
       // Violations are filtered by host-side timestamps taken at exec entry,
       // so re-runs of an identical command never see each other's events.
       const startedAt = Date.now();
-      const wrappedCommand = await manager.wrapWithSandbox(sandboxedCommand, shell);
+      const wrappedCommand = await manager.wrapWithSandbox(
+        sandboxedCommand,
+        shell,
+        undefined,
+        signal,
+        cwd,
+      );
 
       const child = spawn(shell, [...args, wrappedCommand], {
         cwd,
