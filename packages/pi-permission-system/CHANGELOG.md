@@ -25,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   events. Synchronous advisory checks now use the shared `BashProgram.parseSync`
   builder so the fork payload parser and upstream command spellings are retained.
 
+### Fixed
+
+- Retained upstream home/absolute command spellings for source-aligned wrapper
+  inner units and exempt execution-modifier/core-reader checks, so an absolute
+  `bash` deny still applies to a relative command behind `sudo` or `timeout`.
+  Opaque payloads and computed paths do not borrow unproven outer-scope aliases.
+
 ## [1.6.0] — 2026-10-03
 
 ### Changed

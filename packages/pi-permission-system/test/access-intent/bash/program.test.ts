@@ -1566,8 +1566,9 @@ describe("BashProgram", () => {
             executedUnit: "nix eval .#x --json",
             floorExemption: "execution-modifier",
             spellings: ["timeout -k 5 570 nix eval /projects/my-app/.#x --json"],
+            executedSpellings: ["nix eval /projects/my-app/.#x --json"],
           },
-          { text: "nix eval .#x --json", context: "wrapper_indirection" },
+          { text: "nix eval .#x --json", context: "wrapper_indirection", spellings: ["nix eval /projects/my-app/.#x --json"] },
         ]);
       });
 

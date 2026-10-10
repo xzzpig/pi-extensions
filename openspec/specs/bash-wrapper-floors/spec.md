@@ -77,6 +77,15 @@
 - **WHEN** 命令为 `timeout 570 nix eval .#x` 或 `env -u HOME git status`
 - **THEN** 内层命令分别被定位为 `nix eval .#x` 与 `git status`
 
+### Requirement: 包装器内层保留命令等价拼写
+
+对于与原始完整参数词一一对应的 indirection 内层命令，以及已获豁免的执行修饰器／纯读取器命令，系统 SHALL 复用上游同一 AST 节点提供的 HOME 与绝对路径拼写作为同一次调用的规则候选；显式绝对路径 `deny` 不得因添加包装器而丢失。候选 SHALL 保留上游有效工作目录与变量可解析性约束，不得重新猜测 computed 路径或从外层作用域为不透明 payload 伪造拼写；既有包装器识别、递归与兜底策略保持不变。
+
+#### Scenario: 相对路径 deny 在包装后仍生效
+
+- **WHEN** 工作目录为 `/projects/my-app`，规则含 `"*": "allow"` 与 `"rm /projects/my-app/secret": "deny"`，命令为 `sudo rm ./secret`（fallback）或 `timeout 5 rm ./secret`（任意模式）
+- **THEN** 内层命令保留 `rm /projects/my-app/secret` 候选，最终判定为 `deny`
+
 ### Requirement: 仅不可静态解析的内容兜底为 ask
 
 `wrapperFloors` 为 `fallback`（默认）时，包装器命令的 `allow` SHALL 仅在该包装器的内层内容无法静态解析时被钳制为 `ask`，并以合成模式名记录（opaque payload 为 `<opaque-bash-wrapper>`，indirection 为 `<indirection-bash-wrapper>`）。

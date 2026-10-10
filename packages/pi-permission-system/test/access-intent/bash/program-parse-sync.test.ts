@@ -165,7 +165,7 @@ describe("BashProgram.parseSync commands", () => {
         const units = commandsOf("sudo ~/bin/x");
         expect(units?.map((unit) => unit.spellings)).toEqual([
           [`sudo ${homedir()}/bin/x`],
-          undefined,
+          [`${homedir()}/bin/x`],
         ]);
       });
 

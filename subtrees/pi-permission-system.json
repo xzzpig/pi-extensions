@@ -48,7 +48,7 @@
     "RuleOrigin union members",
     "probe import + refreshConfig warning",
     "loadProjectConfig profiles spread",
-    "makeCommandUnit keeps fork classifyWrapperCommand emission (wrapper + inner units), upstream home/argument spellings and floorExemptionOf against redirectedScope(node, scope); classification receives the upstream WordReader to recognize literal quoted sudo names; collectTimedSubshell emits its already-descended subshell once without an extra fork wrapper inner unit",
+    "makeCommandUnit keeps fork classifyWrapperCommand emission (wrapper + inner units), upstream home/argument spellings and floorExemptionOf against redirectedScope(node, scope); classification receives the upstream WordReader to recognize literal quoted sudo names and ArgumentSpeller to retain source-aligned inner/executed spellings; BashCommand/UnitFacts carry executedSpellings; collectTimedSubshell emits its already-descended subshell once without an extra fork wrapper inner unit",
     "wrapper-floors readWrapperCommand skips REDIRECT_NODE_TYPES children",
     "collectCommands retains upstream (node, words, speller) arguments and accepts a fourth options.parseProgram argument for the fork payload parser; BashProgram.build and wrapper-parse carry it through both asynchronous and synchronous parsing",
     "wrapper-floors innerCommandText slices the inner unit from word-joined, heredoc-body-free unit text by mapping the inner token offset through wrapper args rather than node.text.slice(start)",
@@ -57,7 +57,7 @@
     "permission-manager.ts keeps dual-layer profile scopes, invalidProfileName and warnings beside upstream legacyMcpToolKeys relocation; getPolicyIssues returns profile diagnostics through the upstream PolicyIssueReporter",
     "schemas/permissions.schema.json is regenerated with pnpm run gen:schema over fork schema sources; generator tab indentation is declared knownDebt",
     "test/path/native-tool-target.test.ts and test/path/path-flavor.test.ts deep-import hoisted dependencies through ../../../../node_modules/... rather than the upstream package-local ../../node_modules/... path",
-    "resolveWrapperUnit keeps the fork fallback option and uses upstream floorToAsk so unresolved fallback asks carry floor/askingUnits through forwarding; advisory checks pass wrapperFloors after the new PathNormalizer argument",
+    "resolveWrapperUnit keeps the fork fallback option and uses upstream floorToAsk so unresolved fallback asks carry floor/askingUnits through forwarding; exempt inner resolution consumes cmd.executedSpellings instead of discarding its aliases; advisory checks pass wrapperFloors after the new PathNormalizer argument",
     "wrapper-analysis.ts exports innerCommandIndex with an optional allowEmpty=false parameter carried into getoptInnerIndex; fork classifySudo reuses that grammar with allowEmpty=true so rejected syntax floors while legal payload-less invocations remain inert; quote removal is per literal CommandWord.value while source offsets/text remain unchanged, and recognized indirection chains carry refused sudo floors and correctly located sudo inner units",
     "bash-command.test.ts expects explicit inner rm denies to outrank the outer floor for correctly parsed sudo --user/-nu cases; program.test.ts keeps refused sudo compound syntax unresolved"
   ],
@@ -67,6 +67,7 @@
     "do not adopt upstream release-number CHANGELOG sections; keep the independent fork release sections",
     "do not restore the old sync-commands parser: upstream BashProgram.parseSync and its shared builder retain the fork payload parser",
     "do not restore blanket always-mode flooring for proven execution modifiers; both modes retain upstream core-reader and execution-modifier exemptions",
-    "do not restore the fork sudo value-options table or allow refused/unknown sudo modes through fallback; classifySudo reuses upstream grammar and floors unresolved forms"
+    "do not restore the fork sudo value-options table or allow refused/unknown sudo modes through fallback; classifySudo reuses upstream grammar and floors unresolved forms",
+    "do not drop source-aligned inner/exempt command spellings at wrapper seams or fabricate aliases for computed paths and opaque payloads from outer scope"
   ]
 }
