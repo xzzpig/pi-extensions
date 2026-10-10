@@ -5,6 +5,7 @@ import { Type } from "typebox";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createAtomicJsonWriter } from "../../shared/atomic-json.ts";
+import { requireSuccessfulCommandResult } from "./fork-command-result.ts";
 import { watchAsyncControlInbox, requestAsyncCommand, type CommandRequest } from "../background/control-channel.ts";
 
 export const CHILD_COMMAND_TOOL = "subagent_command";
@@ -140,7 +141,7 @@ export function createChildCommandRuntime(channelDir: string) {
 					const execution = Promise.resolve().then(() => tool.execute(toolCallId, args, commandSignal, (update) => {
 						job.snapshot.output = text(update);
 						if (job.snapshot.state === "running") onUpdate?.(update);
-					}, ctx)).then((result) => {
+					}, ctx)).then(requireSuccessfulCommandResult).then((result) => {
 						job.snapshot.output = text(result);
 						job.snapshot.state = "completed";
 						const fullOutputPath = (result.details as { fullOutputPath?: string } | undefined)?.fullOutputPath;

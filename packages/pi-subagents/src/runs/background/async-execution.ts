@@ -1276,6 +1276,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			permissionRules,
 			runtimeSnapshotHost: ctx.pi,
 			sandbox: a.sandbox,
+			permissionProfile: a.permissionProfile,
 			hostAvailableBuiltins,
 		});
 		const launchResolvedExtensions = externalRunner ? undefined : projectLaunchResolvedChildExtensions(toolPlan);
@@ -1325,6 +1326,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			...(toolPlan.builtinMcpTools ? { builtinMcpTools: toolPlan.builtinMcpTools } : {}),
 			mutationTools: a.mutationTools,
 			...(a.sandbox ? { sandbox: a.sandbox } : {}),
+			...(a.permissionProfile ? { permissionProfile: a.permissionProfile } : {}),
 			systemPrompt,
 			systemPromptMode: a.systemPromptMode,
 			inheritProjectContext: a.inheritProjectContext,
@@ -2136,6 +2138,7 @@ export function executeAsyncSingle(
 		permissionRules: resolvePermissionRules(ctx.permissions, agentConfig.permissions),
 		runtimeSnapshotHost: ctx.pi,
 		sandbox,
+		permissionProfile: agentConfig.permissionProfile,
 		hostAvailableBuiltins,
 	});
 	const launchResolvedExtensions = externalRunner ? undefined : projectLaunchResolvedChildExtensions(toolPlan);
@@ -2283,6 +2286,7 @@ export function executeAsyncSingle(
 						...(toolPlan.builtinMcpTools ? { builtinMcpTools: toolPlan.builtinMcpTools } : {}),
 						mutationTools: agentConfig.mutationTools,
 						...(sandbox ? { sandbox } : {}),
+						...(agentConfig.permissionProfile ? { permissionProfile: agentConfig.permissionProfile } : {}),
 						systemPrompt,
 						systemPromptMode: agentConfig.systemPromptMode,
 						inheritProjectContext: agentConfig.inheritProjectContext,

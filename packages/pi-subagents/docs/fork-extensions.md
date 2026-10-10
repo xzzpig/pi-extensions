@@ -130,6 +130,7 @@ Launch them with the subagent tool when a task matches their description.
 
 Semantics and guarantees:
 
+- **Project trust.** An untrusted session excludes project agents, package agents and settings from the snapshot, so a project definition cannot shadow a user agent. A trust-state change refreshes the snapshot and removes any stale injected block before the next turn.
 - **Snapshot per session.** The list resolves once at session start (and on reload) and stays byte-identical for every turn, so provider prompt caching is never invalidated mid-session. Edits to agent files or settings take effect in a new session, not the current one; `{ action: "list" }` remains the runtime source of truth.
 - **Only executable agents are advertised.** Disabled agents and agents restricted by the session capability ceiling are never injected.
 - **Children never see it.** Spawned child sessions do not load the parent injection; fanout children can still call `{ action: "list" }`.

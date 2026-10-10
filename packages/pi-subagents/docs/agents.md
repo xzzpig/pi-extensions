@@ -424,8 +424,7 @@ Field notes:
 | `allowedAgents` | Restricts which canonical, case-sensitive agent names this agent may launch. Omitted adds no restriction; an empty list denies every descendant launch. This only narrows an existing nesting grant: `tools: subagent` or `allowNestedSubagents: true` is still required. Inherited/runtime allowlists are intersected and cannot be widened. |
 | `extensions` | Omitted means a background child loads the parent's ambient extensions; empty means no ambient extensions; list values load exactly those extensions. Foreground children never load ambient extensions, so for them only listed values apply. |
 | `subagentOnlyExtensions` | Extension paths loaded only in this agent's child sessions. Tools registered there are unavailable to the main agent unless also installed through normal Pi extension configuration. |
-| `sandbox` | Optional named `pi-sandbox` profile for a native Pi child. It must be a non-empty safe name defined in the global `<agentDir>/sandbox.json` or, when the project is trusted, in `<cwd>/.pi/sandbox.json`; it is a selector only, never an inline network or filesystem policy. |
-| `permission-profile` | Optional named permission profile for a native Pi child. The name must be a non-empty safe identifier defined in the global `pi-permission-system` config's `profiles` registry or, when the project is trusted, in the project config's registry; only the validated name is passed to the child. See [Permission profiles](fork-extensions.md#permission-profiles). |
+| `sandbox`, `permission-profile`, `injectToContext` | See [Fork fields](fork-extensions.md). |
 | `model` | Default model. Bare ids prefer the current provider when possible, then unique registry matches. On the two Claude Code adapters this is Claude Code's own alias or id, and a trailing `:level` picks the effort. |
 | `thinking` | Appended as a `:level` suffix at runtime unless a suffix is already present. On the two Claude Code adapters it becomes `--effort`, and a suffix on `model` wins over it. |
 | `systemPromptMode` | `replace` by default; `append` keeps Pi's base prompt. |
@@ -447,7 +446,6 @@ Field notes:
 | `mutationTools` | Comma-separated extension tool names treated as mutating activity for runtime diagnostics, long-running-tool status, and timeout recovery. This is diagnostic only and never determines successful completion. List and load each tool through `tools` and its extension provider as usual. |
 | `interactive` | Parsed for compatibility but not currently enforced. |
 | `maxSubagentDepth` | Tightens nested delegation for this agent's children. |
-| `injectToContext` | Advertise this agent in the parent system prompt at session start so the main agent can select it without calling `{ action: "list" }` first. See [Context injection](fork-extensions.md#context-injection). |
 | `memory` | Opt-in role-specific persistent memory. See below. |
 
 ### Required host extensions

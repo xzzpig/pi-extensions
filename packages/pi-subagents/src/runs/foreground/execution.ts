@@ -1243,7 +1243,7 @@ async function runSingleAttempt(
 				// Fork: the shared, id-deduplicated tail (message push, budget,
 				// mutating-failure tracking, output) lives in handleToolResult; hosts
 				// may deliver the same result via message_end(role=toolResult).
-				handleToolResult(evt.message, evt, now);
+				handleToolResult(evt.message, toolResultCompletion, now);
 			}
 		};
 		// SAFETY: this callback is only ever invoked with child-watchdog status events

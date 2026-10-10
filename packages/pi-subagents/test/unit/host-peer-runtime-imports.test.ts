@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
+import { forkTestPackageDirectory } from "../support/fork-package-directory.ts";
 import { HOST_PEER_ALIASES, resolveHostPeerAliases } from "../../src/runs/background/runner-aliases.ts";
 import { resolveInstalledPiPackageRoot } from "../../src/runs/shared/pi-spawn.ts";
 import { resolveCompileFromPackageRoot, validateStructuredOutputValue } from "../../src/runs/shared/structured-output.ts";
@@ -206,13 +207,13 @@ test("validateStructuredOutputValue finds typebox/compile through the running Pi
 		for (const dependency of Object.keys(packageJson.dependencies)) {
 			const target = path.join(extension, "node_modules", dependency);
 			fs.mkdirSync(path.dirname(target), { recursive: true });
-			fs.symlinkSync(fs.realpathSync(path.join(projectRoot, "node_modules", dependency)), target, "junction");
+			fs.symlinkSync(forkTestPackageDirectory(projectRoot, dependency), target, "junction");
 		}
 		const pi = path.join(root, "pi");
 		fs.mkdirSync(path.join(pi, "dist"), { recursive: true });
 		fs.mkdirSync(path.join(pi, "node_modules"));
 		fs.writeFileSync(path.join(pi, "package.json"), JSON.stringify({ name: "@earendil-works/pi-coding-agent", type: "module" }));
-		fs.symlinkSync(fs.realpathSync(path.join(projectRoot, "node_modules", "typebox")), path.join(pi, "node_modules", "typebox"), "junction");
+		fs.symlinkSync(forkTestPackageDirectory(projectRoot, "typebox"), path.join(pi, "node_modules", "typebox"), "junction");
 		const cli = path.join(pi, "dist", "cli.js");
 		fs.writeFileSync(cli, [
 			"const { validateStructuredOutputValue } = await import(process.argv[2]);",

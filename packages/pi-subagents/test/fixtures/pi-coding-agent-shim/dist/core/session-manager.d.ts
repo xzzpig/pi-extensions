@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { type ImageContent, type Message, type TextContent, type Usage } from "@earendil-works/pi-ai";
+import { type AssistantMessage, type ToolResultMessage, type UserMessage, type ImageContent, type Message, type TextContent, type Usage } from "@earendil-works/pi-ai";
 import { type BashExecutionMessage, type CustomMessage } from "./messages.ts";
 export declare const CURRENT_SESSION_VERSION = 3;
 export interface SessionHeader {
@@ -101,8 +101,18 @@ export interface CustomMessageEntry<T = unknown> extends SessionEntryBase {
     details?: T;
     display: boolean;
 }
+export type ContextEditableContent = UserMessage["content"] | AssistantMessage["content"] | ToolResultMessage["content"] | CustomMessage["content"];
+/** Append-only change to one earlier entry's contribution to model context. */
+export interface ContextEditEntry extends SessionEntryBase {
+    type: "context_edit";
+    targetId: string;
+    /** Null omits the target from model context. A value replaces only its content. */
+    replacement: {
+        content: ContextEditableContent;
+    } | null;
+}
 /** Session entry - has id/parentId for tree structure (returned by "read" methods in SessionManager) */
-export type SessionEntry = SessionMessageEntry | ThinkingLevelChangeEntry | ModelChangeEntry | CompactionEntry | BranchSummaryEntry | CustomEntry | CustomMessageEntry | LabelEntry | SessionInfoEntry;
+export type SessionEntry = SessionMessageEntry | ThinkingLevelChangeEntry | ModelChangeEntry | CompactionEntry | BranchSummaryEntry | CustomEntry | CustomMessageEntry | ContextEditEntry | LabelEntry | SessionInfoEntry;
 /** Raw file entry (includes header) */
 export type FileEntry = SessionHeader | SessionEntry;
 /** Tree node for getTree() - defensive copy of session structure */
@@ -352,5 +362,11 @@ export declare class SessionManager {
      */
     static listAll(onProgress?: SessionListProgress): Promise<SessionInfo[]>;
     static listAll(sessionDir?: string, onProgress?: SessionListProgress): Promise<SessionInfo[]>;
+}
+export interface ProjectedSessionEntry {
+    /** Raw append-only entry that owns this projected contribution. */
+    sourceEntry: SessionEntry;
+    /** Model-visible messages after context edits. Empty for state-only entries and omissions. */
+    messages: AgentMessage[];
 }
 //# sourceMappingURL=session-manager.d.ts.map
