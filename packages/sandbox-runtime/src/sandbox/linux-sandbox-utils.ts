@@ -1,5 +1,7 @@
 import { quote } from '../utils/shell-quote.js'
 import { logForDebugging } from '../utils/debug.js'
+import { mandatoryDenyFilter } from './fork-filesystem.js'
+export { pathEntryLstatExists } from './fork-filesystem.js'
 import { whichSync } from '../utils/which.js'
 import { randomBytes } from 'node:crypto'
 import * as fs from 'fs'
@@ -269,6 +271,7 @@ async function linuxGetMandatoryDenyPaths(
   maxDepth: number = DEFAULT_MANDATORY_DENY_SEARCH_DEPTH,
   abortSignal?: AbortSignal,
   denyCwdFiles: boolean = true,
+  protectNonexistentFiles: boolean = true,
 ): Promise<string[]> {
   const cwd = process.cwd()
   // Use provided signal or create a fallback controller
@@ -346,7 +349,9 @@ async function linuxGetMandatoryDenyPaths(
     }
   }
 
-  return [...new Set(denyPaths)]
+  return [...new Set(denyPaths)].filter(
+    mandatoryDenyFilter(protectNonexistentFiles),
+  )
 }
 
 // Track mount points created by bwrap for non-existent deny paths.
@@ -932,26 +937,6 @@ function pushReadDenyDirMounts(
 }
 
 /**
- * Whether a directory entry exists at path, without following symlinks. This
- * differs from fs.existsSync: a dangling symlink (target missing) has a real
- * directory entry, so it counts as existing. Used by the
- * protectNonexistentFiles=false filter to keep protecting dangerous
- * files that already exist on the host (including symlinks) while still
- * dropping genuinely absent paths.
- */
-// [fork] Exported for the pi-sandbox fork, which judges user-configured
-// denyWrite paths with the same lstat semantics (a dangling symlink counts
-// as an existing, still-protected entry).
-export function pathEntryLstatExists(p: string): boolean {
-  try {
-    fs.lstatSync(p)
-    return true
-  } catch (error) {
-    return (error as NodeJS.ErrnoException)?.code !== 'ENOENT'
-  }
-}
-
-/**
  * Generate filesystem bind mount arguments for bwrap
  */
 async function generateFilesystemArgs(
@@ -1037,26 +1022,15 @@ async function generateFilesystemArgs(
     }
 
     // Deny writes within allowed paths (user-specified + mandatory denies)
-    const mandatoryDenyPaths = await linuxGetMandatoryDenyPaths(
+    const denyPaths = [
+      ...(writeConfig.denyWithinAllow || []),
+      ...(await linuxGetMandatoryDenyPaths(
         ripgrepConfig,
         mandatoryDenySearchDepth,
         abortSignal,
         writeConfig.denyMandatoryCwdFiles ?? true,
-    )
-    // When the caller opted out of protecting non-existent dangerous
-    // files, drop the entries that do not exist on the host yet. Only
-    // the auto-protected mandatory list is filtered here; user-specified
-    // denyWithinAllow paths are never dropped, so explicit denyWrite
-    // rules keep full effect even for paths that do not exist yet.
-    // Existence is judged with lstat (not existsSync): an already-present
-    // symlink — including a dangling one, whose target does not exist — is
-    // a real directory entry and must keep its protection exactly like the
-    // default mode, which resolves the deny to the link target.
-    const denyPaths = [
-      ...(writeConfig.denyWithinAllow || []),
-      ...(protectNonexistentFiles === false
-        ? mandatoryDenyPaths.filter(p => pathEntryLstatExists(p))
-        : mandatoryDenyPaths),
+        protectNonexistentFiles,
+      )),
     ]
 
     // Duplicate deny entries must be collapsed: a duplicate

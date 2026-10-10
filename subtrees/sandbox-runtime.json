@@ -4,11 +4,11 @@
   "prefix": "packages/sandbox-runtime",
   "source": "https://github.com/carderne/sandbox-runtime.git",
   "remote": "upstream-sandbox-runtime",
-  "ref": "v0.0.72",
-  "version": "0.0.72",
-  "upstreamCommit": "dea3f1a241c189f0f954ac989dfc2c2a95b64c39",
+  "ref": "v0.0.76",
+  "version": "0.0.76",
+  "upstreamCommit": "b2d73b46ca6b15991cde29a45e988b328c8c971d",
   "squash": true,
-  "lastSyncedAt": "2026-09-17T01:05:00+08:00",
+  "lastSyncedAt": "2026-10-10T06:28:00Z",
   "notes": "Forked from carderne/sandbox-runtime (itself derived from Anthropic's sandbox-runtime). The fork adds filesystem.protectNonexistentFiles so embedders can skip bwrap placeholder mounts for not-yet-existing dangerous files, and network.disabled so a session can run with all network policy enforcement off. Published locally as @xzzpig/sandbox-runtime: it is a support library for pi-sandbox rather than a Pi plugin, so this record keeps the plain upstream-derived name instead of the pi-* plugin convention.",
   "knownDebt": [
     {
@@ -28,10 +28,11 @@
     "network.disabled, filesystem.protectNonexistentFiles, the readdirSync withFileTypes cast in sandbox-utils.ts, and the closeAllConnections cast in sandbox-manager.ts",
     "keep src/sandbox/fork-network.ts (isNetworkDisabled) as the consolidated network.disabled precedence with its two sandbox-manager.ts call sites",
     "keep pathEntryLstatExists exported (plus the root re-export) for the pi-sandbox fork, whose duplicate pathEntryExists was removed",
-    "keep the protectNonexistentFiles tests in fork-only test/sandbox/protect-nonexistent-files.test.ts"
+    "keep the protectNonexistentFiles tests in fork-only test/sandbox/protect-nonexistent-files.test.ts",
+    "pass denyMandatoryCwdFiles and protectNonexistentFiles independently into linuxGetMandatoryDenyPaths; filter its deduplicated mandatory result through the fork-only mandatoryDenyFilter without filtering explicit denyWithinAllow paths; keep the pathEntryLstatExists re-export from linux-sandbox-utils.ts and the package root"
   ],
   "doNotReintroduce": [
-    "package-lock.json keeps upstream bytes with only the two name fields set to @xzzpig/sandbox-runtime (unconsumed by the pnpm monorepo)",
-    "the exact typescript 5.6.3 pin is deliberate — do not widen it without a build check"
+    "package-lock.json preserves upstream bytes and dependency entries except the two root name fields (@xzzpig/sandbox-runtime) and two root version fields (the independent fork package version), updated mechanically from the upstream lock",
+    "the exact typescript 5.6.3 pin is deliberate \u2014 do not widen it without a build check"
   ]
 }

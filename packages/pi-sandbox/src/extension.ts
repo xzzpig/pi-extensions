@@ -30,6 +30,7 @@ import {
 } from "./policy.ts";
 import { listGlobalSandboxProfiles, loadConfig, SANDBOX_PROFILE_ENV } from "./profile-config.ts";
 import { applySandboxConfigChange } from "./fork-profile-network.ts";
+import { warnIfLinuxUnenforcedGlobsSafely } from "./fork-ui-warnings.ts";
 import {
   createSandboxedBashOps,
   extractBlockedWritePath,
@@ -68,7 +69,6 @@ import {
   showPermissionPrompt,
   promptWriteBlock,
   warnIfAllDomainsAllowed,
-  warnIfLinuxUnenforcedGlobs,
 } from "./ui.ts";
 
 export default function (pi: ExtensionAPI) {
@@ -450,7 +450,7 @@ export default function (pi: ExtensionAPI) {
     // Cosmetic UI runs only after the sandbox state is committed, so a missing
     // theme or a failing notification can never invalidate a working sandbox.
     warnIfAllDomainsAllowed(ctx, config);
-    warnIfLinuxUnenforcedGlobs(ctx, config);
+    warnIfLinuxUnenforcedGlobsSafely(ctx, config);
     lastStatusContext = ctx;
     updateStatus(ctx, config);
     return true;

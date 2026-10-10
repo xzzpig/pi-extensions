@@ -5,6 +5,14 @@ This fork tracks [`carderne/sandbox-runtime`](https://github.com/carderne/sandbo
 (itself derived from Anthropic's sandbox-runtime) via git subtree; entries below
 describe only fork-specific deviations from upstream.
 
+## 0.0.74
+
+### Changed
+
+- Synced upstream `v0.0.72` → `v0.0.76`: dedicated `/tmp/agents` setup, private `/proc` dependency diagnostics, and complete `denyMandatoryCwdFiles` plumbing through `wrapWithSandbox`.
+- Kept native `network.disabled` precedence and `protectNonexistentFiles`. The mandatory-CWD switch composes with the fork's nonexistent-path filter without dropping explicit `denyWrite` rules.
+- Preserved the upstream npm lock dependency graph; only the two root name/version pairs follow the independently versioned fork.
+
 ## 0.0.73
 
 ### Changed

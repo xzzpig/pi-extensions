@@ -1,0 +1,3 @@
+# Upstream-owned seams retain upstream import order and indentation.
+src/config.ts
+src/extension.ts

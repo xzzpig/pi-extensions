@@ -5,6 +5,15 @@ This fork tracks [`carderne/pi-sandbox`](https://github.com/carderne/pi-sandbox)
 via git subtree; entries below describe only fork-specific deviations from
 upstream.
 
+## 0.8.0
+
+### Changed
+
+- Synced upstream `v0.6.8` → `v0.7.1`: project trust, JSONC config reads and safe persistence, session-relative bash/settings/filesystem rules, shell command prefixes, credential forwarding, Linux write-glob warnings, SSH-agent socket opt-in, and `denyMandatoryCwdFiles` forwarding.
+- Kept the fork runtime's native `network.disabled` switch and domain-prompt guard. Profile changes still recreate a missing proxy when network restrictions become active; disabled profiles now suppress macOS SSH proxy injection even when a previous profile left a live SOCKS proxy.
+- Profile configuration reads reuse upstream JSONC parsing and apply project trust even when no profile is selected. Live profile selection follows the session working directory.
+- Kept `protectNonexistentFiles`, profile hard denials, tool-display integration, and fork packaging behavior.
+
 ## 0.7.0
 
 ### Changed
