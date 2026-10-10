@@ -18,10 +18,12 @@
 
 import type { BashCommand, ParseProgram } from "./command-enumeration";
 import type { TSNode } from "./parser";
+import type { WordReader } from "./node-text";
 import { REDIRECT_NODE_TYPES } from "./redirect-analysis";
 import {
 	type CommandWord,
 	executedUnitOf,
+	innerCommandIndex,
 	type WrapperKind,
 } from "./wrapper-analysis";
 
@@ -144,19 +146,6 @@ interface WrapperSpec {
 }
 
 const INDIRECTION_WRAPPER_SPECS: Readonly<Record<string, WrapperSpec>> = {
-	sudo: {
-		valueOptions: new Set([
-			"-u",
-			"-g",
-			"-p",
-			"-C",
-			"-D",
-			"-R",
-			"-T",
-			"-t",
-			"-A",
-		]),
-	},
 	env: {
 		valueOptions: new Set(["-u", "-C"]),
 		skipAssignments: true,
@@ -244,8 +233,14 @@ export function classifyWrapperCommand(
 	/** The unit words `readCommandWords` produces for `node`, computed by the caller. */
 	words: CommandWord[],
 	parseProgram: ParseProgram | undefined,
+	reader: WordReader,
 ): WrapperClassification | undefined {
-	const { commandName, args } = readWrapperCommand(node);
+	const { commandName: rawName, args, commandNode } = readWrapperCommand(node);
+	let commandName = rawName;
+	if (commandNode) {
+		const head = reader.argWord(commandNode.type === "command_name" ? commandNode.child(0) ?? commandNode : commandNode);
+		if (!head.computed && basename(head.value) === "sudo") commandName = "sudo";
+	}
 	if (commandName === undefined) return undefined;
 
 	let classification: WrapperClassification | undefined;
@@ -259,6 +254,8 @@ export function classifyWrapperCommand(
 			return undefined;
 		}
 		classification = classifyOpaquePayload(args.slice(cArgIndex + 1), parseProgram);
+	} else if (commandName === "sudo") {
+		classification = classifySudo(text, words);
 	} else if (INDIRECTION_WRAPPER_NAMES.has(commandName)) {
 		const spec = INDIRECTION_WRAPPER_SPECS[commandName] ?? {};
 		if (spec.inlinePayloadFlag === undefined) {
@@ -281,6 +278,8 @@ export function classifyWrapperCommand(
 		return undefined;
 	}
 
+	classification = applySudoChainSafety(classification, text, words, commandName);
+
 	// #713: display-only field naming the command this wrapper actually runs.
 	// It is never gated on its own — the wrapper floor still applies per
 	// `payloadUnresolved` / `wrapperFloors`. Absent when no inner command can
@@ -288,8 +287,79 @@ export function classifyWrapperCommand(
 	const executedUnit =
 		classification.unresolved || classification.empty
 			? null
-			: executedUnitOf(text, words);
+			: executedUnitOf(text, commandName === "sudo" ? sudoGrammarWords(words) : words);
 	return executedUnit === null ? classification : { ...classification, executedUnit };
+}
+
+/**
+ * Reuse upstream's sudo getopt grammar without copying its option table.
+ * A refused/unknown mode is unresolved even in fallback: edit, shell/login,
+ * chdir/chroot and ambiguous options do not execute the visible argv as named.
+ * `allowEmpty` distinguishes a valid payload-less invocation from a refusal;
+ * upstream callers retain their original default. Computed prefix/head words
+ * cannot prove which command sudo invokes and therefore keep the same floor.
+ */
+function classifySudo(text: string, words: readonly CommandWord[]): WrapperClassification {
+	const index = innerCommandIndex(sudoGrammarWords(words), true);
+	if (index === -1 || words.slice(1, index + 1).some((word) => word.computed)) {
+		return { kind: "indirection", inner: [], unresolved: true };
+	}
+	if (index >= words.length) {
+		return { kind: "indirection", inner: [], unresolved: false, empty: true };
+	}
+	return {
+		kind: "indirection",
+		inner: [{ text: text.slice(words[index].offset) }],
+		unresolved: false,
+	};
+}
+
+/** Quote removal is per word: a literal containing spaces remains one argument. */
+function sudoGrammarWords(words: readonly CommandWord[]): CommandWord[] {
+	return words.map((word, index) => ({
+		...word,
+		text: index === 0 ? "sudo" : word.computed ? word.text : word.value,
+	}));
+}
+
+/**
+ * Carry the same sudo safety into an already-recognized wrapper chain.
+ * This is deliberately not a general recursive wrapper parser: only sudo
+ * layers contribute new checks/units, and ordinary fallback extraction stays
+ * unchanged. Keeping the existing inner units preserves explicit deny rules
+ * even when a refused sudo layer floors the outer wrapper.
+ */
+function applySudoChainSafety(
+	classification: WrapperClassification,
+	text: string,
+	words: readonly CommandWord[],
+	commandName: string,
+): WrapperClassification {
+	if (classification.kind !== "indirection" || classification.unresolved || classification.empty) {
+		return classification;
+	}
+	const inner = [...classification.inner];
+	let current = words;
+	while (current.length > 0) {
+		const name = current === words ? commandName :
+			basename(current[0].computed ? current[0].text : current[0].value);
+		const execFlags = EXEC_CONDITIONAL_WRAPPERS.get(name);
+		if (!INDIRECTION_WRAPPER_NAMES.has(name) &&
+			!current.slice(1).some((word) => execFlags?.has(word.text))) break;
+		if (name === "sudo") {
+			const sudo = classifySudo(text, current);
+			if (sudo.unresolved) return { ...classification, inner, unresolved: true };
+			if (current !== words) {
+				for (const unit of sudo.inner) {
+					if (!inner.some((existing) => existing.text === unit.text)) inner.push(unit);
+				}
+			}
+		}
+		const index = innerCommandIndex(name === "sudo" ? sudoGrammarWords(current) : current);
+		if (index < 1 || index >= current.length) break;
+		current = current.slice(index);
+	}
+	return inner.length === classification.inner.length ? classification : { ...classification, inner };
 }
 
 /**
@@ -441,8 +511,10 @@ function findInnerCommandStart(
 function readWrapperCommand(node: TSNode): {
 	commandName: string | undefined;
 	args: WrapperArg[];
+	commandNode: TSNode | undefined;
 } {
 	let commandName: string | undefined;
+	let commandNode: TSNode | undefined;
 	const args: WrapperArg[] = [];
 	for (let i = 0; i < node.childCount; i++) {
 		const child = node.child(i);
@@ -451,6 +523,7 @@ function readWrapperCommand(node: TSNode): {
 		if (REDIRECT_NODE_TYPES.has(child.type)) continue;
 		if (commandName === undefined) {
 			commandName = basename(child.text);
+			commandNode = child;
 			continue;
 		}
 		args.push({
@@ -458,7 +531,7 @@ function readWrapperCommand(node: TSNode): {
 			startIndex: child.startIndex - node.startIndex,
 		});
 	}
-	return { commandName, args };
+	return { commandName, args, commandNode };
 }
 
 /**

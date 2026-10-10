@@ -2,7 +2,7 @@
 
 ## Purpose
 
-定义 `@xzzpig/pi-permission-system` fork 对 bash 包装器命令的分级门控：会执行内层命令的包装器（`eval`、`bash -c`、`sudo`、`env`、`xargs`、`timeout`、`find -exec` 等）不再一律兜底为 `ask`，而是把内层命令解析出来作为独立命令单元门控；包装器自身的 `allow` 仅在其内层内容无法静态解析时兜底为 `ask`。`wrapperFloors` 扩展配置控制该行为（`fallback` 默认 / `always` 复现上游的全面兜底）。
+定义 `@xzzpig/pi-permission-system` fork 对 bash 包装器命令的分级门控：会执行内层命令的包装器（`eval`、`bash -c`、`sudo`、`env`、`xargs`、`timeout`、`find -exec` 等）不再一律兜底为 `ask`，而是把内层命令解析出来作为独立命令单元门控；包装器自身的 `allow` 仅在其内层内容无法静态解析时兜底为 `ask`。`wrapperFloors` 扩展配置控制该行为（`fallback` 默认 / `always` 采用上游兜底及已证明的豁免）。
 
 ## Requirements
 
@@ -100,12 +100,26 @@
 - **WHEN** 命令为 `echo rm x | parallel`
 - **THEN** 该包装器命令的判定保持 `ask`，匹配模式记为 `<indirection-bash-wrapper>`
 
+### Requirement: sudo 安全语法
+
+`fallback` 模式 SHALL 复用上游 sudo 选项语法解析普通命令，包括长选项、缩写、短选项集群、附着参数与环境赋值；不复制一份会漂移的 sudo 参数表。被上游拒绝的编辑、shell/login、chdir/chroot 模式、未知或歧义选项，以及无法静态确定的选项／命令词 SHALL 标记为不可解析并保留 `ask` 兜底。合法但无内层命令的调用仍按原有空调用规则处理。同样的 sudo 安全语法和 floor SHALL 适用于已识别 indirection 包装链中的 sudo（例如 `timeout 5 sudo -e cat`）；该检查不得借此改变不含 sudo 的普通包装器 fallback 策略。
+
+#### Scenario: 长选项后按真实内层命令门控
+
+- **WHEN** 命令为 `sudo --user root git push origin main` 或 `sudo -nu root git push origin main`，且 `git push *` 为 `deny`
+- **THEN** 内层命令为 `git push origin main`，最终判定为 `deny`，不会误把 `root` 作为命令
+
+#### Scenario: sudo 特殊执行模式保持询问
+
+- **WHEN** `wrapperFloors` 为 `"fallback"`，包装器规则为 `allow`，命令含 `sudo -e`、`sudo -s`、`sudo -i`、`sudo -D /tmp`、`sudo -R /tmp` 或未知选项
+- **THEN** 判定为 `ask`，保留 `<indirection-bash-wrapper>` floor，并向父节点转发该 floor
+
 ### Requirement: wrapperFloors 配置项
 
 扩展配置 SHALL 支持 `wrapperFloors` 字段，取值为 `"fallback"`（默认）或 `"always"`：
 
 - `"fallback"`：上文行为，内层命令逐个门控，仅在无法静态解析时兜底。
-- `"always"`：每个包装器命令的 `allow` SHALL 被钳制为 `ask`，不提供任何自动放行途径；该取值 SHALL 复现上游 v24 的全面兜底行为。
+- `"always"`：包装器命令的 `allow` SHALL 被钳制为 `ask`，但保留上游可证明的纯读取器与执行修饰器豁免；包装器上的显式 `deny` 或 `ask` 仍然优先。
 
 调用方未提供该字段时，系统 SHALL 按 `"always"` 语义处理。
 
@@ -127,6 +141,20 @@
 
 - **WHEN** `wrapperFloors` 为 `"always"`，配置含 `"cat *": "allow"`，命令为 `env cat README.md`
 - **THEN** 判定为 `allow`，审查日志记录 `floorExemption: "core-reader"`
+
+### Requirement: 执行修饰器豁免
+
+当所有包装层仅改变内层命令的执行方式（`time`、`timeout`、`nice`、`stdbuf`、`setsid`），且其选项、参数和命令名满足上游静态证明条件时，系统 SHALL 在两种模式下都按内层命令自身规则决定，并记录 `floorExemption: "execution-modifier"`。不透明 shell payload、权限或环境包装层，以及无法确认的参数不获得该豁免。
+
+#### Scenario: always 模式保留执行修饰器豁免
+
+- **WHEN** `wrapperFloors` 为 `"always"`，命令为 `timeout 5 git status`，包装器规则为 `allow` 且 `git status` 为 `allow`
+- **THEN** 判定为 `allow`，并记录执行修饰器豁免
+
+#### Scenario: timed subshell 逐命令门控
+
+- **WHEN** 命令为 `time (git status && rm -rf /tmp/x)`，`rm -rf *` 为 `deny`
+- **THEN** 子 shell 中的命令各自仅枚举一次，内层 `deny` 决定整个调用
 
 ### Requirement: 与显式规则、yoloMode 和会话授权的交互
 

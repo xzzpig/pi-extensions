@@ -412,9 +412,9 @@ export const unifiedConfigSchema = z
     }),
     wrapperFloors: z.enum(["fallback", "always"]).optional().meta({
       description:
-        'Bash wrapper flooring: "fallback" gates wrapper inner commands as their own units and floors only unresolvable content; "always" floors every wrapper allow to ask (upstream v24 behavior).',
+        'Bash wrapper flooring: "fallback" gates wrapper inner commands as their own units and floors only unresolvable content; "always" floors wrapper allows to ask unless a proven pure-reader or execution-modifier exemption applies.',
       markdownDescription:
-        "How wrapper commands (`eval`/`bash -c`/`env`/`xargs`/`sudo`/`timeout`/…) are gated.\n\n- `fallback` (default): the wrapper's inner commands are gated as separate units, so `env X=1 git status` matches `git status *`/`*` like a plain command; an `allow` on the wrapper itself is floored to `ask` only when the inner command cannot be statically resolved.\n- `always`: every wrapper command's `allow` is floored to `ask` (the upstream v24 fail-closed behavior).",
+        "How wrapper commands (`eval`/`bash -c`/`env`/`xargs`/`sudo`/`timeout`/…) are gated.\n\n- `fallback` (default): the wrapper's inner commands are gated as separate units, so `env X=1 git status` matches `git status *`/`*` like a plain command; an `allow` on the wrapper itself is floored to `ask` only when the inner command cannot be statically resolved.\n- `always`: wrapper `allow` is floored to `ask`, except for upstream's proven pure-reader and execution-modifier exemptions.",
       default: "fallback",
     }),
     doublePressToConfirm: z.boolean().optional().meta({

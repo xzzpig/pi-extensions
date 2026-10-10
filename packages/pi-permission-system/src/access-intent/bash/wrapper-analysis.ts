@@ -407,7 +407,7 @@ function unquote(text: string): string {
  * `-1` for any option its grammar refuses; every other wrapper is read by the
  * per-wrapper tables.
  */
-function innerCommandIndex(words: readonly CommandWord[]): number {
+export function innerCommandIndex(words: readonly CommandWord[], allowEmpty = false): number {
   const name = wrapperName(words);
   if (name === undefined) return -1;
 
@@ -418,7 +418,7 @@ function innerCommandIndex(words: readonly CommandWord[]): number {
   const grammar = GETOPT_GRAMMARS.get(name);
   return grammar === undefined
     ? tableInnerIndex(words, name)
-    : getoptInnerIndex(words, grammar);
+    : getoptInnerIndex(words, grammar, allowEmpty);
 }
 
 /**
@@ -432,6 +432,7 @@ function innerCommandIndex(words: readonly CommandWord[]): number {
 function getoptInnerIndex(
   words: readonly CommandWord[],
   grammar: GetoptGrammar,
+  allowEmpty = false,
 ): number {
   let index = 1;
   while (index < words.length) {
@@ -450,7 +451,7 @@ function getoptInnerIndex(
   while (index < words.length && isEnvironmentAssignment(words[index].text)) {
     index++;
   }
-  return index < words.length ? index : -1;
+  return index < words.length || allowEmpty ? index : -1;
 }
 
 /**

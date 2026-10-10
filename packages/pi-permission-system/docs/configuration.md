@@ -665,12 +665,14 @@ The bash gate fails closed: when in doubt it blocks or prompts, never silently a
 
   A provably payload-less invocation is likewise gated as an ordinary command by its own text rather than being floored: whenever every argument is consumed by the wrapper's own syntax — no arguments at all (`sudo`, `env`, `xargs`), a duration/lockfile operand only (`timeout 5`, `flock lockfile`), option values (`env -u HOME`, `sudo -u root`), or `env` carrying only environment assignments (`env FOO=bar BAZ=qux`) — nothing executes beyond the wrapper binary's own usage error or environment output, so `timeout 5` matches your `timeout`/`*` bash rules directly. The exceptions that stay floored to **`ask`**: wrappers whose bare or flags-only form executes each stdin line as a shell command (`parallel`, `rust-parallel`, `rush` — e.g. `echo rm x | parallel` would run it) keep the fail-closed `<indirection-bash-wrapper>` floor. And `env -S '…'` carries a command string in its option value, so it is re-parsed like an opaque payload and its inner commands are gated individually.
 
+  In `fallback` mode, `sudo` reuses the upstream option grammar: long options, short clusters and attached values locate the actual command. Edit, shell/login, chdir/chroot modes, unknown or ambiguous options, and computed prefix/command words remain unresolved and keep the `ask` floor. A valid payload-less invocation keeps the inert behavior above. The same sudo check follows recognized wrapper chains such as `timeout 5 sudo -e cat`; other wrappers retain their existing fallback behavior.
+
   The extension config knob `wrapperFloors` controls this behavior:
 
   - `"fallback"` (default): the behavior above — inner commands are gated individually; the wrapper unit is floored only when its inner content cannot be statically resolved (fail-closed).
-  - `"always"`: the upstream blanket floor — every wrapper `allow` (including a permissive top-level `*` or an explicit rule) is clamped to `ask`, with no way to auto-allow a wrapper.
+  - `"always"`: the upstream floor — a wrapper `allow` is clamped to `ask` unless the parser proves a pure-reader or execution-modifier exemption.
 
-  A wrapper running a [pure-reader command](#wrapper-transparency) is exempt in both modes: its direction is provable however unknown its argument feed is, so the command it runs resolves by its own `bash` rules and the review log records `floorExemption: "core-reader"` beside the rule that decided.
+  The [two upstream exemptions](#wrapper-transparency) apply in both modes: a proven pure-reader command records `floorExemption: "core-reader"`, and a wrapper that only modifies how the command runs (`time`, `timeout`, `nice`, `stdbuf`, `setsid`) records `floorExemption: "execution-modifier"`. The inner command's own rules decide; an explicit `deny` or `ask` on the wrapper still takes precedence. A timed subshell is descended once, so each command inside it is gated.
 
 
 Every synthetic `ask` above — the two parse sentinels and both wrapper floors — is auto-approved under `yoloMode: true`, which is an explicit full-permissive opt-in rather than a rule that could ride through.

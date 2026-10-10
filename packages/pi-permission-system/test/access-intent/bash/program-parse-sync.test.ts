@@ -43,6 +43,7 @@ describe("BashProgram.parseSync commands", () => {
           executedUnit: 'find "$HOME"',
           floorExemption: "core-reader",
         },
+        { text: 'find "$HOME"', context: "wrapper_indirection" },
       ]);
       expect(commandsOf('HOME=-delete; xargs find "$HOME"')).toEqual([
         { text: "HOME=-delete" },
@@ -51,6 +52,7 @@ describe("BashProgram.parseSync commands", () => {
           wrapperKind: "indirection",
           executedUnit: 'find "$HOME"',
         },
+        { text: 'find "$HOME"', context: "wrapper_indirection" },
       ]);
     });
 
@@ -82,6 +84,7 @@ describe("BashProgram.parseSync commands", () => {
           // absolute spelling is spelled; the wrapper floor holds either way.
           spellings: ["bash -c /test/cwd/rm -rf "],
         },
+        { text: "rm -rf /", context: "wrapper_payload" },
       ]);
     });
 
@@ -162,6 +165,7 @@ describe("BashProgram.parseSync commands", () => {
         const units = commandsOf("sudo ~/bin/x");
         expect(units?.map((unit) => unit.spellings)).toEqual([
           [`sudo ${homedir()}/bin/x`],
+          undefined,
         ]);
       });
 

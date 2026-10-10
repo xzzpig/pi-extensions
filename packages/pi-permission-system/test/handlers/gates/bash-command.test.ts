@@ -1295,14 +1295,14 @@ describe("resolveBashCommandCheck: a sudo layer's own options", () => {
       ["sudo -ne cat", "a cluster carrying e is sudoedit"],
       ["sudo --ed cat", "an abbreviation of --edit is sudoedit"],
       ["timeout 5 sudo -e cat", "sudoedit behind an outer wrapper"],
-      ["sudo -nu cat rm x", "the cluster's -u takes cat, so rm runs"],
-      ["sudo --user cat rm x", "--user takes cat, so rm runs"],
+      ["sudo -nu cat rm x", "the cluster's -u takes cat, so rm runs", "deny"],
+      ["sudo --user cat rm x", "--user takes cat, so rm runs", "deny"],
       ["sudo -D /etc cat shadow", "cat reads /etc/shadow, not ./shadow"],
       ["sudo -s cat x", "a root shell runs the operand"],
-    ])("for %s (%s)", (command) => {
+    ])("for %s (%s)", (command, _reason, expected = "ask") => {
       const result = decide(policy, command);
-      expect(result.state).toBe("ask");
-      expect(result.matchedPattern).toBe("<indirection-bash-wrapper>");
+      expect(result.state).toBe(expected);
+      expect(result.matchedPattern).toBe(expected === "deny" ? "rm *" : "<indirection-bash-wrapper>");
     });
   });
 
