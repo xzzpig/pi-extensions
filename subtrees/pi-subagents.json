@@ -126,7 +126,7 @@
     {
       "kind": "other",
       "path": "packages/pi-subagents/scripts/build-package.mjs",
-      "reason": "The unchanged compiled-only upstream build:pkg script assumes package-local node_modules/typescript (line 37) and private source metadata (line 58). The fork publishes public TypeScript source packages in the hoisted pnpm workspace, so this builder is not its release path. Its blob matches pre-sync ffdfabd. Direct tsc -p tsconfig.build.json and the existing source npm pack content check pass; reconcile the builder only if the fork deliberately changes its publishing design.",
+      "reason": "The unchanged compiled-only upstream build:pkg script assumes package-local node_modules/typescript (line 37) and private source metadata (line 59). The fork publishes public TypeScript source packages in the hoisted pnpm workspace, so this builder is not its release path. Its blob matches pre-sync ffdfabd. Direct tsc -p tsconfig.build.json and the existing source npm pack content check pass; reconcile the builder only if the fork deliberately changes its publishing design.",
       "recordedAt": "2026-10-10T07:08:00Z"
     }
   ],
