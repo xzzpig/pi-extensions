@@ -16,8 +16,9 @@
  * `BashCommand` / `ParseProgram` types.
  */
 
-import type { BashCommand, ParseProgram } from "./command-enumeration";
+import type { ArgumentSpeller, BashCommand, ParseProgram } from "./command-enumeration";
 import type { TSNode } from "./parser";
+import { makeWrapperFragmentSpeller } from "./wrapper-spellings";
 import type { WordReader } from "./node-text";
 import { REDIRECT_NODE_TYPES } from "./redirect-analysis";
 import {
@@ -70,6 +71,7 @@ interface WrapperClassification {
 	 * established.
 	 */
 	readonly executedUnit?: string;
+	readonly executedSpellings?: readonly string[];
 }
 
 /**
@@ -234,6 +236,7 @@ export function classifyWrapperCommand(
 	words: CommandWord[],
 	parseProgram: ParseProgram | undefined,
 	reader: WordReader,
+	speller?: ArgumentSpeller,
 ): WrapperClassification | undefined {
 	const { commandName: rawName, args, commandNode } = readWrapperCommand(node);
 	let commandName = rawName;
@@ -288,7 +291,17 @@ export function classifyWrapperCommand(
 		classification.unresolved || classification.empty
 			? null
 			: executedUnitOf(text, commandName === "sudo" ? sudoGrammarWords(words) : words);
-	return executedUnit === null ? classification : { ...classification, executedUnit };
+	const named = executedUnit === null ? classification : { ...classification, executedUnit };
+	if (named.kind !== "indirection") return named;
+	const spell = makeWrapperFragmentSpeller(node, text, words, reader, speller);
+	const inner = named.inner.map((unit) => {
+		const spellings = spell(unit.text);
+		return spellings === undefined ? unit : {
+			...unit, spellings: [...new Set([...(unit.spellings ?? []), ...spellings])],
+		};
+	});
+	const executedSpellings = executedUnit === null ? undefined : spell(executedUnit);
+	return executedSpellings === undefined ? { ...named, inner } : { ...named, inner, executedSpellings };
 }
 
 /**

@@ -52,6 +52,7 @@ export interface BashCommand {
    * by its own walk rather than read off this string (#803).
    */
   readonly executedUnit?: string;
+  readonly executedSpellings?: readonly string[];
   /**
    * Set when this wrapper unit's floor has no reason left to hold, naming the
    * reason (#803). Only ever present alongside `wrapperKind: "indirection"`
@@ -528,6 +529,7 @@ function unresolvedScope(node: TSNode, scope: UnitScope): UnitScope {
 interface UnitFacts {
   readonly wrapperKind?: WrapperKind;
   readonly executedUnit?: string;
+  readonly executedSpellings?: readonly string[];
   readonly floorExemption?: FloorExemption;
   readonly payloadUnresolved?: boolean;
   readonly spellings?: readonly string[];
@@ -538,15 +540,16 @@ function makeUnit(
   scope: UnitScope,
   facts: UnitFacts = {},
 ): BashCommand {
-  const { wrapperKind, executedUnit, floorExemption, spellings, payloadUnresolved } = facts;
+  const { wrapperKind, executedUnit, floorExemption, spellings, payloadUnresolved, executedSpellings } = facts;
   const scoped: BashCommand = scope.context
     ? { text, context: scope.context }
     : { text };
   const flagged = wrapperKind ? { ...scoped, wrapperKind } : scoped;
   const named =
     executedUnit === undefined ? flagged : { ...flagged, executedUnit };
+  const respelled = executedSpellings === undefined ? named : { ...named, executedSpellings };
   const exempted =
-    floorExemption === undefined ? named : { ...named, floorExemption };
+    floorExemption === undefined ? respelled : { ...respelled, floorExemption };
   const payloadMarked =
     payloadUnresolved === undefined
       ? exempted
@@ -590,6 +593,7 @@ function makeCommandUnit(
     words,
     activeParseProgram,
     scope.words,
+    scope.speller,
   );
   if (classification === undefined) {
     out.push(
@@ -605,6 +609,7 @@ function makeCommandUnit(
       spellings,
       wrapperKind: classification.kind,
       executedUnit: classification.executedUnit,
+      executedSpellings: classification.executedSpellings,
     floorExemption:
       floorExemption ?? floorExemptionOf(words, redirectedScope(node, scope)),
       payloadUnresolved: classification.unresolved || undefined,

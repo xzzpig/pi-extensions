@@ -297,7 +297,7 @@ function resolveWrapperUnit(
     return floorToAsk(base, WRAPPER_SENTINEL[wrapperKind]);
   }
   return {
-    ...resolveOnBashSurface(inner, [], agentName, resolver),
+    ...resolveOnBashSurface(inner, cmd.executedSpellings ?? [], agentName, resolver),
     command: base.command,
     floorExemption: cmd.floorExemption,
   };
@@ -323,9 +323,8 @@ function isTriviallyEmptyCommand(command: string): boolean {
  *
  * Three callers share it: each command unit of the chain, the whole command
  * when the chain yields no units, and the inner command of a wrapper the floor
- * no longer covers. Only a unit has spellings: they come from the program
- * analysis that produced it, and the whole command or a wrapper's inner text
- * has no unit of its own to carry them.
+ * no longer covers. Unit and wrapper-inner spellings come from the program
+ * analysis that produced them; the whole command has no aliases of its own.
  */
 function resolveOnBashSurface(
   command: string,
