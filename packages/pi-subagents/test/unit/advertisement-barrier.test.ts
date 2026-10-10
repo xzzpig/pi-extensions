@@ -64,7 +64,7 @@ setTimeout(() => { if (phase === "old") fs.writeFileSync(${JSON.stringify(oldDon
 			}, { get(target, key) { return key in target ? target[key] : () => undefined; } });
 			register(pi);
 			const ctx = {
-				cwd: process.env.TEST_PROJECT, hasUI: false, model: { provider: "test", id: "test" },
+				cwd: process.env.TEST_PROJECT, isIdle() { return false; }, hasUI: false, model: { provider: "test", id: "test" },
 				modelRegistry: { getAvailable() { return []; }, getAll() { return []; } },
 				sessionManager: { getSessionId() { return "barrier-test"; }, getSessionFile() { return undefined; }, getBranch() { return []; }, buildSessionContext() { return { messages: [] }; } },
 			};
@@ -96,7 +96,7 @@ setTimeout(() => { if (phase === "old") fs.writeFileSync(${JSON.stringify(oldDon
 				assert.match(text, /<name>global-specialist<\/name>/);
 				assert.match(text, /<name>local-specialist<\/name>/);
 			}
-			assert.match(loader.content[0].text, /If your tool list includes subagent \(possibly prefixed\), call subagent\(\{action:"list",capabilities:true\}\)\./);
+			assert.match(loader.content[0].text, /If your tool list includes subagent \(possibly prefixed\), call it now\./);
 			assert.match(loader.content[0].text, /Otherwise, wait for the next user prompt; do not retry now\./);
 			assert.match(loader.content[0].text, /Start Pi with --exclude-tools subagents_enable to keep subagent always available\./);
 			process.env.TEST_NPM_PHASE = "seed";

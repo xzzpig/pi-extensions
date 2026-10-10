@@ -812,8 +812,10 @@ interface FleetTranscriptCache {
 
 function transcriptFingerprint(filePath: string): string {
 	try {
-		const stat = fs.statSync(filePath);
-		return `${stat.size}:${stat.mtimeMs}`;
+		// ino and ctime catch a same-size, same-mtime replacement. Bigint keeps
+		// Windows file ids, which exceed 2^53, exact.
+		const stat = fs.statSync(filePath, { bigint: true });
+		return `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
 	} catch {
 		return "missing";
 	}
@@ -882,7 +884,7 @@ export class SubagentFleetComponent implements Component {
 		});
 	}
 
-	private nativeRenderedOutcome(mod: NativeTranscriptModule, target: { path: string; trustedRoots: string[]; trustedFiles?: string[]; trustedFileRoot?: string }, width: number): { body: string[]; conversationState: string; hasContent: boolean; warning?: string } {
+	private nativeRenderedOutcome(mod: NativeTranscriptModule, target: { path: string; trustedRoots: string[]; trustedFiles?: string[]; trustedFileRoot?: string }, width: number): { body: string[]; conversationState: string; hasContent: boolean; warning?: string; readFailed?: boolean } {
 		try {
 			const built = buildNativeFleetTranscript(mod, {
 				filePath: target.path,
@@ -896,7 +898,7 @@ export class SubagentFleetComponent implements Component {
 				cwd: this.state.baseCwd,
 				theme: this.theme,
 			});
-			return { body: built.lines, conversationState: built.conversationState, hasContent: built.entryCount > 0, ...(built.warning ? { warning: built.warning } : {}) };
+			return { readFailed: built.readFailed, body: built.lines, conversationState: built.conversationState, hasContent: built.entryCount > 0, ...(built.warning ? { warning: built.warning } : {}) };
 		} catch {
 			// A native-render failure must never blank the inspector: degrade to
 			// the legacy renderer for the rest of this inspector session.
@@ -905,7 +907,7 @@ export class SubagentFleetComponent implements Component {
 		}
 	}
 
-	private legacyRenderedOutcome(target: { path: string; trustedRoots: string[]; trustedFiles?: string[]; trustedFileRoot?: string }, width: number): { body: string[]; conversationState: string; hasContent: boolean; warning?: string } {
+	private legacyRenderedOutcome(target: { path: string; trustedRoots: string[]; trustedFiles?: string[]; trustedFileRoot?: string }, width: number): { body: string[]; conversationState: string; hasContent: boolean; warning?: string; readFailed?: boolean } {
 		const transcript = readFleetTranscript(target.path, {
 			trustedRoots: target.trustedRoots,
 			...(target.trustedFiles ? { trustedFiles: target.trustedFiles } : {}),
@@ -926,6 +928,7 @@ export class SubagentFleetComponent implements Component {
 			body,
 			conversationState,
 			hasContent: transcript.events.length > 0,
+			readFailed: transcript.readFailed,
 			...(transcript.warning ? { warning: transcript.warning } : {}),
 		};
 	}
@@ -936,7 +939,7 @@ export class SubagentFleetComponent implements Component {
 			this.refreshTimer = undefined;
 			if (this.disposed) return;
 			try {
-				this.invalidate();
+				this.refresh();
 				this.tui.requestRender();
 			} finally {
 				this.scheduleRefresh();
@@ -1359,7 +1362,7 @@ export class SubagentFleetComponent implements Component {
 		});
 	}
 
-	private renderedTranscript(target: { path: string; trustedRoots: string[]; trustedFiles?: string[]; trustedFileRoot?: string }, width: number): { body: string[]; conversationState: string; hasContent: boolean; warning?: string } {
+	private renderedTranscript(target: { path: string; trustedRoots: string[]; trustedFiles?: string[]; trustedFileRoot?: string }, width: number): { body: string[]; conversationState: string; hasContent: boolean; warning?: string; readFailed?: boolean } {
 		const fingerprint = `${this.rendererMode}|${target.trustedRoots.join("\0")}|${target.trustedFiles?.join("\0") ?? ""}|${target.trustedFileRoot ?? ""}|${transcriptFingerprint(target.path)}`;
 		if (this.transcriptCache
 			&& this.transcriptCache.mode === this.rendererMode
@@ -1381,7 +1384,7 @@ export class SubagentFleetComponent implements Component {
 		const outcome = this.rendererMode === "native" && this.nativeModule
 			? this.nativeRenderedOutcome(this.nativeModule, target, width)
 			: this.legacyRenderedOutcome(target, width);
-		this.transcriptCache = { mode: this.rendererMode, path: target.path, fingerprint, width, expandedTools: this.expandedTools, expandedThinking: this.expandedThinking, ...outcome, body: [...outcome.body] };
+		this.transcriptCache = outcome.readFailed ? undefined : { mode: this.rendererMode, path: target.path, fingerprint, width, expandedTools: this.expandedTools, expandedThinking: this.expandedThinking, ...outcome, body: [...outcome.body] };
 		return outcome;
 	}
 

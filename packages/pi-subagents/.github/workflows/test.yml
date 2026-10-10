@@ -69,6 +69,42 @@ jobs:
           path: ${{ runner.temp }}/1906-terminal-evidence/shared-cwd-terminal.json
           if-no-files-found: ignore
 
+  calendar-timezones:
+    runs-on: macos-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+      - name: Calendar local-time and scheduler regressions
+        run: node --experimental-strip-types --import ./test/support/isolated-temp-root.mjs --test test/unit/calendar-schedule.test.ts test/unit/scheduled-runs.test.ts
+
+  worktree-cleanup-recovery:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+      - name: Worktree cleanup and lock recovery regressions
+        run: node --experimental-strip-types --import ./test/support/isolated-temp-root.mjs --test test/unit/worktree-cleanup-plan.test.ts test/unit/worktree-lock.test.ts test/unit/parallel-handoff.test.ts
+
+  schedule-claim-contention:
+    runs-on: macos-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - run: npm ci --ignore-scripts
+      - name: Focused regressions
+        run: node --experimental-strip-types --import ./test/support/isolated-temp-root.mjs --test test/unit/schedule-claim-preservation.test.ts
+
   native-nested-wait:
     strategy:
       matrix:
@@ -163,10 +199,9 @@ jobs:
         run: |
           node -e 'const a = require("node:assert/strict"); a.equal(process.platform, "linux"); a.equal(process.arch, "x64");'
           npm ci --ignore-scripts
-          # Bubblewrap needs only Ubuntu indexes, not the runner's third-party repositories.
-          printf '%s\n' 'deb http://archive.ubuntu.com/ubuntu jammy main universe' 'deb http://archive.ubuntu.com/ubuntu jammy-updates main universe' 'deb http://security.ubuntu.com/ubuntu jammy-security main universe' > "$RUNNER_TEMP/ubuntu.sources.list"
-          sudo apt-get -o Dir::Etc::sourcelist="$RUNNER_TEMP/ubuntu.sources.list" -o Dir::Etc::sourceparts=- update
-          sudo apt-get -o Dir::Etc::sourcelist="$RUNNER_TEMP/ubuntu.sources.list" -o Dir::Etc::sourceparts=- install -y bubblewrap
+          # Bubblewrap needs only the runner's Ubuntu mirror (sources.list), not its third-party repositories (sources.list.d).
+          sudo apt-get -o Dir::Etc::sourceparts=- update
+          sudo apt-get -o Dir::Etc::sourceparts=- install -y bubblewrap
       - name: Provision the checksum-pinned official binary
         shell: bash
         run: |

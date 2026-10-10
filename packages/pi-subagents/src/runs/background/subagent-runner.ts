@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import type { Message } from "@earendil-works/pi-ai";
 import { installRunnerHttpDispatcher } from "./runner-http-dispatcher.ts";
 import { writeAtomicJson } from "../../shared/atomic-json.ts";
-import { writeAsyncResultFile, writePendingAsyncResultFile } from "./result-files.ts";
+import { withResultRunLease, writeAsyncResultFile, writePendingAsyncResultFile } from "./result-files.ts";
 import { createFileCoalescer } from "../../shared/file-coalescer.ts";
 import { createCapacityResilientJsonWriter } from "../../shared/capacity-resilient-json.ts";
 import { isStorageCapacityError } from "../../shared/file-system-retry.ts";
@@ -49,6 +49,7 @@ import {
 	type SubagentChildStatusEvent,
 	type WorkflowLaneMetadata,
 	type HerdrMachineReference,
+	type RunnerLauncher,
 	DEFAULT_MAX_OUTPUT,
 	type MaxOutputConfig,
 	SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
@@ -172,6 +173,7 @@ process.env[SUBAGENT_CHILD_ENV] = "1";
 
 export interface SubagentRunConfig {
 	id: string;
+	toolCallId?: string;
 	steps: RunnerStep[];
 	resultPath: string;
 	cwd: string;
@@ -231,6 +233,7 @@ export interface SubagentRunConfig {
 	parentWorkflowRunId?: string;
 	workflowKey?: string;
 	lane?: WorkflowLaneMetadata;
+	launcher?: RunnerLauncher;
 }
 
 interface StepResult {
@@ -246,6 +249,7 @@ interface StepResult {
 	runtimeAcknowledgedExtensions?: RuntimeAcknowledgedChildExtensions;
 	output: string;
 	outputState?: SubagentOutputState;
+	outputPartial?: boolean;
 	error?: string;
 	success?: boolean;
 	exitCode: number | null;
@@ -912,7 +916,7 @@ export async function runSingleStepInner(
 				const resolvedOutput = step.outputPath ? resolveSingleOutput(step.outputPath, output, outputSnapshot, step.outputClaimPath) : { fullOutput: output };
 				const outputReference = resolvedOutput.savedPath ? formatSavedOutputReference(resolvedOutput.savedPath, resolvedOutput.fullOutput) : undefined;
 				const finalizedOutput = finalizeSingleOutput(omitUndefinedProperties({ fullOutput: resolvedOutput.fullOutput, outputPath: step.outputPath, outputMode: step.outputMode, exitCode: 1, preserveSavedOutput: true, savedPath: resolvedOutput.savedPath, outputReference, saveError: resolvedOutput.saveError }));
-				const artifactErrors = artifactPaths && ctx.artifactConfig?.enabled !== false ? persistStepArtifacts({ artifactPaths, artifactConfig: ctx.artifactConfig, output: formatOutputArtifactContent(omitUndefinedProperties({ output: resolvedOutput.fullOutput, metadataPath: ctx.artifactConfig?.includeMetadata === false ? undefined : artifactPaths.metadataPath })), metadata: { runId: ctx.id, agent: step.agent, task: PROMPT_REDACTED, runner, placement: session.owner.identity, settlement: settled.settlement, outcome: settled.outcome, timestamp: Date.now() } }) : {};
+				const artifactErrors = artifactPaths && ctx.artifactConfig?.enabled !== false ? persistStepArtifacts({ artifactPaths, artifactConfig: ctx.artifactConfig, output: formatOutputArtifactContent(omitUndefinedProperties({ output: resolvedOutput.fullOutput, metadataPath: ctx.artifactConfig?.includeMetadata === false ? undefined : artifactPaths.metadataPath })), metadata: { runId: ctx.id, parentSessionId: step.parentSessionId, agent: step.agent, task: PROMPT_REDACTED, runner, placement: session.owner.identity, settlement: settled.settlement, outcome: settled.outcome, timestamp: Date.now() } }) : {};
 				return omitUndefinedProperties({ agent: step.agent, ...(childSessionName ? { sessionName: childSessionName } : {}), context: step.context, output: finalizedOutput.displayOutput, outputState: output.trim() ? "present" : "absent", exitCode: 1, error: resolvedOutput.fatalError ? resolvedOutput.saveError : undefined, timedOut, stopped, artifactPaths, outputSaveError: [resolvedOutput.saveError, artifactErrors.outputSaveError].filter(Boolean).join("\n") || undefined, metadataSaveError: artifactErrors.metadataSaveError, runner, execution: { status: "partial", success: false, exitCode: 1 } });
 			} catch (error) {
 				// Any post-allocation uncertainty retains the pane; only explicit stop
@@ -985,7 +989,7 @@ export async function runSingleStepInner(
 				artifactPaths,
 				artifactConfig: ctx.artifactConfig,
 				output: formatOutputArtifactContent(omitUndefinedProperties({ output: resolvedOutput.fullOutput, error: external.error, metadataPath: ctx.artifactConfig?.includeMetadata === false ? undefined : artifactPaths.metadataPath })),
-				metadata: { runId: ctx.id, agent: step.agent, task: PROMPT_REDACTED, runner, externalProcess: externalProcess, exitCode: external.exitCode, error: external.error, timestamp: Date.now() },
+				metadata: { runId: ctx.id, parentSessionId: step.parentSessionId, agent: step.agent, task: PROMPT_REDACTED, runner, externalProcess: externalProcess, exitCode: external.exitCode, error: external.error, timestamp: Date.now() },
 			})
 			: {};
 		return omitUndefinedProperties({
@@ -1056,7 +1060,7 @@ export async function runSingleStepInner(
 				artifactPaths,
 				artifactConfig: ctx.artifactConfig,
 				output: formatOutputArtifactContent(omitUndefinedProperties({ output: resolvedOutput.fullOutput, error: external.error, metadataPath: ctx.artifactConfig?.includeMetadata === false ? undefined : artifactPaths.metadataPath })),
-				metadata: { runId: ctx.id, agent: step.agent, task: PROMPT_REDACTED, runner, externalJob: external.externalJob, exitCode: external.exitCode, error: external.error, timestamp: Date.now() },
+				metadata: { runId: ctx.id, parentSessionId: step.parentSessionId, agent: step.agent, task: PROMPT_REDACTED, runner, externalJob: external.externalJob, exitCode: external.exitCode, error: external.error, timestamp: Date.now() },
 			})
 			: {};
 		return omitUndefinedProperties({
@@ -1392,12 +1396,13 @@ export async function runSingleStepInner(
 	}
 
 	const rawOutput = finalResult?.finalOutput ?? "";
-	let outputForPersistence = stripAcceptanceReport(rawOutput);
-	if (!outputForPersistence.trim() && finalResult?.structuredOutput !== undefined)
-		outputForPersistence = JSON.stringify(finalResult.structuredOutput, null, 2);
+	const structuredText = finalResult?.structuredOutput === undefined ? undefined : JSON.stringify(finalResult.structuredOutput, null, 2);
+	let replyOutput = stripAcceptanceReport(rawOutput);
+	if (!replyOutput.trim() && structuredText !== undefined) replyOutput = structuredText;
+	// The schema is the caller's contract: a bound output file holds the structured result, not closing prose.
 	const resolvedOutput = step.outputPath && finalResult?.exitCode === 0
-		? resolveSingleOutput(step.outputPath, outputForPersistence, finalOutputSnapshot, step.outputClaimPath)
-		: { fullOutput: outputForPersistence };
+		? resolveSingleOutput(step.outputPath, structuredText ?? replyOutput, finalOutputSnapshot, step.outputClaimPath)
+		: { fullOutput: replyOutput };
 	if (resolvedOutput.fatalError) {
 		if (finalResult) {
 			finalResult.exitCode = 1;
@@ -1410,7 +1415,8 @@ export async function runSingleStepInner(
 	if (finalResult?.stopped && !outputForSummary.trim()) {
 		outputForSummary = ctx.stopMessage ?? "Subagent stopped by user.";
 	}
-	const outputForAcceptance = rawOutput;
+	// Unfinished streamed text never stands in for the child's completed reply.
+	const outputForAcceptance = finalResult?.outputPartial ? "" : rawOutput;
 	const childWrittenOutput = step.outputPath
 		? extractChildWrittenOutput(finalResult?.messages, step.outputPath, step.cwd ?? ctx.cwd)
 		: undefined;
@@ -1512,6 +1518,7 @@ export async function runSingleStepInner(
 			})),
 			metadata: {
 				runId: ctx.id,
+				parentSessionId: step.parentSessionId,
 				agent: step.agent,
 				task: PROMPT_REDACTED,
 				exitCode: effectiveFinalExitCode,
@@ -1541,6 +1548,7 @@ export async function runSingleStepInner(
 		launchContractDigest: actualLaunchContractDigest,
 		output: outputForSummary,
 		outputState,
+		outputPartial: finalResult?.outputPartial,
 		exitCode: effectiveFinalExitCode,
 		error: effectiveFinalError,
 		sessionFile: step.sessionFile,
@@ -2058,6 +2066,7 @@ export async function runSubagent(
 	const statusPayload: RunnerStatusPayload = omitUndefinedProperties({
 		lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
 		runId: id,
+		...(config.toolCallId ? { toolCallId: config.toolCallId } : {}),
 		...(config.sessionId ? { sessionId: config.sessionId } : {}),
 		...(config.completionOwnerId ? { completionOwnerId: config.completionOwnerId } : {}),
 		mode: config.resultMode ?? (flatSteps.length > 1 ? "chain" : "single"),
@@ -2088,6 +2097,7 @@ export async function runSubagent(
 		...(config.workflowKey ? { workflowKey: config.workflowKey } : {}),
 		...(config.lane ? { lane: config.lane } : {}),
 		...(config.runnerProcessInstanceId ? { processTerminal: { version: 1 as const, state: "pending" as const, runId: id, runnerProcessInstanceId: config.runnerProcessInstanceId } } : {}),
+		...(config.launcher ? { launcher: config.launcher } : {}),
 		steps: initialStatusSteps,
 		artifactsDir,
 		sessionDir: config.sessionDir,
@@ -2112,6 +2122,9 @@ export async function runSubagent(
 	};
 	let finalResultCommitted = false;
 	let finalResultPublication: { resolve(): void; reject(error: unknown): void } | undefined;
+	// The paused and final results replace each other under one run id; the lease keeps a consumer
+	// of the older one from retiring the newer one. A lease timeout fails the publication.
+	const publishRunResult = (filePath: string, write: () => void): void => withResultRunLease(path.dirname(filePath), id, write);
 	const runPersistence = createCapacityResilientJsonWriter({
 		keepAlive: true,
 		onSuccess: (filePath, payload) => {
@@ -2268,7 +2281,7 @@ requestedModel: step.requestedModel,				contextOverflow: step.contextOverflow,
 			sessionId: config.sessionId,
 			completionOwnerId: config.completionOwnerId,
 			sessionFile: statusPayload.sessionFile ?? latestSessionFile,
-		}), (filePath, payload) => writePendingAsyncResultFile(filePath, payload as Record<string, unknown>));
+		}), (filePath, payload) => publishRunResult(filePath, () => writePendingAsyncResultFile(filePath, payload as Record<string, unknown>)));
 	};
 	const writeStatusPayloadNow = (): void => {
 		if (finalResultPublication) return;
@@ -3865,6 +3878,7 @@ requestedModel: step.requestedModel,				contextOverflow: step.contextOverflow,
 					runtimeAcknowledgedExtensions: pr.runtimeAcknowledgedExtensions,
 					output: pr.output,
 					outputState: pr.outputState,
+					outputPartial: pr.outputPartial,
 					error: pr.error,
 					success: pr.stopped !== true && pr.interrupted !== true && pr.exitCode === 0 && pr.execution?.status !== "partial",
 					exitCode: pr.interrupted === true ? 0 : pr.exitCode,
@@ -3883,6 +3897,7 @@ requestedModel: step.requestedModel,				contextOverflow: step.contextOverflow,
 					totalCost: pr.totalCost,
 					usage: pr.usage,
 					artifactPaths: pr.artifactPaths,
+					savedOutputPath: pr.savedOutputPath,
 					outputSaveError: pr.outputSaveError,
 					artifactOutputSaveFailed: pr.artifactOutputSaveFailed,
 					transcriptPath: pr.transcriptPath,
@@ -4315,6 +4330,7 @@ requestedModel: step.requestedModel,				contextOverflow: step.contextOverflow,
 						launchResolvedExtensions: pr.launchResolvedExtensions,
 						output: pr.output,
 						outputState: pr.outputState,
+						outputPartial: pr.outputPartial,
 						error: pr.error,
 						success: pr.stopped !== true && pr.interrupted !== true && pr.exitCode === 0 && pr.execution?.status !== "partial",
 						exitCode: pr.interrupted === true ? 0 : pr.exitCode,
@@ -4333,6 +4349,7 @@ requestedModel: step.requestedModel,				contextOverflow: step.contextOverflow,
 						totalCost: pr.totalCost,
 						usage: pr.usage,
 						artifactPaths: pr.artifactPaths,
+						savedOutputPath: pr.savedOutputPath,
 						outputSaveError: pr.outputSaveError,
 						artifactOutputSaveFailed: pr.artifactOutputSaveFailed,
 						transcriptPath: pr.transcriptPath,
@@ -4622,6 +4639,7 @@ requestedModel: step.requestedModel,				contextOverflow: step.contextOverflow,
 				runtimeAcknowledgedExtensions: singleResult.runtimeAcknowledgedExtensions,
 				output: stopped || childStopped ? stopMessage : timedOut ? singleResult.output || (timeoutMessage ?? "Subagent timed out.") : singleResult.output,
 				outputState: singleResult.outputState,
+				outputPartial: singleResult.outputPartial,
 				error: stopped || childStopped ? stopMessage : timedOut ? (timeoutMessage ?? "Subagent timed out.") : singleResult.error,
 				success: !stopped && !childStopped && !timedOut && singleResult.interrupted !== true && singleResult.exitCode === 0 && singleResult.execution?.status !== "partial",
 				exitCode: stopped || childStopped ? 1 : timedOut ? 1 : singleResult.interrupted === true ? 0 : singleResult.exitCode,
@@ -5000,6 +5018,7 @@ requestedModel: step.requestedModel,				contextOverflow: step.contextOverflow,
 		runPersistence.write(resultPath, {
 			lifecycleArtifactVersion: SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
 			id,
+			...(config.toolCallId ? { toolCallId: config.toolCallId } : {}),
 			agent: agentName,
 			mode: resultMode,
 			success: statusPayload.state === "complete",
@@ -5017,6 +5036,7 @@ requestedModel: step.requestedModel,				contextOverflow: step.contextOverflow,
 				context: r.context,
 				output: r.output,
 				outputState: r.outputState,
+				outputPartial: r.outputPartial,
 				error: r.error,
 				success: r.success,
 				skipped: r.skipped || undefined,
@@ -5092,7 +5112,7 @@ requestedModel: step.requestedModel,				contextOverflow: step.contextOverflow,
 			shareError,
 			...(taskIndex !== undefined && { taskIndex }),
 			...(totalTasks !== undefined && { totalTasks }),
-		}, (filePath, payload) => { writeAsyncResultFile(filePath, payload as Record<string, unknown>); });
+		}, (filePath, payload) => publishRunResult(filePath, () => { writeAsyncResultFile(filePath, payload as Record<string, unknown>); }));
 		// Only capacity deferral releases settled sessions before terminal publication.
 		if (!finalResultCommitted) await Promise.all([publication, disposeChildSessions()]);
 	} catch (err) {
