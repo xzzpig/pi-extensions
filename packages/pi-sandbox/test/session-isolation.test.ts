@@ -33,6 +33,7 @@ function session(cwd: string, projectTrusted = true) {
     cwd,
     hasUI: false,
     isProjectTrusted: () => projectTrusted,
+    sessionManager: { getSessionId: () => "test-session", getSessionFile: () => undefined },
     ui: {
       notify: (message: string, level: string) => {
         if (level === "error") errors.push(message);

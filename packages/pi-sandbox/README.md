@@ -81,7 +81,6 @@ Note below that the order of precedence for filesystem read and write are opposi
   "permissionPromptTimeoutSeconds": 600, // Defaults to 10 minutes; 0 waits indefinitely
   "allowBrowserProcess": true,     // If you want to use agent-browser or similar Chrome setup
   "network": {
-    "disabled": false,             // true = no network restrictions at all (see below)
     "allowLocalBinding": true,     // ditto
     "allowAllUnixSockets": true,   // ditto
     "allowUnauthenticatedSocksProxy": true, // Enables Git-over-SSH on macOS

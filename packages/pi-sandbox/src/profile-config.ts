@@ -229,8 +229,7 @@ function mergeProfileConfig(
   // earlier overreach and broke the common `network.disabled: true` + profile
   // combination (the runtime never started a network proxy).
   network.disabled = profileNetwork?.disabled ?? base.network?.disabled ?? false;
-  filesystem.disabled =
-    profileFilesystem?.disabled ?? base.filesystem?.disabled ?? false;
+  filesystem.disabled = profileFilesystem?.disabled ?? base.filesystem?.disabled ?? false;
   filesystem.protectNonexistentFiles = preserveProtectNonexistentFiles(
     base.filesystem?.protectNonexistentFiles,
     profileFilesystem?.protectNonexistentFiles,
@@ -771,7 +770,13 @@ export function mergeProfileLayers(
     globalConfig.filesystem?.protectNonexistentFiles === true ||
     (projectTrusted && projectConfig.filesystem?.protectNonexistentFiles === true)
   ) {
-    base.filesystem = { ...base.filesystem, protectNonexistentFiles: true };
+    base.filesystem = {
+      denyRead: [],
+      allowWrite: [],
+      denyWrite: [],
+      ...base.filesystem,
+      protectNonexistentFiles: true,
+    };
   }
   return mergeProfileConfig(base, profile, name);
 }
