@@ -3,76 +3,70 @@
  * MUST 经结构化上报（阶段标签 + 百分比，或等效字段），由主会话投影为看板展示).
  *
  * The reporting tools carry an optional structured `progress` field. A child's
- * tool call runs in the child's own session, so the parent does not see it
- * directly; what the parent does see is every report that reaches ITS session —
- * the main agent's own `report_work` (the tick gate requires it in agent mode)
- * and any report relayed up. This observer folds whatever it observes into one
- * row per agent+phase and appends a `progress` flow entry whose renderer draws
- * the board.
+ * tool call runs in the child's own session, so the parent never sees the call
+ * itself — and since the report tools are no longer registered in the main
+ * session at all (design D1), the parent cannot observe them as tool results
+ * either. Progress therefore arrives from the ingestion layer, which is the one
+ * component that holds an accepted child report (design D3).
  *
- * Progress is display-only: it never gates anything, and a session with no
- * reports appends nothing.
+ * This module only folds those accepted updates into one row per agent+phase
+ * and appends a `progress` flow entry whose renderer draws the board.
+ *
+ * Progress is display-only: it never gates anything, it never completes a task,
+ * and a session with no reports appends nothing.
  */
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  ExtensionHandler,
-  ToolResultEvent,
-  ToolResultEventResult,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { appendFlowEntry, OPSX_ENTRY_TYPES } from "./flow-entries.ts";
 import {
   progressUpdateFrom,
   projectProgress,
-  type ProgressUpdate,
+  type ProjectedProgress,
 } from "./progress-projection.ts";
 
-/** The report tools that can carry a structured progress field. */
-const REPORT_TOOL_NAMES = [
-  "report_gap_analysis",
-  "report_plan_review",
-  "report_work",
-] as const;
+/**
+ * The projected board per session.
+ *
+ * Only the folded rows are retained — one per agent+phase — so a chatty
+ * subagent cannot grow the parent's memory without bound (design D4).
+ */
+const boardsBySession = new Map<string, ProjectedProgress[]>();
 
-const updatesBySession = new Map<string, ProgressUpdate[]>();
+/** Reset the per-session progress board. Test-only. */
+export function resetProgressObserverForTests(): void {
+  boardsBySession.clear();
+}
 
-function sessionKey(ctx: ExtensionContext): string {
-  try {
-    return ctx.sessionManager?.getSessionId() ?? "unknown";
-  } catch {
-    return "unknown";
-  }
+/** The current board for a session. Test-observable. */
+export function progressBoardFor(sessionId: string): ProjectedProgress[] {
+  return boardsBySession.get(sessionId) ?? [];
 }
 
 /**
- * Build the `tool_result` handler that folds report-tool progress into the
- * session's board. Returns a value only when a board entry was appended.
+ * Record the structured progress carried by an accepted child report.
+ *
+ * Returns whether a board entry was appended. A report without progress leaves
+ * the board untouched, and a repeated update folds into the existing row rather
+ * than appending a second entry, so duplicates never reach the interface.
+ *
+ * The caller is the ingestion layer, which only ever passes a report that
+ * already reached a successful terminal state with a matching attempt nonce —
+ * so a failed run or a stale nonce is never projected.
  */
-export function createProgressObserverHandler(
+export function recordChildReportProgress(
   pi: Pick<ExtensionAPI, "appendEntry">,
-): ExtensionHandler<ToolResultEvent, ToolResultEventResult> {
-  return (event, ctx) => {
-    if (
-      !(REPORT_TOOL_NAMES as readonly string[]).includes(event.toolName) ||
-      event.isError
-    ) {
-      return;
-    }
-    const update = progressUpdateFrom(event.toolName, event.input);
-    if (!update) return;
+  sessionId: string,
+  input: { toolName: string; report: Record<string, unknown> },
+): boolean {
+  const update = progressUpdateFrom(input.toolName, input.report);
+  if (!update) return false;
 
-    const sessionId = sessionKey(ctx);
-    const updates = updatesBySession.get(sessionId) ?? [];
-    updates.push(update);
-    updatesBySession.set(sessionId, updates);
+  const current = boardsBySession.get(sessionId) ?? [];
+  const next = projectProgress([...current, update]);
+  const changed = JSON.stringify(next) !== JSON.stringify(current);
+  boardsBySession.set(sessionId, next);
+  if (!changed) return false;
 
-    appendFlowEntry(pi, OPSX_ENTRY_TYPES.progress, {
-      rows: projectProgress(updates),
-    });
-  };
-}
-
-export function registerProgressObserver(pi: ExtensionAPI): void {
-  pi.on("tool_result", createProgressObserverHandler(pi));
+  appendFlowEntry(pi, OPSX_ENTRY_TYPES.progress, { rows: next });
+  return true;
 }

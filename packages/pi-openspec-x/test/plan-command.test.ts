@@ -11,6 +11,8 @@ import {
   PLAN_MODE_CONTRACT_CUSTOM_TYPE,
   PLAN_NOTICE_CUSTOM_TYPE,
   PLAN_PHASE_CUSTOM_TYPE,
+  activePlanSession,
+  rebindPlanFlow,
   registerPlanFlow,
   resetPlanFlowStateForTests,
 } from "../src/plan-command.ts";
@@ -229,5 +231,91 @@ describe("registerPlanFlow", () => {
       fetchInstructions: () => LIVE,
     });
     expect(handlers.get("turn_end")![0]!({}, makeCtx("other"))).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Design D5: plan binding recovery from the branch
+// ---------------------------------------------------------------------------
+
+describe("rebindPlanFlow (design D5)", () => {
+  function branchCtx(entries: unknown[], sessionId = "s1") {
+    return {
+      sessionManager: {
+        getSessionId: () => sessionId,
+        getLeafId: () => "leaf-1",
+        getBranch: () => entries,
+      },
+    };
+  }
+
+  const modeEntered = (changeId: string, mode: string) => ({
+    type: "custom",
+    id: "m1",
+    customType: "pi-openspec-x/mode-entered",
+    data: { changeId, mode },
+  });
+
+  it("restores the plan binding from the branch without re-running the command", () => {
+    const restored = rebindPlanFlow(
+      "s1",
+      branchCtx([modeEntered("change-a", "plan")]) as never,
+    );
+    expect(restored).toEqual({ changeId: "change-a" });
+    expect(activePlanSession("s1")).toEqual({ changeId: "change-a" });
+  });
+
+  it("does not restore a plan binding from an implement mode entry", () => {
+    const restored = rebindPlanFlow(
+      "s1",
+      branchCtx([modeEntered("change-a", "agent")]) as never,
+    );
+    expect(restored).toBeUndefined();
+    expect(activePlanSession("s1")).toBeUndefined();
+  });
+
+  it("does not restore a plan flow that already exited", () => {
+    const restored = rebindPlanFlow(
+      "s1",
+      branchCtx([
+        modeEntered("change-a", "plan"),
+        {
+          type: "custom",
+          id: "x1",
+          customType: "pi-openspec-x/mode-exited",
+          data: { changeId: "change-a" },
+        },
+      ]) as never,
+    );
+    expect(restored).toBeUndefined();
+    expect(activePlanSession("s1")).toBeUndefined();
+  });
+
+  it("returns undefined when the branch has no plan flow at all", () => {
+    expect(rebindPlanFlow("s1", branchCtx([]) as never)).toBeUndefined();
+  });
+
+  it("survives a host without getBranch", () => {
+    expect(
+      rebindPlanFlow("s1", { sessionManager: {} } as never),
+    ).toBeUndefined();
+  });
+
+  it("leaves an already-active plan session untouched", () => {
+    const { pi } = createPlanPi();
+    registerPlanFlow(pi as never, {
+      enterMode: async () => {},
+      fetchStatus: () => STATUS_READY,
+      fetchInstructions: () => LIVE,
+    });
+    // The command handler is what normally creates the session; simulate it by
+    // rebinding first, then rebinding again with a different change.
+    rebindPlanFlow("s1", branchCtx([modeEntered("change-a", "plan")]) as never);
+    const second = rebindPlanFlow(
+      "s1",
+      branchCtx([modeEntered("change-b", "plan")]) as never,
+    );
+    expect(second).toEqual({ changeId: "change-a" });
+    expect(activePlanSession("s1")).toEqual({ changeId: "change-a" });
   });
 });

@@ -11,9 +11,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   createOpsxRecoverySessionStartHandler,
   readArchivedGoals,
+  readFocusedGoalSnapshot,
   readGoalBaseSummaries,
   readGoalTaskTree,
+  refreshGoalRecordByPath,
   resetRecoveryStateForTests,
+  type GoalXFocusFacet,
   type GoalXStorageFacet,
 } from "../src/goal-base.ts";
 import type { GoalTaskLike } from "../src/task-sync.ts";
@@ -330,5 +333,305 @@ describe("recovery re-installs the per-goal auditor override", () => {
 
     await handler({} as never, sessionContext(root, "s10"));
     expect(installed).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Design D6: the authoritative focus reader
+// ---------------------------------------------------------------------------
+
+describe("readFocusedGoalSnapshot (design D6)", () => {
+  /**
+   * The real goal-x helpers, with an optional override. Using the published
+   * modules (rather than a reimplementation) is the point: the focus semantics
+   * under test are goal-x's own.
+   */
+  async function realFocusLoader(
+    overrides: Partial<GoalXFocusFacet> = {},
+  ): Promise<GoalXFocusFacet> {
+    const rootModule = await import(
+      "@xzzpig/pi-goal-x/extensions/storage/goal-root.ts"
+    );
+    const filesModule = await import(
+      "@xzzpig/pi-goal-x/extensions/storage/goal-files.ts"
+    );
+    const recordModule = await import(
+      "@xzzpig/pi-goal-x/extensions/goal-record.ts"
+    );
+    const poolModule = await import(
+      "@xzzpig/pi-goal-x/extensions/goal-pool.ts"
+    );
+    const settingsModule = await import(
+      "@xzzpig/pi-goal-x/extensions/goal-settings.ts"
+    );
+    const real = {
+      goalStorageRoot: rootModule.goalStorageRoot,
+      parseGoalFile: filesModule.parseGoalFile,
+      readActiveGoalPoolAsync: filesModule.readActiveGoalPoolAsync,
+      normalizeGoalFocusEntry: recordModule.normalizeGoalFocusEntry,
+      normalizeGoalRecord: recordModule.normalizeGoalRecord,
+      resolveSessionFocus: poolModule.resolveSessionFocus,
+      loadGoalSettings: settingsModule.loadGoalSettings,
+    };
+    return { ...real, ...overrides } as unknown as GoalXFocusFacet;
+  }
+
+  /** Write a canonical active goal file and return its absolute path. */
+  function writeGoal(
+    root: string,
+    id: string,
+    overrides: Record<string, unknown> = {},
+  ): string {
+    const goalRoot = path.join(root, ".pi", "goals");
+    fs.mkdirSync(goalRoot, { recursive: true });
+    const file = path.join(goalRoot, `active_goal_2026010112000000_${id}.md`);
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        id,
+        objective: 'Implement the OpenSpec change "change-a".',
+        status: "active",
+        autoContinue: true,
+        sisyphus: false,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        activePath: file,
+        ...overrides,
+      }),
+    );
+    return file;
+  }
+
+  function focusBranch(
+    focusedGoalId: string | null,
+    storageRoot?: string,
+  ): unknown[] {
+    return [
+      {
+        type: "custom",
+        id: "focus-1",
+        parentId: null,
+        timestamp: "2026-01-01T01:00:00.000Z",
+        customType: "pi-goal-focus",
+        data: {
+          version: 1,
+          ...(storageRoot ? { storageRoot } : {}),
+          focusedGoalId,
+          reason: "selected",
+        },
+      },
+    ];
+  }
+
+  function focusContext(root: string, branch: unknown[]) {
+    return {
+      cwd: root,
+      goalStorageRoot: path.join(root, ".pi", "goals"),
+      sessionManager: {
+        getSessionId: () => "s-focus",
+        getLeafId: () => "focus-1",
+        getBranch: () => branch,
+      },
+    };
+  }
+
+  it("a real focus entry selects the goal and reads its canonical record", async () => {
+    const root = makeRoot();
+    writeGoal(root, "g1");
+    const snapshot = await readFocusedGoalSnapshot(
+      focusContext(root, focusBranch("g1")),
+      { loader: () => realFocusLoader() },
+    );
+    expect(snapshot.state).toBe("known-focused");
+    expect(snapshot.goalId).toBe("g1");
+    expect(snapshot.record?.objective).toContain("change-a");
+    expect(snapshot.token.goalId).toBe("g1");
+    expect(snapshot.token.focusEntryId).toBe("focus-1");
+    expect(snapshot.token.branchGeneration).toBe("focus-1");
+    expect(snapshot.token.storageRoot).toBe(path.join(root, ".pi", "goals"));
+  });
+
+  it("an explicit null focus never falls back to another goal", async () => {
+    const root = makeRoot();
+    writeGoal(root, "g1");
+    const snapshot = await readFocusedGoalSnapshot(
+      focusContext(root, focusBranch(null)),
+      { loader: () => realFocusLoader() },
+    );
+    expect(snapshot.state).toBe("known-unfocused");
+    expect(snapshot.token.goalId).toBeNull();
+  });
+
+  it("several goals without auto-select stay unfocused", async () => {
+    const root = makeRoot();
+    writeGoal(root, "g1");
+    writeGoal(root, "g2");
+    const snapshot = await readFocusedGoalSnapshot(focusContext(root, []), {
+      loader: () => realFocusLoader(),
+    });
+    expect(snapshot.state).toBe("known-unfocused");
+  });
+
+  it("a single goal is auto-selected only when the setting is explicitly true", async () => {
+    const root = makeRoot();
+    writeGoal(root, "g1");
+
+    const off = await readFocusedGoalSnapshot(focusContext(root, []), {
+      loader: () => realFocusLoader(),
+    });
+    expect(off.state).toBe("known-unfocused");
+
+    const on = await readFocusedGoalSnapshot(focusContext(root, []), {
+      loader: () =>
+        realFocusLoader({
+          loadGoalSettings: () => ({ autoSelectSingleGoal: true }),
+        }),
+    });
+    expect(on.state).toBe("known-focused");
+    expect(on.goalId).toBe("g1");
+  });
+
+  it("a focus entry recorded against another storage root does not apply", async () => {
+    const root = makeRoot();
+    writeGoal(root, "g1");
+    const snapshot = await readFocusedGoalSnapshot(
+      focusContext(root, focusBranch("g1", "/somewhere/else/.pi/goals")),
+      { loader: () => realFocusLoader() },
+    );
+    expect(snapshot.state).toBe("known-unfocused");
+    expect(snapshot.token.goalId).toBeNull();
+  });
+
+  it("a newer real tool result covers a task change the file has not flushed", async () => {
+    const root = makeRoot();
+    writeGoal(root, "g1", { updatedAt: "2026-01-01T00:00:00.000Z" });
+    const snapshot = await readFocusedGoalSnapshot(
+      focusContext(root, focusBranch("g1")),
+      {
+        loader: () => realFocusLoader(),
+        recentToolRecord: {
+          goalId: "g1",
+          toolCallId: "call-1",
+          observedAt: "2026-01-01T02:00:00.000Z",
+          record: {
+            id: "g1",
+            status: "active",
+            objective: 'Implement the OpenSpec change "change-a".',
+            updatedAt: "2026-01-01T01:30:00.000Z",
+            taskList: {
+              tasks: [{ id: "1.1", title: "t", status: "complete" }],
+            },
+          },
+        },
+      },
+    );
+    expect(snapshot.state).toBe("known-focused");
+    expect(snapshot.record?.taskList?.tasks?.[0]?.status).toBe("complete");
+  });
+
+  it("an older tool result never overrides the newer canonical file", async () => {
+    const root = makeRoot();
+    writeGoal(root, "g1", { updatedAt: "2026-01-01T05:00:00.000Z" });
+    const snapshot = await readFocusedGoalSnapshot(
+      focusContext(root, focusBranch("g1")),
+      {
+        loader: () => realFocusLoader(),
+        recentToolRecord: {
+          goalId: "g1",
+          toolCallId: "call-old",
+          observedAt: "2026-01-01T01:00:00.000Z",
+          record: {
+            id: "g1",
+            status: "active",
+            objective: "stale",
+            updatedAt: "2026-01-01T01:00:00.000Z",
+          },
+        },
+      },
+    );
+    expect(snapshot.record?.objective).toContain("change-a");
+  });
+
+  it("the record is located by its known path, never by scanning the root", async () => {
+    const root = makeRoot();
+    const file = writeGoal(root, "g1");
+    const probed: string[] = [];
+    let poolReads = 0;
+    const base = await realFocusLoader();
+    const snapshot = await readFocusedGoalSnapshot(
+      focusContext(root, focusBranch("g1")),
+      {
+        loader: async () => ({
+          ...base,
+          parseGoalFile: (filePath: string) => {
+            probed.push(filePath);
+            return base.parseGoalFile(filePath);
+          },
+          readActiveGoalPoolAsync: async (ctx) => {
+            poolReads += 1;
+            return base.readActiveGoalPoolAsync(ctx);
+          },
+        }),
+      },
+    );
+    expect(snapshot.state).toBe("known-focused");
+    expect(poolReads).toBe(1);
+    expect(probed).toEqual([file]);
+  });
+
+  it("reports unknown instead of guessing when goal-x is unavailable", async () => {
+    const root = makeRoot();
+    const snapshot = await readFocusedGoalSnapshot(
+      focusContext(root, focusBranch("g1")),
+      {
+        loader: async () => {
+          throw new Error("goal-x missing");
+        },
+      },
+    );
+    expect(snapshot.state).toBe("unknown");
+    expect(snapshot.reason).toContain("unavailable");
+  });
+
+  it("reports unknown when the focused goal has no readable record", async () => {
+    const root = makeRoot();
+    const base = await realFocusLoader();
+    const snapshot = await readFocusedGoalSnapshot(
+      focusContext(root, focusBranch("g1")),
+      {
+        loader: async () => ({
+          ...base,
+          readActiveGoalPoolAsync: async () => new Map(),
+          resolveSessionFocus: () => "g1",
+        }),
+      },
+    );
+    expect(snapshot.state).toBe("unknown");
+    expect(snapshot.reason).toContain("no readable record");
+  });
+
+  it("reading leaves every canonical goal file byte-identical", async () => {
+    const root = makeRoot();
+    const file = writeGoal(root, "g1");
+    const before = fs.readFileSync(file);
+    await readFocusedGoalSnapshot(focusContext(root, focusBranch("g1")), {
+      loader: () => realFocusLoader(),
+    });
+    expect(fs.readFileSync(file).equals(before)).toBe(true);
+  });
+
+  it("refreshGoalRecordByPath re-reads the known path without scanning", async () => {
+    const root = makeRoot();
+    const file = writeGoal(root, "g1");
+    const refreshed = await refreshGoalRecordByPath(file, () =>
+      realFocusLoader(),
+    );
+    expect(refreshed?.id).toBe("g1");
+
+    const missing = await refreshGoalRecordByPath(
+      path.join(root, "gone.md"),
+      () => realFocusLoader(),
+    );
+    expect(missing).toBeUndefined();
   });
 });

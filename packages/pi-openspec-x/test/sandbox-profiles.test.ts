@@ -85,6 +85,13 @@ function createMockPi() {
     registerMessageRenderer() {},
     appendEntry() {},
     sendMessage() {},
+    // Native lifecycle events arrive on the bus, not the handler registry
+    // (design D3). The stub keeps the fake ExtensionAPI shape-compatible.
+    events: {
+      on() {
+        return () => {};
+      },
+    },
     getAllTools() {
       return [];
     },

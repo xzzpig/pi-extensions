@@ -7,7 +7,11 @@
  * registration roundtrip uses a fake pi capturing registerTool, and the
  * execute calls pin the short child-facing confirmation text.
  */
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import {
   validateToolArguments,
   type ToolCall,
@@ -16,8 +20,13 @@ import {
 import { describe, expect, test } from "vitest";
 
 import {
+  CHILD_REPORT_ATTEMPT_ENTRY,
+  CHILD_REPORT_ATTEMPT_VERSION,
+  CHILD_REPORT_ENVELOPE_VERSION,
+  scanDispatchMarkers,
+} from "../src/child-report-reader.ts";
+import {
   createReportTools,
-  registerReportTools,
   REPORT_GAP_ANALYSIS_TOOL_NAME,
   REPORT_PLAN_REVIEW_TOOL_NAME,
   REPORT_WORK_TOOL_NAME,
@@ -233,25 +242,229 @@ describe("report_work schema", () => {
   });
 });
 
-describe("registration roundtrip", () => {
-  test("registerReportTools registers the three tools sequentially", () => {
-    const registered: Array<{ name: string; executionMode?: string }> = [];
-    const fakePi = {
-      registerTool: (tool: { name: string; executionMode?: string }) => {
-        registered.push(tool);
+describe("child-only registration (design D1)", () => {
+  /** Minimal pi capturing registrations; only the hooks we assert on are kept. */
+  function capturePi() {
+    const tools: ToolDefinition[] = [];
+    const beforeStart: Array<(event: unknown, ctx: unknown) => unknown> = [];
+    const entries: Array<{ customType: string; data: unknown }> = [];
+    const pi = {
+      registerTool: (tool: ToolDefinition) => {
+        tools.push(tool);
+      },
+      on: (
+        event: string,
+        handler: (event: unknown, ctx: unknown) => unknown,
+      ) => {
+        if (event === "before_agent_start") beforeStart.push(handler);
+        return () => {};
+      },
+      appendEntry: (customType: string, data?: unknown) => {
+        entries.push({ customType, data });
       },
     } as unknown as ExtensionAPI;
+    return { pi, tools, beforeStart, entries };
+  }
 
-    registerReportTools(fakePi);
+  const ctx = {
+    sessionManager: { getSessionId: () => "child-session-1" },
+  } as unknown as ExtensionContext;
 
-    expect(registered.map((tool) => tool.name)).toEqual([
-      REPORT_GAP_ANALYSIS_TOOL_NAME,
-      REPORT_PLAN_REVIEW_TOOL_NAME,
-      REPORT_WORK_TOOL_NAME,
-    ]);
+  const ENTRIES = [
+    {
+      module: "../src/child-report-extensions/gap-analysis.ts",
+      agent: "opsx-gap-analysis",
+      toolName: REPORT_GAP_ANALYSIS_TOOL_NAME,
+      params: validGapAnalysis,
+    },
+    {
+      module: "../src/child-report-extensions/plan-review.ts",
+      agent: "opsx-plan-review",
+      toolName: REPORT_PLAN_REVIEW_TOOL_NAME,
+      params: validPlanReview,
+    },
+    {
+      module: "../src/child-report-extensions/worker.ts",
+      agent: "opsx-worker",
+      toolName: REPORT_WORK_TOOL_NAME,
+      params: validWorkReport,
+    },
+  ] as const;
+
+  test("each role entry registers exactly its own tool plus the attempt hook", async () => {
+    for (const entry of ENTRIES) {
+      const captured = capturePi();
+      const mod = (await import(entry.module)) as {
+        default: (pi: ExtensionAPI) => void;
+      };
+      mod.default(captured.pi);
+      expect(captured.tools.map((tool) => tool.name)).toEqual([entry.toolName]);
+      expect(captured.tools[0].executionMode).toBe("sequential");
+      expect(captured.beforeStart).toHaveLength(1);
+    }
+  });
+
+  test("the attempt hook records a v1 attempt entry with a fresh nonce", async () => {
+    const captured = capturePi();
+    const mod = (await import(ENTRIES[0].module)) as {
+      default: (pi: ExtensionAPI) => void;
+    };
+    mod.default(captured.pi);
+    captured.beforeStart[0](
+      { type: "before_agent_start", prompt: "analyse the request" },
+      ctx,
+    );
+    expect(captured.entries).toHaveLength(1);
+    const entry = captured.entries[0];
+    expect(entry.customType).toBe(CHILD_REPORT_ATTEMPT_ENTRY);
+    const data = entry.data as {
+      version: number;
+      attemptId: string;
+      agent: string;
+      sessionId?: string;
+      promptSha256: string;
+      taskMarker?: string;
+    };
+    expect(data.version).toBe(CHILD_REPORT_ATTEMPT_VERSION);
+    expect(data.agent).toBe("opsx-gap-analysis");
+    expect(data.sessionId).toBe("child-session-1");
+    expect(data.attemptId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(data.promptSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(data.taskMarker).toBeUndefined();
+  });
+
+  test("a new prompt gets a new nonce and never inherits the previous one", async () => {
+    const captured = capturePi();
+    const mod = (await import(ENTRIES[2].module)) as {
+      default: (pi: ExtensionAPI) => void;
+    };
+    mod.default(captured.pi);
+    const marker = `[OPSX WORKER DISPATCH task=${encodeURIComponent("1.1")}]`;
+    captured.beforeStart[0](
+      { type: "before_agent_start", prompt: `Task: ${marker}` },
+      ctx,
+    );
+    captured.beforeStart[0](
+      { type: "before_agent_start", prompt: `Resume: ${marker}` },
+      ctx,
+    );
+    const [first, second] = captured.entries.map(
+      (e) =>
+        e.data as {
+          attemptId: string;
+          taskMarker?: string;
+        },
+    );
+    expect(first.attemptId).not.toBe(second.attemptId);
+    expect(first.taskMarker).toBe("1.1");
+    expect(second.taskMarker).toBe("1.1");
+  });
+
+  test("the wrapped execute returns the envelope with the current attempt nonce", async () => {
+    const captured = capturePi();
+    const mod = (await import(ENTRIES[1].module)) as {
+      default: (pi: ExtensionAPI) => void;
+    };
+    mod.default(captured.pi);
+    captured.beforeStart[0](
+      { type: "before_agent_start", prompt: "review the plan" },
+      ctx,
+    );
+    const attemptId = (captured.entries[0].data as { attemptId: string })
+      .attemptId;
+    const result = await captured.tools[0].execute(
+      "call-envelope",
+      validPlanReview as never,
+      undefined,
+      undefined,
+      {} as never,
+    );
+    expect(result.content[0]).toMatchObject({
+      text: "Plan review recorded: verdict OKAY (0 issues, 0 blocking).",
+    });
+    expect(result.isError).toBeFalsy();
+    expect(result.details).toEqual({
+      version: CHILD_REPORT_ENVELOPE_VERSION,
+      attemptId,
+      agent: "opsx-plan-review",
+      report: validPlanReview,
+    });
+  });
+
+  test("a report without a recorded attempt fails loudly instead of faking success", async () => {
+    const captured = capturePi();
+    const mod = (await import(ENTRIES[2].module)) as {
+      default: (pi: ExtensionAPI) => void;
+    };
+    mod.default(captured.pi);
+    // No before_agent_start fired: nothing is attributable this turn.
+    const result = await captured.tools[0].execute(
+      "call-unattributable",
+      validWorkReport as never,
+      undefined,
+      undefined,
+      {} as never,
+    );
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.details)).toContain("attempt-unavailable");
+    expect(result.content[0]).toMatchObject({
+      text: expect.stringContaining("Report rejected"),
+    });
+  });
+
+  test("an attempt whose entry write throws is not reportable", async () => {
+    const captured = capturePi();
+    const failingPi = {
+      ...captured.pi,
+      appendEntry: () => {
+        throw new Error("session is read-only");
+      },
+    } as unknown as ExtensionAPI;
+    const mod = (await import(ENTRIES[0].module)) as {
+      default: (pi: ExtensionAPI) => void;
+    };
+    mod.default(failingPi);
+    captured.beforeStart[0](
+      { type: "before_agent_start", prompt: "analyse" },
+      ctx,
+    );
+    const result = await captured.tools[0].execute(
+      "call-write-failed",
+      validGapAnalysis as never,
+      undefined,
+      undefined,
+      {} as never,
+    );
+    expect(result.isError).toBe(true);
+  });
+
+  test("the dispatch marker is read wherever it appears, and ambiguity is visible", () => {
     expect(
-      registered.every((tool) => tool.executionMode === "sequential"),
-    ).toBe(true);
+      scanDispatchMarkers(
+        `Task: [OPSX WORKER DISPATCH task=${encodeURIComponent("2.3")}] rest`,
+      ),
+    ).toEqual(["2.3"]);
+    expect(scanDispatchMarkers("no marker here")).toEqual([]);
+    expect(
+      scanDispatchMarkers(
+        `[OPSX WORKER DISPATCH task=1.1] and [OPSX WORKER DISPATCH task=1.2]`,
+      ),
+    ).toEqual(["1.1", "1.2"]);
+    expect(
+      scanDispatchMarkers(
+        `[OPSX WORKER DISPATCH task=${encodeURIComponent("1.1")}] repeated [OPSX WORKER DISPATCH task=${encodeURIComponent("1.1")}]`,
+      ),
+    ).toEqual(["1.1"]);
+  });
+});
+
+describe("registration surface", () => {
+  test("no batch registration helper is exported any more", async () => {
+    const mod = (await import("../src/report-tools.ts")) as Record<
+      string,
+      unknown
+    >;
+    expect(mod.registerReportTools).toBeUndefined();
   });
 
   test("every tool carries a parameter schema and a description", () => {

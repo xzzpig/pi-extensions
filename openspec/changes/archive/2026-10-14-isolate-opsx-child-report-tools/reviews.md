@@ -1,0 +1,56 @@
+# Plan review record
+
+Projected from `.opsx-plan-review.jsonl` (append-only).
+
+## Gap analysis — 2026-10-04T20:32:55.464Z
+
+只读分析确认角色专用子扩展接缝可复用，用户要求无直接矛盾；报告包含 9 项源码支持的缺口。四个高影响问题涉及目标焦点、冷恢复门控、前台失败工作流的证据可达性与非 error 任务拒绝；另需收敛日志完整性、版本兼容、资源成本和异步通知顺序。分析未修改文件，未运行实现测试。
+
+- G1：readGoalBaseSummaries/readGoals 只有 id、status、objective，没有目标焦点。需要确定权威只读焦点来源、焦点未知的处理，以及报告 flush 期间切换焦点的行为。
+- G2：peer 版本为 \*，原生 events.jsonl/status.json 是私有产物。必须明确支持的生命周期/数据版本及不兼容诊断，不能仅靠仓库 HEAD 的 fixture 声称兼容。
+- G3：增量读取与零轮询没有限定读取、未完成行、配对状态、receipt 历史和分支扫描的成本；需要明确资源边界及 fs.watch 失败处理。
+- G4：每运行实时日志监听与持久化重放可能扩大范围。应减少第二套观察器，只保留报告交接和已有行为所必需的接缝，不新增通用 transport/provider 框架。
+- G5：activeImplementFlow/activePlanSession 是命令创建的进程内 Map。现有恢复只提示并重装 auditor，不恢复完成门；必须在恢复报告前显式重绑定当前分支的流程与目标，验证冷重启仍受门控。
+- G6：前台失败工作流的 Details.results 在 finalizeToolResult 抛错时丢失，foreground-complete 不提供 messages。必须指定真实可用证据来源，或者对证据不可取得明确 fail-closed；测试必须经过真实工具边界。
+- G7：原生诊断日志写入是 best-effort，可能静默漏掉后续失败上报。完整行和没有截断标记不能证明完整性，不足以保证最后一次失败不能被早先成功掩盖。
+- G8：goal-x 的单项/批量逻辑拒绝不一定带 isError。必须通过真实状态变更确定成功，不得仅凭 !event.isError 发布 task_completed；测试缺少 evidence、子任务未完成、禁用任务等原生拒绝。
+- G9：原生后台 notifier 会先唤醒主会话，再发 async-complete。完成门不能只等已经开始的日志读取；需确定性覆盖通知先到、完成事件迟到及有界等待/读取行为。
+
+## Plan review verdict — round 1 — REJECT — 2026-10-04T20:33:14.445Z
+
+第一轮只读计划审查 REJECT：工具隔离接缝、任务起点与命令足够具体，但三个源码/生命周期不匹配阻止按现方案完整执行。此前无计划审查裁决；本轮提出三个新阻塞项。先修订计划并重审，不能进入审批或实现。
+
+- Blocker: D6/task 4.2 不能用 readGoals/readGoalBaseSummaries 判断目标焦点，该接口只返回所有目标的 id/status/objective。需要明确权威焦点读取接缝、未知焦点行为，并测试完成前及 flush 期间切换焦点，保持普通目标不受影响。
+- Blocker: D5/task 3.2 只恢复 receipts，未重建 activeImplementFlow/activePlanSession 的进程内状态。重启后接收器无活动流程，而完成门会直接跳过。需要当前分支/目标的显式恢复绑定和冷重启门控集成测试。
+- Blocker: D3 的前台失败工作流证据保留保证不成立：finalizeToolResult 抛出普通 Error 丢弃部分 Details.results，foreground-complete 也没有 messages。需要真实可访问的证据路径或明确 fail-closed 不可用边界，并通过实际工具边界验证而非只造内部结果 fixture。
+
+## Plan review verdict — round 2 — ITERATE — 2026-10-05T08:32:24.907Z
+
+第二轮只读审查通过实际 report_plan_review 成功工具结果确认 ITERATE，零 blocking issues；第一轮三个阻塞均已解决：权威分支焦点取代 summaries、冷重启先恢复流程/实际目标/完成门绑定、失败前台 Details 不可取得时明确 fail-closed 且经真实工具边界验收。尚需两处 minor 定点修订：public shared-types 并未导出 AsyncStatus 或生命周期常量，应使用本包受支持的 v3 最小结构/运行时校验及现有公开 preflight 协议字段；D6 指定的 goal-x helper 自身会维护缓存、外部 root 元数据和派生快照，应明确允许其既有非目标状态维护，但禁止本包主动修改 peer 缓存及 goal/focus/task，并同步 task 3.1 验收。17 项任务有明确起点与命令，未发现新阻塞。本次未修改实现、未运行实现测试，不代表用户批准。
+
+## Plan review verdict — round 3 — OKAY — 2026-10-05T08:57:04.831Z
+
+第三轮同一只读线程通过实际 report_plan_review 成功工具结果确认 OKAY，issues 为空。第二轮两项 minor 已解决：公开 shared-types 导出范围已纠正，D3/task 4.1 使用本包 v3 最小结构/运行时校验及现有公开 preflight 的协议字段，不修改 peer export；D6/task 3.1 明确目标/焦点/任务领域状态不变，允许既有 helper 缓存/元数据目录/派生快照维护，禁止本包直接修改 peer 状态或放宽沙箱。第一轮权威焦点、冷恢复完成门绑定、失败前台证据不可取得的三个阻塞已解决且未被撤销。计划17项任务有明确起点和验收命令，OpenSpec 严格校验及四产物 Prettier 检查通过，源码仍无 diff。本轮未实现或运行实现测试；请走正式用户批准，不把 reviewer OKAY 视为批准。
+
+## Plan approval — revise — 2026-10-05T08:57:04.834Z
+
+Requested via: pi-ask
+
+## Plan review verdict — round 4 — REJECT — 2026-10-05T09:55:41.999Z
+
+第四轮仅审用户新增完整真实 E2E，实际 report_plan_review 成功结果为 REJECT：两个新的源码支持阻塞是 agentHome 环境变量错误和 direct 事件断言冲突，另有 minor 要补清 wrapper 固定 cwd/session-dir 与实际 fixture、精确重启、direnv 工具环境的映射。原第三轮 OKAY 的生产设计及此前三个阻塞/两个 minor 解决结论保持，不重新打开。E2E 与确定性6.2分层、真实UI/规范证据/失败不伪报PASS及unborn窗口已有可用依据，但需定点修订后复核。仍未实现或执行真实 E2E。
+
+- Blocker: E0/design D9/task7 使用 runtime 不识别的 PI_AGENT_DIR，无法隔离 trust/auth/settings。统一为绝对 PI_CODING_AGENT_DIR，显式设置本次 PI_SUBAGENTS_TEMP_ROOT，并核对真实主/子 agentDir 与 native 数据路径均在临时根；不改 peer 或放宽沙箱。
+- Blocker: E7/task7.5 错把 ordinary 与 opsx direct 都要求无 opsx 完成投影，和保留的 D7/spec/实际实现冲突。ordinary 不投影 opsx 完成；direct 无 worker receipt 要求，但实际转换后应保留 mode=direct 且归属正确的 taskTicked/task_completed。
+
+## Plan review verdict — round 5 — OKAY — 2026-10-05T10:23:37.943Z
+
+第五轮同一只读线程的实际 report_plan_review 成功结果为 OKAY，issues 为空。新增 E2E 的两个阻塞及一个 minor 均已解决：E0/D9/task7.1 使用绝对 PI_CODING_AGENT_DIR/PI_SUBAGENTS_TEMP_ROOT/PI_GOAL_ROOT 并验证实际主/子配置和 native 路径；E7/task7.5 区分 ordinary 无 opsx 投影和 direct 无 worker receipt 前提、保留其正确归属的 mode=direct 完成事件；wrapperEnv 即 fixture，首次初始化在清空后，固定 sessions/entries、direnv host 工具环境、owned 标记及 manifest 精确重启明确，冷重启不再次 start。此前已 OKAY 的生产设计和已解决问题保持。五计划文档格式及 OpenSpec 严格校验通过，23项任务全部未勾，源码无 diff。本轮未实现或运行真实 E2E，请重新走用户正式批准，不将 reviewer OKAY 当作授权。
+
+## Plan approval — approved — 2026-10-05T10:23:37.946Z
+
+Requested via: pi-ask
+
+## Delegation usage (total)
+
+input 0, output 0, cacheRead 0, cacheWrite 0, turns 0

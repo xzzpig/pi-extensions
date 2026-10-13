@@ -25,6 +25,21 @@ import {
   startImplementFlow,
 } from "../src/implement-command.ts";
 import { assembleOpsxObjective } from "../src/objective.ts";
+import {
+  CHILD_REPORT_RECEIPT_ENTRY,
+  CHILD_REPORT_RECEIPT_VERSION,
+  CHILD_REPORT_RUN_ENTRY,
+  CHILD_REPORT_RUN_VERSION,
+  childReportFlowId,
+  rebuildChildReportFlow,
+  resetChildReportIngestionForTests,
+} from "../src/child-report-ingestion.ts";
+import {
+  FLOW_BINDING_VERSION,
+  readFlowBinding,
+  rebindImplementFlow,
+  writeFlowBinding,
+} from "../src/implement-command.ts";
 import type { GoalTaskLike } from "../src/task-sync.ts";
 
 const roots: string[] = [];
@@ -53,6 +68,8 @@ function fakeGoalXFacet(): GoalXModuleFacet {
 
 beforeEach(async () => {
   resetImplementFlowsForTests();
+  resetChildReportIngestionForTests();
+  seededReceipts.length = 0;
   await probeGoalXDependency(async () => fakeGoalXFacet());
 });
 
@@ -140,6 +157,60 @@ function ctx(
     sessionManager: { getSessionId: () => "s1" },
     ui: { select: options.select ?? (async () => undefined) },
   };
+}
+
+/** Receipts seeded in the current test, replayed on every seed call. */
+const seededReceipts: Array<{ customType: string; data: unknown }> = [];
+
+/**
+ * Seed a persisted ready receipt for a task, the way the ingestion layer
+ * records one from the worker's own run (design D3/D7).
+ *
+ * The tick gate reads this instead of any main-session report tool result:
+ * the report tools are not registered in the main session at all (D1), so the
+ * parent model has nothing to transcribe. Rebuilding replaces the flow's state,
+ * so every seeded receipt is replayed.
+ */
+function seedWorkerReceipt(
+  taskId: string,
+  changedFiles: string[],
+  verificationPassed = true,
+) {
+  const flowId = childReportFlowId("s1", "change-a");
+  const runId = `run-${taskId}`;
+  seededReceipts.push(
+    {
+      customType: CHILD_REPORT_RUN_ENTRY,
+      data: {
+        version: CHILD_REPORT_RUN_VERSION,
+        flowId,
+        runId,
+        stepIndex: 0,
+        agent: "opsx-worker",
+        taskId,
+        taskUnknown: false,
+      },
+    },
+    {
+      customType: CHILD_REPORT_RECEIPT_ENTRY,
+      data: {
+        version: CHILD_REPORT_RECEIPT_VERSION,
+        flowId,
+        runId,
+        stepIndex: 0,
+        agent: "opsx-worker",
+        taskId,
+        toolCallId: "c1",
+        attemptId: "a1",
+        changedFiles,
+        claims: "did it",
+        verificationPassed,
+        selfVerification: { command: "npm test", result: "12 passed" },
+        recordedAt: "2026-01-02T00:00:00.000Z",
+      },
+    },
+  );
+  rebuildChildReportFlow(flowId, seededReceipts);
 }
 
 describe("parseImplementArgs", () => {
@@ -717,15 +788,58 @@ describe("implement lifecycle observers (tasks 9.3/9.4)", () => {
 
   it("publishes task_completed for a completed goal task", async () => {
     const { pi, handlers, emitted } = createPi();
-    startedFlow(pi);
-    await lastToolResult(handlers)(
-      {
-        toolName: "update_goal_task",
-        input: { task_id: "1.2", status: "complete" },
-        isError: false,
-      } as never,
+    registerImplementFlow(pi as never, {
+      enterMode: async () => {},
+      installAuditor: () => {},
+      readGoals: async () => [
+        {
+          id: "goal-1",
+          status: "active",
+          objective: 'Implement the OpenSpec change "change-a".',
+        },
+      ],
+      readGoalTasks: async () => [{ id: "1.2", status: "pending" }],
+    });
+    startImplementFlow("s1", {
+      changeId: "change-a",
+      mode: "agent",
+      phase: "implementing",
+    });
+    // Bind the flow to goal-1 so the completion can be attributed.
+    for (const handler of handlers.get("tool_result") as Array<
+      (event: unknown, ctx: unknown) => unknown
+    >) {
+      await handler(
+        { toolName: "create_goal", input: {}, isError: false } as never,
+        ctx("/tmp") as never,
+      );
+    }
+    const tick = {
+      toolName: "update_goal_task",
+      toolCallId: "c1",
+      input: { task_id: "1.2", status: "complete" },
+      isError: false,
+      details: {
+        version: 3,
+        goal: {
+          id: "goal-1",
+          taskList: {
+            tasks: [
+              {
+                id: "1.2",
+                status: "complete",
+                completedAt: "2026-01-01T00:00:00.000Z",
+              },
+            ],
+          },
+        },
+      },
+    };
+    await handlers.get("tool_call")!.at(-1)!(
+      tick as never,
       ctx("/tmp") as never,
     );
+    await lastToolResult(handlers)(tick as never, ctx("/tmp") as never);
     expect(emitted.at(-1)?.data).toMatchObject({
       type: "task_completed",
       taskId: "1.2",
@@ -885,9 +999,35 @@ describe("tasks.md reconciliation after a tick (task 6.3)", () => {
   function tickEvent() {
     return {
       toolName: "update_goal_task",
+      toolCallId: "c1",
       input: { task_id: "1.1", status: "complete" },
       isError: false,
+      details: {
+        version: 3,
+        goal: {
+          id: "goal-1",
+          taskList: {
+            tasks: [
+              {
+                id: "1.1",
+                status: "complete",
+                completedAt: "2026-01-01T00:00:00.000Z",
+              },
+            ],
+          },
+        },
+      },
     } as never;
+  }
+
+  /** Capture the pre-state the result handler compares against (design D7). */
+  async function fireSnapshot(
+    handlers: Map<string, Array<(event: unknown, ctx: unknown) => unknown>>,
+    project: string,
+    event: unknown,
+  ) {
+    // The snapshot handler is registered after the tick gate.
+    await handlers.get("tool_call")!.at(-1)!(event, ctx(project) as never);
   }
 
   async function startedFlow(
@@ -923,6 +1063,259 @@ describe("tasks.md reconciliation after a tick (task 6.3)", () => {
     return handlers.get("tool_result")!.at(-1)!;
   }
 
+  /** The `task_completed` lifecycle events a run emitted. */
+  function completedEvents(emitted: Array<{ data: unknown }>) {
+    return emitted
+      .map((entry) => entry.data as { type?: string; taskId?: string })
+      .filter((data) => data.type === "task_completed");
+  }
+
+  it("does not publish when the task tool rejects without an error flag", async () => {
+    const { pi, commands, handlers, emitted } = createPi();
+    const project = makeProject();
+    await startedFlow(
+      pi,
+      commands,
+      handlers,
+      async () => [{ id: "1.1", title: "First task", status: "pending" }],
+      project,
+    );
+    emitted.length = 0;
+    // goal-x reports a logical rejection (missing evidence) with isError false;
+    // the returned record shows the task never reached complete.
+    const tick = {
+      toolName: "update_goal_task",
+      toolCallId: "c1",
+      input: { task_id: "1.1", status: "complete" },
+      isError: false,
+      details: {
+        version: 3,
+        goal: {
+          id: "goal-1",
+          taskList: { tasks: [{ id: "1.1", status: "pending" }] },
+        },
+      },
+    };
+    await fireSnapshot(handlers, project, tick);
+    await lastToolResult(handlers)(tick as never, ctx(project) as never);
+    expect(completedEvents(emitted)).toEqual([]);
+  });
+
+  it("does not publish for a task that was already complete", async () => {
+    const { pi, commands, handlers, emitted } = createPi();
+    const project = makeProject();
+    await startedFlow(
+      pi,
+      commands,
+      handlers,
+      async () => [{ id: "1.1", title: "First task", status: "complete" }],
+      project,
+    );
+    emitted.length = 0;
+    // The record shows it complete, but nothing transitioned in this request.
+    const tick = {
+      toolName: "update_goal_task",
+      toolCallId: "c1",
+      input: { task_id: "1.1", status: "complete" },
+      isError: false,
+      details: {
+        version: 3,
+        goal: {
+          id: "goal-1",
+          taskList: {
+            tasks: [
+              {
+                id: "1.1",
+                status: "complete",
+                completedAt: "2026-01-01T00:00:00.000Z",
+              },
+            ],
+          },
+        },
+      },
+    };
+    await fireSnapshot(handlers, project, tick);
+    await lastToolResult(handlers)(tick as never, ctx(project) as never);
+    expect(completedEvents(emitted)).toEqual([]);
+  });
+
+  it("does not publish any item of a batch when one item is rejected", async () => {
+    const { pi, commands, handlers, emitted } = createPi();
+    const project = makeProject();
+    await startedFlow(
+      pi,
+      commands,
+      handlers,
+      async () => [
+        { id: "1.1", title: "First task", status: "pending" },
+        { id: "1.2", title: "Second task", status: "pending" },
+      ],
+      project,
+    );
+    emitted.length = 0;
+    const tick = {
+      toolName: "update_goal_task",
+      toolCallId: "c1",
+      input: {
+        updates: [
+          { task_id: "1.1", status: "complete" },
+          { task_id: "1.2", status: "complete" },
+        ],
+      },
+      isError: false,
+      details: {
+        version: 3,
+        goal: {
+          id: "goal-1",
+          taskList: {
+            tasks: [
+              {
+                id: "1.1",
+                status: "complete",
+                completedAt: "2026-01-01T00:00:00.000Z",
+              },
+              { id: "1.2", status: "pending" },
+            ],
+          },
+        },
+      },
+    };
+    await fireSnapshot(handlers, project, tick);
+    await lastToolResult(handlers)(tick as never, ctx(project) as never);
+    // goal-x applies `updates` atomically, so one unmet item publishes none.
+    expect(completedEvents(emitted)).toEqual([]);
+  });
+
+  it("publishes every item of an all-complete batch", async () => {
+    const { pi, commands, handlers, emitted } = createPi();
+    const project = makeProject();
+    await startedFlow(
+      pi,
+      commands,
+      handlers,
+      async () => [
+        { id: "1.1", title: "First task", status: "pending" },
+        { id: "1.2", title: "Second task", status: "pending" },
+      ],
+      project,
+    );
+    emitted.length = 0;
+    const tick = {
+      toolName: "update_goal_task",
+      toolCallId: "c1",
+      input: {
+        updates: [
+          { task_id: "1.1", status: "complete" },
+          { task_id: "1.2", status: "complete" },
+        ],
+      },
+      isError: false,
+      details: {
+        version: 3,
+        goal: {
+          id: "goal-1",
+          taskList: {
+            tasks: [
+              {
+                id: "1.1",
+                status: "complete",
+                completedAt: "2026-01-01T00:00:00.000Z",
+              },
+              {
+                id: "1.2",
+                status: "complete",
+                completedAt: "2026-01-01T00:00:01.000Z",
+              },
+            ],
+          },
+        },
+      },
+    };
+    await fireSnapshot(handlers, project, tick);
+    await lastToolResult(handlers)(tick as never, ctx(project) as never);
+    expect(completedEvents(emitted).map((data) => data.taskId)).toEqual([
+      "1.1",
+      "1.2",
+    ]);
+  });
+
+  it("does not republish the same transition twice", async () => {
+    const { pi, commands, handlers, emitted } = createPi();
+    const project = makeProject();
+    await startedFlow(
+      pi,
+      commands,
+      handlers,
+      async () => [{ id: "1.1", title: "First task", status: "pending" }],
+      project,
+    );
+    emitted.length = 0;
+    const tick = {
+      toolName: "update_goal_task",
+      toolCallId: "c1",
+      input: { task_id: "1.1", status: "complete" },
+      isError: false,
+      details: {
+        version: 3,
+        goal: {
+          id: "goal-1",
+          taskList: {
+            tasks: [
+              {
+                id: "1.1",
+                status: "complete",
+                completedAt: "2026-01-01T00:00:00.000Z",
+              },
+            ],
+          },
+        },
+      },
+    };
+    await fireSnapshot(handlers, project, tick);
+    await lastToolResult(handlers)(tick as never, ctx(project) as never);
+    await fireSnapshot(handlers, project, tick);
+    await lastToolResult(handlers)(tick as never, ctx(project) as never);
+    expect(completedEvents(emitted)).toHaveLength(1);
+  });
+
+  it("does not project another goal's completion into the opsx flow", async () => {
+    const { pi, commands, handlers, emitted } = createPi();
+    const project = makeProject();
+    await startedFlow(
+      pi,
+      commands,
+      handlers,
+      async () => [{ id: "1.1", title: "First task", status: "pending" }],
+      project,
+    );
+    emitted.length = 0;
+    // A real transition, but in a different goal than this flow's own.
+    const tick = {
+      toolName: "update_goal_task",
+      toolCallId: "c1",
+      input: { task_id: "1.1", status: "complete" },
+      isError: false,
+      details: {
+        version: 3,
+        goal: {
+          id: "ordinary-goal",
+          taskList: {
+            tasks: [
+              {
+                id: "1.1",
+                status: "complete",
+                completedAt: "2026-01-01T00:00:00.000Z",
+              },
+            ],
+          },
+        },
+      },
+    };
+    await fireSnapshot(handlers, project, tick);
+    await lastToolResult(handlers)(tick as never, ctx(project) as never);
+    expect(completedEvents(emitted)).toEqual([]);
+  });
+
   it("stays silent when the goal tree matches tasks.md", async () => {
     const { pi, commands, handlers, sent } = createPi();
     const project = makeProject();
@@ -937,7 +1330,9 @@ describe("tasks.md reconciliation after a tick (task 6.3)", () => {
       project,
     );
     sent.length = 0;
-    await lastToolResult(handlers)(tickEvent(), ctx(project) as never);
+    const tick = tickEvent();
+    await fireSnapshot(handlers, project, tick);
+    await lastToolResult(handlers)(tick, ctx(project) as never);
     expect(sent.filter((m) => m.content.includes("OPSX TASK SYNC"))).toEqual(
       [],
     );
@@ -959,7 +1354,9 @@ describe("tasks.md reconciliation after a tick (task 6.3)", () => {
       project,
     );
 
-    await lastToolResult(handlers)(tickEvent(), ctx(project) as never);
+    const tick = tickEvent();
+    await fireSnapshot(handlers, project, tick);
+    await lastToolResult(handlers)(tick, ctx(project) as never);
     const notices = sent.filter((m) => m.content.includes("OPSX TASK SYNC"));
     expect(notices).toHaveLength(1);
     const notice = notices[0]!.content;
@@ -1142,20 +1539,9 @@ describe("enforced tick gate wiring (task 8.2)", () => {
       reason?: string;
     };
     expect(noReview.block).toBe(true);
-    expect(noReview.reason).toContain("has not been reviewed");
+    expect(noReview.reason).toContain("has no accepted worker report");
 
-    await toolResult(
-      {
-        toolName: "report_work",
-        input: {
-          taskId: "1.1",
-          changedFiles: ["src/a.ts"],
-          claims: "did it",
-          selfVerification: { command: "npm test", result: "12 passed" },
-        },
-      } as never,
-      ctx(project) as never,
-    );
+    seedWorkerReceipt("1.1", ["src/a.ts"]);
     expect(await toolCall(TICK, ctx(project) as never)).toEqual({});
   });
 
@@ -1173,6 +1559,18 @@ describe("enforced tick gate wiring (task 8.2)", () => {
         },
       ],
       readWindowDelta: async () => ["src/a.ts", "src/sneaky.ts"],
+      // The flow's own goal is focused, so the worker conditions apply.
+      readFocus: async () => ({
+        state: "known-focused",
+        goalId: "goal-1",
+        token: {
+          sessionId: "s1",
+          branchGeneration: null,
+          storageRoot: null,
+          focusEntryId: null,
+          goalId: "goal-1",
+        },
+      }),
     });
     await commands
       .get("opsx:implement")!
@@ -1193,18 +1591,7 @@ describe("enforced tick gate wiring (task 8.2)", () => {
       } as never,
       ctx(project) as never,
     );
-    await toolResult(
-      {
-        toolName: "report_work",
-        input: {
-          taskId: "1.1",
-          changedFiles: ["src/a.ts"],
-          claims: "did it",
-          selfVerification: { command: "npm test", result: "ok" },
-        },
-      } as never,
-      ctx(project) as never,
-    );
+    seedWorkerReceipt("1.1", ["src/a.ts"]);
 
     // An omitted file is a warning, not a block: the delta also carries
     // tool-runtime noise that no report can declare.
@@ -1234,18 +1621,7 @@ describe("enforced tick gate wiring (task 8.2)", () => {
       } as never,
       ctx(project) as never,
     );
-    await toolResult(
-      {
-        toolName: "report_work",
-        input: {
-          taskId: "1.1",
-          changedFiles: ["src/a.ts"],
-          claims: "did it",
-          selfVerification: { command: "npm test", result: "ok" },
-        },
-      } as never,
-      ctx(project) as never,
-    );
+    seedWorkerReceipt("1.1", ["src/a.ts"]);
     expect(await toolCall(TICK, ctx(project) as never)).toEqual({});
   });
 
@@ -1263,18 +1639,7 @@ describe("enforced tick gate wiring (task 8.2)", () => {
       } as never,
       ctx(project) as never,
     );
-    await toolResult(
-      {
-        toolName: "report_work",
-        input: {
-          taskId: "1.1",
-          changedFiles: ["src/a.ts"],
-          claims: "did it",
-          selfVerification: { command: "npm test", result: "ok" },
-        },
-      } as never,
-      ctx(project) as never,
-    );
+    seedWorkerReceipt("1.1", ["src/a.ts"]);
     expect(await toolCall(TICK, ctx(project) as never)).toEqual({});
   });
 
@@ -1291,6 +1656,327 @@ describe("enforced tick gate wiring (task 8.2)", () => {
       .handler("--direct change-a", ctx(project) as never);
     const toolCall = handlers.get("tool_call")![0]!;
     expect(await toolCall(TICK, ctx(project) as never)).toEqual({});
+  });
+
+  it("gates every complete item of an atomic updates batch", async () => {
+    const { pi, commands, handlers } = createPi();
+    const project = makeProject();
+    await setupAgent(pi, commands, project);
+    const toolCall = handlers.get("tool_call")![0]!;
+    const toolResult = handlers.get("tool_result")!.at(-1)!;
+
+    for (const taskId of ["1.1", "1.2"]) {
+      await toolResult(
+        {
+          toolName: "subagent",
+          input: {
+            agent: "opsx-worker",
+            prompt: `[OPSX WORKER DISPATCH task=${taskId}]`,
+          },
+        } as never,
+        ctx(project) as never,
+      );
+    }
+    // Only 1.1 has an accepted report so far.
+    seedWorkerReceipt("1.1", ["src/a.ts"]);
+
+    const batch = {
+      toolName: "update_goal_task",
+      input: {
+        updates: [
+          { task_id: "1.1", status: "complete" },
+          { task_id: "1.2", status: "complete" },
+        ],
+      },
+    };
+    const blocked = (await toolCall(batch, ctx(project) as never)) as {
+      block?: boolean;
+      reason?: string;
+    };
+    // The batch is atomic, so one unmet condition blocks the whole request
+    // instead of letting a partial batch land.
+    expect(blocked.block).toBe(true);
+    expect(blocked.reason).toContain("1.2");
+
+    seedWorkerReceipt("1.2", ["src/a.ts"]);
+    expect(await toolCall(batch, ctx(project) as never)).toEqual({});
+  });
+
+  it("does not gate non-complete items in an updates batch", async () => {
+    const { pi, commands, handlers } = createPi();
+    const project = makeProject();
+    await setupAgent(pi, commands, project);
+    const toolCall = handlers.get("tool_call")![0]!;
+    // Starting or skipping a task is not a completion; only `complete` items
+    // are gated, so this must pass straight through.
+    expect(
+      await toolCall(
+        {
+          toolName: "update_goal_task",
+          input: {
+            updates: [
+              { task_id: "1.1", status: "start" },
+              { task_id: "1.2", status: "skipped", reason: "n/a" },
+            ],
+          },
+        },
+        ctx(project) as never,
+      ),
+    ).toEqual({});
+  });
+
+  /**
+   * An opsx agent flow bound to its goal, with an injected focus reader.
+   *
+   * The goal id only exists after `create_goal` returns, so the flow is bound
+   * the way the real agent binds it. `focusReads` is returned so a test can
+   * prove the focus branch actually ran instead of being skipped because the
+   * flow had no goal.
+   */
+  async function setupBoundAgentWithFocus(
+    pi: unknown,
+    commands: Map<
+      string,
+      { handler: (a: string, c: unknown) => Promise<void> }
+    >,
+    handlers: Map<string, Array<(e: unknown, c: unknown) => unknown>>,
+    project: string,
+    readFocus: () => Promise<Record<string, unknown>>,
+  ): Promise<{ focusReads: () => number }> {
+    let focusReads = 0;
+    registerImplementFlow(pi as never, {
+      enterMode: async () => {},
+      installAuditor: () => {},
+      readGoals: async () => [
+        {
+          id: "goal-1",
+          status: "active",
+          objective: 'Implement the OpenSpec change "change-a".',
+        },
+      ],
+      readFocus: (async () => {
+        focusReads += 1;
+        return readFocus();
+      }) as never,
+    });
+    await commands
+      .get("opsx:implement")!
+      .handler("--agent change-a", ctx(project) as never);
+    for (const handler of handlers.get("tool_result") ?? []) {
+      await handler(
+        { toolName: "create_goal", input: {} } as never,
+        ctx(project) as never,
+      );
+    }
+    return { focusReads: () => focusReads };
+  }
+
+  it("refuses when the focused goal cannot be determined", async () => {
+    const { pi, commands, handlers } = createPi();
+    const project = makeProject();
+    const { focusReads } = await setupBoundAgentWithFocus(
+      pi,
+      commands,
+      handlers,
+      project,
+      async () => ({
+        state: "unknown",
+        reason: "the focus format is unrecognized",
+        token: {
+          sessionId: "s1",
+          branchGeneration: null,
+          storageRoot: null,
+          focusEntryId: null,
+          goalId: null,
+        },
+      }),
+    );
+    const toolCall = handlers.get("tool_call")![0]!;
+    const decision = (await toolCall(TICK, ctx(project) as never)) as {
+      block?: boolean;
+      reason?: string;
+    };
+    // The branch really ran, so this is not passing for the wrong reason.
+    expect(focusReads()).toBeGreaterThan(0);
+    // An undecidable focus must never be guessed into an allow.
+    expect(decision.block).toBe(true);
+    expect(decision.reason).toContain("cannot be determined");
+  });
+
+  it("does not apply worker conditions to a different focused goal", async () => {
+    const { pi, commands, handlers } = createPi();
+    const project = makeProject();
+    const { focusReads } = await setupBoundAgentWithFocus(
+      pi,
+      commands,
+      handlers,
+      project,
+      async () => ({
+        state: "known-focused",
+        goalId: "ordinary-goal",
+        token: {
+          sessionId: "s1",
+          branchGeneration: null,
+          storageRoot: null,
+          focusEntryId: null,
+          goalId: "ordinary-goal",
+        },
+      }),
+    );
+    const toolCall = handlers.get("tool_call")![0]!;
+    // No dispatch and no receipt, but this completion is not for the flow's
+    // own goal, so goal-x's own rules apply unchanged.
+    expect(await toolCall(TICK, ctx(project) as never)).toEqual({});
+    // The branch really ran, so this is not passing for the wrong reason.
+    expect(focusReads()).toBeGreaterThan(0);
+  });
+
+  it("re-binds a cold-started agent flow instead of skipping the gate", async () => {
+    const { pi, handlers } = createPi();
+    const project = makeProject();
+    registerImplementFlow(pi as never, {
+      enterMode: async () => {},
+      installAuditor: () => {},
+      readGoals: async () => [
+        {
+          id: "goal-1",
+          status: "active",
+          objective: 'Implement the OpenSpec change "change-a".',
+        },
+      ],
+      // The re-bound flow's own goal is focused, so the worker conditions
+      // apply rather than being skipped as an ordinary goal (design D6).
+      readFocus: async () => ({
+        state: "known-focused",
+        goalId: "goal-1",
+        token: {
+          sessionId: "s1",
+          branchGeneration: null,
+          storageRoot: null,
+          focusEntryId: null,
+          goalId: "goal-1",
+        },
+      }),
+    });
+    // No command ran, so the registry is empty — the restart case.
+    const branch = [
+      {
+        type: "custom",
+        id: "m1",
+        customType: "pi-openspec-x/mode-entered",
+        data: { changeId: "change-a", mode: "agent" },
+      },
+    ];
+    const coldCtx = {
+      cwd: project,
+      sessionManager: {
+        getSessionId: () => "s1",
+        getLeafId: () => "m1",
+        getBranch: () => branch,
+      },
+    };
+    const toolCall = handlers.get("tool_call")![0]!;
+    const decision = (await toolCall(TICK, coldCtx as never)) as {
+      block?: boolean;
+      reason?: string;
+    };
+    // The flow was re-bound from the branch, so the gate applies: a missing
+    // dispatch holds rather than silently allowing the tick.
+    expect(decision.block).toBe(true);
+    expect(decision.reason).toContain("no observed opsx-worker dispatch");
+  });
+
+  it("refuses a cold-started flow whose goal cannot be confirmed", async () => {
+    const { pi, handlers } = createPi();
+    const project = makeProject();
+    registerImplementFlow(pi as never, {
+      enterMode: async () => {},
+      installAuditor: () => {},
+      // goal-x reports no goal for this change, so the binding is unconfirmable.
+      readGoals: async () => [],
+    });
+    const branch = [
+      {
+        type: "custom",
+        id: "m1",
+        customType: "pi-openspec-x/mode-entered",
+        data: { changeId: "change-a", mode: "agent" },
+      },
+    ];
+    const coldCtx = {
+      cwd: project,
+      sessionManager: {
+        getSessionId: () => "s1",
+        getLeafId: () => "m1",
+        getBranch: () => branch,
+      },
+    };
+    const toolCall = handlers.get("tool_call")![0]!;
+    const decision = (await toolCall(TICK, coldCtx as never)) as {
+      block?: boolean;
+      reason?: string;
+    };
+    // An unconfirmable binding is an explicit refusal, never a silent pass.
+    expect(decision.block).toBe(true);
+    expect(decision.reason).toContain("no goal can be confirmed");
+  });
+
+  it("blocks when the focus moves while the report is refreshed", async () => {
+    const { pi, handlers } = createPi();
+    const project = makeProject();
+    let reads = 0;
+    registerImplementFlow(pi as never, {
+      enterMode: async () => {},
+      installAuditor: () => {},
+      readGoals: async () => [
+        {
+          id: "goal-1",
+          status: "active",
+          objective: 'Implement the OpenSpec change "change-a".',
+        },
+      ],
+      // The pre-flush read sees the flow's own goal focused; the re-read after
+      // the flush sees a different focus generation.
+      readFocus: async () => {
+        reads += 1;
+        return {
+          state: "known-focused",
+          goalId: "goal-1",
+          token: {
+            sessionId: "s1",
+            branchGeneration: reads > 1 ? "gen-7" : null,
+            storageRoot: null,
+            focusEntryId: null,
+            goalId: "goal-1",
+          },
+        };
+      },
+    });
+    const branch = [
+      {
+        type: "custom",
+        id: "m1",
+        customType: "pi-openspec-x/mode-entered",
+        data: { changeId: "change-a", mode: "agent" },
+      },
+    ];
+    const coldCtx = {
+      cwd: project,
+      sessionManager: {
+        getSessionId: () => "s1",
+        getLeafId: () => "m1",
+        getBranch: () => branch,
+      },
+    };
+    const toolCall = handlers.get("tool_call")![0]!;
+    const decision = (await toolCall(TICK, coldCtx as never)) as {
+      block?: boolean;
+      reason?: string;
+    };
+    expect(decision.block).toBe(true);
+    expect(decision.reason).toContain("changed while the worker report");
+    // Both reads really ran, so this is not the default branch passing.
+    expect(reads).toBeGreaterThan(1);
   });
 
   it("warns once when a task is dispatched repeatedly without progress", async () => {
@@ -1341,5 +2027,212 @@ describe("enforced tick gate wiring (task 8.2)", () => {
     const stalls = sent.filter((m) => m.content.includes("[OPSX STALLED]"));
     expect(stalls).toHaveLength(1);
     expect(stalls[0]!.content).toContain("1.1");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Design D5: durable flow binding and cold-start recovery
+// ---------------------------------------------------------------------------
+
+describe("flow binding and cold-start rebinding (design D5)", () => {
+  type Entry = {
+    type: string;
+    id: string;
+    customType?: string;
+    data?: unknown;
+  };
+
+  function modeEnteredEntry(
+    id: string,
+    changeId: string,
+    mode: "agent" | "direct",
+  ): Entry {
+    return {
+      type: "custom",
+      id,
+      customType: "pi-openspec-x/mode-entered",
+      data: { changeId, mode },
+    };
+  }
+
+  function modeExitedEntry(id: string): Entry {
+    return { type: "custom", id, customType: "pi-openspec-x/mode-exited" };
+  }
+
+  function bindingCtx(entries: Entry[], sessionId = "s1") {
+    return {
+      cwd: "/tmp/flow-binding",
+      sessionManager: {
+        getSessionId: () => sessionId,
+        getLeafId: () => entries[entries.length - 1]?.id ?? null,
+        getBranch: () => entries,
+      },
+    };
+  }
+
+  /** A pi whose appendEntry lands on the branch, like the host's does. */
+  function branchPi(entries: Entry[]) {
+    let counter = 0;
+    return {
+      appendEntry: (customType: string, data?: unknown) => {
+        counter += 1;
+        entries.push({
+          type: "custom",
+          id: `appended-${counter}`,
+          customType,
+          data,
+        });
+      },
+    };
+  }
+
+  const opsxGoal = (id: string, changeId = "change-a") => ({
+    id,
+    status: "active",
+    objective: `Implement the OpenSpec change "${changeId}".`,
+  });
+
+  it("writes a v1 binding and confirms it landed on the branch", () => {
+    const entries: Entry[] = [];
+    const result = writeFlowBinding(branchPi(entries), bindingCtx(entries), {
+      version: FLOW_BINDING_VERSION,
+      modeEnteredEntryId: "m1",
+      changeId: "change-a",
+      mode: "agent",
+      goalId: "g1",
+    });
+    expect(result.ok).toBe(true);
+    expect(readFlowBinding(bindingCtx(entries))).toEqual({
+      version: FLOW_BINDING_VERSION,
+      modeEnteredEntryId: "m1",
+      changeId: "change-a",
+      mode: "agent",
+      goalId: "g1",
+    });
+  });
+
+  it("refuses a binding that did not land on the branch", () => {
+    const entries: Entry[] = [];
+    const result = writeFlowBinding(
+      { appendEntry: () => {} },
+      bindingCtx(entries),
+      {
+        version: FLOW_BINDING_VERSION,
+        modeEnteredEntryId: "m1",
+        changeId: "change-a",
+        mode: "agent",
+        goalId: "g1",
+      },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("not confirmed");
+  });
+
+  it("a malformed binding payload is ignored rather than trusted", () => {
+    const entries: Entry[] = [
+      {
+        type: "custom",
+        id: "b1",
+        customType: "pi-openspec-x/flow-binding",
+        data: { version: 2, modeEnteredEntryId: "m1", goalId: "g1" },
+      },
+    ];
+    expect(readFlowBinding(bindingCtx(entries))).toBeUndefined();
+  });
+
+  it("rebinds from the branch and goal-x's records after the maps are cleared", async () => {
+    const entries: Entry[] = [modeEnteredEntry("m1", "change-a", "agent")];
+    writeFlowBinding(branchPi(entries), bindingCtx(entries), {
+      version: FLOW_BINDING_VERSION,
+      modeEnteredEntryId: "m1",
+      changeId: "change-a",
+      mode: "agent",
+      goalId: "g1",
+    });
+    resetImplementFlowsForTests();
+    expect(activeImplementFlow("s1")).toBeUndefined();
+
+    const result = await rebindImplementFlow(bindingCtx(entries) as never, {
+      readGoals: async () => [opsxGoal("g1")],
+    });
+    expect(result.ok).toBe(true);
+    expect(activeImplementFlow("s1")?.goalId).toBe("g1");
+    expect(activeImplementFlow("s1")?.mode).toBe("agent");
+    expect(activeImplementFlow("s1")?.modeEnteredEntryId).toBe("m1");
+    expect(activeImplementFlow("s1")?.bindingError).toBeUndefined();
+  });
+
+  it("refuses when the binding names a goal goal-x does not report", async () => {
+    const entries: Entry[] = [modeEnteredEntry("m1", "change-a", "agent")];
+    writeFlowBinding(branchPi(entries), bindingCtx(entries), {
+      version: FLOW_BINDING_VERSION,
+      modeEnteredEntryId: "m1",
+      changeId: "change-a",
+      mode: "agent",
+      goalId: "g1",
+    });
+    resetImplementFlowsForTests();
+
+    const result = await rebindImplementFlow(bindingCtx(entries) as never, {
+      readGoals: async () => [opsxGoal("other")],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("g1");
+    expect(activeImplementFlow("s1")).toBeUndefined();
+  });
+
+  it("refuses a branch flow whose goal cannot be confirmed at all", async () => {
+    const entries: Entry[] = [modeEnteredEntry("m1", "change-a", "agent")];
+    resetImplementFlowsForTests();
+    const result = await rebindImplementFlow(bindingCtx(entries) as never, {
+      readGoals: async () => [],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("no goal can be confirmed");
+    expect(activeImplementFlow("s1")).toBeUndefined();
+  });
+
+  it("recovers without a durable binding only when goal-x confirms ownership", async () => {
+    const entries: Entry[] = [modeEnteredEntry("m1", "change-a", "direct")];
+    resetImplementFlowsForTests();
+    const result = await rebindImplementFlow(bindingCtx(entries) as never, {
+      readGoals: async () => [opsxGoal("g1")],
+    });
+    expect(result.ok).toBe(true);
+    expect(activeImplementFlow("s1")?.goalId).toBe("g1");
+    expect(activeImplementFlow("s1")?.mode).toBe("direct");
+    // The weaker evidence is recorded, not hidden.
+    expect(activeImplementFlow("s1")?.bindingError).toContain(
+      "without a durable flow binding",
+    );
+  });
+
+  it("a branch whose flow already exited is not rebound", async () => {
+    const entries: Entry[] = [
+      modeEnteredEntry("m1", "change-a", "agent"),
+      modeExitedEntry("x1"),
+    ];
+    resetImplementFlowsForTests();
+    const result = await rebindImplementFlow(bindingCtx(entries) as never, {
+      readGoals: async () => [opsxGoal("g1")],
+    });
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.flow).toBeUndefined();
+    expect(activeImplementFlow("s1")).toBeUndefined();
+  });
+
+  it("an already-active flow is left untouched", async () => {
+    resetImplementFlowsForTests();
+    startImplementFlow("s1", {
+      changeId: "change-a",
+      mode: "direct",
+      phase: "implementing",
+    });
+    const result = await rebindImplementFlow(
+      bindingCtx([modeEnteredEntry("m1", "change-other", "agent")]) as never,
+      { readGoals: async () => [opsxGoal("g9", "change-other")] },
+    );
+    expect(result.ok).toBe(true);
+    expect(activeImplementFlow("s1")?.changeId).toBe("change-a");
   });
 });

@@ -100,6 +100,52 @@ export function endPlanFlow(sessionId: string): string | undefined {
   return session.changeId;
 }
 
+/**
+ * Restore a plan binding from the current branch (design D5).
+ *
+ * Read-only: it re-establishes which plan flow this session is in so the
+ * phase injection and status snapshots keep working after a restart. It never
+ * re-runs the command, re-approves a plan, or changes a mode.
+ */
+export function rebindPlanFlow(
+  sessionId: string,
+  ctx: { sessionManager?: { getBranch(): readonly unknown[] } },
+): { changeId: string } | undefined {
+  const existing = planSessions.get(sessionId);
+  if (existing) return { changeId: existing.changeId };
+
+  let branch: Array<{ customType?: string; data?: unknown }> = [];
+  try {
+    branch = (ctx.sessionManager?.getBranch() ?? []) as typeof branch;
+  } catch {
+    return undefined;
+  }
+  let changeId: string | undefined;
+  for (let index = branch.length - 1; index >= 0; index -= 1) {
+    const entry = branch[index];
+    if (entry?.customType === OPSX_ENTRY_TYPES.modeExited) break;
+    if (entry?.customType !== OPSX_ENTRY_TYPES.modeEntered) continue;
+    const data = entry.data as
+      | { changeId?: unknown; mode?: unknown }
+      | undefined;
+    if (data?.mode === "plan" && typeof data.changeId === "string") {
+      changeId = data.changeId;
+    }
+    break;
+  }
+  if (!changeId) return undefined;
+
+  planSessions.set(sessionId, {
+    changeId,
+    injected: new Set<string>(),
+    // Suppress the one-shot notices for a recovered flow: the user already saw
+    // them before the restart, and re-sending them would be noise.
+    degradedNotified: true,
+    reviewNotified: true,
+  });
+  return { changeId };
+}
+
 function defaultFetchStatus(
   changeId: string,
   options: OpenspecCliOptions,

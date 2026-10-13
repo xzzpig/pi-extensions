@@ -23,7 +23,7 @@
  * number of times; projection of the calls is a later concern.
  */
 import { Type } from "@earendil-works/pi-ai";
-import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { defineTool } from "@earendil-works/pi-coding-agent";
 
 export const REPORT_GAP_ANALYSIS_TOOL_NAME = "report_gap_analysis";
 export const REPORT_PLAN_REVIEW_TOOL_NAME = "report_plan_review";
@@ -304,14 +304,15 @@ export const reportWorkTool = defineTool({
   },
 });
 
-/** The three reporting tools, in registration order. */
+/**
+ * The three reporting tools, in registration order.
+ *
+ * These are pure definitions: nothing here registers them into a session.
+ * Each role's child-only extension (design D1,
+ * `src/child-report-extensions/<role>.ts`) wraps exactly one of them with the
+ * attempt metadata envelope and registers that. The main session registers
+ * none of them (design D1, spec "结构化裁决上报").
+ */
 export function createReportTools() {
   return [reportGapAnalysisTool, reportPlanReviewTool, reportWorkTool];
-}
-
-/** Register the three reporting tools into the running pi process. */
-export function registerReportTools(pi: ExtensionAPI): void {
-  for (const tool of createReportTools()) {
-    pi.registerTool(tool);
-  }
 }

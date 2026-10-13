@@ -4,9 +4,14 @@
  *
  * `worker-dispatch.ts` decides *whether* a tick is allowed; this module is what
  * makes the decision binding. It tracks the main session's dispatch traffic —
- * an `opsx-worker` dispatch, the `report_work` review that must follow it, and
- * the tick — and the `tool_call` handler uses it to block an
- * `update_goal_task` completion that has no review behind it.
+ * an `opsx-worker` dispatch and the tick — and the `tool_call` handler uses it
+ * to block an `update_goal_task` completion that has no accepted worker report
+ * behind it.
+ *
+ * The report itself is NOT the tracker's state any more. It arrives as the
+ * persisted ready receipt for the task (design D3/D7), because the report tool
+ * runs inside the child session and the parent never sees it as a tool result.
+ * The tracker keeps only what the gate needs for presence and stall detection.
  *
  * The gate is agent-only on purpose: direct mode has no dispatch, so there is
  * nothing to reconcile and the completion audit remains the only gate.
@@ -50,7 +55,6 @@ function looksFailed(result: string | undefined): boolean {
  */
 export class DispatchReviewTracker {
   private readonly records: DispatchRecord[] = [];
-  private readonly reports = new Map<string, WorkReportLike>();
 
   /**
    * Record an `opsx-worker` dispatch. `taskId` is undefined when the payload
@@ -67,11 +71,12 @@ export class DispatchReviewTracker {
   }
 
   /**
-   * Remember the main agent's `report_work` review and attach its changed-file
-   * count to the most recent dispatch it can belong to.
+   * Attach an accepted worker report to the most recent dispatch it can belong
+   * to. Only the changed-file count is retained, for stall detection: the
+   * report itself is the gate's input, never the tracker's stored evidence
+   * (design D7).
    */
-  rememberReport(report: WorkReportLike): void {
-    this.reports.set(report.taskId, report);
+  noteReceipt(report: WorkReportLike): void {
     for (let index = this.records.length - 1; index >= 0; index -= 1) {
       const record = this.records[index]!;
       if (record.taskId !== undefined && record.taskId !== report.taskId) {
@@ -88,11 +93,6 @@ export class DispatchReviewTracker {
     for (const record of this.records) {
       if (record.taskId === taskId) record.ticked = true;
     }
-  }
-
-  /** The observed `report_work` for a task, if the main agent submitted one. */
-  reportFor(taskId: string): WorkReportLike | undefined {
-    return this.reports.get(taskId);
   }
 
   /**
@@ -123,7 +123,6 @@ export class DispatchReviewTracker {
 
   reset(): void {
     this.records.length = 0;
-    this.reports.clear();
   }
 }
 
@@ -161,7 +160,7 @@ function filterTaskDelta(paths: readonly string[]): string[] {
  * The checks run in this order, and each one is unconditional:
  *
  * 1. a worker dispatch must have been observed;
- * 2. the dispatch must have been reviewed with `report_work`;
+ * 2. the dispatch must have produced an accepted worker report;
  * 3. the recorded verification must have run and passed;
  * 4. the report's files must reconcile with the window delta — a claimed file
  *    nobody changed is a false claim (hold), while a delta file the report
@@ -175,7 +174,15 @@ function filterTaskDelta(paths: readonly string[]): string[] {
  */
 export function evaluateTickGate(
   tracker: DispatchReviewTracker,
-  input: { taskId: string; observedChangedFiles?: string[] },
+  input: {
+    taskId: string;
+    /**
+     * The persisted ready receipt for this task, when one exists. It comes from
+     * the worker's own run, so the parent model never has to transcribe it.
+     */
+    receipt?: WorkReportLike | undefined;
+    observedChangedFiles?: string[];
+  },
 ): TickGateDecision {
   if (!tracker.dispatched(input.taskId)) {
     return {
@@ -184,11 +191,11 @@ export function evaluateTickGate(
     };
   }
 
-  const report = tracker.reportFor(input.taskId);
+  const report = input.receipt;
   if (!report) {
     return {
       allow: false,
-      reason: `The dispatch for task ${input.taskId} has not been reviewed. Call report_work with taskId "${input.taskId}", the changed files you verified, and the verification command and result, then tick.`,
+      reason: `The dispatch for task ${input.taskId} has no accepted worker report yet. The report is recorded automatically from the worker's own run once that run finishes successfully; if the worker failed or reported nothing, re-dispatch it for this task.`,
     };
   }
 

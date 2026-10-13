@@ -45,6 +45,13 @@ import {
 import { sendNotice, sessionKey } from "./command-util.ts";
 import { DispatchReviewTracker, evaluateTickGate } from "./dispatch-gate.ts";
 import {
+  childReportFlowId,
+  childReportReadyForTask,
+  childRunsForFlow,
+  refreshForCompletion,
+  type ChildReportRun,
+} from "./child-report-ingestion.ts";
+import {
   buildOpsxAuditorOverride,
   renderArchiveGuidance,
 } from "./final-gate.ts";
@@ -60,9 +67,11 @@ import {
 } from "./flow-recovery.ts";
 import {
   readArchivedGoals as readArchivedGoalsFromBase,
+  readFocusedGoalSnapshot,
   readGoalBaseSummaries,
   readGoalTaskTree,
   type ArchivedGoalRef,
+  type FocusedGoalSnapshot,
 } from "./goal-base.ts";
 import {
   emitSilentUiSpan,
@@ -127,6 +136,131 @@ interface ImplementFlow {
   /** goal-x goal id once the main agent creates it. */
   goalId?: string;
   phase: "starting" | "implementing" | "reviewing";
+  /**
+   * Entry id of the `modeEntered` entry that opened this flow. The flow key is
+   * `(parentSessionId, modeEnteredEntryId, changeId, mode, goalId?)`, so a
+   * later flow for the same change is a different flow (design D5).
+   */
+  modeEnteredEntryId?: string;
+  /**
+   * Set when the durable flow binding could not be written or verified. A flow
+   * with a damaged binding may not be used to authorize a task completion.
+   */
+  bindingError?: string;
+}
+
+/** Main-branch custom entry recording a flow's goal binding (design D5). */
+export const FLOW_BINDING_ENTRY = "pi-openspec-x/flow-binding";
+
+/** Version of the flow-binding payload. */
+export const FLOW_BINDING_VERSION = 1;
+
+/** The durable flow⇄goal binding this package writes and re-reads. */
+export interface FlowBinding {
+  version: typeof FLOW_BINDING_VERSION;
+  modeEnteredEntryId: string;
+  changeId: string;
+  mode: ImplementationMode;
+  goalId: string;
+}
+
+function asFlowBinding(value: unknown): FlowBinding | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (candidate.version !== FLOW_BINDING_VERSION) return undefined;
+  if (typeof candidate.modeEnteredEntryId !== "string") return undefined;
+  if (typeof candidate.changeId !== "string") return undefined;
+  if (candidate.mode !== "agent" && candidate.mode !== "direct") {
+    return undefined;
+  }
+  if (typeof candidate.goalId !== "string" || !candidate.goalId) {
+    return undefined;
+  }
+  return {
+    version: FLOW_BINDING_VERSION,
+    modeEnteredEntryId: candidate.modeEnteredEntryId,
+    changeId: candidate.changeId,
+    mode: candidate.mode,
+    goalId: candidate.goalId,
+  };
+}
+
+/** The branch entries the recovery reader consumes. */
+interface BranchEntryLike {
+  type?: string;
+  id?: string;
+  customType?: string;
+  data?: unknown;
+}
+
+function readBranch(ctx: {
+  sessionManager?: { getBranch(): readonly unknown[] };
+}): BranchEntryLike[] {
+  try {
+    return (ctx.sessionManager?.getBranch() ?? []) as BranchEntryLike[];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The current leaf id, when the host exposes it. Older fakes and non-session
+ * callers may not, and a missing id only means the flow key cannot include the
+ * entry id — never a reason to throw on a command path.
+ */
+function leafIdOf(ctx: {
+  sessionManager?: { getLeafId?(): string | null };
+}): string | undefined {
+  try {
+    return ctx.sessionManager?.getLeafId?.() ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Write the flow binding with a direct append and confirm it landed on the
+ * current branch. Unlike the best-effort display entries, a binding that did
+ * not persist must never be treated as if it had: the flow would then be
+ * re-bound from a guess on the next start.
+ */
+export function writeFlowBinding(
+  pi: Pick<ExtensionAPI, "appendEntry">,
+  ctx: { sessionManager?: { getBranch(): readonly unknown[] } },
+  binding: FlowBinding,
+): { ok: true } | { ok: false; reason: string } {
+  try {
+    pi.appendEntry(FLOW_BINDING_ENTRY, binding);
+  } catch (error) {
+    return {
+      ok: false,
+      reason: `the flow binding could not be written: ${describeError(error)}`,
+    };
+  }
+  const branch = readBranch(ctx);
+  const last = branch[branch.length - 1];
+  if (last?.customType !== FLOW_BINDING_ENTRY) {
+    return {
+      ok: false,
+      reason:
+        "the flow binding was not confirmed on the current branch; completion cannot be authorized",
+    };
+  }
+  return { ok: true };
+}
+
+/** The latest flow binding on the branch, if any. */
+export function readFlowBinding(ctx: {
+  sessionManager?: { getBranch(): readonly unknown[] };
+}): FlowBinding | undefined {
+  const branch = readBranch(ctx);
+  for (let index = branch.length - 1; index >= 0; index -= 1) {
+    const entry = branch[index];
+    if (entry?.customType !== FLOW_BINDING_ENTRY) continue;
+    const binding = asFlowBinding(entry.data);
+    if (binding) return binding;
+  }
+  return undefined;
 }
 
 const flows = new Map<string, ImplementFlow>();
@@ -195,12 +329,147 @@ export function resetImplementFlowsForTests(): void {
   trackers.clear();
   windowDeltaCache.clear();
   taskSyncWarned.clear();
+  taskPreStates.clear();
+  publishedTicks.clear();
+  trackerSeededFlows.clear();
 }
 
 export function activeImplementFlow(
   sessionId: string,
 ): ImplementFlow | undefined {
   return flows.get(sessionId);
+}
+
+/**
+ * Restore an implement flow from the current branch after a cold start
+ * (design D5).
+ *
+ * The flow registry is process memory, so a restart leaves it empty while the
+ * branch still holds a `modeEntered` entry and (usually) a `flow-binding`. The
+ * binding is checked against goal-x's real records — never guessed from "the
+ * only goal in the list" — and a flow whose binding cannot be confirmed is
+ * refused rather than silently allowed to complete without its gate.
+ */
+/**
+ * Seed the gate's dispatch observations from the durable child-report runs.
+ *
+ * The tracker is in-memory, so a restart leaves it empty even though the runs
+ * and their receipts were restored from the branch. `evaluateTickGate` checks
+ * the tracker *before* it looks at a receipt, so without this every completion
+ * is refused after a restart with "no observed opsx-worker dispatch" and the
+ * work already done can never be accepted (design D5: restore the gate Map,
+ * not just the flow).
+ */
+const trackerSeededFlows = new Set<string>();
+
+function seedTrackerFromRestoredRuns(
+  sessionId: string,
+  changeId: string,
+): void {
+  const key = `${sessionId}:${changeId}`;
+  if (trackerSeededFlows.has(key)) return;
+  const runs = childRunsForFlow(childReportFlowId(sessionId, changeId));
+  // No runs yet means the child-report flow has not been restored yet, NOT
+  // that there is nothing to restore: on `session_start` this flow rebinds
+  // before the ingestion layer rebuilds its runs. Leave it unseeded so the
+  // next call tries again instead of latching an empty tracker.
+  if (runs.length === 0) return;
+  trackerSeededFlows.add(key);
+  const tracker = trackerFor(sessionId);
+  for (const run of runs) {
+    // A run with no attributable task keeps the conservative meaning it had
+    // live: the dispatch counts for every task rather than deadlocking one.
+    tracker.noteDispatch(run.taskId);
+  }
+}
+
+export async function rebindImplementFlow(
+  ctx: ExtensionContext,
+  deps: {
+    readGoals: (ctx: ExtensionContext) => Promise<GoalBaseSummary[]>;
+  },
+): Promise<{ ok: true; flow?: ImplementFlow } | { ok: false; reason: string }> {
+  const sessionId = sessionKey(ctx);
+  const existing = flows.get(sessionId);
+  if (existing) return { ok: true, flow: existing };
+
+  const branch = readBranch(ctx);
+  let modeEntered:
+    | { id: string; changeId: string; mode: ImplementationMode }
+    | undefined;
+  for (let index = branch.length - 1; index >= 0; index -= 1) {
+    const entry = branch[index];
+    // A modeExited before any modeEntered means this branch's flow is over.
+    if (entry?.customType === OPSX_ENTRY_TYPES.modeExited) break;
+    if (entry?.customType !== OPSX_ENTRY_TYPES.modeEntered) continue;
+    const data = entry.data as
+      | { changeId?: unknown; mode?: unknown }
+      | undefined;
+    const mode =
+      data?.mode === "agent" || data?.mode === "direct" ? data.mode : undefined;
+    if (typeof data?.changeId === "string" && mode && entry.id) {
+      modeEntered = { id: entry.id, changeId: data.changeId, mode };
+    }
+    break;
+  }
+  if (!modeEntered) return { ok: true };
+
+  let goals: GoalBaseSummary[] = [];
+  try {
+    goals = await deps.readGoals(ctx);
+  } catch {
+    goals = [];
+  }
+  const goal = findOpsxGoals(goals).find(
+    (candidate) => candidate.changeId === modeEntered.changeId,
+  );
+
+  const binding = readFlowBinding(ctx);
+  const bound =
+    binding && binding.modeEnteredEntryId === modeEntered.id
+      ? binding
+      : undefined;
+
+  if (bound) {
+    if (!goal || goal.goalId !== bound.goalId) {
+      return {
+        ok: false,
+        reason: `The recorded flow binding for ${bound.changeId} names goal ${bound.goalId}, but goal-x reports ${goal?.goalId ?? "no matching goal"}. The completion gate cannot be restored; resume the goal with /goal-resume or start a new flow.`,
+      };
+    }
+    const flow: ImplementFlow = {
+      changeId: bound.changeId,
+      mode: bound.mode,
+      goalId: bound.goalId,
+      phase: "reviewing",
+      modeEnteredEntryId: modeEntered.id,
+    };
+    flows.set(sessionId, flow);
+    seedTrackerFromRestoredRuns(sessionId, flow.changeId);
+    return { ok: true, flow };
+  }
+
+  // No durable binding: recover only when goal-x itself can confirm ownership
+  // from the objective's opsx change marker, and mark the flow as recovered so
+  // its evidence is known to be weaker.
+  if (!goal) {
+    return {
+      ok: false,
+      reason: `An opsx implementation flow for ${modeEntered.changeId} is recorded on this branch, but no goal can be confirmed for it. Its tasks cannot be completed until the flow is re-established.`,
+    };
+  }
+  const flow: ImplementFlow = {
+    changeId: modeEntered.changeId,
+    mode: modeEntered.mode,
+    goalId: goal.goalId,
+    phase: "reviewing",
+    modeEnteredEntryId: modeEntered.id,
+    bindingError:
+      "recovered from the branch without a durable flow binding; the goal binding was confirmed from goal-x's records",
+  };
+  flows.set(sessionId, flow);
+  seedTrackerFromRestoredRuns(sessionId, flow.changeId);
+  return { ok: true, flow };
 }
 
 /**
@@ -383,6 +652,12 @@ export interface ImplementFlowDeps {
     ctx: ExtensionContext,
     goalId: string,
   ) => Promise<string[] | undefined>;
+  /**
+   * Injectable authoritative-focus reader for the tick gate (design D6);
+   * defaults to the goal-x focus snapshot. The worker conditions apply only
+   * when the focused goal is this flow's own goal.
+   */
+  readFocus?: (ctx: ExtensionContext) => Promise<FocusedGoalSnapshot>;
 }
 
 /**
@@ -404,6 +679,7 @@ type OpsxGoalRefLike = ReturnType<typeof findOpsxGoals>[number];
  */
 async function ensureAuditorInstalled(
   pi: Pick<ExtensionAPI, "sendMessage" | "appendEntry" | "events">,
+  ctx: { sessionManager?: { getBranch(): readonly unknown[] } },
   sessionId: string,
   goal: OpsxGoalRefLike,
   flow: ImplementFlow,
@@ -420,6 +696,27 @@ async function ensureAuditorInstalled(
     return;
   }
   updateImplementFlow(sessionId, { goalId: goal.goalId, phase: "reviewing" });
+  // Design D5: bind the flow to the goal it actually created, durably. A
+  // binding that cannot be written (or confirmed) marks the flow's evidence
+  // damaged, so a later completion cannot be authorized from a guess.
+  if (!flow.modeEnteredEntryId) {
+    updateImplementFlow(sessionId, {
+      bindingError:
+        "the flow has no modeEntered entry id, so it cannot be bound to its goal",
+    });
+  } else {
+    const binding = writeFlowBinding(pi, ctx, {
+      version: FLOW_BINDING_VERSION,
+      modeEnteredEntryId: flow.modeEnteredEntryId,
+      changeId: flow.changeId,
+      mode: flow.mode,
+      goalId: goal.goalId,
+    });
+    if (!binding.ok) {
+      updateImplementFlow(sessionId, { bindingError: binding.reason });
+      sendNotice(pi, IMPLEMENT_NOTICE_CUSTOM_TYPE, binding.reason);
+    }
+  }
   appendFlowEntry(pi, OPSX_ENTRY_TYPES.phaseChanged, {
     changeId: flow.changeId,
     phase: "reviewing",
@@ -468,7 +765,7 @@ function createImplementGoalToolResultHandler(
       (candidate) => candidate.changeId === flow.changeId,
     );
     if (!goal) return;
-    await ensureAuditorInstalled(pi, sessionId, goal, flow, deps);
+    await ensureAuditorInstalled(pi, ctx, sessionId, goal, flow, deps);
   };
 }
 
@@ -480,7 +777,6 @@ const SUBAGENT_TOOL_NAME = "subagent";
 const UPDATE_GOAL_TOOL_NAME = "update_goal";
 const UPDATE_GOAL_TASK_TOOL_NAME = "update_goal_task";
 const OPSX_WORKER_AGENT = "opsx-worker";
-const REPORT_WORK_TOOL_NAME = "report_work";
 const WORKER_DISPATCH_TASK_RE = /\[OPSX WORKER DISPATCH task=([^\]]+)\]/;
 const DISPATCH_TASK_RE = /\btask\s*[=:]?\s*(\d+(?:\.\d+)*)\b/i;
 
@@ -605,6 +901,83 @@ async function runTaskSyncCheck(
 }
 
 /**
+ * Each task's status before a completion request ran, keyed by toolCallId. The
+ * result handler needs the pre-state to tell a real transition from a task that
+ * was already complete (design D7).
+ */
+const taskPreStates = new Map<string, Map<string, string | undefined>>();
+
+/** `<goalId>:<taskId>:<completedAt>` keys already published, for de-duping. */
+const publishedTicks = new Set<string>();
+
+/**
+ * Read the v3 goal record out of an `update_goal_task` result. goal-x returns
+ * logical rejections (missing evidence, unfinished subtasks, a disabled or
+ * already-complete task) with `isError` false, so the returned record — not the
+ * absence of an error — is the only truthful verdict (design D7).
+ */
+function goalRecordFromDetails(details: unknown):
+  | {
+      id: string;
+      tasks: Map<string, { status?: string; completedAt?: string }>;
+    }
+  | undefined {
+  if (typeof details !== "object" || details === null) return undefined;
+  const envelope = details as Record<string, unknown>;
+  if (envelope.version !== 3) return undefined;
+  const goal = envelope.goal;
+  if (typeof goal !== "object" || goal === null) return undefined;
+  const record = goal as Record<string, unknown>;
+  const id = record.id;
+  if (typeof id !== "string" || id.length === 0) return undefined;
+  const tasks = new Map<string, { status?: string; completedAt?: string }>();
+  const taskList = record.taskList;
+  const list =
+    typeof taskList === "object" && taskList !== null
+      ? (taskList as Record<string, unknown>).tasks
+      : undefined;
+  if (!Array.isArray(list)) return { id, tasks };
+  for (const entry of list) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const task = entry as Record<string, unknown>;
+    if (typeof task.id !== "string") continue;
+    tasks.set(task.id, {
+      ...(typeof task.status === "string" ? { status: task.status } : {}),
+      ...(typeof task.completedAt === "string"
+        ? { completedAt: task.completedAt }
+        : {}),
+    });
+  }
+  return { id, tasks };
+}
+
+/**
+ * Capture each task's status before a completion request executes. Runs on
+ * `tool_call` so the result handler can compare against it (design D7).
+ */
+function createImplementTaskSnapshotHandler(
+  deps: { readGoalTasks?: ImplementFlowDeps["readGoalTasks"] } = {},
+): ExtensionHandler<ToolCallEvent, ToolCallEventResult> {
+  return async (event, ctx) => {
+    if (event.toolName !== UPDATE_GOAL_TASK_TOOL_NAME) return {};
+    const goalId = flows.get(sessionKey(ctx))?.goalId;
+    const readGoalTasks = deps.readGoalTasks;
+    if (!goalId || !readGoalTasks) return {};
+    let tasks: GoalTaskLike[] | undefined;
+    try {
+      tasks = await readGoalTasks(ctx, goalId);
+    } catch {
+      return {};
+    }
+    if (!tasks) return {};
+    const states = new Map<string, string | undefined>();
+    for (const task of tasks) states.set(task.id, task.status);
+    taskPreStates.set(event.toolCallId, states);
+    return {};
+  };
+}
+
+/**
  * Publish the lifecycle events whose source is the main agent's own tool
  * traffic (task 9.3): `task_dispatched` for an opsx-worker dispatch,
  * `task_completed` for a completed goal task, and `final_verdict` for the
@@ -639,27 +1012,44 @@ function createImplementLifecycleToolHandler(
       return;
     }
 
-    if (event.toolName === REPORT_WORK_TOOL_NAME) {
-      const report = workReportFrom(event.input);
-      if (report) trackerFor(sessionId).rememberReport(report);
-      return;
-    }
-
     if (event.toolName === UPDATE_GOAL_TASK_TOOL_NAME) {
-      if (event.isError) return;
-      if (stringField(event.input, "status") !== "complete") return;
-      const taskId = stringField(event.input, "task_id");
-      if (taskId) trackerFor(sessionId).noteTick(taskId);
-      appendFlowEntry(pi, OPSX_ENTRY_TYPES.taskTicked, {
-        changeId: flow.changeId,
-        ...(taskId ? { taskId } : {}),
-      });
-      publishLifecycle(events, {
-        type: "task_completed",
-        change: flow.changeId,
-        mode: flow.mode,
-        ...(taskId ? { taskId } : {}),
-      });
+      const requested = completeTaskIdsFrom(event.input);
+      const pre = taskPreStates.get(event.toolCallId);
+      taskPreStates.delete(event.toolCallId);
+      if (requested.length === 0) return;
+      // goal-x reports logical rejections without setting `isError`, so an
+      // absent error proves nothing. Only a task that actually moved from
+      // non-complete to complete, in this flow's own goal record, with a fresh
+      // `completedAt`, may be published as a completion (design D7).
+      const goal = goalRecordFromDetails(event.details);
+      if (!goal || !flow.goalId || goal.id !== flow.goalId) return;
+      if (!pre) return;
+      const confirmed: string[] = [];
+      for (const taskId of requested) {
+        const after = goal.tasks.get(taskId);
+        if (!after || after.status !== "complete" || !after.completedAt) return;
+        if (pre.get(taskId) === "complete") return;
+        const key = `${goal.id}:${taskId}:${after.completedAt}`;
+        if (publishedTicks.has(key)) return;
+        confirmed.push(taskId);
+      }
+      for (const taskId of confirmed) {
+        const completedAt = goal.tasks.get(taskId)?.completedAt;
+        if (completedAt) {
+          publishedTicks.add(`${goal.id}:${taskId}:${completedAt}`);
+        }
+        trackerFor(sessionId).noteTick(taskId);
+        appendFlowEntry(pi, OPSX_ENTRY_TYPES.taskTicked, {
+          changeId: flow.changeId,
+          taskId,
+        });
+        publishLifecycle(events, {
+          type: "task_completed",
+          change: flow.changeId,
+          mode: flow.mode,
+          taskId,
+        });
+      }
       // The tick was written back; reconcile the goal tree against tasks.md
       // once per flow (task 6.3: tasks.md wins, divergence warns).
       await runTaskSyncCheck(pi, sessionId, flow, ctx, deps);
@@ -678,38 +1068,95 @@ function createImplementLifecycleToolHandler(
   };
 }
 
-/** Structural read of a `report_work` payload; undefined when malformed. */
-function workReportFrom(
-  input: Record<string, unknown>,
-): WorkReportLike | undefined {
-  const taskId = stringField(input, "taskId");
-  const changedFiles = input.changedFiles;
-  if (!taskId || !Array.isArray(changedFiles)) return undefined;
-  const files = changedFiles.filter(
-    (entry): entry is string => typeof entry === "string",
-  );
-  const verification = input.selfVerification;
+/**
+ * Convert an accepted child run into the gate's work-report shape.
+ *
+ * Every field is read structurally and a missing one simply means the gate
+ * will hold: the receipt is produced by the child, never by the parent model.
+ */
+function workReportFromRun(run: ChildReportRun): WorkReportLike | undefined {
+  const report = run.report;
+  if (!run.taskId || !report) return undefined;
+  const changedFiles = Array.isArray(report.changedFiles)
+    ? report.changedFiles.filter(
+        (entry): entry is string => typeof entry === "string",
+      )
+    : [];
+  const verification = report.selfVerification;
   const selfVerification =
     typeof verification === "object" && verification !== null
       ? (verification as { command?: string; result?: string })
       : {};
   return {
-    taskId,
-    changedFiles: files,
-    claims: stringField(input, "claims") ?? "",
+    taskId: run.taskId,
+    changedFiles,
+    claims: typeof report.claims === "string" ? report.claims : "",
     selfVerification,
-    ...(typeof input.verificationPassed === "boolean"
-      ? { verificationPassed: input.verificationPassed }
+    ...(typeof report.verificationPassed === "boolean"
+      ? { verificationPassed: report.verificationPassed }
       : {}),
   };
 }
 
 /**
+ * Resolve the accepted worker report for a task (design D3/D7).
+ *
+ * The report is read back from the persisted ready receipt of the task's
+ * latest run, so the parent model never has to transcribe it and a failed or
+ * superseded run cannot be resurrected by a later completion request.
+ */
+export function rememberWorkerReportReceipt(
+  flowId: string,
+  taskId: string,
+): WorkReportLike | undefined {
+  const ready = childReportReadyForTask(flowId, taskId);
+  if (!ready.ready) return undefined;
+  return workReportFromRun(ready.run);
+}
+
+/**
+ * Every task a completion request would complete, from either payload shape.
+ *
+ * `update_goal_task` accepts a single `task_id`+`status` and an atomic
+ * `updates: [...]` batch. Both must be gated: a handler that reads only
+ * `task_id` lets the batch form through untouched (design D7).
+ */
+function completeTaskIdsFrom(input: Record<string, unknown>): string[] {
+  const single = stringField(input, "task_id");
+  if (single && stringField(input, "status") === "complete") return [single];
+  const updates = input.updates;
+  if (!Array.isArray(updates)) return [];
+  const ids: string[] = [];
+  for (const entry of updates) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const record = entry as Record<string, unknown>;
+    if (stringField(record, "status") !== "complete") continue;
+    const id = stringField(record, "task_id");
+    if (id) ids.push(id);
+  }
+  return ids;
+}
+
+/**
  * The enforced tick gate (task 8.2; spec MUST "未审查不得勾选"). Blocks an
  * `update_goal_task` completion in agent mode until the task's worker dispatch
- * has been reviewed with `report_work` and the review reconciles with the
- * window delta. Direct mode is ungated: it has no dispatch to review.
+ * has produced an accepted report that reconciles with the window delta. Direct
+ * mode is ungated: it has no dispatch to review.
  */
+/** Whether two focus reads describe the same focus generation (design D6). */
+function sameFocusToken(
+  before: FocusedGoalSnapshot["token"],
+  after: FocusedGoalSnapshot["token"],
+): boolean {
+  return (
+    before.sessionId === after.sessionId &&
+    before.branchGeneration === after.branchGeneration &&
+    before.storageRoot === after.storageRoot &&
+    before.focusEntryId === after.focusEntryId &&
+    before.goalId === after.goalId
+  );
+}
+
 function createImplementTickGateHandler(
   pi: Pick<ExtensionAPI, "sendMessage" | "appendEntry" | "events">,
   deps: {
@@ -717,16 +1164,60 @@ function createImplementTickGateHandler(
       ctx: ExtensionContext,
       goalId: string,
     ) => Promise<string[] | undefined>;
+    readFocus?: (ctx: ExtensionContext) => Promise<FocusedGoalSnapshot>;
+    /** Needed to re-confirm a cold-started flow's goal binding (design D5). */
+    readGoals?: (ctx: ExtensionContext) => Promise<GoalBaseSummary[]>;
   } = {},
 ): ExtensionHandler<ToolCallEvent, ToolCallEventResult> {
   return async (event, ctx) => {
     if (event.toolName !== UPDATE_GOAL_TASK_TOOL_NAME) return {};
-    if (stringField(event.input, "status") !== "complete") return {};
     const sessionId = sessionKey(ctx);
-    const flow = flows.get(sessionId);
+    let flow = flows.get(sessionId);
+    if (!flow) {
+      // A cold start leaves the flow registry empty while the branch still
+      // carries the flow's own entries. Re-bind before deciding: returning
+      // early here would silently skip the gate on every restart, and a flow
+      // that cannot be confirmed is refused rather than guessed (design D5).
+      const rebound = await rebindImplementFlow(ctx, {
+        readGoals: deps.readGoals ?? (async () => []),
+      });
+      if (!rebound.ok) return { block: true, reason: rebound.reason };
+      flow = rebound.flow;
+    }
     if (!flow || flow.mode !== "agent") return {};
-    const taskId = stringField(event.input, "task_id");
-    if (!taskId) return {};
+
+    // Worker conditions apply only to this flow's own goal (design D6): an
+    // ordinary or unrelated focused goal keeps its original behaviour, while a
+    // focus that cannot be determined is refused rather than guessed. A flow
+    // with no bound goal has nothing to compare against, so the worker
+    // conditions still apply to it.
+    let focusToken: FocusedGoalSnapshot["token"] | undefined;
+    if (deps.readFocus && flow.goalId !== undefined) {
+      let focus: FocusedGoalSnapshot;
+      try {
+        focus = await deps.readFocus(ctx);
+      } catch {
+        return {
+          block: true,
+          reason:
+            "The focused goal could not be read, so this completion cannot be authorized for an agent-mode flow.",
+        };
+      }
+      if (focus.state === "unknown") {
+        return {
+          block: true,
+          reason: `The focused goal cannot be determined (${focus.reason ?? "no reason given"}), so this completion cannot be authorized for an agent-mode flow.`,
+        };
+      }
+      // Only skip when the focus is positively known to be elsewhere.
+      if (focus.state !== "known-focused" || focus.goalId !== flow.goalId) {
+        return {};
+      }
+      focusToken = focus.token;
+    }
+
+    const taskIds = completeTaskIdsFrom(event.input);
+    if (taskIds.length === 0) return {};
 
     const goalId = flow.goalId;
     const readDelta = deps.readWindowDelta;
@@ -736,27 +1227,71 @@ function createImplementTickGateHandler(
             readDelta(ctx, goalId),
           )
         : undefined;
-    const decision = evaluateTickGate(trackerFor(sessionId), {
-      taskId,
-      ...(observedChangedFiles ? { observedChangedFiles } : {}),
-    });
-    if (decision.allow) {
-      for (const warning of decision.warnings) {
+
+    const warnings: string[] = [];
+    const flowId = childReportFlowId(sessionId, flow.changeId);
+    // The notifier can wake the session before the native completion event is
+    // delivered, so refresh the flow's runs before asking for a receipt. One
+    // bounded round; the gate never polls or sleeps (design D3).
+    refreshForCompletion(flowId);
+
+    // The refresh above awaited I/O, so the focus may have moved underneath it.
+    // Re-read the generation and refuse a request decided against a stale
+    // context rather than applying a stale verdict to the new focus (design D6).
+    if (deps.readFocus && focusToken) {
+      let after: FocusedGoalSnapshot;
+      try {
+        after = await deps.readFocus(ctx);
+      } catch {
+        return {
+          block: true,
+          reason:
+            "The focused goal could not be re-read after the report refresh, so this completion cannot be authorized.",
+        };
+      }
+      if (!sameFocusToken(focusToken, after.token)) {
+        return {
+          block: true,
+          reason:
+            "The focused goal changed while the worker report was being refreshed, so this completion must be re-submitted under the current focus.",
+        };
+      }
+    }
+    // The tracker is process state, so a restart leaves it empty while the
+    // branch still holds the receipts. Seed it here rather than only at rebind
+    // time: on `session_start` this flow may rebind before the child-report
+    // flow is restored, and the gate must never refuse work that was already
+    // reported (design D5).
+    seedTrackerFromRestoredRuns(sessionId, flow.changeId);
+    for (const taskId of taskIds) {
+      const receipt = rememberWorkerReportReceipt(flowId, taskId);
+      const decision = evaluateTickGate(trackerFor(sessionId), {
+        taskId,
+        ...(receipt ? { receipt } : {}),
+        ...(observedChangedFiles ? { observedChangedFiles } : {}),
+      });
+      if (!decision.allow) {
+        // goal-x applies `updates` as one atomic batch, so a single unmet
+        // condition blocks the whole request rather than letting a partial
+        // batch land (design D7).
         sendNotice(
           pi,
           IMPLEMENT_NOTICE_CUSTOM_TYPE,
-          `[OPSX TICK GATE] ${warning}`,
+          `[OPSX TICK GATE] ${decision.reason}`,
         );
+        return { block: true, reason: decision.reason };
       }
-      return {};
+      warnings.push(...decision.warnings);
     }
 
-    sendNotice(
-      pi,
-      IMPLEMENT_NOTICE_CUSTOM_TYPE,
-      `[OPSX TICK GATE] ${decision.reason}`,
-    );
-    return { block: true, reason: decision.reason };
+    for (const warning of warnings) {
+      sendNotice(
+        pi,
+        IMPLEMENT_NOTICE_CUSTOM_TYPE,
+        `[OPSX TICK GATE] ${warning}`,
+      );
+    }
+    return {};
   };
 }
 
@@ -904,7 +1439,7 @@ export function createImplementTurnEndHandler(
     }
 
     if (!goal) return;
-    await ensureAuditorInstalled(pi, sessionId, goal, flow, deps);
+    await ensureAuditorInstalled(pi, ctx, sessionId, goal, flow, deps);
   };
 }
 
@@ -972,6 +1507,14 @@ export function registerImplementFlow(
       );
       return scope.degraded ? undefined : scope.paths;
     });
+
+  const readFocus =
+    deps.readFocus ??
+    ((ctx: ExtensionContext) =>
+      readFocusedGoalSnapshot({
+        cwd: ctx.cwd,
+        sessionManager: ctx.sessionManager,
+      }));
 
   pi.registerCommand("opsx:implement", {
     description:
@@ -1115,6 +1658,12 @@ export function registerImplementFlow(
         changeId: parsed.changeId,
         mode,
       });
+      // The modeEntered entry id is part of the flow key (design D5): a second
+      // flow for the same change in the same session is a different flow.
+      const modeEnteredEntryId = leafIdOf(ctx);
+      if (modeEnteredEntryId) {
+        updateImplementFlow(sessionId, { modeEnteredEntryId });
+      }
       publishLifecycle(deps.events ?? pi.events, {
         type: "implement_started",
         change: parsed.changeId,
@@ -1147,5 +1696,16 @@ export function registerImplementFlow(
     }),
   );
   // The enforced "review before tick" gate (task 8.2).
-  pi.on("tool_call", createImplementTickGateHandler(pi, { readWindowDelta }));
+  pi.on(
+    "tool_call",
+    createImplementTickGateHandler(pi, {
+      readWindowDelta,
+      readFocus,
+      readGoals,
+    }),
+  );
+  // Pre-completion task snapshots, so the result handler can prove a real
+  // transition instead of trusting the absence of a tool error (design D7).
+  // Registered after the gate so the gate stays the first `tool_call` handler.
+  pi.on("tool_call", createImplementTaskSnapshotHandler({ readGoalTasks }));
 }

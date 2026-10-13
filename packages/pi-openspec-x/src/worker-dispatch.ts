@@ -62,7 +62,7 @@ function normalize(filePath: string): string {
 
 /**
  * Decide whether a task may be ticked. Holds (never ticks) when:
- * - no report was submitted;
+ * - no accepted worker report was recorded;
  * - the report claims files the diff does not contain (phantom work);
  * - the diff contains files the report omitted (unclaimed work);
  * - the verification did not run or did not pass.
@@ -77,7 +77,7 @@ export function decideTaskTick(
       kind: "hold",
       taskId,
       reason:
-        "No report_work was submitted; review the dispatch output before ticking.",
+        "No accepted worker report was recorded for this dispatch; let the worker run to completion, then tick.",
     };
   }
 

@@ -21,6 +21,7 @@
  * never collides with itself.
  */
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import type {
   ExtensionAPI,
   ExtensionHandler,
@@ -91,6 +92,27 @@ const SHARED_ISOLATION = {
 
 const reviewerProgressExtensionPath = resolveGoalAuditorProgressPath();
 
+/**
+ * Child-only report-tool extensions (design D1), one per reporting role.
+ *
+ * Absolute paths on purpose, exactly like the reviewer's goal-x extension: a
+ * child pi process runs in the audited workspace, not in this package's
+ * directory, so a relative specifier would not resolve. These entries are NOT
+ * listed in `package.json::pi.extensions` — the main session must never load
+ * them, and each registers exactly one tool for its own role.
+ */
+const CHILD_REPORT_EXTENSION_PATHS = {
+  "opsx-gap-analysis": fileURLToPath(
+    new URL("./child-report-extensions/gap-analysis.ts", import.meta.url),
+  ),
+  "opsx-plan-review": fileURLToPath(
+    new URL("./child-report-extensions/plan-review.ts", import.meta.url),
+  ),
+  "opsx-worker": fileURLToPath(
+    new URL("./child-report-extensions/worker.ts", import.meta.url),
+  ),
+};
+
 /** The four canonical runtime definitions, keyed by agent name. */
 export const OPSX_AGENT_DEFINITIONS: Record<
   OpsxAgentName,
@@ -108,6 +130,7 @@ export const OPSX_AGENT_DEFINITIONS: Record<
       "bash",
       REPORT_GAP_ANALYSIS_TOOL_NAME,
     ],
+    subagentOnlyExtensions: [CHILD_REPORT_EXTENSION_PATHS["opsx-gap-analysis"]],
     ...SHARED_ISOLATION,
     acceptanceRole: "read-only",
     thinking: "high",
@@ -116,6 +139,7 @@ export const OPSX_AGENT_DEFINITIONS: Record<
     description: "Read-only work-plan reviewer for the opsx planning flow",
     systemPrompt: PLAN_REVIEW_SYSTEM_PROMPT,
     tools: ["read", "grep", "find", "ls", REPORT_PLAN_REVIEW_TOOL_NAME],
+    subagentOnlyExtensions: [CHILD_REPORT_EXTENSION_PATHS["opsx-plan-review"]],
     ...SHARED_ISOLATION,
     acceptanceRole: "read-only",
     thinking: "high",
@@ -134,6 +158,7 @@ export const OPSX_AGENT_DEFINITIONS: Record<
       "ls",
       REPORT_WORK_TOOL_NAME,
     ],
+    subagentOnlyExtensions: [CHILD_REPORT_EXTENSION_PATHS["opsx-worker"]],
     ...SHARED_ISOLATION,
     acceptanceRole: "writer",
   },

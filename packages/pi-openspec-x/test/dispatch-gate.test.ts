@@ -27,17 +27,14 @@ function report(
 }
 
 describe("DispatchReviewTracker", () => {
-  it("records dispatches, reports and ticks", () => {
+  it("records dispatches, receipts and ticks", () => {
     const tracker = new DispatchReviewTracker();
     tracker.noteDispatch("1.1");
     expect(tracker.dispatched("1.1")).toBe(true);
-    expect(tracker.reportFor("1.1")).toBeUndefined();
 
-    tracker.rememberReport(report("1.1", ["src/a.ts", "src/b.ts"]));
-    expect(tracker.reportFor("1.1")?.changedFiles).toEqual([
-      "src/a.ts",
-      "src/b.ts",
-    ]);
+    // Only the changed-file count is retained, for stall detection: the report
+    // itself is the gate's input, not the tracker's stored evidence (D7).
+    tracker.noteReceipt(report("1.1", ["src/a.ts", "src/b.ts"]));
     expect(tracker.traces()).toEqual([
       { taskId: "1.1", changedFiles: 2, ticked: false },
     ]);
@@ -55,7 +52,7 @@ describe("DispatchReviewTracker", () => {
     // A tick or a reported change resets the stall.
     const progressed = new DispatchReviewTracker();
     progressed.noteDispatch("1.1");
-    progressed.rememberReport(report("1.1", ["src/a.ts"]));
+    progressed.noteReceipt(report("1.1", ["src/a.ts"]));
     progressed.noteDispatch("1.1");
     expect(progressed.stalled()).toEqual([]);
   });
@@ -70,21 +67,20 @@ describe("DispatchReviewTracker", () => {
     ]);
   });
 
-  it("attaches a report to the most recent dispatch of that task", () => {
+  it("attaches a receipt to the most recent dispatch of that task", () => {
     const tracker = new DispatchReviewTracker();
     tracker.noteDispatch(undefined);
-    tracker.rememberReport(report("1.1", ["src/a.ts"], "ok"));
-    expect(tracker.reportFor("1.1")?.changedFiles).toEqual(["src/a.ts"]);
+    tracker.noteReceipt(report("1.1", ["src/a.ts"], "ok"));
+    expect(tracker.traces()[0]!.taskId).toBe("1.1");
     expect(tracker.traces()[0]!.changedFiles).toBe(1);
   });
 
   it("resets all state", () => {
     const tracker = new DispatchReviewTracker();
     tracker.noteDispatch("1.1");
-    tracker.rememberReport(report("1.1", ["src/a.ts"]));
+    tracker.noteReceipt(report("1.1", ["src/a.ts"]));
     tracker.reset();
     expect(tracker.dispatched("1.1")).toBe(false);
-    expect(tracker.reportFor("1.1")).toBeUndefined();
     expect(tracker.traces()).toEqual([]);
   });
 });
@@ -99,22 +95,24 @@ describe("evaluateTickGate", () => {
     expect(decision.reason).toContain("no observed opsx-worker dispatch");
   });
 
-  it("holds when the dispatch was never reviewed", () => {
+  it("holds when the dispatch has no accepted worker report yet", () => {
     const tracker = new DispatchReviewTracker();
     tracker.noteDispatch("1.1");
     const decision = evaluateTickGate(tracker, { taskId: "1.1" });
     expect(decision.allow).toBe(false);
     if (decision.allow) throw new Error("expected a hold");
-    expect(decision.reason).toContain("has not been reviewed");
-    expect(decision.reason).toContain("report_work");
+    expect(decision.reason).toContain("has no accepted worker report");
+    // The guidance must not ask the parent model to transcribe the report.
+    expect(decision.reason).not.toContain("report_work");
   });
 
   it("allows a reviewed dispatch whose files match the window delta", () => {
     const tracker = new DispatchReviewTracker();
     tracker.noteDispatch("1.1");
-    tracker.rememberReport(report("1.1", ["src/a.ts"], "12 passed"));
+    const receipt = report("1.1", ["src/a.ts"], "12 passed");
     expect(
       evaluateTickGate(tracker, {
+        receipt,
         taskId: "1.1",
         observedChangedFiles: ["src/a.ts"],
       }),
@@ -124,8 +122,9 @@ describe("evaluateTickGate", () => {
   it("warns but does not hold when the delta has files the report omitted", () => {
     const tracker = new DispatchReviewTracker();
     tracker.noteDispatch("1.1");
-    tracker.rememberReport(report("1.1", ["src/a.ts"], "ok"));
+    const receipt = report("1.1", ["src/a.ts"], "ok");
     const decision = evaluateTickGate(tracker, {
+      receipt,
       taskId: "1.1",
       observedChangedFiles: ["src/a.ts", "src/extra.ts"],
     });
@@ -139,8 +138,9 @@ describe("evaluateTickGate", () => {
   it("ignores tool-runtime paths in the window delta", () => {
     const tracker = new DispatchReviewTracker();
     tracker.noteDispatch("1.1");
-    tracker.rememberReport(report("1.1", ["src/a.ts"], "ok"));
+    const receipt = report("1.1", ["src/a.ts"], "ok");
     const decision = evaluateTickGate(tracker, {
+      receipt,
       taskId: "1.1",
       observedChangedFiles: [
         "src/a.ts",
@@ -154,12 +154,13 @@ describe("evaluateTickGate", () => {
   it("treats build-output directories as task output, not noise", () => {
     const tracker = new DispatchReviewTracker();
     tracker.noteDispatch("1.1");
-    tracker.rememberReport(report("1.1", ["dist/bundle.js"], "ok"));
+    const receipt = report("1.1", ["dist/bundle.js"], "ok");
     // dist/, coverage/, node_modules/ and .cache/ are the agent write
     // allowlist: filtering them would turn a legitimate report into a phantom
     // claim and deadlock the task.
     expect(
       evaluateTickGate(tracker, {
+        receipt,
         taskId: "1.1",
         observedChangedFiles: ["dist/bundle.js", "coverage/lcov.info"],
       }),
@@ -174,8 +175,9 @@ describe("evaluateTickGate", () => {
   it("holds when the report claims a file nobody changed", () => {
     const tracker = new DispatchReviewTracker();
     tracker.noteDispatch("1.1");
-    tracker.rememberReport(report("1.1", ["src/a.ts", "src/ghost.ts"], "ok"));
+    const receipt = report("1.1", ["src/a.ts", "src/ghost.ts"], "ok");
     const decision = evaluateTickGate(tracker, {
+      receipt,
       taskId: "1.1",
       observedChangedFiles: ["src/a.ts"],
     });
@@ -187,8 +189,8 @@ describe("evaluateTickGate", () => {
   it("holds when the recorded verification failed", () => {
     const tracker = new DispatchReviewTracker();
     tracker.noteDispatch("1.1");
-    tracker.rememberReport(report("1.1", ["src/a.ts"], "1 test FAILED"));
-    const decision = evaluateTickGate(tracker, { taskId: "1.1" });
+    const receipt = report("1.1", ["src/a.ts"], "1 test FAILED");
+    const decision = evaluateTickGate(tracker, { receipt, taskId: "1.1" });
     expect(decision.allow).toBe(false);
     if (decision.allow) throw new Error("expected a hold");
     expect(decision.reason).toContain("verification failed");
@@ -197,13 +199,13 @@ describe("evaluateTickGate", () => {
   it("holds when the report carries no verification evidence at all", () => {
     const tracker = new DispatchReviewTracker();
     tracker.noteDispatch("1.1");
-    tracker.rememberReport({
+    const receipt = {
       taskId: "1.1",
       changedFiles: ["src/a.ts"],
       claims: "x",
       selfVerification: {},
-    });
-    const decision = evaluateTickGate(tracker, { taskId: "1.1" });
+    };
+    const decision = evaluateTickGate(tracker, { receipt, taskId: "1.1" });
     expect(decision.allow).toBe(false);
     if (decision.allow) throw new Error("expected a hold");
     expect(decision.reason).toContain("verification has not been run");
@@ -212,10 +214,8 @@ describe("evaluateTickGate", () => {
   it("does not treat a clean run as a failure", () => {
     const tracker = new DispatchReviewTracker();
     tracker.noteDispatch("1.1");
-    tracker.rememberReport(
-      report("1.1", ["src/a.ts"], "0 failures, 12 passed"),
-    );
-    expect(evaluateTickGate(tracker, { taskId: "1.1" })).toEqual({
+    const receipt = report("1.1", ["src/a.ts"], "0 failures, 12 passed");
+    expect(evaluateTickGate(tracker, { receipt, taskId: "1.1" })).toEqual({
       allow: true,
       warnings: [],
     });
@@ -223,30 +223,34 @@ describe("evaluateTickGate", () => {
 });
 
 describe("evaluateTickGate regression: verification is never bypassed", () => {
-  function trackerWith(
+  function gateWith(
     changedFiles: string[],
     selfVerification: { command?: string; result?: string },
+    input: { taskId: string; observedChangedFiles?: string[] },
   ) {
     const tracker = new DispatchReviewTracker();
     tracker.noteDispatch("1.1");
-    tracker.rememberReport({
-      taskId: "1.1",
-      changedFiles,
-      claims: "x",
-      selfVerification,
+    return evaluateTickGate(tracker, {
+      ...input,
+      receipt: {
+        taskId: "1.1",
+        changedFiles,
+        claims: "x",
+        selfVerification,
+      },
     });
-    return tracker;
   }
 
   // These four cases are the probe that exposed the bug: because the delta
   // usually contains a file the report did not declare, the "omitted" hold
   // came first and the verification checks never ran.
   it("holds a failed verification even when the delta has an extra file", () => {
-    const decision = evaluateTickGate(
-      trackerWith(["src/a.ts"], {
+    const decision = gateWith(
+      ["src/a.ts"],
+      {
         command: "npm test",
         result: "1 test FAILED",
-      }),
+      },
       { taskId: "1.1", observedChangedFiles: ["src/a.ts", "src/other.ts"] },
     );
     expect(decision.allow).toBe(false);
@@ -255,21 +259,26 @@ describe("evaluateTickGate regression: verification is never bypassed", () => {
   });
 
   it("holds a missing verification even when the delta has an extra file", () => {
-    const decision = evaluateTickGate(trackerWith(["src/a.ts"], {}), {
-      taskId: "1.1",
-      observedChangedFiles: ["src/a.ts", "src/other.ts"],
-    });
+    const decision = gateWith(
+      ["src/a.ts"],
+      {},
+      {
+        taskId: "1.1",
+        observedChangedFiles: ["src/a.ts", "src/other.ts"],
+      },
+    );
     expect(decision.allow).toBe(false);
     if (decision.allow) throw new Error("expected a hold");
     expect(decision.reason).toContain("verification has not been run");
   });
 
   it("allows a build-output task whose only change is under dist/", () => {
-    const decision = evaluateTickGate(
-      trackerWith(["dist/bundle.js"], {
+    const decision = gateWith(
+      ["dist/bundle.js"],
+      {
         command: "npm run build",
         result: "ok",
-      }),
+      },
       { taskId: "1.1", observedChangedFiles: ["dist/bundle.js"] },
     );
     // Build output is exactly what the agent write allowlist permits, so it
@@ -278,8 +287,9 @@ describe("evaluateTickGate regression: verification is never bypassed", () => {
   });
 
   it("does not hold on tool-runtime noise in the delta", () => {
-    const decision = evaluateTickGate(
-      trackerWith(["src/a.ts"], { command: "npm test", result: "12 passed" }),
+    const decision = gateWith(
+      ["src/a.ts"],
+      { command: "npm test", result: "12 passed" },
       {
         taskId: "1.1",
         observedChangedFiles: [
@@ -293,11 +303,12 @@ describe("evaluateTickGate regression: verification is never bypassed", () => {
   });
 
   it("still holds a phantom claim that sits next to an extra delta file", () => {
-    const decision = evaluateTickGate(
-      trackerWith(["src/a.ts", "src/ghost.ts"], {
+    const decision = gateWith(
+      ["src/a.ts", "src/ghost.ts"],
+      {
         command: "npm test",
         result: "ok",
-      }),
+      },
       { taskId: "1.1", observedChangedFiles: ["src/a.ts", "src/other.ts"] },
     );
     expect(decision.allow).toBe(false);
@@ -310,14 +321,14 @@ describe("evaluateTickGate: structured verdict wins over text", () => {
   it("trusts verificationPassed: true even when the result text looks failed", () => {
     const tracker = new DispatchReviewTracker();
     tracker.noteDispatch("1.1");
-    tracker.rememberReport({
+    const receipt = {
       taskId: "1.1",
       changedFiles: ["src/a.ts"],
       claims: "x",
       selfVerification: { command: "npm test", result: "1 test FAILED" },
       verificationPassed: true,
-    });
-    expect(evaluateTickGate(tracker, { taskId: "1.1" })).toEqual({
+    };
+    expect(evaluateTickGate(tracker, { receipt, taskId: "1.1" })).toEqual({
       allow: true,
       warnings: [],
     });
@@ -326,14 +337,14 @@ describe("evaluateTickGate: structured verdict wins over text", () => {
   it("trusts verificationPassed: false even with a clean-looking result", () => {
     const tracker = new DispatchReviewTracker();
     tracker.noteDispatch("1.1");
-    tracker.rememberReport({
+    const receipt = {
       taskId: "1.1",
       changedFiles: ["src/a.ts"],
       claims: "x",
       selfVerification: { command: "npm test", result: "12 passed" },
       verificationPassed: false,
-    });
-    const decision = evaluateTickGate(tracker, { taskId: "1.1" });
+    };
+    const decision = evaluateTickGate(tracker, { receipt, taskId: "1.1" });
     expect(decision.allow).toBe(false);
     if (decision.allow) throw new Error("expected a hold");
     expect(decision.reason).toContain("verification failed");
@@ -342,13 +353,13 @@ describe("evaluateTickGate: structured verdict wins over text", () => {
   it("still falls back to the text heuristic when the verdict is absent", () => {
     const tracker = new DispatchReviewTracker();
     tracker.noteDispatch("1.1");
-    tracker.rememberReport({
+    const receipt = {
       taskId: "1.1",
       changedFiles: ["src/a.ts"],
       claims: "x",
       selfVerification: { command: "npm test", result: "1 test FAILED" },
-    });
-    const decision = evaluateTickGate(tracker, { taskId: "1.1" });
+    };
+    const decision = evaluateTickGate(tracker, { receipt, taskId: "1.1" });
     expect(decision.allow).toBe(false);
   });
 });

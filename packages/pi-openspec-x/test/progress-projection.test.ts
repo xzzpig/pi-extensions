@@ -1,9 +1,13 @@
 /**
  * Tests for the subagent progress projection (task 9.2).
  */
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
-import { createProgressObserverHandler } from "../src/progress-observer.ts";
+import {
+  progressBoardFor,
+  recordChildReportProgress,
+  resetProgressObserverForTests,
+} from "../src/progress-observer.ts";
 
 import {
   projectProgress,
@@ -135,38 +139,65 @@ describe("progressUpdateFrom", () => {
   });
 });
 
-describe("createProgressObserverHandler", () => {
-  it("folds report-tool progress into a board entry per session", () => {
+describe("recordChildReportProgress", () => {
+  function recorder() {
     const appended: Array<{ customType: string; data?: unknown }> = [];
-    const pi = {
-      appendEntry(customType: string, data?: unknown) {
-        appended.push({ customType, data });
+    return {
+      appended,
+      pi: {
+        appendEntry(customType: string, data?: unknown) {
+          appended.push({ customType, data });
+        },
       },
     };
-    const handler = createProgressObserverHandler(pi as never);
-    const ctx = {
-      sessionManager: { getSessionId: () => "s1" },
-    };
-    handler(
-      {
-        toolName: "report_work",
-        input: { progress: { phase: "editing", percentage: 50 } },
-        isError: false,
-      } as never,
-      ctx as never,
-    );
-    handler(
-      {
-        toolName: "report_work",
-        input: { progress: { phase: "editing", percentage: 90 } },
-        isError: false,
-      } as never,
-      ctx as never,
-    );
-    // Same agent+phase folds into one row at the highest percentage.
+  }
+
+  beforeEach(() => {
+    resetProgressObserverForTests();
+  });
+
+  it("projects two real progress updates in order", () => {
+    const { appended, pi } = recorder();
+    const first = recordChildReportProgress(pi as never, "s1", {
+      toolName: "report_gap_analysis",
+      report: { progress: { phase: "analyzing", percentage: 40 } },
+    });
+    const second = recordChildReportProgress(pi as never, "s1", {
+      toolName: "report_plan_review",
+      report: { progress: { phase: "reviewing", percentage: 10 } },
+    });
+    expect(first).toBe(true);
+    expect(second).toBe(true);
     expect(appended).toHaveLength(2);
-    const board = appended.at(-1)?.data as { rows: unknown[] };
-    expect(board.rows).toEqual([
+    // Both rows survive, in first-seen order.
+    expect(progressBoardFor("s1")).toEqual([
+      {
+        agent: "opsx-gap-analysis",
+        phase: "analyzing",
+        label: "analyzing",
+        percentage: 40,
+      },
+      {
+        agent: "opsx-plan-review",
+        phase: "reviewing",
+        label: "reviewing",
+        percentage: 10,
+      },
+    ]);
+  });
+
+  it("folds a higher percentage for the same agent+phase into one row", () => {
+    const { appended, pi } = recorder();
+    recordChildReportProgress(pi as never, "s1", {
+      toolName: "report_work",
+      report: { progress: { phase: "editing", percentage: 50 } },
+    });
+    recordChildReportProgress(pi as never, "s1", {
+      toolName: "report_work",
+      report: { progress: { phase: "editing", percentage: 90 } },
+    });
+    expect(appended).toHaveLength(2);
+    expect(progressBoardFor("s1")).toEqual([
       {
         agent: "opsx-worker",
         phase: "editing",
@@ -176,30 +207,57 @@ describe("createProgressObserverHandler", () => {
     ]);
   });
 
-  it("ignores non-report tools, errors and reports without progress", () => {
-    const appended: Array<{ customType: string; data?: unknown }> = [];
-    const handler = createProgressObserverHandler({
-      appendEntry(customType: string, data?: unknown) {
-        appended.push({ customType, data });
-      },
-    } as never);
-    const ctx = { sessionManager: { getSessionId: () => "s1" } };
-    handler(
-      { toolName: "read", input: {}, isError: false } as never,
-      ctx as never,
-    );
-    handler(
-      {
+  it("a duplicate update is not appended again", () => {
+    const { appended, pi } = recorder();
+    const update = {
+      toolName: "report_work",
+      report: { progress: { phase: "editing", percentage: 50 } },
+    };
+    expect(recordChildReportProgress(pi as never, "s1", update)).toBe(true);
+    // Re-delivery of the same report must not grow the board.
+    expect(recordChildReportProgress(pi as never, "s1", update)).toBe(false);
+    expect(appended).toHaveLength(1);
+  });
+
+  it("ignores non-report tools and reports without progress", () => {
+    const { appended, pi } = recorder();
+    expect(
+      recordChildReportProgress(pi as never, "s1", {
+        toolName: "read",
+        report: { progress: { phase: "x", percentage: 1 } },
+      }),
+    ).toBe(false);
+    expect(
+      recordChildReportProgress(pi as never, "s1", {
         toolName: "report_work",
-        input: { progress: { phase: "x", percentage: 1 } },
-        isError: true,
-      } as never,
-      ctx as never,
-    );
-    handler(
-      { toolName: "report_work", input: {}, isError: false } as never,
-      ctx as never,
-    );
+        report: {},
+      }),
+    ).toBe(false);
+    expect(
+      recordChildReportProgress(pi as never, "s1", {
+        toolName: "report_work",
+        report: { progress: { phase: "", percentage: 10 } },
+      }),
+    ).toBe(false);
     expect(appended).toEqual([]);
+  });
+
+  it("boards are per session and touch nothing but progress entries", () => {
+    const { appended, pi } = recorder();
+    recordChildReportProgress(pi as never, "s1", {
+      toolName: "report_work",
+      report: { progress: { phase: "editing", percentage: 50 } },
+    });
+    recordChildReportProgress(pi as never, "s2", {
+      toolName: "report_work",
+      report: { progress: { phase: "verifying", percentage: 70 } },
+    });
+    expect(progressBoardFor("s1")).toHaveLength(1);
+    expect(progressBoardFor("s2")).toHaveLength(1);
+    expect(progressBoardFor("s1")[0]!.phase).toBe("editing");
+    // Progress never writes a task tick or an approval — display only.
+    for (const entry of appended) {
+      expect(entry.customType).toContain("progress");
+    }
   });
 });

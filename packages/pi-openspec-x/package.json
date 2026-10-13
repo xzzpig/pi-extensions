@@ -1,6 +1,6 @@
 {
   "name": "@xzzpig/pi-openspec-x",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "OpenSpec workflow for the pi coding agent: spec-driven planning and implementation via dedicated subagents, sandboxed /opsx:plan and /opsx:implement commands.",
   "keywords": [
     "pi-package",

@@ -58,9 +58,13 @@ fail-closed：pi-sandbox 缺失时，`/opsx:plan` 与代理实现态会被拒绝
 计划态与代理实现态的写收敛由 pi-sandbox 的受限 profile 强制（fail-closed）：越界写被沙箱层拒绝并给出原因，读取不受限；进入受限模式前插件发出的模式契约已预先指明可写范围并把写入指引收敛回 `openspec/`。
 
 - **`--direct` 主会话直实现**：不切角色、不收紧权限；按 `tasks.md` 顺序实现、自行验证、验证通过才勾选，终点同样接最终审查门。
-- **`--agent` 代理实现**：进入 `opsx-agent` 受限模式（源码只读、构建产物可写），逐任务派发全写权限的 `opsx-worker`。派发提示词固定六段（任务 / 预期产出 / 所需工具 / 必须做 / 禁止做 / 上下文）；派发返回后逐文件核对 diff 与 `report_work` 声明、运行验证，**通过才勾选 tasks.md**，并同步 goal 任务树。
+- **`--agent` 代理实现**：进入 `opsx-agent` 受限模式（源码只读、构建产物可写），逐任务派发全写权限的 `opsx-worker`。派发提示词固定六段（任务 / 预期产出 / 所需工具 / 必须做 / 禁止做 / 上下文），其中任务段必须带独立行的 `[OPSX WORKER DISPATCH task=<taskId>]` 标记（新派发与 resume 都要带）；派发返回后逐文件核对 diff 与 worker 报告声明、运行验证，**通过才勾选 tasks.md**，并同步 goal 任务树。
 
-  “未审查不得勾选”是**强制门**：插件监听 `subagent`（`agent=opsx-worker`）、`report_work` 与 `update_goal_task` 三类工具流量，在 `update_goal_task status=complete` 的 `tool_call` 阶段拦截——没有观测到派发、没有对应的 `report_work`、报告声明与窗口 delta 不一致（漏报或多报文件）、或记录的验证明显失败时，勾选被 block 并返回具体原因。因此代理模式下**必须先 `report_work`（taskId / changedFiles / 验证命令与结果）再勾选**。同一任务反复派发且既无报告也无改动会被判为空转并提示一次。门拦的是 goal 任务树镜像的 `update_goal_task`；直接以 bash/write 改 `tasks.md` 复选框本身不被硬拦，由「goal 任务树不完整 → goal-x 完成事务拒绝」兜底，最终语义一致。直实现模式不设此门（无派发可核）。
+  三个上报工具（`report_gap_analysis` / `report_plan_review` / `report_work`）**只对各自的子角色可见**：gap-analysis 只见前者、plan-review 只见中间、opsx-worker 只见后者；主会话与其他角色（含 opsx-reviewer）既没有这些工具，也不会有它们的使用指引。插件从子运行的原生结果与规范会话记录里**自动接收**报告并关联到任务，**不需要主模型转录**，也不存在 `review_work` 之类的主会话验收工具。
+
+  “未审查不得勾选”是**强制门**：插件监听 `subagent`（`agent=opsx-worker`）与 `update_goal_task` 两类工具流量，在 `update_goal_task status=complete` 的 `tool_call` 阶段拦截——没有观测到派发、派发没有对应的**已接收**报告、报告声明与窗口 delta 不一致（漏报或多报文件）、或记录的验证明显失败时，勾选被 block 并返回具体原因。因此代理模式下**先派发、等报告自动落定、再勾选**。同一任务反复派发且既无报告也无改动会被判为空转并提示一次。门拦的是 goal 任务树镜像的 `update_goal_task`；直接以 bash/write 改 `tasks.md` 复选框本身不被硬拦，由「goal 任务树不完整 → goal-x 完成事务拒绝」兜底，最终语义一致。直实现模式不设此门（无派发可核）。
+
+  诊断：证据不可用（子运行失败且未留下可读取的规范记录、会话未持久化、分支/焦点在读取期间变化）时该任务的勾选**保持阻塞**并说明原因，不会用旧报告放行；超出资源预算（活跃子项、会话大小、单行长度、报告字节、上报次数、会话树节点）时报告**明确标记为不可用于门控**，同样不放行，而不是截断后当成功。
 
 两种模式都以持久目标为执行底座：插件把 `tasks.md` 组装成 objective（`Steps` + `Boundaries`/`Don'ts` + `Verification contract:`）交给 goal-x 的 `create_goal`（代理模式 `sisyphus`，直实现模式普通 autoContinue），任务清单经 `set_goal_tasks` 单向镜像。`tasks.md` 是任务权威源，goal 任务树上的手工改动不回流。
 

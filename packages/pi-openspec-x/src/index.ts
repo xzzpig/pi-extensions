@@ -1,4 +1,7 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 
 import { loadOpsxConfig, type OpsxConfig } from "./config.ts";
 import {
@@ -15,6 +18,9 @@ import {
 } from "./dependencies.ts";
 import { createResourcesDiscoverHandler } from "./discover.ts";
 import { createOpsxRecoverySessionStartHandler } from "./goal-base.ts";
+import { readGoalBaseSummaries } from "./goal-base.ts";
+import { registerChildReportIngestion } from "./child-report-ingestion.ts";
+import { childReportFlowId } from "./child-report-ingestion.ts";
 import {
   registerOpsxAuditorResolver,
   buildOpsxAuditorOverride,
@@ -27,13 +33,17 @@ import {
 import {
   registerImplementFlow,
   activeImplementFlow,
+  rebindImplementFlow,
 } from "./implement-command.ts";
 import { createOpsxSessionStartHandler } from "./mode.ts";
-import { registerPlanFlow, activePlanSession } from "./plan-command.ts";
+import {
+  registerPlanFlow,
+  activePlanSession,
+  rebindPlanFlow,
+} from "./plan-command.ts";
 import { registerRollbackFlow } from "./rollback-command.ts";
 import { registerPlanGateTools } from "./plan-gate.ts";
-import { registerProgressObserver } from "./progress-observer.ts";
-import { registerReportTools } from "./report-tools.ts";
+import { recordChildReportProgress } from "./progress-observer.ts";
 import { buildSandboxProfiles } from "./sandbox-profiles.ts";
 
 // Read once at extension load (merge semantics in loadOpsxConfig).
@@ -65,8 +75,10 @@ const config: OpsxConfig = loadOpsxConfig();
  * semantics; see mode.ts).
  *
  * Registers the three child reporting tools (report_gap_analysis,
- * report_plan_review, report_work) that the opsx subagents submit their
- * structured results through.
+ * report_plan_review, report_work) through the role-specific child-only
+ * extensions declared in agents.ts (design D1): each tool is registered into
+ * its own subagent's process and never into the main session, so the parent's
+ * tool declaration and prompt rules stay free of them.
  *
  * pi-subagents is probed the same lazy way: on success the four opsx
  * subagents (opsx-gap-analysis / opsx-plan-review / opsx-worker / opsx-reviewer) are
@@ -95,10 +107,12 @@ export default async function piOpenspecX(pi: ExtensionAPI): Promise<void> {
     }
   }
 
-  registerReportTools(pi);
-  // Parent-side projection of the subagents' structured progress (task 9.2).
-  registerProgressObserver(pi);
   // Progress lines for the flow entries (task 9.1).
+  //
+  // The progress board is no longer fed by a main-session `tool_result`
+  // listener: the report tools are not registered here any more (design D1),
+  // so the only honest source is an accepted child report, delivered through
+  // the ingestion callback below (task 4.4).
   registerFlowRenderers(pi);
   // `/opsx:plan`: planner mode + append-only phase injection (task 7.1).
   registerPlanFlow(pi);
@@ -170,4 +184,94 @@ export default async function piOpenspecX(pi: ExtensionAPI): Promise<void> {
   void disposeSessionStart;
   void disposeRecoverySessionStart;
   void disposeStatusSnapshot;
+
+  // Flow recovery (design D5): the flow registries are process memory, so a
+  // cold start leaves them empty while the branch still holds the flow's own
+  // entries. Re-bind on every session boundary and, as a lazy fallback, on the
+  // first tool call of a session that missed them — otherwise a restored
+  // session would silently skip the completion gate.
+  const rebindKeys = new Set<string>();
+  const rebindFlows = async (ctx: ExtensionContext): Promise<void> => {
+    const sessionId = ctx.sessionManager.getSessionId();
+    const key = `${sessionId}:${ctx.sessionManager.getLeafId() ?? "?"}`;
+    if (rebindKeys.has(key)) return;
+    rebindKeys.add(key);
+    try {
+      rebindPlanFlow(sessionId, ctx);
+    } catch {
+      // Recovery is best-effort; an unbound flow stays unbound rather than
+      // being bound to the wrong thing.
+    }
+    try {
+      const result = await rebindImplementFlow(ctx, {
+        readGoals: (innerCtx: ExtensionContext) =>
+          readGoalBaseSummaries({
+            cwd: innerCtx.cwd,
+            sessionManager: innerCtx.sessionManager,
+          }),
+      });
+      if (!result.ok) {
+        pi.sendMessage(
+          {
+            customType: "pi-openspec-x/recovery-notice",
+            content: result.reason,
+            display: true,
+          },
+          { deliverAs: "followUp" },
+        );
+      }
+    } catch {
+      // Best-effort: never break a session boundary.
+    }
+  };
+  const disposeRebindStart = pi.on(
+    "session_start",
+    (_event, ctx: ExtensionContext) => rebindFlows(ctx),
+  );
+  const disposeRebindSwitch = pi.on(
+    "session_before_switch",
+    (_event, ctx: ExtensionContext) => rebindFlows(ctx),
+  );
+  const disposeRebindTree = pi.on(
+    "session_tree",
+    (_event, ctx: ExtensionContext) => rebindFlows(ctx),
+  );
+  const disposeRebindToolCall = pi.on(
+    "tool_call",
+    (_event, ctx: ExtensionContext) => rebindFlows(ctx),
+  );
+  void disposeRebindStart;
+  void disposeRebindSwitch;
+  void disposeRebindTree;
+  void disposeRebindToolCall;
+
+  // Automatic child-report ingestion (design D3): the report tools live only in
+  // their own child processes, so the parent reconstructs delivery from its own
+  // launch records plus the child's canonical session record.
+  registerChildReportIngestion(pi, {
+    activeFlow: (sessionId) => {
+      const flow = activeImplementFlow(sessionId);
+      if (!flow) return undefined;
+      return {
+        flowId: childReportFlowId(sessionId, flow.changeId),
+        changeId: flow.changeId,
+        goalId: flow.goalId,
+      };
+    },
+    // Display-only projection of an accepted report's structured progress.
+    // It never gates, completes, or approves anything (task 4.4).
+    onProgress: ({ sessionId, toolName, report }) => {
+      recordChildReportProgress(pi, sessionId, { toolName, report });
+    },
+    // A durable record that cannot be confirmed is a real gap — the receipt
+    // will not survive a restart. Surfacing it keeps a silent persistence
+    // failure from looking like persistence was never wired (design D5).
+    onDiagnostic: (message) => {
+      pi.sendMessage({
+        customType: "pi-openspec-x/recovery-notice",
+        content: `[OPSX CHILD REPORT] ${message}`,
+        display: true,
+      });
+    },
+  });
 }

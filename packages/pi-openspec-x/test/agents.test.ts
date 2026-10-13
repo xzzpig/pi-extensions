@@ -179,6 +179,12 @@ describe("agent definitions", () => {
     ]);
     expect(gapAnalysis.thinking).toBe("high");
     expect(gapAnalysis.systemPrompt).toBe(GAP_ANALYSIS_SYSTEM_PROMPT);
+    // Design D1: the reporting tool is registered by this role's own
+    // child-only extension, loaded only in the child process.
+    expect(gapAnalysis.subagentOnlyExtensions).toHaveLength(1);
+    expect(gapAnalysis.subagentOnlyExtensions?.[0]).toMatch(
+      /child-report-extensions\/gap-analysis\.ts$/,
+    );
   });
 
   test("plan-review: no bash, its report tool, deep thinking", () => {
@@ -192,6 +198,10 @@ describe("agent definitions", () => {
     ]);
     expect(planReview.thinking).toBe("high");
     expect(planReview.systemPrompt).toBe(PLAN_REVIEW_SYSTEM_PROMPT);
+    expect(planReview.subagentOnlyExtensions).toHaveLength(1);
+    expect(planReview.subagentOnlyExtensions?.[0]).toMatch(
+      /child-report-extensions\/plan-review\.ts$/,
+    );
   });
 
   test("worker: full write surface plus its report tool", () => {
@@ -207,6 +217,10 @@ describe("agent definitions", () => {
       REPORT_WORK_TOOL_NAME,
     ]);
     expect(worker.systemPrompt).toBe(WORKER_SYSTEM_PROMPT);
+    expect(worker.subagentOnlyExtensions).toHaveLength(1);
+    expect(worker.subagentOnlyExtensions?.[0]).toMatch(
+      /child-report-extensions\/worker\.ts$/,
+    );
   });
 
   test("reviewer: carries the goal-x protocol progress tool and its child extension", () => {

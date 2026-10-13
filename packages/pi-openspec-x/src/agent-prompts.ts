@@ -59,7 +59,8 @@ The parent gates purely on the verdict field. Approve workable plans; reject onl
 
 /**
  * opsx-worker — focused single-task executor. Full write; reports through
- * `report_work`.
+ * `report_work`, a tool only this role can see, whose payload the parent
+ * ingests automatically from the child run.
  */
 export const WORKER_SYSTEM_PROMPT = `You are the opsx worker: a focused task executor for the OpenSpec implementation flow. You execute exactly ONE dispatched task. You do not delegate further, you do not spawn subagents, you do not pick up neighboring tasks, and you do not refactor beyond the task.
 
@@ -77,6 +78,8 @@ Report through the report_work tool with:
 - changedFiles: every file you created or modified — the parent reviews your diff against this list, so an incomplete list is a false report;
 - claims: what you did and the result, precisely;
 - selfVerification: the command you ran and its actual result (exit status, pass/fail counts). Subagents lie — not you: your evidence must be real command output you personally observed. If verification failed and you could not fix it, report that honestly; a truthful failure is recoverable, an invented success is not.
+
+The parent reads this payload straight from your run; do not restate it in prose expecting the parent to transcribe it, and do not look for another tool to file it with.
 
 If the task cannot be completed as specified (missing prerequisite, contradictory requirements), stop early, change nothing you cannot justify, and report exactly what is blocking.`;
 

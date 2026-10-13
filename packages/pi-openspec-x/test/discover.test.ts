@@ -23,11 +23,6 @@ import {
   OPSX_PLAN_VERDICT_TOOL_NAME,
 } from "../src/plan-gate.ts";
 import {
-  REPORT_GAP_ANALYSIS_TOOL_NAME,
-  REPORT_PLAN_REVIEW_TOOL_NAME,
-  REPORT_WORK_TOOL_NAME,
-} from "../src/report-tools.ts";
-import {
   findStaticSkillConflicts,
   STATIC_CONFLICT_CUSTOM_TYPE,
   staticConflictMessage,
@@ -294,11 +289,13 @@ describe("extension entry point wiring", () => {
     async () => {
       const { default: piOpenspecX } = await import("../src/index.ts");
       const on = vi.fn(() => () => {});
+      const eventsOn = vi.fn(() => () => {});
       const registerTool = vi.fn();
       const registerCommand = vi.fn();
       const registerEntryRenderer = vi.fn();
       await piOpenspecX({
         on,
+        events: { on: eventsOn },
         registerTool,
         registerCommand,
         registerEntryRenderer,
@@ -309,8 +306,15 @@ describe("extension entry point wiring", () => {
       // (task 6.4); resources_discover once; turn_end three times (plan flow
       // 7.1, implement flow 8.3, status snapshot 9.1); tool_result once (the
       // implement flow's same-turn S1 override install, the implement flow's
-      // lifecycle tool observer, and the enforced tick gate).
-      expect(on).toHaveBeenCalledTimes(11);
+      // lifecycle tool observer, and the enforced tick gate); session_start,
+      // session_switch, session_tree and tool_call once each for the D5 flow
+      // re-binding, plus tool_call, session_start, session_tree and
+      // session_shutdown once each for the D3 child-report ingestion.
+      //
+      // Note there is no progress listener here any more: the main session no
+      // longer observes report_* tool results at all (task 4.4), because those
+      // tools are never registered in this session (design D1).
+      expect(on).toHaveBeenCalledTimes(20);
       expect(on).toHaveBeenCalledWith(
         "resources_discover",
         expect.any(Function),
@@ -324,18 +328,12 @@ describe("extension entry point wiring", () => {
       );
       // The flow entry renderers register at init (task 9.1; six types).
       expect(registerEntryRenderer).toHaveBeenCalledTimes(7);
-      // The three child reporting tools (D3) plus the two parent gate tools
-      // (tasks 7.2/7.3) register at init.
-      expect(registerTool).toHaveBeenCalledTimes(5);
-      expect(registerTool).toHaveBeenCalledWith(
-        expect.objectContaining({ name: REPORT_GAP_ANALYSIS_TOOL_NAME }),
-      );
-      expect(registerTool).toHaveBeenCalledWith(
-        expect.objectContaining({ name: REPORT_PLAN_REVIEW_TOOL_NAME }),
-      );
-      expect(registerTool).toHaveBeenCalledWith(
-        expect.objectContaining({ name: REPORT_WORK_TOOL_NAME }),
-      );
+      // Only the two parent-side plan gate tools (tasks 7.2/7.3) register at
+      // init. The three child reporting tools (D3) are NOT registered into
+      // the main session any more: each is registered by its own role's
+      // child-only extension (design D1), so the main session never declares
+      // them or their prompt rules.
+      expect(registerTool).toHaveBeenCalledTimes(2);
       expect(registerTool).toHaveBeenCalledWith(
         expect.objectContaining({
           name: OPSX_PLAN_GAP_ANALYSIS_TOOL_NAME,
@@ -346,6 +344,15 @@ describe("extension entry point wiring", () => {
           name: OPSX_PLAN_VERDICT_TOOL_NAME,
         }),
       );
+      for (const leaked of [
+        "report_gap_analysis",
+        "report_plan_review",
+        "report_work",
+      ]) {
+        expect(registerTool).not.toHaveBeenCalledWith(
+          expect.objectContaining({ name: leaked }),
+        );
+      }
     },
   );
 });
