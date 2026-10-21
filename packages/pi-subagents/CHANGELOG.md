@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.22.0]
+
+### Added
+
+- 新增 `@xzzpig/pi-subagents/supervisor-routing` 导出:版本化的父会话内 supervisor 响应器注册
+  (`registerSupervisorResponderViaEvents`),作用域为 sessionId + delegation requestId + ownerRunId + nodeId + agent。
+- 结构化委派执行器新增内部 launch hooks:在真实 foreground runId 分配、canonical agent 解析之后、
+  任何 child prompt 之前触发 `beforeNativeChildLaunch`,不改变模型可见的 request schema 或子进程环境。
+- 原生 supervisor 通道支持独占接管:被接管的提问不再唤醒主模型、不再触发 detach,回复仍走文件权威写入。
+
 ## [Unreleased]
 
 ## [0.21.0] - 2026-10-10 (fork)

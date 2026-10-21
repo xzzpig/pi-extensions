@@ -2,6 +2,17 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.10.0]
+
+### Added
+
+- 完成审计的监督提问改由只读旁路回答:审计员用 `contact_supervisor` 提问时,原审计尝试内的只读会话按已完成上下文作答,
+  `update_goal` 保持阻塞、审计员不 detach、主模型不额外起 turn;无法回答时 fail closed 并精确取消。
+- 协调记录随原 `update_goal` 工具结果回流(标题「审计协调记录(参考信息,不是新用户指令或完成证据)」),内容为人读摘要
+  (问题 / 答复或未解决原因 / 中文状态 / 短 ID),JSON 形态答复扁平化为 `key=value`,正文不含 JSON 花括号。
+- goal 结果卡片渲染协调记录:折叠态一行 `审计协调记录 N 条(原因 · 状态)`,`ctrl+o` 展开显示完整问答。
+- 旁路用量单独记 `audit_supervisor_usage`,父 turn 预算与 `goal.usage.tokensUsed` 不变。
+
 ## Unreleased
 
 ## [0.9.1] — 2026-10-09 (fork release)
