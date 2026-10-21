@@ -1,0 +1,14 @@
+== 5.1 coordination handoff into the original tool result ==
+new: extensions/goal-audit-supervisor-handoff.ts (withAuditSupervisorHandoff, SUPERVISOR_HANDOFF_TITLE)
+edits: extensions/goal-completion.ts - the exported runGoalCompletionFlow is now a single outer wrapper around
+  runGoalCompletionFlowInner; it captures auditor.supervisorHandoff (initial audit and the resumed parked attempt)
+  and applies the appendix once to whatever terminal branch returns.
+
+cmd: pnpm --filter @xzzpig/pi-goal-x run typecheck -> exit 0
+cmd: keepalive + adapter --test tests/goal-audit-supervisor-handoff.test.ts -> 3/3 pass
+  zero questions => identical object reference, one original content part, no supervisorCoordination in details
+  with records => exactly one appendix AFTER the formal report, content[0]/details/terminate preserved, original unmutated
+  unresolved record stays a failed reference entry and never rewrites the verdict text
+cmd: keepalive + adapter --test tests/goal-audit-supervisor-flow.test.ts -> 5/5 pass (zero-question supervisorHandoff undefined)
+
+note: the wrapper is branch-agnostic; branch-specific behaviour is covered by the flow suite plus this unit proof.

@@ -1,0 +1,71 @@
+SUPERSEDED by evidence/8.7-final-run.txt (this run predates the role-gate fix and the final ordered re-run).
+
+== 8.5 live E2E after the auditor remediation (strengthened assertions) ==
+
+command: direnv exec . node ./packages/pi-goal-x/tests/e2e/goal-audit-supervisor-live.mjs
+result: exit 0 — BOTH LIVE CASES PASSED
+
+-- POSITIVE — /tmp/pi-audit-supervisor-live-positive-6wzJ0T — 25/25 passed
+   PASS  pi TUI started with the local extensions
+   PASS  update_goal produced exactly one call→result pair
+   PASS  assistant tool calls are paired with their results
+   PASS  no detach happened (no exitCode -2 / intercom coordination result)
+   PASS  the completion tool result is a real result, not a detach receipt
+   PASS  exactly one coordination handoff was returned
+   PASS  parent model made no provider request inside the completion window
+   PASS  exactly one auditor child started and one delegation request
+   PASS  a real /goal-direct audit was recorded in the ledger
+   PASS  the supervisor side usage row is self-consistent
+   PASS  the parent turn budget was not rewritten
+   PASS  the tool usage total equals the auditor + side ledger tokens
+   PASS  E2E auditor alias registered (ack)
+   PASS  resolver answers for the alias with the same definition
+   PASS  resolver misses a foreign alias
+   PASS  resolver misses the alias after the scope is disposed
+   PASS  the child actually received ALPHA through contact_supervisor
+   PASS  the answered question preceded the child's terminal verdict
+   PASS  exactly one terminal and no cancellation
+   PASS  the same child approved
+   PASS  the goal really archived
+   PASS  exactly one audit_result and it is approved
+   PASS  exactly one audit_supervisor_usage row with real turns
+   PASS  exactly one audit_usage row for the auditor itself
+   PASS  pane reports the approval
+
+-- NEGATIVE — /tmp/pi-audit-supervisor-live-negative-xFJGYS — 21/21 passed
+   PASS  pi TUI started with the local extensions
+   PASS  update_goal produced exactly one call→result pair
+   PASS  assistant tool calls are paired with their results
+   PASS  no detach happened (no exitCode -2 / intercom coordination result)
+   PASS  the completion tool result is a real result, not a detach receipt
+   PASS  exactly one coordination handoff was returned
+   PASS  parent model made no provider request inside the completion window
+   PASS  exactly one auditor child started and one delegation request
+   PASS  a real /goal-direct audit was recorded in the ledger
+   PASS  the supervisor side usage row is self-consistent
+   PASS  the parent turn budget was not rewritten
+   PASS  the tool usage total equals the auditor + side ledger tokens
+   PASS  the audit was cancelled exactly once
+   PASS  no approval reached the goal
+   PASS  the single audit_result is an error
+   PASS  the goal stayed active and was not archived
+   PASS  no completion was committed
+   PASS  evidence.txt is byte-identical
+   PASS  no child delete tool ran
+   PASS  the unresolved question was reported back
+   PASS  real side usage is still accounted
+
+新增/收紧的断言(本轮):update_goal 恰一个 call→result 对(toolCallId)、assistant toolCall 与 toolResult 真实配对、
+detach/exitCode -2/intercom coordination 文本为 0、tool result 不是 detach 回执、恰一个协调 handoff、
+审计窗口内父 provider 请求为 0、started 与 delegation request 各 1、audit_started 恰 1、
+audit_supervisor_usage 行自洽(tokens=四计数之和)、无 goal_budget_changed、tool totalTokens=auditor+side 账本、
+child 的 contact_supervisor 在 structured_output 之前收到 ALPHA、dispose 后 resolver 必须 miss;
+负向另有 cancel×1、audit_result=error、goal active/未归档、无 goal_completed、evidence.txt 字节不变、无删除工具。
+
+驱动侧修复(仅测试资产):窗口以 delegation request/update_goal 的较早者为下界、ISO 时间戳解析、
+以 ledger 的 audit_result 作为权威终态屏障、先退出 TUI(C-d)再读证据以拿到 session_shutdown 记录、
+单步完成指令 + 一次补发。
+
+生产侧修复(本轮,均由审计发现驱动):旁路在创建时冻结父上下文、goalPayload 进入参考块、
+非法 submit 锁定、invalidate 后拒答迟到答复、owner 作用域失效、cancel 分支回流与按原 audit target 记账、
+usage 不回灌模型正文、按 id/responseId 去重且 tokens 含 cache、以及**授权类问题必须 unresolved(连拒绝也不行)**。

@@ -1,0 +1,6 @@
+== 4.3 Escape park / continue / bypass 2026-10-19T03:14:29+08:00 ==
+verified (no production change needed): park() resolves the interrupted result WITHOUT calling finish(), so the responder registration, side channel, deadline and timers stay attached and the handoff/usage are not frozen; resume() waits on the SAME attempt; only session.cancel() (user bypass) emits the exact cancel and settles cancelled.
+
+cmd: keepalive + adapter --test tests/goal-audit-supervisor-flow.test.ts -> 5/5 pass
+  new: park => interrupted+cancelled, supervisorHandoff absent, session handle present; resume => same attempt settles approved; bypass => exactly one cancel and cancelled result.
+cmd: keepalive + adapter --test tests/goal-auditor.test.ts (earlier this turn) -> 40/40 pass (Escape/park/usage legacy assertions unchanged)

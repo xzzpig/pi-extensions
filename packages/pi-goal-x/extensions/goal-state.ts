@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import { goalStorageContext, goalStorageRoot } from "./storage/goal-root.ts";
+import { invalidateAuditSidechannelsForOwner } from "./goal-audit-sidechannel.ts";
 import { type AgentToolResult, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import { FOCUS_ENTRY, STATE_ENTRY, GOAL_CONTEXT_EVENT_ENTRY, GOAL_EVENT_ENTRY, GOAL_STATE_EVENT_ENTRY, GOAL_STEERING_EVENT_ENTRY, goalDetails } from "./goal-format.ts";
@@ -128,6 +129,8 @@ export interface GoalCore {
 	clearContinuationTimer(): void;
 	clearContinuationState(resetNetworkErrorBackoff?: boolean): void;
 	clearActiveAccounting(): void;
+	/** Records which runtime session owns this core's audit side channels. */
+	setAuditSessionId(sessionId: string | null): void;
 	advanceTurnSeq(): void;
 	currentTurnStoppedGoalId(): string | null;
 	isActionableContinuationGoal(goalId: string | null | undefined): goalId is string;
@@ -176,9 +179,19 @@ export function createGoalCore(
 	let focusedGoalId: string | null = null;
 	let focusRevision = 0;
 	let hasExplicitSessionFocus = false;
+	// Runtime session that owns this core's audit side channels. Set at session_start
+	// so focus/status invalidation is scoped to THIS session, never another one.
+	let auditSessionId: string | null = null;
 
 	function assignFocusedGoalId(next: string | null): void {
-		if (focusedGoalId !== next) focusRevision += 1;
+		if (focusedGoalId !== next) {
+			focusRevision += 1;
+			// A real focus change revokes ONLY the previously focused goal's
+			// in-flight audit reply permission. Another goal's (or another session's)
+			// audit is never touched, and the audit's own abort controller is left
+			// alone so the auditor and the completion tool are not orphaned.
+			if (focusedGoalId) invalidateAuditSidechannelsForOwner(auditSessionId, focusedGoalId, "focus_changed");
+		}
 		focusedGoalId = next;
 	}
 
@@ -207,6 +220,12 @@ export function createGoalCore(
 		},
 		set goal(next: GoalRecord | null) {
 			if (next) {
+				// Leaving the active status invalidates that goal's own audit attempt,
+				// even when the goal id keeps its focus (e.g. active -> paused).
+				const previous = goalsById.get(next.id);
+				if (previous && previous.status === "active" && next.status !== "active") {
+					invalidateAuditSidechannelsForOwner(auditSessionId, next.id, "goal_status_changed");
+				}
 				goalsById.set(next.id, next);
 				assignFocusedGoalId(next.id);
 				return;
@@ -642,7 +661,13 @@ export function createGoalCore(
 	}
 
 	function updateFocusedGoal(next: GoalRecord, ctx: ExtensionContext, shouldPersist = true): void {
+		const previous = goalsById.get(next.id);
 		goalsById.set(next.id, next);
+		// A goal that stops being active revokes its in-flight audits even when the id does
+		// not change (pause/blocked transitions bypass the focus-change seam otherwise).
+		if (previous?.status === "active" && next.status !== "active") {
+			invalidateAuditSidechannelsForOwner(auditSessionId, next.id, "goal_status_changed");
+		}
 		assignFocusedGoalId(next.id);
 		if (shouldPersist) persist(ctx);
 		updateUI(ctx);
@@ -1300,6 +1325,9 @@ export function createGoalCore(
 		clearContinuationTimer,
 		clearContinuationState,
 		clearActiveAccounting,
+		setAuditSessionId: (sessionId: string | null) => {
+			auditSessionId = sessionId;
+		},
 		advanceTurnSeq,
 		currentTurnStoppedGoalId,
 		isActionableContinuationGoal,

@@ -1,0 +1,91 @@
+== 8.11 FINAL ordered run (round-5 fixes; gates green, live LAST) ==
+
+gates: goal-x typecheck 0 error TS; subagents typecheck 0 error TS;
+       subagents focused unit (fork-supervisor-routing + native-supervisor-takeover) 27/27;
+       subagents focused integration (fork-supervisor-routing) 3/3;
+       goal-x unit 1335/1335; integration exit 1 = integration group 26 pass + 9 DECLARED debt, sdk group 1/1;
+       fork runner 81/81; selfcheck OK (100/3/7); fork gate exit 0 (555/7, 989/10, undeclared 0);
+       strict validate valid; git diff --check clean.  logs /tmp/8.11-logs/
+
+live (last): exit 0 — BOTH LIVE CASES PASSED, 55 assertions.
+
+Round-5 findings and closure:
+1. Parent thinking in production: goal-completion.ts now forwards
+   getThinkingLevel: () => core.pi.getThinkingLevel() (function-checked) into runGoalCompletionAuditor,
+   which hands it to the side channel, so the parent's real level (not 'off') is used.
+2. Cancellation/terminal usage: dispose() revokes reply permission, AWAITS abort (the aborted
+   generation's message_end still bills), and only then releases the listener and disposes.
+3. Idempotent cleanup on error paths: the deadline timer/signal listener are armed only AFTER the
+   synchronous validations (serialize/size/already-expired), so oversized, unserializable, past-deadline
+   and ensureSession-failure paths can never leave a timer behind; stopDeadline still runs in finally.
+4. Delivery truth: a claimed reply is downgraded to failed by markDeliveryFailed() when the routing layer
+   reports a delivery failure, so the tool result can no longer claim 'delivered' for an unwritten reply.
+5. External exception text: fork-supervisor-routing.ts no longer copies error.message/String(error) on the
+   delivery-failure and responder-rejection paths; both use fixed text.
+6. Live integrity baseline: integritySnapshot() is taken BEFORE tmux/pi start (verified line order:
+   snapshot 246, new-session 247), compares in memory and writes only presence + byte counts.
+
+Disclosure: this round only fork-supervisor-routing.ts changed inside pi-subagents, so its own unit+
+integration suites plus both typechecks were re-run (27/27, 3/3, 0 errors) instead of the ~23-minute full
+serial suites; the last full serial runs (4132/4116 unit, 1218/1211 integration, 0 fail) were green before
+that single-file edit and are recorded in 8.9/8.10 evidence.
+
+-- POSITIVE — /tmp/pi-audit-supervisor-live-positive-H0SsYU — 30/30 piVersion=None piExit=None
+   PASS  pi TUI started with the local extensions
+   PASS  global settings/auth/models are byte-identical before and after the case
+   PASS  update_goal produced exactly one call→result pair
+   PASS  assistant tool calls are paired with their results
+   PASS  no detach happened (real pi-intercom detach event count is 0)
+   PASS  the completion result carries no detach receipt
+   PASS  the completion tool result is a real result, not a detach receipt
+   PASS  exactly one coordination handoff was returned
+   PASS  parent model made no provider request inside the completion window
+   PASS  exactly one auditor child started and one delegation request
+   PASS  a real /goal-direct audit was recorded in the ledger
+   PASS  the supervisor side usage row is self-consistent
+   PASS  the parent turn budget was not rewritten
+   PASS  the parent-turn growth is strictly smaller than the side spend (side billing not absorbed)
+   PASS  the tool usage total equals the auditor + side ledger tokens
+   PASS  E2E auditor alias registered (ack)
+   PASS  resolver answers for the alias with the same definition
+   PASS  resolver misses a foreign alias
+   PASS  resolver misses the alias after the scope is disposed
+   PASS  the parent's completion_summary and the child's question carry no marker
+   PASS  the child actually received ALPHA through contact_supervisor
+   PASS  the answered question preceded the child's terminal verdict
+   PASS  exactly one terminal and no cancellation
+   PASS  the same child approved
+   PASS  the goal really archived
+   PASS  exactly one audit_result and it is approved
+   PASS  exactly one audit_supervisor_usage row with real turns
+   PASS  exactly one audit_usage row for the auditor itself
+   PASS  the approval is visible to the user (pane or archived goal)
+   PASS  pi exited cleanly (real exit code recorded by the wrapper)
+
+-- NEGATIVE — /tmp/pi-audit-supervisor-live-negative-lee9Ct — 25/25 piVersion=None piExit=None
+   PASS  pi TUI started with the local extensions
+   PASS  global settings/auth/models are byte-identical before and after the case
+   PASS  update_goal produced exactly one call→result pair
+   PASS  assistant tool calls are paired with their results
+   PASS  no detach happened (real pi-intercom detach event count is 0)
+   PASS  the completion result carries no detach receipt
+   PASS  the completion tool result is a real result, not a detach receipt
+   PASS  exactly one coordination handoff was returned
+   PASS  parent model made no provider request inside the completion window
+   PASS  exactly one auditor child started and one delegation request
+   PASS  a real /goal-direct audit was recorded in the ledger
+   PASS  the supervisor side usage row is self-consistent
+   PASS  the parent turn budget was not rewritten
+   PASS  the parent-turn growth is strictly smaller than the side spend (side billing not absorbed)
+   PASS  the tool usage total equals the auditor + side ledger tokens
+   PASS  the audit was cancelled exactly once
+   PASS  no approval reached the goal
+   PASS  the single audit_result is an error
+   PASS  the goal stayed active and was not archived
+   PASS  no completion was committed
+   PASS  evidence.txt is byte-identical
+   PASS  no child delete tool ran
+   PASS  the unresolved question was reported back
+   PASS  real side usage is still accounted
+   PASS  pi exited cleanly (real exit code recorded by the wrapper)
+

@@ -1,0 +1,34 @@
+== 8.12 FINAL ordered run (round-6 fixes; FULL suites, live LAST) ==
+
+gates (all after the last source edit):
+  pi-subagents typecheck 0 error TS | goal-x typecheck 0 error TS
+  pi-subagents test:unit (serial, FULL)         -> exit 0; 4132 tests / 4116 pass / 0 fail / 0 cancelled / 16 skipped
+  pi-subagents test:integration (serial, FULL)  -> exit 0; 1218 tests / 1211 pass / 0 fail / 0 cancelled / 7 skipped
+  goal-x test:unit                              -> exit 0; 1335/1335
+  goal-x test:integration                       -> exit 1; integration group 26 pass + 9 DECLARED settings-profile debt;
+                                                   sdk group 1/1 pass (real SDK, no stub, NODE_OPTIONS cleared)
+  fork runner                                   -> exit 0; 81/81
+  selfcheck                                     -> OK (100 unit + 3 integration + 7 e2e)
+  fork-divergence gate                          -> exit 0; goal-x 555/7 declared 7 undeclared 0; subagents 989/10 declared 10 undeclared 0
+  openspec validate --strict                    -> valid
+  git diff --check                              -> clean
+live (LAST)                                     -> exit 0; BOTH LIVE CASES PASSED; 55 assertions green
+
+logs: /tmp/8.12-logs/{subagents-unit,subagents-integration,unit,int,live}.txt
+
+Round-6 findings and closure:
+1. Cancellation billing vs. seal: the message_end listener no longer returns on `sealed`
+   (sealed only freezes REPLIES); billing is gated by a separate `usageFrozen` flag that is set
+   only AFTER the abort's message_end has landed. A cancelled generation's real spend is billed.
+2. Async teardown ordering: invalidate()/dispose() share one `settlePromise` that awaits abort(),
+   then disposes the SDK session, then freezes usage and releases the listener; dispose() called
+   after invalidate() awaits the same chain instead of racing it.
+3. Timer/subscription leaks on error paths: ensureSession() failure now calls stopDeadline() before
+   rethrowing, and the created-after-deadline branch calls stopDeadline() before returning, so no
+   ask path can leave a deadline timer or abort listener behind.
+4. Delivery truth is now ask-scoped: the respond wrapper records the ask id whose reply was produced
+   (pendingDelivery) and coordinationFailure() downgrades ONLY that id, so a failure for a different
+   ask (e.g. one rejected before any record) can never rewrite an earlier successful Q&A.
+5. Fork routing no longer copies external exception text (fixed text on both failure paths).
+6. Live integrity baseline is captured BEFORE tmux/pi start (snapshot then new-session), compared in
+   memory, and only presence + byte counts are persisted.

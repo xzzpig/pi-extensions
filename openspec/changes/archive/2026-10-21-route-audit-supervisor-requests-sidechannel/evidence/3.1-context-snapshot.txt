@@ -1,0 +1,13 @@
+== 3.1 completed-context snapshot 2026-10-19T02:51:48+08:00 ==
+new: packages/pi-goal-x/extensions/goal-audit-context-snapshot.ts (captureCompletedAuditContext, MAX_AUDIT_CONTEXT_BYTES=262144)
+test-support (authorized by the approved 3.1 supplement): scripts/test-adapter-hooks.mjs captures the REAL SDK buildSessionContext before installing stubs; tests/stubs/pi-coding-agent.ts forwards to that capture and fails loudly when absent.
+test-fixture (authorized): tests/goal-auditor-package.test.ts D-11 configured/shadowed ctx gains isProjectTrusted: () => true; assertions untouched.
+new: packages/pi-goal-x/tests/goal-audit-context-snapshot.test.ts
+
+rules implemented: SDK builder branch/compaction; system messages stripped BEFORE group analysis; prefix stops before the first incomplete group; no partial results of that group; orphan/duplicate/out-of-order toolResult => context_error; fully paired failed group kept; deferred assistant excluded; structuredClone deep copy; 256 KiB exact allowed, +1 rejected.
+
+cmd: pnpm --filter @xzzpig/pi-goal-x run typecheck
+result: FIRST RUN FAILED (TS2352 on the test helper cast Record<string,unknown> -> SessionEntry).
+        Fixed by casting through unknown with a SAFETY comment in asSessionEntry(); re-run exit 0.
+cmd: node --import keepalive --import scripts/test-adapter-hooks.mjs --experimental-strip-types --test tests/goal-audit-context-snapshot.test.ts tests/goal-auditor.test.ts tests/goal-auditor-package.test.ts
+result: 68 tests / 68 pass / 0 fail / 0 cancelled (12 new snapshot cases + 56 existing auditor cases)

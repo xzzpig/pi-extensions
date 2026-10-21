@@ -1,0 +1,24 @@
+== 8.42 (round-28) criterion 6: one COMBINED test per seam ==
+
+tests/goal-audit-lifecycle-full-chain.test.ts — 6 cases (one per seam), 3.3 s, all green.
+Each case runs the WHOLE user contract inside a single run:
+  real seam -> in-flight ask -> precise cancel + origin identity -> late approval rejected ->
+  cross-goal / cross-session scope -> idempotent cleanup
+
+Per case:
+- a REAL runGoalCompletionAuditor is started (bus acknowledges registration, STARTED emitted) so the
+  PRODUCTION lifecycle callback (cancelAttempt("lifecycle_revoked")) is the one that cancels;
+- three side channels are in flight simultaneously: the victim (session-1/g1), a sibling goal
+  (session-1/g2) and another SESSION (session-2/g1), each with a deferred prompt;
+- the seam is triggered: focus_away_back (through a channel-less goal so only the victim is revoked),
+  same_id_removal (archived), session_start, session_tree, session_shutdown, reload (tree+start);
+- assertions: exactly ONE cancel whose requestId/ownerRunId/nodeId equal the delegation request;
+  the victim's LATE legal answer is dropped (no delivered record); a late schema-valid approved
+  response does NOT authorise (approved false) and no second cancel appears; scope is checked per seam
+  (goal-scoped revocations spare the sibling goal, session-wide ones also cover it) while the OTHER
+  SESSION always still answers; double releaseLifecycle + double dispose are idempotent.
+
+gates: typecheck 0 error TS; unit 1364/1364; fork runner 90/90; fork gate exit 0; diff --check clean;
+       integration exit 1 = 26 pass + 9 DECLARED settings-profile debt; sdk 1/1
+live: exit 0; BOTH LIVE CASES PASSED; 57 assertions
+logs: /tmp/8.42-logs/{unit,int,gate,live}.txt

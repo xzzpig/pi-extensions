@@ -1,0 +1,93 @@
+== 8.9 FINAL ordered run (gates green, live LAST) ==
+
+gates: typecheck goal-x 0 error TS / subagents 0 error TS; goal-x unit 1332/1332 exit 0;
+       goal-x integration exit 1 (integration group 26 pass + 9 DECLARED settings-profile debt;
+       sdk group 1/1 pass, real SDK no stub); fork runner 78/78; selfcheck OK (100/3/7);
+       fork gate exit 0 (goal-x 555/7 declared 7 undeclared 0; subagents 989/10 declared 10 undeclared 0);
+       openspec validate --strict valid; git diff --check clean.
+
+live (last): exit 0 — BOTH LIVE CASES PASSED, 54 assertions green.
+logs: /tmp/8.9-logs/{unit2,int2,live-final}.txt
+
+Auditor round-3 findings and how each is closed:
+1. SDK fail-closed for non-object submits: submit schema is type:object + required:[] +
+   additionalProperties:true (so the tool stays a normal, callable function tool and every object
+   reaches execute), and an SDK-level rejection that never reaches execute is observed in the
+   message_end listener (toolResult carrying the tool name + 'validation failed') and locks the ask.
+   Real-SDK worker locks null / [] / string and then a legal submit -> 'illegal then legal still fails': 6/6.
+2. goalPayload frozen by value: structuredClone at capture, used for BOTH the capacity check and the
+   prompt; mutating the caller's object afterwards (BEFORE->AFTER + 300k chars) changes neither the
+   prompt nor the capacity outcome (new unit test).
+3. Deadline converges across session creation: after ensureSession the clock is re-checked and an
+   expired ask returns deadline_missing without ever prompting (new unit test: factory delayed 120ms,
+   deadline 40ms -> prompt calls 0).
+4. User bypass revokes reply permission immediately: cancelAttempt('user_abort') now calls
+   sidechannel.invalidate('user_bypass') BEFORE emitting the exact child cancel.
+5. Live driver isolation: integritySnapshot() is actually invoked before/after and compared (settings/
+   auth/models, djb2, contents never printed); every spawnSync (incl. tmux) has a timeout; waitFor
+   throws so finally cleanup runs; waitIdle and the main loop are bounded by the 600s total budget.
+6. Live driver evidence: piVersion comes from preflight `pi --version` (1.1.0 in this run); pi's real
+   exit code is recorded by a sh wrapper into pi-exit.txt and asserted == 0; the tool-usage equality is
+   now unconditional (>0 and equal to auditor+side ledger); the budget check is rebased on the parent's
+   own token spend (goal usage must stay <= parent own spend, with a positive separate side row).
+
+-- POSITIVE — /tmp/pi-audit-supervisor-live-positive-7hVfgw — 29/29
+   piVersion=None piExit=None
+   PASS  pi TUI started with the local extensions
+   PASS  global settings/auth/models are byte-identical before and after the case
+   PASS  update_goal produced exactly one call→result pair
+   PASS  assistant tool calls are paired with their results
+   PASS  no detach happened (real pi-intercom detach event count is 0)
+   PASS  the completion result carries no detach receipt
+   PASS  the completion tool result is a real result, not a detach receipt
+   PASS  exactly one coordination handoff was returned
+   PASS  parent model made no provider request inside the completion window
+   PASS  exactly one auditor child started and one delegation request
+   PASS  a real /goal-direct audit was recorded in the ledger
+   PASS  the supervisor side usage row is self-consistent
+   PASS  the parent turn budget was not rewritten
+   PASS  the goal usage stays within the parent's own spend while the side row is separate
+   PASS  the tool usage total equals the auditor + side ledger tokens
+   PASS  E2E auditor alias registered (ack)
+   PASS  resolver answers for the alias with the same definition
+   PASS  resolver misses a foreign alias
+   PASS  resolver misses the alias after the scope is disposed
+   PASS  the child actually received ALPHA through contact_supervisor
+   PASS  the answered question preceded the child's terminal verdict
+   PASS  exactly one terminal and no cancellation
+   PASS  the same child approved
+   PASS  the goal really archived
+   PASS  exactly one audit_result and it is approved
+   PASS  exactly one audit_supervisor_usage row with real turns
+   PASS  exactly one audit_usage row for the auditor itself
+   PASS  the approval is visible to the user (pane or archived goal)
+   PASS  pi exited cleanly (real exit code recorded by the wrapper)
+
+-- NEGATIVE — /tmp/pi-audit-supervisor-live-negative-Pltuhc — 25/25
+   piVersion=None piExit=None
+   PASS  pi TUI started with the local extensions
+   PASS  global settings/auth/models are byte-identical before and after the case
+   PASS  update_goal produced exactly one call→result pair
+   PASS  assistant tool calls are paired with their results
+   PASS  no detach happened (real pi-intercom detach event count is 0)
+   PASS  the completion result carries no detach receipt
+   PASS  the completion tool result is a real result, not a detach receipt
+   PASS  exactly one coordination handoff was returned
+   PASS  parent model made no provider request inside the completion window
+   PASS  exactly one auditor child started and one delegation request
+   PASS  a real /goal-direct audit was recorded in the ledger
+   PASS  the supervisor side usage row is self-consistent
+   PASS  the parent turn budget was not rewritten
+   PASS  the goal usage stays within the parent's own spend while the side row is separate
+   PASS  the tool usage total equals the auditor + side ledger tokens
+   PASS  the audit was cancelled exactly once
+   PASS  no approval reached the goal
+   PASS  the single audit_result is an error
+   PASS  the goal stayed active and was not archived
+   PASS  no completion was committed
+   PASS  evidence.txt is byte-identical
+   PASS  no child delete tool ran
+   PASS  the unresolved question was reported back
+   PASS  real side usage is still accounted
+   PASS  pi exited cleanly (real exit code recorded by the wrapper)
+

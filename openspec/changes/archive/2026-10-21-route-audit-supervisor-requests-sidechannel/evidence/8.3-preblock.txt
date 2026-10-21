@@ -1,0 +1,47 @@
+== 8.3 preblock (design D9) — all green, live runner NOT yet implemented ==
+
+1) tmux (pi-tmux-tmp-server skill)
+   first check: `TMUX_TMPDIR=/tmp tmux ls` -> "no server running on /tmp/tmux-1000/default"
+   -> per the skill the sandbox must NOT start a persistent server, so the exact start commands
+      (kill-server / rm -rf /tmp/tmux-$(id -u) / new-session -d -s host) were handed to the user via ask_user.
+   after the user started it on the host:
+     `TMUX_TMPDIR=/tmp tmux ls` -> "host: 1 windows (created Mon Oct 19 20:55:48 2026)"  (exit 0)
+   The server is on the host with its socket in /tmp, so sandboxed bash commands act as clients and the
+   sessions survive across commands, as required for the interactive TUI case.
+
+2) provider settings (read only, never printed)
+   ~/.pi/agent/settings.json defaultProvider=axonhub defaultModel=deepseek-v4-flash  (both present)
+
+3) credential check (no secret printed)
+   `direnv exec . bash -lc "pi auth check --provider axonhub"` -> "ready"   (exit 0)
+
+4) real print-mode pong smoke (60 s budget, isolated cwd, discovery disabled, only local extensions)
+   d=/tmp/pi-audit-live-smoke   (fresh, mkdir -p $d/sessions)
+   cd $d && pi --no-extensions --no-skills --no-prompt-templates --no-themes --no-context-files --no-mcp \
+     --session-dir $d/sessions \
+     -e <repo>/packages/pi-subagents/index.ts \
+     -e <repo>/packages/pi-goal-x/extensions/goal.ts \
+     -p "Reply with exactly the word: pong"
+   -> stdout: "pong"   exit 0
+   This proves the real model round-trip and that the two local extensions load cleanly together with no
+   discovery channels and no installed-package interference.
+
+5) toolchain
+   `pi --version` -> 1.1.0 ; node reported by the dev shell -> v22.23.3 (>= the 22.15 floor)
+
+Conclusion: the preblock is satisfied. No scripted provider, no auditor disable, no injected
+runCompletionAuditor/sessionFactory and no fake provider switch was used for any of the above.
+
+REMAINING for 8.3 (not done, not claimed):
+   - write packages/pi-goal-x/tests/e2e/goal-audit-supervisor-live.mjs
+     (runLiveAuditSupervisorE2E, assertLiveAuditEvidence: mode-0700 /tmp/pi-audit-supervisor-live-* per case,
+      separate cwd/.pi/session-dir/tmux session, 600 s total / 180 s per case / 60 s smoke, event + state
+      barriers with <=1 s finite TUI polls, evidence written under the case dir and the change's verification.md,
+      nonzero exit on any missing dependency/credential/path with no skip and no fake provider)
+   - write packages/pi-goal-x/tests/fixtures/goal-audit-e2e-fixture.ts
+     (session_start on the pinned parentSessionId: registerAgentViaEvents for one unique test auditor alias AND
+      registerAuditorAgentResolver returning the same cloned definition for that alias only; invalidate before
+      idempotent dispose on switch/session_tree/shutdown; child side observes only, registers nothing)
+   - run it and record both cases (approve+archive / unresolved+cancel+active) with pane, JSONL, trace, ledger,
+     usage and the real native-channel evidence.
+   None of the above may be reported as passing before it actually runs.

@@ -1,0 +1,22 @@
+== 8.34 (round-22) gates green, live green (55/55) ==
+
+gates (unchanged since 8.33; only the E2E driver asset changed after them):
+  goal-x typecheck 0 error TS; goal-x unit 1348/1348; fork runner 90/90;
+  fork-divergence gate exit 0; git diff --check clean;
+  integration exit 1 = 26 pass + 9 DECLARED settings-profile debt; sdk group 1/1 (real SDK, no stub)
+live -> exit 0; BOTH LIVE CASES PASSED; 55 assertions
+logs: /tmp/8.33-logs/{unit,int,gate}.txt, /tmp/8.34-logs-live.txt
+
+Root cause of the two red live attempts (diagnosed from the saved artifacts, no extra tokens):
+the child's own session.jsonl for /tmp/pi-audit-supervisor-live-positive-ypHI2z shows a SCHEMA-VALID
+structured_output call:
+  {"value": {"verdict": "disapproved", "report": "… the supervisor-response required by the operator
+   instructions states that this session's acceptance/delivery marker is ALPHA. No artifact contains
+   ALPHA (case-insensitive search over cwd …)"}}
+i.e. the auditor judged the requirement unmet because the ALPHA marker arrived as the supervisor ANSWER
+and never appeared in a file. That is an instruction-wording fault in the E2E asset, not a product or
+driver-schema fault (the earlier "hasArgs: false" trace row was just a capture limitation).
+
+Fix (test asset only): the positive-case operator instruction now says the supervisor answer ITSELF is
+the evidence for the marker ("把该答复本身当作交付标记的证据（标记不需要出现在任何文件里，也不要要求
+文件里出现标记）"). With that single change the live run passes 55/55, first attempt, no re-run.

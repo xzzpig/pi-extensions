@@ -26,6 +26,13 @@ import { mergeAgentsForScope } from "../agents/agent-selection.ts";
 import { clearRuntimeAgentsForPi, listRuntimeAgentConfigs, mergeRuntimeAgents } from "../agents/runtime-agent-registry.ts";
 import { discoverAgentsWithRuntime } from "../agents/runtime-discovery.ts";
 import { registerRuntimeAgentEventListener } from "../agents/runtime-agent-events.ts";
+import {
+	createSupervisorDispatcher,
+	createSupervisorLaunchHooks,
+	disposeSupervisorRouting,
+	disposeSupervisorRoutingForOwner,
+	registerSupervisorResponderEventListener,
+} from "../intercom/fork-supervisor-routing.ts";
 import { ensureAccessibleDir } from "../shared/accessible-dir.ts";
 import { cleanupAllArtifactDirs, cleanupOldArtifacts, getArtifactsDir } from "../shared/artifacts.ts";
 import { resolveCurrentSessionId } from "../shared/session-identity.ts";
@@ -354,6 +361,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		// Owner states are created only by scheduled execution, which loads the executor first.
 		getCurrentOwnerStates: () => executor?.getCurrentSupervisorOwnerStates() ?? [],
 		parentWake,
+		// Exclusive takeover for registered responder routes; unregistered routes
+		// keep the native wake/detach path untouched.
+		supervisorDispatcher: createSupervisorDispatcher(pi, () => state.supervisorOwnerSessionId ?? null),
 	});
 	const waitSubscriptionManager = createWaitSubscriptionManager(wakingPi, state);
 	const mainWatchdog = registerMainWatchdog(pi);
@@ -647,10 +657,22 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		getContext: () => state.lastUiContext,
 		execute: (requestId, params, signal, ctx, onUpdate) =>
 			executeSubagentCollapsed(requestId, params, signal, onUpdate, ctx),
-		executeStructured: async (requestId, params, signal, ctx, onUpdate) => {
+		executeStructured: async (requestId, params, signal, ctx, onUpdate, request) => {
 			if (ctx.hasUI) ctx.ui.setToolsExpanded(false);
 			await waitForAdvertisement();
-			return (await getExecutor()).executeDelegated(requestId, params, signal, onUpdate, ctx);
+			// The responder is bound to the REAL child route (runId + canonical
+			// agent + index) inside the executor, before the first prompt. Passing
+			// it here keeps callbacks out of model parameters, artifacts and child
+			// env; an unregistered attempt gets no hooks and keeps default behaviour.
+			const supervisorLaunchHooks = request
+				? createSupervisorLaunchHooks(pi, {
+					requestId: request.requestId,
+					ownerRunId: request.ownerRunId,
+					nodeId: request.nodeId,
+					agent: request.agent,
+				}, () => state.supervisorOwnerSessionId ?? null)
+				: undefined;
+			return (await getExecutor()).executeDelegated(requestId, params, signal, onUpdate, ctx, supervisorLaunchHooks);
 		},
 	});
 
@@ -819,6 +841,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 	};
 	const eventUnsubscribes = [
 		registerRuntimeAgentEventListener(pi),
+		registerSupervisorResponderEventListener(pi, () => state.supervisorOwnerSessionId ?? null),
 		registerInspectorEventListener(pi),
 		pi.events.on(SUBAGENT_ASYNC_STARTED_EVENT, asyncStartedHandler),
 		pi.events.on(SUBAGENT_ASYNC_COMPLETE_EVENT, asyncCompleteHandler),
@@ -891,6 +914,9 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		resultDeliveryOwnership.claimPredecessor(previousSessionFile, previousRuntimeSessionId);
 		state.currentSessionId = resolveCurrentSessionId(ctx.sessionManager);
 		state.supervisorOwnerSessionId = ctx.sessionManager.getSessionId() || null;
+		// A responder binding belongs to one exact runtime session; a reset or
+		// tree switch must release every registration that is no longer live.
+		disposeSupervisorRoutingForOwner(pi, state.supervisorOwnerSessionId);
 		transitionResultDelivery();
 		owedResultRunIds.clear();
 		deliveredRunIds.clear();
@@ -1048,6 +1074,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 			state.widgetsSuspended = false;
 			state.currentSessionId = null;
 			state.supervisorOwnerSessionId = null;
+			disposeSupervisorRouting(pi);
 			state.statusProjectionSessionId = null;
 			state.parentSessionFile = null;
 			if (runtimeEntry.sessionManager && runtimeRegistry.bySessionManager.get(runtimeEntry.sessionManager) === runtimeEntry) {

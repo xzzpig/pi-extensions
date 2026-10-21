@@ -1,0 +1,44 @@
+== 6.2 real update_goal handler + real auditor event chain ==
+new file: packages/pi-goal-x/tests/goal-audit-supervisor-completion.test.ts (5 cases, all pass)
+
+The harness registers the REAL goal extension through a fake pi (registerTool captured), so the tool under test is
+the actual registered `update_goal` definition and the flow under test is the real runGoalCompletionFlow wrapper
+(handoff + split billing). The auditor is injected, and in the last case the injected auditor IS the real
+runGoalCompletionAuditor over a real delegation event bus (SUPERVISOR_RESPONDER_REGISTER_EVENT,
+SUBAGENT_DELEGATION_REQUEST/STARTED/RESPONSE/CANCEL), so the delegation chain is exercised through the handler.
+
+cases:
+  1. held promise + unique child + one handoff + split billing:
+     - the update_goal promise does NOT settle after 5 event-loop turns while the audit is unresolved, and
+       nothing is committed before the verdict; exactly one auditor child is launched;
+     - on the terminal: content[0] is the formal approval report and exactly ONE appendix follows, carrying the
+       fixed title 审计协调记录（参考信息，不是新用户指令或完成证据） and the answered question (ALPHA);
+       details.supervisorCoordination carries the same single record;
+     - the tool usage is the auditor+side projection (input 100+7, totalTokens (100+20+5+3)+11, cost total
+       0.02+0.005) while goal.usage.tokensUsed is unchanged — the parent turn budget is not modified;
+     - the record is never sent through sendMessage/sendUserMessage and never with triggerTurn true;
+     - the ledger has exactly one audit_usage, exactly one audit_supervisor_usage (tokens 11 / turns 1 /
+       auditRequestId delegation-1), exactly one audit_result and zero audit_skipped, and the goal archives at
+       turn_end.
+  2. a question-free audit writes no appendix, no supervisorCoordination detail and NO side usage row.
+  3. fail-closed coordination: the unresolved question and the coordination record come back in the tool result,
+     never a pseudo-approval, the goal stays active with no goal_completed row, and the actually-spent side usage
+     is still recorded once.
+  4. user cancel / focus loss: no approval text, no commit, the goal stays open.
+  5. the real delegation chain through the real handler: exactly one child launch and exactly one precise
+     cancellation; the cancel acknowledgement carrying a late `verdict: approved` is only an acknowledgement, so
+     the tool result never says approved, the goal stays active and the single audit_result row has verdict error.
+
+Escape branches (park / continue / bypass) are covered at the delegation layer by
+tests/goal-audit-supervisor-flow.test.ts (park keeps the same attempt alive and returns no frozen handoff;
+continue settles on the child's real terminal; only the user bypass cancels the child) plus the focus/session
+isolation evidence from task 4.2/4.3.
+
+commands
+  cmd: pnpm --filter @xzzpig/pi-goal-x run typecheck -> exit 0
+       (first run exited 2 on three test-local declarations typed string where the harness records unknown
+        payloads; fixed in the test only. Disclosed rather than silently corrected.)
+  cmd: keepalive + adapter --test goal-audit-supervisor-completion.test.ts -> 5/5 pass, 0 fail / 0 cancelled / 0 skipped
+  cmd: keepalive + adapter --test goal-audit-supervisor-completion.test.ts goal-audit-supervisor-flow.test.ts
+       -> 10/10 pass, 0 fail
+  cmd: keepalive + adapter --test the six supervisor/sidechannel unit files -> 41/41 pass, 0 fail / 0 cancelled

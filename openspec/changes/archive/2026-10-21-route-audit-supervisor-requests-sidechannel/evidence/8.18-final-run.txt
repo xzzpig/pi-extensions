@@ -1,0 +1,30 @@
+== 8.18 FINAL ordered run (round-11 fixes; gates green, live LAST) ==
+
+two typechecks 0 error TS (goal-x, subagents)
+goal-x test:unit 1336/1336 exit 0
+goal-x test:integration exit 1 = integration group 26 pass + 9 DECLARED settings-profile debt;
+                              sdk group 1/1 pass (real SDK, no stub, NODE_OPTIONS cleared)
+fork runner 82/82; selfcheck OK (100/3/7)
+fork-divergence gate exit 0 (goal-x 555/7 declared 7 undeclared 0; subagents 989/10 declared 10 undeclared 0)
+openspec validate --strict valid; git diff --check clean
+live (LAST): exit 0 — BOTH LIVE CASES PASSED, 55 assertions
+logs: /tmp/8.18-logs/{unit,int,live}.txt
+
+Round-11 findings and closure:
+1. invalidate() and dispose() now share ONE settle chain (settleAll): abort (bounded) so a running ask
+   settles and writes its cancellation while records are still open -> bounded wait for that ask ->
+   deterministic terminal cancellation record -> force activeStopDeadline -> seal -> dispose the SDK
+   session -> freeze usage and release the listener. dispose() awaits that same chain even when it was
+   already started by invalidate(), so the handoff never freezes on an empty record set.
+2. The terminal now records the cancellation ITSELF (from the channel's activeAsk identity) when the
+   ask did not land one, so the question, supervisorRequestId, runId and cancelled status reach the
+   handoff even if the model never converges; the ask timer/signal listener is force-released by
+   activeStopDeadline on that same path (not only on the first dispose branch).
+3. The regression test now asserts the PRODUCTION freeze boundary: after invalidate + await dispose it
+   reads records() BEFORE releasing the barrier and requires exactly one cancelled entry with the
+   question identity (previously it only checked after a late release). Duplicate cancellation records
+   are deduped by ask id.
+4. Boundary: the invented index.ts imports are removed, `discoverAgentsWithRuntime` is back in
+   index.ts, and the executor's baseline import members (resolveModelSelection,
+   getHostBuiltinToolNames, WorkflowChildSettledNotification) are restored at the baseline paths
+   (../shared/model-resolution.ts, ../shared/child-tool-plan.ts, ../../workflows/scripted-workflow.ts).

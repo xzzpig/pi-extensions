@@ -1,0 +1,15 @@
+== 8.5 整改后全量复跑 ==
+两个包 typecheck                          -> exit 0，0 个 error TS
+goal-x test:unit (`pnpm ... run test:unit`) -> exit 0；1327 tests / 1327 pass / 0 fail / 0 cancelled / 0 skipped
+goal-x test:integration                    -> exit 1；36 tests / 27 pass / 9 fail（9 项均为 extension.test.ts 已声明且经用户批准的
+                                              settings/profile 债务，集合与整改前完全一致，无新增）
+pi-subagents unit (serial)                 -> exit 0；4132 tests / 4116 pass / 0 fail / 0 cancelled / 16 skipped（原有平台/opt-in）
+pi-subagents integration (serial)          -> exit 0；1218 tests / 1211 pass / 0 fail / 0 cancelled / 7 skipped
+fork runner `--selfcheck`                  -> "fork-test-runner list OK: 8 fork suite(s), live E2E excluded."
+fork runner (full)                         -> exit 0；73 tests / 73 pass / 0 fail / 0 cancelled
+unit runner `--selfcheck`                  -> "Runner self-check OK: 100 unit + 3 integration + 7 e2e entries match ..."（检查后退出）
+`pnpm run audit:fork-divergence`           -> exit 0；pi-goal-x 555/7/0/0/7/0/0，pi-subagents 989/10/0/0/10/0/0
+`openspec validate ... --strict`           -> "Change 'route-audit-supervisor-requests-sidechannel' is valid"
+`git diff --check`                         -> clean
+live E2E                                   -> exit 0；BOTH LIVE CASES PASSED（见 8.5-live-e2e-after-remediation.*）
+日志：/tmp/8.5-logs/{unit,integration,subagents-unit,subagents-integration,fork-gate}.txt

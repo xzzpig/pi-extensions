@@ -1,5 +1,6 @@
 import { cacheGoalHistory } from "./goal-prompt-cache.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { invalidateAuditSidechannels } from "./goal-audit-sidechannel.ts";
 import {
 	GOAL_EVENT_ENTRY,
 	assistantTurnTokens,
@@ -298,6 +299,9 @@ export function registerGoalEvents(core: GoalCore): void {
 	});
 
 	pi.on("session_start", async (event, ctx) => {
+		// A new session boundary revokes any audit side channel reply permission.
+		core.setAuditSessionId(ctx.sessionManager.getSessionId());
+		invalidateAuditSidechannels(ctx.sessionManager.getSessionId(), "session_start");
 		core.auditMessages.clear();
 		// A dialog span cannot survive a session boundary: clear any leaked depth
 		// so Escape is never permanently trapped by a goal guard.
@@ -395,6 +399,8 @@ export function registerGoalEvents(core: GoalCore): void {
 	});
 
 	pi.on("session_tree", async (_event, ctx) => {
+		core.setAuditSessionId(ctx.sessionManager.getSessionId());
+		invalidateAuditSidechannels(ctx.sessionManager.getSessionId(), "session_tree");
 		core.auditMessages.clear();
 		core.goalService.flushTurn(ctx); // P1-3: persist any buffered transaction before reload
 		await core.loadState(ctx);
@@ -634,6 +640,8 @@ export function registerGoalEvents(core: GoalCore): void {
 	});
 
 	pi.on("session_shutdown", async (_event, ctx) => {
+		core.setAuditSessionId(null);
+		invalidateAuditSidechannels(ctx.sessionManager.getSessionId(), "session_shutdown");
 		core.auditMessages.clear();
 		core.scheduler.shutdown();
 		continuationAfterSettleFor = null;

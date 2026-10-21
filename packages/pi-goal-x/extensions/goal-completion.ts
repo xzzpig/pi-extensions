@@ -9,6 +9,8 @@ import {
 } from "./goal-policy.ts";
 import { loadGoalSettings } from "./goal-settings.ts";
 import { runGoalCompletionAuditor, appendAuditUsageEntry, type GoalAuditorResult } from "./goal-auditor.ts";
+import { withAuditSupervisorHandoff } from "./goal-audit-supervisor-handoff.ts";
+import { appendAuditSupervisorUsageEntry, type GoalAuditorSupervisorHandoff } from "./goal-auditor-delegation.ts";
 import { loadGoalSettingsWithAuditorOverride } from "./goal-auditor-override.ts"; // [fork] S1: per-goal completion-auditor override
 import { nowIso, type GoalRecord } from "./goal-record.ts";
 import { latestEventsForGoal, latestAuditorResultForGoal, goalRuntimeEvents } from "./goal-ledger.ts";
@@ -44,6 +46,47 @@ function withAuditorUsage<T extends AgentToolResult<unknown>>(result: T, usage: 
 	};
 }
 
+/**
+ * Add the independent side-channel spend to the tool's own usage projection.
+ * `totalTokens` and `cost.total` keep their meaning, so host session statistics
+ * recognise the combined figure; the goal's parent-turn budget
+ * (`goal.usage.tokensUsed`) is never touched by this path.
+ */
+function withSupervisorUsage<T extends AgentToolResult<unknown>>(
+	result: T,
+	usage: GoalAuditorSupervisorHandoff["usage"] | undefined,
+): T {
+	if (!usage || usage.turns <= 0) return result;
+	// The side counters themselves must be representable before anything is summed.
+	const sideCounters = [usage.inputTokens, usage.outputTokens, usage.cacheReadTokens, usage.cacheWriteTokens, usage.tokens, usage.costUsd];
+	if (!sideCounters.every((value) => typeof value === "number" && Number.isFinite(value) && value >= 0)) return result;
+	const current = (result as { usage?: Record<string, unknown> }).usage;
+	const currentCost = (current?.cost as { total?: unknown } | undefined)?.total;
+	const numeric = (value: unknown): number => (typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0);
+	const cost = numeric(currentCost);
+	const projected = {
+		input: numeric(current?.input) + usage.inputTokens,
+		output: numeric(current?.output) + usage.outputTokens,
+		cacheRead: numeric(current?.cacheRead) + usage.cacheReadTokens,
+		cacheWrite: numeric(current?.cacheWrite) + usage.cacheWriteTokens,
+		totalTokens: numeric(current?.totalTokens) + usage.tokens,
+	};
+	const costTotal = cost + usage.costUsd;
+	// A sum can still overflow even when every addend is finite: never publish an
+	// Infinity/NaN usage to host statistics; fall back to the auditor's own usage.
+	if (![...Object.values(projected), costTotal].every((value) => Number.isFinite(value))) return result;
+	return {
+		...result,
+		usage: {
+			...projected,
+			cost: {
+				...(current?.cost as object | undefined),
+				total: costTotal,
+			},
+		},
+	} as T;
+}
+
 /** Total child tokens the auditor burned, across every counter the child reported. */
 function auditorTokens(usage: SubagentDelegationUsage | undefined): number {
 	if (!usage) return 0;
@@ -62,7 +105,37 @@ function auditorUsageLine(usage: SubagentDelegationUsage | undefined): string | 
 // requirements from the objective and any verification contract and inspects
 // actual workspace evidence. An optional completion_summary is forwarded as an
 // UNTRUSTED executor claim — never evidence and never an approval bypass.
-export async function runGoalCompletionFlow(core: GoalCore, ctx: ExtensionContext, completionSummary?: string): Promise<AgentToolResult<unknown>> {
+/**
+ * Single outer return wrapper: every terminal branch of the completion flow goes
+ * through here, so the coordination record is appended exactly once and a
+ * question-free audit keeps the original object untouched.
+ */
+export async function runGoalCompletionFlow(
+	core: GoalCore,
+	ctx: ExtensionContext,
+	completionSummary?: string,
+): Promise<AgentToolResult<unknown>> {
+	let handoff: GoalAuditorResult["supervisorHandoff"];
+	let auditGoalId: string | undefined;
+	const result = await runGoalCompletionFlowInner(core, ctx, completionSummary, (auditor, goalId) => {
+		handoff = auditor.supervisorHandoff;
+		auditGoalId = goalId;
+	});
+	// Exactly one independent side-usage row per real terminal, and only when the
+	// side channel actually spent something. It is billed to the ORIGINAL audit
+	// target, so a focus change during the dialog cannot move the cost to another goal.
+	if (handoff && handoff.usage.turns > 0 && auditGoalId) {
+		appendAuditSupervisorUsageEntry(core, ctx, auditGoalId, handoff.records[0]?.requestId ?? "", handoff.usage);
+	}
+	return withAuditSupervisorHandoff(withSupervisorUsage(result, handoff?.usage), handoff);
+}
+
+async function runGoalCompletionFlowInner(
+	core: GoalCore,
+	ctx: ExtensionContext,
+	completionSummary: string | undefined,
+	onAuditorResult?: (auditor: GoalAuditorResult, goalId: string) => void,
+): Promise<AgentToolResult<unknown>> {
  const flushError = core.goalService.flushForAudit(ctx);
  if (flushError) return {content: [{type: "text", text: flushError}], details: goalDetails(core.state.goal)};
 	core.reconcileFocusedGoalFromDisk(ctx);
@@ -317,6 +390,19 @@ if (auditorSettings?.disabled === true) {
 			settings,
 			warmContext,
 			changeManifest,
+			// The parent's own thinking level is forwarded explicitly; the side channel
+			// must inherit it instead of falling back to a constant.
+			// Reply-time liveness: the target must still be the active, focused goal.
+			// Focus loss already revokes through the lifecycle seam; this guards the active
+			// status itself, which the pause/blocked path can change without a focus change.
+			// The CAPTURED focus token is authoritative: a focus switch away and back, or any
+			// revision bump, makes an in-flight answer stale even if id/status look the same.
+			isGoalLive: () =>
+				core.isFocusedOperationCurrent(completionFocus) &&
+				core.state.goal?.id === auditTarget.id &&
+				core.state.goal?.status === "active",
+			getThinkingLevel: () =>
+				typeof core.pi.getThinkingLevel === "function" ? core.pi.getThinkingLevel() : "off",
 			signal: completionAuditController.signal,
 			// Esc interrupts the audit without killing the child: the audit is
 			// parked and the SAME delegated subagent resumes when the user chooses
@@ -343,6 +429,7 @@ if (auditorSettings?.disabled === true) {
 		core.stopAuditAnimation();
 	}
 
+	onAuditorResult?.(auditor, auditTarget.id);
 	// Child-session accounting. The delegated auditor runs in its own pi session,
 	// so its spend never reaches this session's own turn accounting. Record it as
 	// a separate ledger entry (goal.usage.tokensUsed stays parent-turn-only, so no
@@ -376,6 +463,9 @@ if (auditorSettings?.disabled === true) {
 			// Focus moved on while the dialog was open: kill the parked child so it
 			// does not keep running unattended, then return the focus result.
 			const cancelled = await auditor.session.cancel();
+			// The cancelled attempt is terminal: its coordination record and side
+			// usage belong to THIS audit target, never to whatever goal is focused now.
+			onAuditorResult?.(cancelled, auditTarget.id);
 			appendAuditUsageEntry(core, ctx, auditTarget.id, cancelled.usage);
 			return withAuditorUsage(core.focusedOperationCancelledResult("Goal completion", completionFocus), cancelled.usage);
 		}
@@ -383,6 +473,7 @@ if (auditorSettings?.disabled === true) {
 		if (userChoice === "complete_without_audit") {
 			// The child was kept alive across the dialog; cancel it now.
 			const cancelled = await auditor.session.cancel();
+			onAuditorResult?.(cancelled, auditTarget.id);
 			appendAuditUsageEntry(core, ctx, auditTarget.id, cancelled.usage);
 			// ── Mark complete without audit ────────────────────────────
 			core.auditMessages.enqueue(ctx, {
@@ -451,6 +542,7 @@ if (auditorSettings?.disabled === true) {
 		}
 		// The resumed attempt is terminal: account its spend, then re-check focus
 		// (it may have moved while the resumed audit was running) before verdicts.
+		onAuditorResult?.(auditor, auditTarget.id);
 		appendAuditUsageEntry(core, ctx, auditTarget.id, auditor.usage);
 		if (!core.isFocusedOperationCurrent(completionFocus)) {
 			core.auditProgress = null;

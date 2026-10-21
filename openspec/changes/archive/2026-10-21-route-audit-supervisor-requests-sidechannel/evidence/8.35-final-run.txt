@@ -1,0 +1,27 @@
+== 8.35 (round-23) two blocking findings closed; gates green; live green (56 checks) ==
+
+gates: goal-x typecheck 0 error TS; unit 1348/1348; integration exit 1 (26 pass + 9 DECLARED
+       settings-profile debt; sdk group 1/1 real SDK); fork runner 90/90;
+       fork-divergence gate exit 0 (goal-x 555/7, subagents 989/10, undeclared 0);
+       git diff --check clean
+live: exit 0; BOTH LIVE CASES PASSED; 56 assertions (one more than before: the predicate negative control)
+logs: /tmp/8.35-logs/{unit,int,gate,live}.txt
+
+Finding 1 (task 4.2 lifecycle / late answer) closed with a REAL in-flight test:
+  tests/goal-audit-sidechannel-compat.test.ts now builds a complete deps set (ctx.getSystemPrompt,
+  model, modelRegistry.runtime, sessionManager, getAuditDeadlineAt) and a DEFERRED sessionFactory whose
+  prompt blocks on a manually released gate. While that ask is genuinely in flight it
+  - drives the real GoalCore seam: core.setGoal({...record, revision:1, status:"paused"});
+  - then submits a LATE, perfectly legal reply through the session's own custom tool
+    (submit_audit_supervisor_reply), releases the gate and awaits the outcome;
+  and asserts the late answer is NOT delivered, the record set contains no "delivered" entry, and a
+  HEALTHY control attempt on the same goal still reaches the submit tool and returns kind "reply"
+  (so a removed revocation seam would fail the first assertions, and a broken submit path would fail
+  the control). The previous weak shape (error-only, no in-flight ask, no positive control) is gone.
+
+Finding 2 (negative live assertion) closed: the driver now has a named predicate isUnresolvedRecord()
+that requires deliveryStatus === "failed" AND a non-empty unresolvedReason AND a non-empty question, and
+a selfCheckUnresolvedPredicate() negative control that must reject the weak shapes (failed without a
+reason, blank reason, empty question, delivered with a reason) while accepting the real shape. The check
+"the unresolved question was reported back" uses the predicate only (no pane fallback), and the driver
+asserts the negative control passes BEFORE reporting the live result (hence 56 checks).

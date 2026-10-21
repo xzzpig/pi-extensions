@@ -19,6 +19,7 @@ export type GoalLedgerEvent =
   | { type: "completion_requested"; goalId: string; summary?: string; at: string }
   | { type: "audit_started"; goalId: string; provider?: string; model?: string; thinkingLevel?: string; at: string }
   | { type: "audit_result"; goalId: string; verdict: "approved" | "disapproved" | "error"; report: string; at: string }
+  | { type: "audit_supervisor_usage"; goalId: string; auditRequestId: string; tokens: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; costUsd: number; turns: number; at: string }
   | { type: "audit_usage"; goalId: string; tokens: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; costUsd: number; turns: number; at: string }
   | { type: "audit_skipped"; goalId: string; reason: "disabled" | "user_aborted"; provider?: string; model?: string; thinkingLevel?: string; at: string }
   | { type: "goal_completed"; goalId: string; archivePath?: string; at: string }
@@ -732,6 +733,8 @@ function isValidLedgerEvent(value: unknown): value is GoalLedgerEvent {
       return typeof obj.goalId === "string" && (obj.provider === undefined || typeof obj.provider === "string") && (obj.model === undefined || typeof obj.model === "string") && (obj.thinkingLevel === undefined || typeof obj.thinkingLevel === "string");
     case "audit_result":
       return typeof obj.goalId === "string" && (obj.verdict === "approved" || obj.verdict === "disapproved" || obj.verdict === "error") && typeof obj.report === "string";
+    case "audit_supervisor_usage":
+      return typeof obj.goalId === "string" && typeof obj.auditRequestId === "string" && [obj.tokens, obj.inputTokens, obj.outputTokens, obj.cacheReadTokens, obj.cacheWriteTokens, obj.costUsd, obj.turns].every((counter) => typeof counter === "number" && Number.isFinite(counter) && counter >= 0);
     case "audit_usage":
       return typeof obj.goalId === "string" && [obj.tokens, obj.inputTokens, obj.outputTokens, obj.cacheReadTokens, obj.cacheWriteTokens, obj.costUsd, obj.turns].every((counter) => typeof counter === "number" && Number.isFinite(counter) && counter >= 0);
     case "audit_skipped":

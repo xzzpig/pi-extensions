@@ -1,0 +1,16 @@
+== 4.1 audit-attempt integration + coordination cancel 2026-10-19T03:09:28+08:00 ==
+edits: extensions/goal-auditor-delegation.ts
+  - GoalAuditorResult.supervisorHandoff (records + independent usage), absent for zero-question audits and park results
+  - lazy await import('@xzzpig/pi-subagents/supervisor-routing'); missing API => actionable fail-closed audit error (no static subpath import at extension load)
+  - registerSupervisorResponderViaEvents BEFORE SUBAGENT_DELEGATION_REQUEST_EVENT with the exact scope (live sessionId, requestId, ownerRunId, nodeId, requested agent)
+  - coordinationFailure: locks the error first, sets cancellationReason=coordination_error, emits the original full-identity cancel, bounded cancellation timer; a later completed/approved response is only an acknowledgement
+  - cancelAttempt never overwrites a locked coordination error; auditDeadlineAt is set once together with the terminal timer and never reset by a later ask or park
+  - finish(): freezes records+usage into supervisorHandoff once, seals the side channel, disposes the responder and session (idempotent); park() does not release them
+
+new fixture (approved 4.1 supplement): tests/fixtures/goal-audit-supervisor-owner.ts (inert ack, no model work).
+minimal setup wiring in the legacy suites (no assertion changes): goal-auditor.test.ts baseArgs installs the ack + adds ctx.sessionManager; goal-auditor-package.test.ts and goal-auditor-agent-resolver.test.ts createBus installs the ack + ctx.sessionManager. One fake-timer test now awaits a setImmediate before ticking, because the responder API is imported lazily; its assertions are unchanged.
+
+cmd: pnpm --filter @xzzpig/pi-goal-x run typecheck -> exit 0
+cmd: keepalive + adapter --test tests/goal-audit-supervisor-flow.test.ts -> 3/3 pass
+cmd: keepalive + adapter --test goal-auditor.test.ts -> 40/40 pass
+cmd: keepalive + adapter --test goal-auditor-package.test.ts goal-auditor-agent-resolver.test.ts goal-auditor.test.ts -> 65/65 pass

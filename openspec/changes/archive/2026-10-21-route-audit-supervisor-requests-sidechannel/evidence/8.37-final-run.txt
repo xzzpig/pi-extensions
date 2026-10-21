@@ -1,0 +1,26 @@
+== 8.37 (round-25) gates + live green; 57 live assertions ==
+
+gates: goal-x typecheck 0 error TS; unit 1349/1349; fork runner 90/90;
+       fork-divergence gate exit 0; git diff --check clean
+live: exit 0; BOTH LIVE CASES PASSED; 57 assertions (two more than the previous round)
+logs: /tmp/8.37-logs/{unit,gate,live}.txt
+
+Closed (auditor finding 2 — runId binding was ineffective):
+- The delegation REQUEST row carries runId "", so the old derivation produced undefined and the
+  equality check was skipped. The driver now derives the attempt identity from ANY delegation row that
+  carries a non-empty runId (the update/response rows do) and emits a dedicated assertion
+  "the audit attempt identity was derived from the trace" — a missing identity therefore FAILS the case
+  instead of silently disabling the check.
+- The record walk is scoped to the CURRENT completion tool: only toolResults whose toolCallId is one of
+  the update_goal calls in this window are considered, so another attempt's record cannot be read.
+- "the unresolved question was reported back" now requires failedRecord AND a derived runId, and the
+  predicate still rejects the delivery-failure text and foreign-run records (self-check extended).
+
+Closed/advanced (auditor finding 1):
+- New in-flight test through the REAL handler: goal-events' session_shutdown (invoked with its real
+  (event, ctx) signature) revokes an in-flight ask, and a LATE, perfectly legal submit through the
+  session's own submit tool is dropped (no delivered record).
+- The earlier helper-based test now supplies getAuditDeadlineAt, so its control attempt is a real ask
+  rather than deadline_missing.
+- Still NOT covered by an in-flight test: focus switch away/back and reload handlers. That gap is
+  recorded here and in verification.md instead of being claimed as complete.

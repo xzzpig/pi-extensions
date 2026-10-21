@@ -1,0 +1,44 @@
+== 8.2 scope, spec gates and final acceptance evidence ==
+
+gates (all real runs, repository root, direnv/Nix)
+  openspec validate route-audit-supervisor-requests-sidechannel --strict
+    -> "Change 'route-audit-supervisor-requests-sidechannel' is valid" (exit 0), re-run after tick-box update
+  direnv exec . pnpm run audit:fork-divergence -> exit 0
+    pi-goal-x:   checked=555 noise=7  deleted=0 submodule=0 declared=7  undeclared=0 stale=0
+    pi-subagents: checked=989 noise=10 deleted=0 submodule=0 declared=10 undeclared=0 stale=0
+  direnv exec . node env/ensure-upstreams.mjs -> exit 0 (schema + ref validation of every record)
+  git diff --check -> clean (exit 0)
+
+scope verification
+  READ-ONLY baseline untouched (git status empty for these paths):
+    pi-subagents: src/api/delegation.ts, src/slash/delegation-request.ts, src/slash/delegation-adapters.ts,
+      src/runs/foreground/execution.ts, src/runs/shared/child-launch.ts, src/runs/shared/child-runtime-config.ts,
+      src/shared/types.ts
+    pi-goal-x:    extensions/goal-auditor.ts, goal-service.ts, goal-session-safety.ts, goal-scheduler.ts
+    all of packages/pi-btw/
+  package.json diffs are exactly the two approved additions and nothing else:
+    pi-goal-x  + "docs/audit-supervisor-sidechannel.md" (files)
+    pi-subagents + "./supervisor-routing": "./src/api/supervisor-routing.ts" (exports)
+  no version bump, no dependencies/peerDependencies/devDependencies change, no lockfile change.
+  no credentials: a scan of every new/changed source, test, JSON and doc file finds exactly one synthetic canary
+    ("sk-LEAK-CANARY-9f2b") inside tests/goal-audit-sidechannel.test.ts, whose entire purpose is to prove the
+    diagnostic path never echoes provider secrets. No real key, token or auth file content is present anywhere.
+  .pi/pi-goal-x-settings.json keeps its pre-existing local modification (auditor provider/model/thinkingLevel +
+    the fork-divergence checklistExtra); it predates this session, governs this goal's own auditor and was
+    preserved, not reverted.
+  modification surface: 3 new Goal-X extension modules + 2 new pi-subagents modules + 1 fixture + 6 new/extended
+    test files + 2 docs + manifest + 2 subtree records + 6 pi-goal-x extension edits + 4 minimal pi-subagents
+    upstream seams (prompt-template-bridge, subagent-executor, native-supervisor-channel, package.json) +
+    src/extension/index.ts (fork-owned).
+
+verification.md
+  openspec/changes/route-audit-supervisor-requests-sidechannel/verification.md now records
+  (1) the command matrix with real counts and log paths, (2) the gates and scope checks above,
+  (3) a 36-row trace table for D-01..D-15 and I-01..I-21 with file:line + test name + suite + actual result,
+  (4) honest disclosures: the two regressions found and fixed in 8.1 (test fixtures only, HEAD worktree baseline
+      proving they were regressions), the serial-vs-parallel debt rule for pi-subagents, the nine declared
+      pi-goal-x integration debt failures, and that D-15's live E2E row belongs to 8.3 and is not yet claimed.
+
+tasks.md
+  19 of 20 checkboxes are ticked (1.1 .. 8.2) with a per-task evidence table appended; 8.3 stays unchecked
+  because the live E2E has not run yet. openspec validate --strict still passes after the update.

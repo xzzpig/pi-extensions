@@ -1,0 +1,26 @@
+== 8.36 (round-24) live predicate hardened; gates + live green ==
+
+gates: goal-x typecheck 0 error TS; unit 1348/1348; fork runner 90/90;
+       fork-divergence gate exit 0; git diff --check clean
+live: exit 0; BOTH LIVE CASES PASSED; 56 assertions
+logs: /tmp/8.36-logs/{unit,gate,live}.txt
+
+Closed this round (auditor finding 2): the negative live predicate now
+- requires deliveryStatus "failed" AND a non-empty unresolvedReason AND a non-empty question
+  AND a non-empty runId that equals the attempt's runId taken from the trace delegation request;
+- explicitly REJECTS the production delivery-failure shape
+  (unresolvedReason === "the reply could not be delivered"), so a delivery/protocol failure can no
+  longer be reported as "the unresolved authorisation question";
+- keeps an in-driver negative control (selfCheckUnresolvedPredicate) that must reject: failed without a
+  reason, blank reason, empty question, delivered-with-reason, the delivery-failure shape, and a record
+  from a DIFFERENT run — and accept the real shape. The driver asserts that control before reporting.
+Hence 56 assertions (one more than before).
+
+Still open (auditor finding 1, partially closed): the in-flight pause test with a late legal answer and a
+healthy positive control is in place and was accepted, but focus switch away/back and the real
+session_start/tree/shutdown handler paths are not yet covered by an in-flight test. I attempted it this
+round; the GoalCore+registerGoalEvents harness needs the ExtensionAPI `pi.on` signature and the handler's
+event/ctx shape, and the attempt produced an unhandled rejection inside the shutdown handler
+("Cannot read properties of undefined (reading 'sessionManager')"), so the test was removed rather than
+left red/false-passing. Concretely: the harness must pass the session_shutdown event payload shape that
+goal-events.ts expects, then assert old ask not delivered + the other goal untouched.

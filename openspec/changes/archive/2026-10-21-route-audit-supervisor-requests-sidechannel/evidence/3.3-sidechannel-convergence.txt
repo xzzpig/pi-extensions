@@ -1,0 +1,14 @@
+== 3.3 reply/interview/capacity/deadline convergence 2026-10-19T03:02:11+08:00 ==
+module additions: plain-JSON-object rule for interview replies (no code fences, no arrays, must parse to an object); a session that races cancellation is aborted+disposed and yields code 'cancelled' with zero prompts.
+
+covered by tests (same file, 23 total):
+  reply / unresolved / invalid structure; duplicate submit rejected; no-submit => session_error
+  8 distinct asks; duplicate id consumes no quota; 9th => invalid_ask
+  ask > 8 KiB => invalid_ask; reply > 8 KiB => invalid_ask; record budget invariant 8*8KiB <= 96KiB
+  earliest deadline (min ask/audit), past deadline => deadline_missing, missing deadline => deadline_missing
+  interview plain JSON object accepted; fenced / array / non-JSON rejected as invalid_ask
+  cancel-during-creation: created session disposed once, zero prompts, outcome cancelled
+  seal/dispose refuse later asks; dispose idempotent; borrowed parent runtime never disposed
+
+cmd: node --import keepalive --import scripts/test-adapter-hooks.mjs --experimental-strip-types --test tests/goal-audit-sidechannel.test.ts
+result: 23 tests / 23 pass / 0 fail / 0 cancelled (log /tmp/new-goal-mve57x7e-diagnostic-repair/GREEN-3.3.log)

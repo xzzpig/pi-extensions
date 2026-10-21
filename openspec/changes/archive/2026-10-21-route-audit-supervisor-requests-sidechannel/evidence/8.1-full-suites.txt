@@ -1,0 +1,81 @@
+== 8.1 typecheck, focused, real-SDK and the four complete suites ==
+All commands run from the repository root inside direnv (Nix), logs kept under /tmp/8.1-logs/.
+
+1) typecheck
+   cmd: pnpm --filter @xzzpig/pi-goal-x run typecheck        -> exit 0
+   cmd: pnpm --filter @xzzpig/pi-subagents run typecheck      -> exit 0
+   (goal-x typecheck was re-run after the two test-fixture fixes: exit 0, zero "error TS" lines.)
+
+2) pi-goal-x test:unit  (literal `pnpm --filter @xzzpig/pi-goal-x run test:unit`)
+   -> exit 0; tests 1316 / suites 73 / pass 1316 / fail 0 / cancelled 0 / skipped 0 / todo 0
+   log: /tmp/8.1-logs/goalx-unit-final.txt
+
+3) pi-goal-x test:integration  (`pnpm --filter @xzzpig/pi-goal-x run test:integration`)
+   -> exit 1; tests 36 / pass 27 / fail 9 / cancelled 0 / skipped 0
+   The 9 failures are ALL in tests/integration/extension.test.ts and are exactly the nine settings/profile
+   failures already declared as a user-approved `test` knownDebt entry in subtrees/pi-goal-x.json ("test:all
+   reports the nine settings/profile failures listed in that change's validation.md"). No new failure, no new
+   debt. The new integration file passed inside this same run:
+     ✔ 6.1 the default side-session factory runs against the real SDK with no stub
+   log: /tmp/8.1-logs/goalx-integration.txt
+
+4) pi-subagents test:unit
+   parallel (literal `pnpm --filter @xzzpig/pi-subagents run test:unit`) -> exit 1 with ONE failing test:
+     ✖ subagent extension child mode — "bg_wait did not yield promptly" (a <1200 ms wall-clock assertion)
+   This is pre-existing declared test debt: subtrees/pi-subagents.json carries a `test` knownDebt entry naming
+   "subagent extension child mode" among the spawn-family tests that "exceed their 10-40s waits under the default
+   parallel node --test load on this WSL host ... every affected file passed solo and the whole unit suite passed
+   with --test-concurrency=1 on that WSL baseline. Verify releases with the serial run, not the parallel one."
+   Verified as instructed, not assumed:
+     - solo: test/unit/index-child-registration.test.ts -> exit 0, tests 30 / pass 30 / fail 0 (94 s)
+     - serial full unit suite (--test-concurrency=1, same preloads/env as the npm script):
+       exit 0; tests 4132 / suites 438 / pass 4116 / fail 0 / cancelled 0 / skipped 16 / todo 0
+       the 16 skips are all pre-existing platform/opt-in gates (real-SDK opt-in via PI_SUBAGENTS_NATIVE_SDK,
+       Windows-only and case-insensitive-filesystem cases, unsupported platform probes); none belongs to this
+       change and none of its own tests is skipped.
+   logs: /tmp/8.1-logs/subagents-unit.txt, -serial.txt, child-registration-alone.txt
+
+5) pi-subagents test:integration
+   parallel (literal npm script) -> exit 1 with five timing failures under parallel load
+     (async execution utilities, async job tracker, "hard-kills async children that ignore timeout SIGTERM"
+     elapsed 6063 ms, "Timed out waiting for async result file", "Timed out waiting for running widget cadence
+     repaint").
+   serial (--test-concurrency=1, same preloads/env) -> exit 0;
+     tests 1218 / suites 56 / pass 1211 / fail 0 / cancelled 0 / skipped 7 / todo 0
+   logs: /tmp/8.1-logs/subagents-integration.txt, -serial.txt
+
+6) focused set (design D8, keepalive preload + Goal-X adapter):
+   goal-audit-sidechannel, goal-audit-supervisor-flow, -handoff, -usage, -completion, goal-audit-agent-resolver,
+   goal-audit-context-snapshot -> exit 0; tests 53 / pass 53 / fail 0 / cancelled 0 / skipped 0
+   log: /tmp/8.1-logs/focused.txt
+
+7) real SDK command (exactly the design's, never loading the Goal-X stub):
+   direnv exec . env -u NODE_OPTIONS node --experimental-strip-types --test \
+     ./packages/pi-goal-x/tests/integration/goal-audit-sidechannel-sdk.test.ts
+   -> exit 0; tests 1 / pass 1 / fail 0 / cancelled 0 / skipped 0 (the child runs the 4 no-stub cases)
+   log: /tmp/8.1-logs/sdk-command.txt
+
+8) selfcheck
+   cmd: node ./packages/pi-goal-x/scripts/run-unit-tests.mjs --selfcheck
+   -> "Runner self-check OK: 99 unit + 3 integration + 7 e2e entries match ...tests/.test-manifest.json."
+
+== TWO REAL REGRESSIONS FOUND AND FIXED BY THIS TASK (disclosed, test-only) ==
+The full-suite run initially hung/failed. Both causes were introduced by this change and were fixed in test
+fixtures only, without touching any assertion, and without loosening production fail-closed behaviour:
+  a) tests/goal-delegation-completion.test.ts (a THIRD pre-existing auditor test file beyond the two the approved
+     supplement named) never acknowledged SUPERVISOR_RESPONDER_REGISTER_EVENT, so the mandatory
+     register-before-request step finished the audit before the delegation request was emitted
+     (request?.context === undefined) and the following Escape/park case then hung for >300 s.
+     Fix: install the existing shared fixture installSupervisorResponderAck(events) in its createHarness.
+     After: 14/14 pass, identical to HEAD.
+  b) tests/goal-auditor.test.ts "D-09" overrode ctx with a minimal object lacking sessionManager, so the new
+     scope.sessionId read threw "Cannot read properties of undefined (reading 'getSessionId')".
+     Fix: that ctx now supplies sessionManager.getSessionId() (every real ExtensionContext has one), matching
+     baseArgs. No assertion changed.
+Baseline proof that both were regressions and not pre-existing: a clean `git worktree add` at HEAD bf461ad3ec with
+`pnpm install --frozen-lockfile` ran tests/goal-delegation-completion.test.ts -> 14/14 pass (log
+/tmp/8.1-logs/HEAD-delegation-completion.txt); the worktree was removed afterwards and never modified.
+Honest consequence: the approved 4.1 supplement listed the ack fixture for goal-auditor.test.ts and
+goal-auditor-package.test.ts only, so file (a) is one test file beyond the letter of that supplement. It is the
+same fixture, the same class of change (restore a pre-existing assertion the mandatory registration broke), and no
+assertion was weakened; it is recorded here rather than left silent.

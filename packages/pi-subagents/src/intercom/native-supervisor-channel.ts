@@ -6,6 +6,7 @@ import type { AgentBeforeSettleEvent, AgentBeforeSettleEventResult, ExtensionAPI
 import { Type } from "typebox";
 import type { ChildSupervisorMetadata } from "../runs/shared/child-runtime-config.ts";
 import { INTERCOM_DETACH_REQUEST_EVENT, POLL_INTERVAL_MS, TEMP_ROOT_DIR, type ControlEvent, type IntercomEventBus, type SubagentState } from "../shared/types.ts";
+import type { SupervisorDispatcher } from "./fork-supervisor-routing.ts";
 import { writeAtomicJson } from "../shared/atomic-json.ts";
 import { shouldUseNativeFsWatch } from "../shared/watch-strategy.ts";
 import { MODEL_ONLY_TOOL } from "../shared/extension-context.ts";
@@ -89,6 +90,12 @@ interface NativeSupervisorChannelDeps {
 	/** Retained scheduled states for the current runtime owner, never foreign owners. */
 	getCurrentOwnerStates?: () => Iterable<SubagentState>;
 	parentWake?: Pick<ExtensionAPI, "sendMessage">;
+	/**
+	 * Owner-side responder dispatcher. When a registered responder claims an ask,
+	 * this channel skips the parent wake and detach emission for that ask and
+	 * never lets a generic reply overwrite it. Unset means default behaviour.
+	 */
+	supervisorDispatcher?: SupervisorDispatcher;
 	platform?: NodeJS.Platform;
 	watch?: SupervisorWatch;
 	timers?: Pick<typeof globalThis, "setInterval" | "clearInterval" | "setImmediate" | "clearImmediate">;
@@ -177,8 +184,15 @@ async function waitForReply(channelDir: string, requestId: string, deadline: num
 	while (Date.now() <= deadline) {
 		if (signal?.aborted) throw new Error("Supervisor request cancelled.");
 		if (fs.existsSync(file)) {
-			const parsed = JSON.parse(fs.readFileSync(file, "utf-8")) as Partial<SupervisorReply>;
-			if (parsed.type === "subagent.supervisor.reply" && parsed.requestId === requestId && typeof parsed.message === "string") {
+			let parsed: Partial<SupervisorReply> | undefined;
+			try {
+				parsed = JSON.parse(fs.readFileSync(file, "utf-8")) as Partial<SupervisorReply>;
+			} catch {
+				// A partially written or corrupt reply file must not crash the child;
+				// keep polling until the deadline instead.
+				parsed = undefined;
+			}
+			if (parsed && parsed.type === "subagent.supervisor.reply" && parsed.requestId === requestId && typeof parsed.message === "string") {
 				return parsed as SupervisorReply;
 			}
 		}
@@ -529,7 +543,11 @@ function writeReply(request: PendingSupervisorRequest, message: string): Supervi
 	return reply;
 }
 
-function appendSupervisorReplyEntry(pi: ExtensionAPI, request: PendingSupervisorRequest, reply: SupervisorReply): void {
+/** Internal: exported so the journal-failure content oracle can exercise the real boundary. */
+export function appendSupervisorReplyEntry(pi: ExtensionAPI, request: PendingSupervisorRequest, reply: SupervisorReply): void {
+	// SAFETY: newer hosts expose appendEntry on ExtensionAPI while older SDK
+	// typings omit it. The narrowed shape is optional and every use below is
+	// guarded by a typeof check, so no unchecked property is read.
 	const appendEntry = (pi as unknown as {
 		appendEntry?: (customType: string, data?: SupervisorReplyEntryData) => void;
 	}).appendEntry;
@@ -545,9 +563,10 @@ function appendSupervisorReplyEntry(pi: ExtensionAPI, request: PendingSupervisor
 			message: reply.message,
 			createdAt: reply.createdAt,
 		});
-	} catch (error) {
+	} catch {
 		// The reply file is authoritative; a UI journal failure must not undo a delivered reply.
-		console.error("Failed to journal native supervisor reply:", error);
+		// Fixed text only: an external exception body/stack must never reach diagnostics.
+		console.error("Failed to journal native supervisor reply: error details omitted");
 	}
 }
 
@@ -585,7 +604,7 @@ function publicPendingRequests(pending: Map<string, PendingSupervisorRequest>): 
 	}));
 }
 
-function buildParentSupervisorTool(pi: ExtensionAPI, pending: Map<string, PendingSupervisorRequest>, state: SubagentState, onLifecycle: SupervisorRequestLifecycleObserver, discover: () => void, runState: (request: SupervisorRequest) => SubagentState): ToolDefinition<typeof IntercomParamsSchema, Record<string, unknown>> {
+function buildParentSupervisorTool(pi: ExtensionAPI, pending: Map<string, PendingSupervisorRequest>, state: SubagentState, onLifecycle: SupervisorRequestLifecycleObserver, discover: () => void, runState: (request: SupervisorRequest) => SubagentState, isClaimed: (requestId: string) => boolean = () => false): ToolDefinition<typeof IntercomParamsSchema, Record<string, unknown>> {
 	return {
 		name: NATIVE_SUPERVISOR_TOOL_NAME,
 		...MODEL_ONLY_TOOL,
@@ -601,11 +620,16 @@ function buildParentSupervisorTool(pi: ExtensionAPI, pending: Map<string, Pendin
 				return { content: [{ type: "text", text: `Native supervisor channel active. Pending replies: ${pending.size}.` }], details: { active: true, pending: pending.size, root: SUPERVISOR_CHANNEL_ROOT } };
 			}
 			if (input.action === "pending" || input.action === "list") {
-				const lines = [...pending.values()].filter((request) => request.expectsReply).map(formatPendingLine);
-				return { content: [{ type: "text", text: lines.length ? lines.join("\n") : "No pending supervisor requests." }], details: { pending: publicPendingRequests(pending) } };
+				// Responder-managed asks are not the parent model's to answer.
+				const answerable = [...pending.values()].filter((request) => request.expectsReply && !isClaimed(request.id));
+				const lines = answerable.map(formatPendingLine);
+				return { content: [{ type: "text", text: lines.length ? lines.join("\n") : "No pending supervisor requests." }], details: { pending: publicPendingRequests(new Map(answerable.map((request) => [request.id, request]))) } };
 			}
 			if (input.action === "reply") {
 				const request = resolvePendingRequest(pending, input);
+				if (isClaimed(request.id)) {
+					throw new Error(`Supervisor request ${request.id} is responder-managed; it can only be answered by its registered responder.`);
+				}
 				const reply = writeReply(request, input.message ?? "");
 				appendSupervisorReplyEntry(pi, request, reply);
 				pending.delete(request.id);
@@ -637,6 +661,9 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 		return state;
 	};
 	const pending = new Map<string, PendingSupervisorRequest>();
+	// Asks claimed by a registered responder: never woken, never detached, never
+	// answered through the generic parent tool.
+	const claimedAsks = new Set<string>();
 	// One continuation and one warning per request; never auto-answer or loop.
 	const settleNotices = new Map<string, "reminded" | "warned" | "handled">();
 	let unsubscribeSettle: (() => void) | undefined;
@@ -670,6 +697,7 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 	const observeRequestLifecycle: SupervisorRequestLifecycleObserver = (request, lifecycle) => {
 		settleNotices.delete(request.id);
 		if (lifecycle !== "wrong-session") rememberResolvedRequest(request);
+		if (lifecycle !== "pending") deps.supervisorDispatcher?.observe(request.id, lifecycle);
 		updateSettleSubscription();
 	};
 	const getSupervisorRequestState = (event: ControlEvent): SupervisorRequestState => {
@@ -716,7 +744,25 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 	};
 
 	const registerParentTools = (): void => {
-		if (!hasTool(pi, NATIVE_SUPERVISOR_TOOL_NAME)) pi.registerTool(buildParentSupervisorTool(pi, pending, state, observeRequestLifecycle, () => poll(), runState));
+		if (!hasTool(pi, NATIVE_SUPERVISOR_TOOL_NAME)) pi.registerTool(buildParentSupervisorTool(pi, pending, state, observeRequestLifecycle, () => poll(), runState, (requestId) => claimedAsks.has(requestId)));
+	};
+
+	/**
+	 * Write a responder's answer through the same file-authoritative path the
+	 * native reply uses, after re-confirming the ask is still answerable.
+	 */
+	const deliverClaimedReply = (request: PendingSupervisorRequest, message: string): void => {
+		if (!pending.has(request.id)) throw new Error(`Supervisor ask ${request.id} is no longer pending.`);
+		if (!requestMatchesOwner(request, state)) throw new Error(`Supervisor ask ${request.id} no longer belongs to the live owner session.`);
+		if (fs.existsSync(replyPath(request.channelDir, request.id))) throw new Error(`Supervisor ask ${request.id} already has a reply.`);
+		const now = Date.now();
+		if (request.expectsReply && now > requestExpiresAt(request, now)) throw new Error(`Supervisor ask ${request.id} has expired.`);
+		const reply = writeReply(request, message);
+		appendSupervisorReplyEntry(pi, request, reply);
+		pending.delete(request.id);
+		claimedAsks.delete(request.id);
+		observeRequestLifecycle(request, "resolved");
+		clearForegroundSupervisorAttention(request, pending, state);
 	};
 
 	const cleanupStaleChannelsIfDue = (): void => {
@@ -759,6 +805,24 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 			pending.set(request.id, request);
 			updateSettleSubscription();
 			markForegroundSupervisorAttention(request, state);
+			// Exclusive takeover: a registered responder claims this exact bound
+			// route before any parent wake or detach is emitted. A claim is final
+			// for this ask; failures inside the responder fail the audit closed
+			// instead of falling back to the default notification path.
+			const claimed = deps.supervisorDispatcher?.claim({
+				askId: request.id,
+				runId: request.runId,
+				agent: request.agent,
+				childIndex: request.childIndex,
+				reason: request.reason,
+				message: request.message,
+				...(request.interview !== undefined ? { interview: request.interview } : {}),
+				...(request.expiresAt !== undefined ? { deadlineAt: request.expiresAt } : {}),
+			}, (message) => deliverClaimedReply(request, message)) === true;
+			if (claimed) {
+				claimedAsks.add(request.id);
+				continue;
+			}
 			// The ask is already queued above. A sendMessage failure (no UI, stale context) must not
 			// lose it, and must not abort the loop before the remaining asks register.
 			try {
@@ -803,6 +867,7 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 			return;
 		const messages = event.context.contextMessages;
 		const requests = [...pending.values()].filter(request => {
+			if (claimedAsks.has(request.id)) return false;
 			if (!request.expectsReply || settleNotices.get(request.id) === "warned" || settleNotices.get(request.id) === "handled") return false;
 			const index = messages.findLastIndex(message => message.role === "custom"
 				&& message.customType === SUPERVISOR_REQUEST_MESSAGE_TYPE
@@ -990,6 +1055,7 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 			if (deferredWatcherRefresh) timers.clearImmediate(deferredWatcherRefresh);
 			deferredWatcherRefresh = undefined;
 			pending.clear();
+			claimedAsks.clear();
 			settleNotices.clear();
 			requestCorrelations.clear();
 			seenFiles.clear();

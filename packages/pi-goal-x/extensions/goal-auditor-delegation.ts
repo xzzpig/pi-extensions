@@ -35,6 +35,7 @@ import {
 } from "./goal-settings.ts";
 import { getDefaultGoalAuditorRegistration } from "./goal-auditor-registration.ts";
 import { resolveExternalAuditorAgentDefinition } from "./goal-auditor-agent-resolver.ts";
+import { createAuditSupervisorSidechannel, registerAuditSidechannelLifecycle } from "./goal-audit-sidechannel.ts";
 import {
 	REPORT_AUDITOR_PROGRESS_PROTOCOL_PREFIX,
 	REPORT_AUDITOR_PROGRESS_TOOL_NAME,
@@ -45,6 +46,9 @@ import {
 	type AuditorProgressCallback,
 } from "./goal-auditor.ts";
 
+/** Why an audit attempt was cancelled; lifecycle revocation is not an Escape park. */
+type CancellationReason = "user_abort" | "terminal_timeout" | "coordination_error" | "lifecycle_revoked";
+
 export interface GoalAuditorEvents {
 	on(event: string, handler: (data: unknown) => void): (() => void) | void;
 	emit(event: string, data: unknown): void;
@@ -54,6 +58,30 @@ export interface GoalAuditorStructuredResult {
 	verdict: "approved" | "disapproved";
 	report: string;
 	findings: string[];
+}
+
+export interface GoalAuditorSupervisorHandoff {
+	/** Frozen coordination records, in ask order. */
+	records: Array<{
+		requestId: string;
+		supervisorRequestId: string;
+		runId: string;
+		reason: string;
+		question: string;
+		answer?: string;
+		unresolvedReason?: string;
+		deliveryStatus: "delivered" | "failed" | "cancelled";
+	}>;
+	/** Independent side-channel usage; never folded into the parent turn budget. */
+	usage: {
+		inputTokens: number;
+		outputTokens: number;
+		cacheReadTokens: number;
+		cacheWriteTokens: number;
+		tokens: number;
+		costUsd: number;
+		turns: number;
+	};
 }
 
 export interface GoalAuditorResult {
@@ -76,6 +104,12 @@ export interface GoalAuditorResult {
 	interrupted?: boolean;
 	/** Present exactly when `interrupted` is true; the caller decides the outcome. */
 	session?: GoalAuditorSessionHandle;
+	/**
+	 * Supervisor coordination record + independent side usage. Absent when the
+	 * audit asked nothing and on park intermediate results; only a real terminal
+	 * result carries it.
+	 */
+	supervisorHandoff?: GoalAuditorSupervisorHandoff;
 	/**
 	 * Child session usage from the terminal delegation response, when pi-subagents
 	 * reported one. Presentation/accounting only: it never changes the verdict, and
@@ -227,6 +261,40 @@ export function appendAuditUsageEntry(core: GoalCore, ctx: ExtensionContext, goa
 	}
 }
 
+/**
+ * Independent side-channel accounting. The auditor's own `audit_usage` stays
+ * auditor-only; this is a separate ledger row so the two spends never merge.
+ * Appended exactly once at a real terminal, and only when usage was observed.
+ */
+export function appendAuditSupervisorUsageEntry(
+	core: GoalCore,
+	ctx: ExtensionContext,
+	goalId: string,
+	auditRequestId: string,
+	usage: GoalAuditorSupervisorHandoff["usage"] | undefined,
+): void {
+	if (!usage || usage.turns <= 0) return;
+	const counters = [usage.tokens, usage.inputTokens, usage.outputTokens, usage.cacheReadTokens, usage.cacheWriteTokens, usage.costUsd, usage.turns];
+	if (!counters.every((counter) => typeof counter === "number" && Number.isFinite(counter) && counter >= 0)) return;
+	try {
+		core.goalService.appendEvents(ctx, [{
+			type: "audit_supervisor_usage",
+			goalId,
+			auditRequestId,
+			tokens: usage.tokens,
+			inputTokens: usage.inputTokens,
+			outputTokens: usage.outputTokens,
+			cacheReadTokens: usage.cacheReadTokens,
+			cacheWriteTokens: usage.cacheWriteTokens,
+			costUsd: usage.costUsd,
+			turns: usage.turns,
+			at: nowIso(),
+		}]);
+	} catch {
+		// Ledger append failure must not block completion.
+	}
+}
+
 function formatAuditOutput(report: string, findings: string[]): string {
 	const cleanReport = report.trim();
 	const cleanFindings = findings.map((finding) => finding.trim()).filter(Boolean);
@@ -351,6 +419,13 @@ function responseError(response: SubagentDelegationResponse): string {
 }
 
 export interface GoalCompletionAuditorArgs {
+	/**
+	 * Reply-time liveness: called before EVERY delivered reply. Returning false means the
+	 * audit target is no longer active/focused, so the answer must be refused (fail closed).
+	 */
+	isGoalLive?: () => boolean;
+	/** Test seam: inject the side channel's SESSION factory (production default is the real SDK). */
+	auditSidechannelSessionFactory?: (input: never) => Promise<never>;
 	ctx: ExtensionContext;
 	events?: GoalAuditorEvents;
 	goal: GoalRecord;
@@ -377,6 +452,8 @@ export interface GoalCompletionAuditorArgs {
 	requestId?: string;
 	nodeId?: string;
 	timeouts?: { startedMs?: number; terminalMs?: number; cancellationMs?: number };
+	/** Live parent thinking level for the side channel (captured by the caller). */
+	getThinkingLevel?: () => string;
 	/** Test-only: bypass launch preflight when exercising event lifecycle in isolation. */
 	skipPreflight?: boolean;
 }
@@ -410,7 +487,7 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 				approved: false,
 				disapproved: true,
 				output: "",
-				error: `Goal auditor preflight failed: ${error instanceof Error ? error.message : String(error)}`,
+				error: "Goal auditor preflight failed: error details omitted",
 			};
 		}
 		if (preflight.ok) {
@@ -516,13 +593,89 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 		artifacts: true,
 		result: { kind: "structured" as const, schema: GOAL_AUDITOR_RESULT_SCHEMA },
 	};
+	// Lazy import: a static subpath import would crash the whole goal extension on
+	// an older pi-subagents install. Registration must exist BEFORE the request is
+	// emitted, so an auditor that asks on its first turn is already routed.
+	let registerSupervisorResponder:
+		| typeof import("@xzzpig/pi-subagents/supervisor-routing").registerSupervisorResponderViaEvents
+		| undefined;
+	try {
+		({ registerSupervisorResponderViaEvents: registerSupervisorResponder } = await import("@xzzpig/pi-subagents/supervisor-routing"));
+	} catch {
+		registerSupervisorResponder = undefined;
+	}
+	if (!registerSupervisorResponder) {
+		return {
+			approved: false,
+			disapproved: true,
+			output: "",
+			error:
+				"pi-subagents does not expose the supervisor responder API required for audit coordination. Upgrade @xzzpig/pi-subagents and retry.",
+		};
+	}
+
 	return new Promise<GoalAuditorResult>((resolve) => {
 		let settled = false;
 		let started = false;
 		let startedTimer: ReturnType<typeof setTimeout> | undefined;
 		let terminalTimer: ReturnType<typeof setTimeout> | undefined;
 		let cancellationTimer: ReturnType<typeof setTimeout> | undefined;
-		let cancellationReason: "user_abort" | "terminal_timeout" | undefined;
+		let cancellationReason: CancellationReason | undefined;
+		let coordinationError: string | undefined;
+		let auditDeadlineAt: number | undefined;
+		let supervisorRegistration: { dispose(): void } | undefined;
+		const sidechannel = createAuditSupervisorSidechannel({
+			ctx: args.ctx,
+			...(args.auditSidechannelSessionFactory ? { sessionFactory: args.auditSidechannelSessionFactory as never } : {}),
+			getThinkingLevel: args.getThinkingLevel ?? (() => "off"),
+			goalPayload: {
+				goal: args.goal,
+				detailedSummary: args.detailedSummary,
+				completionSummary: args.completionSummary ?? null,
+				warmContext: args.warmContext ?? null,
+				changeManifest: args.changeManifest ?? null,
+			},
+			// Re-checked before each reply: a goal that left `active` (or lost focus) must not
+			// receive answers, even if no lifecycle event reached the channel.
+			verifyLive: () => {
+				if (args.isGoalLive && !args.isGoalLive()) {
+					throw new Error("The audit target is no longer live; the answer was refused.");
+				}
+			},
+			getAuditDeadlineAt: () => auditDeadlineAt,
+			requestId,
+			ownerRunId,
+			nodeId,
+		});
+		let auditSessionIdValue: string;
+		try {
+			auditSessionIdValue = args.ctx.sessionManager.getSessionId();
+		} catch {
+			// Fixed text only: an external exception body must never reach the tool result.
+			// This runs inside a Promise executor, so the result must be RESOLVED or the
+			// completion tool would never converge.
+			resolve({
+				approved: false,
+				disapproved: true,
+				output: "",
+				error: "Goal auditor delegation failed: error details omitted",
+				requestId,
+			});
+			return;
+		}
+		const releaseSidechannelLifecycle = registerAuditSidechannelLifecycle(
+			auditSessionIdValue,
+			ownerRunId,
+			{
+				invalidate: (reason) => {
+					// A lifecycle revocation (pause/focus/session change) must lock THIS attempt
+					// as cancelled and emit the exact cancel: a late approval can then only be
+					// treated as a cancellation acknowledgement. Escape keeps its own park path.
+					sidechannel.invalidate(reason);
+					cancelAttempt("lifecycle_revoked");
+				},
+			},
+		);
 		let terminalUsage: SubagentDelegationUsage | undefined;
 		// Escape park: the child keeps running and the listeners stay attached; the
 		// caller settles the interrupted result and decides via the session handle.
@@ -535,9 +688,17 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 			if (typeof unsubscribe === "function") unsubscribes.push(unsubscribe);
 		};
 		function cancellationResult(
-			reason: "user_abort" | "terminal_timeout",
+			reason: CancellationReason,
 			acknowledged = false,
 		): GoalAuditorResult {
+			if (reason === "coordination_error") {
+				return {
+					approved: false,
+					disapproved: true,
+					output: "",
+					error: coordinationError ?? "Goal auditor supervisor coordination failed.",
+				};
+			}
 			if (reason === "user_abort") {
 				return {
 					approved: false,
@@ -556,17 +717,33 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 					: "Goal auditor delegation did not return a terminal response before its timeout and did not acknowledge cancellation.",
 			};
 		}
-		function cancelAttempt(reason: "user_abort" | "terminal_timeout"): void {
-			if (settled || cancellationReason) return;
+		// Set synchronously by finish(), so an Escape/bypass arriving while the terminal
+		// is still settling cannot emit a second cancellation.
+		let settleStarted = false;
+
+		function cancelAttempt(reason: CancellationReason): void {
+			// A locked coordination failure already cancelled this attempt; a later
+			// Escape or timeout must not overwrite the recorded reason.
+			if (settleStarted || settled || cancellationReason) return;
 			cancellationReason = reason;
+			// A user bypass must revoke the side channel's reply permission IMMEDIATELY:
+			// the generation is invalidated before the child cancel is emitted, so a late
+			// model result can never be delivered after the user chose to bypass.
+			if (reason === "user_abort") {
+				try {
+					sidechannel.invalidate("user_bypass");
+				} catch {
+					// Invalidation is best effort; the cancel below is authoritative.
+				}
+			}
 			try {
 				events.emit(SUBAGENT_DELEGATION_CANCEL_EVENT, identity);
-			} catch (error) {
+			} catch {
 				finish({
 					approved: false,
 					disapproved: true,
 					output: "",
-					error: `Could not cancel goal auditor delegation: ${error instanceof Error ? error.message : String(error)}`,
+					error: "Could not cancel goal auditor delegation: error details omitted",
 				});
 				return;
 			}
@@ -574,6 +751,22 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 			cancellationTimer = setTimeout(() => finish(cancellationResult(reason)), args.timeouts?.cancellationMs ?? CANCELLATION_TIMEOUT_MS);
 			cancellationTimer.unref?.();
 		}
+		const finish = (result: GoalAuditorResult): void => {
+			// The settle below is async; mark settlement synchronously so a concurrent
+			// Escape/bypass cannot observe "unsettled" and emit a second cancellation.
+			if (settleStarted) return;
+			settleStarted = true;
+			// Await the settle chain before freezing so a cancelled/resumed attempt still
+			// reports the spend and the question that were produced before the terminal.
+			void (async () => {
+				try {
+					await sidechannel.dispose();
+				} catch {
+					// Settling is best effort; the terminal result must still be delivered.
+				}
+				finishNow(result);
+			})();
+		};
 		const onAbort = () => {
 			if (args.parkOnAbort) park();
 			else cancelAttempt("user_abort");
@@ -627,10 +820,32 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 			args.signal?.removeEventListener("abort", onAbort);
 			for (const unsubscribe of unsubscribes) unsubscribe();
 		};
-		const finish = (result: GoalAuditorResult) => {
+		// The terminal freeze must happen AFTER the side channel settled (its abort bills
+		// the in-flight generation). Every caller therefore goes through this wrapper.
+		const finishNow = (result: GoalAuditorResult) => {
 			if (settled) return;
 			settled = true;
 			cleanup();
+			// Terminal freeze: the coordination record and side usage are attached
+			// once, then the responder and its session are released. Park results
+			// never reach here, so an Escape park keeps the route alive.
+			const records = sidechannel.records();
+			const sideUsage = sidechannel.usage();
+			if (!result.interrupted && (records.length > 0 || sideUsage.turns > 0)) {
+				result = { ...result, supervisorHandoff: { records: [...records], usage: { ...sideUsage } } };
+			}
+			sidechannel.seal();
+			releaseSidechannelLifecycle();
+			try {
+				supervisorRegistration?.dispose();
+			} catch {
+				// Best effort: a disposed owner must not block the audit result.
+			}
+			supervisorRegistration = undefined;
+			// Bounded settle BEFORE the usage freeze is observed by consumers: dispose()
+			// aborts the in-flight generation and only then releases its listener, so the
+			// final usage reflects what was actually spent.
+			void sidechannel.dispose();
 			progress.phase = "done";
 			progress.label = "Audit complete.";
 			progress.percentage = 100;
@@ -651,6 +866,8 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 		};
 		const armTerminalTimeout = () => {
 			if (terminalTimer) return;
+			// Set once, with the timer, and never reset by a later ask or park.
+			auditDeadlineAt ??= Date.now() + terminalTimeoutMs;
 			terminalTimer = setTimeout(() => {
 				cancelAttempt("terminal_timeout");
 			}, terminalTimeoutMs);
@@ -764,6 +981,83 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 			});
 		});
 
+		/**
+		 * A claimed supervisor ask could not be answered or delivered. The error is
+		 * locked first, then the attempt is cancelled with the original full
+		 * identity; a later completed response (even an approval) only acknowledges
+		 * the cancellation.
+		 */
+		let pendingDelivery: string | undefined;
+		const coordinationFailure = (error: Error): void => {
+			// First-terminal-wins: once the attempt has locked (settle started or a
+			// cancellation reason recorded) a coordination failure must not emit another
+			// cancel or arm a timer.
+			if (settleStarted || settled || cancellationReason) return;
+			// A claimed answer that could not be written to the native channel was never
+			// delivered: the coordination record must not claim otherwise.
+			// Only the ask whose reply was just produced can be downgraded: a failure for a
+			// DIFFERENT ask (for example one that never got a record) must not rewrite an
+			// earlier successfully delivered Q&A.
+			try {
+				if (pendingDelivery) sidechannel.markDeliveryFailed(pendingDelivery);
+			} catch {
+				// Best effort; the cancellation below is authoritative.
+			}
+			pendingDelivery = undefined;
+			if (settled || coordinationError) return;
+			coordinationError = error.message;
+			if (cancellationReason) return;
+			cancellationReason = "coordination_error";
+			// Revoke the responder BEFORE cancelling: during the cancellation window the
+			// router must not accept (or deliver) any further ask for this attempt.
+			try {
+				sidechannel.invalidate("coordination_error");
+			} catch {
+				// Best effort; the exact cancel below is authoritative.
+			}
+			try {
+				events.emit(SUBAGENT_DELEGATION_CANCEL_EVENT, identity);
+			} catch {
+				// The bounded cancellation timer below still settles the attempt.
+			}
+			cancellationTimer = setTimeout(
+				() => finish(cancellationResult("coordination_error")),
+				args.timeouts?.cancellationMs ?? CANCELLATION_TIMEOUT_MS,
+			);
+			cancellationTimer.unref?.();
+		};
+
+		try {
+			supervisorRegistration = registerSupervisorResponder!({
+				pi: { events } as never,
+				scope: {
+					sessionId: args.ctx.sessionManager.getSessionId(),
+					requestId,
+					ownerRunId,
+					nodeId,
+					agent: request.agent,
+				},
+				respond: async (supervisorRequest) => {
+					// The reply only counts as delivered once the routing layer wrote it; this
+					// id lets a delivery failure target exactly this ask, never an earlier one.
+					pendingDelivery = undefined;
+					const outcome = await sidechannel.respond(supervisorRequest);
+					pendingDelivery = outcome.kind === "reply" ? supervisorRequest.requestId : undefined;
+					return outcome;
+				},
+				onFailure: coordinationFailure,
+			});
+		} catch {
+			// Diagnostics never echo an external exception body: fixed stage + category only.
+			finish({
+				approved: false,
+				disapproved: true,
+				output: "",
+				error: "Goal auditor supervisor responder registration failed: error details omitted",
+			});
+			return;
+		}
+
 		startedTimer = setTimeout(() => {
 			finish({
 				approved: false,
@@ -781,12 +1075,12 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 				else cancelAttempt("user_abort");
 			}
 			events.emit(SUBAGENT_DELEGATION_REQUEST_EVENT, request);
-		} catch (error) {
+		} catch {
 			finish({
 				approved: false,
 				disapproved: true,
 				output: "",
-				error: `Could not start goal auditor delegation: ${error instanceof Error ? error.message : String(error)}`,
+				error: "Could not start goal auditor delegation: error details omitted",
 			});
 		}
 	});

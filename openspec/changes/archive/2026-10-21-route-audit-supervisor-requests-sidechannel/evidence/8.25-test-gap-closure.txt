@@ -1,0 +1,26 @@
+== 8.25 补充两个 oracle(仅测试,无生产改动) ==
+
+生产代码自 8.23 gates+live 之后未再修改;本轮只补审计要求的两条回归。
+
+1) 注册失败的诊断保密 oracle(goal-audit-supervisor-flow.test.ts):
+   构造一个在 SUPERVISOR_RESPONDER_REGISTER_EVENT 上抛
+   Error("AUDIT_SYNTHETIC_REGISTRATION_EXCEPTION_7928") 的 bus,驱动真实 runGoalCompletionAuditor:
+   - result.error 匹配 /error details omitted/;
+   - result.error 不含合成标记;
+   - 未发出任何 SUBAGENT_DELEGATION_REQUEST_EVENT(child 不启动)。
+
+2) 终态锁优先于协调失败的回归(同一文件):
+   先发 completed/approved 的真实终态(同步锁定 attempt),随后调用登记里的 onFailure:
+   - result.approved === true;
+   - cancellations.length === 0(协调噪声不会取消已锁定终态)。
+
+验证:
+  goal-x typecheck           -> 0 error TS
+  goal-x test:unit           -> exit 0; 1341/1341(新增 2 例)
+  fork runner                -> exit 0; 87/87
+  fork-divergence gate       -> exit 0
+  git diff --check           -> clean
+  logs: /tmp/8.25-logs/{unit,gate}.txt
+
+integration / sdk / live 仍引用 8.23 的结果(生产代码未变):integration 26 pass + 9 已声明债务、
+sdk 1/1、live exit 0 且 55/55。

@@ -1,6 +1,7 @@
 import { type Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { restoreDisplayUsage } from "./goal-model-display.ts";
+import { goalCardCoordination } from "./goal-audit-supervisor-handoff.ts";
 import {
 	formatDuration,
 	formatTokenValue,
@@ -117,8 +118,13 @@ export function goalDetails(goal: GoalRecord | null, resultDetail?: string, draf
 }
 
 export function renderGoalResult(result: { details?: unknown; content: Array<{ type: string; text?: string }> }, options: { expanded?: boolean } | undefined, theme: Theme): Text {
+	// Minimal fork seam: one call supplies the verbatim text (record stripped only
+	// when a structured record exists) and the card suffix; with no record both are
+	// unchanged/empty, so upstream rendering stays byte-identical.
 	const first = result.content.find((item) => item.type === "text" && typeof item.text === "string");
-	const firstText = first?.text ?? "";
+	const card = goalCardCoordination(result, first?.text ?? "", options?.expanded === true);
+	const firstText = card.text;
+	const out = (text: string, ..._legacy: unknown[]) => new Text(text + card.suffix, 0, 0);
 	const details = result.details as GoalStateEntry | undefined;
 	const displayText = details && typeof details === "object" && details.goal
 		? restoreDisplayUsage(firstText, details.goal, usageLines(details.goal).join("\n"))
@@ -126,10 +132,10 @@ export function renderGoalResult(result: { details?: unknown; content: Array<{ t
 	if (details && typeof details === "object" && "resultDetail" in details && details.resultDetail && options?.expanded) {
 		// E7: the collapsed heading stays byte-identical; the full reason is one
 		// keystroke away in the expanded tool-result detail view.
-		return new Text(`${displayText}\n${details.resultDetail}`, 0, 0);
+		return out(`${displayText}\n${details.resultDetail}`, 0, 0);
 	}
 	if (!details || typeof details !== "object" || !("goal" in details)) {
-		return new Text(firstText, 0, 0);
+		return out(firstText, 0, 0);
 	}
 	// Draft proposals carry no goal record, so the decision (reject/cancel)
 	// and the reason the user typed in the dialog must come from the details.
@@ -139,13 +145,13 @@ export function renderGoalResult(result: { details?: unknown; content: Array<{ t
 		? details.draftOutcome.decision
 		: null;
 	if (draftDecision) {
-		if (options?.expanded) return new Text(firstText, 0, 0);
+		if (options?.expanded) return out(firstText, 0, 0);
 		if (draftDecision === "cancelled") {
-			return new Text(theme.fg("accent", "Goal draft cancelled — no goal was created"), 0, 0);
+			return out(theme.fg("accent", "Goal draft cancelled — no goal was created"), 0, 0);
 		}
 		const reason = details.draftOutcome?.reason?.trim();
-		if (!reason) return new Text(theme.fg("accent", "Goal draft rejected — no reason given"), 0, 0);
-		return new Text(
+		if (!reason) return out(theme.fg("accent", "Goal draft rejected — no reason given"), 0, 0);
+		return out(
 			theme.fg("accent", "Goal draft rejected — reason:") + "\n" + theme.fg("toolOutput", truncateText(reason, 300)),
 			0,
 			0,
@@ -159,9 +165,9 @@ export function renderGoalResult(result: { details?: unknown; content: Array<{ t
 		|| firstText.startsWith("Goal aborted.")
 		|| firstText.startsWith("Goal confirmed and created.")
 	) {
-		return new Text(displayText, 0, 0);
+		return out(displayText, 0, 0);
 	}
-	return new Text(theme.fg("accent", "Goal ") + theme.fg("muted", oneLineSummary(details.goal)), 0, 0);
+	return out(theme.fg("accent", "Goal ") + theme.fg("muted", oneLineSummary(details.goal)), 0, 0);
 }
 
 export function normalizeGoalEventDetails(value: unknown): GoalEventDetails {

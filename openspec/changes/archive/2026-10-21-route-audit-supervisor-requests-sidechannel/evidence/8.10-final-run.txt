@@ -1,0 +1,88 @@
+== 8.10 FINAL ordered run (round-4 fixes; gates green, live LAST) ==
+
+gates: goal-x typecheck 0 error TS / subagents typecheck 0 error TS; unit 1335/1335 exit 0;
+       integration exit 1 = integration group 26 pass + 9 DECLARED settings-profile debt, sdk group 1/1 pass;
+       fork runner 81/81; selfcheck OK (100/3/7); fork gate exit 0 (555/7, 989/10, undeclared 0);
+       strict validate valid; git diff --check clean.  logs: /tmp/8.10-logs/
+
+live (last): exit 0 — BOTH LIVE CASES PASSED, 55 assertions.
+
+Round-4 findings and closure:
+1. Parent thinking level: the parent getter (deps.getThinkingLevel) is now authoritative and the branch
+   snapshot value is only a fallback; the unit assertion that encoded the old order was corrected.
+2. Missing parent ModelRuntime: ensureSession now throws config_error before creating any session, so the
+   SDK can never build a fresh runtime with a different auth/provider source (test: factory never called).
+3. Usage overflow: every accumulated sum is finiteness-checked; overflow is a protocol failure that locks
+   the ask (never Infinity), and withSupervisorUsage refuses non-finite side counters or totals and falls
+   back to the auditor's own usage (test: two MAX_VALUE generations -> finite totals, ask failed).
+4. Cancellation billing: invalidate()/dispose() revoke reply permission first, abort, and only then release
+   the message_end listener, so the aborted generation's own spend is still billed
+   (test: abort emits input 19 / output 7 -> usage inputTokens 19, outputTokens 7).
+5. Live integrity: reads ~/.pi/agent/models.json (the file the SDK actually loads; directory only a legacy
+   fallback), snapshots BEFORE tmux/pi start, compares in memory, and writes only presence + byte counts —
+   credential hashes never leave memory.
+6. Bounded driver: the main audit loop is min(case deadline, startedAt+600s); waitIdle throws instead of
+   'continuing'; tmux/spawn waits keep their own timeouts. A missed idle barrier now fails the run.
+7. Live isolation + budget proof: the driver asserts the parent's update_goal completion_summary and the
+   child's own contact_supervisor question carry NO marker (only the responder's answer may), and proves
+   'parent-turn growth < side spend' (fails if side billing were absorbed) instead of a tautology.
+
+-- POSITIVE — /tmp/pi-audit-supervisor-live-positive-IUfLMV — 30/30  piVersion=None piExit=None
+   PASS  pi TUI started with the local extensions
+   PASS  global settings/auth/models are byte-identical before and after the case
+   PASS  update_goal produced exactly one call→result pair
+   PASS  assistant tool calls are paired with their results
+   PASS  no detach happened (real pi-intercom detach event count is 0)
+   PASS  the completion result carries no detach receipt
+   PASS  the completion tool result is a real result, not a detach receipt
+   PASS  exactly one coordination handoff was returned
+   PASS  parent model made no provider request inside the completion window
+   PASS  exactly one auditor child started and one delegation request
+   PASS  a real /goal-direct audit was recorded in the ledger
+   PASS  the supervisor side usage row is self-consistent
+   PASS  the parent turn budget was not rewritten
+   PASS  the parent-turn growth is strictly smaller than the side spend (side billing not absorbed)
+   PASS  the tool usage total equals the auditor + side ledger tokens
+   PASS  E2E auditor alias registered (ack)
+   PASS  resolver answers for the alias with the same definition
+   PASS  resolver misses a foreign alias
+   PASS  resolver misses the alias after the scope is disposed
+   PASS  the parent's completion_summary and the child's question carry no marker
+   PASS  the child actually received ALPHA through contact_supervisor
+   PASS  the answered question preceded the child's terminal verdict
+   PASS  exactly one terminal and no cancellation
+   PASS  the same child approved
+   PASS  the goal really archived
+   PASS  exactly one audit_result and it is approved
+   PASS  exactly one audit_supervisor_usage row with real turns
+   PASS  exactly one audit_usage row for the auditor itself
+   PASS  the approval is visible to the user (pane or archived goal)
+   PASS  pi exited cleanly (real exit code recorded by the wrapper)
+
+-- NEGATIVE — /tmp/pi-audit-supervisor-live-negative-v2bQBQ — 25/25  piVersion=None piExit=None
+   PASS  pi TUI started with the local extensions
+   PASS  global settings/auth/models are byte-identical before and after the case
+   PASS  update_goal produced exactly one call→result pair
+   PASS  assistant tool calls are paired with their results
+   PASS  no detach happened (real pi-intercom detach event count is 0)
+   PASS  the completion result carries no detach receipt
+   PASS  the completion tool result is a real result, not a detach receipt
+   PASS  exactly one coordination handoff was returned
+   PASS  parent model made no provider request inside the completion window
+   PASS  exactly one auditor child started and one delegation request
+   PASS  a real /goal-direct audit was recorded in the ledger
+   PASS  the supervisor side usage row is self-consistent
+   PASS  the parent turn budget was not rewritten
+   PASS  the parent-turn growth is strictly smaller than the side spend (side billing not absorbed)
+   PASS  the tool usage total equals the auditor + side ledger tokens
+   PASS  the audit was cancelled exactly once
+   PASS  no approval reached the goal
+   PASS  the single audit_result is an error
+   PASS  the goal stayed active and was not archived
+   PASS  no completion was committed
+   PASS  evidence.txt is byte-identical
+   PASS  no child delete tool ran
+   PASS  the unresolved question was reported back
+   PASS  real side usage is still accounted
+   PASS  pi exited cleanly (real exit code recorded by the wrapper)
+

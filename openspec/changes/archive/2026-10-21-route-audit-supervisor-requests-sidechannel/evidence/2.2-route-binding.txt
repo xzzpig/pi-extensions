@@ -1,0 +1,16 @@
+== 2.2 pre-prompt route binding 2026-10-19T02:30:03+08:00 ==
+edits:
+  src/slash/prompt-template-bridge.ts: executeStructured internal optional 6th param 'request'; call site branches structured (passes validated request) vs legacy 5-arg path
+  src/extension/index.ts: structured wrapper builds createSupervisorLaunchHooks from the parsed request identity; hooks passed as 6th arg to executeDelegated (never in model params/artifacts/env)
+  src/runs/foreground/subagent-executor.ts: delegatedSupervisorLaunchHooks WeakMap (same shape as delegatedThinkingOverrides), ExecutionContextData.supervisorLaunchHooks, executeDelegated 6th param
+  src/runs/foreground/subagent-executor.ts: runSinglePath calls beforeNativeChildLaunch after canonical agentConfig resolution + childBridgeActive, before any prompt; a thrown binding error returns toExecutionErrorResult
+
+semantics: canonical agent comes from agents.find(name===params.agent) after canonicalizeExecutionParams; requested alias is never a route; bridgeActive=false leaves the attempt unbound (no claim); second launch on same hooks throws
+
+cmd: pnpm --filter @xzzpig/pi-subagents run typecheck -> exit 0
+cmd: node --experimental-strip-types --import register-loader --import fork-test-environment --test test/unit/fork-supervisor-routing.test.ts
+result: 20 tests / 20 pass / 0 fail / 0 cancelled (9 new binding tests)
+cmd: same loader --test prompt-template-bridge.test.ts delegation-api.test.ts intercom-bridge.test.ts
+result: 46 tests / 46 pass / 0 fail (legacy 5-arg path unchanged)
+
+lint-only adjustments made (semantics-neutral, proven pre-existing): removed dead imports resolveModelSelection / getHostBuiltinToolNames / WorkflowChildSettledNotification; renamed two unused destructured 'count' bindings to '_count' (property still excluded from the rest spread). See 2.2-preexisting-lint-proof.txt

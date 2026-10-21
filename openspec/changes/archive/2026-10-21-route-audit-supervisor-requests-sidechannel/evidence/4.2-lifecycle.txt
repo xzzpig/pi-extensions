@@ -1,0 +1,9 @@
+== 4.2 focus/session lifecycle isolation 2026-10-19T03:13:26+08:00 ==
+extensions/goal-audit-sidechannel.ts: per-session lifecycle registry (registerAuditSidechannelLifecycle / invalidateAuditSidechannels / invalidateAllAuditSidechannels) + AuditSupervisorSidechannel.invalidate(reason): seals+disposes BEFORE aborting, so a late model result cannot write a reply; idempotent and non-throwing.
+extensions/goal-auditor-delegation.ts: registers the scope under the live sessionId at audit start and releases it in finish().
+extensions/goal-events.ts: session_start / session_tree / session_shutdown invalidate that session's side channels before any state reload.
+extensions/goal-state.ts::assignFocusedGoalId: a REAL focus change (id actually changes) invalidates live side channels; it never touches core.auditAbortController/auditProgress, so the auditor is not orphaned.
+
+cmd: pnpm --filter @xzzpig/pi-goal-x run typecheck -> exit 0
+cmd: keepalive + adapter --test tests/goal-audit-sidechannel.test.ts -> 25/25 pass
+  new: revoked session => later respond code 'cancelled'; other session still answers; invalidate idempotent; records preserved.

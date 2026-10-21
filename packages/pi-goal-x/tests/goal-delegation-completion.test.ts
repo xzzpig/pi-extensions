@@ -17,6 +17,7 @@ import { REPORT_AUDITOR_PROGRESS_PROTOCOL_PREFIX } from "../extensions/goal-audi
 import { createGoal, goalFocusDetails } from "../extensions/goal-record.ts";
 import { writeActiveGoalFile } from "../extensions/storage/goal-files.ts";
 import { goalLedgerPath } from "../extensions/goal-ledger.ts";
+import { installSupervisorResponderAck } from "./fixtures/goal-audit-supervisor-owner.ts";
 
 class FakeEvents {
 	private readonly handlers = new Map<string, Array<(value: unknown) => void>>();
@@ -37,6 +38,10 @@ function createHarness(cwd: string) {
 	const handlers = new Map<string, Function>();
 	const tools = new Map<string, ToolDefinition>();
 	const events = new FakeEvents();
+	// The responder must be registered BEFORE the delegation request; this
+	// fixture answers registration with an inert handle (no model work) so the
+	// existing lifecycle assertions keep running unchanged.
+	installSupervisorResponderAck(events);
 	const messages: unknown[] = [];
 	let activeTools = ["read", "bash", "edit", "write"];
 	const goal = createGoal({ objective: "Ship a complete delegated audit integration.", autoContinue: true, sisyphus: false });

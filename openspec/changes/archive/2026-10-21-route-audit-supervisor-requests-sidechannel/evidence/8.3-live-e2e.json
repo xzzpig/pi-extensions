@@ -1,0 +1,308 @@
+{
+  "ranAt": "2026-10-20T15:12:23.367Z",
+  "provider": "from-settings",
+  "durationMs": 252675,
+  "cases": [
+    {
+      "kind": "positive",
+      "caseDir": "/tmp/pi-audit-supervisor-live-positive-JDSW2d",
+      "checks": [
+        {
+          "name": "pi TUI started with the local extensions",
+          "ok": true
+        },
+        {
+          "name": "global settings/auth/models are byte-identical before and after the case",
+          "ok": true,
+          "detail": "{\"before\":[{\"file\":\".pi/agent/settings.json\",\"present\":true,\"bytes\":3729},{\"file\":\".pi/agent/auth.json\",\"present\":true,\"bytes\":2},{\"file\":\"models.json\",\"present\":true,\"bytes\":12079}],\"after\":[{\"file\":\".pi/agent/settings.json\",\"present\":true,\"bytes\":3729},{\"file\":\".pi/agent/auth.json\",\"present\":true,\"bytes\":2},{\"file\":\"models.json\",\"present\":true,\"bytes\":12079}]}"
+        },
+        {
+          "name": "update_goal produced exactly one call→result pair",
+          "ok": true,
+          "detail": "calls=1 results=1"
+        },
+        {
+          "name": "assistant tool calls are paired with their results",
+          "ok": true,
+          "detail": "[\"bash\",\"bash\",\"bash\",\"get_goal\",\"bash\",\"bash\",\"bash\",\"bash\",\"subagent_supervisor\",\"bash\",\"bash\",\"bash\",\"bash\",\"bash\",\"bash\",\"bash\",\"update_goal\"]"
+        },
+        {
+          "name": "no detach happened (real pi-intercom detach event count is 0)",
+          "ok": true,
+          "detail": "[]"
+        },
+        {
+          "name": "the completion result carries no detach receipt",
+          "ok": true
+        },
+        {
+          "name": "the completion tool result is a real result, not a detach receipt",
+          "ok": true
+        },
+        {
+          "name": "exactly one coordination handoff was returned",
+          "ok": true,
+          "detail": "handoffBlocks=1"
+        },
+        {
+          "name": "the coordination record is a human-readable summary without a JSON block",
+          "ok": true,
+          "detail": "{\"handoffSummary\":true,\"at\":837}"
+        },
+        {
+          "name": "parent model made no provider request inside the completion window",
+          "ok": true,
+          "detail": "count=0"
+        },
+        {
+          "name": "exactly one auditor child started and one delegation request",
+          "ok": true,
+          "detail": "started=1 requests=1"
+        },
+        {
+          "name": "a real /goal-direct audit was recorded in the ledger",
+          "ok": true
+        },
+        {
+          "name": "the supervisor side usage row is self-consistent",
+          "ok": true,
+          "detail": "{\"type\":\"audit_supervisor_usage\",\"goalId\":\"mvgtjsxn-bov4bv\",\"auditRequestId\":\"ef4baea8-9278-4194-9e5d-42c92e0e65b2\",\"tokens\":141496,\"inputTokens\":33561,\"outputTokens\":2975,\"cacheReadTokens\":104960,\"cacheWriteTokens\":0,\"costUsd\":0.047560200000000004,\"turns\":4,\"at\":\"2026-10-20T15:10:27.329Z\"}"
+        },
+        {
+          "name": "the parent turn budget was not rewritten",
+          "ok": true
+        },
+        {
+          "name": "the parent-turn growth is strictly smaller than the side spend (side billing not absorbed)",
+          "ok": true,
+          "detail": "growth=0 side=141496 before=0 after=0 parentOwn=229095"
+        },
+        {
+          "name": "the tool usage total equals the auditor + side ledger tokens",
+          "ok": true,
+          "detail": "tool=190452 ledger=190452"
+        },
+        {
+          "name": "E2E auditor alias registered (ack)",
+          "ok": true,
+          "detail": "{\"at\":1792508897022,\"k\":\"lifecycle\",\"step\":\"alias_registered\",\"alias\":\"goal-auditor-e2e-live\",\"tools\":[\"read\",\"grep\",\"find\",\"ls\",\"report_auditor_progress\"],\"acked\":true}"
+        },
+        {
+          "name": "resolver answers for the alias with the same definition",
+          "ok": true,
+          "detail": "{\"at\":1792508897022,\"k\":\"lifecycle\",\"step\":\"resolver_selfcheck\",\"aliasHit\":true,\"sameDefinition\":true,\"foreignMiss\":true}"
+        },
+        {
+          "name": "resolver misses a foreign alias",
+          "ok": true,
+          "detail": "{\"at\":1792508897022,\"k\":\"lifecycle\",\"step\":\"resolver_selfcheck\",\"aliasHit\":true,\"sameDefinition\":true,\"foreignMiss\":true}"
+        },
+        {
+          "name": "resolver misses the alias after the scope is disposed",
+          "ok": true,
+          "detail": "{\"at\":1792509028723,\"k\":\"lifecycle\",\"step\":\"scope_disposed\",\"alias\":\"goal-auditor-e2e-live\",\"idempotent\":true,\"postDisposeMiss\":true}"
+        },
+        {
+          "name": "the parent's completion_summary and the child's question carry no marker",
+          "ok": true,
+          "detail": "summaryLeak=false childQuestionLeak=false summaries=1"
+        },
+        {
+          "name": "the child actually received ALPHA through contact_supervisor",
+          "ok": true,
+          "detail": "hits=1"
+        },
+        {
+          "name": "the answered question preceded the child's terminal verdict",
+          "ok": true,
+          "detail": "{\"ask\":1792508993949,\"terminal\":1792509027290}"
+        },
+        {
+          "name": "exactly one terminal and no cancellation",
+          "ok": true,
+          "detail": "responses=1 cancels=0"
+        },
+        {
+          "name": "the same child approved",
+          "ok": true,
+          "detail": "{\"at\":1792509027318,\"k\":\"delegation\",\"kind\":\"response\",\"requestId\":\"ef4baea8-9278-4194-9e5d-42c92e0e65b2\",\"ownerRunId\":\"mvgtjsxn-bov4bv\",\"nodeId\":\"goal-completion:mvgtjsxn-bov4bv:3\",\"runId\":\"32d1d1ee-18a6-40e6-8909-fa55475dec55\",\"agent\":\"goal-auditor-e2e-live\",\"status\":\"completed\",\"verdict\":\"approved\"}"
+        },
+        {
+          "name": "the goal really archived",
+          "ok": true,
+          "detail": "archived=1 active=0"
+        },
+        {
+          "name": "exactly one audit_result and it is approved",
+          "ok": true,
+          "detail": "[{\"type\":\"audit_result\",\"goalId\":\"mvgtjsxn-bov4bv\",\"verdict\":\"approved\",\"report\":\"审计确认：(1) cwd 下的 evidence.txt 实际内容为单行 pong，grep '^pong$' 命中且文件中无其他行或空白字符（无空格/制表符/CR/BOM），与目标要求的“内容恰为 pong”一致；(2) goal 事件账本与 checkpoint 均记录 completion_requested（2026-10-20T15:09:23.027Z）及随后 audit_started，证明执行器已调用 update_goal({status:\\\"complete\\\"}) 发起完成请求，剩余 running 状态属于待审计的正常流程；(3) 按 operator 指示已真实询问父 supervisor 交付标记，答复为 ALPHA；依指示该答复本身即作为交付标记成立的证据，不要求标记出现在任何文件中。执行器声明与真实工件一致，无缺失或矛盾。\\n\\nFindings:\\n- evidence.txt 仅含单行 'pong'，无多余行、尾随空白或隐藏字符\\n- completion_requested 事件及 checkpoint 证明 update_goal({status:'complete'}) 已被调用\\n- 交付标记 ALPHA 已通过 contact_supervisor 取得，按 operator 规则视为成立且无需出现在文件中\",\"at\":\"2026-10-20T15:10:27.323Z\"}]"
+        },
+        {
+          "name": "exactly one audit_supervisor_usage row with real turns",
+          "ok": true
+        },
+        {
+          "name": "exactly one audit_usage row for the auditor itself",
+          "ok": true
+        },
+        {
+          "name": "the approval is visible to the user (tool result, pane or archived goal)",
+          "ok": true,
+          "detail": "{\"visibleInTool\":true,\"visibleInPane\":true,\"visibleInArchive\":false,\"archived\":1}"
+        },
+        {
+          "name": "pi exited cleanly (real exit code recorded by the wrapper)",
+          "ok": true,
+          "detail": "piExit=0"
+        }
+      ]
+    },
+    {
+      "kind": "negative",
+      "caseDir": "/tmp/pi-audit-supervisor-live-negative-0wllsG",
+      "checks": [
+        {
+          "name": "pi TUI started with the local extensions",
+          "ok": true
+        },
+        {
+          "name": "global settings/auth/models are byte-identical before and after the case",
+          "ok": true,
+          "detail": "{\"before\":[{\"file\":\".pi/agent/settings.json\",\"present\":true,\"bytes\":3729},{\"file\":\".pi/agent/auth.json\",\"present\":true,\"bytes\":2},{\"file\":\"models.json\",\"present\":true,\"bytes\":12079}],\"after\":[{\"file\":\".pi/agent/settings.json\",\"present\":true,\"bytes\":3729},{\"file\":\".pi/agent/auth.json\",\"present\":true,\"bytes\":2},{\"file\":\"models.json\",\"present\":true,\"bytes\":12079}]}"
+        },
+        {
+          "name": "update_goal produced exactly one call→result pair",
+          "ok": true,
+          "detail": "calls=1 results=1"
+        },
+        {
+          "name": "assistant tool calls are paired with their results",
+          "ok": true,
+          "detail": "[\"bash\",\"subagent_supervisor\",\"bash\",\"subagent_supervisor\",\"bash\",\"get_goal\",\"bash\",\"bash\",\"bash\",\"bash\",\"bash\",\"bash\",\"bash\",\"bash\",\"bash\",\"bash\",\"bash\",\"bash\",\"bash\",\"bash\",\"bash\",\"bash\",\"bash\",\"bash\",\"bash\",\"bash\",\"bash\",\"bash\",\"update_goal\"]"
+        },
+        {
+          "name": "no detach happened (real pi-intercom detach event count is 0)",
+          "ok": true,
+          "detail": "[]"
+        },
+        {
+          "name": "the completion result carries no detach receipt",
+          "ok": true
+        },
+        {
+          "name": "the completion tool result is a real result, not a detach receipt",
+          "ok": true
+        },
+        {
+          "name": "exactly one coordination handoff was returned",
+          "ok": true,
+          "detail": "handoffBlocks=1"
+        },
+        {
+          "name": "the coordination record is a human-readable summary without a JSON block",
+          "ok": false,
+          "detail": "{\"handoffSummary\":false,\"at\":224}"
+        },
+        {
+          "name": "parent model made no provider request inside the completion window",
+          "ok": true,
+          "detail": "count=0"
+        },
+        {
+          "name": "exactly one auditor child started and one delegation request",
+          "ok": true,
+          "detail": "started=1 requests=1"
+        },
+        {
+          "name": "a real /goal-direct audit was recorded in the ledger",
+          "ok": true
+        },
+        {
+          "name": "the supervisor side usage row is self-consistent",
+          "ok": true,
+          "detail": "{\"type\":\"audit_supervisor_usage\",\"goalId\":\"mvgtnar1-by2qz2\",\"auditRequestId\":\"5b4a8fbd-161f-420e-877e-6ffadbb8d827\",\"tokens\":106069,\"inputTokens\":51588,\"outputTokens\":721,\"cacheReadTokens\":53760,\"cacheWriteTokens\":0,\"costUsd\":0.055547200000000005,\"turns\":2,\"at\":\"2026-10-20T15:12:19.347Z\"}"
+        },
+        {
+          "name": "the parent turn budget was not rewritten",
+          "ok": true
+        },
+        {
+          "name": "the parent-turn growth is strictly smaller than the side spend (side billing not absorbed)",
+          "ok": true,
+          "detail": "growth=53826 side=106069 before=0 after=53826 parentOwn=602398"
+        },
+        {
+          "name": "the tool usage total equals the auditor + side ledger tokens",
+          "ok": true,
+          "detail": "tool=109278 ledger=109278"
+        },
+        {
+          "name": "the audit was cancelled exactly once",
+          "ok": true,
+          "detail": "cancels=1"
+        },
+        {
+          "name": "no approval reached the goal",
+          "ok": true,
+          "detail": "[{\"at\":1792509139345,\"k\":\"delegation\",\"kind\":\"response\",\"requestId\":\"5b4a8fbd-161f-420e-877e-6ffadbb8d827\",\"ownerRunId\":\"mvgtnar1-by2qz2\",\"nodeId\":\"goal-completion:mvgtnar1-by2qz2:6\",\"runId\":\"427cbe34-97cf-4a39-a66c-2f05472f0524\",\"agent\":\"goal-auditor-e2e-live\",\"status\":\"cancelled\"}]"
+        },
+        {
+          "name": "the single audit_result is an error",
+          "ok": true,
+          "detail": "[{\"type\":\"audit_result\",\"goalId\":\"mvgtnar1-by2qz2\",\"verdict\":\"error\",\"report\":\"Auditor produced no output.\",\"at\":\"2026-10-20T15:12:19.346Z\"}]"
+        },
+        {
+          "name": "the goal stayed active and was not archived",
+          "ok": true,
+          "detail": "active=1 archived=0"
+        },
+        {
+          "name": "no completion was committed",
+          "ok": true
+        },
+        {
+          "name": "evidence.txt is byte-identical",
+          "ok": true
+        },
+        {
+          "name": "no child delete tool ran",
+          "ok": true
+        },
+        {
+          "name": "the unresolved predicate passes its own negative control",
+          "ok": true
+        },
+        {
+          "name": "the audit attempt identity was derived from the trace",
+          "ok": true
+        },
+        {
+          "name": "the coordination record is a human-readable summary without a JSON block",
+          "ok": true
+        },
+        {
+          "name": "the structured details carry the records for machine reading",
+          "ok": true,
+          "detail": "records=1"
+        },
+        {
+          "name": "the unresolved question was reported back",
+          "ok": true,
+          "detail": "failedRecord=true unresolvedReason=需要用户明确决定：是否授权删除本测试 cwd 下的 evidence.txt。父会话已完成历史中只有交付验收标记 ALPHA，没有任何删除授权；该授权不能由只读协调者代为给出。"
+        },
+        {
+          "name": "real side usage is still accounted",
+          "ok": true
+        },
+        {
+          "name": "pi exited cleanly (real exit code recorded by the wrapper)",
+          "ok": true,
+          "detail": "piExit=0"
+        }
+      ]
+    }
+  ],
+  "failed": [
+    "the coordination record is a human-readable summary without a JSON block"
+  ]
+}

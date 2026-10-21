@@ -1,0 +1,52 @@
+== 7.1 docs, packaging, manifest and runner contract ==
+
+new docs (简体中文, fork-only):
+  packages/pi-goal-x/docs/audit-supervisor-sidechannel.md (5967 B)
+    explains: 同步阻塞(update_goal 在审计收敛前不返回,不改完成事务/新增 pending 或调度等待)、
+    只读授权(真实白名单 read/grep/find/ls/submit_audit_supervisor_reply,无 bash/edit/write、
+    无 goal/oracle/subagent/contact_supervisor/MCP/codemode、不 bindExtensions、无全局
+    subagent_supervisor、回复仍由 native 通道写入)、容量上限(256 KiB / 8 KiB / 8 KiB / 8 asks / 96 KiB,
+    恰好等于允许、超一字节拒绝、不截断不追加摘要、写回复前预留记录空间)、失败策略(fail closed 六类错误、
+    无 UI 升级路径、不猜测/不自动批准/不改 pending/不自动重启/不延长 deadline)、
+    无跨进程恢复、只读不等于目录沙箱(不声称目录级隔离,不把读到的敏感内容写进记录)、
+    deadline = min(native expiresAt, 原审计 deadline) 只装配一次、问答只作为原工具结果的有界附录回流
+    (固定标题,不 sendMessage/不唤醒主模型)、独立 audit_supervisor_usage 记账与父预算不变、
+    诊断只暴露分类码 + 固定文案且 ≤1024 字符。
+  packages/pi-subagents/docs/fork-supervisor-routing.md (5096 B)
+    explains: 版本化 API 与同步回执契约、完整 scope 校验(禁 agent "*")、六步启动前绑定链
+    (bridge 第六参数 → extension hooks → executor WeakMap → canonical agent 在 runId 分配后、
+    任何 child prompt 前绑定)、native poll 中 claim 插入点与独占接管(跳过 parentWake/detach、
+    不 await 模型、progress_update 走原快路径、通用 reply 动作返回 responder-managed)、
+    复用 writeReply + appendSupervisorReplyEntry 与写前四项再校验、失败/清理语义、
+    以及 fork-divergence 关系(上游保持字节稳定、最小 seam、reapplyOnSync 记录)。
+
+packaging:
+  packages/pi-goal-x/package.json::files 显式新增 "docs/audit-supervisor-sidechannel.md" (该包 docs 是显式枚举,
+  无通配符): git diff = 1 insertion, 0 deletion, JSON 解析通过。
+  packages/pi-subagents/package.json 未改:该包 files 已含 "docs/**/*",新 fork 文档自动打包,
+  因此不做多余的上游 package.json churn(遵循 fork-divergence 最小 seam 纪律)。
+  两个文档路径存在且可读;未改 README、版本、dependencies、BTW 代码或任何命令。
+
+manifest & runner:
+  cmd: node ./packages/pi-goal-x/scripts/run-unit-tests.mjs --write-manifest
+       -> exit 0; "Wrote .../tests/.test-manifest.json (99 unit, 3 integration, 7 e2e entries)."
+  cmd: node ./packages/pi-goal-x/scripts/run-unit-tests.mjs --selfcheck
+       -> "Runner self-check OK: 99 unit + 3 integration + 7 e2e entries match .../tests/.test-manifest.json."
+       (before the manifest refresh the same command FAILED with exactly the seven new entries listed as
+        unexpected — recorded honestly, and the manifest was refreshed with the runner's own --write-manifest.)
+  manifest contents: unit entries include .tests/goal-audit-context-snapshot.test.ts,
+    .tests/goal-audit-sidechannel.test.ts, .tests/goal-audit-supervisor-{completion,flow,handoff,usage}.test.ts;
+    integration includes .tests/integration/goal-audit-sidechannel-sdk.test.ts.
+  live entry is NOT impersonated by the stub runner: the runner discovers only *.test.ts
+    (entry.name.endsWith(".test.ts")), so the live mjs entry point cannot be picked up, and the manifest's
+    7 e2e entries are exactly the pre-existing *.test.ts files. The manifest holds no live entry,
+    as design D9 requires.
+  failures propagate: the runner ends with `if (result.error) throw result.error;` and
+    `process.exitCode = result.status ?? 1;` — a non-empty suite cannot report success.
+  SDK file independence (already proven in 6.1): the integration wrapper spawns its worker with
+    NODE_OPTIONS cleared, so it runs the real SDK both under the design command and under the stub-preload
+    runner, 1/1 pass in each mode.
+
+note for 8.1: the goal-x unit suite is 99 files and did not finish inside a 900 s command budget during this
+task (the --selfcheck invocation continues into full execution after printing OK). Task 8.1 must run it with a
+larger budget and must not read the earlier timeout as a test failure.

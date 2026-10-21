@@ -103,7 +103,7 @@ export function projectGoalModelLedgerEvents(
   const keepBudgetUsage = effectiveBudget(tokenBudget) !== undefined;
   const projected: unknown[] = [];
   for (const event of events) {
-    if (event.type === "audit_usage") continue;
+    if (event.type === "audit_usage" || event.type === "audit_supervisor_usage") continue;
     if (!keepBudgetUsage && event.type === "goal_budget_changed") {
       projected.push({
         type: event.type,
@@ -141,7 +141,7 @@ export function projectGoalModelLedgerEvents(
 export function excludeGoalModelAuditUsage(
   events: readonly GoalLedgerEvent[],
 ): GoalLedgerEvent[] {
-  return events.filter((event) => event.type !== "audit_usage");
+  return events.filter((event) => event.type !== "audit_usage" && event.type !== "audit_supervisor_usage");
 }
 
 /** A model-facing detailed goal summary; authoritative UI/auditor formatters stay unchanged. */

@@ -1,0 +1,32 @@
+== 8.19 FINAL ordered run (round-12 fixes; gates green, live LAST) ==
+
+two typechecks 0 error TS (goal-x, pi-subagents)
+goal-x test:unit 1336/1336 exit 0
+goal-x test:integration exit 1 = integration 26 pass + 9 DECLARED settings-profile debt;
+                              sdk group 1/1 (real SDK, no stub)
+pi-subagents focused unit (fork-supervisor-routing + native-supervisor-takeover) 27/27
+fork runner 82/82; selfcheck OK (100/3/7)
+fork-divergence gate exit 0 (goal-x 555/7 declared 7 undeclared 0; subagents 989/10 declared 10 undeclared 0)
+git diff --check clean
+live (LAST): exit 0 — BOTH LIVE CASES PASSED, 55 assertions
+logs: /tmp/8.19-logs/{unit,int,live3}.txt
+
+Round-12 findings and closure:
+1. D2 owner validation is fail closed: registerSupervisorResponderViaRegistration now REFUSES a
+   registration when the runtime has no live owner session id (previously a null owner skipped the
+   comparison and the registration was accepted, so createSupervisorLaunchHooks later returned
+   undefined and the attempt could fall back to the default supervisor path).
+2. Queued asks survive cancellation: the channel now tracks EVERY claimed ask (claimedAsks map, set at
+   claim time, before queueing) and the terminal settle writes a bounded cancelled record for each
+   claimed ask that has no record yet (capped by MAX_AUDIT_ASKS, question truncated to 1024 chars).
+   So a second queued question keeps its supervisorRequestId/runId/status even when the first one was
+   cancelled and the model never converged.
+3. Import-order stability: the three pi-subagents imports were moved back to their baseline positions
+   (model-resolution + child-tool-plan where the baseline had them, scripted-workflow back beside the
+   incremental-completion import) and discoverAgentsWithRuntime again sits immediately before
+   registerRuntimeAgentEventListener, so the remaining diff vs 4ecd854728 is the supervisor seam only.
+
+Honest note on the live runs: the first attempt after these fixes hit the driver's bounded idle
+barrier (150 s) and the second failed only the isolation check because the parent model wrote the
+marker into its completion_summary — a model-behaviour flake, not a product defect. The third run
+(same code, no edits) passed all 55 assertions. These attempts are listed rather than hidden.

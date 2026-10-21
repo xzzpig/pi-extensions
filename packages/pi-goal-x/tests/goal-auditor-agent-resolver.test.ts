@@ -9,6 +9,7 @@
 //   - a resolver for a foreign name never intercepts the plain goal-auditor
 //     path (normal goals stay on the exact original route).
 import assert from "node:assert/strict";
+import { installSupervisorResponderAck } from "./fixtures/goal-audit-supervisor-owner.ts";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -58,7 +59,10 @@ function createBus(): {
 	emit(event: string, value: unknown): void;
 } {
 	const handlers = new Map<string, Array<(value: unknown) => void>>();
-	return {
+	const bus: {
+		on(event: string, handler: (value: unknown) => void): () => void;
+		emit(event: string, value: unknown): void;
+	} = {
 		on(event, handler) {
 			const entries = handlers.get(event) ?? [];
 			entries.push(handler);
@@ -69,6 +73,10 @@ function createBus(): {
 			for (const handler of [...(handlers.get(event) ?? [])]) handler(value);
 		},
 	};
+	// The responder must be registered before the delegation request; this inert
+	// fixture answers registration only (no model work) so existing assertions run.
+	installSupervisorResponderAck(bus);
+	return bus;
 }
 
 /** Simulate the installed pi-subagents owner answering registration requests. */
@@ -188,7 +196,7 @@ test("S2 preflight: a resolver-backed configured agent dispatches with protocol 
 	const events = createBus();
 	const responder = respondWithApproval(events);
 	const result = await runGoalCompletionAuditor({
-		ctx: { cwd: project } as any,
+		ctx: { cwd: project, sessionManager: { getSessionId: () => "test-session" } } as any,
 		events,
 		goal: createGoal({ objective: "Verify resolver-backed audit", autoContinue: true, sisyphus: false }),
 		detailedSummary: "Goal: resolver-backed audit",
@@ -207,7 +215,7 @@ test("S2 preflight: the resolver's definition is still protocol-enforced", async
 	const events = createBus();
 	const responder = respondWithApproval(events);
 	const result = await runGoalCompletionAuditor({
-		ctx: { cwd: project } as any,
+		ctx: { cwd: project, sessionManager: { getSessionId: () => "test-session" } } as any,
 		events,
 		goal: createGoal({ objective: "Verify resolver protocol enforcement", autoContinue: true, sisyphus: false }),
 		detailedSummary: "Goal: resolver protocol enforcement",
@@ -224,7 +232,7 @@ test("S2 preflight: a resolver miss keeps the original missing_agent fallback by
 	const events = createBus();
 	const responder = respondWithApproval(events);
 	const result = await runGoalCompletionAuditor({
-		ctx: { cwd: project } as any,
+		ctx: { cwd: project, sessionManager: { getSessionId: () => "test-session" } } as any,
 		events,
 		goal: createGoal({ objective: "Verify resolver miss fallback", autoContinue: true, sisyphus: false }),
 		detailedSummary: "Goal: resolver miss fallback",
@@ -245,7 +253,7 @@ test("S2 preflight: a foreign-name resolver never intercepts the plain goal-audi
 	const events = createBus();
 	const responder = respondWithApproval(events);
 	const result = await runGoalCompletionAuditor({
-		ctx: { cwd: project } as any,
+		ctx: { cwd: project, sessionManager: { getSessionId: () => "test-session" } } as any,
 		events,
 		goal: createGoal({ objective: "Verify normal goal isolation", autoContinue: true, sisyphus: false }),
 		detailedSummary: "Goal: normal goal isolation",
@@ -272,7 +280,7 @@ test("S2 preflight: the default goal-auditor registration path is unchanged besi
 		const events = createBus();
 		const responder = respondWithApproval(events);
 		const result = await runGoalCompletionAuditor({
-			ctx: { cwd: project } as any,
+			ctx: { cwd: project, sessionManager: { getSessionId: () => "test-session" } } as any,
 			events,
 			goal: createGoal({ objective: "Verify default auditor beside a resolver", autoContinue: true, sisyphus: false }),
 			detailedSummary: "Goal: default auditor beside a resolver",

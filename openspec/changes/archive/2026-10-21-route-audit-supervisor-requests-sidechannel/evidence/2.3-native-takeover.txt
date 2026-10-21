@@ -1,0 +1,17 @@
+== 2.3 native takeover + safe reply 2026-10-19T02:38:33+08:00 ==
+edits: src/intercom/native-supervisor-channel.ts
+  - deps.supervisorDispatcher (optional; unset = original behaviour)
+  - claimedAsks set; claim() runs after pending insertion + attention mark and BEFORE parentWake.sendMessage + INTERCOM_DETACH_REQUEST_EVENT; a claim 'continue's the loop
+  - deliverClaimedReply re-validates pending/owner/no-existing-reply/not-expired, then reuses writeReply + appendSupervisorReplyEntry, deletes pending, observes resolved, clears attention
+  - generic subagent_supervisor(reply) throws 'responder-managed' for claimed asks; pending/list exclude claimed asks; before-settle reminders exclude claimed asks
+  - dispose clears claimedAsks
+edits: src/extension/index.ts wires createSupervisorDispatcher(pi, liveOwnerSessionId)
+pre-existing hardening in the same file (semantics-preserving): waitForReply tolerates a corrupt/partial reply file instead of crashing the child; SAFETY comment on the appendEntry narrowing
+
+cmd: pnpm --filter @xzzpig/pi-subagents run typecheck -> exit 0
+cmd: node --experimental-strip-types --import test/support/register-loader.mjs --import test/support/fork-test-environment.mjs --test test/unit/native-supervisor-takeover.test.ts
+result: 7 tests / 7 pass / 0 fail (claimed no wake+no detach, default route keeps wake+detach, duplicate=1 reply, generic reply refused, error fails closed without wake/detach, expired never claimed, foreign owner never claimed)
+cmd: same loader --test native-supervisor-channel supervisor-ask-registration scheduled-supervisor-demand intercom-bridge
+result: 80 tests / 79 pass / 1 fail
+  the single failure is an invocation artifact: that test spawns a child with '--import ./test/support/register-loader.mjs' and cwd=process.cwd(), so it only resolves when run from the package dir.
+  re-run from packages/pi-subagents: 25 tests / 25 pass / 0 fail. Not a code regression.

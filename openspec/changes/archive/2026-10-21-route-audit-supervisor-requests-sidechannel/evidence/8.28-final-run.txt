@@ -1,0 +1,30 @@
+== 8.28 FINAL ordered run (round-18 fixes; gates green, live LAST) ==
+
+two typechecks 0 error TS
+goal-x test:unit -> exit 0; 1343/1343 (flow file 9/9 in 2.2 s — the earlier hang is gone)
+goal-x test:integration -> exit 1; integration 26 pass + 9 DECLARED settings-profile debt;
+                           sdk group 1/1 (real SDK, no stub)
+fork runner 89/89; selfcheck OK (100/3/7)
+fork-divergence gate exit 0 (goal-x 555/7, subagents 989/10, undeclared 0)
+openspec validate --strict valid; git diff --check clean
+live (LAST) -> exit 0; BOTH LIVE CASES PASSED; 55 assertions
+logs: /tmp/8.28-logs/{unit,int,live}.txt
+
+Round-18 findings and closure:
+1. The session-scope capture failure is now BOUNDED. The guard sits inside a
+   `new Promise<GoalAuditorResult>((resolve) => ...)` executor, where a bare `return {...}` is ignored
+   and the completion tool therefore waited forever. It now calls resolve({approved:false,
+   disapproved:true, error:"Goal auditor delegation failed: error details omitted", requestId}) and
+   returns, so update_goal converges immediately with a safe diagnostic and zero child launches.
+   This also explains last round's hang: the two oracles I removed were waiting on exactly this
+   unresolved promise. With the fix they pass in 2.2 s and are back in the suite.
+2. The delegation-request emit failure no longer echoes an external body: fixed text
+   "Could not start goal auditor delegation: error details omitted".
+3. The same fixed-text policy is applied to the remaining diagnostics on this surface: the preflight
+   failure ("Goal auditor preflight failed: error details omitted") and both context-snapshot failures
+   ("Could not build the parent session context: ..." / "Could not clone the completed context: ...").
+
+New regressions (goal-audit-supervisor-flow.test.ts, 9/9 in 2.2 s):
+- scope capture throws -> converges in <250 ms, exact fixed text, marker absent, 0 requests;
+- request emit throws -> exact fixed text, marker absent;
+- (kept) registration failure fixed text; terminal-lock precedence and the existing coordination tests.

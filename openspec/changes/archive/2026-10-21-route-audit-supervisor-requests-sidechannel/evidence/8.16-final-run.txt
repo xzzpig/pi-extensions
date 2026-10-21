@@ -1,0 +1,28 @@
+== 8.16 FINAL ordered run (round-9 fixes; gates green, live LAST) ==
+
+pi-subagents source unchanged this round => its FULL serial suites from 8.12 still apply
+(unit 4132/4116/0 fail; integration 1218/1211/0 fail; both after the last edit of
+fork-supervisor-routing.ts; logs /tmp/8.12-logs/).
+
+gates: goal-x typecheck 0 error TS; test:unit 1336/1336 exit 0; test:integration exit 1 =
+integration group 26 pass + 9 DECLARED settings-profile debt, sdk group 1/1 (real SDK, no stub);
+selfcheck OK (100/3/7); fork runner 82/82; fork gate exit 0 (555/7 declared 7 undeclared 0;
+subagents 989/10 declared 10 undeclared 0); strict validate valid; git diff --check clean.
+live (LAST): exit 0 — BOTH LIVE CASES PASSED, 55 assertions.
+logs: /tmp/8.16-logs/{int,live2}.txt and /tmp/8.15-logs/{unit3,gate2}.txt
+
+Round-9 findings and closure:
+1. Cancelled ask now lands in the frozen handoff: dispose() runs ONE ordered settle chain —
+   (a) bounded wait for the in-flight ask (withSettleBound(queue)) so its cancelled record is
+   written, (b) seal (record() refuses everything after the freeze again), (c) bounded abort so a
+   running generation's spend is billed, (d) freeze usage and release the listener. No record can be
+   appended after the terminal, and the cancellation evidence is inside the handoff.
+2. Late-created session cleanup is bounded and owned: the disposed branch awaiting created.abort()
+   now uses withSettleBound, and that branch also sets usageFrozen + unsubscribes, so a session that
+   raced cancellation cannot keep a live subscription or hang the teardown.
+3. Watchdog timers are cleared: all bounded waits go through withSettleBound(), which clears its
+   timeout in a finally block, so a normally-completing settle leaves no 5 s timer behind.
+4. Regression found by the full unit run and fixed: making finish() asynchronous briefly let an
+   Escape/bypass see an unsettled attempt and emit a second cancellation. finish() now sets
+   `settleStarted` synchronously and cancelAttempt() respects it, so an already-settled parked
+   attempt is never cancelled again (unit 1336/1336 green).

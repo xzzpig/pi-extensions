@@ -1,0 +1,15 @@
+[0mdirenv: loading ~/.herdr/worktrees/pi-extensions/goal-x/.envrc
+[0mdirenv: using flake
+[0mdirenv: nix-direnv: Using cached dev shell
+✔ 6.1 real SDK default factory: explicit read-only tool plan, real read, runtime-only auth (156.281276ms)
+✔ 6.1 real SDK: capability declarations in the seed are not replayed as permissions (97.202769ms)
+✔ 6.1 real SDK: a duplicate submit fails the ask closed without a second reply (43.052847ms)
+✔ 6.1 real SDK: cache warming stays off so one ask costs one scripted turn set (42.84239ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 2397.305477

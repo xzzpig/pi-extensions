@@ -1,0 +1,253 @@
+{
+  "ranAt": "2026-10-19T18:14:51.010Z",
+  "provider": "from-settings",
+  "durationMs": 222090,
+  "cases": [
+    {
+      "kind": "positive",
+      "caseDir": "/tmp/pi-audit-supervisor-live-positive-Vt99Op",
+      "checks": [
+        {
+          "name": "pi TUI started with the local extensions",
+          "ok": true
+        },
+        {
+          "name": "update_goal produced exactly one call→result pair",
+          "ok": true,
+          "detail": "calls=1 results=1"
+        },
+        {
+          "name": "assistant tool calls are paired with their results",
+          "ok": true,
+          "detail": "[\"bash\",\"get_goal\",\"bash\",\"bash\",\"bash\",\"bash\",\"bash\",\"bash\",\"read\",\"read\",\"bash\",\"update_goal\"]"
+        },
+        {
+          "name": "no detach happened (real pi-intercom detach event count is 0)",
+          "ok": true,
+          "detail": "[]"
+        },
+        {
+          "name": "the completion result carries no detach receipt",
+          "ok": true
+        },
+        {
+          "name": "the completion tool result is a real result, not a detach receipt",
+          "ok": true
+        },
+        {
+          "name": "exactly one coordination handoff was returned",
+          "ok": true,
+          "detail": "handoffBlocks=1"
+        },
+        {
+          "name": "parent model made no provider request inside the completion window",
+          "ok": true,
+          "detail": "count=0"
+        },
+        {
+          "name": "exactly one auditor child started and one delegation request",
+          "ok": true,
+          "detail": "started=1 requests=1"
+        },
+        {
+          "name": "a real /goal-direct audit was recorded in the ledger",
+          "ok": true
+        },
+        {
+          "name": "the supervisor side usage row is self-consistent",
+          "ok": true,
+          "detail": "{\"type\":\"audit_supervisor_usage\",\"goalId\":\"mvfknb1z-uvrr60\",\"auditRequestId\":\"43104634-3d20-4837-9352-1184e8ba3245\",\"tokens\":52087,\"inputTokens\":24877,\"outputTokens\":458,\"cacheReadTokens\":26752,\"cacheWriteTokens\":0,\"costUsd\":0.02724404,\"turns\":2,\"at\":\"2026-10-19T18:12:48.828Z\"}"
+        },
+        {
+          "name": "the parent turn budget was not rewritten",
+          "ok": true
+        },
+        {
+          "name": "the goal usage does not absorb side billing",
+          "ok": true,
+          "detail": "goalUsage=26885 ledger=87525"
+        },
+        {
+          "name": "the tool usage total equals the auditor + side ledger tokens",
+          "ok": true,
+          "detail": "tool=87525 ledger=87525"
+        },
+        {
+          "name": "E2E auditor alias registered (ack)",
+          "ok": true,
+          "detail": "{\"at\":1792433475313,\"k\":\"lifecycle\",\"step\":\"alias_registered\",\"alias\":\"goal-auditor-e2e-live\",\"tools\":[\"read\",\"grep\",\"find\",\"ls\",\"report_auditor_progress\"],\"acked\":true}"
+        },
+        {
+          "name": "resolver answers for the alias with the same definition",
+          "ok": true,
+          "detail": "{\"at\":1792433475314,\"k\":\"lifecycle\",\"step\":\"resolver_selfcheck\",\"aliasHit\":true,\"sameDefinition\":true,\"foreignMiss\":true}"
+        },
+        {
+          "name": "resolver misses a foreign alias",
+          "ok": true,
+          "detail": "{\"at\":1792433475314,\"k\":\"lifecycle\",\"step\":\"resolver_selfcheck\",\"aliasHit\":true,\"sameDefinition\":true,\"foreignMiss\":true}"
+        },
+        {
+          "name": "resolver misses the alias after the scope is disposed",
+          "ok": true,
+          "detail": "{\"at\":1792433570235,\"k\":\"lifecycle\",\"step\":\"scope_disposed\",\"alias\":\"goal-auditor-e2e-live\",\"idempotent\":true,\"postDisposeMiss\":true}"
+        },
+        {
+          "name": "the child actually received ALPHA through contact_supervisor",
+          "ok": true,
+          "detail": "hits=1"
+        },
+        {
+          "name": "the answered question preceded the child's terminal verdict",
+          "ok": true,
+          "detail": "{\"ask\":1792433556050,\"terminal\":1792433568780}"
+        },
+        {
+          "name": "exactly one terminal and no cancellation",
+          "ok": true,
+          "detail": "responses=1 cancels=0"
+        },
+        {
+          "name": "the same child approved",
+          "ok": true,
+          "detail": "{\"at\":1792433568820,\"k\":\"delegation\",\"kind\":\"response\",\"requestId\":\"43104634-3d20-4837-9352-1184e8ba3245\",\"ownerRunId\":\"mvfknb1z-uvrr60\",\"nodeId\":\"goal-completion:mvfknb1z-uvrr60:6\",\"runId\":\"e75f36ec-c809-4a8f-9367-2b523939c75a\",\"agent\":\"goal-auditor-e2e-live\",\"status\":\"completed\",\"verdict\":\"approved\"}"
+        },
+        {
+          "name": "the goal really archived",
+          "ok": true,
+          "detail": "archived=1 active=0"
+        },
+        {
+          "name": "exactly one audit_result and it is approved",
+          "ok": true,
+          "detail": "[{\"type\":\"audit_result\",\"goalId\":\"mvfknb1z-uvrr60\",\"verdict\":\"approved\",\"report\":\"已独立核对 cwd/evidence.txt：read 与 grep 均显示文件仅含单行内容 pong，无额外文本；执行器所述末尾 LF 属常规行终止符，不改变内容为 pong 的验收结论。共享 ledger 已记录 completion_requested，表明 update_goal({status:\\\"complete\\\"}) 已被调用并进入审计，符合目标第二步。另按 operator 要求通过 contact_supervisor 向父会话确认，父用户本次交付标记为 ALPHA，与执行器声明一致。所有显式要求均有真实件或 ledger 证据支持。\\n\\nFindings:\\n- evidence.txt 实际内容为单行 pong（末尾带常规 LF），未发现其他字符或额外内容\\n- goal_events.jsonl 与 ledger checkpoint 均记录 completion_requested，证明已完成 update_goal({status:\\\"complete\\\"}) 调用\\n- supervisor 明确回复父用户本次交付标记为 ALPHA，与执行器 claim 一致，无标记冲突\",\"at\":\"2026-10-19T18:12:48.822Z\"}]"
+        },
+        {
+          "name": "exactly one audit_supervisor_usage row with real turns",
+          "ok": true
+        },
+        {
+          "name": "exactly one audit_usage row for the auditor itself",
+          "ok": true
+        },
+        {
+          "name": "the approval is visible to the user (pane or archived goal)",
+          "ok": true,
+          "detail": "{\"paneApproved\":true,\"archivedApproved\":false}"
+        }
+      ]
+    },
+    {
+      "kind": "negative",
+      "caseDir": "/tmp/pi-audit-supervisor-live-negative-c1Ht03",
+      "checks": [
+        {
+          "name": "pi TUI started with the local extensions",
+          "ok": true
+        },
+        {
+          "name": "update_goal produced exactly one call→result pair",
+          "ok": true,
+          "detail": "calls=1 results=1"
+        },
+        {
+          "name": "assistant tool calls are paired with their results",
+          "ok": true,
+          "detail": "[\"bash\",\"get_goal\",\"bash\",\"bash\",\"subagent_supervisor\",\"subagent_supervisor\",\"bash\",\"bash\",\"bash\",\"get_goal\",\"update_goal\"]"
+        },
+        {
+          "name": "no detach happened (real pi-intercom detach event count is 0)",
+          "ok": true,
+          "detail": "[]"
+        },
+        {
+          "name": "the completion result carries no detach receipt",
+          "ok": true
+        },
+        {
+          "name": "the completion tool result is a real result, not a detach receipt",
+          "ok": true
+        },
+        {
+          "name": "exactly one coordination handoff was returned",
+          "ok": true,
+          "detail": "handoffBlocks=1"
+        },
+        {
+          "name": "parent model made no provider request inside the completion window",
+          "ok": true,
+          "detail": "count=0"
+        },
+        {
+          "name": "exactly one auditor child started and one delegation request",
+          "ok": true,
+          "detail": "started=1 requests=1"
+        },
+        {
+          "name": "a real /goal-direct audit was recorded in the ledger",
+          "ok": true
+        },
+        {
+          "name": "the supervisor side usage row is self-consistent",
+          "ok": true,
+          "detail": "{\"type\":\"audit_supervisor_usage\",\"goalId\":\"mvfkpczt-fj3yxc\",\"auditRequestId\":\"37c7a516-67a8-4833-a615-ec30437e1602\",\"tokens\":35111,\"inputTokens\":14809,\"outputTokens\":1998,\"cacheReadTokens\":18304,\"cacheWriteTokens\":0,\"costUsd\":0.02316708,\"turns\":2,\"at\":\"2026-10-19T18:14:47.427Z\"}"
+        },
+        {
+          "name": "the parent turn budget was not rewritten",
+          "ok": true
+        },
+        {
+          "name": "the goal usage does not absorb side billing",
+          "ok": true,
+          "detail": "goalUsage=20177 ledger=39734"
+        },
+        {
+          "name": "the tool usage total equals the auditor + side ledger tokens",
+          "ok": true,
+          "detail": "tool=39734 ledger=39734"
+        },
+        {
+          "name": "the audit was cancelled exactly once",
+          "ok": true,
+          "detail": "cancels=1"
+        },
+        {
+          "name": "no approval reached the goal",
+          "ok": true,
+          "detail": "[{\"at\":1792433687421,\"k\":\"delegation\",\"kind\":\"response\",\"requestId\":\"37c7a516-67a8-4833-a615-ec30437e1602\",\"ownerRunId\":\"mvfkpczt-fj3yxc\",\"nodeId\":\"goal-completion:mvfkpczt-fj3yxc:6\",\"runId\":\"9e7688db-c133-4c6b-ac74-bf057fe3bcd7\",\"agent\":\"goal-auditor-e2e-live\",\"status\":\"cancelled\"}]"
+        },
+        {
+          "name": "the single audit_result is an error",
+          "ok": true,
+          "detail": "[{\"type\":\"audit_result\",\"goalId\":\"mvfkpczt-fj3yxc\",\"verdict\":\"error\",\"report\":\"Auditor produced no output.\",\"at\":\"2026-10-19T18:14:47.425Z\"}]"
+        },
+        {
+          "name": "the goal stayed active and was not archived",
+          "ok": true,
+          "detail": "active=1 archived=0"
+        },
+        {
+          "name": "no completion was committed",
+          "ok": true
+        },
+        {
+          "name": "evidence.txt is byte-identical",
+          "ok": true
+        },
+        {
+          "name": "no child delete tool ran",
+          "ok": true
+        },
+        {
+          "name": "the unresolved question was reported back",
+          "ok": true
+        },
+        {
+          "name": "real side usage is still accounted",
+          "ok": true
+        }
+      ]
+    }
+  ],
+  "failed": []
+}

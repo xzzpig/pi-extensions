@@ -1,0 +1,17 @@
+== 3.2 read-only side channel + diagnostic safety 2026-10-19T03:01:06+08:00 ==
+new: packages/pi-goal-x/extensions/goal-audit-sidechannel.ts
+new: packages/pi-goal-x/tests/goal-audit-sidechannel.test.ts
+
+implemented: lazy session creation (no ask => no factory/no provider call), serial reuse of one session, borrowed parent ModelRuntime (never rebuilt/disposed), exact tool set read/grep/find/ls/submit_audit_supervisor_reply, in-memory SessionManager seeded via appendMessage, SettingsManager.inMemory{compaction off,retry off,cacheWarming off}, empty ResourceLoader via makeAuditorResourceLoader, strict submit union + duplicate rejection, 8-ask/8KiB ask/8KiB reply/96KiB record bounds with record reserved before delivery, min(ask,audit) deadline, seal/dispose idempotent.
+
+diagnostic safety (approved 3.2 plan): no external exception text is read/truncated/hashed/re-emitted; fixed OMITTED_ERROR_DETAILS stage text; codes preserved (config_error, context_error, context_capacity_exceeded, session_error, invalid_ask, deadline_missing).
+
+RED/GREEN (content-level oracle, 11 entries):
+  RED  : /tmp/new-goal-mve57x7e-diagnostic-repair/RED.log  -> exit 1, 4 oracle cases fail against the leaking describeError variant
+         (session prompt rejects / waitForIdle rejects / post-submit liveness / never-reads-properties)
+  GREEN: /tmp/new-goal-mve57x7e-diagnostic-repair/GREEN-final.log -> exit 0, 20/20 pass
+  the leak probe was injected only into a scratch copy and reverted; current source contains 0 occurrences of 'error instanceof Error ? error.message : String(error)' in the classify path.
+
+cmd: pnpm --filter @xzzpig/pi-goal-x run typecheck -> exit 0
+cmd: node --import keepalive --import scripts/test-adapter-hooks.mjs --experimental-strip-types --test tests/goal-audit-sidechannel.test.ts
+result: 20 tests / 20 pass / 0 fail / 0 cancelled

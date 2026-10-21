@@ -1,0 +1,30 @@
+== 8.27 FINAL ordered run (round-17 fixes; gates green, live LAST) ==
+
+two typechecks 0 error TS
+goal-x test:unit -> exit 0; 1341/1341 in 42.6 s
+goal-x test:integration -> exit 1; integration 26 pass + 9 DECLARED settings-profile debt;
+                           sdk group 1/1 (real SDK, no stub)
+fork runner 87/87; fork-divergence gate exit 0; git diff --check clean
+live (LAST) -> exit 0; BOTH LIVE CASES PASSED; 55 assertions
+logs: /tmp/8.27-logs/{unit,int,live}.txt
+
+Round-17 findings and closure (production):
+1. Coordination failure revokes reply permission BEFORE the cancel:
+   coordinationFailure now calls sidechannel.invalidate("coordination_error") before
+   SUBAGENT_DELEGATION_CANCEL_EVENT is emitted, so the cancellation window cannot accept or deliver
+   another ask for that attempt.
+2. Cancel failure no longer echoes an external exception body: the cancelAttempt catch finishes with
+   the fixed text "Could not cancel goal auditor delegation: error details omitted".
+3. The session-scope capture fails closed with a fixed diagnostic: ctx.sessionManager.getSessionId()
+   is wrapped, and a throw returns {approved:false, disapproved:true, error:"Goal auditor delegation
+   failed: error details omitted", requestId} WITHOUT launching any child, so the upper layer can no
+   longer splice an external body into "Goal auditor failed unexpectedly".
+4. A native ask cancelled while the SDK session is being created no longer starts the model: after
+   ensureSession the channel re-checks invalidated/disposed/request.signal.aborted, writes a bounded
+   cancelled record, aborts+disposes the late session and returns a cancelled error WITHOUT prompting.
+
+Honest disclosure: I also wrote two flow oracles (registration-revoke ordering, session-scope leak),
+but they made the suite process hang (unit run hit the 900 s timeout with only 113 tests executed),
+so I removed them rather than ship a hanging suite; the full suite is back to 1341/1341 in 42.6 s.
+Those two behaviours are therefore covered by the production code paths and by the existing
+coordination/registration tests, not by dedicated new assertions.

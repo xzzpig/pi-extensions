@@ -1,0 +1,21 @@
+== 8.41 (round-27) criterion 6: six seams + REAL cancel chain + parallel isolation + idempotent cleanup ==
+
+A. tests/goal-audit-lifecycle-cancel-chain.test.ts (NEW, 1 case) — drives the REAL
+   runGoalCompletionAuditor and the PRODUCTION lifecycle callback:
+   - on delegation request the audit is in flight; the test then calls the same registry entry the
+     events use (invalidateAuditSidechannelsForOwner("test-session","g1",...)) TWICE;
+   - asserts exactly ONE cancel,	with the ORIGINAL identity (requestId/ownerRunId/nodeId equal to the
+     emitted delegation request) — i.e. the production cancelAttempt("lifecycle_revoked") path ran;
+   - then sends a LATE, schema-valid approved structured response and asserts the result is NOT approved
+     (cancelled/disapproved), and no second cancel is emitted (terminal idempotent).
+
+B. tests/goal-audit-lifecycle-inflight.test.ts (8 cases, 3.3 s) — in-flight asks on real seams:
+   focus away/back, same-id removal (archived), session_start, session_tree, session_shutdown, reload,
+   plus a PARALLEL isolation+cleanup case: gA and gB are BOTH in flight, only gA is revoked (focus moves
+   to gB), gA's late legal answer is dropped while gB STILL answers "reply", and a double
+   releaseLifecycle + double dispose neither throws nor double-records.
+
+gates: typecheck 0 error TS; unit 1358/1358; fork runner 90/90; fork gate exit 0; diff --check clean;
+       integration exit 1 = 26 pass + 9 DECLARED settings-profile debt; sdk 1/1
+live: exit 0; BOTH LIVE CASES PASSED; 57 assertions
+logs: /tmp/8.41-logs/{unit,int,gate,live}.txt

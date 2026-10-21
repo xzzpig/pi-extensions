@@ -1,0 +1,33 @@
+== 8.13 FINAL ordered run (round-7 fixes; gates green, live LAST) ==
+
+pi-subagents source unchanged this round => its FULL serial suites from 8.12 still apply
+(unit 4132/4116/0 fail, integration 1218/1211/0 fail, both run AFTER the last edit of
+fork-supervisor-routing.ts; logs /tmp/8.12-logs/).
+
+this round's gates:
+  goal-x typecheck        -> 0 error TS
+  goal-x test:unit        -> exit 0; 1335/1335
+  goal-x test:integration -> exit 1; integration group 26 pass + 9 DECLARED settings-profile debt;
+                             sdk group 1/1 pass (real SDK, no stub)
+  fork runner             -> exit 0; 81/81
+  selfcheck               -> OK (100 unit + 3 integration + 7 e2e)
+  fork-divergence gate    -> exit 0; goal-x 555/7 declared 7 undeclared 0; subagents 989/10 declared 10 undeclared 0
+  openspec validate       -> valid
+  git diff --check        -> clean
+live (LAST)               -> exit 0; BOTH LIVE CASES PASSED; 55 assertions
+
+logs: /tmp/8.13-logs/{unit,int,live}.txt
+
+Round-7 findings and closure:
+1. Terminal freeze before billing convergence: goal-auditor-delegation.ts now has finishNow()
+   (the old body) and a finish() wrapper that AWAITS sidechannel.dispose() (which waits the
+   settlePromise: abort -> SDK dispose -> freeze usage -> release listener) and only then freezes
+   the result. So a cancelled/resumed attempt reports the spend and the question produced before
+   the terminal, instead of an empty handoff.
+2. Late-created session subscription leak: ensureSession's `disposed` branch (session created
+   AFTER cancellation) now also sets usageFrozen, unsubscribes and clears the handler, so a
+   session that raced cancellation cannot keep a live listener.
+3. Error paths keep their question record: the serialized respond() catch now records a bounded
+   (<=1024 chars) failed entry carrying requestId / supervisorRequestId / runId / reason / question
+   before classifying the error, so a config/session/prompt failure still flows back through
+   withAuditSupervisorHandoff instead of producing an empty record set.

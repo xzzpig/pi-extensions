@@ -128,6 +128,12 @@
       "path": "packages/pi-subagents/scripts/build-package.mjs",
       "reason": "The unchanged compiled-only upstream build:pkg script assumes package-local node_modules/typescript (line 37) and private source metadata (line 59). The fork publishes public TypeScript source packages in the hoisted pnpm workspace, so this builder is not its release path. Its blob matches pre-sync ffdfabd. Direct tsc -p tsconfig.build.json and the existing source npm pack content check pass; reconcile the builder only if the fork deliberately changes its publishing design.",
       "recordedAt": "2026-10-10T07:08:00Z"
+    },
+    {
+      "kind": "noise",
+      "path": "packages/pi-subagents/src/slash/prompt-template-bridge.ts",
+      "reason": "Diff-alignment artifact: the fork's additive sixth executeStructured parameter and the shared onExecutionUpdate closure re-indent upstream-original callback lines (2026-10-19 audit: raw=[21 20] vs ws=[11 10]). The whitespace-insensitive remainder is the intended seam described in reapplyOnSync; nothing else in the file differs.",
+      "recordedAt": "2026-10-19T03:30:00+08:00"
     }
   ],
   "reapplyOnSync": [
@@ -162,7 +168,8 @@
     "v0.77.0: keep the compact combined fork-fields row in docs/agents.md and detailed policy in docs/fork-extensions.md so the frontmatter guide section stays within the upstream 8000-character response limit.",
     "v0.77.0: async-execution.ts preserves the selected agent permissionProfile in both single/chain tool-plan inputs and serialized runner steps so native launcher routing cannot drop the existing forced permission extension or pinned profile environment.",
     "Pi 1.0.0 command results: child-commands.ts passes fulfilled tool results through fork-command-result.ts before its existing success/failure handlers; isError results reject into the unchanged failed/cancelled state handling.",
-    "v0.77.0: external-cli-runner.test.ts startRunner/startRunnerWithStderr resolve the jiti CLI through the existing fork jitiCliPath helper rather than assuming a package-local node_modules directory in the hoisted pnpm workspace."
+    "v0.77.0: external-cli-runner.test.ts startRunner/startRunnerWithStderr resolve the jiti CLI through the existing fork jitiCliPath helper rather than assuming a package-local node_modules directory in the hoisted pnpm workspace.",
+    "supervisor responder side channel (2026-10-19): keep the fork's additive seams on upstream files \u2014 prompt-template-bridge.ts executeStructured takes an internal optional sixth request?: SubagentDelegationRequest (passed only when the full structured request parsed) and its single call site feeds either the six-argument executeStructured or the unchanged five-argument legacy execute through a shared onExecutionUpdate closure; subagent-executor.ts keeps the optional sixth executeDelegated parameter, the delegatedSupervisorLaunchHooks WeakMap keyed by the cloned delegatedParams (read at the top of execute BEFORE canonicalizeExecutionParams replaces effectiveParams, or the audit responder silently unbinds) and the beforeNativeChildLaunch call inside runSinglePath after the canonical agentConfig lookup/unknown-agent early return and before the runSync child launch; native-supervisor-channel.ts keeps the dispatcher claim after pending.set/markForegroundSupervisorAttention and before parentWake.sendMessage and the INTERCOM_DETACH_REQUEST_EVENT emit, plus the responder-managed rejection on the generic subagent_supervisor reply action; package.json keeps the ./supervisor-routing export entry exactly as test/unit/package-manifest.test.ts asserts it. Do not change the model-visible delegation request schema, toSubagentDelegationExecutionParams, the terminal status enum or the detach state transition."
   ],
   "doNotReintroduce": [
     "do not re-port the fork multi-model loop onto execution.ts or subagent-runner.ts",

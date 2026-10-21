@@ -1,0 +1,62 @@
+# Plan review record
+
+Projected from `.opsx-plan-review.jsonl` (append-only).
+
+## Gap analysis — 2026-10-10T15:13:11.542Z
+
+恢复原只读 gap analyst 后收到8项真实缺口；旧35项D/I基线全部保留。将在proposal/specs/design/tasks中明确启动前路由绑定、独占处理与bridge关闭、错误取消与Escape park分离、完整上下文组、终态一次性回流和独立计费、真实SDK验证及纯自动验收。首次运行超时未产生完成报告，代码无改动。
+
+- G1：必须定义原 delegation 完整身份到实际 child (runId,agent,index) 的启动前精确绑定，并证明最早 supervisor 请求不会先于路由登记。
+- G2：被旁路接管的请求必须独占处理；答复/启动失败不得回退为主模型通知或 detach；须明确 intercom bridge 关闭时监督工具不可达的行为。
+- G3：协调失败不能走 Escape abort→park；须先锁定协调错误，再精确取消，禁止迟到 approved 覆盖失败原因。
+- G4：BTW seed 与既有 context filter 不保证完整工具消息组；须实现已完成分支快照并验证 pending toolCall、多工具组和孤立 toolResult。
+- G5：须明确 park 中间结果与真正 terminal 的记录/usage冻结及一次性消费，避免重复或遗漏回流与计费。
+- G6：借用父 ModelRuntime 的认证/provider兼容性、真实只读工具集合以及不会处置父runtime，须用真实 SDK 证据验证。
+- G7：默认 Goal-X runner 使用 stub；须新增不经 stub 的真实SDK集成测试，不能仅凭单元测试宣称生命周期/认证/能力隔离成立。
+- G8：既有规格保留必要人工验证措辞，但本次验收必须完全由 agent执行；需明确本次D-15/新增契约仅接受可运行自动化证据。
+
+## Plan review verdict — round 1 — OKAY — 2026-10-10T16:13:40.941Z
+
+独立只读 opsx-plan-review 恢复run 83f75bea-b7ea-4779-971d-6685adf59dda 已提交 report_plan_review，issues为空。已核验D2启动前canonical route绑定、D3独占接管、D4合法只读SDK上下文、D5取消与park分离、D6记录/usage冻结、D7-D8触及范围及真实SDK测试前置；G1-G8均已处置。父方strict validate及35旧基线/modified原场景完整性检查通过。此为规划可执行结论，未运行实施测试；自动plan status的未显式传ctx.cwd问题尚未修复，不混入此产品变更。
+
+## Plan approval — revise — 2026-10-10T16:13:40.945Z
+
+Requested via: pi-ask
+
+## Plan review verdict — round 2 — REJECT — 2026-10-10T17:45:50.715Z
+
+独立审查run 0b64fb2e-a651-4136-9150-6e4f70f49ed2提交REJECT，只有新增D9的一项启动阻断，原D1-D8结论不变。父已直接核验goal-auditor-agent-resolver.ts与goal-auditor-delegation.ts missing_agent分支，确认有效阻塞；采用现有resolver的最小fixture修订即可闭合。
+
+- Blocker: design.md D9 / tasks.md 8.3：E2E fixture只通过registerAgentViaEvents登记唯一runtime alias，Goal-X磁盘preflight的missing_agent分支不能发现该alias。必须在指定parent scope同时登记现有registerAuditorAgentResolver，仅为该alias返回与runtime登记一致的cloned definition，并在失效/退出时dispose；不修改生产preflight或绕过它。
+
+## Plan review verdict — round 3 — OKAY — 2026-10-10T17:55:13.843Z
+
+独立复审run efab077d-c1fd-4de4-a920-484852dd3eae已提交report_plan_review：OKAY，issues为空。明确确认R2唯一启动阻断已解决：E2E fixture在指定parent scope同时登记唯一runtime alias与现有等价auditor resolver，补齐missing_agent路径，foreign/失效miss、先invalidate再dispose；不改/跳过生产preflight，真实child/native问答/唯一terminal断言保留。最终真实Pi+tmux+真实provider E2E已作为任务8.3，当前20项均未实施；严格validate与diff check通过，无实际模型调用。审查证明规划可执行，不代表E2E已经通过。
+
+## Plan approval — approved — 2026-10-10T17:55:13.848Z
+
+Requested via: pi-ask
+
+## Gap analysis — 2026-10-14T07:24:07.339Z
+
+只读opsx-gap-analysis run3fc4c07a完成，实际结构化report已读。优先候选是测试身份环境，不是SDK升级；full spawn根因尚不足以承诺整个8.1 GREEN。所有源码/断言/metadata仍只读，后续将制作有限范围、可证伪的草案并独立复审；未决定事项不伪装已解决。
+
+- C1：Goal大宗262 unit及25未豁免integration落在installer未注册core/tools/commands家族；goal.ts调用isDelegatedGoalSession的早退与症状吻合。实际CHILD/DEPTH来源未记录，不能直接承诺环境补丁全绿。
+- C1b：subagents index的child早退也可能解释7个未debt unit症状，但需真实环境见证。包测试脚本清原8个PI变量而遗漏CHILD/DEPTH。
+- 必须保留fork-test-runner adapter spawn env===undefined与原argv/SDK独立进程断言；若修复只能在限定测试setup/preload边界隔离继承身份，不能削弱真实child guard或擦除测试主动设置child的场景。
+- C2：两个shared fake pi缺sendMessage公开API已确认；两边full各33诊断、solo0，但没有对应失败leaf因果证据，不能为消除噪声扩大修复域。
+- C3：35个sub integration失败含未到prompt、迟启动/终态发布、正确strict/elapsed/通知契约、Git前置等不同链；16当前独有两边solo全过不能证明full无回归，现阶段无完整可实施文件集。
+- U3：2个cancel仍未归属；原9个settings/profile债务只精确九例，不能改正确恒定工具面/nested设置语义或扩debt；不得serial/加timeout/skip替代原full。
+- 规划限最小证据驱动测试身份隔离候选；先确认U1与遮蔽后病例，所有未定位部分显式保留，独立复审与用户批准前不实施，不改17/20或immutable objective。
+
+## Plan review verdict — round 4 — OKAY — 2026-10-14T07:54:05.679Z
+
+fresh独立opsx-plan-review run947431ce-a9e9-485f-993c-c785497a248b实际report_plan_review verdict OKAY、issues=[]；父已读取结构化实参并将证据记录到baseline-repair-plan.md及proposal/design/tasks。本次仅8.1有限零源码环境复验草案：direnv之后对子命令局部清PI_SUBAGENT_CHILD/DEPTH，原D8十条程序/argv与顺序保持，SDK仍无stub且只该命令清NODE_OPTIONS，父worker环境/runner spawn选项/显式child安全断言不改。现场A/B仅支持见证范围，不承诺262/25/35全消失；C2/C3与原full两个cancel未关闭。knownDebt/源码/fixtures/并发/timeout/正确断言均不改，未覆盖失败仍RED，8.2/8.3不启动，任何新修复需另授权。strict validate0、diffcheck0、20任务中仍17完成；source diff与/tmp/t81/pre-tracked.diff字节相同。OKAY是有限可执行性证据，不是8.1通过或用户执行批准；请求用户批准后才由默认DeepSeek opsx-worker按A1/A2执行。
+
+## Plan review verdict — round 5 — OKAY — 2026-10-14T12:29:46.630Z
+
+3.2诊断安全最小修复：已核对同一reviewer会话续跑e47491fc-c29b-4c71-ac4c-3cedd9b2f672的真实report_plan_review调用及工具确认，静态-only OKAY、issues=[]。两文件scope、snapshot诊断转发、11入口内容oracle、两处旧正文断言适配与独立无stub SDK八例证明一致。复审证据已写回diagnostic-repair-plan/proposal/design/tasks，openspec strict有效、38个非openspec源码hash不变、20项/17历史勾选不变，当前新goal mv7u2wdg-f57vte仍6/20且3.2未验收。没有源码实施授权；用户选择继续新goal并忽略绑定旧goal mv2pfl4u-5kp0kc的流程告警，不恢复或操作旧goal。首轮1800000ms超时未给verdict，不能报通过。原full-suite与live gate不豁免。
+
+## Delegation usage (total)
+
+input 0, output 0, cacheRead 0, cacheWrite 0, turns 0

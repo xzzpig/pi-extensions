@@ -21,6 +21,7 @@ import {
 	parseGoalSettings,
 	saveGoalSettingsFileConfig,
 } from "../extensions/goal-settings.ts";
+import { installSupervisorResponderAck } from "./fixtures/goal-audit-supervisor-owner.ts";
 import { REPORT_AUDITOR_PROGRESS_PROTOCOL_PREFIX } from "../extensions/goal-auditor-progress.ts";
 import type { GoalRecord } from "../extensions/goal-record.ts";
 import {
@@ -65,8 +66,12 @@ function goal(overrides: Partial<GoalRecord> = {}): GoalRecord {
 }
 
 function baseArgs(events?: GoalAuditorEvents) {
+	// The responder must exist before the delegation request; this fixture answers
+	// registration with an inert handle (no model work) so the legacy lifecycle
+	// assertions keep running unchanged.
+	if (events) installSupervisorResponderAck(events);
 	return {
-		ctx: { cwd: "/repo" } as any,
+		ctx: { cwd: "/repo", sessionManager: { getSessionId: () => "test-session" } } as any,
 		events,
 		goal: goal(),
 		detailedSummary: "Goal: tutorial\nStatus: active",
@@ -355,6 +360,10 @@ test("D-09: delegation requests do not serialize runtime-only parent provider st
 		...baseArgs(events),
 		ctx: {
 			cwd: "/repo",
+			// The auditor now registers a supervisor responder for the exact
+			// attempt, which needs the SDK runtime session id; every real
+			// ExtensionContext has this.
+			sessionManager: { getSessionId: () => "test-session" },
 			model: { provider: "runtime-only", id: "volatile-model" },
 			modelRuntime: { opaque: true },
 		} as any,
@@ -519,8 +528,10 @@ test("D-11/I-16: auditorTimeoutMs drives the local terminal timer without an exp
 		...baseArgs(events),
 		settings: { auditor: { timeoutMs: 1_000 } },
 	}).then((result) => (settled = true, result));
-	// Fire only the configured cap: if the setting reached the local timer,
-	// the run settles here; the built-in 30-minute default stays far away.
+	// The responder API is imported lazily before the request is emitted; let that
+	// load settle first, then fire only the configured cap. The assertion below is
+	// unchanged: only a setting-driven cap can settle the run at this point.
+	await new Promise((resolve) => setImmediate(resolve));
 	t.mock.timers.tick(2_000);
 	await new Promise((resolve) => setImmediate(resolve));
 	assert.ok(settled, "auditorTimeoutMs must drive the local terminal timer (settled within the configured cap)");

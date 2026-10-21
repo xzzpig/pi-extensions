@@ -1,0 +1,47 @@
+== 6.1 no-stub real-SDK worker for the DEFAULT side-session factory (design D8) ==
+new files:
+  packages/pi-goal-x/tests/goal-audit-sidechannel-sdk-worker.ts   (the real-SDK cases)
+  packages/pi-goal-x/tests/integration/goal-audit-sidechannel-sdk.test.ts (the gate wrapper; spawns the
+    worker with process.execPath and NODE_OPTIONS cleared so no stub preload can reach it)
+
+real SDK, no stub: the worker loads the genuine @earendil-works/pi-coding-agent and reads its
+createAgentSession/SessionManager/SettingsManager/defineTool directly; `sessionFactory` is NOT injected, so the
+production default factory is the code under test. Provider is a local faux provider registered on a real
+offline ModelRuntime (`ModelRuntime.create({modelsPath:null, refreshOnCreate:false, allowModelNetwork:false})`
++ `registerNativeProvider` + `setRuntimeApiKey`), with HOME redirected to a temp dir and no auth file, so no
+network call, no real credential and no model token is consumed. Observations come only from the payloads the
+real SDK hands the provider plus public runtime APIs.
+
+cases (all four pass):
+  1. default factory: `read` really reads the temporary evidence file (content observed in the next payload's
+     tool result), a `bash` call is REFUSED by the SDK, and the custom submit tool delivers "ALPHA".
+     Also proves runtime-only auth (`setRuntimeApiKey` on a runtime-registered native provider, no auth file,
+     no env key) and that the borrowed parent runtime is still usable after the side channel disposes.
+  2. capability isolation: the live capability declarations observed in the payloads are a subset of
+     read/grep/find/ls/submit_audit_supervisor_reply and never include the seeded historical
+     toolsAdded ["bash","edit","write"]; a question that needs new authorisation returns kind "error" with
+     code "unresolved" (fail closed) and the evidence file is byte-identical afterwards.
+  3. duplicate submit in one ask -> fail closed, one "failed" record, NO answer recorded.
+  4. cache warming off: one ask costs exactly the 3 scripted provider requests, no replay/fallback request;
+     3 generated assistant messages are billed.
+
+RED / GREEN (contract requires both to be preserved):
+  RED  = a temporary mutation of the default factory omitting its explicit read-only tool plan (the design's
+         "omitting tools is not equivalent to read-only" trap). tests 4 / pass 2 / fail 2, exit 1.
+         log: evidence/6.1-sdk-RED.txt
+  GREEN= byte-exact restore (md5 5cf5de1ef2e762c8003ed02951279f9b before and after) re-run:
+         tests 4 / pass 4 / fail 0 / cancelled 0 / skipped 0, exit 0. log: evidence/6.1-sdk-GREEN.txt
+  The temporary mutation was never committed and no other file was touched (git diff of the file is empty
+  against the index).
+
+commands
+  cmd: pnpm --filter @xzzpig/pi-goal-x run typecheck -> exit 0
+       (first run exited 2: the worker's ask() helper lacked the required `signal` field; fixed by adding an
+        AbortController signal. Disclosed rather than silently corrected.)
+  cmd: direnv exec . env -u NODE_OPTIONS node --experimental-strip-types --test <worker> -> 4/4 pass, exit 0
+  cmd: direnv exec . env -u NODE_OPTIONS node --experimental-strip-types --test \
+         ./packages/pi-goal-x/tests/integration/goal-audit-sidechannel-sdk.test.ts -> 1/1 pass, exit 0
+  cmd: same wrapper WITH the stub preload + keepalive -> 1/1 pass, exit 0 (the child still ran the real SDK,
+       i.e. the wrapper is safe under the repository's stub-loading test runner)
+  cmd: focused regression (sidechannel unit + supervisor flow + handoff + usage + sdk wrapper) -> 37/37 pass,
+       0 fail / 0 cancelled / 0 skipped

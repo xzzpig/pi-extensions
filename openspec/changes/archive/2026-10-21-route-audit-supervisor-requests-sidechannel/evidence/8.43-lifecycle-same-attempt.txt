@@ -1,0 +1,25 @@
+== 8.43 (round-29) criterion 6: the in-flight ask is inside the ORIGINAL attempt ==
+
+Production seam added (approved scope: goal-auditor-delegation.ts, test-only injection, no model-visible
+change): GoalCompletionAuditorArgs.auditSidechannelSessionFactory, forwarded to the side channel as its
+sessionFactory. This lets a test hold the SAME attempt's prompt open without a real SDK session.
+
+tests/goal-audit-lifecycle-full-chain.test.ts (6 cases = 6 seams, 6.1 s, green). Per case:
+1. THREE real audits are started (victim session-1/g1, sibling session-1/g2, foreign session-2/g1);
+   each exposes its OWN registered responder, and the test calls
+   bus.registration.respond(ask) — so the in-flight ask belongs to the original attempt;
+2. the seam is triggered (focus away/back through a channel-less goal, same-id archived,
+   session_start, session_tree, session_shutdown, reload);
+3. assertions:
+   - exactly ONE cancel, with requestId/ownerRunId/nodeId equal to that attempt's delegation request;
+   - the victim's LATE legal answer (submitted through the same session's submit tool) is NOT delivered,
+     and its listener is released exactly once (subscribe 1 / unsubscribe 1);
+   - the sibling goal answers for goal-scoped seams and is revoked for session-wide ones; the OTHER
+     SESSION always answers (scope proof on the same run);
+   - a LATE schema-valid approved response does not authorise (approved false) and no second cancel;
+   - the session is aborted exactly once and disposed exactly once (observed counters, not stubs).
+
+gates: typecheck 0 error TS; unit 1364/1364; fork runner 90/90; fork gate exit 0; diff --check clean;
+       integration exit 1 = 26 pass + 9 DECLARED settings-profile debt; sdk 1/1
+live: exit 0; BOTH LIVE CASES PASSED; 57 assertions
+logs: /tmp/8.43-logs/{unit,int,gate,live}.txt

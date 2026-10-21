@@ -1,0 +1,23 @@
+== 1.1 baseline 2026-10-19T02:14:23+08:00 ==
+HEAD=bf461ad3ec885aa1fe1be12ca00a673b3e594c4e branch=goal-x
+node=v22.23.3 pnpm=11.13.1
+pi-coding-agent=1.0.0
+--- inventory pi-goal-x ---
+CONTRACT pi-goal-x reapplyOnSync=0 doNotReintroduce=0
+pi-goal-x: checked=555 noise=7 deleted=0 submodule=0 declared=7 undeclared=0 stale=0
+--- inventory pi-subagents ---
+CONTRACT pi-subagents reapplyOnSync=0 doNotReintroduce=0
+pi-subagents: checked=989 noise=9 deleted=0 submodule=0 declared=9 undeclared=0 stale=0
+
+--- code anchors verified 2026-10-19T02:15:08+08:00 ---
+pi-subagents:
+  prompt-template-bridge.ts:48 executeStructured?: 5-param optional (call site ~347)
+  subagent-executor.ts:5388 createSubagentExecutor / 5409 executeDelegated / 5427 delegatedThinkingOverrides WeakMap / 8169 executeDelegated impl
+  native-supervisor-channel.ts:734 poll; pending.set+markForegroundSupervisorAttention then parentWake.sendMessage(triggerTurn) + INTERCOM_DETACH_REQUEST_EVENT
+pi-goal-x:
+  goal-auditor-delegation.ts:384 runGoalCompletionAuditor / 559 cancelAttempt / 652 armTerminalTimeout / 374 parkOnAbort
+  goal-completion.ts:65 runGoalCompletionFlow / 126 commitGoalCompletion / 32 withAuditorUsage
+  goal-ledger.ts:20-22 audit_started/audit_result/audit_usage union
+  goal-state.ts:180 assignFocusedGoalId / 208 goal setter
+none of the planned new files exist yet -> implementation starts from zero
+write probe: WRITE_OK outside openspec/ (implementation permitted)

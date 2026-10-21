@@ -1,0 +1,12 @@
+== 2.4 bridge+executor+channel integration 2026-10-19T02:43:14+08:00 ==
+new: packages/pi-subagents/test/integration/fork-supervisor-routing.test.ts
+components under test: real registerPromptTemplateDelegationBridge, real createSubagentExecutor.executeDelegated with the internal 6th hooks arg, real owner registry + dispatcher, real createNativeSupervisorChannel poll + writeReply file protocol.
+only stand-in: the child runtime is the repo's mockPi stub, so the test writes the native request file itself into the channel dir the real binding resolved (documented in the file header).
+
+cmd (cwd packages/pi-subagents): node --experimental-strip-types --import ./test/support/register-loader.mjs --import ./test/support/fork-test-environment.mjs --test ./test/integration/fork-supervisor-routing.test.ts
+result: 3 tests / 3 pass / 0 fail / 0 cancelled
+  registered route: earliest ask claimed -> reply file 'ALPHA' written; parentWake 0; detach 0; child launches 1; bridge terminal responses 1; status completed
+  unregistered attempt: wake 1 + detach 1 preserved; terminal 1
+  intercomBridge mode=off: route.bridgeActive false, responder calls 0, wake 1 -> capability not expanded
+
+also re-ran typecheck for the package: exit 0 (see 2.1/2.3).

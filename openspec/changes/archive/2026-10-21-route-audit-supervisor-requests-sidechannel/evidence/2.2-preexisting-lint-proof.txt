@@ -1,0 +1,8 @@
+== 2.2 pre-existing lint proof 2026-10-19T02:25:47+08:00 ==
+file: packages/pi-subagents/src/runs/foreground/subagent-executor.ts
+HEAD occurrence counts (1 == declaration only, i.e. already unused before this change):
+  resolveModelSelection: HEAD=1 WORKTREE=1
+  getHostBuiltinToolNames: HEAD=1 WORKTREE=1
+  WorkflowChildSettledNotification: HEAD=1 WORKTREE=1
+  'const { count, ...concreteTask } = task;' HEAD=3133,3156 WORKTREE=3136,3159 (pure +3 line shift from this edit)
+Decision: do not modify pre-existing upstream dead code; removing the count destructuring would change the spread payload.

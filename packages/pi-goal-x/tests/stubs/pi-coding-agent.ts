@@ -26,6 +26,34 @@ export function getMarkdownTheme(): Record<string, never> {
 	return {};
 }
 
+/**
+ * The bundled stub cannot honestly replay provider sessions, so the fast
+ * runner captures the real public builder before installing this stub (see
+ * scripts/test-adapter-hooks.mjs). Real replay semantics stay the SDK's job;
+ * this export only forwards to that captured function.
+ */
+const REAL_SDK_KEY = Symbol.for("@xzzpig/pi-goal-x/real-pi-coding-agent");
+
+type RealBuildSessionContext = (
+	entries: readonly unknown[],
+	leafId?: string | null,
+	byId?: Map<string, unknown>,
+) => { messages: unknown[]; thinkingLevel: string; model: { provider: string; modelId: string } | null };
+
+export function buildSessionContext(
+	entries: readonly unknown[],
+	leafId?: string | null,
+	byId?: Map<string, unknown>,
+): { messages: unknown[]; thinkingLevel: string; model: { provider: string; modelId: string } | null } {
+	const captured = (globalThis as unknown as Record<symbol, { buildSessionContext?: RealBuildSessionContext; error?: string } | undefined>)[REAL_SDK_KEY];
+	if (typeof captured?.buildSessionContext !== "function") {
+		throw new Error(
+			`The bundled test stub cannot build a session context${captured?.error ? ` (${captured.error})` : ""}; run the unbundled SDK suite for real replay.`,
+		);
+	}
+	return captured.buildSessionContext(entries, leafId, byId);
+}
+
 export class UserMessageComponent {
 	text: string;
 

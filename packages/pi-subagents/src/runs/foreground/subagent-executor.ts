@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { SupervisorLaunchHooks } from "../../intercom/fork-supervisor-routing.ts";
 import { discoverAgents, discoverAgentsAll, findBlockingAgentDiagnostic, formatAvailableAgentLines, formatUnknownAgentError, resolveAgentName, suggestAgentName, unknownAgentDiagnosticContext, type AgentConfig, type AgentDiscoveryDiagnostic, type AgentScope, type UnknownAgentDiagnosticContext } from "../../agents/agents.ts";
 import { getArtifactsDir, getProjectArtifactPackagingWarning, getProjectSubagentsDir } from "../../shared/artifacts.ts";
 import { writeAtomicJson } from "../../shared/atomic-json.ts";
@@ -507,6 +508,8 @@ interface ExecutionContextData {
 	controlConfig: ResolvedControlConfig;
 	/** Structured delegation consumers do not need duration-only heartbeat snapshots. */
 	suppressUnchangedDelegationUpdates?: boolean;
+	/** Internal delegated-launch binding hooks (never a model-facing parameter). */
+	supervisorLaunchHooks?: SupervisorLaunchHooks;
 	intercomBridge: IntercomBridgeState;
 	nestedRoute?: NestedRouteInfo;
 	timeoutMs?: number;
@@ -4164,6 +4167,22 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 			details: { mode: "single", results: [] },
 		};
 	}
+	// Internal delegated-launch binding: the real runId and canonical agent now
+	// exist and no child prompt has been sent yet. A binding conflict or an
+	// identity change must fail here, before any model call.
+	if (data.supervisorLaunchHooks) {
+		try {
+			data.supervisorLaunchHooks.beforeNativeChildLaunch({
+				runId,
+				agent: agentConfig.name,
+				childIndex: 0,
+				...(data.parentPiSessionId ? { parentSessionId: data.parentPiSessionId } : {}),
+				bridgeActive: childBridgeActive,
+			});
+		} catch (error) {
+			return toExecutionErrorResult(params, error instanceof Error ? error : new Error(String(error)), contextPolicy.contextSummary);
+		}
+	}
 	let foregroundMachine: import("../../shared/types.ts").HerdrMachineReference | undefined;
 	const requestedMachine = params.machine ?? agentConfig.machine;
 	const requiredExtensions = data.requiredExtensions ?? deps.childRuntime?.requiredExtensions ?? resolveRequiredChildExtensions(data.parentPiSessionId);
@@ -5412,6 +5431,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		signal: AbortSignal,
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
+		supervisorLaunchHooks?: SupervisorLaunchHooks,
 	) => Promise<AgentToolResult<Details>>;
 	/** Scheduled launches retain their owning context without replacing the live active session. */
 	executeScheduled: (
@@ -5425,6 +5445,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 } {
 	const executorDeps = deps;
 	const delegatedThinkingOverrides = new WeakMap<object, AgentConfig["thinking"]>();
+	const delegatedSupervisorLaunchHooks = new WeakMap<object, SupervisorLaunchHooks>();
 	const delegatedZeroToolBudgets = new WeakSet<object>();
 	const delegatedExecutions = new WeakSet<object>();
 	const publicExecutions = new WeakSet<object>();
@@ -5460,6 +5481,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		const inheritedUsageBudget = workflowOwnedUsageBudgets.get(params);
 		const retainedRequiredExtensions = workflowRetainedRequiredExtensions.get(params);
 		const delegatedThinkingOverride = delegatedThinkingOverrides.get(params);
+		const supervisorLaunchHooks = delegatedSupervisorLaunchHooks.get(params);
 		const allowZeroToolBudget = delegatedZeroToolBudgets.has(params);
 		const delegatedExecution = delegatedExecutions.has(params);
 		const publicExecution = publicExecutions.has(params);
@@ -7857,6 +7879,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 			toolCallId: _id,
 			controlConfig,
 			...(delegatedExecution ? { suppressUnchangedDelegationUpdates: true } : {}),
+			...(supervisorLaunchHooks ? { supervisorLaunchHooks } : {}),
 			intercomBridge,
 			nestedRoute,
 			timeoutMs: foregroundTimeout.timeoutMs,
@@ -8172,6 +8195,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		signal: AbortSignal,
 		onUpdate: ((r: AgentToolResult<Details>) => void) | undefined,
 		ctx: ExtensionContext,
+		supervisorLaunchHooks?: SupervisorLaunchHooks,
 	): Promise<AgentToolResult<Details>> => {
 		const disabledFeatureError = disabledFeatureResult(params);
 		if (disabledFeatureError) return disabledFeatureError;
@@ -8188,6 +8212,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 		delete privateParams.delegatedAllowZeroToolBudget;
 		delete privateParams.delegatedWorkflowPermit;
 		if (thinkingOverride !== undefined) delegatedThinkingOverrides.set(delegatedParams, thinkingOverride);
+		if (supervisorLaunchHooks) delegatedSupervisorLaunchHooks.set(delegatedParams, supervisorLaunchHooks);
 		if (allowZeroToolBudget) delegatedZeroToolBudgets.add(delegatedParams);
 		if (workflowPermit) workflowPermitContexts.set(delegatedParams, { root: workflowPermit });
 		delegatedExecutions.add(delegatedParams);

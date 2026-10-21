@@ -1,0 +1,28 @@
+== 8.31 FINAL ordered run (round-20 fixes; live green) ==
+
+gates (unchanged since 8.30, production/tests untouched after them):
+  two typechecks 0 error TS
+  goal-x test:unit -> exit 0; 1346/1346
+  goal-x test:integration -> exit 1; integration 26 pass + 9 DECLARED settings-profile debt; sdk 1/1
+  fork runner 90/90; selfcheck OK (101/3/7); fork gate exit 0; git diff --check clean
+live -> exit 0; BOTH LIVE CASES PASSED; 55 assertions
+logs: /tmp/8.30-logs/{unit,int,gate}.txt, /tmp/8.31-logs-live.txt
+
+Round-20 findings and closure:
+1. Reply-time liveness now checks the CAPTURED focus token: goal-completion's isGoalLive is
+   core.isFocusedOperationCurrent(completionFocus) && goal id match && status "active", so a focus
+   switch away/back or any revision bump makes an in-flight answer stale.
+2. Isolated-process compatibility test (was a two-round audit blocker):
+   tests/goal-audit-sidechannel-compat.test.ts spawns a child node with a data: resolve hook that
+   rejects `@xzzpig/pi-subagents/supervisor-routing` (and preloads the repo's test-adapter-hooks so the
+   stub mapping is identical to the normal harness). It asserts the extension LOADS without crashing,
+   the first audit fails closed with the actionable/fixed diagnostic, and child requests == 0.
+3. Real lifecycle seams: the same file registers a live side channel through
+   registerAuditSidechannelLifecycle and revokes it via the two real seams
+   (invalidateAuditSidechannelsForOwner for focus/pause, invalidateAuditSidechannels for
+   session_shutdown). A revoked generation never answers; a NEW audit for the same goal can still
+   register and reach the model.
+4. Negative live assertion replaced by evidence-based proof: instead of matching pane text, the driver
+   now reads the parent session's toolResult and requires the coordination handoff block
+   ("审计协调记录") to contain a record with deliveryStatus "failed" — the pane regex remains only as a
+   fallback. With that, the previously failing negative case passes (55/55).

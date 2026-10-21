@@ -1,0 +1,30 @@
+== 8.22 FINAL ordered run (round-15 fixes; FULL suites GREEN, live LAST) ==
+
+two typechecks 0 error TS
+pi-subagents FULL serial unit        -> exit 0; 4133 tests / 4117 pass / 0 fail / 0 cancelled
+                                        (4133 = 4132 + the new journal content-oracle case)
+pi-subagents FULL serial integration -> exit 0; 1218 tests / 1211 pass / 0 fail / 0 cancelled / 7 skipped
+                                        (the earlier async-execution flake did NOT recur; no exemption used)
+router unit (fork-supervisor-routing) -> 21/21 (incl. the journal-failure oracle)
+goal-x test:unit                     -> exit 0; 1336/1336
+goal-x test:integration              -> exit 1; integration 26 pass + 9 DECLARED settings-profile debt;
+                                        sdk group 1/1 (real SDK, no stub)
+fork runner 82/82; selfcheck OK (100/3/7)
+fork gate exit 0 (goal-x 555/7 declared 7 undeclared 0; subagents 989/10 declared 10 undeclared 0)
+openspec validate --strict valid; git diff --check clean
+live (LAST) -> exit 0; BOTH LIVE CASES PASSED; 55 assertions
+logs: /tmp/8.22-logs/{subagents-unit,subagents-integration,unit,int,live2}.txt
+
+Round-15 findings and closure:
+1. Full pi-subagents integration is GREEN on the final candidate: 1218 tests / 1211 pass / 0 fail,
+   exit 0, with no dependency on the declared spawn-family debt (that debt covers parallel unit runs
+   only; it is not being stretched into a serial-integration exemption).
+2. The managed native reply path no longer echoes external exception text: appendSupervisorReplyEntry's
+   journal catch now logs a fixed string ("error details omitted") and no longer passes the Error
+   object, so neither message nor stack can reach diagnostics. A content-oracle regression drives the
+   REAL journal boundary with an appendEntry that throws a synthetic marker and asserts the marker and
+   any stack frame are absent from everything written to console.error (router unit 21/21).
+
+Honest note: the first live attempt after these fixes reported 3 assertions (budget growth, the negative
+case's unresolved record, pi exit code) while the negative case was still converging; the immediate
+re-run of the same code passed all 55. Both attempts are listed; the second is /tmp/8.22-logs/live2.txt.

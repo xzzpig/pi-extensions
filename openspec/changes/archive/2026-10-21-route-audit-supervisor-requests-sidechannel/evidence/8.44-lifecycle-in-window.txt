@@ -1,0 +1,25 @@
+== 8.44 (round-30) criterion 6: the late reply/approval now arrive INSIDE the revocation window ==
+
+Fixed two timing holes the auditor reproduced:
+1. The mock session's abort() no longer releases the prompt gate, so the ask is STILL RUNNING when the
+   lifecycle seam fires. The test now waits on an explicit prompt-entered barrier, triggers the seam,
+   submits the LATE LEGAL reply while the prompt is held, and only then releases the gate. Before this
+   change the ask had already settled, so the "not delivered" assertion was vacuous.
+2. The LATE schema-valid approved RESPONSE is now emitted immediately after the seam fires, i.e. while
+   the attempt is still unsettled and inside the 50 ms cancellation-confirmation window (previously it
+   was emitted after awaiting the handlers, when the attempt had already settled).
+
+tests/goal-audit-lifecycle-full-chain.test.ts — 6 seams, 3.8 s, green. Per seam the same run asserts:
+  - in-flight ask inside the ORIGINAL attempt (bus.registration.respond, injected session factory);
+  - exactly one cancel with requestId/ownerRunId/nodeId equal to that attempt's request;
+  - the in-window late legal reply is NOT delivered (no delivered record) and the listener is released
+    exactly once (subscribe 1 / unsubscribe 1);
+  - the in-window late approval does not authorise (approved false), no second cancel;
+  - scope: goal-scoped seams spare the sibling goal, session-wide seams cover it, the other SESSION
+    always answers;
+  - abort exactly once, dispose exactly once (waited for, not assumed).
+
+gates: typecheck 0 error TS; unit 1364/1364; fork runner 90/90; fork gate exit 0; diff --check clean;
+       integration exit 1 = 26 pass + 9 DECLARED settings-profile debt; sdk 1/1
+live: exit 0; BOTH LIVE CASES PASSED; 57 assertions
+logs: /tmp/8.44-logs/{unit,int,gate,live}.txt

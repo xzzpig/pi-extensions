@@ -1,0 +1,47 @@
+== 7.2 fork replay maintenance and divergence audit ==
+
+metadata updates (only real inventory needs; original metadata and debt preserved):
+  subtrees/pi-subagents.json
+    reapplyOnSync += 1 entry (English, matching this record's style) describing the REAL upstream seams of this
+      change so a future sync can replay them: prompt-template-bridge.ts's internal optional sixth
+      executeStructured parameter + the shared onExecutionUpdate call site; subagent-executor.ts's optional sixth
+      executeDelegated parameter, the delegatedSupervisorLaunchHooks WeakMap read BEFORE
+      canonicalizeExecutionParams replaces effectiveParams, and the beforeNativeChildLaunch call inside
+      runSinglePath after the canonical agentConfig lookup and before the runSync child launch;
+      native-supervisor-channel.ts's dispatcher claim between pending.set/markForegroundSupervisorAttention and
+      parentWake.sendMessage/INTERCOM_DETACH_REQUEST_EVENT plus the responder-managed reply rejection;
+      package.json's ./supervisor-routing export as asserted by test/unit/package-manifest.test.ts. It also
+      states the do-not-change list (model-visible delegation schema, toSubagentDelegationExecutionParams,
+      terminal status enum, detach transition).
+    knownDebt += 1 entry of kind "noise" for packages/pi-subagents/src/slash/prompt-template-bridge.ts with the
+      honest diff-alignment reason and the audit's own numbers (raw=[21 20] vs ws=[11 10]); no existing entry was
+      edited or removed, and no fork-only module received a debt entry.
+  subtrees/pi-goal-x.json
+    reapplyOnSync += 1 entry (Chinese, matching this record's style) covering the Goal-X seam: the single outer
+      completion wrapper + one-shot handoff replay, the coordination-error lock-then-precise-cancel, terminal
+      freeze and appendAuditSupervisorUsageEntry, the audit_supervisor_usage ledger event and validator branch,
+      the two goal-model-view.ts predicate exclusions, and the goal-events.ts/goal-state.ts lifecycle
+      invalidation hooks; the three new modules are named as fork-only and must never be written into an upstream
+      file. knownDebt untouched.
+
+commands and real exit codes
+  cmd: direnv exec . node env/ensure-upstreams.mjs -> exit 0 (schema validation of every record + ref
+       validation + PI_UPSTREAM_* export; zero error/invalid/fail lines)
+  cmd: bash .agents/skills/pi-fork-divergence/scripts/audit-fork-divergence.sh pi-goal-x -> exit 0
+       "pi-goal-x: checked=555 noise=7 deleted=0 submodule=0 declared=7 undeclared=0 stale=0"
+  cmd: bash .agents/skills/pi-fork-divergence/scripts/audit-fork-divergence.sh pi-subagents -> exit 0
+       "pi-subagents: checked=989 noise=10 deleted=0 submodule=0 declared=10 undeclared=0 stale=0"
+  cmd: direnv exec . pnpm run audit:fork-divergence -> exit 0 (repo-level gate over all subtree records;
+       pi-goal-x 555/7/0/0/7/0/0 and pi-subagents 989/10/0/0/10/0/0 confirmed inside it)
+  cmd: git diff --check -> clean (exit 0)
+  cmd: record diffs are minimal: subtrees/pi-goal-x.json 3 lines (+1 entry, 1 reflowed comma),
+       subtrees/pi-subagents.json 9 lines (+1 reapply entry, +1 knownDebt entry).
+
+honest deltas against the 1.1 baseline
+  pi-goal-x: unchanged (555 / 7 / undeclared 0).
+  pi-subagents: noise and declared both moved 9 -> 10 because this change's prompt-template-bridge.ts seam is a
+       genuine diff-alignment artifact (raw differs, whitespace-insensitive diff is the real seam). This is a
+       real declaration of a real divergence, not silence-buying: no existing debt was weakened, no new lint/test
+       debt was created, every other file's cluster is unchanged, and the pre-existing undeclared finding that
+       made the raw audit exit 1 is now resolved with exit 0. Upstream files were not reformatted, and the
+       package.json export entry was added by exact string replacement (1 insertion), not by a formatter.

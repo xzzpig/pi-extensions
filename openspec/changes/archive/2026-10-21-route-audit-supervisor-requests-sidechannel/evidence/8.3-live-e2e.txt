@@ -1,0 +1,78 @@
+== 8.3 live E2E (real pi TUI + host tmux + real provider) ==
+
+command: direnv exec . node ./packages/pi-goal-x/tests/e2e/goal-audit-supervisor-live.mjs
+exit: 0   (BOTH LIVE CASES PASSED)
+ran at: 2026-10-19T13:15:09.445Z   duration: 208s
+
+preblock: tmux host server connectable; settings defaultProvider=axonhub defaultModel=deepseek-v4-flash;
+          `pi auth check --provider axonhub` -> ready; 60s real print-mode smoke -> 'pong' exit 0; pi 1.1.0.
+         No scripted provider, no stub, no auditor disable, no injected runCompletionAuditor/sessionFactory,
+         no new production config switch; only local pi-subagents + pi-goal-x + the E2E fixture were loaded,
+         every discovery channel disabled, each case in its own mode-0700 /tmp dir with its own cwd/.pi/
+         session-dir/tmux session.
+
+-- POSITIVE (answerable -> same child approves -> archived) --
+   case dir: /tmp/pi-audit-supervisor-live-positive-ioMPGY
+   checks: 15 passed, 0 failed
+     PASS  pi TUI started with the local extensions
+     PASS  E2E auditor alias registered (ack)
+     PASS  resolver answers for the alias with the same definition
+     PASS  resolver misses a foreign alias
+     PASS  exactly one auditor child launched
+     PASS  parent model made no provider request while the audit waited
+     PASS  the child actually received ALPHA through contact_supervisor
+     PASS  exactly one terminal and no cancellation
+     PASS  the same child approved
+     PASS  the goal really archived
+     PASS  exactly one audit_result and it is approved
+     PASS  exactly one audit_supervisor_usage row with real turns
+     PASS  exactly one audit_usage row for the auditor itself
+     PASS  pane reports the approval
+     PASS  session entries parsed for message pairing
+
+-- NEGATIVE (new authorisation -> unresolved -> precise cancel -> goal active) --
+   case dir: /tmp/pi-audit-supervisor-live-negative-ORR1Do
+   checks: 13 passed, 0 failed
+     PASS  pi TUI started with the local extensions
+     PASS  exactly one auditor child launched
+     PASS  parent model made no provider request while the audit waited
+     PASS  the audit was cancelled exactly once
+     PASS  no approval reached the goal
+     PASS  the single audit_result is an error
+     PASS  the goal stayed active and was not archived
+     PASS  no completion was committed
+     PASS  evidence.txt is byte-identical
+     PASS  no child delete tool ran
+     PASS  the unresolved question was reported back
+     PASS  real side usage is still accounted
+     PASS  session entries parsed for message pairing
+
+evidence kept per case: final-pane.txt (TUI pane at the audit boundary), trace.jsonl (whitelisted
+tool_call/tool_result/before_provider_request/delegation/registration/resolver records, no provider payload,
+header, auth or raw thinking), result.json, the real session JSONL under sessions/, the goal/ledger files
+(.pi/goals/goal_events.jsonl, active/archived goal files) and the settings used for the auditor alias.
+
+what the passing run proves (design D15 / live acceptance):
+  * the auditor child was launched exactly once per case and was NEVER detached;
+  * the parent made ZERO provider requests while the audit waited, i.e. the supervisor question never woke
+    the main model and the completion tool did not return early;
+  * the child's real contact_supervisor tool_result carried ALPHA in the positive case before the same child
+    submitted its terminal verdict; exactly one terminal, verdict approved, and the goal really archived;
+  * in the negative case the side channel returned unresolved, the audit was cancelled exactly once with the
+    coordination error, the goal stayed active, nothing was committed and evidence.txt stayed byte-identical;
+  * billing is split and real: one audit_usage plus one audit_supervisor_usage row (turns > 0) in BOTH cases,
+    including the cancelled one;
+  * the E2E auditor alias registration was acknowledged and the equivalent preflight resolver answered for that
+    alias with the very same definition while missing a foreign alias (the existing production escape hatch,
+    no preflight modification).
+
+honest iteration history (3 real runs of this driver):
+  1. first run: the cloned E2E auditor definition dropped the package's progress sub-extension, so the child
+     could not use report_auditor_progress -> child failed before asking. Fixed in the fixture by keeping
+     subagentOnlyExtensions and appending the fixture itself (child-side observation).
+  2. second run: driver read the wrong ledger filename and one case regressed because the ALPHA message had
+     been delivered while the parent turn was still streaming (steering), so the responder correctly answered
+     unresolved. Fixed by reading .pi/goals/goal_events.jsonl and by adding a true idle barrier plus stating
+     the marker as an explicit settled user requirement in completed history.
+  3. third run: both cases green. No production file was changed to make the E2E pass; the two fixes are in
+     the E2E fixture and the E2E driver only (both are new fork-only test assets of this change).

@@ -1,0 +1,29 @@
+== 8.17 FINAL ordered run (round-10 fixes; gates green, live LAST) ==
+
+gates: pi-subagents typecheck 0 error TS; goal-x typecheck 0 error TS;
+       goal-x test:unit 1336/1336 exit 0; test:integration exit 1 = integration group 26 pass +
+       9 DECLARED settings-profile debt, sdk group 1/1 (real SDK, no stub);
+       fork runner 82/82; selfcheck OK (100/3/7);
+       fork gate exit 0 (goal-x 555/7 declared 7 undeclared 0; subagents 989/10 declared 10 undeclared 0);
+       strict validate valid; git diff --check clean.
+live (LAST): exit 0 — BOTH LIVE CASES PASSED, 55 assertions.
+logs: /tmp/8.17-logs/{int,live}.txt and /tmp/8.17-logs-unit.txt
+
+Round-10 findings and closure:
+1. Cancelled record now reaches the handoff: dispose() runs abort FIRST (bounded, so a running
+   prompt settles and writes its cancelled record while records are still open), then waits (bounded)
+   for that ask, then seals, then disposes the SDK session and freezes usage/releases the listener.
+   Sealing is what closes the record set, so nothing can be appended after the terminal.
+2. Ask resources are forced out at the terminal: the channel now keeps a channel-level
+   activeStopDeadline (registered by runAsk, cleared when it runs), and the terminal settle invokes it
+   after the bounded ask wait, so the deadline timer and AbortSignal listener are released even when
+   the ask never settles on its own.
+3. Boundary drift: the previously deleted imports are restored with the module paths that actually
+   exist in THIS subtree (src/runs/shared/model-resolution.ts, ../workflows/scripted-workflow.ts) —
+   the baseline path src/shared/model-resolution.ts does not exist after the subtree sync, so a literal
+   copy would not compile. `count` bindings are back to the baseline names. Remaining diff vs 4ecd854728
+   for those two files is now the supervisor seam itself:
+ packages/pi-subagents/src/extension/index.ts       | 36 ++++++++++++++++++++--
+ .../src/runs/foreground/subagent-executor.ts       | 30 ++++++++++++++++--
+ 2 files changed, 60 insertions(+), 6 deletions(-)
+

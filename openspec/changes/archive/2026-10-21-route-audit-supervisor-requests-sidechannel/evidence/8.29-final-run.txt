@@ -1,0 +1,31 @@
+== 8.29 FINAL ordered run (round-19 fixes; gates green, live LAST) ==
+
+two typechecks 0 error TS
+goal-x test:unit -> exit 0; 1344/1344 (sidechannel+flow focused 49/49 in 8 s)
+goal-x test:integration -> exit 1; integration 26 pass + 9 DECLARED settings-profile debt;
+                           sdk group 1/1 (real SDK, no stub)
+fork runner 90/90; fork-divergence gate exit 0 (goal-x 555/7, subagents 989/10, undeclared 0)
+openspec validate --strict valid; git diff --check clean
+live: first attempt 54/55 (only "the approval is visible to the user (pane or archived goal)" failed);
+      ONE same-code re-run (the user's approved policy) -> exit 0; BOTH LIVE CASES PASSED; 55 assertions
+logs: /tmp/8.29-logs/{unit,int,live,live2}.txt
+
+Round-19 findings and closure:
+1. Reply-time liveness is now wired in production: GoalCompletionAuditorArgs gains isGoalLive, the
+   delegation passes it as the side channel's verifyLive (called before every delivered reply, throwing
+   = refused), and goal-completion supplies
+   isGoalLive: () => core.state.goal?.id === auditTarget.id && core.state.goal?.status === "active".
+   Unit regression: with verifyLive throwing, respond() returns an error and no record is delivered.
+2. The same-id status seam no longer bypasses revocation: updateFocusedGoal now compares the previous
+   record and, when a goal leaves status "active", calls
+   invalidateAuditSidechannelsForOwner(auditSessionId, next.id, "goal_status_changed") — so pausing a
+   goal without changing focus revokes its in-flight audits.
+3. Fixed-text diagnostics extended (from round 18) remain in place across the delegation surface.
+
+Disclosed gaps (not claimed as covered):
+- The isolated unbundled Node process proving LATE loading of @xzzpig/pi-subagents/supervisor-routing
+  (missing subpath/export -> extension still loads, first audit fails closed, child requests 0) is NOT
+  implemented as its own test.
+- Broad lifecycle coverage through the real seams (focus away/back, same-id remove, branch/session,
+  shutdown/reload with late replies) is covered indirectly (the new status-path revocation is exercised
+  by unit tests of the seam helpers) but not by a dedicated end-to-end lifecycle test.

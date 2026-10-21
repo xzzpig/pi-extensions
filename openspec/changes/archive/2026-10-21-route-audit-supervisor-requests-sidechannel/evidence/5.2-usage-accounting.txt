@@ -1,0 +1,22 @@
+== 5.2 independent side-channel accounting ==
+edits:
+  extensions/goal-ledger.ts: new GoalLedgerEvent variant audit_supervisor_usage (goalId, auditRequestId,
+    tokens/input/output/cacheRead/cacheWrite/costUsd/turns/at) + isValidLedgerEvent case requiring all seven
+    counters finite and >= 0 and a string auditRequestId. audit_usage stays auditor-only.
+  extensions/goal-auditor-delegation.ts: appendAuditSupervisorUsageEntry(core, ctx, goalId, auditRequestId, usage)
+    -> one ledger row, only when turns > 0 and every counter is valid; ledger failure never blocks completion.
+  extensions/goal-completion.ts: the outer wrapper appends that row exactly once at a real terminal and projects
+    the side spend onto the tool's own usage (input/output/cacheRead/cacheWrite/totalTokens plus cost.total) while
+    goal.usage.tokensUsed and the budget gate stay untouched.
+  extensions/goal-model-view.ts: both model-facing predicates now exclude audit_supervisor_usage as well as
+    audit_usage, so billing statistics can never be replayed into the main model context.
+
+cmd: pnpm --filter @xzzpig/pi-goal-x run typecheck -> exit 0
+cmd: keepalive + adapter --test tests/goal-audit-supervisor-usage.test.ts -> 3/3 pass
+  valid row: appended and read back with auditRequestId/tokens/turns; audit_usage absent from that ledger.
+  invalid row (NaN, negative tokens, negative turns): never surfaces as a valid row; counted as malformed.
+  model views: authoritative ledger still holds the side row, both projectGoalModelLedgerEvents and
+  excludeGoalModelAuditUsage drop audit_usage AND audit_supervisor_usage while keeping goal_completed.
+cmd: keepalive + adapter --test tests/goal-audit-sidechannel.test.ts -> 25/25 pass (usage counters sum once per
+  generated assistant message; a partial counter snapshot is skipped rather than under-billed; seed is never billed
+  because message_end only fires for newly generated messages).

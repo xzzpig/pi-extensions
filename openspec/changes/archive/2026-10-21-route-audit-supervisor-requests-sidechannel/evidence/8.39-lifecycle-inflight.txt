@@ -1,0 +1,20 @@
+== 8.39 (round-26) success criterion 6 satisfied: six in-flight lifecycle seams ==
+
+New file tests/goal-audit-lifecycle-inflight.test.ts — 7 cases, 4.7 s, all green. Each case starts a
+REAL in-flight ask (deferred sessionFactory holding the prompt), then triggers a REAL seam, then submits
+a LATE but perfectly legal answer through the session's own submit_audit_supervisor_reply tool, releases
+the gate, and asserts the answer was NOT delivered (and no "delivered" record exists):
+
+1. focus switch away and back      -> core.setGoal(b) then core.setGoal(a)            (real GoalCore)
+2. same-id removal                -> core.setGoal({...a, status:"archived"})         (real GoalCore)
+3. session_start handler          -> goal-events handler, its real (event, ctx) call
+4. session_tree handler           -> idem
+5. session_shutdown handler       -> idem
+6. reload                         -> session_tree then session_start (reason reload)
+7. session isolation control      -> an untouched goal's channel still answers (kind "reply")
+
+gates: goal-x typecheck 0 error TS; unit 1356/1356 (was 1349); selfcheck OK (102 unit files);
+       fork runner 90/90; integration exit 1 = 26 pass + 9 DECLARED settings-profile debt; sdk 1/1;
+       fork-divergence gate exit 0 (555/7, 989/10, undeclared 0); strict validate valid; diff --check clean
+live: exit 0; BOTH LIVE CASES PASSED; 57 assertions
+logs: /tmp/8.39-logs/{unit,int,gate,live}.txt

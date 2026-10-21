@@ -1,0 +1,30 @@
+== 8.20 FINAL ordered run (round-13 fixes; FULL suites, live LAST) ==
+
+two typechecks 0 error TS
+pi-subagents FULL serial unit        -> exit 0; 4132 tests / 4116 pass / 0 fail / 0 cancelled / 16 skipped
+pi-subagents FULL serial integration -> exit 0; 1218 tests / 1211 pass / 0 fail / 0 cancelled / 7 skipped
+goal-x test:unit                     -> exit 0; 1336/1336
+goal-x test:integration              -> exit 1; integration 26 pass + 9 DECLARED settings-profile debt;
+                                        sdk group 1/1 (real SDK, no stub)
+fork runner 82/82; selfcheck OK (100/3/7)
+fork gate exit 0 (goal-x 555/7 declared 7 undeclared 0; subagents 989/10 declared 10 undeclared 0)
+openspec validate --strict valid; git diff --check clean
+live (LAST) -> exit 0; BOTH LIVE CASES PASSED; 55 assertions
+logs: /tmp/8.20-logs/{subagents-unit,subagents-integration,unit,int,live}.txt
+
+Round-13 findings and closure:
+1. Launch-time owner validation is fail closed: createSupervisorLaunchHooks now looks the attempt up
+   by scope.requestId; if a registration exists but the live owner is missing or different, it THROWS
+   instead of returning undefined, so a registered audit can never be launched on the default
+   supervisor path after its owner disappeared or changed.
+2. The FULL pi-subagents suites were re-run AFTER the last edits of
+   src/intercom/fork-supervisor-routing.ts, src/extension/index.ts and
+   src/runs/foreground/subagent-executor.ts (see timestamps of the logs above): unit 4132/4116/0 and
+   integration 1218/1211/0, both exit 0. Nothing from an older candidate is being reused.
+3. Import order restored to the baseline: the import diff versus 4ecd854728 for those two files is now:
++import {
++import type { SupervisorLaunchHooks } from "../../intercom/fork-supervisor-routing.ts";
+
+   i.e. only the one new seam import (SupervisorLaunchHooks) is added and nothing else moved or was
+   deleted: model-resolution + child-tool-plan sit before projectScopedProfileTrustError and
+   scripted-workflow sits before formatIncrementalChildCompletion, exactly as in the baseline.

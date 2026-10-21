@@ -3,9 +3,21 @@
   "note": "Expected test-entry manifest for the runner self-check (npm run test:selfcheck). Regenerate with: node scripts/run-unit-tests.mjs --write-manifest",
   "unitFiles": [
     ".tests/fault-injection.test.ts",
+    ".tests/fork-test-runner.test.ts",
     ".tests/goal-accounting-runtime.test.ts",
     ".tests/goal-activity.test.ts",
+    ".tests/goal-audit-context-snapshot.test.ts",
     ".tests/goal-audit-dashboard.test.ts",
+    ".tests/goal-audit-lifecycle-cancel-chain.test.ts",
+    ".tests/goal-audit-lifecycle-full-chain.test.ts",
+    ".tests/goal-audit-lifecycle-inflight.test.ts",
+    ".tests/goal-audit-sidechannel-compat.test.ts",
+    ".tests/goal-audit-sidechannel.test.ts",
+    ".tests/goal-audit-supervisor-card.test.ts",
+    ".tests/goal-audit-supervisor-completion.test.ts",
+    ".tests/goal-audit-supervisor-flow.test.ts",
+    ".tests/goal-audit-supervisor-handoff.test.ts",
+    ".tests/goal-audit-supervisor-usage.test.ts",
     ".tests/goal-auditor-agent-resolver.test.ts",
     ".tests/goal-auditor-override.test.ts",
     ".tests/goal-auditor-package.test.ts",
@@ -98,6 +110,7 @@
   ],
   "integrationFiles": [
     ".tests/integration/extension.test.ts",
+    ".tests/integration/goal-audit-sidechannel-sdk.test.ts",
     ".tests/integration/goal-change-manifest.test.ts"
   ],
   "e2eFiles": [

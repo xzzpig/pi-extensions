@@ -1,0 +1,26 @@
+== 8.32 (round-21) gates green, live green; ONE item still open ==
+
+gates: goal-x typecheck 0 error TS; goal-x unit 1347/1347; fork runner 90/90;
+       fork-divergence gate exit 0; git diff --check clean
+live: exit 0; BOTH LIVE CASES PASSED; 55 assertions (driver now parses the coordination block)
+logs: /tmp/8.32-logs/{unit,live}.txt
+
+Closed this round (auditor findings 1, 3, 4):
+1. goal-x typecheck failure from TS2698 is fixed (the ask is typed as Record<string, unknown> and the
+   fresh-ask object is built explicitly instead of spreading `as never`). Typecheck is 0 error TS again,
+   so the earlier "0 error" claim is now true.
+3. The isolated compat test now covers BOTH incompatibilities and proves laziness:
+   - mode missing_subpath: the resolve hook throws ERR_PACKAGE_PATH_NOT_EXPORTED;
+   - mode missing_export: the hook resolves to a module that exports nothing;
+   in both modes the extension imports cleanly, `__routingResolutions` is 0 AT IMPORT, > 0 after the
+   first audit, the error is the exact "does not expose the supervisor responder API" diagnostic, and
+   child requests are 0.
+4. The live driver no longer stringifies-then-regexes: it extracts the toolResult text, isolates the
+   "审计协调记录" block, JSON.parses it and requires a record with deliveryStatus "failed" (recording
+   unresolvedReason in the failure detail). The pane regex fallback was removed. The negative case now
+   passes on that real assertion.
+
+Still open (auditor finding 2): the lifecycle test drives the invalidation seams directly
+(registerAuditSidechannelLifecycle + invalidateAuditSidechannels[ForOwner]) rather than through a real
+GoalCore focus/status mutation and the session_start/tree/shutdown handlers, and it does not create an
+in-flight MODEL late answer. Build that harness next; do not claim 4.2 complete before it exists.

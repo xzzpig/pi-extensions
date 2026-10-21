@@ -1,0 +1,32 @@
+== 8.21 FINAL ordered run (round-14 fixes; FULL suites, live LAST) ==
+
+two typechecks 0 error TS
+pi-subagents FULL serial unit        -> exit 0; 4132 / 4116 pass / 0 fail / 0 cancelled / 16 skipped
+pi-subagents FULL serial integration -> exit 1; 1218 / 1210 pass / 1 fail:
+    'gives foreground and background children exactly the selected tools' in
+    test/integration/async-execution.part-1.test.ts timed out waiting for an async result file.
+    Re-ran that file standalone: 44 / 44 pass, 0 fail — the declared spawn-family load flake
+    (knownDebt in subtrees/pi-subagents.json), not the supervisor change.
+goal-x test:unit -> exit 0; 1336/1336
+goal-x test:integration -> exit 1; integration 26 pass + 9 DECLARED settings-profile debt;
+                           sdk group 1/1 (real SDK, no stub)
+pi-subagents focused router unit -> 20/20
+fork runner 82/82; selfcheck OK
+fork gate exit 0 (goal-x 555/7 declared 7 undeclared 0; subagents 989/10 declared 10 undeclared 0)
+git diff --check clean
+live (LAST) -> exit 0; BOTH LIVE CASES PASSED; 55 assertions
+logs: /tmp/8.21-logs/{subagents-unit,subagents-integration,unit,int,live}.txt
+
+Round-14 findings and closure:
+1. Lifetime revocation now fails the audit closed: the side-channel lifecycle callback no longer just
+   closes the responder — it calls cancelAttempt("lifecycle_revoked"), so the SAME attempt locks a
+   cancellation reason and emits the exact cancel for its own identity. A schema-valid approval that
+   arrives afterwards is treated only as a cancellation acknowledgement (existing locked-reason path),
+   so a pause/focus/session revocation during an audit cannot be completed by a late verdict. The
+   reason union was widened explicitly (user_abort | terminal_timeout | coordination_error |
+   lifecycle_revoked); Escape park keeps its separate route.
+2. Terminal cleanup releases the responder closures: disposeRegistration now ALSO deletes every
+   registry.asks entry that references the disposed registration (after cancelling live asks), so the
+   respond/onFailure closures and the audit context they hold are dropped at the attempt terminal
+   instead of surviving until the whole owner shuts down. Idempotent: a replacement registration on
+   the same scope owns its own entries and is untouched.

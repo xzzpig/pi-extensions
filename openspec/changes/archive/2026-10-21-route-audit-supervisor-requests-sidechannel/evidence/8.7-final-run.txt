@@ -1,0 +1,79 @@
+== 8.7 FINAL ordered run (gates first, live LAST) ==
+
+1) pi-subagents unit (serial)        -> exit 0; 4132 tests / 4116 pass / 0 fail / 0 cancelled / 16 skipped (pre-existing platform skips)
+2) pi-subagents integration (serial) -> exit 0; 1218 tests / 1211 pass / 0 fail / 0 cancelled / 7 skipped
+3) typechecks (both packages)        -> exit 0, 0 error TS
+4) goal-x test:unit                  -> exit 0; 1330 tests / 1330 pass / 0 fail / 0 cancelled / 0 skipped (unit group only)
+5) goal-x test:integration           -> exit 1; integration group 35 tests / 26 pass / 9 fail = the nine DECLARED,
+                                        user-approved settings/profile debt in tests/integration/extension.test.ts;
+                                        sdk group 1 test / 1 pass (real SDK, no stub, NODE_OPTIONS cleared)
+6) fork runner                       -> exit 0; 76 tests / 76 pass
+7) unit runner --selfcheck           -> OK: 100 unit + 3 integration + 7 e2e entries match (exits after the check)
+8) fork-divergence gate              -> exit 0; goal-x 555/7/0/0/7/0/0, subagents 989/10/0/0/10/0/0
+9) openspec validate --strict        -> valid
+10) git diff --check                 -> clean
+11) LIVE E2E (LAST)                  -> exit 0; BOTH LIVE CASES PASSED (50 assertions green)
+
+logs: /tmp/8.7-logs/{subagents-unit,subagents-integration,unit-final,int-final,gate-final,live-final2}.txt
+
+-- POSITIVE — /tmp/pi-audit-supervisor-live-positive-Vt99Op — 27/27 passed
+   PASS  pi TUI started with the local extensions
+   PASS  update_goal produced exactly one call→result pair
+   PASS  assistant tool calls are paired with their results
+   PASS  no detach happened (real pi-intercom detach event count is 0)
+   PASS  the completion result carries no detach receipt
+   PASS  the completion tool result is a real result, not a detach receipt
+   PASS  exactly one coordination handoff was returned
+   PASS  parent model made no provider request inside the completion window
+   PASS  exactly one auditor child started and one delegation request
+   PASS  a real /goal-direct audit was recorded in the ledger
+   PASS  the supervisor side usage row is self-consistent
+   PASS  the parent turn budget was not rewritten
+   PASS  the goal usage does not absorb side billing
+   PASS  the tool usage total equals the auditor + side ledger tokens
+   PASS  E2E auditor alias registered (ack)
+   PASS  resolver answers for the alias with the same definition
+   PASS  resolver misses a foreign alias
+   PASS  resolver misses the alias after the scope is disposed
+   PASS  the child actually received ALPHA through contact_supervisor
+   PASS  the answered question preceded the child's terminal verdict
+   PASS  exactly one terminal and no cancellation
+   PASS  the same child approved
+   PASS  the goal really archived
+   PASS  exactly one audit_result and it is approved
+   PASS  exactly one audit_supervisor_usage row with real turns
+   PASS  exactly one audit_usage row for the auditor itself
+   PASS  the approval is visible to the user (pane or archived goal)
+
+-- NEGATIVE — /tmp/pi-audit-supervisor-live-negative-c1Ht03 — 23/23 passed
+   PASS  pi TUI started with the local extensions
+   PASS  update_goal produced exactly one call→result pair
+   PASS  assistant tool calls are paired with their results
+   PASS  no detach happened (real pi-intercom detach event count is 0)
+   PASS  the completion result carries no detach receipt
+   PASS  the completion tool result is a real result, not a detach receipt
+   PASS  exactly one coordination handoff was returned
+   PASS  parent model made no provider request inside the completion window
+   PASS  exactly one auditor child started and one delegation request
+   PASS  a real /goal-direct audit was recorded in the ledger
+   PASS  the supervisor side usage row is self-consistent
+   PASS  the parent turn budget was not rewritten
+   PASS  the goal usage does not absorb side billing
+   PASS  the tool usage total equals the auditor + side ledger tokens
+   PASS  the audit was cancelled exactly once
+   PASS  no approval reached the goal
+   PASS  the single audit_result is an error
+   PASS  the goal stayed active and was not archived
+   PASS  no completion was committed
+   PASS  evidence.txt is byte-identical
+   PASS  no child delete tool ran
+   PASS  the unresolved question was reported back
+   PASS  real side usage is still accounted
+
+Root cause of the earlier live regression (fixed): the new role gate rejected the real parent's
+`custom` role (pi-goal-context event) with context_error, so the side channel failed before creating a
+session. Verified by replaying the real session JSONL through the snapshot: before = 'Parent message role
+'custom' cannot be safely replayed', after = 'OK messages: 25 thinking: max' (proving the parent thinking
+level is now inherited instead of defaulting to off). Per the user's decision B, intra-group parallel
+result order is legal (set completeness is what matters) and custom/bashExecution are replayable roles;
+spec/design/tasks were revised accordingly.

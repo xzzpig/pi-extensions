@@ -1,0 +1,27 @@
+== 2.1 supervisor routing API + owner registry 2026-10-19T02:22:13+08:00 ==
+new: packages/pi-subagents/src/api/supervisor-routing.ts
+new: packages/pi-subagents/src/intercom/fork-supervisor-routing.ts
+edit: packages/pi-subagents/src/extension/index.ts (listener registration, stale-session release, shutdown dispose)
+edit: packages/pi-subagents/package.json (+./supervisor-routing export only)
+edit: packages/pi-subagents/test/unit/package-manifest.test.ts (+same one expected-map entry, per approved 2.1 supplement)
+new: packages/pi-subagents/test/unit/fork-supervisor-routing.test.ts
+
+cmd: pnpm --filter @xzzpig/pi-subagents run typecheck
+result: exit 0 (tsc --noEmit, no diagnostics)
+
+cmd: node --experimental-strip-types --import register-loader.mjs --import fork-test-environment.mjs --test test/unit/fork-supervisor-routing.test.ts
+result: 11 tests, 11 pass, 0 fail, 0 cancelled, 0 skipped (exit 0)
+
+cmd: same loader --test test/unit/package-manifest.test.ts
+result: 8 tests, 8 pass, 0 fail (exit 0)
+
+note(pre-existing, not introduced here): pi-lens flags 'discoverAgentsWithRuntime' unused at src/extension/index.ts:27.
+  proof: git show HEAD:packages/pi-subagents/src/extension/index.ts | grep -c discoverAgentsWithRuntime == 1 (the import itself),
+  so it was already dead upstream code before this change; removing it would be an unrelated upstream edit requiring new knownDebt.
+  Decision: leave untouched; typecheck and all D8 gates pass. Not a regression.
+
+--- follow-up on the pre-existing unused import ---
+Removed the dead 'discoverAgentsWithRuntime' import from src/extension/index.ts:27 (dead in HEAD: only the import itself matched).
+Justification: semantically neutral dead-code removal in a file already in the approved D7 edit set; pi-lens blocked otherwise.
+Fork audit after removal: pi-subagents checked=989 noise=9 deleted=0 declared=9 undeclared=0 (unchanged, no new debt).
+Re-verified: typecheck exit 0; fork-supervisor-routing tests 11/11 pass.

@@ -1,0 +1,29 @@
+== 8.14 FINAL ordered run (round-8 fixes; gates green, live LAST) ==
+
+pi-subagents source unchanged this round => its FULL serial suites from 8.12 still apply
+(unit 4132/4116/0 fail; integration 1218/1211/0 fail; both run after the last edit of
+fork-supervisor-routing.ts; logs /tmp/8.12-logs/).
+
+this round's gates (after the last source edit):
+  goal-x typecheck        -> 0 error TS
+  goal-x test:unit        -> exit 0; 1336/1336  (new cancel-record regression included)
+  goal-x test:integration -> exit 1; integration 26 pass + 9 DECLARED settings-profile debt;
+                             sdk group 1/1 pass (real SDK, no stub)
+  fork runner             -> exit 0; 81/81
+  selfcheck               -> OK (100 unit + 3 integration + 7 e2e)
+  fork-divergence gate    -> exit 0; goal-x 555/7 declared 7 undeclared 0; subagents 989/10 declared 10 undeclared 0
+  git diff --check        -> clean
+live (LAST)               -> exit 0; BOTH LIVE CASES PASSED; 55 assertions
+
+logs: /tmp/8.14-logs/{unit,int,live}.txt
+
+Round-8 findings and closure:
+1. Unbounded terminal wait: every settle step is now raced against SETTLE_TIMEOUT_MS (5 s) —
+   both in dispose() and in invalidate()'s chain. A provider/SDK abort that never reaches idle is
+   abandoned (timer unref'd) and the terminal still converges and releases the listener, so the
+   5-second cancellation guard is a real bound again.
+2. Cancelled running ask kept its record: record() now refuses only *delivered* records once sealed,
+   so a cancellation/failure entry for an ask that was already running survives the terminal freeze.
+   Regression test: prompt blocked on a barrier -> invalidate + await dispose -> the ask returns
+   cancelled AND records() still reports the question with supervisorRequestId and
+   deliveryStatus 'cancelled' (sidechannel suite 36/36).

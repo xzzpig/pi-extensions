@@ -1,0 +1,28 @@
+== 8.45 (round-31) criterion 6: the late approval is injected inside a DETERMINISTIC barrier ==
+
+The previous attempt awaited the whole session handler before emitting the approval; with
+cancellationMs=50 ms the cancel timer had already locked the terminal (measured 260-444 ms), so the
+assertion proved nothing. Fixed:
+
+- cancellationMs is widened to 5000 ms, so the cancel-confirmation timer cannot settle the attempt
+  during the test.
+- The seam is STARTED WITHOUT AWAITING (handler tail runs concurrently); the test then waits on a
+  hard barrier "a cancel was emitted" (waitFor victim.cancels.length === 1).
+- At that exact point it asserts the attempt is STILL UNSETTLED (settled flag flipped by a
+  victim.pending.then) and only then (a) submits the late legal reply through the same attempt's
+  submit tool while the prompt is still held, and (b) emits the late schema-valid APPROVAL. Then it
+  awaits the handler tail.
+
+So the approval provably arrives AFTER the lifecycle revocation and BEFORE the terminal lock, for
+every one of the six seams — not by racing a timer.
+
+tests/goal-audit-lifecycle-full-chain.test.ts — 6 seams, 2.6 s, green. Per seam the same run asserts:
+in-flight ask inside the ORIGINAL attempt; exactly one precise cancel with matching identity; the
+in-window late reply is not delivered (no delivered record) and the listener is released once; the
+in-window late approval does not authorise and emits no second cancel; scope (goal-scoped spares the
+sibling, session-wide covers it, the other SESSION always answers); abort 1 / dispose 1.
+
+gates: typecheck 0 error TS; unit 1364/1364; fork runner 90/90; fork gate exit 0; diff --check clean;
+       integration exit 1 = 26 pass + 9 DECLARED settings-profile debt; sdk 1/1
+live: exit 0; BOTH LIVE CASES PASSED; 57 assertions
+logs: /tmp/8.45-logs/{unit,int,gate,live}.txt

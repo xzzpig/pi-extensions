@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { installSupervisorResponderAck } from "./fixtures/goal-audit-supervisor-owner.ts";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -67,7 +68,10 @@ function createBus(): {
 	emit(event: string, value: unknown): void;
 } {
 	const handlers = new Map<string, Array<(value: unknown) => void>>();
-	return {
+	const bus: {
+		on(event: string, handler: (value: unknown) => void): () => void;
+		emit(event: string, value: unknown): void;
+	} = {
 		on(event, handler) {
 			const entries = handlers.get(event) ?? [];
 			entries.push(handler);
@@ -78,6 +82,10 @@ function createBus(): {
 			for (const handler of [...(handlers.get(event) ?? [])]) handler(value);
 		},
 	};
+	// The responder must be registered before the delegation request; this inert
+	// fixture answers registration only (no model work) so existing assertions run.
+	installSupervisorResponderAck(bus);
+	return bus;
 }
 
 /** Simulate the installed pi-subagents owner answering registration requests. */
@@ -318,7 +326,7 @@ test("D-11/I-21: runtime-registered default auditor passes the audit preflight t
 			});
 		});
 		const result = await runGoalCompletionAuditor({
-			ctx: { cwd: project } as any,
+			ctx: { cwd: project, sessionManager: { getSessionId: () => "test-session" } } as any,
 			events,
 			goal: createGoal({ objective: "Verify runtime-registered preflight fallback", autoContinue: true, sisyphus: false }),
 			detailedSummary: "Goal: runtime preflight fallback",
@@ -337,7 +345,7 @@ test("D-11: audit fails closed when no configured agent and no runtime registrat
 	fs.mkdirSync(project, { recursive: true });
 	let dispatched = false;
 	const result = await runGoalCompletionAuditor({
-		ctx: { cwd: project } as any,
+		ctx: { cwd: project, sessionManager: { getSessionId: () => "test-session" } } as any,
 		events: {
 			on: () => () => {},
 			emit: (event) => {
@@ -371,7 +379,7 @@ test("D-11/I-20: runtime fallback enforcement retains the protocol progress tool
 	try {
 		let dispatched = false;
 		const result = await runGoalCompletionAuditor({
-			ctx: { cwd: project } as any,
+			ctx: { cwd: project, sessionManager: { getSessionId: () => "test-session" } } as any,
 			events: {
 				on: () => () => {},
 				emit: (event) => {
@@ -410,7 +418,7 @@ test("D-11: a runtime registration never substitutes for a different configured 
 	try {
 		let dispatched = false;
 		const result = await runGoalCompletionAuditor({
-			ctx: { cwd: project } as any,
+			ctx: { cwd: project, sessionManager: { getSessionId: () => "test-session" } } as any,
 			events: {
 				on: () => () => {},
 				emit: (event) => {
@@ -468,7 +476,14 @@ Use the project configuration.
 		});
 	});
 	const result = await runGoalCompletionAuditor({
-		ctx: { cwd: project, modelRegistry: { getAvailable: () => [{ provider: "mock", id: "auditor" }] } } as any,
+		ctx: {
+			cwd: project,
+			sessionManager: { getSessionId: () => "test-session" },
+			modelRegistry: { getAvailable: () => [{ provider: "mock", id: "auditor" }] },
+			// The temporary project fixture is intentionally trusted for this D-11
+			// discovery case; production trust checks are untouched.
+			isProjectTrusted: () => true,
+		} as any,
 		events,
 		goal: createGoal({ objective: "Verify configured auditor path", autoContinue: true, sisyphus: false }),
 		detailedSummary: "Goal: configured auditor",

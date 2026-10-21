@@ -1,0 +1,58 @@
+[0mdirenv: loading ~/.herdr/worktrees/pi-extensions/goal-x/.envrc
+[0mdirenv: using flake
+[0mdirenv: nix-direnv: Using cached dev shell
+✖ 6.1 real SDK default factory: explicit read-only tool plan, real read, runtime-only auth (115.452313ms)
+✖ 6.1 real SDK: capability declarations in the seed are not replayed as permissions (46.767772ms)
+✔ 6.1 real SDK: a duplicate submit fails the ask closed without a second reply (50.152701ms)
+✔ 6.1 real SDK: cache warming stays off so one ask costs one scripted turn set (40.218358ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 2
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1894.745525
+
+✖ failing tests:
+
+test at packages/pi-goal-x/tests/goal-audit-sidechannel-sdk-worker.ts:176:1
+✖ 6.1 real SDK default factory: explicit read-only tool plan, real read, runtime-only auth (115.452313ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  
+  'error' !== 'reply'
+  
+      at TestContext.<anonymous> (file:///home/xzzpig/.herdr/worktrees/pi-extensions/goal-x/packages/pi-goal-x/tests/goal-audit-sidechannel-sdk-worker.ts:205:9)
+      at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+      at async Test.run (node:internal/test_runner/test:1332:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'error',
+    expected: 'reply',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at packages/pi-goal-x/tests/goal-audit-sidechannel-sdk-worker.ts:229:1
+✖ 6.1 real SDK: capability declarations in the seed are not replayed as permissions (46.767772ms)
+  AssertionError [ERR_ASSERTION]: historical seed capabilities must not be replayed as live permissions (saw ["read","bash","edit","write","submit_audit_supervisor_reply"])
+  + actual - expected
+  
+  + [
+  +   'bash',
+  +   'edit',
+  +   'write'
+  + ]
+  - []
+  
+      at TestContext.<anonymous> (file:///home/xzzpig/.herdr/worktrees/pi-extensions/goal-x/packages/pi-goal-x/tests/goal-audit-sidechannel-sdk-worker.ts:273:9)
+      at async Test.run (node:internal/test_runner/test:1332:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:911:7) {
+    generatedMessage: false,
+    code: 'ERR_ASSERTION',
+    actual: [ 'bash', 'edit', 'write' ],
+    expected: [],
+    operator: 'deepStrictEqual',
+    diff: 'simple'
+  }

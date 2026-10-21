@@ -1,0 +1,29 @@
+== 8.23 FINAL ordered run (round-16 fixes; gates green, live LAST, first attempt) ==
+
+two typechecks 0 error TS
+goal-x test:unit -> exit 0; 1339/1339 (3 new capacity-boundary cases)
+goal-x test:integration -> exit 1; integration 26 pass + 9 DECLARED settings-profile debt;
+                           sdk group 1/1 (real SDK, no stub)
+fork runner 85/85; selfcheck OK (100/3/7)
+fork gate exit 0 (goal-x 555/7 declared 7 undeclared 0; subagents 989/10 declared 10 undeclared 0)
+openspec validate --strict valid; git diff --check clean
+live (LAST) -> exit 0 on the FIRST attempt; BOTH LIVE CASES PASSED; 55 assertions
+logs: /tmp/8.23-logs/{unit,int,live}.txt
+
+Round-16 findings and closure:
+1. Registration failure no longer echoes an external exception body: the responder registration
+   catch now finishes with the fixed text
+   "Goal auditor supervisor responder registration failed: error details omitted"
+   (previously it interpolated error.message / String(error), which the auditor's content oracle
+   reproduced as a leak).
+2. Coordination cannot act after the terminal locked: coordinationFailure now returns immediately when
+   settleStarted/settled/cancellationReason is already set, so a claimed-then-failed side channel can no
+   longer emit an extra cancel or arm another timer after an approved terminal was locked.
+3. Exact capacity boundaries are now tested for real (not via constants):
+   - ask: exactly MAX_AUDIT_ASK_BYTES is accepted, +1 byte returns invalid_ask;
+   - reply: exactly MAX_AUDIT_REPLY_BYTES is accepted, +1 byte returns invalid_ask;
+   - cumulative record: the boundary is binary-searched against the implementation's own measure; the
+     largest fitting record is still delivered, one more byte fails closed with NO delivered record,
+     and the record set never exceeds MAX_AUDIT_RECORD_BYTES.
+4. Live policy: per the user's decision, a failing live run may be re-run at most once with unchanged
+   code. This round the live run passed on its first attempt; no re-run was needed.
