@@ -59,7 +59,8 @@
     "test/path/native-tool-target.test.ts and test/path/path-flavor.test.ts deep-import hoisted dependencies through ../../../../node_modules/... rather than the upstream package-local ../../node_modules/... path",
     "resolveWrapperUnit keeps the fork fallback option and uses upstream floorToAsk so unresolved fallback asks carry floor/askingUnits through forwarding; exempt inner resolution consumes cmd.executedSpellings instead of discarding its aliases; advisory checks pass wrapperFloors after the new PathNormalizer argument",
     "wrapper-analysis.ts exports innerCommandIndex with an optional allowEmpty=false parameter carried into getoptInnerIndex; fork classifySudo reuses that grammar with allowEmpty=true so rejected syntax floors while legal payload-less invocations remain inert; quote removal is per literal CommandWord.value while source offsets/text remain unchanged, and recognized indirection chains carry refused sudo floors and correctly located sudo inner units",
-    "bash-command.test.ts expects explicit inner rm denies to outrank the outer floor for correctly parsed sudo --user/-nu cases; program.test.ts keeps refused sudo compound syntax unresolved"
+    "bash-command.test.ts expects explicit inner rm denies to outrank the outer floor for correctly parsed sudo --user/-nu cases; program.test.ts keeps refused sudo compound syntax unresolved",
+    "test/helpers/handler-fixtures.ts makePromptOptions provides hiddenTools: [] so the fixture stays collection-complete against pi-coding-agent >= 1.1 NormalizedBuildSystemPromptOptions where the field is required; drop the line when upstream's own fixture catches up"
   ],
   "doNotReintroduce": [
     "do not re-inline the wrapper-classification block into command-enumeration.ts on sync",

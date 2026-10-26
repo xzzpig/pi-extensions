@@ -20,8 +20,8 @@ describe("package identity", () => {
 		}
 	});
 
-	it("ships only the extension sources", () => {
-		expect(pkg.files).toEqual(["extensions"]);
+	it("ships extension sources, declarations and fork release notes only", () => {
+		expect(pkg.files).toEqual(["extensions", "dist", "FORK-CHANGELOG.md"]);
 	});
 
 	it("keeps both copyright lines in the licence", () => {

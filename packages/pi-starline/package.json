@@ -1,6 +1,6 @@
 {
 	"name": "@xzzpig/pi-starline",
-	"version": "0.5.0",
+	"version": "0.5.1",
 	"description": "A Starship-inspired statusline and Opencode-style TUI for Pi.",
 	"type": "module",
 	"license": "MIT",
@@ -20,11 +20,15 @@
 		"tui"
 	],
 	"files": [
-		"extensions"
+		"extensions",
+		"dist",
+		"FORK-CHANGELOG.md"
 	],
 	"scripts": {
 		"lint": "biome check .",
 		"typecheck": "tsc --noEmit",
+		"build:types": "rollup -c rollup.dts.config.mjs && biome format --write dist/public.d.ts",
+		"prepack": "pnpm run build:types",
 		"test": "vitest run",
 		"pi:dev": "${PI_BIN:-/opt/homebrew/bin/pi} --no-extensions -e ./extensions/starline/index.ts",
 		"pi:install-local": "${PI_BIN:-/opt/homebrew/bin/pi} install ./ -l",
@@ -55,6 +59,8 @@
 		"@earendil-works/pi-coding-agent": "catalog:",
 		"@earendil-works/pi-tui": "catalog:",
 		"@types/node": "^26.0.0",
+		"rollup": "^4.62.2",
+		"rollup-plugin-dts": "^6.4.1",
 		"typescript": "^7.0.2",
 		"vitest": "^4.1.8",
 		"@xzzpig/pi-mouse-events": "workspace:*"

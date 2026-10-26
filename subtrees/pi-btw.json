@@ -16,12 +16,6 @@
       "path": "packages/pi-btw/package-lock.json",
       "reason": "Upstream package-lock.json is deleted on every sync (it resurrects on each pull) and is never consumed by this pnpm monorepo; delete it again with git rm packages/pi-btw/package-lock.json after each subtree pull.",
       "recordedAt": "2026-09-28T02:09:09+08:00"
-    },
-    {
-      "kind": "test",
-      "reason": "'applies distinct theme treatment' asserts truecolor ANSI and fails when COLORTERM is unset. Environment-dependent, not code; run suites with COLORTERM=truecolor.",
-      "recordedAt": "2026-09-28T02:09:09+08:00",
-      "path": "packages/pi-btw/tests/btw.runtime.test.ts"
     }
   ],
   "reapplyOnSync": [
@@ -30,7 +24,7 @@
     "bump upstream tests asserting SessionManager.appendMessage call counts by +1 because the fork's boundary message is also seeded",
     "delete package-lock.json again if a future subtree pull resurrects it",
     "keep pi-ai in devDeps as an explicit 0.83.0 (no catalog entry exists) with peerDependencies >=0.83.0 <1",
-    "run the suites with COLORTERM=truecolor, because 'applies distinct theme treatment' asserts truecolor ANSI"
+    "'applies distinct theme treatment' must keep its user-row assertion color-mode agnostic (\\\\x1b[48;2; truecolor or \\\\x1b[49m default background): pi 1.1 themes leave headless runs on the default background, so a truecolor-only assertion fails without proving anything about the renderer"
   ],
   "doNotReintroduce": [
     "do not adopt upstream's overlay renderer (buildOverlayTranscript plus its per-entry helpers): rendering stays on pi-components renderTranscriptLines",

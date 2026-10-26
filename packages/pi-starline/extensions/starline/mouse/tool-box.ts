@@ -87,6 +87,7 @@
 
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { createComponentTree, isComponentLike, isExpandableComponent } from "./component-tree";
+import { explicitExpandTargetAt } from "./explicit-expand-target";
 import { type BoxLike, boxesAt, scrollContentLinesFor, scrollContentOrigin } from "./hit-test";
 import { keyTextFor } from "./key-text";
 
@@ -242,6 +243,9 @@ export function expandTargetAt(
 
 	for (let index = path.length - 1; index >= 0; index--) {
 		const span = path[index];
+		// Fork seam: a versioned explicit target on this component's local row wins over the component's own expand state, so a group summary toggles its group instead of the tool carrying it. No provider, wrong version, or invalid shape falls through untouched.
+		const explicit = explicitExpandTargetAt(span.component, row - span.start, origin.rect.width);
+		if (explicit) return { component: explicit.component, expanded: explicit.expanded };
 		if (!isExpandableComponent(span.component)) continue;
 		const component = span.component as ExpandableComponent;
 		// The hint is matched against this component's own rendered row, not

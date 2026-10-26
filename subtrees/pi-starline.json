@@ -12,10 +12,14 @@
   "notes": "Forked from carderne/pi-starline. The mouse capability contract lives in openspec (change adopt-pi-native-mouse-api, spec component-mouse-deference); the rest is documented in the package README and CHANGELOG.",
   "knownDebt": [
     {
-      "kind": "noise",
-      "path": "packages/pi-starline/package-lock.json",
-      "reason": "Kept at upstream bytes plus the two @xzzpig name/version lines (npm tab indentation); unconsumed by this pnpm monorepo. Re-apply after each sync.",
-      "recordedAt": "2026-09-28T02:09:09+08:00"
+      "kind": "other",
+      "path": "packages/pi-starline/package.json",
+      "reason": "Fork release packaging adds declaration build/prepack scripts and dist plus fork release notes to the source-only upstream allowlist. Required by the repository publish contract; removable if upstream adopts the same declaration distribution."
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-starline/test/package-identity.test.ts",
+      "reason": "The exact published-files assertion follows the intentional fork allowlist including declarations and fork release notes, without relaxing runtime assertions. Reconcile when upstream changes its packaging contract."
     },
     {
       "kind": "lint",
@@ -61,17 +65,17 @@
     }
   ],
   "reapplyOnSync": [
-    "mouse features register with the local @xzzpig/pi-mouse-events extension instead of patching TuiAltScreen.prototype (optional peer >=0.1.0 <2, devDep workspace:*); without it mouse features are simply off, with one console note per process",
+    "mouse features register with the local @xzzpig/pi-mouse-events extension instead of patching TuiAltScreen.prototype (optional peer >=0.2.0 <3, devDep workspace:*); without it mouse features are simply off, with one console note per process",
     "mouse/api-consumer.ts reads Symbol.for('pi-mouse-events.api.v2') and rejects any candidate whose version !== 2, so an older v1 publisher is rejected rather than misread",
     "keep test/contract/mouse-api.test.ts pinning that key plus the version:1 rejection fixture",
     "every git probe in extensions/starline/git.ts passes --no-optional-locks (test/git-no-optional-locks.test.ts)",
     "test/runtime.test.ts passes an explicit empty env to detectRuntime so ambient Nix markers cannot shadow file-marker fixtures",
     "keep the comment-only additions: ui.ts SAFETY/pi-lens-ignore notes and config.ts's empty-catch note",
-    "package-lock.json stays at upstream bytes plus the name/version lines in npm's TAB indentation; package.json MUST stay TAB-indented when re-applying the fork name/version/deps lines or prepublishOnly blocks the release",
+    "Keep package.json TAB-indented with the fork name/version/dependencies, declaration build:types/prepack scripts, and files allowlist (extensions, dist, FORK-CHANGELOG.md). Keep the upstream package-identity test's exact allowlist assertion aligned with those intentional published resources; update package-lock root identity mechanically with npm version --no-git-tag-version --ignore-scripts, never by hand.",
     "mouse/index.ts stays the fork's consumer-API rewrite (took OURS wholesale)",
     "keep clickToToggleExpandable (default true) across the config.ts sites and the test files; clickToExpandTools is not restored anywhere",
     "keep handlesMouse() deleted, mouse/hit-test.ts at fork HEAD, key-text.ts at upstream bytes as the single source with tool-box.ts/index.ts importing keyTextFor from ./key-text, and capabilities.ts's D8 type tightening (<T extends object>)",
-    "keep peer ranges >=0.86.0 <0.88 with devDeps ^0.87.1 (pi-mouse-events 0.2.0 and pi-thinking-collapse 0.2.0 share that floor)"
+    "keep Pi peer ranges >=1.0.0 <2 with catalog devDependencies; retain the optional pi-mouse-events v2 API contract"
   ],
   "doNotReintroduce": [
     "expect recurring modify/delete conflicts on every pull: upstream deleted these files and the fork keeps them — extensions/starline/mouse/tool-box.ts, mouse/component-tree.ts, test/contract/tool-box-hint.test.ts, test/mouse/tool-box.test.ts, test/mouse/component-tree.test.ts, test/contract/transcript-layout.test.ts",

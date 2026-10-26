@@ -26,8 +26,8 @@ const realSdkSuites = new Set([
 if (realSdkSuites.has(path.basename(process.argv[1] ?? ""))) {
 	const sdkRoot = new URL("../../../../node_modules/@earendil-works/pi-coding-agent/", import.meta.url);
 	const manifest = JSON.parse(fs.readFileSync(new URL("package.json", sdkRoot), "utf8"));
-	if (manifest.name !== "@earendil-works/pi-coding-agent" || manifest.version !== "1.0.0") {
-		throw new Error("Real-SDK suites require the pinned workspace Pi 1.0.0 package.");
+	if (manifest.name !== "@earendil-works/pi-coding-agent" || manifest.version !== "1.1.0") {
+		throw new Error("Real-SDK suites require the pinned workspace Pi 1.1.0 package.");
 	}
 	const sdkEntry = new URL(manifest.exports["."].import, sdkRoot).href;
 	registerHooks({

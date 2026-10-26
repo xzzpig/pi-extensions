@@ -1,0 +1,16 @@
+{
+  "rules": [
+    { "kind": "tool", "name": "update_goal", "action": "keep" },
+    {
+      "kind": "customMessage",
+      "customType": "pi-goal-audit-event",
+      "action": "group"
+    },
+    {
+      "kind": "notification",
+      "textPrefix": "Observational memory:",
+      "level": "info",
+      "action": "group"
+    }
+  ]
+}

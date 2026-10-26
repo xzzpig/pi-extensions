@@ -1,0 +1,58 @@
+{
+  "name": "@xzzpig/pi-group-collapse",
+  "version": "0.1.0",
+  "description": "Fold a settled turn's tools, thinking, and selected special messages into one-line summaries, keeping the original rendering one click away.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xzzpig/pi-extensions.git",
+    "directory": "packages/pi-group-collapse"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-tui",
+    "transcript",
+    "tui"
+  ],
+  "files": [
+    "index.ts",
+    "src",
+    "config",
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "package.json"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "build:types": "rollup -c rollup.dts.config.mjs",
+    "prepack": "pnpm run build:types",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=1.0.0 <2",
+    "@earendil-works/pi-tui": ">=1.0.0 <2"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "catalog:",
+    "@earendil-works/pi-tui": "catalog:",
+    "@types/node": "catalog:",
+    "@xzzpig/pi-thinking-collapse": "workspace:*",
+    "@xzzpig/pi-tool-display": "workspace:*",
+    "rollup": "^4.62.2",
+    "rollup-plugin-dts": "^6.4.1",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

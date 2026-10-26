@@ -227,3 +227,26 @@ Inspired by:
 ## License
 
 MIT
+
+## Compatibility: explicit expand targets (fork-only)
+
+This fork's click-to-expand resolution (`mouse/tool-box.ts`) checks an
+optional, versioned **explicit expand-target protocol** before its own
+`setExpanded`/hint logic:
+
+- Providers publish a resolver on a component instance under
+  `Symbol.for("@xzzpig/transcript-expand-target.v1")` with
+  `{ version: 1, resolveLocalTarget(localRow, width) }`. The consumer is
+  `mouse/explicit-expand-target.ts` (fork-only file).
+- Today the only provider is
+  [`@xzzpig/pi-group-collapse`](../pi-group-collapse): its group summaries
+  resolve to the independent group object, so clicking a summary toggles
+  the group instead of the tool that carries it.
+- Without a provider nothing changes: no published protocol, a wrong
+  version, a non-callable resolver, a thrown resolution, or an invalid
+  resolved shape all fall through to the existing resolution. Installing
+  the provider is never required, and load order in either direction
+  works (the resolver is read per click, not cached).
+- Drag selection, double-click word selection, hyperlinks, wheel, and
+  overlay behavior are unaffected; the explicit target only answers for
+  the specific local rows it owns.

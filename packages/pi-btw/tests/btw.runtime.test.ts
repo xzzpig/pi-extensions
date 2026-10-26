@@ -2505,11 +2505,12 @@ describe("btw runtime behavior", () => {
 
     const transcript = transcriptText(harness.latestOverlayComponent());
     // User rows are rendered by the main-window UserMessageComponent: they carry
-    // the real theme background (ANSI) and no fake badge, so they must not look
-    // like an assistant badge row.
+    // the real theme's ANSI background escapes (truecolor only when the terminal
+    // reports the capability; pi 1.1 headless themes emit the default background)
+    // and no fake badge, so they must not look like an assistant badge row.
     const userLine = transcript.split("\n").find((line) => line.includes("first question"));
     expect(userLine).toBeDefined();
-    expect(userLine).toContain("\x1b[48;2;");
+    expect(userLine).toMatch(/\x1b\[(?:48;2;|49m)/);
     expect(userLine).not.toContain("<bg:customMessageBg>");
     // Assistant rows keep the pi-btw badge (fake theme here) plus the
     // main-window AssistantMessageComponent body.
