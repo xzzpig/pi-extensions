@@ -2,6 +2,8 @@ import type { ISandboxManager, SandboxRuntimeConfig } from "@carderne/sandbox-ru
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, realpathSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { type BashOperations, getShellConfig } from "@earendil-works/pi-coding-agent";
@@ -45,11 +47,14 @@ function resolveUnixSockets(config: SandboxConfig): string[] | undefined {
   return unique(sockets);
 }
 
-const canonicalizeFilesystemPattern = (path: string, baseCwd?: string) =>
-  path.includes("*") ? path : canonicalizePath(path, baseCwd);
-
 const canonicalizeFilesystemPatterns = (paths: string[], baseCwd?: string) =>
-  unique(paths.map((path) => canonicalizeFilesystemPattern(path, baseCwd)));
+  unique(
+    paths.flatMap((path) => {
+      if (path.includes("*")) return [path];
+      const absolutePath = resolve(baseCwd ?? process.cwd(), path.replace(/^~(?=$|\/)/, homedir()));
+      return [absolutePath, canonicalizePath(path, baseCwd)];
+    }),
+  );
 
 function sandboxRuntimeReadPaths(platform: NodeJS.Platform): string[] {
   if (platform !== "linux") return [];
@@ -130,6 +135,7 @@ export function buildRuntimeConfig(
     allowBrowserProcess: config.allowBrowserProcess,
     allowPty: config.allowPty,
     enableWeakerNetworkIsolation: true,
+    allowAppleEvents: config.allowAppleEvents,
   };
 
   return runtimeConfig;
@@ -161,13 +167,6 @@ export function updateSandboxConfig(
 export function supportsNodeEnvProxy(version: string): boolean {
   const [major, minor] = version.split(".").map(Number);
   return (major === 22 && minor >= 21) || major >= 24;
-}
-
-export function extractBlockedWritePath(output: string): string | null {
-  const match = output.match(
-    /(?:\/bin\/bash|bash|sh): (?:line \d: )?(\/[^\s:]+): Operation not permitted/,
-  );
-  return match ? match[1] : null;
 }
 
 const EXIT_STDIO_GRACE_MS = 100;
