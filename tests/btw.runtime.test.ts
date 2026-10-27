@@ -19,7 +19,9 @@ const {
   modelRuntimeRecords,
   subSessionRecords,
   readBtwExtensionSourcesMock,
+  readBtwWorkspaceModeMock,
   loadBtwExtensionResourcesMock,
+  createBtwSshWorkspaceMock,
 } = vi.hoisted(() => ({
   promptStreamMock: vi.fn(),
   createAgentSessionMock: vi.fn(),
@@ -52,13 +54,18 @@ const {
     getIsStreaming: () => boolean;
   }>,
   readBtwExtensionSourcesMock: vi.fn(),
+  readBtwWorkspaceModeMock: vi.fn(),
   loadBtwExtensionResourcesMock: vi.fn(),
+  createBtwSshWorkspaceMock: vi.fn(),
 }));
 
 vi.mock("../extensions/btw-extension-tools", () => ({
   readBtwExtensionSources: readBtwExtensionSourcesMock,
+  readBtwWorkspaceMode: readBtwWorkspaceModeMock,
   loadBtwExtensionResources: loadBtwExtensionResourcesMock,
 }));
+
+vi.mock("../extensions/btw-ssh-workspace", () => ({ createBtwSshWorkspace: createBtwSshWorkspaceMock }));
 
 const markdownTheme = {
   heading: (text: string) => `<heading>${text}</heading>`,
@@ -152,7 +159,9 @@ const tuiMocks = vi.hoisted(() => {
     render(_width: number) {
       return [`> ${this.value}`];
     }
-    handleInput(_data: string) {}
+    handleInput(data: string) {
+      if (data.startsWith("\x1b[200~") && data.endsWith("\x1b[201~")) this.value += data.slice(6, -6);
+    }
   }
 
   class FakeContainer {
@@ -866,7 +875,9 @@ describe("btw runtime behavior", () => {
     modelRuntimeRecords.length = 0;
     subSessionRecords.length = 0;
     readBtwExtensionSourcesMock.mockReset().mockResolvedValue([]);
+    readBtwWorkspaceModeMock.mockReset().mockResolvedValue("local");
     loadBtwExtensionResourcesMock.mockReset();
+    createBtwSshWorkspaceMock.mockReset();
 
     createAgentSessionMock.mockImplementation(async (options: any) => createMockAgentSession(options));
     modelRuntimeCreateMock.mockImplementation(async () => {
@@ -1051,6 +1062,69 @@ describe("btw runtime behavior", () => {
     expect(summary.options.tools).toEqual([]);
     expect(summary.options.resourceLoader.getExtensions().extensions).toEqual([]);
     expect(summary.session.bindExtensions).not.toHaveBeenCalled();
+  });
+
+  function remoteWorkspace(identity = "ssh:fixture") {
+    const workspace = {
+      label: "SSH test-host:/srv/project", identity, tools: [{ name: "read", description: "Remote read" }],
+      assertCurrent: vi.fn(), dispose: vi.fn(async () => {}),
+    };
+    readBtwWorkspaceModeMock.mockResolvedValue("ssh");
+    createBtwSshWorkspaceMock.mockResolvedValue(workspace);
+    return workspace;
+  }
+
+  it("ask selects remote read-only tools without loading extensions and shows its workspace", async () => {
+    const harness = createHarness();
+    const workspace = remoteWorkspace();
+    readBtwExtensionSourcesMock.mockRejectedValue(new Error("must not load extensions"));
+    await harness.runSessionStart();
+    await harness.command("btw:ask", "remote question");
+    expect(createBtwSshWorkspaceMock).toHaveBeenCalledWith(harness.api, expect.anything(), true);
+    expect(subSessionRecords[0].options.customTools).toBe(workspace.tools);
+    expect(subSessionRecords[0].options.tools).toEqual(["read", "grep", "find", "ls"]);
+    expect(readBtwExtensionSourcesMock).not.toHaveBeenCalled();
+    expect(harness.latestOverlayComponent()["modeText"].text).toContain(workspace.label);
+    expect(subSessionRecords[0].options.resourceLoader.getAppendSystemPrompt().join(" ")).toContain(workspace.label);
+    await harness.command("btw:clear");
+    expect(workspace.dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it("blocks a changed remote workspace before submitting a follow-up", async () => {
+    const harness = createHarness();
+    const workspace = remoteWorkspace();
+    await harness.runSessionStart();
+    await harness.command("btw", "first remote question");
+    workspace.assertCurrent.mockImplementation(() => { throw new Error("Parent SSH workspace changed. Run /btw:clear."); });
+    await harness.command("btw", "must not submit");
+    expect(subSessionRecords[0].session.prompt).toHaveBeenCalledTimes(1);
+    expect(harness.latestOverlayComponent()["statusText"].text).toContain("/btw:clear");
+  });
+
+  it("does not create a local child after remote connection failure", async () => {
+    const harness = createHarness();
+    remoteWorkspace();
+    createBtwSshWorkspaceMock.mockRejectedValue(new Error("SSH connection refused"));
+    await harness.runSessionStart();
+    await harness.command("btw", "remote question");
+    expect(createAgentSessionMock).not.toHaveBeenCalled();
+    expect(harness.notifications.at(-1)?.message).toContain("SSH connection refused");
+  });
+
+  it("retains workspace identity across reload and rejects saved history from another host", async () => {
+    const harness = createHarness();
+    remoteWorkspace("ssh:first-host");
+    await harness.runSessionStart();
+    await harness.command("btw", "remote question");
+    const saved = harness.entries.filter((entry) => entry.type === "custom");
+    const next = createHarness(saved);
+    const other = remoteWorkspace("ssh:other-host");
+    const before = subSessionRecords.length;
+    await next.runSessionStart();
+    await next.command("btw", "must clear first");
+    expect(subSessionRecords).toHaveLength(before);
+    expect(other.dispose).toHaveBeenCalledTimes(1);
+    expect(next.notifications.at(-1)?.message).toContain("saved thread");
   });
 
   it("shuts down extensions before disposal when switching into read-only mode", async () => {
@@ -1467,6 +1541,41 @@ describe("btw runtime behavior", () => {
     expect(secondOptions.thinkingLevel).toBe("low");
   });
 
+  it("contextual BTW strips parent tool declarations from seeded system messages", async () => {
+    const harness = createHarness([
+      {
+        type: "message",
+        role: "system",
+        content: [{ type: "text", text: "main system prompt" }],
+        toolsAdded: [{ name: "parent_only_tool", description: "", parameters: {} }],
+        timestamp: Date.now(),
+      } as unknown as SessionEntry,
+      {
+        type: "message",
+        role: "system",
+        content: [{ type: "text", text: "main system update" }],
+        toolsRemoved: [{ name: "parent_only_tool" }],
+        timestamp: Date.now(),
+      } as unknown as SessionEntry,
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "text", text: "main session task" }],
+        timestamp: Date.now(),
+      } as SessionEntry,
+    ]);
+
+    await harness.runSessionStart();
+    await harness.command("btw", "contextual start");
+
+    const systemSeeds = subSessionRecords[0].seedMessages.filter((message) => message.role === "system");
+    expect(systemSeeds.map((message) => message.content[0].text)).toEqual(["main system prompt", "main system update"]);
+    for (const message of systemSeeds) {
+      expect(message).not.toHaveProperty("toolsAdded");
+      expect(message).not.toHaveProperty("toolsRemoved");
+    }
+  });
+
   it("contextual BTW seeds the sub-session with main-session messages but excludes visible BTW notes", async () => {
     const harness = createHarness([
       {
@@ -1707,6 +1816,18 @@ describe("btw runtime behavior", () => {
     const transcript = transcriptText(overlay);
     expect(transcript).toContain("You  read-only follow-up");
     expect(transcript).not.toContain("You  first question");
+  });
+
+  it.each(["btw", "side"])("dispatches in-modal /%s through contextual BTW semantics", async (command) => {
+    const harness = createHarness();
+    await harness.runSessionStart();
+    await harness.command("btw:ask", "");
+    const overlay = harness.latestOverlayComponent();
+    overlay.input.onSubmit?.(`/${command} contextual follow-up`);
+    await flushAsyncWork();
+    expect([...subSessionRecords.at(-1)!.options.tools].sort()).toEqual(["bash", "edit", "read", "write"]);
+    expect(subSessionRecords.at(-1)?.session.prompt).toHaveBeenLastCalledWith("contextual follow-up", { source: "extension" });
+    expect(overlay["modeText"].text).not.toContain("read-only");
   });
 
   it("preserves BTW overlay recoverability after agent prompt failure", async () => {

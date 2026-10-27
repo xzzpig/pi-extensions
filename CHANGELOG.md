@@ -2,7 +2,23 @@
 
 All notable changes to this project are documented here.
 
-## Unreleased
+## [0.8.0] - 2026-10-10
+
+Supports Pi 0.85.1 through 1.x. Tested with Pi 0.85.1, 0.99.2, and 1.1.0.
+
+### Added
+- Slash-command completion in the BTW composer: type `/`, filter command names,
+  navigate with Up/Down, and accept with Tab or Enter. Includes `/btw` and `/side`.
+- Opt-in SSH workspaces for BTW via `workspace: "ssh"`, using the active parent
+  pi-ssh-remote target and directory through an independent connection. Remote
+  ask mode retains only read-only tools; workspace changes require a fresh thread.
+- Local/remote workspace labels in the overlay and child capability prompt.
+
+### Fixed
+- Contextual `/btw` no longer fails with Anthropic `400 tool_addition/tool_removal
+  references unknown tool` on Pi 1.1+. Seeded parent system messages are stripped
+  of their `toolsAdded`/`toolsRemoved` declarations, so the child session declares
+  only its own tools instead of emitting removals for the parent's tools.
 
 ## [0.7.1] - 2026-10-01
 
