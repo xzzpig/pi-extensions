@@ -4,6 +4,18 @@ All notable changes to the `@xzzpig/pi-btw` fork are documented here. This
 fork tracks [`dbachelder/pi-btw`](https://github.com/dbachelder/pi-btw) via git
 subtree; entries below describe only fork-specific deviations from upstream.
 
+## 0.11.0
+
+### Changed
+
+- **Synced upstream `v0.7.1` → `v0.8.0`**, adding in-modal BTW command
+  completion, opt-in SSH workspaces with read-only ask mode, and workspace
+  labels. Contextual sessions also strip parent tool declarations from seeded
+  system messages to prevent unknown-tool errors on Pi 1.1.
+- Retained the fork's shared pi-components transcript renderer, contextual
+  boundary prompt, mouse behavior, and independent package identity. The new
+  upstream completion tests use the fork's transcript-renderer callbacks.
+
 ## 0.10.0
 
 ### Changed

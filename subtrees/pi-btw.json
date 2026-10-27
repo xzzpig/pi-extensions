@@ -4,11 +4,11 @@
   "prefix": "packages/pi-btw",
   "source": "https://github.com/dbachelder/pi-btw.git",
   "remote": "upstream-pi-btw",
-  "ref": "v0.7.1",
-  "version": "v0.7.1",
-  "upstreamCommit": "d0d1ba5404b66058c501ed3e286733660df56aa9",
+  "ref": "v0.8.0",
+  "version": "v0.8.0",
+  "upstreamCommit": "2bf85893c3755a09e987ce23468757d82bc20e16",
   "squash": true,
-  "lastSyncedAt": "2026-10-02T23:29:23+08:00",
+  "lastSyncedAt": "2026-10-27T14:00:59+08:00",
   "notes": "Forked from the pi-btw upstream. The transcript-builder contract lives in openspec (spec transcript-builder-api).",
   "knownDebt": [
     {
@@ -16,6 +16,12 @@
       "path": "packages/pi-btw/package-lock.json",
       "reason": "Upstream package-lock.json is deleted on every sync (it resurrects on each pull) and is never consumed by this pnpm monorepo; delete it again with git rm packages/pi-btw/package-lock.json after each subtree pull.",
       "recordedAt": "2026-09-28T02:09:09+08:00"
+    },
+    {
+      "kind": "lint",
+      "path": "packages/pi-btw/extensions/btw.ts",
+      "reason": "Five pi-lens require-safety-comment-for-as-unknown-as findings are unchanged upstream casts that also predate the v0.8.0 sync. Keep upstream bytes rather than add fork-only suppressions; revisit if upstream removes or documents the casts.",
+      "recordedAt": "2026-10-27T14:00:59+08:00"
     }
   ],
   "reapplyOnSync": [
@@ -23,7 +29,8 @@
     "adapt upstream tests asserting the upstream renderer's 'You  <text>' user-row badge format to plain-text assertions (the fork renderer has no You label)",
     "bump upstream tests asserting SessionManager.appendMessage call counts by +1 because the fork's boundary message is also seeded",
     "delete package-lock.json again if a future subtree pull resurrects it",
-    "keep pi-ai in devDeps as an explicit 0.83.0 (no catalog entry exists) with peerDependencies >=0.83.0 <1",
+    "keep the Pi 1.x peer ranges and workspace catalog devDependencies instead of upstream SDK pins",
+    "the upstream completion test fixture supplies the fork overlay's transcript-version and tool-component lookup callbacks before the status callback",
     "'applies distinct theme treatment' must keep its user-row assertion color-mode agnostic (\\\\x1b[48;2; truecolor or \\\\x1b[49m default background): pi 1.1 themes leave headless runs on the default background, so a truecolor-only assertion fails without proving anything about the renderer"
   ],
   "doNotReintroduce": [
