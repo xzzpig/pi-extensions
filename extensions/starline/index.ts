@@ -11,41 +11,48 @@ import {
 	type ExtensionStatusColorMode,
 	type ExtensionStatusPlacement,
 	ensureConfigExists,
-	type FooterSegmentsConfig,
 	type GitBranchConfig,
 	type IconMode,
 	loadConfig,
 	type MouseConfig,
 	type PathDisplayConfig,
 	type PolishedTuiConfig,
-	type SeparatorStyle,
 	saveColorSourcesPatch,
 	saveContextStylePatch,
 	saveExtensionStatusColorMode,
 	saveExtensionStatusPlacement,
-	saveFooterFormatPatch,
-	saveFooterSegmentsPatch,
 	saveGitBranchPatch,
 	saveIconsModePatch,
 	saveMousePatch,
 	savePathDisplayPatch,
-	saveSeparatorPatch,
+	savePillSegmentsPatch,
 	saveUiFeaturesPatch,
 	type UiFeaturesConfig,
 } from "./config";
+import { setActiveContextSnapshot } from "./context-live";
 import {
 	getStarlineEditorBaseFactory,
 	isStarlineEditorFactory,
 	markEditorFactory,
 } from "./editor-factory-marker";
 import { installFooter } from "./footer";
-import { buildSessionDurationLabel, invalidateUsageTotalsCache } from "./format";
-import { emptyGitStatus, readGitHost, readGitStatus } from "./git";
+import {
+	buildSessionDurationLabel,
+	compactionFailureNotice,
+	invalidateUsageTotalsCache,
+	resolveSessionStartEpoch,
+} from "./format";
+import { emptyGitStatus } from "./git";
+import { setActiveGitStatus } from "./git-live";
 import { LiveContextController } from "./live-context";
+import { forgetLiveSession, installLiveSessionCapture } from "./live-session";
 import { installMouse } from "./mouse";
 import { setActiveEditor } from "./mouse/editor-mouse";
-import { readPackageVersionResult } from "./package-version";
 import { installPasteCollapse } from "./paste-collapse";
+import { setModelSwitcher } from "./pill-actions";
+import { publishPillApi } from "./pill-api";
+import { setPillBubbleAnimation } from "./pill-bubble";
+import { probeProject } from "./project-probe";
 import {
 	createProjectRefreshScheduler,
 	type ScheduleProjectRefreshOptions,
@@ -53,13 +60,21 @@ import {
 	startProjectRefreshInterval,
 } from "./project-refresh";
 import { applyProjectRefreshToState } from "./project-state";
-import { readRuntimeInfo } from "./runtime";
+import { installNativeQueueRowHiding } from "./queue-rows";
 import { installSelectorBorderStyle } from "./selector-border";
 import { SessionLifecycle } from "./session-lifecycle";
 import { registerStarlineSettingsCommand } from "./settings-command";
 import { createInitialState, type FooterState, syncState } from "./state";
+import {
+	createSubagentFleet,
+	type EventBusLike,
+	getActiveSubagentFleet,
+	SUBAGENT_TOOL_NAME,
+	setActiveSubagentFleet,
+} from "./subagent-fleet";
 import { PolishedEditor, WrappedPolishedEditor } from "./ui";
 import { installUserMessageStyle } from "./user-message";
+import { setWorkingIndicator } from "./working-indicator";
 
 type EditorFactory = NonNullable<Parameters<ExtensionContext["ui"]["setEditorComponent"]>[0]>;
 
@@ -78,8 +93,21 @@ function isTuiContext(ctx: ExtensionContext): boolean {
 	}
 }
 
+/**
+ * How long a pill's bubble takes to unfold from the pill: long enough to read as
+ * growing out of it, short enough never to be waited on.
+ */
+const BUBBLE_ANIMATION_MS = 60;
+
 export default function (pi: ExtensionAPI) {
+	// Published before anything else so a bridge that registers in `session_start`
+	// finds it, whichever order the extensions were loaded in.
+	publishPillApi();
+
 	const state: FooterState = createInitialState(emptyGitStatus());
+	// The git pill's bubble reads the same object the footer draws from, so a
+	// click costs no extra \`git status\`.
+	setActiveGitStatus(state);
 	const sessionLifecycle = new SessionLifecycle();
 
 	let currentConfig: PolishedTuiConfig = loadConfig();
@@ -99,6 +127,8 @@ export default function (pi: ExtensionAPI) {
 	let lastProjectCwd: string | undefined;
 	let disposePasteCollapse: (() => void) | undefined;
 	let disposeMouse: (() => void) | undefined;
+	let cleanupSessionCapture: (() => void) | undefined;
+	let cleanupQueueRows: (() => void) | undefined;
 
 	const refresh = () => {
 		if (sessionLifecycle.isCurrent()) requestFooterRender?.();
@@ -106,6 +136,18 @@ export default function (pi: ExtensionAPI) {
 	const liveContext = new LiveContextController(sessionLifecycle, refresh);
 	const getActiveTheme = () => activeTheme;
 	const getCurrentConfig = () => currentConfig;
+	/**
+	 * The session's own header, or nothing. Read through a guard because this runs on
+	 * whatever `sessionManager` the running Pi build provides — the header is where a
+	 * resumed session keeps its original start time.
+	 */
+	const readSessionHeader = (ctx: ExtensionContext): { timestamp?: string } | undefined => {
+		try {
+			return ctx.sessionManager.getHeader() ?? undefined;
+		} catch {
+			return undefined;
+		}
+	};
 	const getThinkingLevel = () =>
 		sessionLifecycle.isCurrent() ? pi.getThinkingLevel() : ("off" as const);
 	const syncFooterState = (ctx: ExtensionContext) =>
@@ -120,39 +162,15 @@ export default function (pi: ExtensionAPI) {
 	type ProjectRefreshTarget = { cwd: string; generation: number };
 	const refreshProjectState = async ({ cwd, generation }: ProjectRefreshTarget) => {
 		if (!sessionLifecycle.isCurrent(generation)) return;
-		const gitCommitConfig = currentConfig.gitCommit;
-		const gitMetricsConfig = currentConfig.gitMetrics;
-		const segments = currentConfig.footerSegments;
-		const fmt = currentConfig.footerFormat;
-		// Enable optional probes when the segment is on OR a custom footerFormat
-		// references the relevant variable. Mirrors the session-duration timer
-		// pattern so format-only users still get data.
-		const formatNeedsTag = /\$\{?(?:git_tag|tag)\b/.test(fmt);
-		const formatNeedsCommit = /\$\{?(?:git_commit|commit)\b/.test(fmt);
-		const formatNeedsMetrics = /\$\{?(?:git_metrics|git_added|git_deleted)\b/.test(fmt);
-		const formatNeedsPackage = /\$\{?(?:package|package_version)\b/.test(fmt);
-		const wantExactTag =
-			((segments.gitCommit || formatNeedsCommit) && gitCommitConfig.showTag) || formatNeedsTag;
-		const wantMetrics = segments.gitMetrics || formatNeedsMetrics;
-		const wantPackage = segments.packageVersion || formatNeedsPackage;
-		const [git, runtime, packageVersion, gitHost] = await Promise.all([
-			readGitStatus(cwd, {
-				readExactTag: wantExactTag,
-				readMetrics: wantMetrics,
-				ignoreSubmodules: gitMetricsConfig.ignoreSubmodules,
-			}),
-			readRuntimeInfo(cwd),
-			wantPackage ? readPackageVersionResult(cwd) : Promise.resolve(undefined),
-			currentConfig.gitHostIcon ? readGitHost(cwd) : Promise.resolve(undefined),
-		]);
+		// A bar with no git pill reads no git: `probeProject` answers an empty
+		// status rather than starting `git status` and `git stash list` every
+		// interval.
+		const probe = await probeProject(cwd, currentConfig);
 		if (!sessionLifecycle.isCurrent(generation)) return;
 		lastProjectCwd = applyProjectRefreshToState(state, {
 			cwd,
 			previousCwd: lastProjectCwd,
-			git,
-			gitHost,
-			runtime,
-			packageVersion,
+			...probe,
 		});
 	};
 
@@ -185,18 +203,11 @@ export default function (pi: ExtensionAPI) {
 		lastDurationLabel = "";
 		const timer = setInterval(() => {
 			if (!sessionLifecycle.isCurrent()) return;
-			const segments = currentConfig.footerSegments;
-			const formatNeedsTimer =
-				currentConfig.footerFormat &&
-				/\$\{?(?:time|session_duration|duration)\b/.test(currentConfig.footerFormat);
-			if (
-				!(
-					currentConfig.features.statusLine &&
-					(segments.sessionDuration || segments.time || formatNeedsTimer)
-				)
-			)
+			const shown = currentConfig.pill.segments;
+			const wantsTime = shown.includes("time");
+			if (!(currentConfig.features.statusLine && (wantsTime || shown.includes("sessionDuration"))))
 				return;
-			if (segments.time || formatNeedsTimer) {
+			if (wantsTime) {
 				refresh();
 				return;
 			}
@@ -233,6 +244,73 @@ export default function (pi: ExtensionAPI) {
 	const uninstallMouse = () => {
 		disposeMouse?.();
 		disposeMouse = undefined;
+	};
+
+	/**
+	 * Capture the live `AgentSession` so the queue bubble can list what is waiting.
+	 * The context only carries a boolean; the messages are on the session, and one
+	 * wrapper on its `prompt` is enough to hold the instance. See `live-session.ts`.
+	 */
+	const installSessionCapture = () => {
+		cleanupSessionCapture?.();
+		cleanupSessionCapture = installLiveSessionCapture();
+	};
+
+	const uninstallSessionCapture = () => {
+		cleanupSessionCapture?.();
+		cleanupSessionCapture = undefined;
+		forgetLiveSession();
+	};
+
+	/**
+	 * Pi's own `Steering:` rows above the editor are the same information the queue
+	 * pill carries, so they are hidden exactly while the pill is on screen. The
+	 * predicate is read on every queue update, so `/starline` changes apply without
+	 * a restart.
+	 */
+	const queuePillCarriesTheQueue = () =>
+		currentConfig.features.statusLine && currentConfig.pill.segments.includes("queue");
+
+	const installQueueRowHiding = () => {
+		cleanupQueueRows?.();
+		cleanupQueueRows = installNativeQueueRowHiding(queuePillCarriesTheQueue);
+	};
+
+	const uninstallQueueRowHiding = () => {
+		cleanupQueueRows?.();
+		cleanupQueueRows = undefined;
+	};
+
+	/**
+	 * Follow what pi-subagents is running, for the `subagents` pill. Its public RPC
+	 * answers on `pi.events`; without the package nothing answers and the pill
+	 * stays off. One request now picks up runs restored with the session.
+	 */
+	const installSubagentFleet = () => {
+		const bus = (pi as { events?: EventBusLike }).events;
+		if (!bus) return;
+		const fleet = createSubagentFleet(bus, { onChange: refresh });
+		setActiveSubagentFleet(fleet);
+		fleet.refresh();
+	};
+
+	/**
+	 * The model pill's picker switches through `pi`, which actions do not get.
+	 * A scoped model that pins a thinking level brings it along, as ctrl+p does.
+	 */
+	const installModelSwitcher = () => {
+		setModelSwitcher(async ({ model, thinkingLevel }) => {
+			const switched = await pi.setModel(model as Parameters<typeof pi.setModel>[0]);
+			if (switched && thinkingLevel) {
+				pi.setThinkingLevel(thinkingLevel as Parameters<typeof pi.setThinkingLevel>[0]);
+			}
+			return switched;
+		});
+	};
+
+	/** A foreground run starts with no event of its own, only the tool call. */
+	const refreshFleetForTool = (event: { toolName?: string }) => {
+		if (event.toolName === SUBAGENT_TOOL_NAME) getActiveSubagentFleet()?.refresh();
 	};
 
 	/**
@@ -415,6 +493,10 @@ export default function (pi: ExtensionAPI) {
 		installedEditorFactory = undefined;
 		editorInstallMode = "none";
 		editorInstalled = false;
+		// Pi only clears the indicator it handed to the editor it is replacing, and
+		// this editor is on its way out; leaving the stale reference behind would
+		// keep a spinner in the footer forever.
+		setWorkingIndicator(undefined);
 		// Pi rebuilds the editor from whatever factory is now in place, and that
 		// one is not ours. Leaving the old instance registered would point the
 		// wheel patch at an editor no longer on screen.
@@ -485,6 +567,11 @@ export default function (pi: ExtensionAPI) {
 		currentConfig = loadConfig();
 		syncFooterState(ctx);
 		stopProjectRefresh();
+		installSessionCapture();
+		installQueueRowHiding();
+		installSubagentFleet();
+		installModelSwitcher();
+		setPillBubbleAnimation(currentConfig.pill.bubbleAnimation ? BUBBLE_ANIMATION_MS : 0);
 		applyConfiguredUi(ctx);
 		installMousePatches();
 		refresh();
@@ -506,7 +593,14 @@ export default function (pi: ExtensionAPI) {
 		sessionLifecycle.shutdown();
 		try {
 			uninstallMouse();
+			uninstallSessionCapture();
+			uninstallQueueRowHiding();
+			setActiveSubagentFleet(undefined);
+			setActiveGitStatus(undefined);
+			setActiveContextSnapshot(undefined);
+			setModelSwitcher(undefined);
 			uninstallPrototypePatches();
+			setWorkingIndicator(undefined);
 			stopSessionTimer();
 			stopProjectRefresh();
 			requestFooterRender = undefined;
@@ -544,7 +638,9 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		sessionLifecycle.start();
 		liveContext.clear();
-		state.sessionStartEpoch = Date.now();
+		// A resumed session keeps its original header, and reporting the moment this
+		// process attached to it would make the elapsed-time segment read 0s forever.
+		state.sessionStartEpoch = resolveSessionStartEpoch(readSessionHeader(ctx));
 		invalidateUsageTotalsCache();
 		lastProjectCwd = undefined;
 		installUi(ctx);
@@ -567,26 +663,20 @@ export default function (pi: ExtensionAPI) {
 					: undefined,
 			};
 		},
-		setFooterSegments(patch: Partial<FooterSegmentsConfig>) {
-			currentConfig = saveFooterSegmentsPatch(patch);
-		},
-		setFooterFormat(value: string) {
-			currentConfig = saveFooterFormatPatch(value);
-		},
 		setIconMode(mode: IconMode) {
 			currentConfig = saveIconsModePatch(mode);
 		},
 		setContextStyle(style: ContextStyle) {
 			currentConfig = saveContextStylePatch(style);
 		},
-		setSeparator(separator: SeparatorStyle) {
-			currentConfig = saveSeparatorPatch(separator);
-		},
 		setPathDisplay(patch: Partial<PathDisplayConfig>) {
 			currentConfig = savePathDisplayPatch(patch);
 		},
 		setGitBranch(patch: Partial<GitBranchConfig>) {
 			currentConfig = saveGitBranchPatch(patch);
+		},
+		setPillSegments(segments: readonly string[]) {
+			currentConfig = savePillSegmentsPatch(segments);
 		},
 		getActiveExtensionStatuses() {
 			return getActiveExtensionStatuses();
@@ -651,12 +741,22 @@ export default function (pi: ExtensionAPI) {
 	});
 	pi.on("tool_execution_start", (event, ctx) => {
 		liveContext.clear();
+		refreshFleetForTool(event);
 		syncInteractiveState(event, ctx);
 	});
-	pi.on("tool_execution_end", syncInteractiveAndProjectState);
+	pi.on("tool_execution_end", (event, ctx) => {
+		refreshFleetForTool(event);
+		syncInteractiveAndProjectState(event, ctx);
+	});
 	pi.on("session_compact", (event, ctx) => {
 		liveContext.clear();
 		syncInteractiveAndProjectStateWithUsage(event, ctx);
+	});
+	// Pi emits this and draws nothing for it: a failed compaction late in a long
+	// session otherwise looks like the agent forgetting the conversation.
+	pi.on("session_compact_failed", (event, ctx) => {
+		const notice = compactionFailureNotice(event);
+		if (notice) ctx.ui.notify(notice, "error");
 	});
 	pi.on("session_tree", (event, ctx) => {
 		liveContext.clear();

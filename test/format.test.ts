@@ -8,6 +8,7 @@ import {
 	buildCostLabel,
 	buildSessionDurationLabel,
 	buildTokenLabel,
+	compactionFailureNotice,
 	contextColorTier,
 	formatCount,
 	formatCwdLabel,
@@ -18,6 +19,8 @@ import {
 	formatPackageVersionSegment,
 	getUsageTotals,
 	invalidateUsageTotalsCache,
+	resolveSessionStartEpoch,
+	statusValueText,
 } from "../extensions/starline/format";
 import {
 	ASCII_DEFAULT_ICONS,
@@ -363,18 +366,10 @@ describe("formatGitMetricsSegment", () => {
 				{ onlyNonzero: true },
 				"terminal",
 				"bold green",
-				"bold red",
 			),
 		).toBe("");
 		expect(
-			formatGitMetricsSegment(
-				makeTheme(),
-				null,
-				{ onlyNonzero: true },
-				"terminal",
-				"bold green",
-				"bold red",
-			),
+			formatGitMetricsSegment(makeTheme(), null, { onlyNonzero: true }, "terminal", "bold green"),
 		).toBe("");
 	});
 
@@ -385,7 +380,6 @@ describe("formatGitMetricsSegment", () => {
 			{ onlyNonzero: false },
 			"terminal",
 			"bold green",
-			"bold red",
 		);
 		expect(out).toContain("+12");
 		expect(out).toContain("−3");
@@ -400,7 +394,6 @@ describe("formatGitMetricsSegment", () => {
 				{ onlyNonzero: true },
 				"terminal",
 				"bold green",
-				"bold red",
 			),
 		).not.toContain("+0");
 		expect(
@@ -410,7 +403,6 @@ describe("formatGitMetricsSegment", () => {
 				{ onlyNonzero: true },
 				"terminal",
 				"bold green",
-				"bold red",
 			),
 		).toContain("−5");
 		// 0 deleted → only show added.
@@ -421,7 +413,6 @@ describe("formatGitMetricsSegment", () => {
 				{ onlyNonzero: true },
 				"terminal",
 				"bold green",
-				"bold red",
 			),
 		).toContain("+7");
 	});
@@ -434,7 +425,6 @@ describe("formatGitMetricsSegment", () => {
 				{ onlyNonzero: true },
 				"terminal",
 				"bold green",
-				"bold red",
 			),
 		).toBe("");
 	});
@@ -590,5 +580,145 @@ describe("formatPackageVersionSegment", () => {
 		);
 		expect(out).toContain("#");
 		expect(out).not.toContain("\u{f487}");
+	});
+});
+
+describe("resolveSessionStartEpoch", () => {
+	const now = Date.parse("2026-10-25T12:00:00.000Z");
+
+	it("keeps a resumed session's original start time", () => {
+		const header = { timestamp: "2026-10-24T09:30:00.000Z" };
+		expect(resolveSessionStartEpoch(header, now)).toBe(Date.parse(header.timestamp));
+	});
+
+	it("falls back to now when there is no header", () => {
+		expect(resolveSessionStartEpoch(undefined, now)).toBe(now);
+		expect(resolveSessionStartEpoch(null, now)).toBe(now);
+	});
+
+	it("falls back to now when the header has no usable timestamp", () => {
+		expect(resolveSessionStartEpoch({}, now)).toBe(now);
+		expect(resolveSessionStartEpoch({ timestamp: "not a date" }, now)).toBe(now);
+		expect(resolveSessionStartEpoch({ timestamp: "" }, now)).toBe(now);
+	});
+});
+
+describe("usage totals cover every paid call", () => {
+	function totalsFor(entries: unknown[]) {
+		invalidateUsageTotalsCache();
+		return getUsageTotals(makeSessionContext(entries) as never);
+	}
+
+	it("counts a usage entry", () => {
+		const totals = totalsFor([
+			{
+				type: "usage",
+				usage: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, cost: { total: 0.5 } },
+			},
+		]);
+		expect(totals).toMatchObject({ input: 10, output: 5, cost: 0.5 });
+	});
+
+	it("counts a tool result's own usage", () => {
+		const totals = totalsFor([
+			{
+				type: "message",
+				message: {
+					role: "toolResult",
+					usage: { input: 3, output: 4, cacheRead: 0, cacheWrite: 0, cost: { total: 0.2 } },
+				},
+			},
+		]);
+		expect(totals).toMatchObject({ input: 3, output: 4, cost: 0.2 });
+	});
+
+	it("counts what compaction and branching cost", () => {
+		const totals = totalsFor([
+			{
+				type: "compaction",
+				usage: { input: 900, output: 100, cacheRead: 0, cacheWrite: 0, cost: { total: 1.5 } },
+			},
+			{
+				type: "branch_summary",
+				usage: { input: 40, output: 10, cacheRead: 0, cacheWrite: 0, cost: { total: 0.25 } },
+			},
+		]);
+		expect(totals).toMatchObject({ input: 940, output: 110, cost: 1.75 });
+	});
+
+	it("adds them to assistant turns instead of replacing them", () => {
+		const totals = totalsFor([
+			makeAssistantEntry(100, 20, 1, 20, 0),
+			{
+				type: "compaction",
+				usage: { input: 50, output: 60, cacheRead: 0, cacheWrite: 0, cost: { total: 2 } },
+			},
+		]);
+		expect(totals).toMatchObject({ input: 150, output: 80, cost: 3 });
+	});
+
+	it("still takes the cache hit rate from the assistant turn, not a summary", () => {
+		const totals = totalsFor([
+			makeAssistantEntry(100, 20, 1, 100, 0),
+			{
+				type: "compaction",
+				usage: { input: 0, output: 0, cacheRead: 500, cacheWrite: 0, cost: { total: 1 } },
+			},
+		]);
+		// 100 cache reads out of 100 input + 100 cache reads.
+		expect(totals.latestCacheHitRate).toBeCloseTo(50, 5);
+	});
+
+	it("ignores entries that carry no usage at all", () => {
+		const totals = totalsFor([
+			{ type: "model_change", provider: "p", modelId: "m" },
+			{ type: "label", label: "x" },
+		]);
+		expect(totals).toMatchObject({ input: 0, output: 0, cost: 0 });
+	});
+});
+
+describe("compactionFailureNotice", () => {
+	it("stays silent when the user aborted it", () => {
+		expect(compactionFailureNotice({ aborted: true, reason: "manual" })).toBeUndefined();
+	});
+
+	it("names the reason it fired for", () => {
+		expect(compactionFailureNotice({ reason: "threshold" })).toBe(
+			"Compaction failed (context threshold)",
+		);
+		expect(compactionFailureNotice({ reason: "overflow" })).toBe(
+			"Compaction failed (context was full)",
+		);
+		expect(compactionFailureNotice({ reason: "manual" })).toBe("Compaction failed");
+	});
+
+	it("carries Pi's error text when there is one", () => {
+		expect(compactionFailureNotice({ reason: "manual", errorMessage: " model overloaded " })).toBe(
+			"Compaction failed: model overloaded",
+		);
+	});
+
+	it("does not end in a dangling colon", () => {
+		expect(compactionFailureNotice({ reason: "manual", errorMessage: "   " })).toBe(
+			"Compaction failed",
+		);
+	});
+});
+
+describe("statusValueText", () => {
+	it("keeps the number and drops the label", () => {
+		expect(statusValueText("1 proc")).toBe("1");
+		expect(statusValueText("2 agents")).toBe("2");
+		expect(statusValueText("Tavily: 41.1%")).toBe("41.1%");
+	});
+
+	it("keeps grouping separators", () => {
+		expect(statusValueText("DeepSeek: \u00a51,447.55 spent")).toBe("1,447.55");
+	});
+
+	it("leaves text with no number alone", () => {
+		expect(statusValueText("ready")).toBe("ready");
+		expect(statusValueText("")).toBe("");
 	});
 });

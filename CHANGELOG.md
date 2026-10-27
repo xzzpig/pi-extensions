@@ -10,6 +10,341 @@ notes, so write it for someone reading the releases page, not for someone readin
 the diff. A tag with no section here fails the release before anything reaches
 npm.
 
+## [0.6.1] - 2026-10-26
+
+A second press on the same pill puts its bubble away and leaves it away.
+
+**Fixed**
+
+- **The same pill closes its own bubble again.** Pi sends a synthesized click
+after every press that did not move. Pressing an open pill's own pill closed the
+bubble, but that click was no longer taken for part of the press that closed it,
+so it ran the action again and the bubble came straight back. The press now claims
+its click whichever way it went, opening or closing, which is what the design note
+already said it did.
+
+No API change: the pill and bubble shapes are untouched, so extensions that bridge
+a pill keep working as they are.
+
+## [0.6.0] - 2026-10-26
+
+A pill opens on the press, so a bubble no longer waits for the button to come
+back up.
+
+**Added**
+
+- **Pills act on mouse-down.** A click is press + release + a synthesized click,
+  and Pi only delivers that click after the button is released — which put the
+  whole button-hold in front of every bubble. The press now runs the action.
+- **A drag still cancels.** Because the press acts, a press that turns into a
+  gesture has already opened something; the drag branch closes it once the pointer
+  has moved more than two columns, which is past any jitter and short of any
+  selection a user meant to start. A gesture that slides *onto* the footer and
+  releases there still never fires, since no press landed on the pill.
+
+**Changed**
+
+- Pi synthesizes a click after every press that did not move, so the handler now
+  remembers which pill it acted on and swallows exactly that click. Without it a
+  single press would open a bubble and immediately toggle it shut.
+- `docs/clickable-pills.md` says what the code does now: press acts, click is
+  swallowed, drag undoes.
+
+No API change: `register` and the bubble shapes are untouched, so extensions that
+bridge a pill keep working as they are.
+
+## [0.5.1] - 2026-10-25
+
+A click outside a bubble now puts it away, the *Pills* tab can place a single
+extension status, and a bar with no git pill stops reading the repository.
+
+**Added**
+
+- **Clicking away closes a bubble.** Escape, the same pill and another pill
+already closed it; every other click left it on screen. A press anywhere outside
+the bubble now closes it, and the press is still delivered, so the caret moves or
+the line gets selected exactly as it would with no bubble open. The footer row
+follows the same rule cell by cell: a clickable pill keeps its own meaning (the
+same pill closes, another replaces), while the bar's padding, a gap or a
+read-out pill closes the bubble like anywhere else. Nothing new is patched for
+this: the press is read where the pointer-shape patch already sees every pointer
+report.
+
+- **Per-status rows in the *Pills* tab.** Every status an extension published
+this session gets a row of its own (`extensionStatus:<key>`), so a single status
+can be placed on the bar from the menu instead of by editing `starline.json`. The
+*Other extensions* row still carries every status not placed by name, and a
+status listed both ways is drawn once, where the named row put it.
+
+**Changed**
+
+- **No git pill means no git read.** The refresh on its interval used to run
+`git status` and `git stash list` whatever the bar showed. It now reads the
+repository only when `git`, `gitCommit`, `gitTag` or `gitMetrics` is in
+`pill.segments`, and clears the branch the previous refresh drew when the last
+git pill goes away.
+
+## [0.5.0] - 2026-10-25
+
+Two things happened at once. The footer has one style now: pills. The text
+footer is gone, and with it the three settings that only existed to describe it
+(`footerStyle`, `footerFormat`, `separator`) and the per-segment toggle table
+(`footerSegments`); `pill.segments` is the only list that decides what appears
+and in what order. And the bar got shorter: the three git pills are one and the
+three token pills are one, each with its numbers behind a click.
+
+**Added**
+
+- **Compact pill text.** `extensionStatuses.formats` keeps a status to its number
+  (`Tavily: 41.1%` becomes `41.1%`, a status with no number keeps its words), and
+  `segmentOptions.subagents.format: "count"` drops the noun from the subagents
+  pill. Both default to what shipped.
+
+- **One clickable `context` pill.** The percentage is all the bar shows; clicking
+  it opens the window size, the tokens used this turn, the session's `↑in ↓out`
+  totals and the cache hit rate, refreshed while it streams. `tokens` and
+  `cacheHit` in `pill.segments` are rewritten to `context`, so an existing bar
+  keeps the numbers.
+
+- **A clickable `git` pill.** Branch, dirty markers and any operation in progress
+  share one pill (`main [!?] REBASING`) instead of three. Clicking it lists what
+  changed — up to a dozen paths, ahead/behind and stashes above them — refreshed
+  while the bubble is open. It is read-only on purpose: no staging, no branch
+  switch, because an agent may be running in the same tree. `gitBranch`,
+  `gitStatus` and `gitState` in `pill.segments` are rewritten to `git`, so an
+  existing bar keeps its git pill.
+
+- **A *Pills* tab in `/starline`.** One row per segment; the value is its position
+  in the bar, `off` hides it, and Space cycles through them. Picking a number
+  inserts the segment there and shifts the rest along. The same list is still
+  `pill.segments` in `starline.json`, so editing the file and the tab are the
+  same thing.
+
+**Removed**
+
+- **`footerStyle`.** The pill bar is the footer. A config file that still says
+  `"footerStyle": "text"` loads fine and shows the bar; the key is ignored.
+
+- **`footerFormat` and `/starline format`.** The Starship-style template only
+  ever drove the text footer. `pill.segments` replaces it: list the segments you
+  want, in your order. `editorMetadataFormat` keeps its own `$name` template, and
+  the parser is the same one.
+
+- **`separator` and `colors.separator`.** The text footer's separator glyph.
+  Pills are joined by the powerline arrows `pill.separator` picks.
+
+- **`footerSegments`.** All nineteen toggles, and the *Built-in segments* tab.
+  `pill.segments` is the list; drop a name to hide it. `gitCounts` moved to
+  `git.counts`. A pill that was listed but toggled off here now shows, which is
+  the behaviour the docs claimed all along.
+
+- **Side-by-side compatibility with pi-zentui.** The editor-factory marker, the
+  prototype patch registry and the polished-frame splitter no longer answer to
+  the pre-rename keys. Running both packages in one session now wraps the editor
+  twice, so remove one of them.
+
+- **Four colour keys that no longer reach the screen.** `colors.tokens`,
+  `colors.cacheHit`, `colors.gitStatus` and `colors.gitMetricsDeleted` only ever
+  coloured text inside a pill that was its own segment. Those pills are gone, and
+  a pill paints its whole label in one contrast colour, so the entries did
+  nothing. Nothing else moves: a pill's colour comes from `colors.*` as before,
+  it is just used as the background.
+
+- **`gitBranch`, `gitHostIcon`, `gitCommit`, `gitMetrics`.** The four flat keys
+  are now one `git` block: `git.branch.maxLength`, `git.hostIcon`,
+  `git.commit.{hashLength,onlyDetached,showTag}`, `git.metrics.{onlyNonzero,ignoreSubmodules}`,
+  plus `git.counts`. Existing values need to move into that block.
+
+**Fixed**
+
+- The optional git probes follow `pill.segments` instead of the removed toggles,
+  so a `gitTag` or `gitMetrics` pill reads its data without an unrelated segment
+  having to be switched on first.
+
+## [0.4.0] - 2026-10-25
+
+Pills in the pill footer can now be clicked. The model, thinking, queue and
+subagents pills open a small bubble on the pill where you can read more or pick
+something, and other extensions can put their own content in the same bubble.
+Clicking needs **Pi 0.85.0 or newer**; on 0.84.x the footer looks the same and the
+pills stay labels.
+
+**Added**
+
+- **Clickable pills.** Click a pill to open its bubble; click it again, or press
+  Escape, to close it. Clicking another pill swaps the bubble. Lines you can act on
+  are underlined and highlight under the pointer; ↑/↓ move the same highlight and
+  Enter picks it. Every action also runs from the keyboard as `/starline <name>`, so
+  nothing is mouse-only. Pills without an action stay labels and let the click
+  through. In Ghostty and kitty the pointer turns into a hand over anything
+  clickable (not under tmux, zellij or screen, where Pi only reports the mouse while
+  a button is held).
+
+- **Model pill: switch models.** Lists the session's scoped models (the ones ctrl+p
+  cycles) and opens on the current one; pick another to switch, bringing along any
+  thinking level the scope pins. With no scope it lists up to eight available models
+  and points at `/model` for the rest. `/starline model` steps to the next one.
+
+- **Thinking pill: pick a level.** Lists the levels the model supports and opens on
+  the current one, so ↑ from `high` lands on `medium`. Opening the list changes
+  nothing. `off` is not offered, so a choice never removes the pill.
+  `/starline thinking` steps to the next level.
+
+- **Queue pill.** A new `queue` segment appears while messages wait for the current
+  turn to end: an inbox icon and the count, gone once the queue drains. Its bubble
+  lists the messages and stays current while open. While the pill is in the bar,
+  Pi's own `Steering: …` rows above the editor are hidden, so the queue shows once.
+  If Pi does not let the count be read the pill says `queued`; with icons off it
+  reads `3 queued`. Configure with `colors.queue`, `icons.queue` and `$queue`.
+
+- **Subagents pill.** With [pi-subagents](https://github.com/nicobailon/pi-subagents)
+  installed, a new `subagents` segment counts running subagents (`2 agents`) behind
+  the users icon pi-tidy uses for subagent rows. Its bubble lists each run with
+  agent, model, time running and tokens, updating every second while open. It reads
+  pi-subagents' public in-process RPC and refreshes when a run starts or ends, not
+  on a timer; without pi-subagents it never appears. To let the pill replace
+  pi-subagents' own FleetView and async widget, set `"fleetView": false` and
+  `"asyncWidget": false` in its config. Configure with `colors.subagents`,
+  `icons.subagents` and `$subagents`.
+
+- **The bubble.** A rounded outline in the pill's colour that sits on the pill,
+  its bottom edge open over the pill like a folder tab and its title in the top
+  edge. Nothing inside is filled, so a translucent terminal shows through; the
+  highlighted line is filled with the pill's colour. It unfolds upward from the pill
+  in 60 ms; `pill.bubbleAnimation: false` turns that off.
+
+- **For extension authors: put your content in a pill.** An extension that
+  publishes a status with `ctx.ui.setStatus()` can register a click action for it
+  through a small API on `globalThis` (`Symbol.for("pi-starline.pill-api.v1")`) and
+  open the same bubble with its own lines and actions, without rendering or
+  positioning anything. Bubbles can be live (pass a function and call `refresh()`
+  on the returned handle), a line can be marked `current` so the bubble opens on
+  it, and the action is told whether it came from a click or `/starline <key>`.
+  Types ship in the package as `pi-starline/types/pill-api`; nothing is imported at
+  runtime, so the extension still loads without Starline. A bridge extension can
+  do the same for someone else's extension. Guide and templates:
+  [docs/pill-api.md](https://github.com/Andy8647/pi-starline/blob/main/docs/pill-api.md);
+  [pi-balance](https://github.com/Andy8647/pi-balance) is a working example.
+
+**Changed**
+
+- `queue` and `subagents` are part of the default pill bar. If you keep your own
+  `pill.segments`, add them where you want them; neither takes space while empty.
+
+- The README is shorter. The git status indicators and the 57 detected runtimes
+  moved to [docs/segments.md](https://github.com/Andy8647/pi-starline/blob/main/docs/segments.md).
+
+**Notes**
+
+- Pi's extension API does not expose the queued messages, the live session, a way
+  to hide its queue rows, or a mouse "leave" event, so four guarded wrappers fill
+  the gaps: `AgentSession.prompt` and `getContextUsage` (to reach the session),
+  `InteractiveMode.updatePendingMessagesDisplay` (to hide the rows) and
+  `TuiAltScreen.handleMouseEvent` (to reset the pointer when it leaves a pill). If a
+  future Pi changes any of them, that feature falls back or switches off and the
+  rest keeps working. Each goes away once Pi offers the matching API.
+
+## [0.3.9] - 2026-10-25
+
+Two things about repositories being written to and events being handled twice —
+both of them noticed by someone else first.
+
+**Fixed**
+
+- **The git probes no longer write to your repository.** `status` and `diff`
+  refresh the index's stat information as a side effect: they take
+  `.git/index.lock` and rewrite `.git/index`. From a footer that polls every
+  thirty seconds that is churn on every repository you open, and a lock that can
+  collide with your own `git commit` — read-only probes now run with
+  `GIT_OPTIONAL_LOCKS=0`. (An env var rather than `--no-optional-locks`: an older
+  git ignores a variable it does not know and fails on a flag it does not know.)
+
+  Thanks to [@xzzpig](https://github.com/xzzpig): this came from their fork
+  [`@xzzpig/pi-starline`](https://www.npmjs.com/package/@xzzpig/pi-starline),
+  which runs the same probes with `--no-optional-locks`.
+
+- **Starline stands down when another extension owns Pi's mouse layer.**
+  [`@xzzpig/pi-mouse-events`](https://www.npmjs.com/package/@xzzpig/pi-mouse-events)
+  patches the same `TuiAltScreen` methods Starline does, so with both installed
+  every wheel notch scrolled twice, every click moved the caret twice and every
+  copy wrote the clipboard twice. Starline detects the API object that extension
+  publishes under `Symbol.for("pi-mouse-events.api.v2")` and leaves the mouse
+  layer alone, with one console note saying where the features went. The
+  selection-marker cleanup is a render pass rather than mouse input, so it stays.
+  Same thanks: the coexistence problem only exists because their split showed what
+  a shared mouse layer would look like.
+
+## [0.3.8] - 2026-10-25
+
+The working spinner moved out of its own row above the editor and into the model
+pill. Pi 0.87 added the hook that makes this possible: a custom editor that
+advertises `embedWorkingStatus` takes over status rendering, and Pi stops drawing
+its own line. Starline now does that, so there is one less row of chrome under the
+transcript and the animation lands where you are already looking.
+
+**Changed**
+
+- **The model pill's icon becomes the spinner while the agent works.** It takes the
+  icon's slot at the icon's own display width, so the pill keeps its size and the
+  pill bar never reflows. An icon-less model pill gains the two cells the spinner
+  needs; a wider icon is padded to match. The pill uses a filled braille set rather
+  than Pi's sparse one, whose top-left dot reads as sitting high above the model
+  name; frames a session customized with `ctx.ui.setWorkingIndicator({ frames })`
+  pass through untouched.
+- **Retry, compaction and branch-summary statuses keep Pi's layout, now on
+  Starline's top border** — `── Retrying (1/3) in 4s... ────` — because they spell
+  a sentence and carry an interrupt hint a pill cannot hold. The same fallback
+  catches the spinner when the status line is off or the model segment is hidden,
+  so the indicator never disappears.
+- Needs Pi 0.87.0 or newer for the spinner to move; older builds never hand the
+  indicator to the editor and keep Pi's own row, exactly as before.
+
+**Fixed**
+
+- **The draft's scroll cue is back on the frame.** Pi caps the input box at a third
+  of the terminal and paints `↑ 3 more` / `↓ 2 more` into the borders it draws;
+  Starline redraws both borders, so those counts are now read back out of Pi's
+  frame and re-emitted, sharing the top rule with a status when both are present.
+- **The wheel step follows `fullscreenWheelScrollLines` again.** Pi 1.4 hands the
+  finished line count to `routeWheel` as its second argument (it moved the setting
+  into a private accelerator), and the editor's own notch scroll was reading a
+  field that no longer exists — so every notch moved exactly one line.
+- **`/starline` can toggle the model, thinking and cache-hit segments.** Both
+  hand-written key whitelists had drifted from `FooterSegmentsConfig`, so those
+  three rows did nothing and their patches were dropped on save. Both are now
+  derived from the defaults.
+- **A config file that cannot be parsed says so** instead of silently reverting
+  every setting to its default for the session.
+- **`icons.mode: "ascii"` covers the pill spinner**, which was braille regardless
+  and grew the pill by two cells in terminals without a Nerd Font.
+
+- **Drag-selecting the row the caret is on no longer garbles the display.** Pi's
+  `applySelection` reassembles a selected row from three column slices, and
+  `sliceWithWidth` carries the escape sequences before each slice into it — the
+  editor's zero-width caret marker included, so one marker became two or three.
+  Pi strips only the first per line, and the rest reach the terminal; a terminal
+  that ends APC only on `ESC ` (Ghostty) swallows the text after them. Starline
+  keeps the first marker per line and drops the copies. Upstream issue
+  [#9332](https://github.com/earendil-works/pi/issues/9332); once the fix in
+  [#9441](https://github.com/earendil-works/pi/pull/9441) ships this goes away.
+- **Copies go through Pi's own clipboard implementation when the host injects
+  one.** Both clean-copy paths wrote OSC 52 themselves, which reports success and
+  leaves the clipboard empty on macOS Terminal.app, in tmux without OSC 52
+  passthrough and on WSL — the places Pi's native implementation exists for. The
+  terminal write is still the fallback when nothing is injected.
+- **Cost and token totals count every paid call.** They summed assistant messages
+  only, which quietly skipped `usage` entries, a tool result's own usage, and the
+  summary calls that compaction and branching make — so a session that compacted
+  read cheaper than it was, and compaction is the call you least want hidden. The
+  accumulation now follows Pi's own footer entry for entry; the cache hit rate
+  still comes from assistant turns, which are the only ones with a prompt to
+  measure.
+- **A failed compaction says so.** Pi emits `session_compact_failed` and draws
+  nothing for it, so a failure late in a long session read as the agent quietly
+  forgetting the conversation. Starline raises an error notification naming the
+  reason (threshold, overflow, manual) and Pi's message; an abort, which is the
+  user's own doing, stays silent.
+
 ## [0.3.7] - 2026-09-22
 
 Dropped Starline's own click-to-expand for tool boxes. Pi 0.86.0 ships the
@@ -384,7 +719,12 @@ What this fork adds over upstream:
   selection
 - Paste collapsing, with paste-again-to-expand
 
-[Unreleased]: https://github.com/Andy8647/pi-starline/compare/v0.3.7...HEAD
+[Unreleased]: https://github.com/Andy8647/pi-starline/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/Andy8647/pi-starline/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/Andy8647/pi-starline/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/Andy8647/pi-starline/compare/v0.3.9...v0.4.0
+[0.3.9]: https://github.com/Andy8647/pi-starline/compare/v0.3.8...v0.3.9
+[0.3.8]: https://github.com/Andy8647/pi-starline/compare/v0.3.7...v0.3.8
 [0.3.7]: https://github.com/Andy8647/pi-starline/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/Andy8647/pi-starline/compare/v0.3.5...v0.3.6
 [0.3.5]: https://github.com/Andy8647/pi-starline/compare/v0.3.4...v0.3.5

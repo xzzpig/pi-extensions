@@ -26,6 +26,8 @@ export type PillConfig = {
 	separator: PillSeparator;
 	bold: boolean;
 	caps: PillCaps;
+	/** Unfold a pill's bubble upward from the pill instead of showing it at once. */
+	bubbleAnimation: boolean;
 };
 
 export const EXTENSION_STATUS_SEGMENT = "extensionStatus";
@@ -35,18 +37,16 @@ export const EXTENSION_STATUS_PREFIX = `${EXTENSION_STATUS_SEGMENT}:`;
 export const PILL_SEGMENT_VARIABLES: Record<string, string> = {
 	model: "model",
 	thinking: "thinking",
+	queue: "queue",
+	subagents: "subagents",
 	cwd: "cwd",
 	sessionName: "session_name",
-	gitBranch: "git_branch",
-	gitStatus: "git_status",
-	gitState: "git_state",
+	git: "git",
 	gitCommit: "git_commit",
 	gitTag: "git_tag",
 	gitMetrics: "git_metrics",
 	runtime: "runtime",
 	context: "context",
-	tokens: "tokens",
-	cacheHit: "cache_hit",
 	cost: "cost",
 	sessionDuration: "session_duration",
 	username: "username",
@@ -59,9 +59,10 @@ export const DEFAULT_PILL_CONFIG: PillConfig = {
 	segments: [
 		"model",
 		"thinking",
+		"queue",
+		"subagents",
 		"cwd",
-		"gitBranch",
-		"gitStatus",
+		"git",
 		"context",
 		"cost",
 		EXTENSION_STATUS_SEGMENT,
@@ -69,6 +70,7 @@ export const DEFAULT_PILL_CONFIG: PillConfig = {
 	separator: "powerline",
 	bold: true,
 	caps: "round",
+	bubbleAnimation: true,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -98,15 +100,65 @@ export function isKnownPillSegment(name: string): boolean {
 	return name in PILL_SEGMENT_VARIABLES;
 }
 
+/**
+ * Every segment name `/starline` can put on the bar, in a fixed order so the
+ * rows do not move under the cursor when a position changes. Per-status
+ * `extensionStatus:<key>` entries are not listed here: they depend on what other
+ * extensions published this session, and the *Pills* tab appends a row for each
+ * one after these.
+ */
+export const PILL_SEGMENT_NAMES: readonly string[] = [
+	...Object.keys(PILL_SEGMENT_VARIABLES),
+	EXTENSION_STATUS_SEGMENT,
+];
+
+/** 1-based position of a segment in the bar, or 0 when it is not drawn. */
+export function pillSegmentPosition(segments: readonly string[], name: string): number {
+	return segments.indexOf(name) + 1;
+}
+
+/**
+ * Apply a position edit to `pill.segments`.
+ *
+ * `value` is `off` or a 1-based position. A position is where the segment ends
+ * up: everything already there shifts along, and a position past the end
+ * appends. Moving the segment that is already in the bar works the same way,
+ * because it is removed before the index is applied.
+ */
+export function movePillSegment(
+	segments: readonly string[],
+	name: string,
+	value: string,
+): string[] {
+	const rest = segments.filter((segment) => segment !== name);
+	if (value === "off") return rest;
+	const position = Number(value);
+	if (!Number.isInteger(position) || position < 1) return [...segments];
+	const index = Math.min(position - 1, rest.length);
+	return [...rest.slice(0, index), name, ...rest.slice(index)];
+}
+
+/** Segment names that became part of another one. */
+const LEGACY_SEGMENT_NAMES: Record<string, string> = {
+	gitBranch: "git",
+	gitStatus: "git",
+	gitState: "git",
+	tokens: "context",
+	cacheHit: "context",
+};
+
 function parseSegments(value: unknown): string[] {
 	if (!Array.isArray(value)) return DEFAULT_PILL_CONFIG.segments;
 	const segments: string[] = [];
 	for (const entry of value) {
 		if (typeof entry !== "string") continue;
-		const name = entry.trim();
+		// A bar that listed the branch and the dirty block separately now draws
+		// both in one pill, so the old names collapse into it instead of vanishing.
+		const renamed = LEGACY_SEGMENT_NAMES[entry.trim()] ?? entry.trim();
 		// Unknown names are dropped rather than rendered as empty pills, so a
 		// typo shortens the bar instead of punching a hole in it.
-		if (name && isKnownPillSegment(name) && !segments.includes(name)) segments.push(name);
+		if (renamed && isKnownPillSegment(renamed) && !segments.includes(renamed))
+			segments.push(renamed);
 	}
 	return segments;
 }
@@ -118,5 +170,9 @@ export function normalizePillConfig(value: unknown): PillConfig {
 		separator: parseSeparator(value.separator),
 		bold: typeof value.bold === "boolean" ? value.bold : DEFAULT_PILL_CONFIG.bold,
 		caps: parseCaps(value.caps),
+		bubbleAnimation:
+			typeof value.bubbleAnimation === "boolean"
+				? value.bubbleAnimation
+				: DEFAULT_PILL_CONFIG.bubbleAnimation,
 	};
 }
