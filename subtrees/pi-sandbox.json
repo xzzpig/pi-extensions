@@ -4,11 +4,11 @@
   "prefix": "packages/pi-sandbox",
   "source": "https://github.com/carderne/pi-sandbox.git",
   "remote": "upstream-pi-sandbox",
-  "ref": "v0.7.1",
-  "version": "0.7.1",
-  "upstreamCommit": "ad8c63c18eec7c70e3a91653758bd19eb1ae484c",
+  "ref": "v0.7.2",
+  "version": "0.7.2",
+  "upstreamCommit": "1391cdfac55f989116d8a26b8924906e017974f1",
   "squash": true,
-  "lastSyncedAt": "2026-10-10T06:30:00Z",
+  "lastSyncedAt": "2026-10-27T15:19:30+08:00",
   "notes": "Forked from carderne/pi-sandbox. The fork adds optional pi-tool-display bash rendering decoration (falling back to built-in rendering when pi-tool-display is absent), named sandbox profiles for subagents, the per-session SandboxService profile layer, a runtime in-memory profile registry (registerSandboxProfiles; user sandbox.json definitions of the same name keep priority), network.disabled, and protectNonexistentFiles passthrough. The project-scoped profile contract lives in openspec (change add-project-scoped-profiles, spec project-sandbox-profiles); the runtime registration contract lives in openspec change add-pi-openspec-x (design D4).",
   "knownDebt": [
     {
@@ -55,14 +55,17 @@
     "thread session cwd through profile refresh/reinitialization and the live SandboxService, and apply resolved project trust to both profile and no-profile config loading and shell settings; profile-config.ts mirrors the upstream JSONC reader via stripJsonComments",
     "the upstream network.disabled runtime test asserts the fork's native disabled flag and retained allowlist rather than upstream's omitted-allowedDomains implementation",
     "keep the extension warning call through fork-ui-warnings.ts so the upstream Linux unenforced-glob notice retains the fork headless/cosmetic-failure guarantee",
-    "keep the sandbox-runtime.ts pattern seam delegating to fork-filesystem-paths.ts so all glob syntax is anchored to baseCwd without being canonicalized as a literal; preserve the runtime call forwarding the execution cwd and abort signal",
-    "the upstream sandbox-runtime test expects denyWrite globs anchored to the process/session cwd rather than raw relative text"
+    "keep the sandbox-runtime.ts pattern seam delegating glob syntax to fork-filesystem-paths.ts so all globs are anchored to baseCwd, while upstream retains literal and canonical paths for non-globs; preserve the runtime call forwarding the execution cwd and abort signal",
+    "the upstream sandbox-runtime test expects globs anchored to the session cwd rather than raw relative text",
+    "preserve the fork's Bash write-denial monitor, output fallback, permission prompts and guarded retry in extension.ts and sandbox-runtime.ts even though upstream v0.7.2 removed its Bash write-failure inference; the removed upstream shell-error recognizer now lives in the fork-only write-denial.ts",
+    "the upstream blocked-execution session test is headless because the fork's interactive write-denial path intentionally retains guarded retries"
   ],
   "doNotReintroduce": [
     "do not introduce gratuitous upstream-file formatting drift; keep fork behavior tests in fork-only files, with only necessary upstream assertion adaptations for the native network.disabled contract and @xzzpig package identity",
     "do not force network or filesystem isolation on inside a profile: a switch the profile does not declare inherits the baseline, so a global network.disabled/filesystem.disabled opt-out stays in force (forcing network isolation broke the common opt-out case by requiring a proxy the runtime never started)",
     "do not go back to replacing the baseline filesystem.allowRead with the profile's own list: a profile's allowRead unions onto the inherited list in both merge paths, because replacing it (the opsx profiles declared only '.') made every path outside the project unreadable \u2014 agent cache and generated skills, subagent result archives, /nix/store, /tmp \u2014 so the opsx planner could not even read its own generated skills; narrowing reads is what denyRead is for, and denyRead still unions",
     "do not adopt upstream's network.disabled implementation that omits allowedDomains; the fork runtime uses the native disabled flag and must keep the allowlist for later restricted profiles",
-    "do not widen the existing profile field whitelist during an upstream sync: allowSSHAgentSocket and denyMandatoryCwdFiles are inherited from the global/trusted-project baseline but are not directly configurable by named profiles"
+    "do not widen the existing profile field whitelist during an upstream sync: allowSSHAgentSocket and denyMandatoryCwdFiles are inherited from the global/trusted-project baseline but are not directly configurable by named profiles",
+    "do not remove the fork's sandbox-write-denial-diagnostics capability when adopting upstream's Bash error handling changes"
   ]
 }

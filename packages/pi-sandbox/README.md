@@ -7,8 +7,8 @@ Sandboxes pi like this:
 - bash: uses [`@xzzpig/sandbox-runtime`](https://www.npmjs.com/package/@xzzpig/sandbox-runtime) to control network and file system access
 
 Blocked read/write/edit tool calls and detected network requests prompt for
-temporary or permanent permission. Bash filesystem failures are returned without
-automatically granting permissions or retrying the command.
+temporary or permanent permission. The fork also diagnoses sandboxed Bash write
+failures and can prompt for write access and retry when access is allowed.
 
 ![demo](./demo/demo.gif)
 
@@ -312,16 +312,16 @@ consistently.
 |------|-----------|
 | Domain not in `allowedDomains` | Prompted (bash and `!cmd`, unless `sandboxUserShell` is disabled) |
 | Path not in `allowRead` or `allowWrite` | Prompted (read tool); granting adds to `allowRead` outside named profiles |
-| Path not in `allowWrite` | Prompted (write/edit tools) |
+| Path not in `allowWrite` | Prompted (write/edit tools and diagnosed Bash write failures) |
 | Path in `denyWrite` | Hard-blocked, no prompt |
 | Domain in `deniedDomains` | Hard-blocked at OS level, no prompt |
 
-Bash filesystem errors do not identify whether a read, write, or execution was
-blocked. In particular, `Operation not permitted` does not imply a write failure,
-and `command not found` can mean an executable is unreadable inside the sandbox.
-Use `/sandbox-allow read <path>` or `/sandbox-allow write <path>` after identifying
-the required access, then rerun the command explicitly. Retrying automatically
-could repeat side effects from commands that partially completed.
+Bash filesystem errors do not always identify whether a read, write, or
+execution was blocked. The fork prefers the write-violation monitor and falls
+back to recognizing command output when the monitor is unavailable. Review the
+path before granting access: a recognized error can have another cause. When
+write access is allowed, the fork may automatically retry the command; earlier
+side effects in that command can therefore run again.
 
 If a path is added to `allowWrite` via a prompt but is also present in
 `denyWrite`, it remains blocked. A warning is shown explaining which config

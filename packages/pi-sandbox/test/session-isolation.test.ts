@@ -174,7 +174,7 @@ test(
 );
 
 test(
-  "blocked execution does not prompt for write access or retry earlier side effects",
+  "headless blocked execution does not prompt for write access or retry earlier side effects",
   {
     skip: process.platform !== "darwin",
     timeout: 15_000,
@@ -195,7 +195,7 @@ test(
         filesystem: { denyRead: [script], allowRead: [], allowWrite: [root], denyWrite: [] },
       }),
     );
-    const current = session(root, true, true);
+    const current = session(root, true, false);
     t.after(async () => {
       await current.shutdown();
       if (originalAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;

@@ -15,6 +15,7 @@ import {
 import { type SandboxConfig } from "./config.ts";
 import { canonicalizeFilesystemPatternForCwd, isFilesystemGlob } from "./fork-filesystem-paths.ts";
 import { canonicalizePath } from "./policy.ts";
+import { collectBlockedWritePaths, type BlockedWrite } from "./write-denial.ts";
 
 export interface SessionAllowances {
   domains: string[];
@@ -157,7 +158,11 @@ export async function initializeSandbox(
   const runtimeConfig = buildRuntimeConfig(config, allowances, process.platform, baseCwd);
   // The runtime checks its live allowlist. Permission prompts happen before
   // execution; a callback capturing this initial list could re-allow removed domains.
-  await manager.initialize(runtimeConfig);
+  // The violation monitor (Linux) reports blocked write-intent syscalls per
+  // command so a sandbox refusal can be explained instead of surfacing as a
+  // bare kernel error. Diagnostic-only: it degrades gracefully and never
+  // relaxes policy.
+  await manager.initialize(runtimeConfig, undefined, process.platform === "linux");
 }
 
 export function updateSandboxConfig(
@@ -278,10 +283,18 @@ export const sandboxManagerFactory: { create: () => ISandboxManager } = {
   create: () => createSandboxManager(),
 };
 
+export interface SandboxCommandOutcome {
+  /** The exact command string handed to the sandbox (violation correlation key). */
+  command: string;
+  /** Blocked writes the violation monitor reported for this execution. */
+  blockedWrites: BlockedWrite[];
+}
+
 export function createSandboxedBashOps(
   manager: ISandboxManager,
   shellPath?: string,
   sshProxy = true,
+  onCompleted?: (outcome: SandboxCommandOutcome) => void,
 ): BashOperations {
   return {
     async exec(command, cwd, { onData, signal, timeout, env }) {
@@ -298,8 +311,14 @@ export function createSandboxedBashOps(
         process.platform === "darwin" && socksProxyPort !== undefined
           ? `ssh() { /usr/bin/ssh -o 'ProxyCommand=/usr/bin/nc -X 5 -x localhost:${socksProxyPort} %h %p' "$@"; }; `
           : "";
+      // The sandbox tags violation events with the wrapped input verbatim, so
+      // the same string is the only reliable correlation key for the store.
+      const sandboxedCommand = `${sshProxyCommand}${command}`;
+      // Violations are filtered by host-side timestamps taken at exec entry,
+      // so re-runs of an identical command never see each other's events.
+      const startedAt = Date.now();
       const wrappedCommand = await manager.wrapWithSandbox(
-        `${sshProxyCommand}${command}`,
+        sandboxedCommand,
         shell,
         undefined,
         signal,
@@ -340,6 +359,12 @@ export function createSandboxedBashOps(
         const exitCode = await waitForChildProcess(child);
         if (signal?.aborted) throw new Error("aborted");
         if (timedOut) throw new Error(`timeout:${timeout}`);
+        if (onCompleted) {
+          onCompleted({
+            command: sandboxedCommand,
+            blockedWrites: collectBlockedWritePaths(manager, sandboxedCommand, startedAt),
+          });
+        }
         return { exitCode };
       } finally {
         if (timeoutHandle) clearTimeout(timeoutHandle);

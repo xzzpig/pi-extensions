@@ -5,6 +5,18 @@ This fork tracks [`carderne/pi-sandbox`](https://github.com/carderne/pi-sandbox)
 via git subtree; entries below describe only fork-specific deviations from
 upstream.
 
+## 0.8.1
+
+### Changed
+
+- **Synced upstream `v0.7.1` → `v0.7.2`**: forward `allowAppleEvents` and
+  retain both the literal and canonical filesystem paths, while preserving the
+  fork's session-relative glob handling and profile restrictions.
+- Retained the fork's Bash write-denial monitor, fallback diagnostics, user
+  permission prompts, and retry guard despite upstream removing its separate
+  Bash write-failure handling. Recognized errors may have other causes and an
+  allowed retry may repeat earlier side effects; these trade-offs are documented.
+
 ## 0.8.0
 
 ### Changed
