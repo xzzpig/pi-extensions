@@ -13,7 +13,6 @@ import { canonicalizePath } from "../src/policy.ts";
 import {
   buildRuntimeConfig,
   createSandboxedBashOps,
-  extractBlockedWritePath,
   resolveAllowances,
   supportsNodeEnvProxy,
 } from "../src/sandbox-runtime.ts";
@@ -83,6 +82,12 @@ test("buildRuntimeConfig adds session allowances without mutating config", () =>
   assert.equal(runtime.filesystem?.allowRead?.includes("/write"), true);
   assert.equal(runtime.filesystem?.allowWrite?.includes("/write"), true);
   assert.equal(DEFAULT_CONFIG.network?.allowedDomains?.includes("example.com"), false);
+});
+
+test("buildRuntimeConfig forwards allowAppleEvents to the runtime", () => {
+  assert.equal(buildRuntimeConfig(DEFAULT_CONFIG).allowAppleEvents, undefined);
+  const runtime = buildRuntimeConfig({ ...DEFAULT_CONFIG, allowAppleEvents: true });
+  assert.equal(runtime.allowAppleEvents, true);
 });
 
 function withSshAuthSock<T>(value: string | undefined, fn: () => T): T {
@@ -178,22 +183,69 @@ test("buildRuntimeConfig does not allow a missing SSH_AUTH_SOCK path", () => {
   });
 });
 
-test("buildRuntimeConfig canonicalizes non-glob filesystem paths", () => {
-  const runtime = buildRuntimeConfig({
-    ...DEFAULT_CONFIG,
-    filesystem: {
-      ...DEFAULT_CONFIG.filesystem!,
-      denyRead: ["/tmp"],
-      allowRead: [],
-      allowWrite: ["/tmp"],
-      denyWrite: ["*.key"],
-    },
-  });
+test("buildRuntimeConfig retains literal and canonical allowRead paths", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-sandbox-allow-read-"));
+  const directory = join(root, "directory");
+  const symlink = join(root, "directory-link");
+  mkdirSync(directory);
+  symlinkSync(directory, symlink);
 
-  assert.deepEqual(runtime.filesystem?.denyRead, [canonicalizePath("/tmp")]);
-  assert.equal(runtime.filesystem?.allowRead?.includes(canonicalizePath("/tmp")), true);
-  assert.deepEqual(runtime.filesystem?.allowWrite, [canonicalizePath("/tmp")]);
-  assert.deepEqual(runtime.filesystem?.denyWrite, [join(process.cwd(), "*.key")]);
+  try {
+    const runtime = buildRuntimeConfig(
+      {
+        ...DEFAULT_CONFIG,
+        filesystem: {
+          ...DEFAULT_CONFIG.filesystem!,
+          allowRead: [directory, symlink],
+          allowWrite: [],
+        },
+      },
+      undefined,
+      "darwin",
+      root,
+    );
+
+    assert.deepEqual(runtime.filesystem?.allowRead, [
+      ...new Set([directory, realpathSync(directory), symlink, realpathSync(symlink)]),
+    ]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("buildRuntimeConfig preserves literal and canonical paths in all filesystem lists", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-sandbox-filesystem-"));
+  const directory = join(root, "directory");
+  const symlink = join(root, "directory-link");
+  mkdirSync(directory);
+  symlinkSync(directory, symlink);
+
+  try {
+    const paths = ["directory-link", directory, "*.key"];
+    const runtime = buildRuntimeConfig(
+      {
+        ...DEFAULT_CONFIG,
+        filesystem: {
+          denyRead: paths,
+          allowRead: paths,
+          allowWrite: paths,
+          denyWrite: paths,
+        },
+      },
+      undefined,
+      "darwin",
+      root,
+    );
+    const expected = [
+      ...new Set([symlink, realpathSync(directory), directory, join(root, "*.key")]),
+    ];
+
+    for (const list of ["denyRead", "allowRead", "allowWrite", "denyWrite"] as const) {
+      assert.deepEqual(runtime.filesystem?.[list], expected, list);
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("buildRuntimeConfig forwards denyMandatoryCwdFiles to the runtime", () => {
@@ -256,14 +308,6 @@ test("resolveAllowances makes configured and session write paths readable", () =
 
   assert.deepEqual(effective.readPaths, ["/configured-write", "/session-write"]);
   assert.deepEqual(effective.writePaths, ["/configured-write", "/session-write"]);
-});
-
-test("extractBlockedWritePath recognizes shell sandbox errors", () => {
-  assert.equal(
-    extractBlockedWritePath("bash: line 1: /private/file: Operation not permitted"),
-    "/private/file",
-  );
-  assert.equal(extractBlockedWritePath("permission denied"), null);
 });
 
 test("supportsNodeEnvProxy observes Node release boundaries", () => {

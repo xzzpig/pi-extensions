@@ -1,5 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, realpathSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { type BashOperations, getShellConfig } from "@earendil-works/pi-coding-agent";
@@ -12,7 +14,7 @@ import {
 
 import { type SandboxConfig } from "./config.ts";
 import { canonicalizeFilesystemPatternForCwd, isFilesystemGlob } from "./fork-filesystem-paths.ts";
-import { collectBlockedWritePaths, type BlockedWrite } from "./write-denial.ts";
+import { canonicalizePath } from "./policy.ts";
 
 export interface SessionAllowances {
   domains: string[];
@@ -50,11 +52,14 @@ function resolveUnixSockets(config: SandboxConfig): string[] | undefined {
   return unique(sockets);
 }
 
-const canonicalizeFilesystemPattern = (path: string, baseCwd?: string) =>
-  canonicalizeFilesystemPatternForCwd(path, baseCwd);
-
 const canonicalizeFilesystemPatterns = (paths: string[], baseCwd?: string) =>
-  unique(paths.map((path) => canonicalizeFilesystemPattern(path, baseCwd)));
+  unique(
+    paths.flatMap((path) => {
+      if (isFilesystemGlob(path)) return [canonicalizeFilesystemPatternForCwd(path, baseCwd)];
+      const absolutePath = resolve(baseCwd ?? process.cwd(), path.replace(/^~(?=$|\/)/, homedir()));
+      return [absolutePath, canonicalizePath(path, baseCwd)];
+    }),
+  );
 
 function sandboxRuntimeReadPaths(platform: NodeJS.Platform): string[] {
   if (platform !== "linux") return [];
@@ -137,6 +142,7 @@ export function buildRuntimeConfig(
     allowBrowserProcess: config.allowBrowserProcess,
     allowPty: config.allowPty,
     enableWeakerNetworkIsolation: true,
+    allowAppleEvents: config.allowAppleEvents,
   };
 
   return runtimeConfig;
@@ -151,11 +157,7 @@ export async function initializeSandbox(
   const runtimeConfig = buildRuntimeConfig(config, allowances, process.platform, baseCwd);
   // The runtime checks its live allowlist. Permission prompts happen before
   // execution; a callback capturing this initial list could re-allow removed domains.
-  // The violation monitor (Linux) reports blocked write-intent syscalls per
-  // command so a sandbox refusal can be explained instead of surfacing as a
-  // bare kernel error. Diagnostic-only: it degrades gracefully and never
-  // relaxes policy.
-  await manager.initialize(runtimeConfig, undefined, process.platform === "linux");
+  await manager.initialize(runtimeConfig);
 }
 
 export function updateSandboxConfig(
@@ -172,13 +174,6 @@ export function updateSandboxConfig(
 export function supportsNodeEnvProxy(version: string): boolean {
   const [major, minor] = version.split(".").map(Number);
   return (major === 22 && minor >= 21) || major >= 24;
-}
-
-export function extractBlockedWritePath(output: string): string | null {
-  const match = output.match(
-    /(?:\/bin\/bash|bash|sh): (?:line \d: )?(\/[^\s:]+): Operation not permitted/,
-  );
-  return match ? match[1] : null;
 }
 
 const EXIT_STDIO_GRACE_MS = 100;
@@ -283,18 +278,10 @@ export const sandboxManagerFactory: { create: () => ISandboxManager } = {
   create: () => createSandboxManager(),
 };
 
-export interface SandboxCommandOutcome {
-  /** The exact command string handed to the sandbox (violation correlation key). */
-  command: string;
-  /** Blocked writes the violation monitor reported for this execution. */
-  blockedWrites: BlockedWrite[];
-}
-
 export function createSandboxedBashOps(
   manager: ISandboxManager,
   shellPath?: string,
   sshProxy = true,
-  onCompleted?: (outcome: SandboxCommandOutcome) => void,
 ): BashOperations {
   return {
     async exec(command, cwd, { onData, signal, timeout, env }) {
@@ -311,14 +298,8 @@ export function createSandboxedBashOps(
         process.platform === "darwin" && socksProxyPort !== undefined
           ? `ssh() { /usr/bin/ssh -o 'ProxyCommand=/usr/bin/nc -X 5 -x localhost:${socksProxyPort} %h %p' "$@"; }; `
           : "";
-      // The sandbox tags violation events with the wrapped input verbatim, so
-      // the same string is the only reliable correlation key for the store.
-      const sandboxedCommand = `${sshProxyCommand}${command}`;
-      // Violations are filtered by host-side timestamps taken at exec entry,
-      // so re-runs of an identical command never see each other's events.
-      const startedAt = Date.now();
       const wrappedCommand = await manager.wrapWithSandbox(
-        sandboxedCommand,
+        `${sshProxyCommand}${command}`,
         shell,
         undefined,
         signal,
@@ -359,12 +340,6 @@ export function createSandboxedBashOps(
         const exitCode = await waitForChildProcess(child);
         if (signal?.aborted) throw new Error("aborted");
         if (timedOut) throw new Error(`timeout:${timeout}`);
-        if (onCompleted) {
-          onCompleted({
-            command: sandboxedCommand,
-            blockedWrites: collectBlockedWritePaths(manager, sandboxedCommand, startedAt),
-          });
-        }
         return { exitCode };
       } finally {
         if (timeoutHandle) clearTimeout(timeoutHandle);
