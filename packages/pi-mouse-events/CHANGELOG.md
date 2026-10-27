@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.0]
+
+### Added
+
+- Coordinate terminal pointer shapes across mouse handlers and Pi's native
+  component hover dispatch via the optional v2 `requestPointerShape` method.
+  Unclaimed hover restores the default, and session replacement and process exit
+  reset the pointer. Existing v2 consumers and publishers remain compatible.
+- Internally remove duplicate Pi cursor markers from selection-rendered rows
+  while preserving the first marker and other content. Unsupported hosts are
+  left untouched; the workaround is not a public rendering hook.
+
 ## [0.2.0] — 2026-09-24
 
 ### Breaking

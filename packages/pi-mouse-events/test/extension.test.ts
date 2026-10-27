@@ -19,6 +19,8 @@ import { makePi, makeReceiver, type ReceiverWithWrites } from "./helpers.ts";
 const prototype = TuiAltScreen.prototype as unknown as Record<string, unknown>;
 const originalViewportInput = prototype.handleViewportInput;
 const originalCopy = prototype.copyActiveSelectionToClipboard;
+const originalSelection = prototype.applySelection;
+const originalExitListeners = new Set(process.listeners("exit"));
 
 beforeEach(() => {
   vi.resetModules();
@@ -28,6 +30,15 @@ afterEach(() => {
   delete (globalThis as Record<symbol, unknown>)[MOUSE_EVENTS_API_KEY];
   prototype.handleViewportInput = originalViewportInput;
   prototype.copyActiveSelectionToClipboard = originalCopy;
+  prototype.applySelection = originalSelection;
+  for (const listener of process.listeners("exit")) {
+    if (
+      !originalExitListeners.has(listener) &&
+      listener.name === "onProcessExit"
+    ) {
+      process.removeListener("exit", listener);
+    }
+  }
 });
 
 async function loadExtension() {

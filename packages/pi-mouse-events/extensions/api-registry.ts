@@ -34,6 +34,9 @@ export function createMouseEventsApi(
     version: 2,
     eventChannel: MOUSE_EVENT_CHANNEL,
     copySlotAvailable: patches.state.copySlotAvailable,
+    requestPointerShape(shape) {
+      patches.state.requestPointerShape(shape);
+    },
     liveReceiver() {
       // SAFETY: the patch state returns the `this` of the wrapper it installed
       // on TuiAltScreen.prototype, which is a live TuiAltScreen (a TUI).

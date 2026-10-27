@@ -1,6 +1,6 @@
 {
   "name": "@xzzpig/pi-mouse-events",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Mouse event dispatch for Pi's fullscreen TUI: a global mouse event channel and handler slots for other extensions.",
   "type": "module",
   "license": "MIT",

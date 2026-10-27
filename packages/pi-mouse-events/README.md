@@ -42,10 +42,35 @@ package opens that path and adds an integration surface around it.
     against, from the first keystroke or mouse report of the session onward.
     The hook render-time consumers need to read renderer state without waiting
     for a mouse event; inside a handler prefer the per-event `ctx.tui`.
+  - `requestPointerShape?.("pointer" | "text" | "default")` — request the
+    shared terminal pointer shape while Pi dispatches a hover. The last request
+    in dispatch order wins; an unclaimed hover, session replacement, or process
+    exit restores the default. Outside a hover the call is ignored. The method
+    is optional because earlier v2 publishers do not provide it.
+- **Selection rendering compatibility** — when Pi exposes a patchable
+  `applySelection`, duplicate caret markers on each rendered selection row are
+  removed while the first marker and all other text are preserved. This is an
+  internal workaround, not a public rendering hook.
 - **Consumer-side types** — import from `@xzzpig/pi-mouse-events/api`. The
   module is dependency-free; the API is read through `Symbol.for`, so it
   works across Pi's per-extension module isolation whether or not your
   extension declares this package as a dependency.
+
+## Coordinating pointer shapes
+
+A component can request a pointer shape from its native `handleMouse` callback:
+
+```ts
+const api = getMouseEventsApi();
+if (event.type === "move") api?.requestPointerShape?.("pointer");
+```
+
+Requests are coordinated through the same process-global v2 API even when
+extensions load in isolated modules. The capability is optional so a new
+consumer remains safe with an older `pi-mouse-events` installation. Pointer
+shapes use OSC 22; unsupported terminals ignore them, and terminal multiplexers
+may not report hover at all. This does not replace native component clicks or
+change mouse event consumption.
 
 ## Component-level clicks are Pi's own API
 

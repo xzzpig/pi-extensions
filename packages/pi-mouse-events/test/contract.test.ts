@@ -17,6 +17,7 @@ const prototype = TuiAltScreen.prototype as unknown as AnyPrototype;
 const PATCHED_METHODS = [
   "handleViewportInput",
   "copyActiveSelectionToClipboard",
+  "applySelection",
 ];
 const READ_METHODS = [
   "parseWheelEvent",

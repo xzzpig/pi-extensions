@@ -9,7 +9,7 @@
  * extension can register an input listener, and consumes every mouse report
  * it parses.
  *
- * Two methods are wrapped, and nothing else:
+ * Two input methods are wrapped, plus an optional selection-render workaround:
  *
  * - `handleViewportInput` — mouse events are parsed and handed to the
  *   registered handlers, then fall through to the original method, whose
@@ -27,6 +27,8 @@
  * - `copyActiveSelectionToClipboard` — registered handlers run first and may
  *   answer the copy themselves; otherwise the original method runs. Installed
  *   only when the method exists (pi-tui gained it in 0.84.3).
+ * - `applySelection` — when patchable, remove duplicate caret markers from
+ *   rendered selection rows without changing any other content.
  *
  * The install is process-wide and idempotent: the extension never uninstalls
  * outside tests, so repeated session starts do not grow the wrapper chain.
@@ -39,6 +41,7 @@ import {
   type MouseDispatchEvent,
   type MouseHandler,
   type MouseHandlerRegistrationOptions,
+  type PointerShape,
 } from "../api.ts";
 import { restoreCoreGesture } from "./restore.ts";
 import {
@@ -47,6 +50,8 @@ import {
 } from "./test-support.ts";
 import { isPatchable, type MouseReceiver } from "./receiver.ts";
 import { parseMouseEventWith } from "./parse.ts";
+import { createPointerController } from "./pointer.ts";
+import { installSelectionMarkerDedupe } from "./selection-markers.ts";
 
 interface MouseHandlerEntry {
   id: number;
@@ -70,6 +75,7 @@ export interface MousePatchState {
     options?: MouseHandlerRegistrationOptions,
   ): () => void;
   readonly copySlotAvailable: boolean;
+  requestPointerShape(shape: PointerShape): void;
   /** The renderer instance the wrappers last ran against, if any. */
   liveReceiver(): MouseReceiver | undefined;
   /**
@@ -128,6 +134,12 @@ export function installMousePatches<T extends object>(
     copyHandlers: [],
     nextHandlerId: 0,
   };
+  const pointer = createPointerController();
+  const onProcessExit = () => pointer.reset();
+  process.once("exit", onProcessExit);
+  const disposeSelection = installSelectionMarkerDedupe(
+    prototype as { applySelection?: unknown },
+  );
 
   // The renderer instance the wrappers last ran against. `handleViewportInput`
   // sees every keystroke as well as every mouse report, so this is the live
@@ -225,23 +237,25 @@ export function installMousePatches<T extends object>(
     // branch, and the consuming release never reaches the latter. A press
     // this extension consumed armed nothing, and an unhandled release is
     // cleared by the built-ins itself, so only the mixed case is restored.
-    const handled = runMouseHandlersInPriorityOrder(
-      core.mouseHandlers,
-      event,
-      receiver,
-    );
-    const pressWasConsumed = consumedPress;
-    if (!event.release) consumedPress = handled;
+    return pointer.dispatch(event, receiver, () => {
+      const handled = runMouseHandlersInPriorityOrder(
+        core.mouseHandlers,
+        event,
+        receiver,
+      );
+      const pressWasConsumed = consumedPress;
+      if (!event.release) consumedPress = handled;
 
-    emit({ ...event, handled });
-    if (handled) {
-      if (event.release && !pressWasConsumed) restoreCoreGesture(receiver);
-      return { consume: true };
-    }
-    // pi-lens-ignore: no-reflect-apply
-    return Reflect.apply(originalViewportInput, this, [data, ...rest]) as
-      | { consume: boolean }
-      | undefined;
+      emit({ ...event, handled });
+      if (handled) {
+        if (event.release && !pressWasConsumed) restoreCoreGesture(receiver);
+        return { consume: true };
+      }
+      // pi-lens-ignore: no-reflect-apply
+      return Reflect.apply(originalViewportInput, this, [data, ...rest]) as
+        | { consume: boolean }
+        | undefined;
+    });
   }
   target.handleViewportInput = patchedViewportInput;
 
@@ -269,10 +283,14 @@ export function installMousePatches<T extends object>(
   return {
     state: {
       copySlotAvailable: copyAvailable,
+      requestPointerShape(shape) {
+        pointer.request(shape);
+      },
       liveReceiver() {
         return live;
       },
       refreshBus(next) {
+        pointer.reset();
         bus = next;
         busInvalid = false;
       },
@@ -306,6 +324,9 @@ export function installMousePatches<T extends object>(
       },
     },
     dispose() {
+      process.removeListener("exit", onProcessExit);
+      pointer.reset();
+      disposeSelection?.();
       // Test-only: restore the prototypes exactly as they were found.
       if (target.handleViewportInput === patchedViewportInput) {
         target.handleViewportInput = originalViewportInput;

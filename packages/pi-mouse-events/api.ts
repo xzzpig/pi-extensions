@@ -137,6 +137,9 @@ export type CopyHandler = (context: CopyHandlerContext) => CopyHandlerResult;
 export type MouseHandlerResult = ComponentMouseEventResult | undefined | void;
 export type CopyHandlerResult = ComponentMouseEventResult | undefined | void;
 
+/** OSC 22 pointer names supported by the shared coordinator. */
+export type PointerShape = "default" | "pointer" | "text";
+
 export interface MouseHandlerRegistrationOptions {
   /**
    * Handlers with a higher priority run first; ties resolve by registration
@@ -159,6 +162,14 @@ export interface MouseHandlerRegistrationOptions {
 export interface MouseEventsApi {
   readonly version: 2;
   readonly eventChannel: typeof MOUSE_EVENT_CHANNEL;
+
+  /**
+   * Request a terminal pointer while the current hover is dispatched. Calls
+   * outside a hover are ignored. The last request in dispatch order wins;
+   * an unclaimed hover restores the default pointer. Optional for backwards
+   * compatibility with earlier v2 publishers.
+   */
+  requestPointerShape?(shape: PointerShape): void;
 
   /**
    * Register a handler that runs on every parsed mouse event, before the
