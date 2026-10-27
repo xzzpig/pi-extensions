@@ -104,7 +104,7 @@ describe("review round 5: notification invalidation refreshes the index", () => 
     host.showExtensionNotify("INCLUDE: original", "info");
     runtime.syncReceiver(host);
     settled(runtime);
-    expect(text(host.chatContainer)).toContain("▸ 1 条消息");
+    expect(text(host.chatContainer)).toContain("▸ 分组 1 条消息");
 
     // The core status overwrites the same line: the member is removed
     // (topology change) and the derived index must see it.
@@ -113,7 +113,7 @@ describe("review round 5: notification invalidation refreshes the index", () => 
     expect(runtime.debugSegmentCount()).toBe(0);
     const rendered = text(host.chatContainer);
     expect(rendered).toContain("CORE IMPORTANT NOTICE");
-    expect(rendered).not.toContain("▸ 1 条消息");
+    expect(rendered).not.toContain("▸ 分组 1 条消息");
     runtime.onSessionShutdown();
   });
 
@@ -135,7 +135,7 @@ describe("review round 5: notification invalidation refreshes the index", () => 
     runtime.observeNotification(notification, "info", "INCLUDE: info");
     runtime.syncReceiver(receiver);
     settled(runtime);
-    expect(text(notification)).toContain("▸ 1 条消息");
+    expect(text(notification)).toContain("▸ 分组 1 条消息");
     expect(text(notification)).not.toContain("✗");
 
     notification.setText("INCLUDE: error");
@@ -199,7 +199,7 @@ describe("review round 5: removal searches closed segments", () => {
     expect(runtime.debugFoldedIds()).toEqual([2]);
     const rendered = text(component);
     expect(rendered).toContain("KEEP NEW");
-    expect(rendered).not.toContain("▸ 1 条消息");
+    expect(rendered).not.toContain("▸ 分组 1 条消息");
     runtime.onSessionShutdown();
   });
 });

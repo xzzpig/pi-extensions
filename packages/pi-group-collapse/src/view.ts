@@ -18,11 +18,33 @@ import type { SegmentSummary } from "./model.ts";
 export type SummaryTextOptions = {
   /** Available terminal columns for the summary line. */
   readonly width: number;
+  /**
+   * The group's own expanded state. An expanded group's title row points
+   * down (▾) because the next click folds it; a folded group's summary
+   * points right (▸). Callers must pass the *group* state, never a member
+   * component's expansion or an expand-target's toggle direction.
+   */
+  readonly expanded?: boolean;
 };
 
-const DISCLOSURE = "▸";
+const DISCLOSURE_FOLDED = "▸";
+const DISCLOSURE_EXPANDED = "▾";
 const FAILURE_MARK = "✗";
 const WARNING_MARK = "⚠";
+
+/**
+ * The failure/warning marker a summary warrants, if any. Failures outrank
+ * warnings and both outrank every count, so the marker is never squeezed
+ * out by a narrow terminal. Exported so the header decoration can give the
+ * marker its semantic color without re-deriving the precedence.
+ */
+export function summaryMarker(
+  summary: SegmentSummary,
+): typeof FAILURE_MARK | typeof WARNING_MARK | undefined {
+  if (summary.errors > 0 || summary.failed > 0) return FAILURE_MARK;
+  if (summary.warnings > 0) return WARNING_MARK;
+  return undefined;
+}
 
 type CountPart = {
   /** Lower significance drops first when the terminal is narrow. */
@@ -38,12 +60,7 @@ export function summaryLine(
   summary: SegmentSummary,
   options: SummaryTextOptions,
 ): string | undefined {
-  const marker =
-    summary.errors > 0 || summary.failed > 0
-      ? FAILURE_MARK
-      : summary.warnings > 0
-        ? WARNING_MARK
-        : undefined;
+  const marker = summaryMarker(summary);
 
   const parts: CountPart[] = [];
   if (summary.tools > 0) {
@@ -60,9 +77,11 @@ export function summaryLine(
   // Most significant first; narrow terminals drop from the tail.
   parts.sort((a, b) => b.significance - a.significance);
 
+  const disclosure = options.expanded ? DISCLOSURE_EXPANDED : DISCLOSURE_FOLDED;
+
   let keep = parts.length;
   while (keep > 0) {
-    const line = compose(marker, parts.slice(0, keep));
+    const line = compose(disclosure, marker, parts.slice(0, keep));
     if (visibleWidth(line) <= options.width) return line;
     keep -= 1;
   }
@@ -71,18 +90,23 @@ export function summaryLine(
 }
 
 function compose(
+  disclosure: string,
   marker: string | undefined,
   parts: readonly CountPart[],
 ): string {
-  const head = marker === undefined ? DISCLOSURE : `${DISCLOSURE} ${marker}`;
+  const head = marker === undefined ? disclosure : `${disclosure} ${marker}`;
   return `${head} ${parts.map((part) => part.text).join(" · ")}`;
 }
 
 /**
- * Summary cache key inputs: the line depends only on the counts, so the
- * view can reuse a rendered line until the segment's statistics change.
+ * Summary cache key inputs: the line depends only on the counts and the
+ * group's expanded state, so a cache can reuse a rendered line until the
+ * segment's statistics or its disclosure state change.
  */
-export function summaryCacheKey(summary: SegmentSummary): string {
+export function summaryCacheKey(
+  summary: SegmentSummary,
+  expanded = false,
+): string {
   return [
     summary.tools,
     summary.thinking,
@@ -90,5 +114,6 @@ export function summaryCacheKey(summary: SegmentSummary): string {
     summary.failed,
     summary.warnings,
     summary.errors,
+    expanded ? "open" : "closed",
   ].join("/");
 }

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.1 — Recovery fixes and group title bars
+
+- Bind restored transcript components on initial startup and after in-process session replacement, without requiring a manual reload.
+- Re-evaluate verified notification content when the status tail moves instead of unconditionally removing matching notifications and splitting a continuous run.
+- Batch notification reclassification and invalidation so one status change removes affected members in linear scans rather than repeatedly scanning historical groups.
+- Distinguish collapsed and expanded titles with `▸` / `▾`, an accent-colored `分组` label and a theme-aware neutral title bar, without changing member rendering or row height.
+- Let expand/collapse commands request a redraw directly and use the visible group state as feedback; omit info acknowledgements that could overwrite the shared notification status text.
+
 ## 0.1.0 — Initial release
 
 - Collapse settled runs of tools, thinking and selected special messages; expand to restore the existing renderers without changing member visibility settings.

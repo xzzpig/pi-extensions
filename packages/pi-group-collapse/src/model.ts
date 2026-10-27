@@ -154,6 +154,19 @@ export class GroupingModel {
   revision(): number {
     return this.revisionCounter;
   }
+
+  /**
+   * Cost probe for member removal: how many closed segments and how many
+   * member slots the removal scan touched. A batch removal of k members
+   * must stay linear in the transcript (one pass), never k passes over the
+   * whole history.
+   */
+  private readonly removalScan = { segmentVisits: 0, memberVisits: 0 };
+
+  /** Test/probe: accumulated removal-scan visits since the model was built. */
+  debugRemovalScanCounts(): { segmentVisits: number; memberVisits: number } {
+    return { ...this.removalScan };
+  }
   /**
    * How many closed segments existed when the last turn settled. Members
    * arriving after that boundary are "settled-after" items: they wait for
@@ -330,40 +343,76 @@ export class GroupingModel {
         break;
       }
       case "notificationUpdate": {
-        const member = this.membersByKey.get(item.key);
-        if (!member || member.kind !== "notification") {
-          this.apply({
-            type: "notification",
-            key: item.key,
-            level: item.level,
-            text: item.text,
-          });
-          break;
-        }
-        member.version += 1;
-        const levelChanged = member.level !== item.level;
-        member.level = item.level;
-        const action = actionForCandidateCompiled(this.policy, {
-          kind: "notification",
-          text: item.text,
-          level: item.level,
-        });
-        // A level change alters the summary's warning/error statistics; a
-        // keep action removes the member (topology). Both invalidate the
-        // derived index — only the text alone is activity.
-        if (action === "keep") this.removeMemberAndSplit(item.key);
-        if (action === "keep" || levelChanged) this.revisionCounter += 1;
+        this.reclassifyNotifications([item]);
         break;
       }
       case "memberInvalidated": {
-        // The host overwrote or moved the line: the member leaves its
-        // group. That is a topology change even when the key was absent.
-        const existed = this.membersByKey.has(item.key);
-        this.removeMemberAndSplit(item.key);
-        if (existed) this.revisionCounter += 1;
+        this.invalidateMembers([item.key]);
         break;
       }
     }
+  }
+
+  /**
+   * Re-classify a batch of already-included notifications that one host
+   * status change may repaint (see `notificationUpdate`).
+   *
+   * Per-item semantics are unchanged — version bump, level statistics,
+   * policy re-application, fresh item for a key we never included — but the
+   * members a batch drops leave in a single transcript pass instead of one
+   * full scan per dropped member. A status change that re-classifies N
+   * members therefore costs one pass, not N(N+1)/2 segment checks.
+   */
+  reclassifyNotifications(
+    updates: readonly {
+      readonly key: string;
+      readonly level: NotificationLevel;
+      readonly text: string;
+    }[],
+  ): void {
+    const removals: string[] = [];
+    for (const update of updates) {
+      const member = this.membersByKey.get(update.key);
+      if (!member || member.kind !== "notification") {
+        // An update for an item we never included is just a fresh item.
+        this.apply({
+          type: "notification",
+          key: update.key,
+          level: update.level,
+          text: update.text,
+        });
+        continue;
+      }
+      member.version += 1;
+      const levelChanged = member.level !== update.level;
+      member.level = update.level;
+      const action = actionForCandidateCompiled(this.policy, {
+        kind: "notification",
+        text: update.text,
+        level: update.level,
+      });
+      // A level change alters the summary's warning/error statistics; a keep
+      // action removes the member (topology). Both invalidate the derived
+      // index — only the text alone is activity.
+      if (action === "keep") removals.push(update.key);
+      if (action === "keep" || levelChanged) this.revisionCounter += 1;
+    }
+    this.removeMembersAndSplit(removals);
+  }
+
+  /**
+   * The host overwrote or moved a batch of lines in one status change: those
+   * members leave their groups. That is a topology change even for keys the
+   * model never included, but only present keys move the revision.
+   */
+  invalidateMembers(keys: readonly string[]): void {
+    const unique = new Set(keys);
+    let existed = 0;
+    for (const key of unique) {
+      if (this.membersByKey.has(key)) existed += 1;
+    }
+    this.removeMembersAndSplit(unique);
+    if (existed > 0) this.revisionCounter += existed;
   }
 
   applyAll(items: readonly VisualItem[]): void {
@@ -442,49 +491,116 @@ export class GroupingModel {
    * became) a visible non-member boundary. An emptied segment disappears.
    */
   private removeMemberAndSplit(key: string): void {
-    const member = this.membersByKey.get(key);
-    if (!member) return;
-    this.membersByKey.delete(key);
+    this.removeMembersAndSplit([key]);
+  }
 
-    // An open (still-growing) segment splits at the removed member: the
-    // members before it close as their own segment, the members after it
-    // stay open, and everything arriving later joins only the latter.
-    // The member may belong to an *earlier* segment while a new one is
-    // open — only a hit in the open segment ends the search.
+  /**
+   * Remove every listed member and split each segment at its hole(s): the
+   * members before and after a removed item become separate segments,
+   * because the removed item is (or became) a visible non-member boundary.
+   * An emptied segment disappears.
+   *
+   * One pass over the transcript for the whole batch, so the cost is linear
+   * in segments + members and independent of how many members leave. (The
+   * per-key form scanned from the first segment for every key, so a single
+   * host status change that dropped N members cost N(N+1)/2 scans.)
+   */
+  private removeMembersAndSplit(keys: Iterable<string>): void {
+    const targets = new Set<Member>();
+    for (const key of keys) {
+      const member = this.membersByKey.get(key);
+      if (!member) continue;
+      this.membersByKey.delete(key);
+      targets.add(member);
+    }
+    if (targets.size === 0) return;
+
+    // An open (still-growing) segment splits at each removed member: the
+    // members between two holes close as their own segment, the members
+    // after the last hole stay open, and everything arriving later joins
+    // only them. (Same ids as closing each piece as it is cut.) The pieces
+    // are held aside: they belong after every closed segment, so the pass
+    // below never has to re-examine what it just built.
+    const segments = this.segments;
+    const openedPieces: Segment[] = [];
     if (this.current !== null) {
-      const index = this.current.indexOf(member);
-      if (index >= 0) {
-        const after = this.current.slice(index + 1);
-        this.current = this.current.slice(0, index);
-        this.closeSegment();
-        this.current = after.length > 0 ? after : null;
-        return;
+      this.removalScan.memberVisits += this.current.length;
+      let run: Member[] = [];
+      let split = false;
+      for (const member of this.current) {
+        if (targets.has(member)) {
+          targets.delete(member);
+          split = true;
+          if (run.length > 0) {
+            openedPieces.push({
+              id: this.nextSegmentId++,
+              members: run,
+              turn: this.turn,
+            });
+          }
+          run = [];
+          continue;
+        }
+        run.push(member);
       }
+      if (split) this.current = run.length > 0 ? run : null;
     }
 
-    for (let sIndex = 0; sIndex < this.segments.length; sIndex++) {
-      const segment = this.segments[sIndex];
-      const mIndex = segment.members.indexOf(member);
-      if (mIndex < 0) continue;
-      const before = segment.members.slice(0, mIndex);
-      const after = segment.members.slice(mIndex + 1);
-      const replacement: Segment[] = [];
-      if (before.length > 0) {
-        replacement.push({ ...segment, members: before });
-      }
-      if (after.length > 0) {
-        replacement.push({
-          id: this.nextSegmentId++,
-          members: after,
-          turn: segment.turn,
-        });
-      }
-      this.segments.splice(sIndex, 1, ...replacement);
-      if (this.settleBoundary > sIndex) {
-        // Boundary bookkeeping: the split may add a segment.
-        this.settleBoundary += replacement.length - 1;
-      }
+    if (targets.size === 0) {
+      // Only the open segment was cut.
+      if (openedPieces.length > 0) this.segments.push(...openedPieces);
       return;
+    }
+
+    // Closed segments: one pass, each hole cutting its segment into the
+    // pieces around it. The piece before the first hole keeps the segment id
+    // (and with it the user's fold choice); later pieces get fresh ids.
+    const rebuilt: Segment[] = [];
+    let boundary = 0;
+    let changed = false;
+    for (let index = 0; index < segments.length; index++) {
+      const segment = segments[index];
+      this.removalScan.segmentVisits += 1;
+      this.removalScan.memberVisits += segment.members.length;
+      let removed = 0;
+      let run: Member[] = [];
+      const pieces: Member[][] = [];
+      for (const member of segment.members) {
+        if (targets.has(member)) {
+          targets.delete(member);
+          removed += 1;
+          if (run.length > 0) pieces.push(run);
+          run = [];
+          continue;
+        }
+        run.push(member);
+      }
+      if (removed === 0) {
+        if (index < this.settleBoundary) boundary += 1;
+        rebuilt.push(segment);
+        continue;
+      }
+      changed = true;
+      if (run.length > 0) pieces.push(run);
+      for (let piece = 0; piece < pieces.length; piece++) {
+        rebuilt.push(
+          piece === 0
+            ? { ...segment, members: pieces[piece] }
+            : {
+                id: this.nextSegmentId++,
+                members: pieces[piece],
+                turn: segment.turn,
+              },
+        );
+      }
+      if (index < this.settleBoundary) {
+        // Boundary bookkeeping: every piece before the boundary counts.
+        boundary += pieces.length;
+      }
+    }
+    if (changed || openedPieces.length > 0) {
+      this.segments = [...rebuilt, ...openedPieces];
+      this.settleBoundary = boundary;
     }
   }
 

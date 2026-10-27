@@ -30,11 +30,15 @@ Older or unsupported host component layouts fail safely without hiding content.
   `agent_settled`, the result is provably normal, and every member has
   stopped. Parallel tools must all finish; unknown evidence never counts
   as success.
-- **Two-level view**: a folded group renders one width-aware summary line
-  (`▸ 4 次工具调用 · 3 段思考 · 2 条消息`, with `✗`/`⚠` markers when
-  failures or warning/error notifications exist). Expanding restores the
-  members' original rendering byte-for-byte — no member list, no
-  indentation, no changes to members' own expand states.
+- **Two-level view**: a folded group renders one width-aware title bar
+  (`▸ 分组 4 次工具调用 · 3 段思考 · 2 条消息`, with `✗`/`⚠` markers when
+  failures or warning/error notifications exist). An accent-colored arrow
+  and label distinguish the bar from message text; a neutral background
+  follows the host theme when it provides a panel color. Expanding keeps
+  the same title with `▾` and restores the members' original rendering
+  byte-for-byte — no member list, no indentation, no changes to members'
+  own expand states. Narrow terminals omit the label before sacrificing
+  statistics or exception markers.
 - **Independent group objects**: a summary click toggles the group, never
   the first tool inside it. Works with pi-starline's click resolution (via
   a versioned explicit-target protocol) and without it; drags, double
@@ -96,6 +100,12 @@ ignored.
 - `/group-collapse collapse` — fold every settled, quiet group; the
   running turn and unresolved calls are never hidden.
 
+The arrow and visible content confirm these operations. Successful and
+no-op commands do not append status notifications: Pi's shared status text
+must not cause previously grouped notifications to be reclassified merely
+because this plugin acknowledged a command. Invalid arguments still show
+a warning.
+
 ## Boundaries (first version)
 
 - Interactive main-session TUI only; RPC/JSON/print and other extensions'
@@ -105,7 +115,12 @@ ignored.
 - Renderer-level hiding (e.g. pi-tool-display hidden output) is respected:
   expanding a group never forces hidden content back on.
 - Temporary notifications that the session did not persist are not
-  replayed on reload.
+  replayed on reload. A notification losing the host's tail position is
+  re-evaluated, not automatically removed from its group. Pi may redraw
+  historical status rows using the latest status text; this plugin does
+  not freeze the host's notification builders or shared text. Verified
+  content that becomes `keep`, or whose source cannot be verified, remains
+  visible and forms a boundary.
 - If the host no longer exposes all required notification-source methods,
   notification grouping is disabled and a warning is shown once per session.
   Notifications stay visible; ordinary tool grouping remains available.

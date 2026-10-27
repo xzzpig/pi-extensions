@@ -70,6 +70,11 @@ export default function extension(pi: ExtensionAPI): void {
         (ctx.sessionManager.buildContextEntries() ??
           ctx.sessionManager.getBranch() ??
           []) as unknown as never,
+      // Read through the getter, never through a captured Theme: a theme
+      // switch mid-session must repaint the group header on the next frame.
+      // Non-UI hosts and hosts without `ui.theme` yield undefined, and the
+      // header then renders uncolored.
+      getTheme: () => ctx.ui?.theme,
     });
     flush(ctx.ui.notify.bind(ctx.ui));
   });
@@ -147,24 +152,15 @@ export default function extension(pi: ExtensionAPI): void {
         return;
       }
       const action = args.trim();
+      // The group title and content are the command's feedback. An info
+      // notice would replace the host's shared status text and re-classify
+      // the OM lines we just expanded or folded. Keep no-ops quiet too.
       if (action === "expand") {
-        const opened = runtime.expandAll();
-        ctx.ui.notify(
-          opened > 0
-            ? `group-collapse: expanded ${opened} group(s)`
-            : "group-collapse: nothing folded to expand",
-          "info",
-        );
+        runtime.expandAll();
         return;
       }
       if (action === "collapse") {
-        const closed = runtime.collapseAll();
-        ctx.ui.notify(
-          closed > 0
-            ? `group-collapse: folded ${closed} group(s)`
-            : "group-collapse: nothing to fold",
-          "info",
-        );
+        runtime.collapseAll();
         return;
       }
       ctx.ui.notify("group-collapse: expected expand or collapse", "warning");

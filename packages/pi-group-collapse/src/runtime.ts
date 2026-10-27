@@ -27,6 +27,7 @@ import {
   CustomMessageComponent,
   InteractiveMode,
   ToolExecutionComponent,
+  type Theme,
 } from "@earendil-works/pi-coding-agent";
 import {
   bindComponent,
@@ -44,6 +45,7 @@ import {
   summarizeSegment,
   type MemberPolicy,
   type Segment,
+  type SegmentSummary,
 } from "./model.ts";
 import {
   GroupStateStore,
@@ -61,6 +63,7 @@ import {
   type PatchInstallResult,
 } from "./patch-registry.ts";
 import { summaryLine } from "./view.ts";
+import { groupHeaderLine } from "./header-style.ts";
 import {
   isValidExpandTarget,
   publishExpandTarget,
@@ -97,6 +100,13 @@ export type RuntimeContextInput = {
   readonly mode?: string;
   readonly cwd: string;
   readonly getBranch?: () => readonly BranchEntry[];
+  /**
+   * Live host-theme accessor (`() => ctx.ui.theme`). Called per render, so a
+   * theme switch repaints the next frame and no old Theme object is kept.
+   * Undefined outside a UI session (or on a host without `ui.theme`): the
+   * group header then renders uncolored instead of failing the frame.
+   */
+  readonly getTheme?: () => Theme | undefined;
 };
 
 export type RuntimeNotifications = {
@@ -107,6 +117,7 @@ export type RuntimeNotifications = {
 type InstalledDisplays = {
   render: PatchInstallResult;
   handleEvent: PatchInstallResult;
+  renderInitialMessages: PatchInstallResult;
   observer: PatchInstallResult;
   expandObserver: PatchInstallResult;
   customExpandObserver: PatchInstallResult;
@@ -210,6 +221,8 @@ export class GroupCollapseRuntime {
   private readonly widthFallbacks = new Map<number, Set<number>>();
   /** The branch getter from session_start, for post-rebuild replays. */
   private lastGetBranch: RuntimeContextInput["getBranch"];
+  /** The live theme accessor from session_start (dropped on shutdown). */
+  private lastGetTheme: RuntimeContextInput["getTheme"];
   /** Per-custom-component content signature, for change detection. */
   private customStates = new WeakMap<object, string>();
   /** History custom messages indexed by (customType, display, content). */
@@ -249,6 +262,7 @@ export class GroupCollapseRuntime {
     // Full view rebuild for a fresh session: the model replays the current
     // (compaction-aware) branch and every derived table resets.
     this.lastGetBranch = input.getBranch;
+    this.lastGetTheme = input.getTheme;
     this.rebuildView(input.getBranch);
 
     if (this.displayAllowed && !this.displays) {
@@ -357,6 +371,9 @@ export class GroupCollapseRuntime {
     // receiver, the branch closure, and the rebind marker with the session.
     this.activeReceiver = undefined;
     this.lastGetBranch = undefined;
+    // The getter closes over the session's ctx: drop it with the session so
+    // the process-global runtime cannot pin a dead host context.
+    this.lastGetTheme = undefined;
     this.reboundAfterRebuild = undefined;
     globalSlots().rebuildPending = undefined;
     boundKeysClear();
@@ -786,6 +803,9 @@ export class GroupCollapseRuntime {
       if (this.store.isFolded(segment.id)) opened += 1;
       this.store.open(segment.id);
     }
+    if (opened > 0 && this.activeReceiver !== undefined) {
+      this.requestHostRender(this.activeReceiver);
+    }
     return opened;
   }
 
@@ -805,6 +825,9 @@ export class GroupCollapseRuntime {
       if (!this.store.isFolded(segment.id)) closed += 1;
       this.store.close(segment.id);
       this.wasEverFolded.add(segment.id);
+    }
+    if (closed > 0 && this.activeReceiver !== undefined) {
+      this.requestHostRender(this.activeReceiver);
     }
     return closed;
   }
@@ -865,6 +888,94 @@ export class GroupCollapseRuntime {
   }
 
   /**
+   * A bound notification line lost the status tail and may now render a newer
+   * *proven* notification version: the host appends a new status pair instead
+   * of reusing the old line, and every info line's builder reads the shared
+   * `lastStatusMessage`, so a later invalidate repaints this line from that
+   * field. A tail move is a state-change signal, not a verdict:
+   *
+   * - the line's own visible text has not changed, so this is not an update
+   *   to reveal; it is a re-classification of the version the line may render
+   *   next;
+   * - if the current policy still selects `group` for that version the line
+   *   stays exactly where it is (a moved tail must never split a run, which
+   *   is what fragmented one settled turn into four groups);
+   * - if the version is `keep` the member leaves and its segment splits at
+   *   the hole, so the line shows up as the visible boundary it now is;
+   * - nothing here ever turns a currently-visible non-member into a hidden
+   *   member: a `keep` line that becomes group-eligible stays visible, so
+   *   group positions and boundaries cannot be rewritten retroactively.
+   *
+   * Only notification members are reconsidered; any other key is untouched.
+   *
+   * One host status change can move the tail over *every* tracked line, so
+   * this takes the whole batch: the model drops the members a batch
+   * re-classifies in a single transcript pass. A single entry keeps the
+   * per-item behavior exactly.
+   */
+  private reclassifyNotifications(
+    versions: readonly {
+      readonly component: unknown;
+      readonly level: "info" | "warning" | "error";
+      readonly text: string;
+    }[],
+  ): void {
+    const updates: {
+      key: string;
+      level: "info" | "warning" | "error";
+      text: string;
+      component: object;
+    }[] = [];
+    for (const version of versions) {
+      const component = version.component as object;
+      const key = identityOf(component);
+      const member = this.model.member(key);
+      // Only notification members are reconsidered; a currently-visible
+      // non-member is never retroactively hidden.
+      if (!member || member.kind !== "notification") continue;
+      updates.push({
+        key,
+        level: version.level,
+        text: version.text,
+        component,
+      });
+    }
+    if (updates.length === 0) return;
+    // `notificationUpdate` re-applies the policy to the current version and
+    // removes the member when it is no longer a candidate. Unlike a real
+    // content update this neither reveals nor re-collects: the group's
+    // visibility was already correct for the text on screen.
+    this.model.reclassifyNotifications(
+      updates.map(({ key, level, text }) => ({ key, level, text })),
+    );
+    // Keep the carrier index in sync with the model, exactly like the
+    // invalidation path: a dropped member must not stay "already applied"
+    // for later scans. (The split itself already happened in the model.)
+    for (const { key, component } of updates) {
+      if (this.model.member(key)) this.groupedNotifications.add(component);
+      else this.groupedNotifications.delete(component);
+    }
+  }
+
+  /**
+   * One host status change invalidated these lines (overwritten in place or
+   * tail-moved): the members leave their groups. Batched for the same reason
+   * as `reclassifyNotifications` — the model removes them in one pass.
+   */
+  private invalidateNotifications(
+    invalidations: readonly { readonly component: unknown }[],
+  ): void {
+    if (invalidations.length === 0) return;
+    const keys: string[] = [];
+    for (const invalidation of invalidations) {
+      const component = invalidation.component as object;
+      keys.push(identityOf(component));
+      this.groupedNotifications.delete(component);
+    }
+    this.model.invalidateMembers(keys);
+  }
+
+  /**
    * Test/probe helper: register a notification component exactly as the
    * observer would when the host shows it.
    */
@@ -888,6 +999,15 @@ export class GroupCollapseRuntime {
 
   debugSegmentCount(): number {
     return this.model.currentSegments().length;
+  }
+
+  /**
+   * Test/probe helper: cost of member removal (segment/member visits).
+   * One host status change that drops k members must cost one pass over the
+   * transcript, not k passes.
+   */
+  debugRemovalScanCounts(): { segmentVisits: number; memberVisits: number } {
+    return this.model.debugRemovalScanCounts();
   }
 
   /** Test/probe helper: current deferred-candidate count. */
@@ -921,6 +1041,11 @@ export class GroupCollapseRuntime {
       .map((segment) => segment.id);
   }
 
+  /** Test/probe helper: whether a session theme getter is still installed. */
+  debugHasThemeGetter(): boolean {
+    return this.lastGetTheme !== undefined;
+  }
+
   private installDisplays(): void {
     const render = installRenderProjection(
       (component, width) => this.projectionFor(component, width),
@@ -943,6 +1068,27 @@ export class GroupCollapseRuntime {
       InteractiveMode.prototype as unknown as Record<PropertyKey, unknown>,
       "handleEvent",
       "runtime-receiver-sync",
+      ({ predecessor, receiver, args }) => {
+        const result = predecessor.apply(receiver, args);
+        if (this.displayAllowed && isHostReceiver(receiver)) {
+          this.syncReceiver(receiver as HostReceiver);
+        }
+        return result;
+      },
+    );
+    // Pi's startup path emits `session_start` from
+    // `rebindCurrentSession()` and only then renders the restored transcript
+    // with `renderInitialMessages()`. Without this seam the components of
+    // that first frame are never bound: the history model is folded while
+    // the screen shows the raw history until a model event or `/reload`.
+    // Session-scoped on purpose — `session_shutdown` restores the host
+    // method, and the persistent chat-rebuild hook below still covers the
+    // between-sessions window used by `/reload`.
+    const renderInitialMessages = installPrototypePatch(
+      // SAFETY: the registry probes callable host methods before wrapping them.
+      InteractiveMode.prototype as unknown as Record<PropertyKey, unknown>,
+      "renderInitialMessages",
+      "runtime-initial-render-sync",
       ({ predecessor, receiver, args }) => {
         const result = predecessor.apply(receiver, args);
         if (this.displayAllowed && isHostReceiver(receiver)) {
@@ -975,6 +1121,43 @@ export class GroupCollapseRuntime {
         return result;
       },
     );
+    // In-session session replacement (`/resume`, `/fork`) hands over too:
+    // `teardownCurrent` awaits `session_shutdown` and only then
+    // `rebindCurrentSession({ renderBeforeBind: true })` renders the new
+    // branch through `renderCurrentSessionState()` — before the new
+    // `session_start` exists. The session-scoped `renderInitialMessages`
+    // seam above is already uninstalled in that window, so without this
+    // hook the replacement frame is never bound: the model replays the new
+    // branch while the screen keeps showing it raw.
+    //
+    // Persistent for the same reason as the chat-rebuild hook above, and
+    // with the same contract: the wrapper is a pure pass-through (it calls
+    // the predecessor first and returns its result unchanged); while a
+    // session is active it binds immediately, otherwise it only records the
+    // receiver in the WeakRef handoff slot for the next `session_start` to
+    // consume. It keeps no strong reference, so an abandoned view, a quit
+    // with no next session, or a re-imported runtime copy that replaces this
+    // behavior slot all release the host tree. Session-scoped state is still
+    // dropped by `onSessionShutdown`.
+    installPrototypePatch(
+      // SAFETY: the registry probes callable host methods before wrapping them.
+      InteractiveMode.prototype as unknown as Record<PropertyKey, unknown>,
+      "renderCurrentSessionState",
+      "runtime-session-replacement-sync",
+      ({ predecessor, receiver, args }) => {
+        const result = predecessor.apply(receiver, args);
+        if (isHostReceiver(receiver)) {
+          if (this.sessionActive && this.displayAllowed) {
+            this.syncReceiver(receiver as HostReceiver);
+          } else {
+            globalSlots().rebuildPending = new WeakRef(
+              receiver as HostReceiver,
+            );
+          }
+        }
+        return result;
+      },
+    );
     this.notificationObserver = createNotificationObserver({
       onNotification: (notification) => {
         this.observeNotification(
@@ -983,13 +1166,17 @@ export class GroupCollapseRuntime {
           notification.text,
         );
       },
-      onInvalidated: (invalidation) => {
-        this.model.apply({
-          type: "memberInvalidated",
-          key: identityOf(invalidation.component as object),
-        });
-        this.groupedNotifications.delete(invalidation.component as object);
-      },
+      // The batch callbacks are what this runtime uses: one host status
+      // change can touch every tracked line, and the model must drop or
+      // re-classify them in one transcript pass. The per-item callbacks stay
+      // wired to the same handlers so a consumer that only offers the
+      // single-item contract keeps working unchanged.
+      onInvalidated: (invalidation) =>
+        this.invalidateNotifications([invalidation]),
+      onInvalidations: (invalidations) =>
+        this.invalidateNotifications(invalidations),
+      onContentVersion: (version) => this.reclassifyNotifications([version]),
+      onContentVersions: (versions) => this.reclassifyNotifications(versions),
     });
     const observer = this.notificationObserver.install();
     if (!observer.available) {
@@ -1037,6 +1224,7 @@ export class GroupCollapseRuntime {
     this.displays = {
       render,
       handleEvent,
+      renderInitialMessages,
       observer,
       expandObserver,
       customExpandObserver,
@@ -1134,6 +1322,7 @@ export class GroupCollapseRuntime {
     if (!this.displays) return;
     this.displays.render.cleanup();
     this.displays.handleEvent.cleanup();
+    this.displays.renderInitialMessages.cleanup();
     this.displays.observer.cleanup();
     this.displays.expandObserver.cleanup();
     this.displays.customExpandObserver.cleanup();
@@ -1268,14 +1457,15 @@ export class GroupCollapseRuntime {
               if (runSegment.members[0]?.key !== `${messageKey}#t${run}`) {
                 return undefined;
               }
-              return (
-                summaryLine(this.summaryOf(runSegment), { width: w }) ??
-                undefined
-              );
+              // The one decorated header row shared by every projection
+              // path: arrow + `分组` label in accent, counts muted, neutral
+              // theme background across the available width.
+              return this.headerLine(this.summaryOf(runSegment), w);
             },
             titleForRun: (run, w) => {
               // An expanded run of an ever-folded group keeps the group
-              // title above its content so it can be collapsed again.
+              // title above its content so it can be collapsed again. Its
+              // arrow points down because the group itself is open.
               const segmentId = runSegments.get(run);
               const runSegment =
                 segmentId === undefined
@@ -1288,10 +1478,7 @@ export class GroupCollapseRuntime {
               if (runSegment.members[0]?.key !== `${messageKey}#t${run}`) {
                 return undefined;
               }
-              return (
-                summaryLine(this.summaryOf(runSegment), { width: w }) ??
-                undefined
-              );
+              return this.headerLine(this.summaryOf(runSegment), w, true);
             },
           };
         }
@@ -1326,21 +1513,50 @@ export class GroupCollapseRuntime {
       return {
         kind: "summary",
         token,
-        lineFor: (w: number) =>
-          summaryLine(this.summaryOf(segment), { width: w }) ?? undefined,
+        lineFor: (w: number) => this.headerLine(this.summaryOf(segment), w),
       };
     }
     if (folded) return { kind: "hide" };
-    // An expanded group keeps its title so it can be collapsed again.
+    // An expanded group keeps its title so it can be collapsed again; the
+    // arrow points down because the group itself is open.
     if (carrier && this.everFolded(segment)) {
       return {
         kind: "titled",
         token,
         titleFor: (w: number) =>
-          summaryLine(this.summaryOf(segment), { width: w }) ?? undefined,
+          this.headerLine(this.summaryOf(segment), w, true),
       };
     }
     return undefined;
+  }
+
+  /**
+   * The group's decorated header row for this frame: the host theme is read
+   * through the session's live getter on every call, so a theme switch
+   * repaints without caching a colored string. No getter (non-UI session, or
+   * a host without `ui.theme`) renders the header uncolored.
+   */
+  private headerLine(
+    summary: SegmentSummary,
+    width: number,
+    expanded = false,
+  ): string | undefined {
+    return groupHeaderLine(summary, {
+      width,
+      expanded,
+      theme: this.currentTheme(),
+    });
+  }
+
+  private currentTheme(): Theme | undefined {
+    const getTheme = this.lastGetTheme;
+    if (getTheme === undefined) return undefined;
+    try {
+      return getTheme();
+    } catch {
+      // A torn-down host context must not fail the frame.
+      return undefined;
+    }
   }
 
   /**
@@ -1439,10 +1655,15 @@ export class GroupCollapseRuntime {
     const carrier = segment.members[0]?.key === key;
     if (!carrier) return undefined;
     // Only a summary/title that actually fits the width renders a row to
-    // hit — folded or expanded alike.
-    const line = summaryLine(this.summaryOf(segment), { width });
+    // hit — folded or expanded alike, each measured with its own row's
+    // disclosure marker.
+    const line = summaryLine(this.summaryOf(segment), {
+      width,
+      expanded: !this.store.isFolded(segment.id),
+    });
     if (line === undefined) return undefined;
     const handle = this.groupHandle(segment.id);
+    // `expanded` is the direction a plain click sets, not the state.
     return { component: handle, expanded: !handle.expanded };
   }
 
