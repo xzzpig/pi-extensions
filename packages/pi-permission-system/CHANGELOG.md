@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] — 2026-10-28
+
+### Changed
+
+- Synced upstream `v40.1.2` → `v42.0.0`, including declared command effects,
+  unanswered prompt timeouts, narrower wrapper session approvals, and option
+  grammar and wrapper-exemption security fixes. Fork permission profiles,
+  forwarded-decision events, and `fallback` inner-command gating remain.
+- Adopted the upstream opt-in authorizer-chain exception for qualifying Bash
+  `external_directory` asks whose paths name nothing on disk; the path family
+  remains capped, and accepted exceptions are recorded in the review log.
+- Config arrays are now limited to 1,000 entries and oversized configurations
+  fail closed. The package requires Zod `^4.6.7`, the upstream security fix.
+- Both wrapper-floor modes now ask when template-based execution, computed
+  wrapper arguments, or uncertain option grammars prevent proving the command.
+  Safely resolved wrappers retain fine-grained fork gating, and explicit inner
+  denies still take precedence.
+
 ## [1.7.0] — 2026-10-10
 
 ### Changed

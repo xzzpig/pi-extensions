@@ -90,9 +90,9 @@
 
 `wrapperFloors` 为 `fallback`（默认）时，包装器命令的 `allow` SHALL 仅在该包装器的内层内容无法静态解析时被钳制为 `ask`，并以合成模式名记录（opaque payload 为 `<opaque-bash-wrapper>`，indirection 为 `<indirection-bash-wrapper>`）。
 
-可证明不执行任何内层命令的调用 SHALL 按其自身文本作为普通命令门控，而不是兜底为 `ask`：裸 `eval`、缺失或空白 payload（`eval ""`）、解析后不含任何命令的 payload（仅注释或纯赋值）、无参数的 `sudo`/`env`/`xargs`、仅有操作数的 `timeout 5` 或 `flock lockfile`、仅有选项取值的 `env -u HOME` 或 `sudo -u root`，以及只带环境赋值的 `env FOO=bar BAZ=qux`。
+可证明不执行任何内层命令的调用 SHALL 按其自身文本作为普通命令门控，而不是兜底为 `ask`：裸 `eval`、缺失或空白 payload（`eval ""`）、解析后不含任何命令的 payload（仅注释或纯赋值）、无参数的 `sudo`/`env`、仅有操作数的 `timeout 5` 或 `flock lockfile`、仅有选项取值的 `env -u HOME` 或 `sudo -u root`，以及只带环境赋值的 `env FOO=bar BAZ=qux`。
 
-例外：裸调用或仅带标志时会把标准输入逐行当作 shell 命令执行的包装器（`parallel`、`rust-parallel`、`rush`）SHALL 保持兜底为 `ask`。
+`xargs` 无显式命令时可能运行隐含的 `echo`，不能当作不执行命令；裸调用或仅带标志时会把标准输入逐行当作 shell 命令执行的包装器（`parallel`、`rust-parallel`、`rush`）也不属于空调用。这些情况 SHALL 保持兜底为 `ask`。
 
 #### Scenario: 不可解析的 payload 兜底为 ask
 
@@ -111,7 +111,7 @@
 
 ### Requirement: sudo 安全语法
 
-`fallback` 模式 SHALL 复用上游 sudo 选项语法解析普通命令，包括长选项、缩写、短选项集群、附着参数与环境赋值；不复制一份会漂移的 sudo 参数表。被上游拒绝的编辑、shell/login、chdir/chroot 模式、未知或歧义选项，以及无法静态确定的选项／命令词 SHALL 标记为不可解析并保留 `ask` 兜底。合法但无内层命令的调用仍按原有空调用规则处理。同样的 sudo 安全语法和 floor SHALL 适用于已识别 indirection 包装链中的 sudo（例如 `timeout 5 sudo -e cat`）；该检查不得借此改变不含 sudo 的普通包装器 fallback 策略。
+`fallback` 模式 SHALL 复用上游 sudo 选项语法解析普通命令，包括长选项、缩写、短选项集群、附着参数与环境赋值；不复制一份会漂移的 sudo 参数表。被上游拒绝的编辑、shell/login、chdir/chroot 模式、未知或歧义选项，以及无法静态确定的选项／命令词 SHALL 标记为不可解析并保留 `ask` 兜底。合法但无内层命令的调用仍按原有空调用规则处理。同样的 sudo 安全语法和 floor SHALL 适用于已识别 indirection 包装链中的 sudo（例如 `timeout 5 sudo -e cat`）；不含 sudo 的包装器仍须遵守下文的通用安全约束。
 
 #### Scenario: 长选项后按真实内层命令门控
 
@@ -122,6 +122,25 @@
 
 - **WHEN** `wrapperFloors` 为 `"fallback"`，包装器规则为 `allow`，命令含 `sudo -e`、`sudo -s`、`sudo -i`、`sudo -D /tmp`、`sudo -R /tmp` 或未知选项
 - **THEN** 判定为 `ask`，保留 `<indirection-bash-wrapper>` floor，并向父节点转发该 floor
+
+### Requirement: 不确定的包装器执行方式必须询问
+
+在 `fallback` 和 `always` 两种模式中，系统 SHALL 对无法证明实际执行内容的包装器保留 `ask` floor，而不是依赖表面上可见的内层命令自动放行。包括将命令行交给 shell 或从模板构造的 `watch`、`parallel`、`rust-parallel`、`rush`；会影响包装层选项、取值或命令头的动态词；以及上游 `sudo`、`env`、`xargs`、`doas` 语法不能可靠识别的模式。可解析且安全的包装器仍 SHALL 保留 fork 的逐内层命令门控；已识别内层命令的显式 `deny` SHALL 优先于询问。
+
+#### Scenario: 模板可能包含额外 shell 命令
+
+- **WHEN** 策略允许 `*`，但拒绝 `rm *`，命令为 `watch cat x \\; rm y` 或 `parallel cat x \\; rm y ::: a`
+- **THEN** 在任一包装器模式中，命令不得被自动放行；需要询问或命中显式拒绝
+
+#### Scenario: 动态选项可能改变真正运行的命令
+
+- **WHEN** 命令为 `sudo -u $U cat x`、`env -u $U cat x` 或 `timeout $D cat x`
+- **THEN** 在任一包装器模式中，系统不得按表面的 `cat` 自动放行
+
+#### Scenario: 明确安全的包装器保留细粒度能力
+
+- **WHEN** `wrapperFloors` 为 `fallback`，命令为 `sudo --user root git status`，且 `git status` 规则允许
+- **THEN** 系统仍按已解析的内层命令门控，而不是一律询问
 
 ### Requirement: wrapperFloors 配置项
 
