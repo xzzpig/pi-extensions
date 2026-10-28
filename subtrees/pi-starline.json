@@ -4,22 +4,35 @@
   "prefix": "packages/pi-starline",
   "source": "https://github.com/Andy8647/pi-starline.git",
   "remote": "upstream-pi-starline",
-  "ref": "v0.3.7",
-  "version": "0.3.7",
-  "upstreamCommit": "caa1acd3a6e873f753a4cc737aaf50a7f4e16828",
+  "ref": "v0.6.1",
+  "version": "0.6.1",
+  "upstreamCommit": "523c0f2cdc938af3cef0595cd28e2e1c02e9c730",
   "squash": true,
-  "lastSyncedAt": "2026-09-25T04:12:42+08:00",
-  "notes": "Forked from carderne/pi-starline. The mouse capability contract lives in openspec (change adopt-pi-native-mouse-api, spec component-mouse-deference); the rest is documented in the package README and CHANGELOG.",
+  "lastSyncedAt": "2026-10-28T02:28:25+08:00",
+  "notes": "Forked from Andy8647/pi-starline. The shared mouse API contract lives in openspec/specs/mouse-api; fork behavior and releases are documented in the package README and FORK-CHANGELOG.",
   "knownDebt": [
     {
       "kind": "other",
       "path": "packages/pi-starline/package.json",
-      "reason": "Fork release packaging adds declaration build/prepack scripts and dist plus fork release notes to the source-only upstream allowlist. Required by the repository publish contract; removable if upstream adopts the same declaration distribution."
+      "reason": "Fork release packaging adds declaration build/prepack scripts and dist plus fork release notes to upstream's extensions/types allowlist. Required by the repository publish contract; removable if upstream adopts the same declaration distribution."
     },
     {
       "kind": "other",
       "path": "packages/pi-starline/test/package-identity.test.ts",
       "reason": "The exact published-files assertion follows the intentional fork allowlist including declarations and fork release notes, without relaxing runtime assertions. Reconcile when upstream changes its packaging contract."
+    },
+    {
+      "kind": "other",
+      "reason": "The mouse consumer, pointer delegation and adapted upstream integration tests intentionally use pi-mouse-events rather than upstream's separate renderer patches. Keep until upstream adopts a compatible shared mouse API."
+    },
+    {
+      "kind": "other",
+      "reason": "The editor factory, frame splitter and prototype registry retain pi-zentui legacy aliases removed upstream so the two packages can coexist in either load order. Remove only when legacy coexistence is no longer supported."
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-starline/extensions/starline/queue-rows.ts",
+      "reason": "Use Function.prototype.apply.call to preserve predecessor dispatch while satisfying the local no-Reflect.apply rule; remove if upstream adopts equivalent forwarding or the rule changes."
     },
     {
       "kind": "lint",
@@ -65,14 +78,17 @@
     }
   ],
   "reapplyOnSync": [
-    "mouse features register with the local @xzzpig/pi-mouse-events extension instead of patching TuiAltScreen.prototype (optional peer >=0.2.0 <3, devDep workspace:*); without it mouse features are simply off, with one console note per process",
+    "mouse features register with the local @xzzpig/pi-mouse-events extension instead of patching TuiAltScreen.prototype (optional peer >=0.2.0 <3, devDep workspace:*); without it fork mouse features are off, with one console note per process; click-away observes shared mouse events and the optional shared pointer API handles hover without a Starline patch",
     "mouse/api-consumer.ts reads Symbol.for('pi-mouse-events.api.v2') and rejects any candidate whose version !== 2, so an older v1 publisher is rejected rather than misread",
     "keep test/contract/mouse-api.test.ts pinning that key plus the version:1 rejection fixture",
     "every git probe in extensions/starline/git.ts passes --no-optional-locks (test/git-no-optional-locks.test.ts)",
     "test/runtime.test.ts passes an explicit empty env to detectRuntime so ambient Nix markers cannot shadow file-marker fixtures",
     "keep the comment-only additions: ui.ts SAFETY/pi-lens-ignore notes and config.ts's empty-catch note",
-    "Keep package.json TAB-indented with the fork name/version/dependencies, declaration build:types/prepack scripts, and files allowlist (extensions, dist, FORK-CHANGELOG.md). Keep the upstream package-identity test's exact allowlist assertion aligned with those intentional published resources; update package-lock root identity mechanically with npm version --no-git-tag-version --ignore-scripts, never by hand.",
-    "mouse/index.ts stays the fork's consumer-API rewrite (took OURS wholesale)",
+    "Keep package.json TAB-indented with the fork name/version/dependencies, declaration build:types/prepack scripts, and files allowlist (extensions, dist, types, FORK-CHANGELOG.md). Keep the upstream package-identity test aligned; regenerate the package-lock root identity mechanically with npm, never by hand.",
+    "mouse/index.ts stays the fork's consumer-API rewrite; use the optional shared asynchronous copy slot for Pi's native clipboard and retain the synchronous OSC 52 fallback for older v2 publishers; prefer the shared post-component wheel slot and Pi's computed delta, falling back to the older pre-dispatch slot when unavailable",
+    "preserve pi-zentui legacy symbol interoperability in editor-factory-marker.ts, ui.ts and prototype-patch-registry.ts and retain test/legacy-symbols.test.ts when upstream removes the aliases",
+    "delegate mouse/pointer-shape.ts requests to the shared pointer coordinator; keep the fork pill-mouse observer and adapt upstream external-layer and clipboard tests to the shared consumer architecture",
+    "keep typed pointer-shape prototype and safe Function.prototype.apply.call forwarding in pointer-shape.ts and queue-rows.ts when upstream changes these methods",
     "keep clickToToggleExpandable (default true) across the config.ts sites and the test files; clickToExpandTools is not restored anywhere",
     "keep handlesMouse() deleted, mouse/hit-test.ts at fork HEAD, key-text.ts at upstream bytes as the single source with tool-box.ts/index.ts importing keyTextFor from ./key-text, and capabilities.ts's D8 type tightening (<T extends object>)",
     "keep Pi peer ranges >=1.0.0 <2 with catalog devDependencies; retain the optional pi-mouse-events v2 API contract"

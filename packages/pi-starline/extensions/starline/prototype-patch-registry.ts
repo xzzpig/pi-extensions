@@ -21,7 +21,12 @@ const LEGACY_PROTOTYPE_PATCH_REGISTRY = Symbol.for("pi-zentui.prototype-patch-re
 type PrototypePatchAdapter =
 	| "user-message-render"
 	| "user-message-invalidate"
-	| "selector-border-render";
+	| "selector-border-render"
+	| "selection-marker-dedupe"
+	| "agent-session-capture-prompt"
+	| "agent-session-capture-usage"
+	| "pending-messages-hide"
+	| "mouse-pointer-shape";
 
 type PrototypeMethodName = string;
 

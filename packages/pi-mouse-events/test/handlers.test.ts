@@ -20,10 +20,12 @@ import {
 type TuiAltScreenPrototype = {
   handleViewportInput: (data: string) => { consume: boolean } | undefined;
   copyActiveSelectionToClipboard: () => Promise<boolean>;
+  routeWheel: (event: unknown, delta?: number) => void;
 };
 const prototype = TuiAltScreen.prototype as unknown as TuiAltScreenPrototype;
 const originalViewportInput = prototype.handleViewportInput;
 const originalCopy = prototype.copyActiveSelectionToClipboard;
+const originalWheel = prototype.routeWheel;
 
 let installed: InstalledPatches | undefined;
 let emitted: Array<{ channel: string; data: unknown }> = [];
@@ -37,11 +39,14 @@ function install() {
   // property is the patch wrapper, and the spy is its predecessor.
   const copyPredecessor = vi.fn(async () => false);
   prototype.copyActiveSelectionToClipboard = copyPredecessor;
+  const wheelPredecessor = vi.fn();
+  prototype.routeWheel = wheelPredecessor;
   installed = installMousePatches(pi, TuiAltScreen.prototype);
   expect(installed).toBeDefined();
   return {
     predecessor,
     copyPredecessor,
+    wheelPredecessor,
     api: installed!.state,
   };
 }
@@ -65,6 +70,7 @@ afterEach(() => {
     installed = undefined;
     prototype.handleViewportInput = originalViewportInput;
     prototype.copyActiveSelectionToClipboard = originalCopy;
+    prototype.routeWheel = originalWheel;
   }
 });
 
@@ -277,6 +283,84 @@ describe("event-bus handle", () => {
   });
 });
 
+describe("post-component wheel handler slot", () => {
+  const wheel = { direction: 1, x: 3, y: 5, button: 73 };
+
+  it("delivers Pi's computed delta in priority order and skips the router", () => {
+    const { api, wheelPredecessor } = install();
+    const receiver = makeReceiver();
+    const requestRender = vi.fn();
+    receiver.requestRender = requestRender;
+    const calls: string[] = [];
+    api.addWheelHandler(
+      () => {
+        calls.push("low");
+      },
+      { priority: 1 },
+    );
+    api.addWheelHandler(
+      ({ event, tui, wheelDelta }) => {
+        calls.push("high");
+        expect(event).toMatchObject({
+          kind: "wheel",
+          wheel: 1,
+          button: 73,
+          x: 3,
+          y: 5,
+        });
+        expect(tui).toBe(receiver);
+        expect(wheelDelta).toBe(15);
+        return { handled: true };
+      },
+      { priority: 10 },
+    );
+    (receiver as unknown as TuiAltScreenPrototype).routeWheel(wheel, 15);
+    expect(calls).toEqual(["high"]);
+    expect(wheelPredecessor).not.toHaveBeenCalled();
+    expect(requestRender).toHaveBeenCalledOnce();
+  });
+
+  it("preserves Pi fallback, arguments and missing legacy delta", () => {
+    const { api, wheelPredecessor } = install();
+    const receiver = makeReceiver() as unknown as TuiAltScreenPrototype;
+    const handler = vi.fn((context: { wheelDelta?: number }) => {
+      expect(context.wheelDelta).toBeUndefined();
+    });
+    const remove = api.addWheelHandler(handler);
+    receiver.routeWheel(wheel);
+    expect(wheelPredecessor).toHaveBeenCalledWith(wheel);
+    remove();
+    receiver.routeWheel(wheel, 3);
+    expect(handler).toHaveBeenCalledOnce();
+    expect(wheelPredecessor).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips throwing handlers and forwards malformed wheel events untouched", () => {
+    const { api, wheelPredecessor } = install();
+    const receiver = makeReceiver() as unknown as TuiAltScreenPrototype;
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      api.addWheelHandler(
+        () => {
+          throw new Error("wheel failure");
+        },
+        { priority: 10 },
+      );
+      const next = vi.fn(() => ({ handled: true }));
+      api.addWheelHandler(next);
+      receiver.routeWheel(wheel, -4);
+      expect(error).toHaveBeenCalledOnce();
+      expect(next).toHaveBeenCalledOnce();
+      expect(wheelPredecessor).not.toHaveBeenCalled();
+      receiver.routeWheel({ direction: "bad" }, 5);
+      expect(next).toHaveBeenCalledOnce();
+      expect(wheelPredecessor).toHaveBeenCalledWith({ direction: "bad" }, 5);
+    } finally {
+      error.mockRestore();
+    }
+  });
+});
+
 describe("copy handler slot", () => {
   it("lets a handler answer the copy and skips the original", async () => {
     const { api, copyPredecessor } = install();
@@ -305,6 +389,64 @@ describe("copy handler slot", () => {
 
     expect(result).toBe(false);
     expect(copyPredecessor).toHaveBeenCalledTimes(1);
+  });
+
+  it("awaits asynchronous handlers in shared priority order", async () => {
+    const { api, copyPredecessor } = install();
+    const receiver = makeReceiver();
+    const calls: string[] = [];
+    let finish: (handled: { handled: boolean }) => void = () => {};
+    api.addCopyHandler(
+      () => {
+        calls.push("sync-first");
+      },
+      { priority: 10 },
+    );
+    api.addAsyncCopyHandler!(
+      () => {
+        calls.push("async");
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      },
+      { priority: 5 },
+    );
+    api.addCopyHandler(() => {
+      calls.push("sync-last");
+      return { handled: true };
+    });
+
+    const result = (
+      receiver as unknown as TuiAltScreenPrototype
+    ).copyActiveSelectionToClipboard.call(receiver);
+    // The sync-first handler runs before the asynchronous one is awaited.
+    await Promise.resolve();
+    expect(calls).toEqual(["sync-first", "async"]);
+    expect(copyPredecessor).not.toHaveBeenCalled();
+    finish({ handled: true });
+    expect(await result).toBe(true);
+    expect(calls).toEqual(["sync-first", "async"]);
+  });
+
+  it("skips rejected async handlers, then falls through or unregisters", async () => {
+    const { api, copyPredecessor } = install();
+    const receiver = makeReceiver() as unknown as TuiAltScreenPrototype;
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const remove = api.addAsyncCopyHandler!(async () => {
+        throw new Error("failed");
+      });
+      expect(await receiver.copyActiveSelectionToClipboard()).toBe(false);
+      expect(copyPredecessor).toHaveBeenCalledTimes(1);
+      expect(errors).toHaveBeenCalledOnce();
+      remove();
+      const sync = vi.fn(() => ({ handled: true }));
+      api.addCopyHandler(sync);
+      expect(receiver.copyActiveSelectionToClipboard()).toBe(true);
+      expect(sync).toHaveBeenCalledOnce();
+    } finally {
+      errors.mockRestore();
+    }
   });
 
   it("reports copySlotAvailable and degrades to a warning without the method", async () => {

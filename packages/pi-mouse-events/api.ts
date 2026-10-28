@@ -132,8 +132,18 @@ export interface CopyHandlerContext {
   readonly tui: TUI;
 }
 
+/** A wheel event Pi offered to its normal wheel router. */
+export interface WheelHandlerContext extends MouseHandlerContext {
+  /** Pi's signed, accelerated scroll delta; absent on older Pi builds. */
+  readonly wheelDelta?: number;
+}
+
 export type MouseHandler = (context: MouseHandlerContext) => MouseHandlerResult;
+export type WheelHandler = (context: WheelHandlerContext) => MouseHandlerResult;
 export type CopyHandler = (context: CopyHandlerContext) => CopyHandlerResult;
+export type AsyncCopyHandler = (
+  context: CopyHandlerContext,
+) => CopyHandlerResult | Promise<CopyHandlerResult>;
 export type MouseHandlerResult = ComponentMouseEventResult | undefined | void;
 export type CopyHandlerResult = ComponentMouseEventResult | undefined | void;
 
@@ -184,12 +194,33 @@ export interface MouseEventsApi {
   ): () => void;
 
   /**
+   * Register a synchronous handler for wheel events after Pi has computed the
+   * scroll delta and offered the event to native components and overlays, but
+   * before its default wheel router. Handled events skip the default router.
+   * Optional on older v2 publishers and when Pi's wheel router is unavailable.
+   */
+  addWheelHandler?(
+    handler: WheelHandler,
+    options?: MouseHandlerRegistrationOptions,
+  ): () => void;
+
+  /**
    * Register a handler in front of `TuiAltScreen.copyActiveSelectionToClipboard`
    * — the method Pi's copy key (default ctrl+x) reaches. Returning
    * `{ handled: true }` answers the copy yourself; anything else calls through.
    */
   addCopyHandler(
     handler: CopyHandler,
+    options?: MouseHandlerRegistrationOptions,
+  ): () => void;
+
+  /**
+   * Register a copy handler that may complete asynchronously. Sync and async
+   * handlers share one priority order; a rejection is skipped, and Pi's copy
+   * runs only if none handled it. Optional on older v2 publishers.
+   */
+  addAsyncCopyHandler?(
+    handler: AsyncCopyHandler,
     options?: MouseHandlerRegistrationOptions,
   ): () => void;
 

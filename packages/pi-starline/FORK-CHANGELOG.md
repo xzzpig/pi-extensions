@@ -1,5 +1,13 @@
 # Fork release notes
 
+## 0.6.0 — Upstream v0.6.1 sync
+
+- Adopt upstream's pill-only status bar, clickable pills, bubbles and keyboard actions. The old text-footer configuration is removed.
+- Keep the fork's `pi-mouse-events` consumer, component expansion and group-target compatibility. Pill pointer requests and click-away use the shared mouse layer rather than a second Starline mouse patch.
+- Prefer Pi's native clipboard through the shared asynchronous copy slot when available; older v2 mouse-event publishers retain the existing OSC 52 fallback.
+- Route editor-wheel input through the shared post-component slot using Pi's calculated delta, including acceleration and Alt-wheel, while retaining the earlier fallback for older v2 publishers.
+- Ship upstream's public `types/pill-api.d.ts` along with the fork's built declarations and release notes.
+
 ## 0.5.1 — Release candidate
 
 - Recognize the optional `@xzzpig/transcript-expand-target.v1` contract for group summary clicks. Invalid or absent providers fall back to the existing component resolver; no new mandatory package dependency or default-setting change.

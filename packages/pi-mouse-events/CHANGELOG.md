@@ -11,6 +11,12 @@
 - Internally remove duplicate Pi cursor markers from selection-rendered rows
   while preserving the first marker and other content. Unsupported hosts are
   left untouched; the workaround is not a public rendering hook.
+- Add the optional v2 `addAsyncCopyHandler` slot. Synchronous and asynchronous
+  handlers share priority order; rejected handlers are skipped, and an
+  unhandled copy falls back to Pi. Existing synchronous-only dispatch is unchanged.
+- Add the optional `addWheelHandler` slot after Pi's native component and overlay
+  dispatch. Handlers receive Pi's signed accelerated delta, including Alt-wheel,
+  without advancing the accelerator twice; older v2 publishers remain supported.
 
 ## [0.2.0] — 2026-09-24
 

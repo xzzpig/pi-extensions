@@ -19,6 +19,7 @@ import { makePi, makeReceiver, type ReceiverWithWrites } from "./helpers.ts";
 const prototype = TuiAltScreen.prototype as unknown as Record<string, unknown>;
 const originalViewportInput = prototype.handleViewportInput;
 const originalCopy = prototype.copyActiveSelectionToClipboard;
+const originalWheel = prototype.routeWheel;
 const originalSelection = prototype.applySelection;
 const originalExitListeners = new Set(process.listeners("exit"));
 
@@ -30,6 +31,7 @@ afterEach(() => {
   delete (globalThis as Record<symbol, unknown>)[MOUSE_EVENTS_API_KEY];
   prototype.handleViewportInput = originalViewportInput;
   prototype.copyActiveSelectionToClipboard = originalCopy;
+  prototype.routeWheel = originalWheel;
   prototype.applySelection = originalSelection;
   for (const listener of process.listeners("exit")) {
     if (
@@ -58,6 +60,14 @@ describe("extension entry", () => {
     expect(api?.eventChannel).toBe(MOUSE_EVENT_CHANNEL);
     expect(api?.copySlotAvailable).toBe(true);
     expect(prototype.handleViewportInput).not.toBe(originalViewportInput);
+  });
+
+  it("omits the optional wheel slot when Pi has no wheel router", async () => {
+    const extension = await loadExtension();
+    const { pi } = makePi();
+    delete prototype.routeWheel;
+    extension(pi);
+    expect(getMouseEventsApi()?.addWheelHandler).toBeUndefined();
   });
 
   it("is a no-op when the API is already published", async () => {

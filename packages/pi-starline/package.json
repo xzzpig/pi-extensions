@@ -1,6 +1,6 @@
 {
 	"name": "@xzzpig/pi-starline",
-	"version": "0.5.1",
+	"version": "0.6.0",
 	"description": "A Starship-inspired statusline and Opencode-style TUI for Pi.",
 	"type": "module",
 	"license": "MIT",
@@ -22,6 +22,7 @@
 	"files": [
 		"extensions",
 		"dist",
+		"types",
 		"FORK-CHANGELOG.md"
 	],
 	"scripts": {
@@ -48,7 +49,7 @@
 		"extensions": [
 			"./extensions"
 		],
-		"image": "https://raw.githubusercontent.com/Andy8647/pi-starline/main/assets/starline.png"
+		"image": "https://raw.githubusercontent.com/Andy8647/pi-starline/main/assets/cover.png"
 	},
 	"publishConfig": {
 		"access": "public"

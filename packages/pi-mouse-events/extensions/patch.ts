@@ -9,7 +9,8 @@
  * extension can register an input listener, and consumes every mouse report
  * it parses.
  *
- * Two input methods are wrapped, plus an optional selection-render workaround:
+ * Input, wheel and copy methods are wrapped when available, plus an optional
+ * selection-render workaround:
  *
  * - `handleViewportInput` — mouse events are parsed and handed to the
  *   registered handlers, then fall through to the original method, whose
@@ -27,6 +28,8 @@
  * - `copyActiveSelectionToClipboard` — registered handlers run first and may
  *   answer the copy themselves; otherwise the original method runs. Installed
  *   only when the method exists (pi-tui gained it in 0.84.3).
+ * - `routeWheel` — when patchable, offer Pi's computed wheel delta to
+ *   registered handlers before its default router, after native components.
  * - `applySelection` — when patchable, remove duplicate caret markers from
  *   rendered selection rows without changing any other content.
  *
@@ -37,21 +40,26 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   MOUSE_EVENT_CHANNEL,
+  type AsyncCopyHandler,
   type CopyHandler,
   type MouseDispatchEvent,
   type MouseHandler,
   type MouseHandlerRegistrationOptions,
   type PointerShape,
+  type WheelHandler,
 } from "../api.ts";
 import { restoreCoreGesture } from "./restore.ts";
 import {
+  runAsyncCopyHandlersInPriorityOrder,
   runCopyHandlersInPriorityOrder,
   runMouseHandlersInPriorityOrder,
+  runWheelHandlersInPriorityOrder,
 } from "./test-support.ts";
 import { isPatchable, type MouseReceiver } from "./receiver.ts";
 import { parseMouseEventWith } from "./parse.ts";
 import { createPointerController } from "./pointer.ts";
 import { installSelectionMarkerDedupe } from "./selection-markers.ts";
+import { wheelDispatchEvent } from "./wheel.ts";
 
 interface MouseHandlerEntry {
   id: number;
@@ -59,22 +67,35 @@ interface MouseHandlerEntry {
   handler: MouseHandler;
 }
 
-interface CopyHandlerEntry {
+interface WheelHandlerEntry {
   id: number;
   priority: number;
-  handler: CopyHandler;
+  handler: WheelHandler;
 }
+
+type CopyHandlerEntry =
+  | { id: number; priority: number; handler: CopyHandler; async: false }
+  | { id: number; priority: number; handler: AsyncCopyHandler; async: true };
 
 export interface MousePatchState {
   addMouseHandler(
     handler: MouseHandler,
     options?: MouseHandlerRegistrationOptions,
   ): () => void;
+  addWheelHandler(
+    handler: WheelHandler,
+    options?: MouseHandlerRegistrationOptions,
+  ): () => void;
   addCopyHandler(
     handler: CopyHandler,
     options?: MouseHandlerRegistrationOptions,
   ): () => void;
+  addAsyncCopyHandler(
+    handler: AsyncCopyHandler,
+    options?: MouseHandlerRegistrationOptions,
+  ): () => void;
   readonly copySlotAvailable: boolean;
+  readonly wheelSlotAvailable: boolean;
   requestPointerShape(shape: PointerShape): void;
   /** The renderer instance the wrappers last ran against, if any. */
   liveReceiver(): MouseReceiver | undefined;
@@ -96,6 +117,7 @@ export interface InstalledPatches {
 interface PatchCore {
   readonly copySlotAvailable: boolean;
   mouseHandlers: MouseHandlerEntry[];
+  wheelHandlers: WheelHandlerEntry[];
   copyHandlers: CopyHandlerEntry[];
   nextHandlerId: number;
 }
@@ -128,9 +150,11 @@ export function installMousePatches<T extends object>(
     );
   }
 
+  const wheelAvailable = isPatchable(prototype, "routeWheel");
   const core: PatchCore = {
     copySlotAvailable: copyAvailable,
     mouseHandlers: [],
+    wheelHandlers: [],
     copyHandlers: [],
     nextHandlerId: 0,
   };
@@ -199,6 +223,10 @@ export function installMousePatches<T extends object>(
   let patchedCopy:
     | ((this: unknown, ...args: unknown[]) => Promise<boolean> | boolean)
     | undefined;
+  const originalWheel = wheelAvailable
+    ? (target.routeWheel as (this: unknown, ...args: unknown[]) => void)
+    : undefined;
+  let patchedWheel: ((this: unknown, ...args: unknown[]) => void) | undefined;
 
   const originalViewportInput = target.handleViewportInput as (
     this: unknown,
@@ -259,6 +287,37 @@ export function installMousePatches<T extends object>(
   }
   target.handleViewportInput = patchedViewportInput;
 
+  if (originalWheel) {
+    patchedWheel = function patchedWheel(
+      this: unknown,
+      ...args: unknown[]
+    ): void {
+      // SAFETY: routeWheel is called with the live TuiAltScreen receiver.
+      const receiver = this as unknown as MouseReceiver;
+      live = receiver;
+      const event = wheelDispatchEvent(args[0]);
+      const delta =
+        typeof args[1] === "number" && Number.isFinite(args[1])
+          ? args[1]
+          : undefined;
+      if (
+        event &&
+        runWheelHandlersInPriorityOrder(
+          core.wheelHandlers,
+          event,
+          receiver,
+          delta,
+        )
+      ) {
+        receiver.requestRender?.();
+        return undefined;
+      }
+      // pi-lens-ignore: no-reflect-apply
+      return Reflect.apply(originalWheel, this, args);
+    };
+    target.routeWheel = patchedWheel;
+  }
+
   if (copyAvailable) {
     originalCopy = target.copyActiveSelectionToClipboard as (
       this: unknown,
@@ -271,9 +330,20 @@ export function installMousePatches<T extends object>(
       // SAFETY: as above — copyActiveSelectionToClipboard is a TuiAltScreen
       // method, so `this` is the live renderer.
       live = this as unknown as MouseReceiver;
-      if (runCopyHandlersInPriorityOrder(core.copyHandlers, this)) return true;
-      // Same forwarding as above; the original is async, so the promise it
-      // returns is passed through untouched.
+      if (core.copyHandlers.some((entry) => entry.async)) {
+        return runAsyncCopyHandlersInPriorityOrder(
+          core.copyHandlers,
+          this,
+        ).then((handled) => {
+          if (handled) return true;
+          // pi-lens-ignore: no-reflect-apply
+          return Reflect.apply(originalCopy!, this, args);
+        });
+      }
+      const synchronous = core.copyHandlers.filter((entry) => !entry.async);
+      if (runCopyHandlersInPriorityOrder(synchronous, this)) return true;
+      // Preserve the original synchronous-handler dispatch and forward Pi's
+      // own promise unchanged when no asynchronous handler is registered.
       // pi-lens-ignore: no-reflect-apply
       return Reflect.apply(originalCopy!, this, args);
     };
@@ -283,6 +353,7 @@ export function installMousePatches<T extends object>(
   return {
     state: {
       copySlotAvailable: copyAvailable,
+      wheelSlotAvailable: wheelAvailable,
       requestPointerShape(shape) {
         pointer.request(shape);
       },
@@ -308,12 +379,40 @@ export function installMousePatches<T extends object>(
           );
         };
       },
+      addWheelHandler(handler, options) {
+        const entry: WheelHandlerEntry = {
+          id: core.nextHandlerId++,
+          priority: options?.priority ?? 0,
+          handler,
+        };
+        core.wheelHandlers.push(entry);
+        return () => {
+          core.wheelHandlers = core.wheelHandlers.filter(
+            (candidate) => candidate !== entry,
+          );
+        };
+      },
       addCopyHandler(handler, options) {
         const id = core.nextHandlerId++;
         const entry: CopyHandlerEntry = {
           id,
           priority: options?.priority ?? 0,
           handler,
+          async: false,
+        };
+        core.copyHandlers.push(entry);
+        return () => {
+          core.copyHandlers = core.copyHandlers.filter(
+            (candidate) => candidate !== entry,
+          );
+        };
+      },
+      addAsyncCopyHandler(handler, options) {
+        const entry: CopyHandlerEntry = {
+          id: core.nextHandlerId++,
+          priority: options?.priority ?? 0,
+          handler,
+          async: true,
         };
         core.copyHandlers.push(entry);
         return () => {
@@ -337,7 +436,11 @@ export function installMousePatches<T extends object>(
       ) {
         target.copyActiveSelectionToClipboard = originalCopy;
       }
+      if (patchedWheel && target.routeWheel === patchedWheel) {
+        target.routeWheel = originalWheel;
+      }
       core.mouseHandlers = [];
+      core.wheelHandlers = [];
       core.copyHandlers = [];
       live = undefined;
       bus = undefined;

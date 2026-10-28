@@ -1,4 +1,5 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readdirSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -7,6 +8,7 @@ import {
 	emptyGitStatus,
 	parseGitNumstat,
 	parseGitStatusPorcelain,
+	readGitStatus,
 } from "../extensions/starline/git";
 
 describe("parseGitStatusPorcelain", () => {
@@ -18,6 +20,30 @@ describe("parseGitStatusPorcelain", () => {
 		const empty = emptyGitStatus();
 		expect(empty.commit).toBeUndefined();
 		expect(empty.metrics).toBeUndefined();
+		expect(empty.changes).toEqual([]);
+	});
+
+	it("remembers the changed paths for the pill's bubble", () => {
+		const status = parseGitStatusPorcelain(
+			[
+				"# branch.head main",
+				"1 .M N... 100644 100644 100644 abc abc src/app.ts",
+				"1 A. N... 000000 100644 100644 000 def src/new file.ts",
+				"2 R. N... 100644 100644 100644 abc def R100 src/moved.ts\tsrc/old.ts",
+				"? notes/todo.md",
+				"u UU N... 100644 100644 100644 100644 abc def ghi conflict.txt",
+			].join("\n"),
+			0,
+		);
+
+		expect(status.changes).toEqual([
+			// A path with a space stays whole; `2` lines carry a score field first.
+			{ code: "M", path: "src/app.ts" },
+			{ code: "A", path: "src/new file.ts" },
+			{ code: "R", path: "src/moved.ts" },
+			{ code: "?", path: "notes/todo.md" },
+			{ code: "U", path: "conflict.txt" },
+		]);
 	});
 
 	it("parses branch, ahead/behind, and file states", () => {
@@ -208,5 +234,68 @@ describe("detectGitState", () => {
 
 	it("returns empty when no state files exist", () => {
 		expect(detectGitState({})).toEqual({});
+	});
+});
+
+/**
+ * Git refreshes the index's stat information while answering `status` and
+ * `diff`, which takes `.git/index.lock` and rewrites `.git/index`. A footer that
+ * polls every thirty seconds doing that is churn on the user's repository, and a
+ * lock that can collide with their own `git commit`.
+ */
+describe("git probes never write to the repository", () => {
+	function repoWithEditedFile(): string {
+		const root = mkdtempSync(join(tmpdir(), "starline-git-quiet-"));
+		const run = (...args: string[]) =>
+			execFileSync("git", args, { cwd: root, env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" } });
+		run("init", "--quiet");
+		run("config", "user.email", "test@example.com");
+		run("config", "user.name", "Test");
+		writeFileSync(join(root, "file.txt"), "one\n");
+		run("add", "file.txt");
+		run("commit", "--quiet", "-m", "initial");
+		// A changed file is what makes git want to refresh the index on the next
+		// status: without the opt-out, `status` rewrites it. The mtime is pushed a
+		// little into the future, because git treats a file whose timestamp equals
+		// the index's as "racy" and may skip the refresh — which made the control
+		// test below fail now and then on fast disks.
+		const edited = join(root, "file.txt");
+		writeFileSync(edited, "one\ntwo\n");
+		const future = new Date(Date.now() + 2000);
+		utimesSync(edited, future, future);
+		return root;
+	}
+
+	it("leaves .git/index alone while reading the status", async () => {
+		const root = repoWithEditedFile();
+		const indexPath = join(root, ".git", "index");
+		const before = statSync(indexPath).mtimeMs;
+
+		await readGitStatus(root, { readExactTag: true, readMetrics: true });
+
+		expect(statSync(indexPath).mtimeMs).toBe(before);
+	});
+
+	it("never leaves an index lock behind", async () => {
+		const root = repoWithEditedFile();
+
+		await readGitStatus(root, { readExactTag: true, readMetrics: true });
+
+		expect(readdirSync(join(root, ".git")).filter((name) => name.endsWith(".lock"))).toEqual([]);
+	});
+
+	// The control: without the opt-out git does rewrite the index, so the test
+	// above is measuring the behaviour it claims to.
+	it("would rewrite it without GIT_OPTIONAL_LOCKS=0", () => {
+		const root = repoWithEditedFile();
+		const indexPath = join(root, ".git", "index");
+		const before = statSync(indexPath).mtimeMs;
+
+		execFileSync("git", ["status", "--porcelain=2", "--branch"], {
+			cwd: root,
+			env: { ...process.env, GIT_OPTIONAL_LOCKS: undefined },
+		});
+
+		expect(statSync(indexPath).mtimeMs).not.toBe(before);
 	});
 });

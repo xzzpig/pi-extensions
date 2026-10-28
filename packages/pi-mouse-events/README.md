@@ -31,9 +31,18 @@ package opens that path and adds an integration surface around it.
     see a mouse event _before_ Pi acts on it: `ctx.ui.onTerminalInput` cannot
     (the alt-screen registers its viewport listener first and consumes every
     mouse report).
+  - `addWheelHandler?.(handler, { priority })` — receives wheel events after
+    Pi has offered them to native components and overlays, and receives Pi's
+    calculated signed `wheelDelta` before default scroll routing. A handled
+    event skips the default router and requests a repaint. The optional slot is
+    absent on older v2 publishers or when Pi's router cannot be patched.
   - `addCopyHandler(handler)` — runs in front of
     `TuiAltScreen.copyActiveSelectionToClipboard` (Pi's copy key, default
     ctrl+x); `{ handled: true }` answers the copy yourself.
+  - `addAsyncCopyHandler?.(handler, { priority })` — allows a handler to await
+    a native clipboard write. Synchronous and asynchronous handlers share one
+    priority order; rejected handlers are skipped and Pi's copy runs if none
+    handles the request. Older v2 publishers lack this optional method.
   - `hitTest(tui, x, y)` — the component under a screen cell, overlay or
     layout, whatever it is.
   - `parseMouseEvent(data)` / `isMouseSequence(data)` — the same SGR and

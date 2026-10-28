@@ -1,6 +1,6 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Container, Text } from "@earendil-works/pi-tui";
-import type { MouseEventsApi } from "@xzzpig/pi-mouse-events/api";
+import type { AsyncCopyHandler, MouseEventsApi } from "@xzzpig/pi-mouse-events/api";
 import { describe, expect, it } from "vitest";
 import type { PolishedTuiConfig } from "../../extensions/starline/config";
 import {
@@ -527,6 +527,95 @@ describe("installMouseFeaturesOn wiring", () => {
 
 		expect(listeners[0]("\x03")).toBeUndefined();
 		expect(listeners[0]("\x04")).toBeUndefined();
+		dispose();
+	});
+});
+
+/**
+ * Pi injects a native clipboard implementation when the host wired one; it knows
+ * about macOS Terminal.app, tmux without OSC 52 passthrough and WSL, where a bare
+ * OSC 52 write reports success and leaves the clipboard untouched. Starline's two
+ * copy paths used to write OSC 52 themselves, which skipped all of that.
+ */
+function installWithNativeCopy(receiver: object, deps: { getConfig: () => PolishedTuiConfig }) {
+	const fake = makeFakeApi(receiver);
+	let handler: AsyncCopyHandler | undefined;
+	fake.api.addAsyncCopyHandler = (registered) => {
+		handler = registered;
+		return () => {};
+	};
+	const dispose = installMouseFeaturesOn(fake.api, makeCtx(receiver), deps);
+	return { dispose, copy: () => handler?.({ tui: receiver as never }) };
+}
+
+describe("clipboard delegation", () => {
+	it("hands the cleaned text to Pi's implementation and skips the terminal write", async () => {
+		const { receiver, written, flashes } = makeTranscriptFixture();
+		const copied: string[] = [];
+		Object.assign(receiver, {
+			copySelection: async (text: string) => {
+				copied.push(text);
+				return true;
+			},
+		});
+		const { dispose, copy } = installWithNativeCopy(receiver, { getConfig: makeConfig(true) });
+
+		await copy();
+
+		expect(copied).toEqual(["hello"]);
+		expect(written).toEqual([]);
+		expect(flashes).toContain("Copied!");
+		dispose();
+	});
+
+	it("falls back to the terminal write when Pi's implementation fails", async () => {
+		const { receiver, written } = makeTranscriptFixture();
+		Object.assign(receiver, { copySelection: () => "Copy failed" });
+		const { dispose, copy } = installWithNativeCopy(receiver, { getConfig: makeConfig(true) });
+
+		await copy();
+
+		expect(decodeOsc52(written[0])).toBe("hello");
+		dispose();
+	});
+
+	it("falls back when Pi's implementation throws", async () => {
+		const { receiver, written } = makeTranscriptFixture();
+		Object.assign(receiver, {
+			copySelection: () => {
+				throw new Error("no display");
+			},
+		});
+		const { dispose, copy } = installWithNativeCopy(receiver, { getConfig: makeConfig(true) });
+
+		await copy();
+
+		expect(decodeOsc52(written[0])).toBe("hello");
+		dispose();
+	});
+
+	it("still honours copyNotice when Pi's implementation answers", async () => {
+		const { receiver, flashes } = makeTranscriptFixture();
+		Object.assign(receiver, { copySelection: () => true });
+		const config = {
+			...makeConfig(true)(),
+			mouse: { ...makeConfig(true)().mouse, copyNotice: false },
+		};
+		const { dispose, copy } = installWithNativeCopy(receiver, { getConfig: () => config });
+
+		await copy();
+
+		expect(flashes).toEqual([]);
+		dispose();
+	});
+
+	it("keeps the OSC 52 path when no implementation is injected", async () => {
+		const { receiver, written } = makeTranscriptFixture();
+		const { dispose, copy } = installWithNativeCopy(receiver, { getConfig: makeConfig(true) });
+
+		await copy();
+
+		expect(decodeOsc52(written[0])).toBe("hello");
 		dispose();
 	});
 });

@@ -11,7 +11,13 @@
  * through to the built-in behavior.
  */
 
-import type { CopyHandler, MouseDispatchEvent, MouseHandler } from "../api.ts";
+import type {
+  AsyncCopyHandler,
+  CopyHandler,
+  MouseDispatchEvent,
+  MouseHandler,
+  WheelHandler,
+} from "../api.ts";
 
 export interface MouseHandlerEntryLike {
   id: number;
@@ -19,10 +25,22 @@ export interface MouseHandlerEntryLike {
   handler: MouseHandler;
 }
 
+export interface WheelHandlerEntryLike {
+  id: number;
+  priority: number;
+  handler: WheelHandler;
+}
+
 export interface CopyHandlerEntryLike {
   id: number;
   priority: number;
   handler: CopyHandler;
+}
+
+export interface AsyncCopyHandlerEntryLike {
+  id: number;
+  priority: number;
+  handler: AsyncCopyHandler;
 }
 
 function sorted<T extends { priority: number; id: number }>(
@@ -59,6 +77,28 @@ export function runMouseHandlersInPriorityOrder(
   return false;
 }
 
+/** Run post-component wheel handlers in priority order. */
+export function runWheelHandlersInPriorityOrder(
+  entries: readonly WheelHandlerEntryLike[],
+  event: MouseDispatchEvent,
+  tui: unknown,
+  wheelDelta?: number,
+): boolean {
+  for (const entry of sorted(entries)) {
+    try {
+      const result = entry.handler({
+        event: { ...event, handled: false },
+        tui: tui as never,
+        wheelDelta,
+      });
+      if (result?.handled) return true;
+    } catch (error) {
+      console.error("[pi-mouse-events] wheel handler error:", error);
+    }
+  }
+  return false;
+}
+
 /**
  * Run registered copy handlers in priority order. Returns whether any handler
  * answered the copy (`{ handled: true }`).
@@ -76,6 +116,22 @@ export function runCopyHandlersInPriorityOrder(
       continue;
     }
     if (result?.handled) return true;
+  }
+  return false;
+}
+
+/** Run synchronous and asynchronous copy handlers in one priority order. */
+export async function runAsyncCopyHandlersInPriorityOrder(
+  entries: readonly AsyncCopyHandlerEntryLike[],
+  tui: unknown,
+): Promise<boolean> {
+  for (const entry of sorted(entries)) {
+    try {
+      const result = await entry.handler({ tui: tui as never });
+      if (result?.handled) return true;
+    } catch (error) {
+      console.error("[pi-mouse-events] copy handler error:", error);
+    }
   }
   return false;
 }

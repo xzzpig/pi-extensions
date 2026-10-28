@@ -12,11 +12,13 @@ import type { TUI } from "@earendil-works/pi-tui";
 import {
   MOUSE_EVENTS_API_KEY,
   MOUSE_EVENT_CHANNEL,
+  type AsyncCopyHandler,
   type CopyHandler,
   type MouseDispatchEvent,
   type MouseEventsApi,
   type MouseHandler,
   type MouseHandlerRegistrationOptions,
+  type WheelHandler,
 } from "../api.ts";
 import { hitTestReceiver } from "./geometry.ts";
 import {
@@ -51,11 +53,27 @@ export function createMouseEventsApi(
     ) {
       return patches.state.addMouseHandler(handler, options);
     },
+    ...(patches.state.wheelSlotAvailable
+      ? {
+          addWheelHandler(
+            handler: WheelHandler,
+            options?: MouseHandlerRegistrationOptions,
+          ) {
+            return patches.state.addWheelHandler(handler, options);
+          },
+        }
+      : {}),
     addCopyHandler(
       handler: CopyHandler,
       options?: MouseHandlerRegistrationOptions,
     ) {
       return patches.state.addCopyHandler(handler, options);
+    },
+    addAsyncCopyHandler(
+      handler: AsyncCopyHandler,
+      options?: MouseHandlerRegistrationOptions,
+    ) {
+      return patches.state.addAsyncCopyHandler(handler, options);
     },
     hitTest(tui: TUI, x: number, y: number) {
       // SAFETY: TUI is the public surface of the fullscreen renderer;

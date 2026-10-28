@@ -197,8 +197,8 @@ describe("extension wiring of the mouse features", () => {
 		published = publishFakeApi();
 		await startSession();
 
-		// Three mouse handlers (expand, wheel, caret) plus the copy handler.
-		expect(published.mouseHandlers).toHaveLength(3);
+		// Expand, wheel, caret, and the non-consuming pill-bubble observer.
+		expect(published.mouseHandlers).toHaveLength(4);
 		expect(published.copyHandlers).toHaveLength(1);
 
 		await endSession();
@@ -265,7 +265,7 @@ describe("extension wiring of the mouse features", () => {
 
 		expect(published.copyHandlers).toHaveLength(0);
 		// The pointer features do not need the copy slot.
-		expect(published.mouseHandlers).toHaveLength(3);
+		expect(published.mouseHandlers).toHaveLength(4);
 	});
 
 	it("registers without duplication across two session_starts", async () => {
@@ -273,7 +273,7 @@ describe("extension wiring of the mouse features", () => {
 		const { handlers, ctx } = await startSession();
 		await emit(handlers, "session_start", ctx);
 
-		expect(published.mouseHandlers).toHaveLength(3);
+		expect(published.mouseHandlers).toHaveLength(4);
 		expect(published.copyHandlers).toHaveLength(1);
 	});
 

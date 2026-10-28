@@ -238,7 +238,9 @@ function makeWheelReceiver() {
 	receiver.currentLayout = renderLayoutFrame(root, WIDTH, HEIGHT, () => {});
 	receiver.terminal = { rows: HEIGHT, columns: WIDTH, write: () => {} };
 	receiver.wheelScrollLines = 3;
+	receiver.wheelScroll = { next: () => 3, setLines: () => {} };
 	receiver.overlayStack = [];
+	receiver.renderedOverlayLayouts = [];
 	receiver.scrollbarHover = undefined;
 	receiver.scrollbarDrag = undefined;
 	receiver.stopped = true;

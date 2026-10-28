@@ -88,6 +88,8 @@ import {
 import { activeEditor, pointerOverEditor } from "./editor-mouse";
 import { scrollEditorBy } from "./editor-scroll";
 import { editorVisualRowCount } from "./editor-text-cursor";
+import { nativeCopyHandler } from "./fork-native-clipboard";
+import { type SharedWheelHandler, sharedWheelRegistrar } from "./fork-wheel-compat";
 import { type BoxLike, scrollContentLinesFor } from "./hit-test";
 import { keyTextFor } from "./key-text";
 import { externalEditorName, selectionHintText } from "./selection-state";
@@ -738,6 +740,7 @@ function scrollEditorForWheel(
 	receiver: MouseCapableReceiver,
 	event: { direction: number; x: number; y: number },
 	deps: InstallMouseDeps,
+	wheelDelta?: number,
 ): boolean {
 	try {
 		if (!deps.getConfig().mouse.wheelRouting) return false;
@@ -749,7 +752,10 @@ function scrollEditorForWheel(
 		const rows = receiver.terminal?.rows;
 		if (typeof rows !== "number") return false;
 		if (!pointerOverEditorBox(receiver, editor.component, event.x, event.y)) return false;
-		const lines = event.direction * Math.max(1, receiver.wheelScrollLines ?? 1);
+		const lines =
+			typeof wheelDelta === "number" && Number.isFinite(wheelDelta) && wheelDelta !== 0
+				? wheelDelta
+				: event.direction * Math.max(1, receiver.wheelScrollLines ?? 1);
 		return scrollEditorBy(editor.scrollable, lines, rows);
 	} catch {
 		// Routing is a best-effort read of Pi's internals and of an editor this
@@ -855,24 +861,22 @@ export function installMouseFeaturesOn(
 		),
 	);
 
+	const registerWheel = sharedWheelRegistrar(api);
+	const wheelHandler: SharedWheelHandler = ({ event, tui, wheelDelta }) => {
+		if (event.wheel === undefined) return undefined;
+		const receiver = bindReceiver(tui);
+		if (!receiver || !featureOn("editorWheelScroll")) return undefined;
+		const notch = { direction: event.wheel, x: event.x, y: event.y };
+		if (!scrollEditorForWheel(receiver, notch, deps, wheelDelta)) return undefined;
+		// The shared wheel slot repaints handled events; the older pre-dispatch
+		// slot needs the consumer to request the repaint itself.
+		if (!registerWheel) receiver.requestRender?.();
+		return { handled: true };
+	};
 	cleanups.push(
-		api.addMouseHandler(
-			({ event, tui }) => {
-				if (event.wheel === undefined) return undefined;
-				const receiver = bindReceiver(tui);
-				if (!receiver || !featureOn("editorWheelScroll")) return undefined;
-				const notch = { direction: event.wheel, x: event.x, y: event.y };
-				if (!scrollEditorForWheel(receiver, notch, deps)) {
-					return undefined;
-				}
-				// Pi's own wheel routing repaints at the end of every notch;
-				// consuming the event means reaching that repaint is now this
-				// handler's job.
-				receiver.requestRender?.();
-				return { handled: true };
-			},
-			{ priority: 10 },
-		),
+		registerWheel
+			? registerWheel(wheelHandler, { priority: 10 })
+			: api.addMouseHandler(wheelHandler, { priority: 10 }),
 	);
 
 	cleanups.push(
@@ -887,7 +891,32 @@ export function installMouseFeaturesOn(
 		),
 	);
 
-	if (api.copySlotAvailable) {
+	if (api.copySlotAvailable && api.addAsyncCopyHandler) {
+		cleanups.push(
+			api.addAsyncCopyHandler(
+				nativeCopyHandler(({ tui }) => {
+					const receiver = bindReceiver(tui);
+					const bounds = receiver?.getSelectionBounds?.();
+					if (!receiver || !bounds) return undefined;
+					const config = deps.getConfig();
+					return {
+						receiver,
+						showNotice: config.mouse.copyNotice,
+						texts: [
+							() =>
+								featureOn("editorBufferCopy")
+									? editorTextForSelection(receiver, config, bounds)
+									: undefined,
+							() =>
+								featureOn("transcriptCleanCopy") && config.mouse.transcriptCleanCopy
+									? transcriptSelectionText(receiver, config, bounds)
+									: undefined,
+						],
+					};
+				}),
+			),
+		);
+	} else if (api.copySlotAvailable) {
 		cleanups.push(
 			api.addCopyHandler(({ tui }) => {
 				const receiver = bindReceiver(tui);
