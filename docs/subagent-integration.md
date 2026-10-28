@@ -186,6 +186,8 @@ permission requests.
 The grace window exists so a request that arrives while the parent is switching sessions is not abandoned in the gap.
 Absence of a record is deliberately **not** read as unknown: a cleanly exited parent leaves nothing behind, so treating absence as "maybe serving" would restore the full-timeout stall that the heartbeat exists to end.
 A target that *is* draining its inbox is waited on for the full `forwardingTimeoutMs`, however long the human takes to decide.
+The exception is the serving session's own `promptTimeoutMs`: when it is set and nobody answers the forwarded prompt within it, the serving session denies the request as unanswered and the child receives that decision, telling its agent that nobody answered rather than that the user refused.
+Keep `promptTimeoutMs` below `forwardingTimeoutMs`, or the child can give up while the parent's prompt is still open.
 That includes a parent whose human is still deliberating at an earlier forwarded prompt: it keeps refreshing its heartbeat throughout, so a second child does not read it as gone.
 
 Every other way the forwarding path can give up — an unresolvable parent session, forwarding directories that cannot be created, a request that cannot be written, an unreadable response, and the timeout itself — is reported the same way: as approval being unavailable, with a reason naming the specific failure.

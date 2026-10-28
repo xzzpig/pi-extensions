@@ -203,6 +203,7 @@ describe("emitDecisionEvent", () => {
       "user_denied",
       "auto_approved",
       "confirmation_unavailable",
+      "prompt_unanswered",
     ];
     const bus = makeEventBus();
     for (const resolution of resolutions) {

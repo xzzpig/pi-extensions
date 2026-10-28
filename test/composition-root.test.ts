@@ -1270,6 +1270,81 @@ describe("service and chain share one authorizer registry", () => {
   });
 });
 
+describe("the nothing-on-disk license reaches the delegation envelope", () => {
+  // End to end through the bash gate, the escalation, the chain, and the
+  // envelope: an allowing link is honored on a bash external_directory ask only
+  // when every flagged path names nothing on disk (ADR 0007, amendment 8).
+  async function askThroughAllowingLink(
+    command: string,
+  ): Promise<{ block?: true; titles: string[]; cwd: string }> {
+    writeGlobalConfig({
+      permission: { "*": "allow", external_directory: { "*": "ask" } },
+      authorizerChain: ["allowing-judge"],
+    });
+    const cwd = mkdtempSync(join(tmpdir(), "pi-perm-license-cwd-"));
+    const pi = makeFakePi({ toolNames: ["bash"] });
+    piPermissionSystemExtension(pi as unknown as ExtensionAPI);
+    const titles: string[] = [];
+    const { ctx } = makeUiCtx(cwd, titles);
+    await fireSessionStart(pi, ctx);
+    getPermissionsService("ui-session")!.registerAuthorizer(
+      "allowing-judge",
+      () => Promise.resolve({ kind: "allow" }),
+    );
+    const result = (await pi.fire(
+      "tool_call",
+      { toolName: "bash", toolCallId: "b-1", input: { command } },
+      ctx,
+    )) as { block?: true };
+    return { block: result.block, titles, cwd };
+  }
+
+  it("lets the link's allow stand when the operand names nothing on disk", async () => {
+    const { block, titles, cwd } = await askThroughAllowingLink(
+      "officecli set data.xlsx /pi-permission-882-absent/Sheet1/B1",
+    );
+
+    expect(block).toBeUndefined();
+    expect(titles).toEqual([]);
+    const entries = readReviewLog() as Record<string, unknown>[];
+    const licensed = entries.filter(
+      (entry) => entry.event === "authorizer_allow_licensed",
+    );
+    expect(licensed).toHaveLength(1);
+    expect(licensed[0]).toMatchObject({
+      link: "allowing-judge",
+      license: "nothing-on-disk",
+    });
+    const approved = entries.find(
+      (entry) => entry.event === "permission_request.approved",
+    );
+    expect(approved?.requestId).toBe(licensed[0].requestId);
+    expect(approved?.decidedBy).toMatchObject({
+      kind: "authorizer",
+      name: "allowing-judge",
+    });
+
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("still prompts when the operand sits under an existing directory", async () => {
+    const { block, titles, cwd } = await askThroughAllowingLink(
+      `cat ${join(tmpdir(), "pi-permission-882-absent", "x")}`,
+    );
+
+    // The envelope capped the link's allow, so the ask reached the human.
+    expect(block).toBeUndefined();
+    expect(titles).toHaveLength(1);
+    expect(
+      readReviewLog().filter(
+        (entry) => entry.event === "authorizer_allow_licensed",
+      ),
+    ).toEqual([]);
+
+    rmSync(cwd, { recursive: true, force: true });
+  });
+});
+
 describe("ready emitted after service publication", () => {
   // Ordering contracts exist only at the composition root: a consumer reacting
   // to permissions:ready must be able to resolve the service immediately. The
@@ -2452,6 +2527,34 @@ describe("configured prompt preferences reach the inline dialog", () => {
     rmSync(cwd, { recursive: true, force: true });
   });
 
+  it("denies a prompt nobody answers within promptTimeoutMs, and tells the agent so", async () => {
+    writeGlobalConfig({
+      permission: { "*": "allow", demo: "ask" },
+      promptTimeoutMs: 20,
+    });
+
+    const cwd = mkdtempSync(join(tmpdir(), "pi-perm-unanswered-cwd-"));
+    const pi = makeFakePi({ toolNames: ["demo"] });
+    piPermissionSystemExtension(pi as unknown as ExtensionAPI);
+
+    const { ctx } = makeTuiCtx(cwd);
+    await fireSessionStart(pi, ctx);
+
+    const decision = await pi.fire(
+      "tool_call",
+      { toolName: "demo", toolCallId: "unanswered-ask", input: {} },
+      ctx,
+    );
+
+    expect(decision).toEqual({
+      block: true,
+      reason:
+        "[pi-permission-system] Nobody answered the approval prompt for this 'demo' call (rule '*') within 0.02s.",
+    });
+
+    rmSync(cwd, { recursive: true, force: true });
+  });
+
   describe("notification text", () => {
     async function openPrompt(sessionName?: string) {
       writeGlobalConfig({
@@ -2582,6 +2685,35 @@ describe("configured prompt preferences reach the inline dialog", () => {
   // debug log and nothing else, because the factory-time priming refresh
   // recorded the warning as delivered while having no ctx to deliver it.
   describe("a config issue present at session start", () => {
+    it("names the commandEffects declarations for core words and wrappers", async () => {
+      writeGlobalConfig({
+        permission: { "*": "ask", bash: { "*": "ask" } },
+        commandEffects: { sed: { effects: "read" }, xargs: { effects: [] } },
+      });
+
+      const cwd = mkdtempSync(join(tmpdir(), "pi-perm-shadow-cwd-"));
+      const pi = makeFakePi({ toolNames: ["demo"] });
+      piPermissionSystemExtension(pi as unknown as ExtensionAPI);
+
+      const { ctx, notified } = makeTuiCtx(cwd);
+      await fireSessionStart(pi, ctx);
+
+      expect(
+        notified.filter((message) =>
+          message.includes(
+            "commandEffects declares 'sed', a pure-reader core command.",
+          ),
+        ),
+      ).toHaveLength(1);
+      expect(
+        notified.filter((message) =>
+          message.includes("commandEffects declares 'xargs', a wrapper."),
+        ),
+      ).toHaveLength(1);
+
+      rmSync(cwd, { recursive: true, force: true });
+    });
+
     it("is shown by session_start alone, before the first turn", async () => {
       // The shape `detectPermissiveBashFallback` exists to flag.
       writeGlobalConfig({ permission: { "*": "allow" } });

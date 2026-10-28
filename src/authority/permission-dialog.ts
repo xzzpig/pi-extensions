@@ -17,7 +17,8 @@ export type PermissionPromptDecision = {
    * reachable at all (`DenyingAuthorizer`, a no-UI non-subagent session) or the
    * forwarding path gave up before reaching one (`ParentAuthorizer` — target
    * unresolvable, request undeliverable, target not serving, or no answer
-   * within the timeout). Consumed by the gate (block reason) and
+   * within the timeout), or a prompt was shown and nobody answered it within
+   * its `promptTimeoutMs` window (`AnswerWindow`). Consumed by the gate (block reason) and
    * `PermissionPrompter` (review-entry resolution) to report
    * "confirmation_unavailable" rather than a plain user denial — a user who
    * was never asked denied nothing (#719). The decision-event resolution
@@ -55,9 +56,22 @@ export type PermissionPromptDecision = {
  */
 export type UnattributedDecision = Omit<PermissionPromptDecision, "decidedBy">;
 
+/** What the fallback hands each host dialog: the signal that may dismiss it. */
+export interface PermissionDialogOptions {
+  signal?: AbortSignal;
+}
+
 export interface PermissionDecisionUi {
-  select(title: string, options: string[]): Promise<string | undefined>;
-  input(title: string, placeholder?: string): Promise<string | undefined>;
+  select(
+    title: string,
+    options: string[],
+    opts?: PermissionDialogOptions,
+  ): Promise<string | undefined>;
+  input(
+    title: string,
+    placeholder?: string,
+    opts?: PermissionDialogOptions,
+  ): Promise<string | undefined>;
 }
 
 const APPROVE_OPTION = "Yes";
@@ -140,12 +154,25 @@ export interface RequestPermissionOptions {
   };
 }
 
+/**
+ * Ask through the host's `select`/`input` dialogs.
+ *
+ * `signal` reaches every dialog, and the host resolves a dismissed one
+ * `undefined` — the same value a human cancel produces. The two are told apart
+ * by the signal: an `undefined` while it is aborted answers `undefined` (the
+ * prompt was dismissed, so no human ruled), and one while it is live keeps its
+ * meaning as the human's cancel.
+ */
 export async function requestPermissionDecisionFromUi(
   ui: PermissionDecisionUi,
   title: string,
   message: string,
   options?: RequestPermissionOptions,
-): Promise<UnattributedDecision> {
+  signal?: AbortSignal,
+): Promise<UnattributedDecision | undefined> {
+  const dialogOptions: PermissionDialogOptions = { signal };
+  const dismissed = (answer: string | undefined): boolean =>
+    answer === undefined && signal?.aborted === true;
   const sessionOption = options?.sessionLabel ?? APPROVE_FOR_SESSION_OPTION;
   const widthOption = options?.sessionWidth?.label;
   const decisionOptions = [
@@ -156,7 +183,14 @@ export async function requestPermissionDecisionFromUi(
     DENY_WITH_REASON_OPTION,
   ];
 
-  const selected = await ui.select(`${title}\n${message}`, decisionOptions);
+  const selected = await ui.select(
+    `${title}\n${message}`,
+    decisionOptions,
+    dialogOptions,
+  );
+  if (dismissed(selected)) {
+    return undefined;
+  }
 
   if (selected === APPROVE_OPTION) {
     return {
@@ -171,10 +205,17 @@ export async function requestPermissionDecisionFromUi(
     const width: SessionGrantWidth =
       selected === widthOption ? "family" : "proven";
     if (options?.sessionScope) {
-      const scope = await ui.select(`${title}\nApply this session grant to:`, [
-        options.sessionScope.subagentLabel,
-        options.sessionScope.servingSessionLabel,
-      ]);
+      const scope = await ui.select(
+        `${title}\nApply this session grant to:`,
+        [
+          options.sessionScope.subagentLabel,
+          options.sessionScope.servingSessionLabel,
+        ],
+        dialogOptions,
+      );
+      if (dismissed(scope)) {
+        return undefined;
+      }
       return sessionApproval(
         // A cancelled scope select (undefined) falls back to the
         // least-privilege subagent scope.
@@ -188,12 +229,15 @@ export async function requestPermissionDecisionFromUi(
   }
 
   if (selected === DENY_WITH_REASON_OPTION) {
-    const denialReason = normalizePermissionDenialReason(
-      await ui.input(
-        `${title}\nShare why this request was denied (optional).`,
-        "Reason shown back to the agent",
-      ),
+    const typed = await ui.input(
+      `${title}\nShare why this request was denied (optional).`,
+      "Reason shown back to the agent",
+      dialogOptions,
     );
+    if (dismissed(typed)) {
+      return undefined;
+    }
+    const denialReason = normalizePermissionDenialReason(typed);
 
     return createDeniedPermissionDecision(denialReason);
   }

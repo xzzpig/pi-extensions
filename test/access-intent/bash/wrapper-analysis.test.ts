@@ -190,6 +190,26 @@ describe("inlineShellPayloadIndex", () => {
     });
   });
 
+  describe("an xargs layer", () => {
+    it("finds the payload past an optional-argument option", () => {
+      expect(payloadIndex(`xargs -i bash -c 'x'`)).toBe(4);
+    });
+
+    it("answers -1 when -J may put input in the utility position", () => {
+      expect(payloadIndex(`xargs -J % bash -c 'x'`)).toBe(-1);
+    });
+  });
+
+  describe("an env layer", () => {
+    it("finds the payload past a clearing flag", () => {
+      expect(payloadIndex(`env -i bash -c 'x'`)).toBe(4);
+    });
+
+    it("answers -1 when env moves the working directory", () => {
+      expect(payloadIndex(`env -C /tmp bash -c 'x'`)).toBe(-1);
+    });
+  });
+
   describe("a payload flag with nothing after it", () => {
     // The index still names where the payload *would* be; the caller decides
     // what an out-of-range index is worth, exactly as `opaquePayload` does.
@@ -313,6 +333,81 @@ describe("executedUnitOf", () => {
     });
   });
 
+  describe("an xargs layer", () => {
+    it.each([
+      ["xargs -i rm cat x", "rm cat x"],
+      ["xargs -l rm cat x", "rm cat x"],
+      ["xargs -i{} cat {}", "cat {}"],
+      ["xargs -l1 cat x", "cat x"],
+      ["xargs --replace cat x", "cat x"],
+      ["xargs --replace=% cat %", "cat %"],
+      ["xargs FOO=1 cat", "FOO=1 cat"],
+      ["xargs --max-args 1 cat", "cat"],
+    ])(
+      "names the inner command of %s by xargs's option grammar",
+      (unit, expected) => {
+        expect(executedUnit(unit)).toBe(expected);
+      },
+    );
+
+    it.each([
+      ["xargs -J cat rm x", "-J may put input in the utility position"],
+      ["xargs -J % cat %", "-J may put input in the utility position"],
+      ["xargs -Z cat x", "an unlisted option refuses"],
+    ])("returns null for %s (%s)", (unit) => {
+      expect(executedUnit(unit)).toBeNull();
+    });
+  });
+
+  describe("an env layer", () => {
+    it.each([
+      ["env -iu FOO cat rm x", "cat rm x"],
+      ["env --unset=FOO cat x", "cat x"],
+      ["env - cat x", "cat x"],
+      ["env - FOO=1 cat x", "cat x"],
+    ])(
+      "names the inner command of %s by env's option grammar",
+      (unit, expected) => {
+        expect(executedUnit(unit)).toBe(expected);
+      },
+    );
+
+    it.each([
+      ["env -C /etc cat shadow", "-C moves where operands resolve"],
+      ["env -Srm cat", "-S builds the command at run time"],
+      ["env - -i cat x", "a lone dash ends the options"],
+      ["env --un FOO cat x", "BSD reads -u n, so FOO runs"],
+    ])("returns null for %s (%s)", (unit) => {
+      expect(executedUnit(unit)).toBeNull();
+    });
+
+    it("names the refused env layer when an outer wrapper peels to it", () => {
+      expect(executedUnit("sudo env -C /etc cat shadow")).toBe(
+        "env -C /etc cat shadow",
+      );
+    });
+  });
+
+  describe("a doas layer", () => {
+    it.each([
+      ["doas -nu root cat x", "cat x"],
+      ["doas FOO=1 cat x", "FOO=1 cat x"],
+    ])(
+      "names the inner command of %s by doas's option grammar",
+      (unit, expected) => {
+        expect(executedUnit(unit)).toBe(expected);
+      },
+    );
+
+    it.each([
+      ["doas -a cat rm x", "OpenBSD's -a is unlisted on opendoas"],
+      ["doas -C /etc/doas.conf cat x", "-C checks a config and runs nothing"],
+      ["doas -s cat x", "-s runs a shell"],
+    ])("returns null for %s (%s)", (unit) => {
+      expect(executedUnit(unit)).toBeNull();
+    });
+  });
+
   describe("nothing to add", () => {
     it("returns null for an ordinary command", () => {
       expect(executedUnit("grep foo")).toBeNull();
@@ -331,6 +426,14 @@ describe("floorExemptionOf", () => {
       floorExemptionOf(words(unitText), { writesViaRedirect: false }) ===
       "core-reader"
     );
+  }
+
+  /** The exemption a unit earns, with or without a write-proving redirect. */
+  function exemptionOf(
+    unitText: string,
+    writesViaRedirect = false,
+  ): string | undefined {
+    return floorExemptionOf(words(unitText), { writesViaRedirect });
   }
 
   describe("a wrapper running a proven pure reader", () => {
@@ -434,15 +537,24 @@ describe("floorExemptionOf", () => {
     });
   });
 
-  describe("an execution modifier", () => {
-    /** The exemption a unit earns, with or without a write-proving redirect. */
-    function exemptionOf(
-      unitText: string,
-      writesViaRedirect = false,
-    ): string | undefined {
-      return floorExemptionOf(words(unitText), { writesViaRedirect });
-    }
+  describe("a computed word in a peeled layer", () => {
+    it.each([
+      ["sudo -u $U cat x", "an option value may split"],
+      ["env FOO=$Y cat x", "an assignment argument may split"],
+      ["timeout $D cat x", "a leading operand may split"],
+      ["time FOO=$Y pnpm test", "a modifier's assignment may split"],
+    ])("withholds every exemption from %s (%s)", (unit) => {
+      expect(
+        floorExemptionOf(words(unit), { writesViaRedirect: false }),
+      ).toBeUndefined();
+    });
 
+    it("keeps the exemption for a computed word of the inner command", () => {
+      expect(isTransparent("sudo -u root cat $X")).toBe(true);
+    });
+  });
+
+  describe("an execution modifier", () => {
     describe("running any visible command", () => {
       it.each([
         "time pnpm test",
@@ -572,6 +684,7 @@ describe("floorExemptionOf", () => {
       ["sudo --us root cat x", "an abbreviation of --user takes root"],
       ["sudo --user=root cat x", "an attached long value"],
       ["sudo -uedward cat", "an attached short value ends the cluster"],
+      ["sudo FOO=1 cat x", "sudo passes an assignment to the command"],
     ])("is transparent: %s (%s)", (unit) => {
       expect(isTransparent(unit)).toBe(true);
     });
@@ -619,6 +732,262 @@ describe("floorExemptionOf", () => {
       ])("is transparent: %s", (unit) => {
         expect(isTransparent(unit)).toBe(true);
       });
+    });
+  });
+
+  describe("an xargs layer", () => {
+    it.each([
+      ["xargs -J cat rm x", "-J takes cat as its replstr, so rm runs"],
+      ["xargs -J % cat %", "-J may put input in the utility position"],
+      ["xargs -Z cat x", "an unlisted option refuses"],
+      ["xargs -i rm cat x", "-i takes only an attached value, so rm runs"],
+      ["xargs -l rm cat x", "-l takes only an attached value, so rm runs"],
+      ["xargs FOO=1 cat", "xargs runs a word like FOO=1 as the command"],
+    ])("is not transparent: %s (%s)", (unit) => {
+      expect(isTransparent(unit)).toBe(false);
+    });
+
+    it.each([
+      ["xargs -i{} cat {}", "an attached optional value"],
+      ["xargs -l1 cat x", "an attached optional value"],
+      ["xargs --replace cat x", "a long optional argument takes no word"],
+      ["xargs --replace=% cat %", "an attached long optional value"],
+      ["xargs --max-args 1 cat", "--max-args takes 1 as its value"],
+      ["xargs -0r grep foo", "a cluster of flags"],
+      ["xargs -n1 cat x", "an attached short value"],
+      ["xargs -I{} cat {}", "an attached replstr"],
+    ])("is transparent: %s (%s)", (unit) => {
+      expect(isTransparent(unit)).toBe(true);
+    });
+
+    describe("an option either manual lists", () => {
+      it.each([
+        ["xargs -E END cat x", "-E takes an EOF string"],
+        ["xargs -L 2 cat", "-L takes a line count"],
+        ["xargs -s 100 cat", "-s takes a size"],
+        ["xargs -P 4 cat", "-P takes a process count"],
+        ["xargs -d x cat", "GNU -d takes a delimiter"],
+        ["xargs -a f cat", "GNU -a takes a file"],
+        ["xargs --arg-file f cat", "--arg-file takes a file"],
+        ["xargs --delimiter x cat", "--delimiter takes a character"],
+        ["xargs --max-lines=2 cat", "an attached --max-lines count"],
+        ["xargs --max-lines cat x", "--max-lines takes no following word"],
+        ["xargs --max-procs 4 cat", "--max-procs takes a count"],
+        ["xargs --max-chars 100 cat", "--max-chars takes a size"],
+        ["xargs --process-slot-var V cat", "--process-slot-var takes a name"],
+        ["xargs --max-a 1 cat", "a unique abbreviation of --max-args"],
+        [
+          "xargs -R 1 cat rm x",
+          "BSD -R takes a count; nothing runs without -I",
+        ],
+        ["xargs -S 255 cat", "BSD -S takes a size; nothing runs without -I"],
+        ["xargs -I {} -R 1 cat rm x", "cat reads the files rm and x"],
+        ["xargs -p cat", "-p prompts before running"],
+        ["xargs -o cat", "-o reopens the terminal"],
+        ["xargs -x cat", "-x exits on an oversized line"],
+        ["xargs -tn1 cat x", "a flag then an attached value"],
+        ["xargs -eEND cat x", "an attached optional EOF string"],
+        ["xargs --eof cat x", "a long optional argument takes no word"],
+      ])("is transparent: %s (%s)", (unit) => {
+        expect(isTransparent(unit)).toBe(true);
+      });
+
+      it.each([
+        "xargs -t cat x",
+        "xargs --exit cat x",
+        "xargs --help cat x",
+        "xargs --interactive cat x",
+        "xargs --no-run-if-empty cat x",
+        "xargs --null cat x",
+        "xargs --open-tty cat x",
+        "xargs --show-limits cat x",
+        "xargs --verbose cat x",
+        "xargs --version cat x",
+      ])("names cat x past the flag in %s", (unit) => {
+        expect(isTransparent(unit)).toBe(true);
+        expect(executedUnitOf(unit, words(unit))).toBe("cat x");
+      });
+
+      it.each([
+        [
+          "xargs -e rm cat x",
+          "GNU -e takes only an attached value, so rm runs",
+        ],
+        [
+          "xargs --max-lines rm cat x",
+          "GNU --max-lines takes only an attached value, so rm runs",
+        ],
+        ["xargs --max-l rm cat x", "an abbreviation of --max-lines"],
+        ["xargs --ver cat", "ambiguous between --verbose and --version"],
+        ["xargs --e cat", "ambiguous between --eof and --exit"],
+      ])("is not transparent: %s (%s)", (unit) => {
+        expect(isTransparent(unit)).toBe(false);
+      });
+    });
+  });
+
+  describe("an env layer", () => {
+    describe("a mode in which the named command is not what runs", () => {
+      it.each([
+        ["env -C /etc cat shadow", "-C moves where operands resolve"],
+        ["env -C/etc cat shadow", "an attached -C value"],
+        ["env -iC /etc cat shadow", "a cluster carrying C"],
+        ["env --chdir /etc cat shadow", "--chdir moves where operands resolve"],
+        ["env --chdir=/etc cat shadow", "an attached --chdir value"],
+        ["env --ch /etc cat shadow", "an abbreviation of --chdir"],
+        ["env -Srm cat", "-S splits its value into the command"],
+        ["env --split-string rm cat", "--split-string splits its value"],
+        ["env -P cat rm x", "-P chooses where the command is found"],
+        ["env -P/bin cat x", "an attached -P value"],
+        ["env -a cat rm x", "-a sets the argv0 a multi-call binary reads"],
+        ["env --argv0 cat rm x", "--argv0 sets argv0"],
+        ["env --a cat rm x", "an abbreviation of --argv0"],
+        ["env --unset sh cat x", "BSD reads -u nset, so sh runs"],
+        ["env --un sh cat x", "BSD reads -u n, so sh runs"],
+        ["env -i --unset sh cat x", "BSD reads -u nset after -i"],
+        ["env --unset cat x", "GNU unsets cat and runs x"],
+        ["env -a rm cat x", "argv0 rm makes a multi-call cat run rm"],
+        ["env --argv0 rm cat x", "argv0 rm makes a multi-call cat run rm"],
+        [
+          "env --env0-from /dev/null cat x",
+          "--env0-from may set PATH from a file",
+        ],
+      ])("is not transparent: %s (%s)", (unit) => {
+        expect(isTransparent(unit)).toBe(false);
+      });
+
+      it.each([
+        ["env -Z cat x", "an unlisted option refuses"],
+        ["env --i cat x", "--ignore-environment and --ignore-signal"],
+        ["env --d cat x", "--debug and --default-signal"],
+        ["sudo env -C /etc cat shadow", "the refused layer is still a wrapper"],
+        [
+          "env - -i cat x",
+          "a lone dash ends the options, so -i is the command",
+        ],
+      ])("is not transparent: %s (%s)", (unit) => {
+        expect(isTransparent(unit)).toBe(false);
+      });
+    });
+
+    it.each([
+      ["env -i cat x", "-i clears the environment"],
+      ["env -u FOO cat x", "-u takes a name"],
+      ["env -uFOO cat x", "an attached -u value"],
+      ["env --unset=FOO cat x", "an attached --unset value"],
+      ["env --un=FOO cat x", "an attached abbreviation of --unset"],
+      ["env -iu FOO cat rm x", "the cluster's -u takes FOO"],
+      ["env FOO=1 cat x", "env passes an assignment to the command"],
+      ["env -i HOME=/h cat x", "a flag, then an assignment"],
+      ["env - cat x", "a lone dash clears the environment"],
+      ["env - FOO=1 cat x", "a lone dash, then an assignment"],
+      ["env -0 cat x", "-0 is a flag"],
+      ["env -v cat x", "-v is a flag"],
+      ["env --ignore-environment cat x", "a long flag"],
+      ["env --null cat x", "a long flag"],
+      ["env --list-signal-handling cat x", "a long flag"],
+      ["env --debug cat x", "a long flag"],
+      ["env --help cat x", "a long flag"],
+      ["env --version cat x", "a long flag"],
+      ["env --ignore-signal cat x", "an optional argument takes no word"],
+      ["env --ignore-signal=PIPE cat x", "an attached optional value"],
+      ["env --block-signal cat x", "an optional argument takes no word"],
+      ["env --default-signal cat x", "an optional argument takes no word"],
+    ])("is transparent: %s (%s)", (unit) => {
+      expect(isTransparent(unit)).toBe(true);
+    });
+  });
+
+  describe("a wrapper naming no command", () => {
+    it.each([
+      ["env", "env alone prints the environment"],
+      ["env -0", "a flag"],
+      ["env -i", "a cleared environment"],
+      ["env -v", "a flag"],
+      ["env -u FOO", "-u takes a name"],
+      ["env -uFOO", "an attached -u value"],
+      ["env --unset=FOO", "an attached --unset value"],
+      ["env -", "a lone dash ends the options"],
+      ["env FOO=1", "an assignment"],
+      ["env -i FOO=1", "a flag, then an assignment"],
+      ["env -- FOO=1", "the end of options, then an assignment"],
+      ["env --help", "a long flag"],
+      ["env --block-signal", "an optional argument takes no word"],
+    ])("runs nothing: %s (%s)", (unit) => {
+      expect(exemptionOf(unit)).toBe("no-command");
+    });
+
+    it("needs no redirect refusal, since it classifies no read", () => {
+      expect(exemptionOf("env", true)).toBe("no-command");
+    });
+
+    describe("keeps the floor", () => {
+      it.each([
+        ["env -u $X", 'X="FOO rm" runs rm'],
+        ["env FOO=$X", 'X="1 rm" runs rm'],
+        ['env FOO="$X"', "a nameref to an array splits the quoted word"],
+        ["env $X", "a computed word names the command"],
+        ['env "$X"', "a computed word names the command"],
+        ["env 'FOO=1'", "a quoted assignment reads as the command"],
+        ["env -S 'rm x'", "-S splits its value into the command"],
+        ["env -C /tmp", "-C is refused"],
+        ["env -P /bin", "-P is refused"],
+        ["env -a x", "-a is refused"],
+        ["env --env0-from /dev/null", "--env0-from is refused"],
+        ["env -Z", "an unlisted option refuses"],
+        ["env -u", "-u runs out of words"],
+        ["env --unset FOO", "BSD reads -u nset, so FOO runs"],
+        ["env --un FOO", "BSD reads -u n, so FOO runs"],
+        ["env --uns FOO", "BSD reads -u ns, so FOO runs"],
+        ["env -i --unset sh", "BSD reads -u nset after -i"],
+        ["env --unset sh x=1", "BSD runs sh with the argument x=1"],
+        ["xargs", "bare xargs runs echo"],
+        ["sudo -l", "sudo's bare forms are not audited as running nothing"],
+        ["doas -L", "doas's bare forms are not audited as running nothing"],
+        ["sudo env", "only the outermost layer is read"],
+        ["time env", "only the outermost layer is read"],
+        ["nohup env", "only the outermost layer is read"],
+      ])("for %s (%s)", (unit) => {
+        expect(exemptionOf(unit)).toBeUndefined();
+      });
+    });
+  });
+
+  describe("a wrapper whose command line the peel does not see", () => {
+    it.each([
+      ["watch cat x", "watch hands its command line to sh -c"],
+      ["watch -x cat x", "one refusal for every watch mode"],
+      ["watch -n 2 cat x", "an option does not change it"],
+      ["parallel cat ::: a", "parallel runs its command through a shell"],
+      ["rush cat", "rush builds command lines from a template"],
+      ["rust-parallel cat", "rust-parallel builds command lines too"],
+      ["sudo watch cat x", "behind an outer wrapper"],
+      ["timeout 5 watch cat x", "behind an execution modifier"],
+    ])("is not transparent: %s (%s)", (unit) => {
+      expect(isTransparent(unit)).toBe(false);
+    });
+  });
+
+  describe("a doas layer", () => {
+    it.each([
+      ["doas -a cat rm x", "-a is unlisted, so it refuses"],
+      ["doas -C /etc/doas.conf cat x", "-C checks a config and runs nothing"],
+      ["doas -s cat x", "-s runs a shell"],
+      ["doas --user root cat x", "doas has no long options"],
+      ["doas FOO=1 cat x", "doas runs a word like FOO=1 as the command"],
+    ])("is not transparent: %s (%s)", (unit) => {
+      expect(isTransparent(unit)).toBe(false);
+    });
+
+    it.each([
+      ["doas cat x", "no options"],
+      ["doas -u root cat x", "-u takes a user"],
+      ["doas -uroot cat x", "an attached -u value"],
+      ["doas -nu root cat x", "the cluster's -u takes root"],
+      ["doas -L cat x", "-L is a flag"],
+      ["doas -- cat x", "the end of options"],
+    ])("is transparent: %s (%s)", (unit) => {
+      expect(isTransparent(unit)).toBe(true);
     });
   });
 });

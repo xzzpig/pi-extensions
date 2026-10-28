@@ -428,19 +428,23 @@ Forwarding is orthogonal to origin: a forwarded subagent prompt keeps its origin
 The facts every render of the ask shows, that no renderer's budget may elide.
 Nested rather than flattened so the event and the prompt payload share one shape: a fact added here reaches the bus without a second hand-maintained declaration.
 
-| Field             | Type                         | Description                                                                                        |
-| ----------------- | ---------------------------- | -------------------------------------------------------------------------------------------------- |
-| `requester`       | `PromptRequester`            | Who is asking, and whether the ask arrived from a subagent                                         |
-| `surface`         | `string`                     | The **gate** surface the rule fired on — `"external_directory"`, `"path"`, `"bash"`, a tool name   |
-| `toolName`        | `string \| null`             | The gated tool name; `null` when the ask is not tool-shaped                                        |
-| `invokedToolName` | `string \| null`             | The invoked name when a shell alias re-exposes bash under another name                             |
-| `value`           | `string`                     | The decision-relevant value: the command, path, MCP target, or skill name                          |
-| `matchedPattern`  | `string \| null`             | The matched rule, including a sentinel such as `<indirection-bash-wrapper>`                        |
-| `matchedSpelling` | `string \| null`             | For bash, the spelling of the command the rule matched, when it did not match the command as typed |
-| `commandContext`  | `BashCommandContext \| null` | Where the offending bash unit runs, when it came from a substitution or subshell                   |
-| `executedUnit`    | `string \| null`             | For bash, the unit that will actually run, including inside an unstrippable wrapper                |
+| Field             | Type                         | Description                                                                                                |
+| ----------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `requester`       | `PromptRequester`            | Who is asking, and whether the ask arrived from a subagent                                                 |
+| `surface`         | `string`                     | The **gate** surface the rule fired on — `"external_directory"`, `"path"`, `"bash"`, a tool name           |
+| `toolName`        | `string \| null`             | The gated tool name; `null` when the ask is not tool-shaped                                                |
+| `invokedToolName` | `string \| null`             | The invoked name when a shell alias re-exposes bash under another name                                     |
+| `value`           | `string`                     | The decision-relevant value: the command, path, MCP target, or skill name                                  |
+| `matchedPattern`  | `string \| null`             | The matched rule, including a sentinel such as `<indirection-bash-wrapper>`                                |
+| `matchedSpelling` | `string \| null`             | For bash, the spelling of the command the rule matched, when it did not match the command as typed         |
+| `commandContext`  | `BashCommandContext \| null` | Where the offending bash unit runs, when it came from a substitution or subshell                           |
+| `executedUnit`    | `string \| null`             | For bash, the unit that will actually run, including inside an unstrippable wrapper                        |
+| `decidingPath`    | `DecidingPath \| null`       | For a bash path-surface ask, the path that decided it and what established its direction; `null` otherwise |
 
 `PromptRequester` carries `agentName` (`string | null`), `forwarded` (`boolean`), and `sessionId` (`string | null`, the requesting session for a forwarded ask).
+
+`DecidingPath` carries `path` (`string`, as the prompt shows it), `effect` (`"read" | "write" | "unproven"`), and `effectSource` (`"syntax" | "core" | "declared-global" | "declared-project" | "retracted" | "unproven"`, what established the effect).
+A request written by a version that predates the field carries no `decidingPath`, so a reader of a forwarded request should treat its absence as `null`.
 
 The top-level `surface` and `request.surface` are two different facts and both belong on the event.
 The top-level one is the **display** projection — the child's tool name, what a notification shows.
@@ -502,20 +506,21 @@ pi.events.on("permissions:decision", (raw) => {
 
 ### Resolution Values
 
-| Value                         | Meaning                                                              |
-| ----------------------------- | -------------------------------------------------------------------- |
-| `policy_allow`                | Config rule said allow — no prompt shown                             |
-| `policy_deny`                 | Config rule said deny — blocked immediately                          |
-| `session_approved`            | Covered by a session-level approval from earlier in the same session |
-| `infrastructure_auto_allowed` | Read of a Pi infrastructure path — auto-allowed                      |
-| `user_approved`               | User approved once via dialog                                        |
-| `user_approved_for_session`   | User approved for the rest of the session                            |
-| `user_denied`                 | User denied via dialog                                               |
-| `authorizer_allowed`          | A registered `authorizerChain` link granted the ask — no human asked |
-| `authorizer_denied`           | A registered `authorizerChain` link refused the ask — no human asked |
-| `auto_approved`               | Yolo mode — approved automatically without dialog                    |
-| `confirmation_unavailable`    | State was `ask` but no UI was available — blocked                    |
-| `gate_error`                  | The gate threw, or an escalation failed — blocked, fail-closed       |
+| Value                         | Meaning                                                                  |
+| ----------------------------- | ------------------------------------------------------------------------ |
+| `policy_allow`                | Config rule said allow — no prompt shown                                 |
+| `policy_deny`                 | Config rule said deny — blocked immediately                              |
+| `session_approved`            | Covered by a session-level approval from earlier in the same session     |
+| `infrastructure_auto_allowed` | Read of a Pi infrastructure path — auto-allowed                          |
+| `user_approved`               | User approved once via dialog                                            |
+| `user_approved_for_session`   | User approved for the rest of the session                                |
+| `user_denied`                 | User denied via dialog                                                   |
+| `authorizer_allowed`          | A registered `authorizerChain` link granted the ask — no human asked     |
+| `authorizer_denied`           | A registered `authorizerChain` link refused the ask — no human asked     |
+| `auto_approved`               | Yolo mode — approved automatically without dialog                        |
+| `confirmation_unavailable`    | State was `ask` but no UI was available — blocked                        |
+| `prompt_unanswered`           | A prompt was shown and nobody answered within `promptTimeoutMs` — denied |
+| `gate_error`                  | The gate threw, or an escalation failed — blocked, fail-closed           |
 
 ### Recipe: bridging a prompt to an external notifier
 

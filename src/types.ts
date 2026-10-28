@@ -52,12 +52,19 @@ export type BashCommandContext =
  * `stdbuf`, `setsid`) changes only how the visible inner command runs, so the
  * unit is decided by that command's own rule whatever it does (#963).
  *
+ * `"no-command"` — the wrapper names no command at all, and its bare form runs
+ * nothing (`env` alone prints the environment), so there is nothing for it to
+ * hide and the unit is decided by its own rule, as `printenv` is.
+ *
  * A named reason rather than a boolean, so the review log states *why* a
  * wrapper was let through, and so a later source (a chain verdict, a user
  * declaration) is an added member rather than a second flag. ADR 0013 §11
  * keeps both reasons package-audited; user declarations do not lift the floor.
  */
-export type FloorExemption = "core-reader" | "execution-modifier";
+export type FloorExemption =
+  | "core-reader"
+  | "execution-modifier"
+  | "no-command";
 
 export interface PermissionCheckResult {
   toolName: string;

@@ -140,6 +140,16 @@ describe("normalizePermissionSystemConfig", () => {
     expect("forwardingTimeoutMs" in result).toBe(false);
   });
 
+  it("includes promptTimeoutMs when provided", () => {
+    const result = normalizePermissionSystemConfig({ promptTimeoutMs: 60_000 });
+    expect(result.promptTimeoutMs).toBe(60_000);
+  });
+
+  it("omits promptTimeoutMs when absent, leaving prompts untimed", () => {
+    const result = normalizePermissionSystemConfig({});
+    expect("promptTimeoutMs" in result).toBe(false);
+  });
+
   it("includes the prompt-budget knobs when provided", () => {
     const result = normalizePermissionSystemConfig({
       promptMaxRows: 12,

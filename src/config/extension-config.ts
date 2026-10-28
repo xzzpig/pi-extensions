@@ -24,6 +24,8 @@ export interface PermissionSystemExtensionConfig {
   piInfrastructureReadPaths?: string[];
   /** How long a subagent waits for the parent's answer to a forwarded ask, in ms. Defaults to 600000. */
   forwardingTimeoutMs?: number;
+  /** How long a shown permission prompt waits for an answer before denying, in ms. Absent means no timer. */
+  promptTimeoutMs?: number;
   /** Max rows a permission prompt renders before eliding its evidence. Defaults to 24. */
   promptMaxRows?: number;
   /** Max characters of any one field shown in a permission prompt. Defaults to 400. */
@@ -83,6 +85,9 @@ export function normalizePermissionSystemConfig(
   }
   if (raw.forwardingTimeoutMs !== undefined) {
     result.forwardingTimeoutMs = raw.forwardingTimeoutMs;
+  }
+  if (raw.promptTimeoutMs !== undefined) {
+    result.promptTimeoutMs = raw.promptTimeoutMs;
   }
   if (raw.promptMaxRows !== undefined) {
     result.promptMaxRows = raw.promptMaxRows;

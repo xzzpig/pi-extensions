@@ -82,6 +82,13 @@ export function renderRefusal(
       );
     case "unavailable":
       return renderUnavailableDenial(payload, denialReason, budget);
+    case "unanswered":
+      return renderUnansweredDenial(
+        payload,
+        { timeoutMs: decider.timeoutMs, decidedElsewhere },
+        denialReason,
+        budget,
+      );
     case "rule":
       return renderEscalatedPolicyDenial(
         payload,
@@ -227,6 +234,35 @@ export function renderUnavailableDenial(
 ): string {
   return tagged(
     `This ${identification(payload, budget, "call", askRuleClause(payload))} requires approval, but no interactive UI is available.`,
+    denialReason,
+  );
+}
+
+/** The prompt window that expired, and where the prompt was shown. */
+export interface UnansweredPrompt {
+  /** How long the prompt stayed open unanswered, in milliseconds. */
+  readonly timeoutMs: number;
+  /** Whether the prompt was shown in a session reached through a forwarding hop. */
+  readonly decidedElsewhere: boolean;
+}
+
+/**
+ * The agent-facing render of a prompt nobody answered within its window.
+ *
+ * Unlike {@link renderUnavailableDenial}, a prompt *was* shown, so the sentence
+ * says nobody answered rather than that no UI exists; unlike
+ * {@link renderUserDenial}, it never claims the user refused. Like the
+ * unavailable render, it omits the escaped boundary: no rule ruled, so no
+ * retry shape would change the outcome.
+ */
+export function renderUnansweredDenial(
+  payload: PromptPayload,
+  prompt: UnansweredPrompt,
+  denialReason: string | null,
+  budget: AgentRenderBudget = DEFAULT_RENDER_BUDGET,
+): string {
+  return tagged(
+    `Nobody${servingClause(prompt.decidedElsewhere)} answered the approval prompt for this ${identification(payload, budget, "call", askRuleClause(payload))} within ${prompt.timeoutMs / 1000}s.`,
     denialReason,
   );
 }

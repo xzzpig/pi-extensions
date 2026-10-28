@@ -140,6 +140,14 @@ export interface ForwardedAccessFacts {
    * parse), where `matchValues` is the whole command.
    */
   askingUnits?: AskingBashUnit[];
+  /**
+   * Set only by the bash external-directory gate, when every path it left
+   * uncovered names nothing on disk below the filesystem root, was located
+   * against a known working directory, and is not a proven write (ADR 0007 §8). The
+   * delegation envelope honors a link's `allow` on the `external_directory`
+   * family only when it is present; absence means unlicensed.
+   */
+  delegationLicense?: "nothing-on-disk";
 }
 
 /**

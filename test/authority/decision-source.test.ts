@@ -57,6 +57,13 @@ describe("asDecisionSource", () => {
         reason: "Session 'abc' did not answer within 600s",
       },
       { kind: "gate_error", reason: "boom" },
+      { kind: "unanswered", timeoutMs: 60000 },
+      { kind: "unanswered", timeoutMs: 1500 },
+      {
+        kind: "forwarded",
+        responderSessionId: "019ff969-c34c-70be-9034-fae19c852932",
+        decision: { kind: "unanswered", timeoutMs: 60000 },
+      },
       {
         kind: "forwarded",
         responderSessionId: "019ff969-c34c-70be-9034-fae19c852932",
@@ -107,6 +114,24 @@ describe("asDecisionSource", () => {
       ["a missing yolo pattern", { kind: "yolo" }],
       ["a missing unavailable reason", { kind: "unavailable" }],
       ["a non-string gate_error reason", { kind: "gate_error", reason: null }],
+      ["a missing unanswered timeoutMs", { kind: "unanswered" }],
+      ["a zero unanswered timeoutMs", { kind: "unanswered", timeoutMs: 0 }],
+      [
+        "a negative unanswered timeoutMs",
+        { kind: "unanswered", timeoutMs: -1 },
+      ],
+      [
+        "an infinite unanswered timeoutMs",
+        { kind: "unanswered", timeoutMs: Number.POSITIVE_INFINITY },
+      ],
+      [
+        "a NaN unanswered timeoutMs",
+        { kind: "unanswered", timeoutMs: Number.NaN },
+      ],
+      [
+        "a string unanswered timeoutMs",
+        { kind: "unanswered", timeoutMs: "60000" },
+      ],
       [
         "a missing forwarded decision",
         { kind: "forwarded", responderSessionId: "s" },

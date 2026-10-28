@@ -127,6 +127,7 @@ function asForwardedAccessIntent(
     boundaryValue?: unknown;
     floor?: unknown;
     askingUnits?: unknown;
+    delegationLicense?: unknown;
     requesterCwd?: unknown;
     principal?: unknown;
   };
@@ -170,6 +171,11 @@ function asForwardedAccessIntent(
     ...(candidate.floor === undefined ? {} : { floor: candidate.floor }),
     ...(isWellFormedAskingUnits(candidate.askingUnits)
       ? { askingUnits: copyAskingUnits(candidate.askingUnits) }
+      : {}),
+    // Unlike a malformed floor, an unrecognized license drops only itself:
+    // absence is the restrictive reading, so the intent stays usable.
+    ...(candidate.delegationLicense === "nothing-on-disk"
+      ? { delegationLicense: candidate.delegationLicense }
       : {}),
     requesterCwd: candidate.requesterCwd,
     principal: {
