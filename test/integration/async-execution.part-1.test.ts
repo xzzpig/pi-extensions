@@ -21,6 +21,7 @@ import { resolveSubagentLaunchContract } from "../../src/api/preflight.ts";
 import { discoverAgents } from "../../src/agents/agents.ts";
 import { runSync } from "../../src/runs/foreground/execution.ts";
 import { ACTIVE_ASYNC_CAPACITY_DIR, acquireActiveAsyncCapacity, activeAsyncCapacitySessionKey, getActiveAsyncCapacitySnapshot } from "../../src/runs/background/active-async-capacity.ts";
+import { primeBootId, resetBootIdForTesting } from "../../src/runs/background/boot-id.ts";
 import {
 	SUBAGENT_ASYNC_STARTED_EVENT,
 	SUBAGENT_CHILD_STATUS_EVENT,
@@ -464,11 +465,19 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 	it("persists terminal status with the result artifact", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
 		mockPi.onCall({ output: "completed output" });
 		const id = `async-terminal-status-${Date.now().toString(36)}`;
-		launchProtocolTest(id);
-		await waitForAsyncResultFile(id);
-		const status = await waitForAsyncState(id, (candidate) => candidate.state === "complete");
-		assert.equal(status.state, "complete");
-		assert.equal(status.endedAt !== undefined, true);
+		// A value no OS reader returns: the runner's status can only carry it if it came through the runner config.
+		primeBootId("boot-id-from-parent-pi");
+		try {
+			launchProtocolTest(id);
+			assert.equal(JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "status.json"), "utf-8")).bootId, "boot-id-from-parent-pi");
+			await waitForAsyncResultFile(id);
+			const status = await waitForAsyncState(id, (candidate) => candidate.state === "complete");
+			assert.equal(status.state, "complete");
+			assert.equal(status.endedAt !== undefined, true);
+			assert.equal((status as AsyncStatusPayload & { bootId?: string }).bootId, "boot-id-from-parent-pi");
+		} finally {
+			resetBootIdForTesting();
+		}
 	});
 
 	it("preserves effective thinking in the completed async result artifact", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
@@ -1069,6 +1078,90 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 		assert.equal(fs.existsSync(path.join(tempDir, ".pi/subagents", "artifacts")), false);
 	});
 
+	it("keeps a background child's session under a directory named by its run id", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
+		mockPi.onCall({ output: "session layout" });
+		const sessionsDir = path.join(tempDir, "child-sessions");
+		const executor = makeAsyncExecutor([makeAgent("worker")], { defaultSessionDir: sessionsDir });
+
+		const launch = await executor.execute(
+			"async-session-run-id",
+			{ agent: "worker", task: "Report", async: true, acceptance: false },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		) as AsyncExecutionResult;
+
+		assert.equal(launch.isError, undefined, launch.content[0]?.text);
+		const id = launch.details.asyncId!;
+		await readAsyncPayload(id);
+		const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "status.json"), "utf-8")) as AsyncStatusPayload;
+		const expected = path.join(sessionsDir, id, "run-0", "session.jsonl");
+		assert.equal(status.steps?.[0]?.sessionFile, expected);
+		const args = readMockPiArgs(mockPi, 0);
+		assert.equal(args[args.indexOf("--session") + 1], expected);
+	});
+
+	it("records the run a resume replacement continues in its status", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {
+		mockPi.onCall({ output: "continued" });
+		const id = `async-revived-from-${Date.now().toString(36)}`;
+		const sessionFile = path.join(tempDir, "sessions", "source-run", "run-0", "session.jsonl");
+		fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+		fs.writeFileSync(sessionFile, `${JSON.stringify({ type: "session", cwd: fs.realpathSync(tempDir) })}\n`, "utf-8");
+		executeAsyncSingle(id, {
+			agent: "worker",
+			task: "Continue",
+			agentConfig: makeAgent("worker"),
+			ctx: { pi: { events: { emit() {} } }, cwd: tempDir, currentSessionId: "session-revived-from" },
+			artifactConfig: { enabled: false, includeInput: false, includeOutput: false, includeJsonl: false, includeMetadata: false, cleanupDays: 7 },
+			shareEnabled: false,
+			sessionFile,
+			revivalLease: { sessionFile, runId: id, sourceRunId: "source-run", parentSessionId: "session-revived-from" },
+			maxSubagentDepth: 2,
+			acceptance: false,
+		});
+
+		await readAsyncPayload(id);
+		const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "status.json"), "utf-8")) as { revivedFrom?: string };
+		assert.equal(status.revivedFrom, "source-run");
+	});
+
+	it("keeps a background forked child's session under a fork directory named by its run id", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
+		mockPi.onCall({ output: "fork layout" });
+		const parentSessionFile = path.join(tempDir, "parent-fork-layout.jsonl");
+		const sessionHeader = JSON.stringify({ type: "session", cwd: fs.realpathSync(tempDir) });
+		fs.writeFileSync(parentSessionFile, `${sessionHeader}\n`, "utf-8");
+		const ctx = {
+			...makeMinimalCtx(tempDir),
+			sessionManager: {
+				getSessionId: () => "session-fork-layout",
+				getSessionFile: () => parentSessionFile,
+				getLeafId: () => "leaf-current",
+				openSession: (_file: string, sessionDir: string) => ({
+					createBranchedSession: () => {
+						const forkedSessionFile = path.join(sessionDir, "forked.jsonl");
+						fs.mkdirSync(sessionDir, { recursive: true });
+						fs.writeFileSync(forkedSessionFile, `${sessionHeader}\n`, "utf-8");
+						return forkedSessionFile;
+					},
+				}),
+			},
+		};
+
+		const launch = await makeAsyncExecutor([makeAgent("worker")]).execute(
+			"async-fork-session-run-id",
+			{ agent: "worker", task: "Report", async: true, context: "fork", acceptance: false },
+			new AbortController().signal,
+			undefined,
+			ctx,
+		) as AsyncExecutionResult;
+
+		assert.equal(launch.isError, undefined, launch.content[0]?.text);
+		const id = launch.details.asyncId!;
+		await readAsyncPayload(id);
+		const status = JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, id, "status.json"), "utf-8")) as AsyncStatusPayload;
+		assert.equal(status.steps?.[0]?.sessionFile, path.join(tempDir, "parent-fork-layout", "forks", id, "forked.jsonl"));
+	});
+
 	it("launches foreground and background children with the parent session's project trust", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
 		const executor = makeAsyncExecutor([makeAgent("worker")]);
 		const ctx = { ...makeMinimalCtx(tempDir), isProjectTrusted: () => false };
@@ -1218,6 +1311,19 @@ describe("async execution utilities", { skip: !available ? "pi packages not avai
 				handle.dispose();
 			}
 		}
+	});
+
+	it("applies a ceiling registered by session id to async launches from a saved session", { skip: !isAsyncAvailable() || !createSubagentExecutor ? "jiti or executor not available" : undefined }, async () => {
+		const ctx = makeMinimalCtx(tempDir);
+		// A saved session's file path differs from its session id, which is the documented registration key.
+		ctx.sessionManager.getSessionFile = () => path.join(tempDir, "parent.jsonl");
+		const handle = registerSubagentCapabilityCeiling({ sessionId: ctx.sessionManager.getSessionId(), source: "plan-mode", ceiling: { allowedAgents: ["reviewer"] } });
+		try {
+			const launch = await makeAsyncExecutor([makeAgent("worker"), makeAgent("reviewer")]).execute("ceiling-by-id", { agent: "worker", task: "Write", async: true }, new AbortController().signal, undefined, ctx);
+			assert.equal(launch.isError, true);
+			assert.match(launch.content[0]?.text ?? "", /Capability ceiling from plan-mode does not allow agent 'worker'/);
+			assert.equal(mockPi.callCount(), 0);
+		} finally { handle.dispose(); }
 	});
 
 	it("redacts async task text from durable artifacts, transcripts, and metadata", { skip: !isAsyncAvailable() ? "jiti not available" : undefined }, async () => {

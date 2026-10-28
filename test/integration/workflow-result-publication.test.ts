@@ -22,6 +22,18 @@ async function bounded(promise: Promise<unknown>) {
 
 describe("host workflow result publication", { skip: !available }, () => {
 	installAsyncExecutionHooks();
+	it("launches a workflow when the parent tool-call id is multi-kilobyte", async () => {
+		const parentToolCallId = `call_abc__thought__${"A".repeat(10_000)}`;
+		const executor = createSubagentExecutor!({ pi: { events: createEventBus(), getSessionName: () => undefined }, state: { baseCwd: tempDir, currentSessionId: null, asyncJobs: new Map(), foregroundControls: new Map(), lastForegroundControlId: null },
+			config: {}, asyncByDefault: false, tempArtifactsDir: tempDir, getSubagentSessionRoot: () => tempDir, expandTilde: (p: string) => p, discoverAgents: () => ({ agents: [] }),
+		});
+		const launch = await executor.execute(parentToolCallId, { workflowScript: "return 'ok';", async: true, mission: false }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+		assert.notEqual(launch.isError, true, launch.content[0]?.text);
+		const payload = await readAsyncPayload(launch.details.asyncId!);
+		assert.equal(payload.success, true);
+		assert.match(payload.workflowChildren.parentToolCallId, /^~sha256-[0-9a-f]{64}$/);
+		assert.equal(JSON.parse(fs.readFileSync(path.join(ASYNC_DIR, launch.details.asyncId!, "status.json"), "utf8")).toolCallId, parentToolCallId);
+	});
 	for (const background of [false, true]) it(`reports explicit async children as running after workflow dispatch (async=${background})`, async () => {
 		const release = path.join(tempDir, "release-child");
 		mockPi.onCall({ steps: [{ waitForPath: release, jsonl: [events.assistantMessage("Final child report")] }] });
@@ -31,7 +43,7 @@ describe("host workflow result publication", { skip: !available }, () => {
 			cleanupTimers: new Map(), lastUiContext: null, poller: null, completionSeen: new Map(), watcher: null,
 			watcherRestartTimer: null, resultFileCoalescer: { schedule: () => false, clear() {} },
 		};
-		const pi = { events: createEventBus(), getSessionName: () => undefined, sendMessage(message: { customType: string; content: string }) { notices.push(message); } };
+		const pi = { events: createEventBus(), getSessionName: () => undefined, isHeld: () => false, sendMessage(message: { customType: string; content: string }) { notices.push(message); } };
 		const executor = createSubagentExecutor!({ pi, state, config: {}, asyncByDefault: false, tempArtifactsDir: tempDir,
 			getSubagentSessionRoot: () => tempDir, expandTilde: (p: string) => p, discoverAgents: () => ({ agents: [makeAgent("worker")] }),
 		});
@@ -93,7 +105,7 @@ describe("host workflow result publication", { skip: !available }, () => {
 		};
 		const pi = { getSessionName: () => undefined, events: { on: () => () => {}, emit(event: string, data: unknown) {
 			if (event === SUBAGENT_ASYNC_COMPLETE_EVENT) { assert.equal((data as { completionOwnerId: string }).completionOwnerId, owner); delivered.resolve(); }
-		} }, sendMessage(message: { customType?: string; content?: string }) { notifications++; notificationContent = message.content ?? ""; if (message.customType) notificationTypes.push(message.customType); } };
+		} }, isHeld: () => false, sendMessage(message: { customType?: string; content?: string }) { notifications++; notificationContent = message.content ?? ""; if (message.customType) notificationTypes.push(message.customType); } };
 		const notifier = registerSubagentNotify(pi, state, { batchConfig: { enabled: false } });
 		const watcher = createResultWatcher(pi, state, RESULTS_DIR, 60000, { platform: "darwin", coalesceDelayMs: 0, notifier,
 			hasDeliveryDemand: () => [...state.asyncJobs.values()].some((job) => job.status === "running" || job.status === "queued"),

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -6,6 +7,9 @@ import { describe, it } from "node:test";
 import { applySteeringRecoveryAgentConfig, asyncReviveRequiresRecoveryDescriptor, buildRevivedAsyncTask, resolveAsyncResumeTarget } from "../../src/runs/background/async-resume.ts";
 import type { AgentConfig } from "../../src/agents/agents.ts";
 import { createRunFanoutBudget } from "../../src/runs/shared/run-fanout-budget.ts";
+import { parallelHandoffPath, writeParallelHandoffGroup, writeWorktreeSetupHandoff } from "../../src/runs/shared/parallel-handoff.ts";
+import { cleanupWorktrees, createWorktrees } from "../../src/runs/shared/worktree.ts";
+import { recordSessionReplacement } from "../../src/shared/session-succession.ts";
 
 function writeJson(filePath: string, value: object): void {
 	fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -141,6 +145,39 @@ describe("async resume lookup", () => {
 				/required managed worktree cwd is missing/,
 			);
 		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("refuses to revive a worktree child in the source checkout while its runner is finalizing", async () => {
+		// Git reports the long Windows path; a short 8.3 temp path would fail the cwd containment check first.
+		const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-resume-finalizing-")));
+		const repo = path.join(root, "repo");
+		const asyncDir = path.join(root, "runs", "run-finalizing");
+		const manifestPath = parallelHandoffPath(asyncDir);
+		const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { encoding: "utf-8" });
+		fs.mkdirSync(repo);
+		git("init", "-q");
+		fs.writeFileSync(path.join(repo, "a.txt"), "a", "utf-8");
+		git("add", ".");
+		git("-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-qm", "init");
+		const handoff = { manifestPath, runId: "run-finalizing", mode: "single" as const, source: "async" as const, cwd: repo, stepIndex: 0, flatStartIndex: 0 };
+		const setup = await createWorktrees(repo, "run-finalizing-s0", 1, { baseDir: path.join(root, "worktrees"), onProgress: (progress) => { writeWorktreeSetupHandoff({ ...handoff, progress }); } });
+		try {
+			const sessionFile = path.join(root, "session.jsonl");
+			fs.writeFileSync(sessionFile, "", "utf-8");
+			// Interrupt marks the run paused before the runner captures the child's handoff.
+			writeJson(path.join(asyncDir, "status.json"), {
+				runId: "run-finalizing", mode: "single", state: "paused", startedAt: 100, lastUpdate: 200, cwd: repo,
+				steps: [{ agent: "worker", status: "paused", sessionFile, worktreePath: setup.worktrees[0]!.path, branch: setup.worktrees[0]!.branch }],
+			});
+			const resume = () => resolveAsyncResumeTarget({ id: "run-finalizing" }, { asyncDirRoot: path.join(root, "runs"), resultsDir: path.join(root, "results") });
+
+			assert.throws(resume, /handoff has no resumable record yet/);
+			writeParallelHandoffGroup({ ...handoff, setup, diffs: [], results: [{ agent: "worker", status: "paused", summary: "paused", sessionPath: sessionFile }] });
+			assert.throws(resume, /still finalizing its managed worktree/);
+		} finally {
+			cleanupWorktrees(setup);
 			fs.rmSync(root, { recursive: true, force: true });
 		}
 	});
@@ -677,6 +714,17 @@ describe("async resume lookup", () => {
 		}
 	});
 
+	it("names the requested id when no async run matches it", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-resume-unknown-"));
+		try {
+			const deps = { asyncDirRoot: path.join(root, "runs"), resultsDir: path.join(root, "results") };
+			assert.throws(() => resolveAsyncResumeTarget({ id: "nonexistent-probe-1234" }, deps), /^Error: Async run not found for 'nonexistent-probe-1234'\.$/);
+			assert.throws(() => resolveAsyncResumeTarget({}, deps), /^Error: Async run not found\. Provide id or dir\.$/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("rejects non-jsonl session files before reviving", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-resume-session-"));
 		try {
@@ -919,6 +967,37 @@ describe("async resume lookup", () => {
 		}
 	});
 
+	it("revives a run of a session this process replaced, and still refuses other sessions' runs", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-resume-inherited-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const resultsDir = path.join(root, "results");
+			const sessionFile = path.join(root, "child.jsonl");
+			fs.writeFileSync(sessionFile, "", "utf-8");
+			const [replaced, successor, unrelated] = ["replaced", "successor", "unrelated"].map((name) => path.join(root, `${name}.jsonl`));
+			writeJson(path.join(asyncRoot, "failed-child", "status.json"), {
+				runId: "failed-child",
+				sessionId: replaced,
+				mode: "single",
+				state: "failed",
+				startedAt: 100,
+				endedAt: 200,
+				cwd: root,
+				sessionFile,
+				steps: [{ agent: "worker", status: "failed", sessionFile }],
+			});
+			const resume = (sessionId: string) => resolveAsyncResumeTarget({ id: "failed-child" }, { asyncDirRoot: asyncRoot, resultsDir }, { sessionId });
+			assert.throws(() => resume(successor), /not found in the active session/);
+			recordSessionReplacement(successor, replaced);
+			const target = resume(successor);
+			assert.equal(target.kind, "revive");
+			assert.equal(target.sessionFile, sessionFile);
+			assert.throws(() => resume(unrelated), /not found in the active session/);
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("revives a completed child by index while a sibling async child is still running", () => {
 		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-resume-partial-"));
 		try {
@@ -1042,6 +1121,33 @@ describe("async resume lookup", () => {
 			assert.equal(target.sessionFile, secondSession);
 			assert.equal(target.model, "anthropic/claude-sonnet-4");
 			assert.equal(target.thinking, "high");
+		} finally {
+			fs.rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("revives on the launch model when status reports a model a host extension switched to and no result exists yet", () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), "pi-async-resume-routed-"));
+		try {
+			const asyncRoot = path.join(root, "runs");
+			const resultsDir = path.join(root, "results");
+			const sessionFile = path.join(root, "a.jsonl");
+			fs.writeFileSync(sessionFile, "", "utf-8");
+			writeJson(path.join(asyncRoot, "run-routed", "status.json"), {
+				runId: "run-routed",
+				mode: "parallel",
+				state: "running",
+				startedAt: 100,
+				lastUpdate: 200,
+				steps: [
+					{ agent: "worker", status: "complete", sessionFile, model: "openai-codex/gpt-6-sol", launchModel: "llama-swap/qwen3.5:9b", thinking: "high" },
+					{ agent: "worker", status: "running" },
+				],
+			});
+
+			const target = resolveAsyncResumeTarget({ id: "run-routed", index: 0 }, { asyncDirRoot: asyncRoot, resultsDir });
+			assert.equal(target.kind, "revive");
+			assert.equal(target.model, "llama-swap/qwen3.5:9b");
 		} finally {
 			fs.rmSync(root, { recursive: true, force: true });
 		}

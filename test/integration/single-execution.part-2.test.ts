@@ -39,7 +39,7 @@ import {
 import registerSubagentExtension from "../../src/extension/index.ts";
 import { handleSubagentControlNotice } from "../../src/extension/control-notices.ts";
 import { discoverAgents } from "../../src/agents/agents.ts";
-import { INVALID_STRUCTURED_OUTPUT_SCHEMA_ERROR, validateStructuredOutputValue } from "../../src/runs/shared/structured-output.ts";
+import { INVALID_STRUCTURED_OUTPUT_SCHEMA_ERROR, STRUCTURED_OUTPUT_FOLLOW_UP, validateStructuredOutputValue } from "../../src/runs/shared/structured-output.ts";
 import {
 	SUBAGENT_DELEGATION_REQUEST_EVENT,
 	SUBAGENT_DELEGATION_RESPONSE_EVENT,
@@ -51,8 +51,14 @@ import {
 import { CHAIN_RUNS_DIR, DIRS, INTERCOM_DETACH_REQUEST_EVENT, INTERCOM_DETACH_RESPONSE_EVENT, SUBAGENT_CONTROL_EVENT, TEMP_ARTIFACTS_DIR, type AsyncStatus, type ChildWatchdogProgress, type ControlEvent, type SubagentState } from "../../src/shared/types.ts";
 import { ACTIVE_RUN_INDEX_DIR } from "../../src/runs/background/active-run-index.ts";
 import { encodeIndexSegment } from "../../src/runs/background/index-segment.ts";
+import { currentBootId } from "../../src/runs/background/boot-id.ts";
+import { currentPidNamespaceScope } from "../../src/runs/background/pid-namespace.ts";
 import { waitForSubagents } from "../../src/runs/background/subagent-wait.ts";
 import { listAsyncRuns } from "../../src/runs/background/async-status.ts";
+import { formatControlNoticeMessage } from "../../src/runs/shared/subagent-control.ts";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { createChildCommandRuntime } from "../../src/runs/shared/child-commands.ts";
+import { supervisorChannelDir } from "../../src/runs/shared/child-tool-plan.ts";
 import { CHILD_WATCHDOG_STATUS_EVENT } from "../../src/watchdog/child-status.ts";
 import { createRunFanoutBudget } from "../../src/runs/shared/run-fanout-budget.ts";
 import { MainWatchdogRuntime } from "../../src/watchdog/runtime.ts";
@@ -69,6 +75,13 @@ import { toSubagentDelegationExecutionParams, toSubagentDelegationUpdate } from 
 import { registerRequiredChildExtensions } from "../../src/api/required-child-extensions.ts";
 import { createStructuredOutputRuntime } from "../../src/runs/shared/structured-output.ts";
 import { ensureSupervisorChannelDir, resolveSupervisorChannelDir } from "../../src/intercom/native-supervisor-channel.ts";
+
+/** Every saved foreground run: one file each under results/foreground-history. */
+function savedForegroundRuns<T>(): T[] {
+	const dir = path.join(DIRS.results, "foreground-history");
+	const names = fs.existsSync(dir) ? fs.readdirSync(dir).filter((name) => name.endsWith(".json")) : [];
+	return names.map((name) => JSON.parse(fs.readFileSync(path.join(dir, name), "utf-8")) as T);
+}
 
 describe("single sync execution", { skip: !available ? "pi packages not available" : undefined }, () => {
 	installSingleExecutionHooks();
@@ -926,8 +939,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 				const settleDeadline = Date.now() + 10_000;
 				while (!child?.settled && Date.now() < settleDeadline) await new Promise((resolve) => setTimeout(resolve, 20));
 				await new Promise((resolve) => setTimeout(resolve, 200));
-				const history = JSON.parse(fs.readFileSync(path.join(DIRS.results, "foreground-history.json"), "utf-8")) as { runs: Array<{ runId: string; children: Array<{ status: string; error?: string }> }> };
-				const recorded = history.runs.find((run) => run.runId === runId)?.children[0];
+				const recorded = savedForegroundRuns<{ runId: string; children: Array<{ status: string; error?: string }> }>().find((run) => run.runId === runId)?.children[0];
 				assert.equal(recorded?.status, "stopped");
 				assert.match(recorded?.error ?? "", /runtime that ran it was replaced/);
 				assert.doesNotMatch(JSON.stringify(child?.session?.messages ?? []), /finished after replacement/);
@@ -946,6 +958,68 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			}
 		});
 	}
+
+	it("saves a foreground single run as running while it runs, and its final result replaces the record", { timeout: 60_000, skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const nonce = `foreground-running-${Date.now()}`;
+		const release = path.join(tempDir, `${nonce}.release`);
+		mockPi.onCall({ matchArgIncludes: `Single ${nonce}`, waitForPath: release, output: "single done" });
+		mockPi.onCall({ matchArgIncludes: `Workflow child ${nonce}`, waitForPath: release, output: "child done" });
+		type HistoryRun = { runId: string; updatedAt: number; owner?: { pid: number; pidNamespaceScope?: string; bootId?: string }; parentWorkflowRunId?: string; children: Array<{ status: string; sessionFile?: string }> };
+		const historyRuns = () => savedForegroundRuns<HistoryRun>();
+		const waitForRecord = async (label: string, predicate: (run: HistoryRun) => boolean): Promise<HistoryRun> => {
+			for (const deadline = Date.now() + 15_000; Date.now() < deadline; await new Promise((resolve) => setTimeout(resolve, 20))) {
+				const run = historyRuns().find(predicate);
+				if (run) return run;
+			}
+			assert.fail(`timed out waiting for ${label}`);
+		};
+		const startedAt = Date.now();
+		const executor = makeExecutor([makeAgent("echo")], {}, false, undefined, true, new Map(), new Map(), undefined, undefined, undefined, undefined, () => {});
+		const single = executor.execute(`${nonce}-single`, { agent: "echo", task: `Single ${nonce}`, async: false }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+		const workflow = await executor.execute(`${nonce}-workflow`, { async: true, mission: false, workflowScript: `return (await runs.run("child", { agent: "echo", task: "Workflow child ${nonce}" })).output;` }, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+		const workflowRunId = workflow.details.asyncId;
+		assert.ok(workflowRunId, workflow.content[0]?.text);
+		try {
+			const running = await waitForRecord("the single run's running record", (run) => run.updatedAt >= startedAt && run.parentWorkflowRunId === undefined && run.children[0]?.status === "running");
+			assert.equal(running.owner?.pid, process.pid);
+			assert.equal(running.owner?.pidNamespaceScope, currentPidNamespaceScope());
+			assert.equal(running.owner?.bootId, currentBootId());
+			assert.match(running.children[0]?.sessionFile ?? "", /\.jsonl$/, "the record points at the child's transcript");
+			const workflowChild = await waitForRecord("the workflow child's running record", (run) => run.parentWorkflowRunId === workflowRunId);
+			assert.equal(workflowChild.children[0]?.status, "running");
+			assert.equal(workflowChild.owner?.pid, process.pid);
+
+			fs.writeFileSync(release, "go");
+			const result = await single;
+			assert.equal(result.isError, undefined, result.content[0]?.text);
+			const finished = historyRuns().find((run) => run.runId === running.runId);
+			assert.equal(finished?.children[0]?.status, "completed");
+			assert.equal(finished?.owner, undefined);
+			const childFinished = await waitForRecord("the workflow child's final record", (run) => run.runId === workflowChild.runId && run.children[0]?.status !== "running");
+			assert.equal(childFinished.children[0]?.status, "completed");
+			assert.equal(childFinished.owner, undefined);
+		} finally {
+			fs.writeFileSync(release, "go");
+			await single.catch(() => undefined);
+		}
+	});
+
+	it("replaces the running record of an attached foreground run that is aborted mid-run", { timeout: 60_000, skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const nonce = `foreground-running-abort-${Date.now()}`;
+		const startedAt = Date.now();
+		mockPi.onCall({ matchArgIncludes: `Abort ${nonce}`, hangUntilAbort: true });
+		const runningRecord = () => savedForegroundRuns<{ runId: string; updatedAt: number; children: Array<{ status: string }> }>().find((run) => run.updatedAt >= startedAt && run.children[0]?.status === "running");
+		const controller = new AbortController();
+		const executor = makeExecutor([makeAgent("echo")]);
+		const pending = executor.execute(`${nonce}-single`, { agent: "echo", task: `Abort ${nonce}`, async: false }, controller.signal, undefined, makeMinimalCtx(tempDir));
+		let running = runningRecord();
+		for (const deadline = Date.now() + 15_000; !running && Date.now() < deadline; running = runningRecord()) await new Promise((resolve) => setTimeout(resolve, 20));
+		assert.ok(running, "the run saved a running record");
+		controller.abort();
+		await pending.catch(() => undefined);
+		const after = savedForegroundRuns<{ runId: string; children: Array<{ status: string }> }>().find((run) => run.runId === running.runId);
+		assert.notEqual(after?.children[0]?.status ?? "removed", "running", "an aborted run never stays running in history");
+	});
 
 	it("routes registered structured text delegation through the concurrent executor", async () => {
 		const literalJsonText = '{"looks":"json"}';
@@ -1131,7 +1205,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 						},
 					}],
 				},
-				{ jsonl: [{ type: "tool_result_end", message: { role: "toolResult", toolCallId: "call-1", toolName: "read", isError: false, content: [] } }] },
+				{ jsonl: [{ type: "message_end", message: { role: "toolResult", toolCallId: "call-1", toolName: "read", isError: false, content: [] } }] },
 				{
 					jsonl: [{
 						type: "message_end",
@@ -1728,8 +1802,8 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		mockPi.onCall({
 			stdoutRaw: [
 				{ type: "tool_execution_start", toolName: "structured_output", args: { value: { ok: true, note: "captured" } } },
-				{ type: "tool_result_end", message: { role: "toolResult", toolName: "structured_output", content: [{ type: "text", text: "Structured output captured." }] } },
 				{ type: "tool_execution_end", toolName: "structured_output" },
+				{ type: "message_end", message: { role: "toolResult", toolName: "structured_output", content: [{ type: "text", text: "Structured output captured." }] } },
 			].map((entry) => JSON.stringify(entry)).join("\n") + "\n",
 			structuredOutputCapture: { ok: true, note: "captured" },
 		});
@@ -1905,13 +1979,13 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		const firstSchema = { type: "object", required: ["first"], properties: { first: { type: "boolean" } } };
 		const firstEvents = [
 			{ type: "tool_execution_start", toolName: "structured_output", args: { value: { first: true } } },
-			{ type: "tool_result_end", message: { role: "toolResult", toolName: "structured_output", content: [{ type: "text", text: "Structured output captured." }] } },
 			{ type: "tool_execution_end", toolName: "structured_output" },
+			{ type: "message_end", message: { role: "toolResult", toolName: "structured_output", content: [{ type: "text", text: "Structured output captured." }] } },
 		];
 		const resumedEvents = [
 			{ type: "tool_execution_start", toolName: "structured_output", args: { value: { ok: true } } },
-			{ type: "tool_result_end", message: { role: "toolResult", toolName: "structured_output", content: [{ type: "text", text: "Structured output captured." }] } },
 			{ type: "tool_execution_end", toolName: "structured_output" },
+			{ type: "message_end", message: { role: "toolResult", toolName: "structured_output", content: [{ type: "text", text: "Structured output captured." }] } },
 		];
 		mockPi.onCall({ stdoutRaw: firstEvents.map((entry) => JSON.stringify(entry)).join("\n") + "\n", structuredOutputCapture: { first: true } });
 		mockPi.onCall({ stdoutRaw: resumedEvents.map((entry) => JSON.stringify(entry)).join("\n") + "\n", structuredOutputCapture: { ok: true } });
@@ -2045,8 +2119,8 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		fs.writeFileSync(agentPath, definition("ok"));
 		const structuredEvents = [
 			{ type: "tool_execution_start", toolName: "structured_output", args: { value: { ok: true } } },
-			{ type: "tool_result_end", message: { role: "toolResult", toolName: "structured_output", content: [{ type: "text", text: "Structured output captured." }] } },
 			{ type: "tool_execution_end", toolName: "structured_output" },
+			{ type: "message_end", message: { role: "toolResult", toolName: "structured_output", content: [{ type: "text", text: "Structured output captured." }] } },
 		];
 		mockPi.onCall({ stdoutRaw: structuredEvents.map((entry) => JSON.stringify(entry)).join("\n") + "\n", structuredOutputCapture: { ok: true }, writeFiles: [{ path: agentPath, content: definition("changed") }] });
 		mockPi.onCall({ stdoutRaw: structuredEvents.map((entry) => JSON.stringify(entry)).join("\n") + "\n", structuredOutputCapture: { ok: true } });
@@ -2159,8 +2233,12 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 
 		assert.equal(resumedResult.isError, undefined, resumedResult.content[0]?.text ?? "workflow failed");
 		const resumed = resumedResult.details.results[0];
-		assert.match(resumed?.finalOutput ?? "", new RegExp(`Output saved to: ${escapeRegExp(configuredOutput)}`));
-		assert.equal(fs.readFileSync(configuredOutput, "utf-8"), "resumed report");
+		// The resume keeps the recorded file-only contract but writes its own report, never over the first run's.
+		assert.ok(resumed?.savedOutputPath && resumed.savedOutputPath !== configuredOutput, resumed?.savedOutputPath);
+		assert.match(resumed?.finalOutput ?? "", new RegExp(`^Output saved to: ${escapeRegExp(resumed.savedOutputPath)} `));
+		assert.doesNotMatch(resumed?.finalOutput ?? "", /resumed report/, "file-only keeps the report out of the inline output");
+		assert.equal(fs.readFileSync(resumed.savedOutputPath, "utf-8"), "resumed report");
+		assert.equal(fs.readFileSync(configuredOutput, "utf-8"), "first report");
 	});
 
 	it("preserves successful no-edit foreground resume output and transcript metadata", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -2232,8 +2310,8 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		mockPi.onCall({
 			stdoutRaw: [
 				{ type: "tool_execution_start", toolName: "structured_output", args: { value: { ok: true }, acceptanceReport } },
-				{ type: "tool_result_end", message: { role: "toolResult", toolName: "structured_output", content: [{ type: "text", text: "Structured output captured." }] } },
 				{ type: "tool_execution_end", toolName: "structured_output" },
+				{ type: "message_end", message: { role: "toolResult", toolName: "structured_output", content: [{ type: "text", text: "Structured output captured." }] } },
 			].map((entry) => JSON.stringify(entry)).join("\n") + "\n",
 			structuredOutputCapture: { ok: true },
 			structuredOutputAcceptanceReport: acceptanceReport,
@@ -2271,8 +2349,8 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		mockPi.onCall({
 			stdoutRaw: [
 				{ type: "tool_execution_start", toolName: "structured_output", args: { value: { ok: true } } },
-				{ type: "tool_result_end", message: { role: "toolResult", toolName: "structured_output", content: [{ type: "text", text: "Structured output captured." }] } },
 				{ type: "tool_execution_end", toolName: "structured_output" },
+				{ type: "message_end", message: { role: "toolResult", toolName: "structured_output", content: [{ type: "text", text: "Structured output captured." }] } },
 			].map((entry) => JSON.stringify(entry)).join("\n") + "\n",
 			structuredOutputCapture: { ok: true },
 		});
@@ -2318,8 +2396,8 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 			stdoutRaw: [
 				events.assistantMessage(`done\n\`\`\`acceptance-report\n${JSON.stringify(acceptanceReport)}\n\`\`\``),
 				{ type: "tool_execution_start", toolName: "structured_output", args: { value: { ok: true } } },
-				{ type: "tool_result_end", message: { role: "toolResult", toolName: "structured_output", content: [{ type: "text", text: "Structured output captured." }] } },
 				{ type: "tool_execution_end", toolName: "structured_output" },
+				{ type: "message_end", message: { role: "toolResult", toolName: "structured_output", content: [{ type: "text", text: "Structured output captured." }] } },
 			].map((entry) => JSON.stringify(entry)).join("\n") + "\n",
 			structuredOutputCapture: { ok: true },
 		});
@@ -2339,11 +2417,11 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 	});
 
 	it("accepts recovered tool errors before valid structured output but rejects later errors", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
-		const recoveredError = { type: "tool_result_end", message: { role: "toolResult", toolName: "read", isError: true, content: [{ type: "text", text: "EISDIR" }] } };
+		const recoveredError = { type: "message_end", message: { role: "toolResult", toolName: "read", isError: true, content: [{ type: "text", text: "EISDIR" }] } };
 		const structuredEvents = [
 			{ type: "tool_execution_start", toolName: "structured_output", args: { value: { ok: true } } },
-			{ type: "tool_result_end", message: { role: "toolResult", toolName: "structured_output", content: [{ type: "text", text: "Structured output captured." }] } },
 			{ type: "tool_execution_end", toolName: "structured_output" },
+			{ type: "message_end", message: { role: "toolResult", toolName: "structured_output", content: [{ type: "text", text: "Structured output captured." }] } },
 		];
 		mockPi.onCall({
 			stdoutRaw: [recoveredError, ...structuredEvents].map((entry) => JSON.stringify(entry)).join("\n") + "\n",
@@ -2388,12 +2466,37 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(fs.existsSync(path.dirname(child.structuredOutputPath)), false);
 	});
 
+	it("gives a structured child one follow-up turn to call structured_output", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+		const prompts = () => fs.readdirSync(mockPi.dir).filter((name) => name.startsWith("call-") && name.endsWith(".json"))
+			.map((name) => (JSON.parse(fs.readFileSync(path.join(mockPi.dir, name), "utf-8")) as { args: string[] }).args.at(-1));
+		const executor = makeExecutor([makeAgent("echo")]);
+		const params = { agent: "echo", task: "Return structured data", outputSchema: { type: "object", required: ["ok"], properties: { ok: { type: "boolean" } } }, acceptance: false, artifacts: false } as const;
+		mockPi.onCall({ output: "prose without the tool call" });
+		mockPi.onCall({ matchArgIncludes: STRUCTURED_OUTPUT_FOLLOW_UP, structuredOutput: { ok: true } });
+
+		const recovered = await executor.execute("single-schema-follow-up", params, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+
+		assert.equal(recovered.isError, undefined, recovered.content[0]?.text);
+		assert.deepEqual(recovered.details.results[0]?.structuredOutput, { ok: true });
+		assert.equal(prompts().filter((prompt) => prompt === STRUCTURED_OUTPUT_FOLLOW_UP).length, 1);
+
+		mockPi.reset();
+		mockPi.onCall({ output: "prose without the tool call" });
+		const missing = await executor.execute("single-schema-follow-up-missing", params, new AbortController().signal, undefined, makeMinimalCtx(tempDir));
+
+		assert.equal(missing.isError, true);
+		assert.match(missing.details.results[0]?.error ?? "", /Missing structured_output call/);
+		assert.equal(missing.details.results[0]?.usage.turns, 2);
+		assert.equal(prompts().filter((prompt) => prompt === STRUCTURED_OUTPUT_FOLLOW_UP).length, 1);
+		assert.equal(prompts().length, 2);
+	});
+
 	it("reports rejected structured_output evidence and lets a later valid call win", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		const rejectedEvents = [
 			{ type: "message_end", message: { role: "assistant", content: [{ type: "toolCall", id: "structured-rejected", name: "structured_output", arguments: { value: {} } }], model: "mock/test-model", stopReason: "toolUse", usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0 } } } },
 			{ type: "tool_execution_start", toolCallId: "structured-rejected", toolName: "structured_output", args: { value: {} } },
-			{ type: "tool_result_end", message: { role: "toolResult", toolCallId: "structured-rejected", toolName: "structured_output", isError: true, content: [{ type: "text", text: "Structured output validation failed: ok: is required" }] } },
 			{ type: "tool_execution_end", toolCallId: "structured-rejected", toolName: "structured_output" },
+			{ type: "message_end", message: { role: "toolResult", toolCallId: "structured-rejected", toolName: "structured_output", isError: true, content: [{ type: "text", text: "Structured output validation failed: ok: is required" }] } },
 		];
 		mockPi.onCall({ stdoutRaw: rejectedEvents.map((entry) => JSON.stringify(entry)).join("\n") + "\n" });
 		const executor = makeExecutor([makeAgent("echo")]);
@@ -2427,8 +2530,8 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		mockPi.onCall({
 			jsonl: [
 				{ type: "tool_execution_start", toolCallId: "structured-malformed-schema", toolName: "structured_output", args: { value: "value" } },
-				{ type: "tool_result_end", message: { role: "toolResult", toolCallId: "structured-malformed-schema", toolName: "structured_output", isError: true, content: [{ type: "text", text: `Structured output validation failed: ${validation.message}` }] } },
 				{ type: "tool_execution_end", toolCallId: "structured-malformed-schema", toolName: "structured_output" },
+				{ type: "message_end", message: { role: "toolResult", toolCallId: "structured-malformed-schema", toolName: "structured_output", isError: true, content: [{ type: "text", text: `Structured output validation failed: ${validation.message}` }] } },
 			],
 		});
 
@@ -2497,8 +2600,8 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 					},
 				},
 				{ type: "tool_execution_start", toolName: "structured_output", args: { value: { ok: true } } },
-				{ type: "tool_result_end", message: { role: "toolResult", toolName: "structured_output", content: [{ type: "text", text: "Structured output captured." }] } },
 				{ type: "tool_execution_end", toolName: "structured_output" },
+				{ type: "message_end", message: { role: "toolResult", toolName: "structured_output", content: [{ type: "text", text: "Structured output captured." }] } },
 			].map((entry) => JSON.stringify(entry)).join("\n") + "\n",
 			structuredOutputCapture: { ok: true },
 		});
@@ -2607,6 +2710,61 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(result.progress.activityState, "active_long_running");
 	});
 
+	it("suggests command controls for a long-open bash call the child's command controller manages", async () => {
+		const runId = "run-active-controller";
+		const channelDir = supervisorChannelDir(runId, "echo", 0);
+		const commands = createChildCommandRuntime(channelDir);
+		const bash = commands.wrap({
+			name: "bash", label: "bash", description: "Run a command", parameters: { type: "object", properties: {} },
+			async execute() {
+				await new Promise((resolve) => setTimeout(resolve, 150));
+				return { content: [{ type: "text", text: "ok" }], details: {} };
+			},
+		} as unknown as ToolDefinition);
+		const controlEvents: NonNullable<RunSyncResult["controlEvents"]> = [];
+		const factory = {
+			async create() {
+				let listener: (event: { type: string; [key: string]: unknown }) => void = () => {};
+				return {
+					subscribe(handler: typeof listener) { listener = handler; return () => {}; },
+					async prompt() {
+						const running = bash.execute("bash-1", { command: "sleep 300" }, undefined, undefined, undefined as never);
+						listener({ type: "tool_execution_start", toolCallId: "bash-1", toolName: "bash", args: { command: "sleep 300" } });
+						await running;
+						listener({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "done" }], stopReason: "stop", timestamp: Date.now() } });
+					},
+					async steer() {},
+					async followUp() {},
+					async dispose() {},
+					messages: [],
+					sessionFile: undefined,
+					sessionId: "command-controller-positive",
+					modelId: "mock/model",
+				};
+			},
+			async dispose() {},
+		};
+		try {
+			const result = await runSync(tempDir, makeAgentConfigs(["echo"]), "echo", "Investigate behavior", {
+				runId,
+				controlConfig: { enabled: true, activeNoticeAfterMs: 20, activeNoticeAfterTurns: 999, activeNoticeAfterTokens: 999_999, notifyOn: ["needs_attention", "active_long_running"] },
+				onControlEvent: (event: NonNullable<RunSyncResult["controlEvents"]>[number]) => controlEvents.push(event),
+				childSessionFactory: factory,
+			});
+			assert.equal(result.exitCode, 0);
+			const attentionEvent = controlEvents.find((event) => event.type === "needs_attention");
+			assert.equal(attentionEvent?.reason, "tool_open_threshold");
+			assert.equal(attentionEvent?.toolCallId, "bash-1");
+			const notice = formatControlNoticeMessage(attentionEvent!);
+			assert.match(notice, /"action":"command\.status"/);
+			assert.match(notice, /"action":"command\.yield"/);
+			assert.match(notice, /"action":"command\.cancel"/);
+		} finally {
+			await commands.shutdown();
+			fs.rmSync(channelDir, { recursive: true, force: true });
+		}
+	});
+
 	it("escalates repeated mutating tool failures to needs attention", async () => {
 		mockPi.onCall({
 			jsonl: [
@@ -2637,6 +2795,61 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(failureEvent?.currentPath, "src/runs/background/async-status.ts");
 		assert.match(failureEvent?.recentFailureSummary ?? "", /No exact match/);
 		assert.equal(result.progress.activityState, "needs_attention");
+		assert.equal(result.messages?.filter((message) => message.role === "toolResult").length, 3, "each tool result is recorded once");
+	});
+
+	it("does not count tool-budget blocks of a mutating tool as tool failures", async () => {
+		const toolBudget = { hard: 1, block: "*" as const };
+		const blocked = "Tool budget hard limit reached after 2 tool calls (hard 1). The 'edit' tool is blocked so you can finalize from the context you already have.";
+		mockPi.onCall({
+			jsonl: [
+				...Array.from({ length: 3 }, () => [
+					events.toolStart("edit", { path: "src/a.ts" }),
+					events.toolEnd("edit"),
+					events.toolResult("edit", blocked, true),
+				]).flat(),
+				events.assistantMessage("The budget is spent."),
+			],
+		});
+		const controlEvents: NonNullable<RunSyncResult["controlEvents"]> = [];
+
+		const result = await runSync(tempDir, [makeAgent("worker")], "worker", "Edit the file", {
+			runId: "run-budget-blocked-edits",
+			toolBudget,
+			controlConfig: { enabled: true, failedToolAttemptsBeforeAttention: 3, notifyOn: ["active_long_running", "needs_attention"] },
+			onControlEvent: (event: NonNullable<RunSyncResult["controlEvents"]>[number]) => controlEvents.push(event),
+		});
+
+		assert.equal(result.toolBudgetBlocked, true);
+		assert.equal(controlEvents.some((event) => event.reason === "tool_failures"), false);
+		assert.notEqual(result.progress.activityState, "needs_attention");
+	});
+
+	it("records a parallel batch's mutating failure against the failed call's path", async () => {
+		// Pi's parallel tool execution: every start and end comes before the result messages.
+		const result = (toolCallId: string, isError: boolean, text: string) => ({ type: "message_end", message: { role: "toolResult", toolCallId, toolName: "edit", isError, content: [{ type: "text", text }] } });
+		mockPi.onCall({
+			jsonl: [
+				{ type: "tool_execution_start", toolCallId: "edit-a", toolName: "edit", args: { path: "src/a.ts" } },
+				{ type: "tool_execution_start", toolCallId: "edit-b", toolName: "edit", args: { path: "src/b.ts" } },
+				{ type: "tool_execution_end", toolCallId: "edit-a", toolName: "edit", isError: true },
+				{ type: "tool_execution_end", toolCallId: "edit-b", toolName: "edit", isError: false },
+				result("edit-a", true, "No exact match found for a.ts"),
+				result("edit-b", false, "Edited src/b.ts"),
+				events.assistantMessage("Edit A failed."),
+			],
+		});
+		const controlEvents: NonNullable<RunSyncResult["controlEvents"]> = [];
+
+		await runSync(tempDir, [makeAgent("worker")], "worker", "Edit both files", {
+			runId: "run-parallel-failure",
+			controlConfig: { enabled: true, failedToolAttemptsBeforeAttention: 1, notifyOn: ["active_long_running", "needs_attention"] },
+			onControlEvent: (event: NonNullable<RunSyncResult["controlEvents"]>[number]) => controlEvents.push(event),
+		});
+
+		const failureEvent = controlEvents.find((event) => event.reason === "tool_failures");
+		assert.equal(failureEvent?.currentPath, "src/a.ts");
+		assert.equal(failureEvent?.recentFailureSummary, "edit(src/a.ts): No exact match found for a.ts");
 	});
 
 	it("does not surface control state or events when control is disabled", async () => {
@@ -2868,6 +3081,24 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(result.exitCode, 0);
 		assert.equal(getFinalOutput(result.messages), "settled after compaction retry");
 		assert.ok(Date.now() - startedAt >= 1200, "foreground runner must not terminate during compaction retry");
+	});
+
+	it("finishes a child whose last event is a terminal agent_end", { timeout: 10_000 }, async () => {
+		mockPi.onCall({ jsonl: [events.assistantMessage("final reply"), { type: "agent_end", willRetry: false }], omitImplicitFinalEvents: true, hangUntilAbort: true });
+		const result = await runSync(tempDir, makeAgentConfigs(["echo"]), "echo", "Finish", { acceptance: false });
+		assert.equal(result.exitCode, 0);
+		assert.equal(result.error, undefined);
+		assert.equal(getFinalOutput(result.messages), "final reply");
+	});
+
+	it("lets a compaction that runs after the final agent_end finish", { timeout: 10_000 }, async () => {
+		mockPi.onCall({ omitImplicitFinalEvents: true, steps: [
+			{ jsonl: [events.assistantMessage("final reply"), { type: "agent_end", willRetry: false }, { type: "compaction_start" }] },
+			{ delay: 1500, jsonl: [{ type: "compaction_end", willRetry: false }, { type: "agent_settled" }] },
+		] });
+		const result = await runSync(tempDir, makeAgentConfigs(["echo"]), "echo", "Finish", { acceptance: false });
+		assert.equal(result.exitCode, 0);
+		assert.equal(mockPi.sessions.at(-1)?.aborted, false, "the child is not aborted during its compaction");
 	});
 
 	it("treats agent_settled as a clean terminal watermark", async () => {
@@ -3797,7 +4028,7 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(fs.existsSync(path.join(tempDir, "context.md")), false);
 	});
 
-	it("makes task-level output overrides authoritative in the child system prompt", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
+	it("delivers the authoritative output override in the task and keeps it out of the child system prompt", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
 		mockPi.onCall({ output: "override report" });
 		const overridePath = path.join(tempDir, "custom-report.md");
 		const executor = makeExecutor([
@@ -3820,10 +4051,23 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		const systemPrompt = call.systemPrompts[0]?.text ?? "";
 		assert.equal(result.isError, undefined);
 		assert.match(taskArg, new RegExp(`Write your findings to exactly this path: ${escapeRegExp(overridePath)}`));
+		assert.match(taskArg, /Ignore any other output filename or output path mentioned elsewhere/);
 		assert.match(systemPrompt, /Output format \(`default-report\.md`\):/);
-		assert.match(systemPrompt, /Runtime output path override:/);
-		assert.match(systemPrompt, new RegExp(`Write your findings to exactly this path: ${escapeRegExp(overridePath)}`));
-		assert.match(systemPrompt, /Ignore any other output filename or output path mentioned elsewhere/);
+		assert.doesNotMatch(systemPrompt, new RegExp(escapeRegExp(overridePath)));
+
+		// A later stage of the same agent with a new output path keeps the same system prompt, so its prompt cache survives.
+		mockPi.onCall({ output: "second report" });
+		const secondPath = path.join(tempDir, "second-report.md");
+		await executor.execute(
+			"single-output-override-system-prompt-2",
+			{ agent: "researcher", task: "Write report", output: secondPath },
+			new AbortController().signal,
+			undefined,
+			makeMinimalCtx(tempDir),
+		);
+		const second = readCall();
+		assert.match(resolveMockPiCallArgs(second).at(-1) ?? "", new RegExp(`Write your findings to exactly this path: ${escapeRegExp(secondPath)}`));
+		assert.equal(second.systemPrompts[0]?.text ?? "", systemPrompt);
 	});
 
 	it("persists read-only file-only output without requiring a child write tool", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {
@@ -3848,12 +4092,11 @@ if (!fs.existsSync(${JSON.stringify(holdPath)})) { console.log('{}'); } else {
 		assert.equal(result.isError, undefined);
 		assert.equal(fs.readFileSync(outputPath, "utf-8"), "complete read-only analysis");
 		assert.match(result.content[0]?.text ?? "", /Output saved to:/);
-		for (const instruction of [taskArg, systemPrompt]) {
-			assert.match(instruction, /Return the complete artifact in your final response\./);
-			assert.match(instruction, /runtime will persist it to exactly this path:/);
-			assert.match(instruction, /Do not call contact_supervisor merely because no write-capable tool is available\./);
-			assert.doesNotMatch(instruction, /Write your findings to exactly this path/);
-		}
+		assert.match(taskArg, /Return the complete artifact in your final response\./);
+		assert.match(taskArg, /runtime will persist it to exactly this path:/);
+		assert.match(taskArg, /Do not call contact_supervisor merely because no write-capable tool is available\./);
+		assert.doesNotMatch(taskArg, /Write your findings to exactly this path/);
+		assert.doesNotMatch(systemPrompt, /runtime will persist it to exactly this path:/);
 	});
 
 	it("treats string false as disabled output in foreground single runs", { skip: !createSubagentExecutor ? "executor not importable" : undefined }, async () => {

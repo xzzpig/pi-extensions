@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { describe, it } from "node:test";
 import type { AssistantMessage, Message, Model, ToolResultMessage } from "@earendil-works/pi-ai";
+import { ExtensionRunner } from "@earendil-works/pi-coding-agent";
 import { convertResponsesMessages } from "@earendil-works/pi-ai/api/openai-responses-shared";
 import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
 import { createEventBus } from "../support/helpers.ts";
@@ -18,7 +19,10 @@ import { randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { createNestedRoute, nestedResultsPath } from "../../src/runs/shared/nested-events.ts";
 import { updateActiveRunIndex } from "../../src/runs/background/active-run-index.ts";
-import { INTERCOM_SESSION_IDENTITY_EVENT, SUBAGENT_ASYNC_COMPLETE_EVENT, TEMP_ROOT_DIR, SUBAGENT_FOREGROUND_COMPLETE_EVENT, type SubagentState } from "../../src/shared/types.ts";
+import { createChildHooks } from "../../src/runs/shared/child-hooks.ts";
+import { registerBackgroundWorkProvider } from "../../src/api/background-work.ts";
+import { ensureSupervisorChannelDir, resolveSupervisorChannelDir } from "../../src/intercom/native-supervisor-channel.ts";
+import { INTERCOM_SESSION_IDENTITY_EVENT, SUBAGENT_ASYNC_COMPLETE_EVENT, SUBAGENT_ASYNC_STARTED_EVENT, TEMP_ROOT_DIR, SUBAGENT_FOREGROUND_COMPLETE_EVENT, type SubagentState } from "../../src/shared/types.ts";
 import registerSubagentPromptRuntime, {
 	CHILD_FANOUT_BOUNDARY_INSTRUCTIONS,
 	CHILD_SUBAGENT_BOUNDARY_INSTRUCTIONS,
@@ -36,9 +40,21 @@ function childConfig(overrides: Partial<ChildRuntimeConfig> = {}): ChildRuntimeC
 	return { fanoutChild: false, depth: 1, waitTool: { enabled: true }, fast: false, ...overrides };
 }
 
-it("does not skip drain for in-process child sessions when hasUI is true", async () => {
+function registerChild(ctx: unknown, config: ChildRuntimeConfig) {
 	const handlers = new Map<string, Function[]>();
 	const listeners = new Map<string, Array<() => void>>();
+	registerSubagentPromptRuntime({
+		on: (name: string, fn: Function) => handlers.set(name, [...(handlers.get(name) ?? []), fn]),
+		registerTool: () => {},
+		events: { on: (channel: string, handler: () => void) => { listeners.set(channel, [...(listeners.get(channel) ?? []), handler]); return () => {}; } },
+	} as never, config);
+	return {
+		emit: async (name: string, event: unknown = {}) => { for (const fn of handlers.get(name) ?? []) await fn(event, ctx); },
+		wake: (channel: string) => { for (const handler of listeners.get(channel) ?? []) handler(); },
+	};
+}
+
+it("does not skip drain for in-process child sessions when hasUI is true", async () => {
 	const held: boolean[] = [];
 	const sessionId = "reviewer-ui-session.jsonl";
 	const runtimeState = {
@@ -47,29 +63,22 @@ it("does not skip drain for in-process child sessions when hasUI is true", async
 			children: [{ agent: "reviewer", index: 0, status: "detached", updatedAt: 1 }],
 		}]]),
 	} as SubagentState;
-	const ctx = { hasUI: true, sessionManager: { getSessionFile: () => sessionId } };
-	const emit = async (name: string, event: unknown) => { for (const fn of handlers.get(name) ?? []) await fn(event, ctx); };
-	registerSubagentPromptRuntime({
-		on: (name: string, fn: Function) => handlers.set(name, [...(handlers.get(name) ?? []), fn]),
-		registerTool: () => {},
-		events: { on: (channel: string, handler: () => void) => { listeners.set(channel, [...(listeners.get(channel) ?? []), handler]); return () => {}; } },
-	} as never, childConfig({ runtimeState, holdFinalDrain: (value) => { held.push(value); } }));
-	await emit("session_start", {});
+	const ctx = { hasUI: true, sessionManager: { getSessionFile: () => sessionId, getSessionId: () => "reviewer-ui-session" } };
+	const { emit, wake } = registerChild(ctx, childConfig({ runtimeState, holdFinalDrain: (value) => { held.push(value); } }));
+	await emit("session_start");
 	let settled = false;
 	const ended = emit("agent_end", { messages: [] }).then(() => { settled = true; });
 	await new Promise((resolve) => setTimeout(resolve, 30));
 	assert.equal(settled, false);
 	assert.deepEqual(held, [true]);
 	runtimeState.foregroundRuns.get("fg")!.children[0]!.status = "completed";
-	for (const handler of listeners.get(SUBAGENT_FOREGROUND_COMPLETE_EVENT) ?? []) handler();
+	wake(SUBAGENT_FOREGROUND_COMPLETE_EVENT);
 	await ended;
 	assert.equal(settled, true);
 	assert.deepEqual(held, [true, false]);
 });
 
 it("reads a late-installed owner barrier for each final drain and balances the hold", async () => {
-	const handlers = new Map<string, Function[]>();
-	const listeners = new Map<string, Array<() => void>>();
 	const held: boolean[] = [];
 	const sessionId = "fanout-owner-session.jsonl";
 	const runtimeState = {
@@ -79,13 +88,8 @@ it("reads a late-installed owner barrier for each final drain and balances the h
 		}]]),
 	} as SubagentState;
 	const config = childConfig({ runtimeState, holdFinalDrain: (value) => { held.push(value); } });
-	const ctx = { hasUI: true, sessionManager: { getSessionFile: () => sessionId } };
-	const emit = async (name: string) => { for (const fn of handlers.get(name) ?? []) await fn({}, ctx); };
-	registerSubagentPromptRuntime({
-		on: (name: string, fn: Function) => handlers.set(name, [...(handlers.get(name) ?? []), fn]),
-		registerTool: () => {},
-		events: { on: (channel: string, handler: () => void) => { listeners.set(channel, [...(listeners.get(channel) ?? []), handler]); return () => {}; } },
-	} as never, config);
+	const ctx = { hasUI: true, sessionManager: { getSessionFile: () => sessionId, getSessionId: () => "fanout-owner-session" } };
+	const { emit, wake } = registerChild(ctx, config);
 	await emit("session_start");
 	let pending = true;
 	config.hasPendingSupervisorRequest = () => pending;
@@ -99,9 +103,33 @@ it("reads a late-installed owner barrier for each final drain and balances the h
 	await new Promise((resolve) => setTimeout(resolve, 30));
 	assert.equal(settled, false);
 	runtimeState.foregroundRuns.get("fg")!.children[0]!.status = "completed";
-	for (const handler of listeners.get(SUBAGENT_FOREGROUND_COMPLETE_EVENT) ?? []) handler();
+	wake(SUBAGENT_FOREGROUND_COMPLETE_EVENT);
 	await ended;
 	assert.deepEqual(held, [true, false, true, false]);
+});
+
+it("keeps a file-backed child's final drain waiting for provider work keyed by its session id", async () => {
+	let active = true;
+	const dispose = registerBackgroundWorkProvider({
+		name: "child-session-id",
+		wakeChannels: ["child-session-id:done"],
+		listActiveWork: () => active ? [{ id: "job", sessionId: "child-session-id" }] : [],
+	});
+	try {
+		const ctx = { hasUI: false, sessionManager: { getSessionFile: () => "/sessions/child.jsonl", getSessionId: () => "child-session-id" } };
+		const { emit, wake } = registerChild(ctx, childConfig());
+		await emit("session_start");
+		let settled = false;
+		const ended = emit("agent_end").then(() => { settled = true; });
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		assert.equal(settled, false);
+		active = false;
+		wake("child-session-id:done");
+		await ended;
+		assert.equal(settled, true);
+	} finally {
+		dispose();
+	}
 });
 
 it("does not grant nested wait access for an invalid inherited route", async (t) => {
@@ -134,7 +162,7 @@ it("registered child bg_wait discovers nested personas and agent_end drains the 
 	const events = createEventBus();
 	const tools = new Map<string, { execute: Function }>();
 	const held: boolean[] = [];
-	const ctx = { hasUI: false, sessionManager: { getSessionFile: () => sessionId } };
+	const ctx = { hasUI: false, sessionManager: { getSessionFile: () => sessionId, getSessionId: () => "nested-child-session" } };
 	const emit = async (event: string) => { for (const fn of handlers.get(event) ?? []) await fn({}, ctx); };
 	const writeStatus = (state: "running" | "complete") => {
 		fs.mkdirSync(asyncDir, { recursive: true });
@@ -175,6 +203,66 @@ it("registered child bg_wait discovers nested personas and agent_end drains the 
 	} finally {
 		fs.rmSync(asyncRoot, { recursive: true, force: true });
 		fs.rmSync(path.dirname(resultPath), { recursive: true, force: true });
+		fs.rmSync(path.dirname(route.eventSink), { recursive: true, force: true });
+	}
+});
+
+it("fanout child bg_wait yields to a descendant's supervisor request while the awaited run is still running", async () => {
+	const route = createNestedRoute(randomUUID());
+	const runId = randomUUID();
+	const asyncRoot = path.join(TEMP_ROOT_DIR, "nested-subagent-runs", route.rootRunId);
+	const asyncDir = path.join(asyncRoot, runId);
+	const channelDir = resolveSupervisorChannelDir(runId, "worker", 0);
+	const sessionFile = "fanout-coordinator-session.jsonl";
+	const ownerSessionId = `coordinator-${randomUUID()}`;
+	const requestId = `ask-${randomUUID()}`;
+	const handlers = new Map<string, Function[]>();
+	const events = createEventBus();
+	const tools = new Map<string, { execute: Function }>();
+	const ctx = {
+		cwd: process.cwd(), hasUI: false, isIdle: () => false,
+		sessionManager: { getSessionFile: () => sessionFile, getSessionId: () => ownerSessionId, getEntries: () => [] },
+	};
+	// SAFETY: this fixture supplies the registration/event APIs both child hooks use; other calls are inert.
+	const pi = new Proxy({
+		events,
+		on: (event: string, fn: Function) => {
+			handlers.set(event, [...(handlers.get(event) ?? []), fn]);
+			return () => handlers.set(event, (handlers.get(event) ?? []).filter((candidate) => candidate !== fn));
+		},
+		registerTool: (tool: { name: string; execute: Function }) => tools.set(tool.name, tool),
+		getAllTools: () => [...tools.keys()].map((name) => ({ name })),
+	}, { get: (target, prop) => prop in target ? target[prop as keyof typeof target] : () => undefined }) as never;
+	try {
+		fs.mkdirSync(asyncDir, { recursive: true });
+		fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({
+			runId, sessionId: sessionFile, mode: "workflow", state: "running", pid: process.pid,
+			startedAt: Date.now(), lastUpdate: Date.now(), steps: [{ agent: "worker", status: "running" }],
+		}));
+		updateActiveRunIndex(asyncDir, "running");
+		// Real hook order: the prompt runtime registers bg_wait before fanout-child installs the supervisor channel.
+		for (const hook of createChildHooks(childConfig({ fanoutChild: true, nestedRoute: route }))) hook.factory(pi);
+		for (const fn of handlers.get("session_start") ?? []) await fn({ reason: "startup" }, ctx);
+		events.emit(SUBAGENT_ASYNC_STARTED_EVENT, { id: runId, asyncDir, sessionId: sessionFile, agents: ["worker"] });
+
+		const startedAt = Date.now();
+		const waiting = tools.get("bg_wait")!.execute("wait", { id: runId, timeoutMs: 3000 }, new AbortController().signal, undefined, ctx);
+		await new Promise((resolve) => setTimeout(resolve, 25));
+		ensureSupervisorChannelDir(channelDir);
+		fs.writeFileSync(path.join(channelDir, "requests", `${requestId}.json`), JSON.stringify({
+			type: "subagent.supervisor.request", id: requestId, createdAt: Date.now(), expiresAt: Date.now() + 60_000,
+			reason: "need_decision", message: "Choose the safe path", expectsReply: true,
+			orchestratorSessionId: ownerSessionId, runId, agent: "worker", childIndex: 0,
+		}));
+
+		const result = await waiting;
+		assert.deepEqual(result.details.wait, { reason: "supervisor_request", timedOut: false, activeRunIds: [runId], activeProviderItems: [] });
+		assert.ok(Date.now() - startedAt < 2500, "bg_wait did not yield before its window elapsed");
+		assert.equal(JSON.parse(fs.readFileSync(path.join(asyncDir, "status.json"), "utf8")).state, "running");
+	} finally {
+		for (const fn of handlers.get("session_shutdown") ?? []) await fn({}, ctx);
+		fs.rmSync(asyncRoot, { recursive: true, force: true });
+		fs.rmSync(channelDir, { recursive: true, force: true });
 		fs.rmSync(path.dirname(route.eventSink), { recursive: true, force: true });
 	}
 });
@@ -791,7 +879,7 @@ describe("subagent prompt runtime", () => {
 		assert.ok(rewritten.includes("<skill name=\"safe-bash\">"));
 	});
 
-	it("strips parent-only subagent custom messages from forked child context", () => {
+	it("strips parent-only subagent custom messages from a child's context outside inherited fork history", () => {
 		const user = { role: "user", content: "Task" };
 		const instruction = { role: "custom", customType: "subagent-orchestration-instructions", content: "Subagent orchestration is enabled." };
 		const slashResult = { role: "custom", customType: "subagent-slash-result", content: "## Orchestration" };
@@ -805,7 +893,7 @@ describe("subagent prompt runtime", () => {
 		assert.deepEqual(stripParentOnlySubagentMessages([user, instruction, slashResult, slashTextResult, notify, control, watchdogWarning, childWatchdogWarning, otherCustom]), [user, otherCustom]);
 	});
 
-	it("strips prior parent subagent tool calls and results from forked child context", () => {
+	it("strips subagent tool calls and results from a child's context outside inherited fork history", () => {
 		const user = { role: "user", content: "Task" };
 		const subagentResult = { role: "toolResult", toolName: "subagent", content: "subagent results" };
 		const readResult = { role: "toolResult", toolName: "read", content: "file contents" };
@@ -1121,11 +1209,30 @@ describe("subagent prompt runtime", () => {
 		assert.equal(handlers[0]!({ systemPrompt: finalized!.systemPrompt }), undefined);
 	});
 
+	it("strips subagent history without moving Pi's system messages", async () => {
+		const handlers = new Map<string, Function[]>();
+		registerSubagentPromptRuntime({
+			on: (name: string, fn: Function) => handlers.set(name, [...(handlers.get(name) ?? []), fn]),
+			registerTool: () => {},
+			events: { on: () => () => {} },
+		} as never, childConfig());
+		const runner = new ExtensionRunner([{ path: "child-runtime", handlers } as never], {} as never, process.cwd(), undefined as never, undefined as never);
+		const leading = { role: "system", content: "Base prompt", timestamp: 0 };
+		const task = { role: "user", content: "Task", timestamp: 1 };
+		const call = { role: "assistant", content: [{ type: "toolCall", id: "call_1", name: "subagent", arguments: {} }], timestamp: 2 };
+		const result = { role: "toolResult", toolCallId: "call_1", toolName: "subagent", content: [], isError: false, timestamp: 3 };
+		// A mid-conversation system message must stay where it is, or the cached prefix ends at the tools.
+		const sectionUpdate = { role: "system", content: "", sections: { time: "Now: 10:00" }, timestamp: 4 };
+		const next = { role: "user", content: "Continue", timestamp: 5 };
+
+		assert.deepEqual(await runner.emitContext([leading, task, call, result, sectionUpdate, next] as never), [leading, task, sectionUpdate, next]);
+	});
+
 	it("filters parent-only artifacts from polluted fork context while preserving ordinary history", () => {
 		let contextHandler: ((event: { messages: unknown[] }) => { messages: unknown[] } | undefined) | undefined;
 		registerSubagentPromptRuntime({
 			on(event: string, handler: (payload: { messages: unknown[] }) => { messages: unknown[] } | undefined) {
-				if (event === "context") contextHandler = handler;
+				if (event === "context_with_system") contextHandler = handler;
 			},
 		} as { on(event: string, handler: (payload: { messages: unknown[] }) => { messages: unknown[] } | undefined): void }, childConfig());
 
@@ -1153,7 +1260,7 @@ describe("subagent prompt runtime", () => {
 		let contextHandler: ((event: { messages: unknown[] }, ctx: { model: typeof model }) => { messages: unknown[] } | undefined) | undefined;
 		registerSubagentPromptRuntime({
 			on(event: string, handler: typeof contextHandler) {
-				if (event === "context") contextHandler = handler;
+				if (event === "context_with_system") contextHandler = handler;
 			},
 		} as never, childConfig());
 
@@ -1194,6 +1301,13 @@ describe("subagent prompt runtime", () => {
 			});
 		}
 
+		it("preserves composite ids for a custom provider on the Codex Responses wire", () => {
+			// DeepSeek's Responses endpoint rejects a call_id that is not shaped like the one it issued.
+			const messages = history("call_00_ET_9AVPsTo5MNbdb2i4IbPv5443|0a48e5ac-df6b-47c9-a133-4da6b380fa82");
+			assert.ok(contextHandler);
+			assert.equal(contextHandler({ messages }, { model: { ...model, api: "cliproxyapi-codex-responses" } } as never), undefined);
+		});
+
 		for (const [label, toolCallId] of [
 			["65-character call half", `${"a".repeat(65)}|fc_item`],
 			["65-character item half", `call_read|fc_${"b".repeat(62)}`],
@@ -1233,7 +1347,7 @@ describe("subagent prompt runtime", () => {
 		let contextHandler: ((event: { messages: unknown[] }, ctx: { model?: { api: string } }) => { messages: unknown[] } | undefined) | undefined;
 		registerSubagentPromptRuntime({
 			on(event: string, handler: (payload: { messages: unknown[] }, ctx: { model?: { api: string } }) => { messages: unknown[] } | undefined) {
-				if (event === "context") contextHandler = handler;
+				if (event === "context_with_system") contextHandler = handler;
 			},
 		} as { on(event: string, handler: (payload: { messages: unknown[] }, ctx: { model?: { api: string } }) => { messages: unknown[] } | undefined): void }, childConfig());
 
@@ -1251,7 +1365,7 @@ describe("subagent prompt runtime", () => {
 		let contextHandler: ((event: { messages: unknown[] }, ctx: { model?: { api: string } }) => { messages: unknown[] } | undefined) | undefined;
 		registerSubagentPromptRuntime({
 			on(event: string, handler: (payload: { messages: unknown[] }, ctx: { model?: { api: string } }) => { messages: unknown[] } | undefined) {
-				if (event === "context") contextHandler = handler;
+				if (event === "context_with_system") contextHandler = handler;
 			},
 		} as { on(event: string, handler: (payload: { messages: unknown[] }, ctx: { model?: { api: string } }) => { messages: unknown[] } | undefined): void }, childConfig());
 
@@ -1271,7 +1385,7 @@ describe("subagent prompt runtime", () => {
 		let contextHandler: ((event: { messages: unknown[] }, ctx: { model?: { api: string } }) => { messages: unknown[] } | undefined) | undefined;
 		registerSubagentPromptRuntime({
 			on(event: string, handler: (payload: { messages: unknown[] }, ctx: { model?: { api: string } }) => { messages: unknown[] } | undefined) {
-				if (event === "context") contextHandler = handler;
+				if (event === "context_with_system") contextHandler = handler;
 			},
 		} as { on(event: string, handler: (payload: { messages: unknown[] }, ctx: { model?: { api: string } }) => { messages: unknown[] } | undefined): void }, childConfig());
 

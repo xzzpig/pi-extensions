@@ -841,6 +841,57 @@ describe("slash command custom message delivery", { skip: !available ? "slash-co
 		assert.deepEqual(requestedParams, { action: "stop", id: "run-123", childId: "step-0-agent-0" });
 	});
 
+	const stopFromPicker = async (runIds: string[]) => {
+		const requested: Array<{ action: string; id: string }> = [];
+		const events = createEventBus();
+		events.on(SLASH_SUBAGENT_REQUEST_EVENT, (data) => {
+			const { requestId, params } = data as { requestId: string; params: { action: string; id: string } };
+			requested.push(params);
+			events.emit(SLASH_SUBAGENT_STARTED_EVENT, { requestId });
+			events.emit(SLASH_SUBAGENT_RESPONSE_EVENT, { requestId, result: { content: [{ type: "text", text: "stopped" }], details: { mode: "management", results: [] } }, isError: false });
+		});
+		const commands = new Map<string, RegisteredSlashCommand>();
+		registerSlashCommands!({ events, registerCommand(name, spec) { commands.set(name, spec); }, registerShortcut() {}, sendMessage() {} }, createState(process.cwd()));
+		for (const runId of runIds) {
+			const asyncDir = path.join(ASYNC_DIR, runId);
+			fs.mkdirSync(asyncDir, { recursive: true });
+			fs.writeFileSync(path.join(asyncDir, "status.json"), JSON.stringify({ runId, mode: "single", state: "running", sessionId: "session-test", pid: process.pid, cwd: os.tmpdir(), startedAt: 100, lastUpdate: Date.now(), steps: [{ agent: "worker", status: "running", startedAt: 100 }] }));
+			updateActiveRunIndex(asyncDir, "running");
+		}
+		let rows: string[] = [];
+		let confirm: string[] = [];
+		try {
+			await commands.get("subagents-stop")!.handler("", createCommandContext({ hasUI: true, custom: (factory) => new Promise((resolve) => {
+				const selector = (factory as (tui: unknown, theme: unknown, keybindings: unknown, done: (result: unknown) => void) => { handleInput(data: string): void; render(width: number): string[] })(
+					{ requestRender() {} }, { fg: (_name: string, text: string) => text, bold: (text: string) => text }, {}, resolve);
+				rows = selector.render(120);
+				// Enter twice: select the first row, then confirm.
+				selector.handleInput("\r");
+				confirm = selector.render(120);
+				selector.handleInput("\r");
+			}) }));
+		} finally {
+			for (const runId of runIds) {
+				updateActiveRunIndex(path.join(ASYNC_DIR, runId), "complete");
+				fs.rmSync(path.join(ASYNC_DIR, runId), { recursive: true, force: true });
+			}
+		}
+		return { rows, confirm, requested };
+	};
+
+	it("/subagents-stop offers a first stop all row for two or more async runs and stops each of them", async () => {
+		const { rows, confirm, requested } = await stopFromPicker(["stop-all-a", "stop-all-b"]);
+		assert.ok(rows.some((row) => row.startsWith("› stop all 2 async runs")), rows.join("\n"));
+		assert.ok(confirm.includes("Confirm: stop all 2 async runs?"), confirm.join("\n"));
+		assert.deepEqual(requested.sort((left, right) => left.id.localeCompare(right.id)), [{ action: "stop", id: "stop-all-a" }, { action: "stop", id: "stop-all-b" }]);
+	});
+
+	it("/subagents-stop shows no stop all row for a single async run", async () => {
+		const { rows, requested } = await stopFromPicker(["stop-one"]);
+		assert.ok(!rows.some((row) => row.includes("stop all")), rows.join("\n"));
+		assert.deepEqual(requested, [{ action: "stop", id: "stop-one" }]);
+	});
+
 	it("/subagents-stop rejects extra arguments with usage text", async () => {
 		const sent: unknown[] = [];
 		const commands = new Map<string, { handler(args: string, ctx: unknown): Promise<void> }>();
@@ -1363,6 +1414,41 @@ Inspect
 		assert.ok(visibleDetails);
 		const visibleSnapshot = getSlashRenderableSnapshot!(visibleDetails!);
 		assert.equal((visibleSnapshot.result.content[0] as { text?: string }).text, "Scout finished");
+	});
+
+	it("/run leaves the live-detail key out of its status when no expand key resolves", async () => {
+		const statuses: string[] = [];
+		const commands = new Map<string, { handler(args: string, ctx: unknown): Promise<void> }>();
+		const events = createEventBus();
+		events.on(SLASH_SUBAGENT_REQUEST_EVENT, (data) => {
+			const requestId = (data as { requestId: string }).requestId;
+			events.emit(SLASH_SUBAGENT_STARTED_EVENT, { requestId });
+			events.emit("subagent:slash:update", { requestId, toolCount: 3, currentTool: "read" });
+			events.emit(SLASH_SUBAGENT_RESPONSE_EVENT, {
+				requestId,
+				result: { content: [{ type: "text", text: "done" }], details: { mode: "single", results: [] } },
+				isError: false,
+			});
+		});
+		const pi = {
+			events,
+			registerCommand(name: string, spec: { handler(args: string, ctx: unknown): Promise<void> }) {
+				commands.set(name, spec);
+			},
+			registerShortcut() {},
+			sendMessage() {},
+		};
+
+		registerSlashCommands!(pi, createState(process.cwd()));
+		// The test process never loads Pi's app keybindings, like RPC mode.
+		await commands.get("run")!.handler("scout inspect this", createCommandContext({
+			hasUI: true,
+			setStatus: (_key, text) => {
+				if (text) statuses.push(text);
+			},
+		}));
+
+		assert.ok(statuses.includes("3 tools read"), JSON.stringify(statuses));
 	});
 
 	it("/run collapses tool detail before showing the initial live card", async () => {

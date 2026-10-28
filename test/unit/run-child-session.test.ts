@@ -7,7 +7,7 @@ import { runChildSession } from "../../src/runs/background/run-child-session.ts"
 import type { ChildSession, ChildSessionFactory } from "../../src/runs/shared/child-session.ts";
 import type { InProcessChildLaunch } from "../../src/runs/shared/child-launch.ts";
 
-const launch = { session: {
+const launch = { capture: { finalDrainHeld: () => false }, session: {
 	cwd: process.cwd(), storage: { kind: "memory" }, extensionPaths: [], ambientExtensions: false,
 	hooks: [], noSkills: true, noContextFiles: true,
 	runtime: { fanoutChild: false, fast: false, depth: 1, waitTool: { enabled: false } },
@@ -51,6 +51,58 @@ it("settles a timed-out run whose session creation never returns, and contains l
 	assert.equal(disposeAttempted, true);
 	assert.equal(prompted, false);
 });
+
+for (const control of ["stop", "timeout", "interrupt"] as const) {
+	it(`cancels background session startup on ${control} before a session is returned`, { timeout: 5_000 }, async () => {
+		let cancel!: () => void;
+		let observedAbort = false;
+		const factory: ChildSessionFactory = {
+			create(input) {
+				assert.ok(input.signal, "startup must receive a cancellation signal");
+				return new Promise((_resolve, reject) => {
+					input.signal!.addEventListener("abort", () => { observedAbort = true; reject(new Error("startup cancelled")); }, { once: true });
+				});
+			},
+			async dispose() {},
+		};
+		const run = runChildSession({
+			factory, launch, prompt: "must not reach the model", appendChildEvent() {}, writeOutputLine() {},
+			registerStop(handler) { if (control === "stop" && handler) cancel = handler; },
+			registerTimeout(handler) { if (control === "timeout" && handler) cancel = handler; },
+			registerInterrupt(handler) { if (control === "interrupt" && handler) cancel = handler; },
+		});
+		cancel();
+		const result = await run;
+		assert.equal(observedAbort, true);
+		assert.equal(result.toolCount, 0);
+		assert.equal(result[control === "stop" ? "stopped" : control === "timeout" ? "timedOut" : "interrupted"], true);
+	});
+}
+
+for (const control of ["stop", "timeout", "interrupt"] as const) {
+	it(`cancels foreground session startup on ${control} before a session is returned`, { timeout: 5_000 }, async () => {
+		const controller = new AbortController();
+		let observedAbort = false;
+		const factory: ChildSessionFactory = {
+			create(input) {
+				assert.ok(input.signal, "startup must receive a cancellation signal");
+				return new Promise((_resolve, reject) => {
+					input.signal!.addEventListener("abort", () => { observedAbort = true; reject(new Error("startup cancelled")); }, { once: true });
+					if (control !== "timeout") controller.abort();
+				});
+			},
+			async dispose() {},
+		};
+		const result = await runSync(process.cwd(), makeAgentConfigs(["worker"]), "worker", "must not reach the model", {
+			childSessionFactory: factory,
+			...(control === "stop" ? { signal: controller.signal } : control === "interrupt" ? { interruptSignal: controller.signal } : { timeoutMs: 100 }),
+		});
+		assert.equal(observedAbort, true);
+		assert.deepEqual(result.messages, []);
+		if (control === "timeout") assert.equal(result.timedOut, true);
+		if (control === "interrupt") assert.equal(result.interrupted, true);
+	});
+}
 
 it("reports the created child's context window before prompting", { timeout: 10_000 }, async () => {
 	const reported: number[] = [];
@@ -228,3 +280,85 @@ for (const mode of ["foreground", "background"] as const) {
 		assert.match(result.finalOutput ?? "", /half a thought, finished/);
 	});
 }
+
+for (const mode of ["foreground", "background"] as const) {
+	it(`${mode}: reports a provider stop with its reply text`, { timeout: 10_000 }, async () => {
+		let listener: Parameters<ChildSession["subscribe"]>[0] = () => {};
+		const messages: ChildSession["messages"] = [];
+		const session: ChildSession = {
+			subscribe(handler) { listener = handler; return () => {}; },
+			async prompt() {
+				const message = { ...fauxAssistantMessage("Blocked by the provider's usage policy."), stopReason: "error", rawStopReason: "content_filter", errorMessage: "Provider finish_reason: content_filter" };
+				messages.push(message);
+				listener({ type: "message_end", message });
+			},
+			async steer() {}, async followUp() {}, async abort() {}, async dispose() {},
+			messages, sessionId: "filtered-session", modelId: "mock/model",
+		};
+		const factory: ChildSessionFactory = { create: async () => session, async dispose() {} };
+		const result = mode === "foreground"
+			? await runSync(process.cwd(), makeAgentConfigs(["worker"]), "worker", "Study", { childSessionFactory: factory })
+			: await runChildSession({ factory, launch, prompt: "Study", appendChildEvent() {}, writeOutputLine() {} });
+		assert.equal(result.exitCode, 1);
+		assert.equal(result.error, "Provider finish_reason: content_filter\nReply text: Blocked by the provider's usage policy.");
+	});
+}
+
+/** Runs a child whose prompt emits a final "Done" reply ending on agent_end, then runs `after` before prompt() returns. */
+function runFinalReply(sessionId: string, abort: () => Promise<void>, after: (emit: Parameters<ChildSession["subscribe"]>[0]) => Promise<void>) {
+	let listener: Parameters<ChildSession["subscribe"]>[0] = () => {};
+	const messages: ChildSession["messages"] = [];
+	const session: ChildSession = {
+		subscribe(handler) { listener = handler; return () => {}; },
+		async prompt() {
+			const message = fauxAssistantMessage("Done");
+			messages.push(message);
+			listener({ type: "agent_start" });
+			listener({ type: "message_end", message });
+			listener({ type: "turn_end" });
+			listener({ type: "agent_end", messages });
+			await after((event) => listener(event));
+		},
+		async steer() {}, async followUp() {}, async dispose() {}, abort,
+		messages, sessionId, modelId: "mock/model",
+	};
+	return runChildSession({
+		factory: { create: async () => session, async dispose() {} }, launch, prompt: "Finish",
+		timeoutMessage: "timed out", appendChildEvent() {}, writeOutputLine() {},
+	});
+}
+
+// A child that stops after its terminal assistant message emits `agent_end` but Pi may
+// never follow it with `agent_settled`; the run still has to settle and publish its reply.
+it("settles and keeps the reply when the child ends on agent_end without agent_settled", { timeout: 10_000 }, async () => {
+	let releasePrompt!: () => void;
+	let aborted = false;
+	let emit!: Parameters<ChildSession["subscribe"]>[0];
+	const result = await runFinalReply("terminal-agent-end-session", async () => {
+		aborted = true;
+		emit({ type: "agent_settled" });
+		releasePrompt();
+	}, (listener) => {
+		emit = listener;
+		// The real child resolves this only once its agent loop is settled or aborted.
+		return new Promise<void>((resolve) => { releasePrompt = resolve; });
+	});
+	assert.equal(result.error, undefined, "a clean terminal stop must not be reported as a settle timeout");
+	assert.equal(result.exitCode, 0);
+	assert.equal(result.finalOutput, "Done");
+	assert.equal(aborted, true, "the re-armed drain must abort the child so its loop can end");
+});
+
+// Pi's order after a final reply: agent_end, then a threshold auto-compaction (a model call that
+// can take seconds), then agent_settled. Ending the run early would cancel the compaction.
+it("lets a compaction that runs after the final agent_end finish", { timeout: 10_000 }, async () => {
+	let aborted = false;
+	const result = await runFinalReply("compaction-after-final-session", async () => { aborted = true; }, async (emit) => {
+		emit({ type: "compaction_start", reason: "threshold" });
+		await new Promise((resolve) => setTimeout(resolve, 1500));
+		emit({ type: "compaction_end", reason: "threshold", willRetry: false, aborted });
+		emit({ type: "agent_settled" });
+	});
+	assert.equal(result.finalOutput, "Done");
+	assert.equal(aborted, false, "the child must not be aborted while it compacts");
+});

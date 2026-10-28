@@ -426,6 +426,36 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 		}
 	});
 
+	it("emits subagent:jobs-changed when a background chain moves to its next step", async () => {
+		const asyncRoot = createTempDir("pi-async-jobs-changed-");
+		try {
+			const runDir = path.join(asyncRoot, "run-chain");
+			fs.mkdirSync(runDir, { recursive: true });
+			const writeStatus = (currentStep: number) => fs.writeFileSync(path.join(runDir, "status.json"), JSON.stringify({
+				runId: "run-chain", mode: "chain", state: "running", sessionId: "session-chain", startedAt: 1000, lastUpdate: 2000 + currentStep, currentStep, chainStepCount: 2,
+				steps: [{ agent: "scout", status: currentStep === 0 ? "running" : "complete" }, { agent: "worker", status: currentStep === 0 ? "pending" : "running" }],
+			}), "utf-8");
+			writeStatus(0);
+			updateActiveRunIndex(runDir, "running");
+			const state = createState();
+			state.currentSessionId = "session-chain";
+			const recorder = createEventRecorder();
+			const changed = () => recorder.events.filter((event) => event.channel === "subagent:jobs-changed");
+			const tracker = createTracker(recorder.pi, state as never, asyncRoot, { pollIntervalMs: 10 });
+			tracker.restoreActiveJobs(createUiContext().ctx as never);
+			assert.ok(changed().length > 0, "restoring a running job is a change");
+
+			const before = changed().length;
+			assert.equal(state.asyncJobs.get("run-chain")?.currentStep, 0);
+			writeStatus(1);
+			await waitForCondition(() => changed().length > before, "jobs-changed after the step moved");
+			assert.equal(state.asyncJobs.get("run-chain")?.currentStep, 1);
+			for (const event of changed()) assert.deepEqual(event.data, { version: 1 });
+		} finally {
+			removeTempDir(asyncRoot);
+		}
+	});
+
 	it("retains nested lookup authority after async coordinator widget cleanup without crossing sessions", async () => {
 		const asyncRoot = createTempDir("pi-async-retained-lookup-");
 		const route = createNestedRoute("async-coordinator");
@@ -584,7 +614,7 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			}
 
 			await new Promise((resolve) => setTimeout(resolve, 30));
-			assert.equal(recorder.events.length, 0, "historical control events should not be replayed during restore");
+			assert.deepEqual(recorder.events.filter((event) => event.channel !== "subagent:jobs-changed"), [], "historical control events should not be replayed during restore");
 		} finally {
 			removeTempDir(asyncRoot);
 		}
@@ -681,6 +711,35 @@ describe("async job tracker", { skip: !available ? "pi packages not available" :
 			}), "utf-8");
 			await waitForCondition(() => JSON.stringify(state.asyncJobs.get("workflow-run")?.workflow?.emits) === JSON.stringify([{ stage: "review" }]), "evented workflow refresh", 1000);
 			assert.equal(state.asyncJobs.get("workflow-run")?.workflow?.trace[0]?.key, "review");
+			tracker.resetJobs();
+		} finally {
+			removeTempDir(asyncRoot);
+		}
+	});
+
+	it("keeps a workflow lane's recorded model and fills its missing thinking level from the child run", async () => {
+		const asyncRoot = createTempDir("pi-async-job-workflow-child-model-");
+		try {
+			const runDir = path.join(asyncRoot, "workflow-run");
+			fs.mkdirSync(runDir, { recursive: true });
+			const writeWorkflow = (lastUpdate: number, step: Record<string, unknown>) => fs.writeFileSync(path.join(runDir, "status.json"), JSON.stringify({
+				runId: "workflow-run", mode: "workflow", state: "running", sessionId: "session-workflow", startedAt: 1000, lastUpdate, steps: [step],
+			}), "utf-8");
+			writeWorkflow(2000, { agent: "scout", status: "pending" });
+			fs.mkdirSync(path.join(asyncRoot, "child-run"));
+			fs.writeFileSync(path.join(asyncRoot, "child-run", "status.json"), JSON.stringify({
+				runId: "child-run", mode: "single", state: "running", startedAt: 1000,
+				steps: [{ agent: "scout", status: "running", model: "observed/model", thinking: "low" }],
+			}), "utf-8");
+			updateActiveRunIndex(runDir, "running");
+			const state = createState();
+			state.currentSessionId = "session-workflow";
+			const tracker = createTracker(createEventRecorder().pi, state as never, asyncRoot, { pollIntervalMs: 60_000 });
+			tracker.restoreActiveJobs();
+			// The tracker's own status refresh, not the restore projection, feeds the widget lane.
+			writeWorkflow(3000, { agent: "scout", status: "running", async: true, runId: "child-run", model: "launch/model" });
+			await waitForCondition(() => state.asyncJobs.get("workflow-run")?.steps?.[0]?.model === "launch/model", "workflow lane refresh", 1000);
+			assert.equal(state.asyncJobs.get("workflow-run")?.steps?.[0]?.thinking, "low");
 			tracker.resetJobs();
 		} finally {
 			removeTempDir(asyncRoot);
