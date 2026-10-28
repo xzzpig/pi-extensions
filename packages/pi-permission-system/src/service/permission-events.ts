@@ -146,6 +146,11 @@ export type PermissionDecisionResolution =
   | "user_denied"
   | "auto_approved"
   | "confirmation_unavailable"
+  /**
+   * A human was shown the prompt and nobody answered within the configured
+   * `promptTimeoutMs`, so the request was denied.
+   */
+  | "prompt_unanswered"
   /** A registered `authorizerChain` link granted the ask; no human was asked. */
   | "authorizer_allowed"
   /** A registered `authorizerChain` link refused the ask; no human was asked. */
@@ -207,6 +212,7 @@ export type PermissionForwardedDecisionResolution =
   | "user_denied"
   | "auto_approved"
   | "confirmation_unavailable"
+  | "prompt_unanswered"
   | "authorizer_allowed"
   | "authorizer_denied"
   | "gate_error";

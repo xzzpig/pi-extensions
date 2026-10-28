@@ -237,6 +237,7 @@ export function classifyWrapperCommand(
 	parseProgram: ParseProgram | undefined,
 	reader: WordReader,
 	speller?: ArgumentSpeller,
+	timedSubshell = false,
 ): WrapperClassification | undefined {
 	const { commandName: rawName, args, commandNode } = readWrapperCommand(node);
 	let commandName = rawName;
@@ -262,11 +263,15 @@ export function classifyWrapperCommand(
 	} else if (INDIRECTION_WRAPPER_NAMES.has(commandName)) {
 		const spec = INDIRECTION_WRAPPER_SPECS[commandName] ?? {};
 		if (spec.inlinePayloadFlag === undefined) {
-			classification = classifyIndirection(node, text, args, spec);
+			classification = GETOPT_WRAPPERS.has(commandName)
+				? classifyGetoptWrapper(commandName, text, words)
+				: classifyIndirection(node, text, args, spec);
 		} else {
 			const flagIndex = args.findIndex((arg) => arg.text === spec.inlinePayloadFlag);
 			if (flagIndex === -1) {
-				classification = classifyIndirection(node, text, args, spec);
+				classification = GETOPT_WRAPPERS.has(commandName)
+					? classifyGetoptWrapper(commandName, text, words)
+					: classifyIndirection(node, text, args, spec);
 			} else {
 				classification = classifyOpaquePayload(args.slice(flagIndex + 1), parseProgram);
 			}
@@ -281,7 +286,7 @@ export function classifyWrapperCommand(
 		return undefined;
 	}
 
-	classification = applySudoChainSafety(classification, text, words, commandName);
+	if (!timedSubshell) classification = applyWrapperChainSafety(classification, text, words, commandName);
 
 	// #713: display-only field naming the command this wrapper actually runs.
 	// It is never gated on its own — the wrapper floor still applies per
@@ -335,23 +340,42 @@ function sudoGrammarWords(words: readonly CommandWord[]): CommandWord[] {
 	}));
 }
 
+/** Use upstream's shared getopt grammar to locate the command the wrapper runs. */
+function classifyGetoptWrapper(name: string, text: string, words: readonly CommandWord[]): WrapperClassification {
+	const grammarWords = words.map((word) => ({ ...word, text: word.computed ? word.text : word.value }));
+	const index = innerCommandIndex(grammarWords, true);
+	if (index < 0 || words.slice(1, index + 1).some((word) => word.computed)) {
+		return { kind: "indirection", inner: [], unresolved: true };
+	}
+	if (index >= words.length) {
+		// Unlike env and doas, bare xargs runs an implicit echo command.
+		return name === "xargs"
+			? { kind: "indirection", inner: [], unresolved: true }
+			: { kind: "indirection", inner: [], unresolved: false, empty: true };
+	}
+	return { kind: "indirection", inner: [{ text: text.slice(words[index].offset) }], unresolved: false };
+}
+
+/** Wrappers that execute or build a shell command line from their arguments. */
+const SHELL_TEMPLATE_WRAPPERS = new Set(["watch", "parallel", "rust-parallel", "rush"]);
+/** Upstream's option grammar is authoritative for these wrappers. */
+const GETOPT_WRAPPERS = new Set(["sudo", "env", "xargs", "doas"]);
+
 /**
- * Carry the same sudo safety into an already-recognized wrapper chain.
- * This is deliberately not a general recursive wrapper parser: only sudo
- * layers contribute new checks/units, and ordinary fallback extraction stays
- * unchanged. Keeping the existing inner units preserves explicit deny rules
- * even when a refused sudo layer floors the outer wrapper.
+ * Fail closed when the fallback extractor cannot prove the wrapper's command.
+ * Preserve emitted units so an explicit inner deny still outranks the floor.
+ * The upstream getopt grammar also checks our independent fork extraction:
+ * if their command positions disagree, neither interpretation is trusted.
  */
-function applySudoChainSafety(
+function applyWrapperChainSafety(
 	classification: WrapperClassification,
 	text: string,
 	words: readonly CommandWord[],
 	commandName: string,
 ): WrapperClassification {
-	if (classification.kind !== "indirection" || classification.unresolved || classification.empty) {
-		return classification;
-	}
+	if (classification.kind !== "indirection" || classification.unresolved) return classification;
 	const inner = [...classification.inner];
+	const unresolved = () => ({ ...classification, inner, unresolved: true, empty: false });
 	let current = words;
 	while (current.length > 0) {
 		const name = current === words ? commandName :
@@ -359,16 +383,32 @@ function applySudoChainSafety(
 		const execFlags = EXEC_CONDITIONAL_WRAPPERS.get(name);
 		if (!INDIRECTION_WRAPPER_NAMES.has(name) &&
 			!current.slice(1).some((word) => execFlags?.has(word.text))) break;
+		if (SHELL_TEMPLATE_WRAPPERS.has(name)) return unresolved();
+
+		const grammarWords = current.map((word, index) => ({
+			...word,
+			text: name === "sudo" && index === 0 ? "sudo" : word.computed ? word.text : word.value,
+		}));
+		const index = innerCommandIndex(grammarWords, true);
+		if (GETOPT_WRAPPERS.has(name) && index < 0) return unresolved();
+		if (current.slice(1, index < 0 ? current.length : index + 1).some((word) => word.computed)) {
+			return unresolved();
+		}
 		if (name === "sudo") {
 			const sudo = classifySudo(text, current);
-			if (sudo.unresolved) return { ...classification, inner, unresolved: true };
+			if (sudo.unresolved) return unresolved();
 			if (current !== words) {
 				for (const unit of sudo.inner) {
 					if (!inner.some((existing) => existing.text === unit.text)) inner.push(unit);
 				}
 			}
+		} else if (GETOPT_WRAPPERS.has(name) && current !== words) {
+			const spec = INDIRECTION_WRAPPER_SPECS[name] ?? {};
+			const args = current.slice(1).map((word) => ({ text: word.text, startIndex: word.offset }));
+			const forkStart = findInnerCommandStart(args, spec);
+			const grammarStart = index < current.length ? current[index].offset : undefined;
+			if (forkStart !== grammarStart) return unresolved();
 		}
-		const index = innerCommandIndex(name === "sudo" ? sudoGrammarWords(current) : current);
 		if (index < 1 || index >= current.length) break;
 		current = current.slice(index);
 	}

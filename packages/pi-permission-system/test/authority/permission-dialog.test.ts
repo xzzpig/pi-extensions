@@ -341,6 +341,119 @@ describe("requestPermissionDecisionFromUi", () => {
       expect(result).toEqual({ approved: true, state: "approved" });
     });
   });
+
+  describe("dismissal by an expired answer window", () => {
+    /** A scripted answer that waits for the signal to dismiss it, as Pi's dialogs do. */
+    const AWAIT_DISMISSAL = Symbol("await dismissal");
+    type Scripted = string | undefined | typeof AWAIT_DISMISSAL;
+    interface DialogOptions {
+      signal?: AbortSignal;
+    }
+
+    function respond(
+      queue: Scripted[],
+      opts: DialogOptions | undefined,
+    ): Promise<string | undefined> {
+      const next = queue.shift();
+      if (next !== AWAIT_DISMISSAL) {
+        return Promise.resolve(next);
+      }
+      return new Promise((resolve) => {
+        opts?.signal?.addEventListener(
+          "abort",
+          () => {
+            resolve(undefined);
+          },
+          { once: true },
+        );
+      });
+    }
+
+    function scriptedUi(selects: Scripted[], inputs: Scripted[] = []) {
+      const select = vi.fn(
+        (_title: string, _options: string[], opts?: DialogOptions) =>
+          respond(selects, opts),
+      );
+      const input = vi.fn(
+        (_title: string, _placeholder?: string, opts?: DialogOptions) =>
+          respond(inputs, opts),
+      );
+      const ui: PermissionDecisionUi = { select, input };
+      return { ui, select, input };
+    }
+
+    async function dismissWhilePending(
+      ui: PermissionDecisionUi,
+      options?: Parameters<typeof requestPermissionDecisionFromUi>[3],
+    ) {
+      const window = new AbortController();
+      const answer = requestPermissionDecisionFromUi(
+        ui,
+        "Title",
+        "Message",
+        options,
+        window.signal,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+      window.abort();
+      return answer;
+    }
+
+    it("hands the signal to the select, so the host can dismiss it", async () => {
+      const { ui, select } = scriptedUi(["Yes"]);
+      const window = new AbortController();
+
+      await requestPermissionDecisionFromUi(
+        ui,
+        "Title",
+        "Message",
+        undefined,
+        window.signal,
+      );
+
+      expect(select).toHaveBeenCalledWith("Title\nMessage", expect.any(Array), {
+        signal: window.signal,
+      });
+    });
+
+    it("answers nothing when the window dismisses the decision select", async () => {
+      const { ui } = scriptedUi([AWAIT_DISMISSAL]);
+      expect(await dismissWhilePending(ui)).toBeUndefined();
+    });
+
+    it("answers nothing when the window dismisses the scope select", async () => {
+      const { ui } = scriptedUi(["Yes, for this session", AWAIT_DISMISSAL]);
+      expect(
+        await dismissWhilePending(ui, {
+          sessionScope: {
+            subagentLabel: "This subagent only",
+            servingSessionLabel: "The whole session",
+          },
+        }),
+      ).toBeUndefined();
+    });
+
+    it("answers nothing when the window dismisses the reason input", async () => {
+      const { ui } = scriptedUi(["No, provide reason"], [AWAIT_DISMISSAL]);
+      expect(await dismissWhilePending(ui)).toBeUndefined();
+    });
+
+    it("still denies a select the human cancelled while the window was open", async () => {
+      const { ui } = scriptedUi([undefined]);
+      const window = new AbortController();
+
+      const result = await requestPermissionDecisionFromUi(
+        ui,
+        "Title",
+        "Message",
+        undefined,
+        window.signal,
+      );
+
+      expect(result).toEqual({ approved: false, state: "denied" });
+    });
+  });
 });
 
 describe("normalizePermissionDenialReason", () => {

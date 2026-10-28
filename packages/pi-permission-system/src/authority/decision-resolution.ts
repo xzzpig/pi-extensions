@@ -47,6 +47,8 @@ export function resolutionFor(
       return "confirmation_unavailable";
     case "gate_error":
       return "gate_error";
+    case "unanswered":
+      return "prompt_unanswered";
     case "user":
     // A `forwarded` frame reaches here only when the responder named no
     // decider — an older parent — so the hop is the only fact available and

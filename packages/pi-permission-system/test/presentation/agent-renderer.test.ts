@@ -7,6 +7,7 @@ import {
   renderGateErrorDenial,
   renderPolicyDenial,
   renderRefusal,
+  renderUnansweredDenial,
   renderUnavailableDenial,
   renderUserDenial,
 } from "#src/presentation/agent-renderer";
@@ -397,6 +398,44 @@ describe("renderUnavailableDenial", () => {
   });
 });
 
+describe("renderUnansweredDenial", () => {
+  it("says nobody answered within the window, never that the user denied", () => {
+    expect(
+      renderUnansweredDenial(
+        bashPayload(),
+        { timeoutMs: 60000, decidedElsewhere: false },
+        null,
+      ),
+    ).toBe(
+      "[pi-permission-system] Nobody answered the approval prompt for this 'bash' call (rule 'rm *') within 60s.",
+    );
+  });
+
+  it("places the unanswered prompt in the serving session after a hop", () => {
+    expect(
+      renderUnansweredDenial(
+        bashPayload(),
+        { timeoutMs: 60000, decidedElsewhere: true },
+        null,
+      ),
+    ).toBe(
+      "[pi-permission-system] Nobody in the session serving this request answered the approval prompt for this 'bash' call (rule 'rm *') within 60s.",
+    );
+  });
+
+  it("states a sub-second window in fractional seconds", () => {
+    expect(
+      renderUnansweredDenial(
+        bashPayload(),
+        { timeoutMs: 1500, decidedElsewhere: false },
+        null,
+      ),
+    ).toBe(
+      "[pi-permission-system] Nobody answered the approval prompt for this 'bash' call (rule 'rm *') within 1.5s.",
+    );
+  });
+});
+
 describe("renderAuthorizerDenial", () => {
   it("attributes the refusal to the named link, not the user", () => {
     expect(renderAuthorizerDenial(bashPayload(), "model-judge", null)).toBe(
@@ -619,6 +658,34 @@ describe("renderRefusal", () => {
   it("states that approval was unreachable when nobody could rule", () => {
     expect(renderRefusal(bashPayload(), absent, "no serving session")).toBe(
       "[pi-permission-system] This 'bash' call (rule 'rm *') requires approval, but no interactive UI is available. Reason: no serving session.",
+    );
+  });
+
+  it("says nobody answered when the prompt window expired", () => {
+    expect(
+      renderRefusal(
+        bashPayload(),
+        { kind: "unanswered", timeoutMs: 60000 },
+        null,
+      ),
+    ).toBe(
+      "[pi-permission-system] Nobody answered the approval prompt for this 'bash' call (rule 'rm *') within 60s.",
+    );
+  });
+
+  it("says nobody in the serving session answered a forwarded prompt", () => {
+    expect(
+      renderRefusal(
+        bashPayload(),
+        {
+          kind: "forwarded",
+          responderSessionId: "parent-1",
+          decision: { kind: "unanswered", timeoutMs: 60000 },
+        },
+        null,
+      ),
+    ).toBe(
+      "[pi-permission-system] Nobody in the session serving this request answered the approval prompt for this 'bash' call (rule 'rm *') within 60s.",
     );
   });
 

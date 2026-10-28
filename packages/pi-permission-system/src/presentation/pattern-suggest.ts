@@ -2,6 +2,7 @@ import {
   prefix,
   stripBashCommentLines,
 } from "#src/access-intent/bash/bash-arity";
+import { sessionCommandIndex } from "#src/access-intent/bash/wrapper-analysis";
 import {
   type CapabilityDirection,
   PATH_BEARING_TOOLS,
@@ -30,6 +31,10 @@ export interface SessionApprovalSuggestion {
  * - Arity prefix covers all tokens: trailing wildcard (`npm run build*`).
  * - Arity prefix shorter than token list: space + wildcard (`git checkout *`).
  * - Unknown command: first token + space wildcard (`mytool *`).
+ * - Recognized wrapper: its words, then the inner command's arity prefix,
+ *   then a space wildcard (`sudo -u root nohup mytool *`).
+ * - Wrapper whose inner command cannot be proven: the exact command, with no
+ *   wildcard (`watch mytool x`).
  */
 export function suggestBashPattern(command: string): string {
   const trimmed = command.trim();
@@ -40,10 +45,38 @@ export function suggestBashPattern(command: string): string {
   if (!stripped) return "";
   const tokens = stripped.split(/\s+/);
   if (tokens.length === 1) return stripped;
+  // A wrapper's words are split only where bash splits them: `\s` also splits
+  // on a non-breaking space or `\r`, which would read `rm<NBSP>-rf` as `rm`.
+  const words = stripped.split(BASH_BLANKS);
+  const commandIndex = sessionCommandIndex(words);
+  if (commandIndex === null) return stripped;
+  if (commandIndex > 0) return wrappedPattern(words, commandIndex);
   const meaningful = prefix(tokens);
   if (meaningful.length >= tokens.length) {
     return `${stripped}*`;
   }
+  return `${meaningful.join(" ")} *`;
+}
+
+/** The blanks bash splits a command's words on. */
+const BASH_BLANKS = /[ \t\n]+/;
+
+/**
+ * The wrapper words kept literally, then the inner command's arity prefix.
+ *
+ * The wildcard always follows a space, even when the arity prefix covers every
+ * token, so approving `nohup mytool` never approves `nohup mytool-other`; the
+ * matcher treats a trailing space and wildcard as optional, so the bare
+ * command is still covered.
+ */
+function wrappedPattern(
+  tokens: readonly string[],
+  commandIndex: number,
+): string {
+  const meaningful = [
+    ...tokens.slice(0, commandIndex),
+    ...prefix(tokens.slice(commandIndex)),
+  ];
   return `${meaningful.join(" ")} *`;
 }
 

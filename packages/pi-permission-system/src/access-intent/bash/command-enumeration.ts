@@ -594,6 +594,7 @@ function makeCommandUnit(
     activeParseProgram,
     scope.words,
     scope.speller,
+    floorExemption !== undefined,
   );
   if (classification === undefined) {
     out.push(

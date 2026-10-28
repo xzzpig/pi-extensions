@@ -52,6 +52,12 @@ export type DecisionSource =
   /** A gate threw, and the boundary blocked rather than allowed. */
   | { kind: "gate_error"; reason: string }
   /**
+   * A human was shown the prompt and nobody answered it within the configured
+   * `promptTimeoutMs` window, so the window denied. Distinct from
+   * `unavailable`, where no prompt could be shown at all.
+   */
+  | { kind: "unanswered"; timeoutMs: number }
+  /**
    * Another session decided. Recursive by design: the requesting side records
    * both that the decider was elsewhere and what, within that session, decided
    * — which is the distinction an audit of a forwarded ask needs.
@@ -147,6 +153,8 @@ function narrowSource(
       return typeof candidate.reason === "string"
         ? { kind: "gate_error", reason: candidate.reason }
         : undefined;
+    case "unanswered":
+      return narrowUnanswered(candidate);
     case "forwarded":
       return narrowForwarded(candidate, depthBudget);
     default:
@@ -159,6 +167,17 @@ function narrowUser(
 ): DecisionSource | undefined {
   const via = USER_DECISION_SURFACES.find((entry) => entry === candidate.via);
   return via ? { kind: "user", via } : undefined;
+}
+
+function narrowUnanswered(
+  candidate: Record<string, unknown>,
+): DecisionSource | undefined {
+  const { timeoutMs } = candidate;
+  return typeof timeoutMs === "number" &&
+    Number.isFinite(timeoutMs) &&
+    timeoutMs > 0
+    ? { kind: "unanswered", timeoutMs }
+    : undefined;
 }
 
 function narrowAuthorizer(

@@ -161,9 +161,9 @@ function buildForwardedAskDetails(
  * own resolution (ADR 0008 §3) and stay off the ask details. A link that needs
  * requester identity reads `details.forwarding`. `ForwardedAccessIntent`
  * extends `ForwardedAccessFacts`, so a spread would type-check while widening
- * disclosure at runtime; the explicit return type makes any future field on
- * `ForwardedAccessFacts` a compile error here until it is deliberately
- * projected or deliberately withheld.
+ * disclosure at runtime. The explicit return type catches a new *required*
+ * field on `ForwardedAccessFacts`; an optional one compiles when omitted, so
+ * each optional fact needs its own projection test.
  */
 function toAccessFacts(intent: ForwardedAccessIntent): ForwardedAccessFacts {
   return {
@@ -174,6 +174,9 @@ function toAccessFacts(intent: ForwardedAccessIntent): ForwardedAccessFacts {
     ...(intent.askingUnits === undefined
       ? {}
       : { askingUnits: intent.askingUnits }),
+    ...(intent.delegationLicense === undefined
+      ? {}
+      : { delegationLicense: intent.delegationLicense }),
   };
 }
 

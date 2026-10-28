@@ -66,10 +66,7 @@ export class LocalUserAuthorizer implements TerminalAuthorizer {
   authorize(
     details: PromptPermissionDetails,
   ): Promise<PermissionPromptDecision> {
-    return this.deps.dialogs.run(
-      () => this.present(details),
-      unansweredDecision,
-    );
+    return this.deps.dialogs.run(() => this.present(details), releasedDecision);
   }
 
   /**
@@ -114,7 +111,7 @@ export class LocalUserAuthorizer implements TerminalAuthorizer {
  * one string so what the model is told and what the log attributes cannot
  * drift (#726).
  */
-function unansweredDecision(reason: string): PermissionPromptDecision {
+function releasedDecision(reason: string): PermissionPromptDecision {
   return {
     approved: false,
     state: "denied",

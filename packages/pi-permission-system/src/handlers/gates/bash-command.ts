@@ -29,7 +29,9 @@ import type { PermissionCheckResult } from "#src/types";
  * payload (`bash -c`/`eval`, #481) or `<indirection-bash-wrapper>` for a
  * prefix/exec wrapper (`sudo`/`env`/`xargs`/`find -exec`/…, #490) — to keep it
  * from riding a permissive rule; an explicit `deny`/`ask` on the wrapper is left
- * untouched (`deny > ask > allow`).
+ * untouched (`deny > ask > allow`). A wrapper the enumerator marked exempt is
+ * decided by the command it runs instead, or by its own rule when it names no
+ * command (a bare `env`).
  *
  * A trivially-empty command (an empty, whitespace-only, or comment-only line)
  * has genuinely nothing to gate, so the whole `command` is resolved as before.
@@ -265,7 +267,9 @@ function floorToAsk(
  * the enumerator established that the floor has no reason left to hold, in
  * which case the unit is resolved by the rules of the command it runs (ADR 0013
  * §11): its inner command is a proven pure reader (#803), or every wrapper
- * layer only modifies how that command runs (#963).
+ * layer only modifies how that command runs (#963). A wrapper that names no
+ * command and runs nothing so (`"no-command"`, a bare `env`) has no inner
+ * command to resolve, so its own rule, already in `base`, decides.
  *
  * Fork: wrapper flooring is configurable (`wrapperFloors`). In `fallback` mode
  * (the fork's default) a wrapper whose inner commands were resolved is gated by
@@ -286,6 +290,9 @@ function resolveWrapperUnit(
   resolver: ScopedPermissionResolver,
   wrapperFloors?: WrapperFloors,
 ): PermissionCheckResult {
+  if (cmd.floorExemption === "no-command") {
+    return { ...base, floorExemption: cmd.floorExemption };
+  }
   const inner = cmd.floorExemption && cmd.executedUnit;
   if (wrapperFloors === "fallback") {
     if (cmd.payloadUnresolved === true) {

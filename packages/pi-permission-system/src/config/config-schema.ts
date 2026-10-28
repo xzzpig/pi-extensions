@@ -20,6 +20,13 @@ import {
 export const PERMISSIONS_SCHEMA_URL =
   "https://raw.githubusercontent.com/gotgenes/pi-packages/main/packages/pi-permission-system/schemas/permissions.schema.json";
 
+/**
+ * The most entries any config array accepts. zod checks `.max()` before it
+ * walks the elements, so an oversized array costs one issue rather than one per
+ * entry (CVE-2023-54404); an unbounded array has no such guard.
+ */
+const MAX_CONFIG_ARRAY_ITEMS = 1000;
+
 const permissionStateSchema = z
   .union([
     z.literal("allow").meta({
@@ -332,6 +339,100 @@ const shellToolsSchema = z
     ],
   });
 
+const declaredEffectSchema = z.enum(["read", "write"]).meta({
+  description:
+    "A filesystem effect: read (the command only reads its path operands) or write (it may modify them).",
+});
+
+const declaredEffectsSchema = z
+  .union([
+    declaredEffectSchema,
+    z.array(declaredEffectSchema).max(MAX_CONFIG_ARRAY_ITEMS),
+  ])
+  .meta({
+    description:
+      'The filesystem effects of a command\'s path operands: "read", "write", or an array of them. An empty array declares that the operands touch no file, so they are withdrawn from the path surfaces.',
+  });
+
+const optionStemSchema = z
+  .string()
+  .regex(/^-{1,2}[^-=\s][^=\s]*$/, {
+    message:
+      "An option stem starts with '-' or '--' and contains no whitespace or '='.",
+  })
+  .meta({
+    description:
+      "An option whose appearance anywhere in the command withdraws the declaration (e.g. '-i', '--in-place').",
+  });
+
+const subcommandKeySchema = z
+  .string()
+  .regex(/^[^-\s]\S*$/, {
+    message:
+      "A subcommand is one word that does not start with '-' (e.g. 'log').",
+  })
+  .meta({ description: "A subcommand word, matched exactly." });
+
+const commandKeySchema = z
+  .string()
+  .regex(/^[^/\\\s]+$/, {
+    message:
+      "A command is a bare basename (e.g. 'git'), with no path separator or whitespace.",
+  })
+  .meta({
+    description:
+      "A command's bare basename, matched exactly against the command's head word.",
+  });
+
+const commandEffectsEntrySchema = z
+  .strictObject({
+    effects: declaredEffectsSchema.optional(),
+    unlessOption: z
+      .array(optionStemSchema)
+      .max(MAX_CONFIG_ARRAY_ITEMS)
+      .optional()
+      .meta({
+        description:
+          "Option stems whose appearance anywhere in the command withdraws the declaration, so its path operands fall back to consulting both directional surfaces.",
+      }),
+    get subcommands() {
+      return z
+        .record(
+          subcommandKeySchema,
+          z.union([commandEffectsEntrySchema, declaredEffectsSchema]),
+        )
+        .optional()
+        .meta({
+          description:
+            "Subcommands, keyed by the exact word that follows the command (or its parent subcommand). A value is a nested entry or, as a shorthand, its effects.",
+        });
+    },
+  })
+  .meta({
+    id: "commandEffectsEntry",
+    description:
+      "What a command does to the filesystem paths it is given: its effects, the options that withdraw the declaration, and its subcommands.",
+  });
+
+/** The `commandEffects` map: command basename → its declared effects. */
+export const commandEffectsSchema = z
+  .record(commandKeySchema, commandEffectsEntrySchema)
+  .meta({
+    description:
+      "Declares the filesystem effects of your own bash commands, so a declared reader's path operands consult only the _read surfaces. Keys are bare command basenames; subcommands match exactly; an empty effects array withdraws the operands from the path surfaces.",
+    markdownDescription:
+      'Declares the filesystem effects of your own bash commands, so a path a declared reader names consults only `path_read` / `external_directory_read` rather than both directions.\n\nKeys are bare command basenames (`git`, never `/usr/bin/git`), and `subcommands` match the following word exactly (`git -C dir log` is not `git log`). `effects` is `"read"`, `"write"`, or an array; `[]` declares that the operands touch no file, which withdraws them from the `path` and `external_directory` surfaces while `bash` rules still govern the command. An `unlessOption` stem seen anywhere in the command withdraws the declaration. An undeclared command or subcommand is unknown, and consults both surfaces.\n\nA declaration never overrides the built-in pure-reader core (`cat`, `sed`, `find`, …), and never lifts the indirection-wrapper floor (`xargs git log` still asks); a declaration keyed by a wrapper (`xargs`, `sudo`, `env`, …) is ignored.\n\nExample:\n\n```json\n"commandEffects": {\n  "git": { "unlessOption": ["--output"], "subcommands": { "log": "read", "diff": "read" } },\n  "officecli": { "effects": [] }\n}\n```\n\n**Merge order:** shallow-merge by command across global → project. A project entry replaces a colliding command whole but never drops a global one. Agent frontmatter cannot declare effects.',
+    examples: [
+      {
+        git: {
+          unlessOption: ["--output"],
+          subcommands: { log: "read", diff: "read" },
+        },
+        officecli: { effects: [] },
+      },
+    ],
+  });
+
 /**
  * A named permission ruleset under the global config's `profiles` key.
  *
@@ -427,6 +528,7 @@ export const unifiedConfigSchema = z
     permissionDialogKeys: dialogKeysSchema.optional(),
     promptNotifications: z
       .array(promptNotificationChannelSchema)
+      .max(MAX_CONFIG_ARRAY_ITEMS)
       .optional()
       .meta({
         description:
@@ -441,6 +543,12 @@ export const unifiedConfigSchema = z
       markdownDescription:
         "How long a subagent waits for the parent session to answer a forwarded permission request, in milliseconds.\n\nOmit to use the default (`600000`, ten minutes). A child whose in-process parent is not draining its inbox at all gives up in a couple of seconds regardless of this value, so lower it only to bound how long you are willing to leave an *unanswered* prompt pending.",
       default: 600000,
+    }),
+    promptTimeoutMs: z.number().int().min(1).optional().meta({
+      description:
+        "How long a permission prompt, once shown, waits for an answer before it is dismissed and the request denied, in milliseconds. Omit for no timer (the default). Pressing any key in the inline dialog stops the timer.",
+      markdownDescription:
+        "How long a permission prompt, once shown, waits for an answer before it is dismissed and the request denied, in milliseconds.\n\nOmit for no timer (the default): a prompt waits until someone answers it. The clock starts when the prompt is shown, not when the request is raised, so a request queued behind another prompt gets its own full window. In the inline TUI dialog, pressing any key stops the timer, so a prompt you have started answering is never cut off.\n\nThe timeout only ever **denies**, and the agent is told nobody answered. It applies to prompts this session shows, including requests forwarded from its subagents; keep it below `forwardingTimeoutMs` so a forwarded request is answered before the subagent stops waiting.",
     }),
     promptMaxRows: z.number().int().min(1).optional().meta({
       description:
@@ -477,23 +585,32 @@ export const unifiedConfigSchema = z
       markdownDescription:
         "**Deprecated and ignored.** Superseded by `promptMaxRows` and `promptFieldMaxWidth`, which bound the whole permission prompt rather than one summary inside it.\n\nStill accepted so an existing config is not rejected fail-closed, but the value no longer takes effect. Remove it.",
     }),
-    piInfrastructureReadPaths: z.array(z.string().min(1)).optional().meta({
-      description:
-        "Additional directories to auto-allow for reads as Pi infrastructure, bypassing the external_directory gate. Supports ~ expansion and wildcard patterns (* and ?).",
-      markdownDescription:
-        "Additional directories to auto-allow for reads as Pi infrastructure, bypassing the `external_directory` gate.\n\nThe extension auto-discovers the global node_modules root (walks up from the extension's install path; falls back to `npm root -g` from a dev checkout), Pi's own install directory (via the coding-agent `getPackageDir()` API), Pi's harness entries under `agentDir` (`agents/`, `extensions/`, `git/`, `npm/`, `prompts/`, `skills/`, `themes/`, `settings.json`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md`), and project-local `.pi/npm/` and `.pi/git/`. The package's own logs directory is never auto-allowed, even when an entry here covers it. Add entries here for edge cases where auto-discovery is insufficient (e.g. custom `npmCommand` pointing to pnpm).\n\nSupports `~`/`$HOME` expansion. Entries may be plain directory prefixes or wildcard patterns using `*` (matches any characters, including `/`) and `?` (matches exactly one character). `**` and `*` are equivalent — both cross directory boundaries.\n\nOn Windows, matching is case-insensitive and tolerant of either path separator.",
-      default: [],
-    }),
-    authorizerChain: z.array(z.string().min(1)).optional().meta({
-      description:
-        "Ordered names of registered live-authority chain links to consult before the terminal authorizer. Config order (not registration order) fixes the chain order; an unregistered name is skipped fail-safe (more prompting, never less); a link decides nothing until it is named here.",
-      markdownDescription:
-        "Ordered names of registered **live-authority chain links** (e.g. a model judge) to consult before the terminal authorizer (the human, or the subagent-forwarding / headless-deny fallback).\n\nA link reviews an `ask` and returns `allow` / `deny` (with an optional teaching reason) / `defer` to the next link. Three invariants govern the chain:\n\n- **Config order wins.** The order here \u2014 not the order extensions register in \u2014 fixes the security-relevant chain order.\n- **Fail-safe skip.** A name with no registered link is skipped with a warning; the `ask` still reaches the terminal (more prompting, never less).\n- **Opt-in activation.** Installing a judge extension grants it no authority; a link decides nothing until you name it here.\n\nThe chain owner caps every verdict with a bounded-delegation checkpoint: a link's `allow` on an excluded surface (`external_directory` or `path`) is downgraded to `defer`, so a link cannot exceed your policy.\n\nDefaults to an empty list (no links).",
-      default: [],
-    }),
+    piInfrastructureReadPaths: z
+      .array(z.string().min(1))
+      .max(MAX_CONFIG_ARRAY_ITEMS)
+      .optional()
+      .meta({
+        description:
+          "Additional directories to auto-allow for reads as Pi infrastructure, bypassing the external_directory gate. Supports ~ expansion and wildcard patterns (* and ?).",
+        markdownDescription:
+          "Additional directories to auto-allow for reads as Pi infrastructure, bypassing the `external_directory` gate.\n\nThe extension auto-discovers the global node_modules root (walks up from the extension's install path; falls back to `npm root -g` from a dev checkout), Pi's own install directory (via the coding-agent `getPackageDir()` API), Pi's harness entries under `agentDir` (`agents/`, `extensions/`, `git/`, `npm/`, `prompts/`, `skills/`, `themes/`, `settings.json`, `SYSTEM.md`, `APPEND_SYSTEM.md`, `AGENTS.md`), and project-local `.pi/npm/` and `.pi/git/`. The package's own logs directory is never auto-allowed, even when an entry here covers it. Add entries here for edge cases where auto-discovery is insufficient (e.g. custom `npmCommand` pointing to pnpm).\n\nSupports `~`/`$HOME` expansion. Entries may be plain directory prefixes or wildcard patterns using `*` (matches any characters, including `/`) and `?` (matches exactly one character). `**` and `*` are equivalent — both cross directory boundaries.\n\nOn Windows, matching is case-insensitive and tolerant of either path separator.",
+        default: [],
+      }),
+    authorizerChain: z
+      .array(z.string().min(1))
+      .max(MAX_CONFIG_ARRAY_ITEMS)
+      .optional()
+      .meta({
+        description:
+          "Ordered names of registered live-authority chain links to consult before the terminal authorizer. Config order (not registration order) fixes the chain order; an unregistered name is skipped fail-safe (more prompting, never less); a link decides nothing until it is named here.",
+        markdownDescription:
+          "Ordered names of registered **live-authority chain links** (e.g. a model judge) to consult before the terminal authorizer (the human, or the subagent-forwarding / headless-deny fallback).\n\nA link reviews an `ask` and returns `allow` / `deny` (with an optional teaching reason) / `defer` to the next link. Three invariants govern the chain:\n\n- **Config order wins.** The order here \u2014 not the order extensions register in \u2014 fixes the security-relevant chain order.\n- **Fail-safe skip.** A name with no registered link is skipped with a warning; the `ask` still reaches the terminal (more prompting, never less).\n- **Opt-in activation.** Installing a judge extension grants it no authority; a link decides nothing until you name it here.\n\nThe chain owner caps every verdict with a bounded-delegation checkpoint: a link's `allow` on an excluded surface (`external_directory` or `path`) is downgraded to `defer`, so a link cannot exceed your policy. The one exception is per ask: a link's `allow` on a bash `external_directory` ask whose every flagged path names nothing on disk below the filesystem root (and is not a proven write) is honored, and the review log records `authorizer_allow_licensed`.\n\nDefaults to an empty list (no links).",
+        default: [],
+      }),
     permission: permissionSchema.optional(),
     shellTools: shellToolsSchema.optional(),
     profiles: profilesSchema.optional(),
+    commandEffects: commandEffectsSchema.optional(),
   })
   .meta({
     title: "PI Permission System Configuration",
@@ -521,6 +638,12 @@ export type ShellToolsConfig = z.infer<typeof shellToolsSchema>;
 /** One named permission profile (global or project config). */
 export type ProfilePermissionConfig = z.infer<typeof profileEntrySchema>;
 
+/** One declared command, or subcommand, in the `commandEffects` map. */
+export type CommandEffectsEntry = z.infer<typeof commandEffectsEntrySchema>;
+
+/** The `commandEffects` map: command basename to its declared effects. */
+export type CommandEffectsConfig = z.infer<typeof commandEffectsSchema>;
+
 /** The raw config file shape after validation (all fields optional). */
 export type UnifiedPermissionConfig = z.infer<typeof unifiedConfigSchema>;
 
@@ -532,9 +655,9 @@ export type PromptNotificationChannel = z.infer<
 /**
  * Derive the published JSON Schema (Draft 2020-12) from the zod source.
  *
- * The three id-tagged sub-schemas (`permissionState`, `permissionMap`,
- * `denyWithReason`) become `$defs` referenced by `$ref`; everything else
- * inlines. The root `$id` is set to the canonical monorepo URL.
+ * The four id-tagged sub-schemas (`permissionState`, `permissionMap`,
+ * `denyWithReason`, and the recursive `commandEffectsEntry`) become `$defs`
+ * referenced by `$ref`; everything else inlines. The root `$id` is set to the canonical monorepo URL.
  */
 export function buildPermissionsJsonSchema(): Record<string, unknown> {
   const { $schema, ...rest } = z.toJSONSchema(unifiedConfigSchema, {

@@ -101,6 +101,12 @@ describe("resolutionFor", () => {
       ).toBe("confirmation_unavailable");
     });
 
+    it("names a prompt nobody answered prompt_unanswered, not a user denial", () => {
+      expect(
+        resolutionFor({ kind: "unanswered", timeoutMs: 60000 }, REFUSED),
+      ).toBe("prompt_unanswered");
+    });
+
     it("names a failed gate gate_error", () => {
       expect(
         resolutionFor({ kind: "gate_error", reason: "boom" }, REFUSED),
@@ -143,6 +149,15 @@ describe("resolutionFor", () => {
           REFUSED,
         ),
       ).toBe("authorizer_denied");
+    });
+
+    it("names the parent's unanswered prompt prompt_unanswered", () => {
+      expect(
+        resolutionFor(
+          forwarded({ kind: "unanswered", timeoutMs: 60000 }),
+          REFUSED,
+        ),
+      ).toBe("prompt_unanswered");
     });
 
     it("still names the parent's human approval user_approved", () => {

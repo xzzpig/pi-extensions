@@ -1,5 +1,13 @@
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type Mock,
+  vi,
+} from "vitest";
 import type {
   RequestPermissionOptions,
   UnattributedDecision,
@@ -46,7 +54,7 @@ type PromptFactory = (
   },
   theme: ReturnType<typeof plainTheme>,
   keybindings: { matches(data: string, action: string): boolean },
-  done: (decision: UnattributedDecision) => void,
+  done: (decision: UnattributedDecision | undefined) => void,
 ) => CapturedComponent;
 
 /** Pi's default binding for the `app.tools.expand` action. */
@@ -67,6 +75,8 @@ function makeFakeView(
   const captured: {
     component?: CapturedComponent;
     options?: unknown;
+    /** The host's `done`, as the dialog received it. */
+    done?: Mock<(decision: UnattributedDecision | undefined) => void>;
   } = {};
   let toolsExpanded = false;
   const getToolsExpanded = vi.fn(() => toolsExpanded);
@@ -76,9 +86,13 @@ function makeFakeView(
   const custom = (
     factory: PromptFactory,
     options: unknown,
-  ): Promise<UnattributedDecision> => {
+  ): Promise<UnattributedDecision | undefined> => {
     captured.options = options;
-    return new Promise<UnattributedDecision>((resolve) => {
+    return new Promise<UnattributedDecision | undefined>((resolve) => {
+      const done = vi.fn((decision: UnattributedDecision | undefined) => {
+        resolve(decision);
+      });
+      captured.done = done;
       captured.component = factory(
         { requestRender: vi.fn(), terminal: { write: terminalWrite } },
         plainTheme(),
@@ -86,7 +100,7 @@ function makeFakeView(
           matches: (data, action) =>
             action === "app.tools.expand" && data === expandKey,
         },
-        resolve,
+        done,
       );
     });
   };
@@ -158,7 +172,7 @@ async function runPrompt(
   doublePressToConfirm: boolean,
   keys: string[],
   options?: RequestPermissionOptions,
-): Promise<UnattributedDecision> {
+): Promise<UnattributedDecision | undefined> {
   const { view, captured } = makeFakeView(doublePressToConfirm);
   const promise = presentInlinePermissionPrompt(
     view,
@@ -550,6 +564,7 @@ describe("presentInlinePermissionPrompt", () => {
       expect(select).toHaveBeenCalledWith(
         "Title\ntool : read\npath : /repo/secret.txt",
         expect.any(Array),
+        { signal: undefined },
       );
       expect(decision).toEqual({
         approved: true,
@@ -571,6 +586,169 @@ describe("presentInlinePermissionPrompt", () => {
       // The denial is the human's, and which surface they used is what
       // separates "the operator declined" from "a prompt they never saw".
       expect(decision).toEqual({
+        approved: false,
+        state: "denied",
+        decidedBy: { kind: "user", via: "select" },
+      });
+    });
+  });
+
+  describe("answer window", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    const UNANSWERED = {
+      approved: false,
+      state: "denied",
+      confirmationUnavailable: true,
+      decidedBy: { kind: "unanswered", timeoutMs: 60_000 },
+    };
+
+    /** Track whether a promise has settled, without awaiting it. */
+    function settlement<T>(promise: Promise<T>) {
+      const state = { settled: false };
+      void promise.then(() => {
+        state.settled = true;
+      });
+      return state;
+    }
+
+    it("dismisses an inline prompt nobody answered and denies it as unanswered", async () => {
+      const { view, captured } = makeFakeView(true, {
+        promptTimeoutMs: 60_000,
+      });
+      const promise = requestPermissionDecision(view, "Title", ASK);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(await promise).toStrictEqual(UNANSWERED);
+      expect(captured.done).toHaveBeenCalledExactlyOnceWith(undefined);
+    });
+
+    it("keeps a human answer given inside the window, and never dismisses afterwards", async () => {
+      const { view, captured } = makeFakeView(true, {
+        promptTimeoutMs: 60_000,
+      });
+      const promise = requestPermissionDecision(view, "Title", ASK);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      captured.component?.handleInput("y");
+      captured.component?.handleInput("y");
+      const decision = await promise;
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(decision).toEqual({
+        approved: true,
+        state: "approved",
+        decidedBy: { kind: "user", via: "dialog" },
+      });
+      expect(captured.done).toHaveBeenCalledOnce();
+    });
+
+    it("stops the clock once the human presses a key, then waits for the answer", async () => {
+      const { view, captured } = makeFakeView(true, {
+        promptTimeoutMs: 60_000,
+      });
+      const promise = requestPermissionDecision(view, "Title", ASK);
+      const state = settlement(promise);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      captured.component?.handleInput(ARROW_DOWN);
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(state.settled).toBe(false);
+
+      captured.component?.handleInput("y");
+      captured.component?.handleInput("y");
+      expect(await promise).toEqual({
+        approved: true,
+        state: "approved",
+        decidedBy: { kind: "user", via: "dialog" },
+      });
+    });
+
+    it("names the window in the hint while the clock runs", () => {
+      const { view, captured } = makeFakeView(true, {
+        promptTimeoutMs: 60_000,
+      });
+      void requestPermissionDecision(view, "Title", ASK);
+
+      expect(captured.component?.render(200).at(-1)).toBe(
+        "↑/↓ move · enter confirm · esc deny · press a letter, then again to confirm · unanswered, denies in 60s",
+      );
+    });
+
+    it("drops the window from the hint once the human engages", () => {
+      const { view, captured } = makeFakeView(true, {
+        promptTimeoutMs: 60_000,
+      });
+      void requestPermissionDecision(view, "Title", ASK);
+
+      captured.component?.handleInput(ARROW_DOWN);
+
+      expect(captured.component?.render(200).at(-1)).toBe(
+        "↑/↓ move · enter confirm · esc deny · press a letter, then again to confirm",
+      );
+    });
+
+    it("names no window in the hint when none is configured", () => {
+      const { view, captured } = makeFakeView(true);
+      void requestPermissionDecision(view, "Title", ASK);
+
+      expect(captured.component?.render(200).at(-1)).toBe(
+        "↑/↓ move · enter confirm · esc deny · press a letter, then again to confirm",
+      );
+    });
+
+    it("leaves a prompt open indefinitely when no window is configured", async () => {
+      const { view, captured } = makeFakeView(true);
+      const state = settlement(requestPermissionDecision(view, "Title", ASK));
+
+      await vi.advanceTimersByTimeAsync(600_000);
+
+      expect(state.settled).toBe(false);
+      expect(captured.done).not.toHaveBeenCalled();
+    });
+
+    it("dismisses a fallback prompt nobody answered and denies it as unanswered", async () => {
+      const select = vi.fn(
+        (_title: string, _options: string[], opts?: { signal?: AbortSignal }) =>
+          new Promise<string | undefined>((resolve) => {
+            opts?.signal?.addEventListener(
+              "abort",
+              () => {
+                resolve(undefined);
+              },
+              { once: true },
+            );
+          }),
+      );
+      const view = makeView(
+        "rpc",
+        { select, input: vi.fn(), custom: vi.fn() },
+        { promptTimeoutMs: 60_000 },
+      );
+      const promise = requestPermissionDecision(view, "Title", ASK);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(await promise).toStrictEqual(UNANSWERED);
+    });
+
+    it("still attributes a fallback cancel inside the window to the human", async () => {
+      const select = vi.fn().mockResolvedValue(undefined);
+      const view = makeView(
+        "rpc",
+        { select, input: vi.fn(), custom: vi.fn() },
+        { promptTimeoutMs: 60_000 },
+      );
+
+      expect(await requestPermissionDecision(view, "Title", ASK)).toEqual({
         approved: false,
         state: "denied",
         decidedBy: { kind: "user", via: "select" },

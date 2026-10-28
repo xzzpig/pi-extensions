@@ -1321,7 +1321,7 @@ describe("BashProgram", () => {
             {
               text: command,
               wrapperKind: "indirection",
-              executedUnit: "(rm x)",
+              payloadUnresolved: true,
             },
             { text: "(rm x)", context: "wrapper_indirection" },
           ]);
@@ -1343,7 +1343,7 @@ describe("BashProgram", () => {
           {
             text: "time -p (rm x)",
             wrapperKind: "indirection",
-            executedUnit: "(rm x)",
+            payloadUnresolved: true,
             parseUnresolved: true,
           },
           { text: "(rm x)", context: "wrapper_indirection" },
@@ -1519,7 +1519,6 @@ describe("BashProgram", () => {
         ["nohup aws s3 ls", "nohup aws s3 ls", "aws s3 ls"],
         ["/usr/bin/sudo aws s3 ls", "/usr/bin/sudo aws s3 ls", "aws s3 ls"],
         // Exec-capable rewrites and prefix wrappers (#575).
-        ["parallel rm ::: x", "parallel rm ::: x", "rm ::: x"],
         ["doas aws s3 ls", "doas aws s3 ls", "aws s3 ls"],
         ["flock /tmp/lock aws s3 ls", "flock /tmp/lock aws s3 ls", "aws s3 ls"],
       ])("flags %s as an indirection wrapper and emits its inner command", async (command, text, inner) => {
@@ -1531,28 +1530,37 @@ describe("BashProgram", () => {
       });
 
 
-      // The remaining #575 wrappers, whose realistic inner commands are core
-      // readers, so the wrapper unit also carries the floor exemption (#803)
-      // while the inner command is still emitted as its own unit (fork).
+      // Shell/template wrappers cannot prove that the displayed first command
+      // is all they execute. Preserve inner units for explicit denies, but floor.
       it.each([
+        ["parallel rm ::: x", "rm ::: x"],
         ["rust-parallel echo", "echo"],
         ["rush echo", "echo"],
         ["watch ls", "ls"],
       ])(
-        "flags %s as an indirection wrapper running a pure reader",
-        async (command, executedUnit) => {
+        "keeps %s unresolved while emitting its apparent inner command",
+        async (command, inner) => {
           const program = await BashProgram.parse(command, normalizer);
           expect(program.commands()).toEqual([
-            {
-              text: command,
-              wrapperKind: "indirection",
-              executedUnit,
-              floorExemption: "core-reader",
-            },
-            { text: executedUnit, context: "wrapper_indirection" },
+            { text: command, wrapperKind: "indirection", payloadUnresolved: true },
+            { text: inner, context: "wrapper_indirection" },
           ]);
         },
       );
+
+      it.each([
+        ["time aws s3 ls", "aws s3 ls"],
+        ["timeout 10 aws s3 ls", "aws s3 ls"],
+        ["nice -n 10 aws s3 ls", "aws s3 ls"],
+        ["setsid aws s3 ls", "aws s3 ls"],
+        ["stdbuf -oL aws s3 ls", "aws s3 ls"],
+      ])("preserves the execution-modifier exemption for %s", async (command, inner) => {
+        const program = await BashProgram.parse(command, normalizer);
+        expect(program.commands()).toEqual([
+          { text: command, wrapperKind: "indirection", executedUnit: inner, floorExemption: "execution-modifier" },
+          { text: inner, context: "wrapper_indirection" },
+        ]);
+      });
 
       it("skips an indirection wrapper's option values and duration when locating the inner command", async () => {
         const program = await BashProgram.parse(
@@ -1582,7 +1590,7 @@ describe("BashProgram", () => {
       it("treats an assignments-only env as inert", async () => {
         const program = await BashProgram.parse("env FOO=bar BAZ=qux", normalizer);
         expect(program.commands()).toEqual([
-          { text: "env FOO=bar BAZ=qux", wrapperKind: "indirection" },
+          { text: "env FOO=bar BAZ=qux", wrapperKind: "indirection", floorExemption: "no-command" },
         ]);
       });
 
@@ -1593,7 +1601,7 @@ describe("BashProgram", () => {
         for (const command of ["timeout 5", "sudo -u root", "env -u HOME"]) {
           const program = await BashProgram.parse(command, normalizer);
           expect(program.commands()).toEqual([
-            { text: command, wrapperKind: "indirection" },
+            { text: command, wrapperKind: "indirection", ...(command.startsWith("env ") ? { floorExemption: "no-command" } : {}) },
           ]);
         }
       });
@@ -1709,7 +1717,7 @@ describe("BashProgram", () => {
       it("is absent when the wrapper names no inner command", async () => {
         const program = await BashProgram.parse("xargs", normalizer);
         expect(program.commands()).toEqual([
-          { text: "xargs", wrapperKind: "indirection" },
+          { text: "xargs", wrapperKind: "indirection", payloadUnresolved: true },
         ]);
       });
     });
@@ -1832,6 +1840,25 @@ describe("BashProgram", () => {
 
       it("is absent for a command that is not a wrapper", async () => {
         await expect(exemptions("grep foo")).resolves.toEqual([undefined]);
+      });
+
+      describe("an env naming no command", () => {
+        it("exempts the env unit of a pipeline", async () => {
+          await expect(exemptions("env | rg '^PI_'")).resolves.toEqual([
+            "no-command",
+            undefined,
+          ]);
+        });
+
+        it("exempts it whose statement redirects to a file", async () => {
+          await expect(exemptions("env > /tmp/x")).resolves.toEqual([
+            "no-command",
+          ]);
+        });
+
+        it("does not exempt a computed option value", async () => {
+          await expect(exemptions("env -u $X")).resolves.toEqual([undefined]);
+        });
       });
 
       describe("a statement that writes through a redirect", () => {
@@ -1959,6 +1986,71 @@ describe("BashProgram", () => {
         await expect(
           exemptions("echo hi > $(xargs grep foo)"),
         ).resolves.toEqual([undefined, "core-reader"]);
+      });
+
+      describe("a computed word in a wrapper's options", () => {
+        describe("keeps the exemption for a literal layer", () => {
+          it.each([
+            ["sudo -u root cat x", "every layer word is literal"],
+            ["sudo -u ~ cat x", "a tilde the program leaves alone is known"],
+            ["sudo -u $HOME cat x", "an unrebound HOME is known"],
+            ["sudo -u root cat $X", "the computed word is the reader's own"],
+            ["xargs -I{} cat {}", "an empty brace pair is literal"],
+            ["xargs -I {} cat {}", "an empty brace pair is literal"],
+            ["find . -name '*.ts' -exec cat {} +", "a quoted glob is literal"],
+            ["env HOME=~ cat x", "a tilde assignment value is known"],
+          ])("exempts %s (%s)", async (command) => {
+            await expect(exemptions(command)).resolves.toEqual(["core-reader"]);
+          });
+
+          it("exempts a modifier carrying a literal assignment", async () => {
+            await expect(exemptions("time FOO=1 pnpm test")).resolves.toEqual([
+              "execution-modifier",
+            ]);
+          });
+        });
+
+        describe("loses the exemption for a computed layer word", () => {
+          // The shell splits or expands the word before the wrapper runs, so
+          // one of the words it becomes may be the command that really runs:
+          // `sudo -u $U cat x` with `U="root rm y"` runs `rm y cat x` as root.
+          it.each([
+            ["sudo -u $U cat x", "an option value may split"],
+            ["doas -u $U cat x", "an option value may split"],
+            ["env -u $U cat x", "an option value may split"],
+            ["env -u$U cat x", "an attached value may split"],
+            ["xargs -n $N cat", "an option value may split"],
+            ["timeout $D cat x", "a leading operand may split"],
+            ["sudo FOO=$Y cat x", "an assignment argument may split"],
+            ["env FOO=$Y cat x", "an assignment argument may split"],
+            ['env PATH="$PATH:/x" cat x', "a quoted expansion may split"],
+            ['sudo -u "$U" cat x', "a nameref splits a quoted expansion"],
+            ['sudo -u "$@" cat x', "a quoted $@ may vanish"],
+            ["sudo -u * cat x", "a glob may expand to several words"],
+            ["sudo -u {root,rm} cat x", "brace expansion adds a word"],
+            ["sudo -u r\\oot cat x", "an escape is rewritten"],
+            ["find . -name *.ts -exec cat {} +", "an unquoted glob may expand"],
+            ["sudo -u $U -- cat x", "the word sits before the end of options"],
+            ["timeout 5 sudo -u $U cat x", "an inner layer's value may split"],
+            ["sudo -u $U timeout 5 cat x", "an outer layer's value may split"],
+            ["time FOO=$Y pnpm test", "a modifier's assignment may split"],
+          ])("does not exempt %s (%s)", async (command) => {
+            await expect(exemptions(command)).resolves.toEqual([undefined]);
+          });
+
+          it("does not exempt a value a command substitution produces", async () => {
+            // The substitution's own command is a unit of its own.
+            await expect(
+              exemptions('sudo -u "$(whoami)" cat x'),
+            ).resolves.toEqual([undefined, undefined]);
+          });
+
+          it("does not exempt a value spelled from a rebound HOME", async () => {
+            await expect(
+              exemptions('HOME="a rm"; sudo -u $HOME cat x'),
+            ).resolves.toEqual([undefined, undefined]);
+          });
+        });
       });
     });
 

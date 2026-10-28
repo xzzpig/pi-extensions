@@ -4,6 +4,7 @@ import {
   resolveShellInvocation,
   type ShellInvocation,
 } from "#src/access-intent/tool-kind";
+import type { DeclaredCommandEffects } from "#src/config/command-effects-config";
 import type { ShellToolsConfig } from "#src/config/config-schema";
 import type { SkillPromptEntry } from "#src/exposure/skill-prompt-sanitizer";
 import type { PathNormalizer } from "#src/path/path-normalizer";
@@ -55,6 +56,11 @@ export interface ToolCallGateInputs {
   getShellToolAliases(): ShellToolsConfig | undefined;
   /** The configured wrapper-floor mode (`"fallback"` or `"always"`). */
   getWrapperFloors(): WrapperFloors;
+  /**
+   * The user's `commandEffects` declarations, scope stamped, so a declared
+   * command's path operands route by their declared effect.
+   */
+  getCommandEffects(): DeclaredCommandEffects;
 }
 
 /**
@@ -94,6 +100,7 @@ export class ToolCallGatePipeline {
     const bashProgram = shell?.command
       ? await BashProgram.parse(shell.command, normalizer, {
           workdir: shell.workdir,
+          commandEffects: this.inputs.getCommandEffects(),
         })
       : null;
 

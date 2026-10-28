@@ -23,6 +23,7 @@ import {
   renderPromptNotification,
 } from "#src/presentation/prompt-notification";
 import type { PromptPayload } from "#src/presentation/prompt-payload";
+import { AnswerWindow } from "./answer-window";
 import { collapsePastedNewlines } from "./bracketed-paste";
 import type { DecisionSource, UserDecisionSurface } from "./decision-source";
 import {
@@ -76,6 +77,8 @@ export interface PromptPreferences {
   dialogKeys: DialogKeyBindings;
   /** Terminal notifications the inline dialog emits as it opens; empty for none. */
   promptNotifications: readonly PromptNotificationChannel[];
+  /** How long a shown prompt waits for an answer before it denies; absent for no timer. */
+  promptTimeoutMs?: number;
 }
 
 /**
@@ -89,6 +92,10 @@ export interface PromptPreferences {
  * answered on, so it is where the decision is attributed to that surface
  * (#726). Having the dialog model and the fallback each name themselves would
  * be two sites that must agree with this branch.
+ *
+ * It also opens the prompt's {@link AnswerWindow} as the prompt is shown. A
+ * surface the window dismissed answers `undefined`, and the window, which is
+ * what decided, stamps the `unanswered` decision itself.
  */
 export async function requestPermissionDecision(
   view: PermissionPromptView,
@@ -96,12 +103,65 @@ export async function requestPermissionDecision(
   payload: PromptPayload,
   options?: RequestPermissionOptions,
 ): Promise<PermissionPromptDecision> {
-  if (view.mode === "tui") {
-    return attributeToHuman(
-      await presentInlinePermissionPrompt(view, title, payload, options),
-      "dialog",
-    );
+  const window = AnswerWindow.open(view.promptTimeoutMs);
+  const surface = chooseDecisionSurface(view, title, payload, options);
+  try {
+    const answer = await surface.ask(window);
+    return answer === undefined
+      ? window.expiredDecision()
+      : attributeToHuman(answer, surface.via);
+  } finally {
+    window.close();
   }
+}
+
+/**
+ * One human-facing surface: how to ask on it, and the name it answers under.
+ *
+ * `ask` answers `undefined` only when the window dismissed the prompt.
+ */
+interface DecisionSurface {
+  via: UserDecisionSurface;
+  ask: (window: DialogClock) => Promise<UnattributedDecision | undefined>;
+}
+
+/**
+ * The answer window as a surface uses it: the signal that dismisses the
+ * prompt, and — for the inline dialog, which sees keystrokes — the
+ * running length to show and the means to stop it once the human engages.
+ */
+export type DialogClock = Pick<
+  AnswerWindow,
+  "signal" | "pendingTimeoutMs" | "engage"
+>;
+
+function chooseDecisionSurface(
+  view: PermissionPromptView,
+  title: string,
+  payload: PromptPayload,
+  options?: RequestPermissionOptions,
+): DecisionSurface {
+  if (view.mode === "tui") {
+    return {
+      via: "dialog",
+      ask: (window) =>
+        presentInlinePermissionPrompt(view, title, payload, options, window),
+    };
+  }
+  return {
+    via: "select",
+    ask: (window) =>
+      askThroughFallback(view, title, payload, options, window.signal),
+  };
+}
+
+function askThroughFallback(
+  view: PermissionPromptView,
+  title: string,
+  payload: PromptPayload,
+  options: RequestPermissionOptions | undefined,
+  signal: AbortSignal | undefined,
+): Promise<UnattributedDecision | undefined> {
   // The fallback renders once and cannot re-render, so it neither paints nor
   // offers an expansion; it substitutes a nominal width for the terminal size
   // it is never told, and the host's own select wraps from there.
@@ -109,14 +169,12 @@ export async function requestPermissionDecision(
     ...view.budget,
     width: FALLBACK_RENDER_WIDTH,
   });
-  return attributeToHuman(
-    await requestPermissionDecisionFromUi(
-      view.ui,
-      title,
-      rendered.lines.join("\n"),
-      options,
-    ),
-    "select",
+  return requestPermissionDecisionFromUi(
+    view.ui,
+    title,
+    rendered.lines.join("\n"),
+    options,
+    signal,
   );
 }
 
@@ -146,12 +204,18 @@ const OPTION_LABELS: Record<PromptAction, string> = {
   denyWithReason: "No, provide reason",
 };
 
+/**
+ * Show the inline dialog. The clock's signal dismisses it: an abort closes the
+ * dialog and answers `undefined`, so a caller can tell a dismissal from a
+ * human answer. The first keystroke engages the clock, stopping it.
+ */
 export function presentInlinePermissionPrompt(
   view: PermissionPromptView,
   title: string,
   payload: PromptPayload,
   options?: RequestPermissionOptions,
-): Promise<UnattributedDecision> {
+  clock?: DialogClock,
+): Promise<UnattributedDecision | undefined> {
   const config: PromptModelConfig = {
     doublePressToConfirm: view.doublePressToConfirm,
     sessionLabel: options?.sessionLabel ?? DEFAULT_SESSION_LABEL,
@@ -159,8 +223,17 @@ export function presentInlinePermissionPrompt(
     sessionScope: options?.sessionScope,
     keys: view.dialogKeys,
   };
-  return view.ui.custom<UnattributedDecision>(
+  return view.ui.custom<UnattributedDecision | undefined>(
     (tui, theme, keybindings, done) => {
+      // The host's `done` is idempotent, so a human answer racing the abort
+      // settles whichever arrives first.
+      clock?.signal?.addEventListener(
+        "abort",
+        () => {
+          done(undefined);
+        },
+        { once: true },
+      );
       // The factory runs once, as the dialog mounts, which is the moment the
       // human is being asked; a re-render does not come back through here.
       const notification = renderPromptNotification(
@@ -181,6 +254,7 @@ export function presentInlinePermissionPrompt(
           tui.requestRender();
         },
         done,
+        clock,
       );
     },
     { overlay: false },
@@ -228,6 +302,7 @@ class PermissionPromptComponent implements Component {
     private readonly handleAppAction: (data: string) => boolean,
     private readonly requestRender: () => void,
     private readonly done: (decision: UnattributedDecision) => void,
+    private readonly clock: DialogClock | undefined,
   ) {
     this.state = initialPromptState(config);
     this.reason = this.createReasonEditor();
@@ -306,10 +381,15 @@ class PermissionPromptComponent implements Component {
     } else if (view.elided) {
       keys.push("ctrl+o full request");
     }
+    const pendingTimeoutMs = this.clock?.pendingTimeoutMs;
+    if (pendingTimeoutMs !== undefined) {
+      keys.push(`unanswered, denies in ${pendingTimeoutMs / 1000}s`);
+    }
     return this.theme.fg("muted", keys.join(" · "));
   }
 
   handleInput(data: string): void {
+    this.engageClock();
     if (this.state.step === "reason") {
       this.handleReasonInput(data);
       return;
@@ -325,6 +405,21 @@ class PermissionPromptComponent implements Component {
     if (event) {
       this.apply(event);
     }
+  }
+
+  /**
+   * Stop the answer window on the human's first keystroke.
+   *
+   * The window bounds a prompt nobody is attending to; a keystroke proves
+   * someone is, so the dialog waits for them to finish rather than vanishing
+   * mid-answer. Re-renders so the hint stops advertising a deadline.
+   */
+  private engageClock(): void {
+    if (this.clock?.pendingTimeoutMs === undefined) {
+      return;
+    }
+    this.clock.engage();
+    this.requestRender();
   }
 
   /**
