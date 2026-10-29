@@ -324,11 +324,13 @@ test("active context handler omits context telemetry and keeps real constraints"
       display: false,
       timestamp: 0,
     };
-    const result = await h.handlers.get("context")?.(
-      { messages: [userMessage, oldCounter] },
+    const system = { role: "system", content: "base prompt" };
+    const result = await h.handlers.get("context_with_system")?.(
+      { messages: [system, userMessage, oldCounter] },
       h.ctx,
     );
-    const messages = (result as any)?.messages ?? [userMessage, oldCounter];
+    const messages = (result as any)?.messages ?? [system, userMessage, oldCounter];
+    assert.equal(messages[0], system, "the Pi system message stays at the transcript boundary");
     const live = messages.filter(
       (message: any) =>
         message.role === "custom" &&
@@ -407,11 +409,13 @@ test("context handler preserves old persisted context while generating current r
     };
     assert.match(persisted.content, /Scheduling: Autonomous runs: 2\/5\./);
     const original = structuredClone(persisted);
-    const result = await h.handlers.get("context")?.(
-      { messages: [persisted] },
+    const system = { role: "system", content: "base prompt" };
+    const result = await h.handlers.get("context_with_system")?.(
+      { messages: [system, persisted] },
       h.ctx,
     );
-    const messages = (result as any)?.messages ?? [persisted];
+    const messages = (result as any)?.messages ?? [system, persisted];
+    assert.equal(messages[0], system, "the Pi system message stays at the transcript boundary");
     const context = messages.find(
       (message: any) =>
         message.role === "custom" &&

@@ -26,6 +26,7 @@ import {
 } from "@xzzpig/pi-subagents/delegation";
 import { nowIso, type GoalRecord } from "./goal-record.ts";
 import type { GoalCore } from "./goal-state.ts";
+import type { GoalStorageContext } from "./storage/goal-root.ts";
 import {
 	DEFAULT_AUDITOR_AGENT,
 	DEFAULT_AUDITOR_TIMEOUT_MS,
@@ -241,7 +242,7 @@ export function parseGoalAuditorStructuredResult(value: unknown): { value?: Goal
  * call per completion attempt — the three Escape flows (continue, bypass, focus
  * lost) are mutually exclusive, so the entry is never duplicated.
  */
-export function appendAuditUsageEntry(core: GoalCore, ctx: ExtensionContext, goalId: string, usage: SubagentDelegationUsage | undefined): void {
+export function appendAuditUsageEntry(core: GoalCore, ctx: GoalStorageContext, goalId: string, usage: SubagentDelegationUsage | undefined): void {
 	if (!usage) return;
 	try {
 		core.goalService.appendEvents(ctx, [{
@@ -255,7 +256,7 @@ export function appendAuditUsageEntry(core: GoalCore, ctx: ExtensionContext, goa
 			costUsd: usage.cost,
 			turns: usage.turns,
 			at: nowIso(),
-		}]);
+		}], { immediate: true });
 	} catch {
 		// Ledger append failure should not block completion
 	}
@@ -268,7 +269,7 @@ export function appendAuditUsageEntry(core: GoalCore, ctx: ExtensionContext, goa
  */
 export function appendAuditSupervisorUsageEntry(
 	core: GoalCore,
-	ctx: ExtensionContext,
+	ctx: GoalStorageContext,
 	goalId: string,
 	auditRequestId: string,
 	usage: GoalAuditorSupervisorHandoff["usage"] | undefined,
@@ -289,7 +290,7 @@ export function appendAuditSupervisorUsageEntry(
 			costUsd: usage.costUsd,
 			turns: usage.turns,
 			at: nowIso(),
-		}]);
+		}], { immediate: true });
 	} catch {
 		// Ledger append failure must not block completion.
 	}

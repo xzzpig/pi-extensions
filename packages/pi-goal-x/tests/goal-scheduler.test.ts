@@ -1,6 +1,6 @@
 import test, { type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -11,13 +11,13 @@ import { writeActiveGoalFile, parseGoalFile } from "../extensions/storage/goal-f
 import { invalidateGoalSettingsCache, parseGoalSettings, saveGoalSettingsFileConfig, loadGoalSettings } from "../extensions/goal-settings.ts";
 import { newGoalScheduler, normalizeGoalScheduler, schedulerSummary } from "../extensions/goal-scheduler-state.ts";
 
-async function fixture(t: TestContext, limit?: number, owner = "owner", existing?: string, strict = true) {
+async function fixture(t: TestContext, limit?: number, owner = "owner", existing?: string, strict = true, idleBackoff = false) {
 	const cwd = existing ?? mkdtempSync(path.join(tmpdir(), "goal-scheduler-"));
 	const prior = process.env.PI_GOAL_GLOBAL_SETTINGS_FILE;
 	process.env.PI_GOAL_GLOBAL_SETTINGS_FILE = path.join(cwd, "absent-global.json");
 	if (!existing) {
 		mkdirSync(path.join(cwd, ".pi"), { recursive: true });
-		writeFileSync(path.join(cwd, ".pi", "pi-goal-x-settings.json"), JSON.stringify({ strictExecutionContract: strict, ...(limit !== undefined ? { maxAutonomousRuns: limit } : {}) }));
+		writeFileSync(path.join(cwd, ".pi", "pi-goal-x-settings.json"), JSON.stringify({ strictExecutionContract: strict, ...(idleBackoff ? { idleContinuationBackoff: true } : {}), ...(limit !== undefined ? { maxAutonomousRuns: limit } : {}) }));
 	}
 	invalidateGoalSettingsCache();
 	const goal = createGoal({ objective: "Test explicit scheduling", autoContinue: true, sisyphus: false });
@@ -36,7 +36,7 @@ async function fixture(t: TestContext, limit?: number, owner = "owner", existing
 		// is filtered out here.
 		if (typeof message === "object" && message !== null) {
 			const customType = (message as { customType?: string }).customType;
-			if (customType === "pi-goal-context-event" || customType === "pi-goal-state-event") return;
+			if (customType === "pi-goal-context-event" || customType === "pi-goal-state-event" || customType === "pi-goal-steering-event") return;
 		}
 		sent.push(message);
 	}, events: { on: (name: string, fn: Function) => { listeners.set(name, fn); return () => listeners.delete(name); }, emit: (name: string, event: unknown) => listeners.get(name)?.(event) } };
@@ -226,8 +226,9 @@ test("update_goal rejects mixed forms and scheduler cloning protects rollback", 
 	const h = await fixture(t, 5);
 	h.begin();
 	const tool = h.tools.get("update_goal");
-	const mixed = await tool.execute("mixed", { status: "complete", continuation: { kind: "ready" } }, undefined, undefined, h.ctx);
+	const mixed = await tool.execute("mixed", { status: "complete", continuation: { kind: "wait", reason: "external job", deadline: "2099-01-01T00:00:00Z" } }, undefined, undefined, h.ctx);
 	assert.equal(mixed.terminate, false);
+	assert.equal(mixed.isError, true);
 	h.ready();
 	const before = structuredClone(h.core.state.goal!.scheduler);
 	const clone = cloneGoal(h.core.state.goal!); clone.scheduler!.used = 999;
@@ -381,7 +382,7 @@ test("explicit resume during an execution waits for settlement and dispatches ki
 	assert.equal(h.core.state.goal?.scheduler?.used, 1);
 });
 
-// Default policy deliberately does not infer productivity from tool activity.
+// Default policy preserves immediate reasoning-only and final-task wrap-up runs.
 test("implicit executions continue without tools through task completion and wrap-up", async t => {
  const h = await fixture(t, undefined, "owner", undefined, false);
  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
@@ -397,6 +398,246 @@ test("implicit executions continue without tools through task completion and wra
  assert.equal(h.sent.length, 4);
  assert.equal(h.core.state.goal?.scheduler?.used, 4);
  assert.ok(h.core.state.goal?.taskList?.tasks.every(task => task.status === "complete"));
+});
+
+test("default continuation does not inspect goal content or delay reasoning/custom tools", async t => {
+	const h = await fixture(t, undefined, "owner", undefined, false);
+	t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+	(h.core.scheduler as unknown as { goalContent: () => never }).goalContent = () => { throw new Error("Default must skip pacing snapshots"); };
+	h.begin();
+	for (let i = 0; i < 12; i++) {
+		if (i % 2) await h.handlers.tool_call!({ toolName: "publish_report", input: { stage: i } }, h.ctx);
+		h.core.scheduler.settled(h.ctx); t.mock.timers.tick(1);
+		assert.equal(h.sent.length, i + 1);
+		assert.equal(h.core.state.goal?.scheduler?.idle, undefined);
+		h.admit();
+	}
+});
+
+test("old saved delays without explicit opt-in are ignored on restore and in status", async t => {
+	const h = await fixture(t, undefined, "owner", undefined, false);
+	t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+	h.core.goalService.apply(h.ctx, { mutate: g => ({ ...g, scheduler: { ...newGoalScheduler("owner"), used: 7, phase: "ready", decision: { kind: "ready", purpose: "ready" }, idle: { runs: 4, nextAt: Date.now() + 120000 } } }) });
+	assert.doesNotMatch(schedulerSummary(h.core.state.goal?.scheduler), /Next automatic|delay off/);
+	assert.equal(h.core.scheduler.isWaiting(), false);
+	h.core.scheduler.restore(h.ctx); t.mock.timers.tick(1);
+	assert.equal(h.sent.length, 1);
+	assert.equal(h.core.state.goal?.scheduler?.used, 8);
+	assert.equal(h.core.state.goal?.scheduler?.idle, undefined);
+});
+
+test("disabling a pending delay dispatches promptly without renewing spent allowance", async t => {
+	const h = await fixture(t, 20, "owner", undefined, false, true);
+	t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+	h.begin(); h.core.scheduler.settled(h.ctx); t.mock.timers.tick(1); h.admit(); h.core.scheduler.settled(h.ctx);
+	assert.equal(h.core.scheduler.isWaiting(), true);
+	saveGoalSettingsFileConfig(h.cwd, { idleContinuationBackoff: false, maxAutonomousRuns: 20 });
+	h.core.scheduler.refreshSettings(h.ctx); t.mock.timers.tick(1);
+	assert.equal(h.sent.length, 2);
+	assert.equal(h.core.state.goal?.scheduler?.used, 2);
+	assert.equal(h.core.state.goal?.scheduler?.idle, undefined);
+	h.admit();
+	t.mock.timers.tick(30000);
+	assert.equal(h.sent.length, 2, "obsolete idle timer cannot spend twice");
+});
+
+test("enabling during work and off/on edits do not retroactively classify an execution", async t => {
+	const h = await fixture(t, undefined, "owner", undefined, false);
+	const idle = () => h.core.state.goal?.scheduler?.idle;
+	t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+	h.begin();
+	saveGoalSettingsFileConfig(h.cwd, { idleContinuationBackoff: true });
+	h.core.scheduler.refreshSettings(h.ctx);
+	h.core.scheduler.settled(h.ctx); t.mock.timers.tick(1); h.admit();
+	assert.equal(idle(), undefined);
+	h.core.scheduler.settled(h.ctx); t.mock.timers.tick(1); h.admit();
+	assert.equal(idle()?.runs, 1);
+	saveGoalSettingsFileConfig(h.cwd, { idleContinuationBackoff: false }); h.core.scheduler.refreshSettings(h.ctx);
+	saveGoalSettingsFileConfig(h.cwd, { idleContinuationBackoff: true }); h.core.scheduler.refreshSettings(h.ctx);
+	h.core.scheduler.settled(h.ctx); t.mock.timers.tick(1);
+	assert.equal(h.sent.length, 3);
+	assert.equal(idle(), undefined);
+});
+
+test("claim drops a saved delay if the preference was disabled after scheduling", async t => {
+	const h = await fixture(t, undefined, "owner", undefined, false, true);
+	t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+	h.begin(); h.core.scheduler.settled(h.ctx);
+	h.core.goalService.apply(h.ctx, { mutate: g => ({ ...g, scheduler: { ...g.scheduler!, used: 3, idle: { runs: 2, nextAt: Date.now() + 30000 } } }) });
+	saveGoalSettingsFileConfig(h.cwd, { idleContinuationBackoff: false });
+	t.mock.timers.tick(1);
+	assert.equal(h.sent.length, 1);
+	assert.equal(h.core.state.goal?.scheduler?.used, 4);
+	assert.equal(h.core.state.goal?.scheduler?.idle, undefined);
+});
+
+test("repeated opted-in idle executions back off durably, cap at five minutes and spend only on delivery", async t => {
+	const h = await fixture(t, undefined, "owner", undefined, false, true);
+	t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+	h.begin();
+	for (const [index, delay] of [0, 30_000, 60_000, 120_000, 240_000, 300_000, 300_000].entries()) {
+		h.core.scheduler.settled(h.ctx);
+		assert.equal(h.core.state.goal?.status, "active");
+		assert.equal(h.core.state.goal?.scheduler?.used, index);
+		if (delay) {
+			assert.match(schedulerSummary(h.core.state.goal?.scheduler, undefined, true, true), /Next automatic attempt in .*s/);
+			const disk = parseGoalFile(path.resolve(h.cwd, h.core.state.goal!.activePath!));
+			assert.deepEqual(disk?.scheduler, h.core.state.goal?.scheduler, "pacing is saved before waiting");
+			h.core.scheduler.schedule(h.ctx);
+			t.mock.timers.tick(delay - 1);
+			assert.equal(h.sent.length, index, "rescheduling cannot skip a saved delay");
+		}
+		t.mock.timers.tick(1);
+		assert.equal(h.sent.length, index + 1);
+		assert.equal(h.core.state.goal?.scheduler?.used, index + 1);
+		h.admit();
+	}
+});
+
+test("work in an earlier tool turn resets idle pacing for the entire logical run", async t => {
+	const h = await fixture(t, undefined, "owner", undefined, false, true);
+	t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+	h.begin(); h.core.scheduler.settled(h.ctx); t.mock.timers.tick(1); h.admit();
+	await h.handlers.turn_start!({}, h.ctx);
+	await h.handlers.tool_call!({ toolName: "write", input: { path: "result.txt", content: "done" } }, h.ctx);
+	// A second agent_start can occur during native retry or compaction.
+	h.begin();
+	await h.handlers.turn_start!({}, h.ctx);
+	assert.equal(h.core.goalWorkToolCalledThisTurn, false, "last-turn flag alone misses earlier work");
+	h.core.goalService.flushTurn(h.ctx);
+	h.core.scheduler.settled(h.ctx); t.mock.timers.tick(1);
+	assert.equal(h.sent.length, 2, "the completed execution continues immediately");
+	h.admit(); h.core.scheduler.settled(h.ctx); t.mock.timers.tick(1);
+	assert.equal(h.sent.length, 3, "work reset the single idle grace execution");
+});
+
+for (const [toolName, input] of [
+	["get_goal", {}], ["read", { path: ".pi/goals/active_goal_fixture.md" }],
+	["bash", { command: "echo 'Standing by'" }], ["bg_wait", { id: "running-job" }],
+	["subagent", { action: "status", id: "running-job" }],
+] as const) test(`inspection-only ${toolName} does not erase idle pacing`, async t => {
+	const h = await fixture(t, undefined, "owner", undefined, false, true);
+	t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+	h.begin(); h.core.scheduler.settled(h.ctx); t.mock.timers.tick(1); h.admit();
+	await h.handlers.tool_call!({ toolName, input }, h.ctx);
+	// Accounting/persistence and scheduler admission always bump revisions.
+	h.core.goalService.apply(h.ctx, { mutate: g => ({ ...g, usage: { tokensUsed: 1000, activeSeconds: 3 } }) });
+	h.core.scheduler.settled(h.ctx); t.mock.timers.tick(29_999);
+	assert.equal(h.sent.length, 1);
+	t.mock.timers.tick(1);
+	assert.equal(h.sent.length, 2);
+});
+
+test("optional default ready decisions do not bypass repeated-idle pacing", async t => {
+	const h = await fixture(t, undefined, "owner", undefined, false, true);
+	t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+	h.begin(); h.ready(); h.core.scheduler.settled(h.ctx); t.mock.timers.tick(1); h.admit();
+	h.ready(); h.core.scheduler.settled(h.ctx); t.mock.timers.tick(29_999);
+	assert.equal(h.sent.length, 1);
+	t.mock.timers.tick(1);
+	assert.equal(h.sent.length, 2);
+});
+
+test("restoring a paced goal preserves its deadline; explicit resume clears it", async t => {
+	const h = await fixture(t, undefined, "owner", undefined, false, true);
+	t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+	h.begin(); h.core.scheduler.settled(h.ctx); t.mock.timers.tick(1); h.admit();
+	h.core.scheduler.settled(h.ctx);
+	t.mock.timers.tick(10_000);
+	h.core.scheduler.shutdown();
+	await h.core.loadState(h.ctx);
+	h.core.scheduler.restore(h.ctx);
+	t.mock.timers.tick(19_999);
+	assert.equal(h.sent.length, 1);
+	t.mock.timers.tick(1);
+	assert.equal(h.sent.length, 2);
+	h.admit(); h.core.scheduler.settled(h.ctx);
+	assert.equal(h.core.scheduler.resume(h.ctx), true);
+	t.mock.timers.tick(1);
+	assert.equal(h.sent.length, 3, "user resume takes effect promptly");
+	assert.equal(h.core.state.goal?.scheduler?.used, 1, "only resume renews allowance");
+});
+
+test("producer messages take over idle pacing without renewing allowance", async t => {
+	const h = await fixture(t, 10, "owner", undefined, false, true);
+	t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+	h.begin(); h.core.scheduler.settled(h.ctx); t.mock.timers.tick(1); h.admit();
+	h.core.scheduler.settled(h.ctx);
+	h.begin(); h.core.scheduler.message(h.ctx, { role: "custom", customType: "producer-result", content: "Job finished" });
+	h.core.scheduler.settled(h.ctx); t.mock.timers.tick(1);
+	assert.equal(h.sent.length, 2);
+	assert.equal(h.core.state.goal?.scheduler?.used, 2);
+	t.mock.timers.tick(30_000);
+	assert.equal(h.sent.length, 2, "superseded idle timer cannot send another marker");
+});
+
+test("claim rechecks a newly postponed idle deadline before spending allowance", async t => {
+	const h = await fixture(t, undefined, "owner", undefined, false, true);
+	t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+	h.begin(); h.core.scheduler.settled(h.ctx);
+	// Runtime has a queued ready callback, but the authoritative record changes
+	// before delivery. Admission must use the later due time from disk.
+	h.core.goalService.apply(h.ctx, { mutate: g => ({ ...g, scheduler: { ...g.scheduler!, idle: { runs: 2, nextAt: Date.now() + 30_000 } } }) });
+	t.mock.timers.tick(1);
+	assert.equal(h.sent.length, 0);
+	assert.equal(h.core.state.goal?.scheduler?.used, 0);
+	assert.equal(h.core.state.goal?.status, "active");
+	t.mock.timers.tick(29_999);
+	assert.equal(h.sent.length, 1);
+	assert.equal(h.core.state.goal?.scheduler?.used, 1);
+});
+
+test("idle pacing excludes waiting time from accounting and respects changed run limits", async t => {
+	const h = await fixture(t, undefined, "owner", undefined, false, true);
+	t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+	h.begin(); h.core.scheduler.settled(h.ctx); t.mock.timers.tick(1); h.admit();
+	h.core.scheduler.settled(h.ctx);
+	const before = h.core.state.goal!.usage.activeSeconds;
+	h.core.beginAccounting();
+	t.mock.timers.tick(20_000);
+	assert.equal(h.core.goalForDisplay()?.usage.activeSeconds, before);
+	saveGoalSettingsFileConfig(h.cwd, { maxAutonomousRuns: 1 });
+	t.mock.timers.tick(10_000);
+	assert.equal(h.sent.length, 1);
+	assert.equal(h.core.state.goal?.status, "paused");
+	assert.match(h.core.state.goal?.pauseReason ?? "", /allowance exhausted/);
+});
+
+for (const action of ["pause", "unfocus", "replace", "shutdown"] as const) test(`${action} invalidates an idle continuation`, async t => {
+	const h = await fixture(t, undefined, "owner", undefined, false, true);
+	t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+	h.begin(); h.core.scheduler.settled(h.ctx); t.mock.timers.tick(1); h.admit();
+	h.core.scheduler.settled(h.ctx);
+	if (action === "pause") h.core.pauseActiveGoal(h.ctx);
+	else if (action === "unfocus") h.core.setFocusedGoalId(null, h.ctx, "unfocused");
+	else if (action === "replace") h.core.replaceGoal({ objective: "Replacement goal", autoContinue: false, sisyphus: false }, h.ctx);
+	else h.core.scheduler.shutdown();
+	t.mock.timers.tick(300_000);
+	assert.equal(h.sent.length, 1);
+});
+
+test("an old stale settlement cannot consume the current execution's continuation", async t => {
+	const h = await fixture(t, undefined, "owner", undefined, false);
+	t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+	h.begin();
+	await h.handlers.agent_end!({ messages: [{ role: "assistant", stopReason: "stop" }] }, h.ctx);
+	const stale = { get sessionManager() { throw new Error("This extension ctx is stale after session replacement or reload."); } };
+	await h.handlers.agent_settled!({}, stale);
+	t.mock.timers.tick(1);
+	assert.equal(h.sent.length, 0);
+	await h.handlers.agent_settled!({}, h.ctx);
+	t.mock.timers.tick(1);
+	assert.equal(h.sent.length, 1);
+});
+
+test("pacing metadata is optional, round-trips and rejects corrupt idle state", () => {
+	const base = newGoalScheduler("owner");
+	assert.deepEqual(normalizeGoalScheduler(base), base);
+	const paced = { ...base, idle: { runs: 3, nextAt: Date.now() + 60_000 } };
+	assert.deepEqual(normalizeGoalScheduler(paced), paced);
+	for (const idle of [null, false, 0, {}, { runs: 0, nextAt: 0 }, { runs: 7, nextAt: 0 }, { runs: 1.5, nextAt: 0 }, { runs: 2, nextAt: Infinity }, { runs: 2, nextAt: -1 }]) {
+		assert.equal(normalizeGoalScheduler({ ...base, idle })?.phase, "interrupted", JSON.stringify(idle));
+	}
 });
 
 test("default rejects new waits without terminating or mutating; optional ready succeeds", async t => {
@@ -562,7 +803,7 @@ test("prompt cache: normal and custom runs preserve history while refreshing bud
  h.core.state.goal!.usage.tokensUsed = 20;
  const history: any[] = [{role: "user", content: "Work on the goal", timestamp: 1}];
  const original = structuredClone(history);
- const request = async () => (await h.handlers.context!({messages: history}, h.ctx)).messages;
+ const request = async () => (await h.handlers.context_with_system!({messages: history}, h.ctx)).messages;
  const preflight = await h.handlers.before_agent_start!({prompt: "continue", systemPrompt: "host policy"}, h.ctx);
  assert.equal(preflight, undefined, "goal state never rewrites the system prefix");
  const first = await request();
@@ -620,11 +861,11 @@ test("prompt cache: interleaved sessions keep per-session transient sets", async
 	h.core.state.goal!.usage.tokensUsed = 1;
 	const history: any[] = [{role: "user", content: "Work on the goal", timestamp: 1}];
 	const ctxB = {...h.ctx, sessionManager: {...h.ctx.sessionManager, getSessionId: () => "owner-B"}} as unknown as ExtensionContext;
-	const first: any[] = (await h.handlers.context!({messages: history}, h.ctx)).messages;
+	const first: any[] = (await h.handlers.context_with_system!({messages: history}, h.ctx)).messages;
 	// Session B advances the same goal so its transient set differs from A's.
 	h.core.state.goal!.usage.tokensUsed = 12345;
 	h.core.state.goal!.scheduler = {...newGoalScheduler("owner"), used: 7};
-	await h.handlers.context!({messages: history}, ctxB);
+	await h.handlers.context_with_system!({messages: history}, ctxB);
 	const wire: any = {messages: [{role: "user", content: "Work on the goal"}, {role: "user", content: [{type: "text", text: first.at(-2).content}]}, {role: "user", content: [{type: "text", text: first.at(-1).content, cache_control: {type: "ephemeral"}}]}]};
 	await h.handlers.before_provider_request!({payload: wire}, h.ctx);
 	assert.equal(wire.messages[0].content[0].cache_control?.type, "ephemeral", "session A's request relocates with A's set even after B overwrote its own");
@@ -637,21 +878,22 @@ test("prompt cache: cleared scheduling instructions vanish from retained history
 	// The standing instruction is a saved wait reason. A ready decision no longer
 	// carries text: next actions were removed.
 	h.core.state.goal!.scheduler = {...newGoalScheduler("owner"), phase: "waiting", decision: {kind: "wait"}, wait: {id: "w1", token: "t1", reason: "Publish release v1", deadline: Date.now() + 60_000}};
-	const first: any[] = (await h.handlers.context!({messages: history}, h.ctx)).messages;
+	const first: any[] = (await h.handlers.context_with_system!({messages: history}, h.ctx)).messages;
 	assert.ok(first.some((m: any) => typeof m.content === "string" && m.content.includes("Publish release v1")), "standing instruction rides the live state");
 	// Cleared by omission: a plain scheduler with no decision must not re-issue the order.
 	h.core.state.goal!.scheduler = {...newGoalScheduler("owner"), used: 1};
 	const advanced = [...history, {role: "assistant", content: "ack", timestamp: 2}];
-	const second: any[] = (await h.handlers.context!({messages: advanced}, h.ctx)).messages;
+	const second: any[] = (await h.handlers.context_with_system!({messages: advanced}, h.ctx)).messages;
 	assert.ok(!second.some((m: any) => typeof m.content === "string" && m.content.includes("Publish release v1")), "no retained tail re-issues the cancelled order");
 });
 
 
 test("prompt cache: model changes and missing identities cannot replay another request's budget counters", async t => {
  const h = await fixture(t);
+ await h.handlers.session_start!({}, h.ctx);
  h.core.state.goal!.tokenBudget = 200000;
  const history = [{role: "user", content: "inspect", timestamp: 1}];
- const request = async (ctx: ExtensionContext) => (await h.handlers.context!({messages: history}, ctx)).messages as any[];
+ const request = async (ctx: ExtensionContext) => (await h.handlers.context_with_system!({messages: history}, ctx)).messages as any[];
  const initial = {...h.ctx, model: {provider: "provider-a", id: "model-a"}} as ExtensionContext;
  await request(initial);
  h.core.state.goal!.usage.tokensUsed = 123456;
@@ -661,13 +903,95 @@ test("prompt cache: model changes and missing identities cannot replay another r
   assert.match(out.at(-1).content, /123456\/200000 used/);
  }
  const unknown = {...h.ctx, sessionManager: {...h.ctx.sessionManager, getSessionId: () => undefined}} as unknown as ExtensionContext;
+ await h.handlers.session_start!({}, unknown);
  await request(unknown);
  h.core.state.goal!.usage.tokensUsed = 234567;
  const next = await request(unknown);
  assert.equal(next.filter(m => m.customType === "pi-goal-live-context").length, 2);
  assert.ok(!JSON.stringify(next).includes("123456/200000 used"));
- await h.handlers.session_shutdown!({}, initial);
+ assert.ok(!JSON.stringify(next).includes("123456 tokens"));
+ await h.handlers.session_shutdown!({}, unknown);
+ await h.handlers.session_start!({}, initial);
  const restarted = await request(initial);
  assert.equal(restarted.filter(m => m.customType === "pi-goal-live-context").length, 2);
  assert.match(restarted.at(-1).content, /234567\/200000 used/);
+});
+
+for (const order of ['prepare-first', 'agent-first']) test(`rejected checkpoints preserve a replacement goal through ${order} startup and cancellation`, async t => {
+ const h=await fixture(t,10);
+ const before=readFileSync(path.join(h.cwd,h.core.state.goal!.activePath!),'utf8');
+ const ctx={...h.ctx,signal:AbortSignal.abort()};
+ h.core.runningGoalId='previous-goal';
+ if(order==='agent-first')h.begin();
+ await h.handlers.before_agent_start!({prompt:'<pi_goal_continuation goal_id="previous-goal" kind="checkpoint"/>',systemPrompt:'base',systemPromptOptions:{}},ctx);
+ if(order==='prepare-first')h.begin();
+ assert.equal(h.core.runningGoalId,null,'rejected startup does not bind to the replacement goal');
+ assert.equal((await h.handlers.tool_call!({toolName:'write',input:{path:'wrong'}},ctx)).block,true);
+ await h.handlers.turn_start!({},ctx);
+ const message={role:'assistant',stopReason:'aborted',usage:{input:50,output:50,totalTokens:100}};
+ await h.handlers.message_end!({message},ctx);
+ await h.handlers.turn_end!({message},ctx);
+ await h.handlers.agent_end!({messages:[message]},ctx);
+ await h.handlers.agent_settled!({aborted:true},ctx);
+ assert.equal(h.core.scheduler.isDenied(),false);
+ assert.equal(h.core.state.goal?.status,'active');
+ assert.equal(readFileSync(path.join(h.cwd,h.core.state.goal!.activePath!),'utf8'),before,'no pause, accounting or scheduler changes leak into the replacement');
+ await h.handlers.before_agent_start!({prompt:'Continue the current goal',systemPrompt:'base',systemPromptOptions:{}},h.ctx);
+ h.begin();
+ assert.equal(h.core.runningGoalId,h.core.state.goal?.id,'the next legitimate run binds normally');
+});
+
+test('rejection cancels timers without losing the replacement goal\'s saved dispatch', async t => {
+ const h=await fixture(t,10);
+ t.mock.timers.enable({apis:['setTimeout','Date']});
+ assert.equal(h.core.scheduler.resume(h.ctx),true);
+ const before=JSON.stringify(h.core.state.goal?.scheduler);
+ h.core.scheduler.rejectCheckpoint(h.ctx);
+ h.begin();
+ h.core.scheduler.schedule(h.ctx);
+ t.mock.timers.tick(1000);
+ assert.equal(h.sent.length,0);
+ assert.equal(JSON.stringify(h.core.state.goal?.scheduler),before);
+ await h.handlers.agent_settled!({aborted:true},h.ctx);
+ t.mock.timers.tick(1);
+ assert.equal(h.sent.length,1,'existing intent dispatches once after the rejection settles');
+ assert.equal(h.core.state.goal?.scheduler?.used,1);
+});
+
+test('a rejected dispatch cannot release a user turn hold or renew its allowance', async t => {
+ const h=await fixture(t,10);
+ saveGoalSettingsFileConfig(h.cwd,{pauseOrder:'turn-first'});
+ h.core.interruption.pause(h.ctx);
+ const before=JSON.stringify(h.core.state.goal?.scheduler);
+ h.core.scheduler.rejectCheckpoint(h.ctx);
+ h.begin();
+ await h.handlers.agent_settled!({aborted:true},h.ctx);
+ assert.equal(h.core.interruption.isHeld(),true);
+ assert.equal(JSON.stringify(h.core.state.goal?.scheduler),before);
+ assert.equal(h.sent.length,0);
+});
+
+test('native retries retain the original run while a replacement waits for its own kickoff', async t => {
+ const h=await fixture(t,10);
+ t.mock.timers.enable({apis:['setTimeout','Date']});
+ const original=h.core.state.goal!.id;
+ h.begin();
+ h.core.replaceGoal({objective:'Replacement work',autoContinue:true,sisyphus:false},h.ctx);
+ const replacement=h.core.state.goal!.id;
+ assert.notEqual(replacement,original);
+ h.core.accountProgress(h.ctx,{completedTurnTokens:128});
+ assert.equal(h.core.state.goal?.usage.tokensUsed,0,'an old run cannot charge the replacement');
+ assert.equal(h.core.accounting.goalId,null,'replacement time starts with its own run');
+ assert.deepEqual(h.core.state.goal?.scheduler?.decision,{kind:'ready',purpose:'kickoff'});
+ h.core.runningGoalId=replacement; // before_agent_start can run again during host retry
+ h.begin();
+ assert.equal(h.core.runningGoalId,original);
+ t.mock.timers.tick(1000);
+ assert.equal(h.sent.length,0,'replacement work waits for the original execution to settle');
+ h.core.scheduler.settled(h.ctx,false);
+ t.mock.timers.tick(1);
+ assert.equal(h.sent.length,1,'saved creation intent starts a fresh run');
+ h.admit();
+ assert.equal(h.core.runningGoalId,replacement);
+ assert.equal(h.core.state.goal?.scheduler?.used,1);
 });

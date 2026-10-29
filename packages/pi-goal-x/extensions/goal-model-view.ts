@@ -1,5 +1,5 @@
 import { statusLabel } from "./goal-core.ts";
-import { modelBudgetLine } from "./goal-accounting.ts";
+import { contextUsageLine, modelBudgetLine, type GoalContextUsage } from "./goal-accounting.ts";
 import { detailedSummary } from "./goal-format.ts";
 import type { GoalLedgerEvent } from "./goal-ledger.ts";
 import type { GoalRecord } from "./goal-record.ts";
@@ -26,9 +26,10 @@ function effectiveBudget(budget: number | undefined): number | undefined {
 export function goalModelPromptParts(
   goal: GoalRecord,
   settings?: GoalPromptSettings,
+  contextUsage?: GoalContextUsage,
 ): { state: string; counters?: string } {
-  // Do not pass host context usage into the prompt formatter. Its returned
-  // telemetry tail is intentionally discarded before it reaches retention.
+  // The upstream formatter's cumulative telemetry is intentionally discarded.
+  // Only the explicitly opted-in context observation is selected below.
   const parts = goalPromptParts(goal, settings);
   const guardAt = parts.state.lastIndexOf(CONTEXT_USAGE_GUARD);
   if (
@@ -73,7 +74,8 @@ export function goalModelPromptParts(
     settings?.showAutonomousRuns,
   );
   const budgetSnapshot = modelBudgetLine(goal);
-  const counters = [budgetSnapshot, runs].filter((line): line is string =>
+  const contextSnapshot = settings?.showContextUsage === true ? contextUsageLine(contextUsage) : undefined;
+  const counters = [budgetSnapshot, runs, contextSnapshot].filter((line): line is string =>
     Boolean(line),
   );
   const snapshotKinds = [

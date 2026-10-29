@@ -1,6 +1,6 @@
 import { statusLabel, truncateText } from "./goal-core.ts";
 import {
-  latestAuditorResultForGoal,
+  latestAuditorResultForGoal, latestAuditForGoal,
   latestEventsForGoal,
   reconstructGoalLedger,
   type GoalLedgerEvent,
@@ -70,6 +70,7 @@ export function buildGoalCompactSummary(
   }
 
   const auditor = auditorOverride ?? latestAuditorResultForGoal(events, goal.id);
+  if (latestAuditForGoal(events, goal.id)?.type === "audit_started") lines.push("  Latest audit: no recorded result.");
   if (auditor && auditor.verdict === "disapproved") {
     lines.push(`  Auditor rejection (latest): ${truncateText(auditor.report, 120)}`);
   }
@@ -172,6 +173,7 @@ export function buildPostCompactionGoalDelta(args: {
   }
   // Latest unresolved auditor finding.
   const audit = latestAuditorResultForGoal(ledgerEvents, goal.id);
+  if (latestAuditForGoal(ledgerEvents, goal.id)?.type === "audit_started") lines.push("Latest audit: no recorded result.");
   if (audit && audit.verdict === "disapproved") {
     lines.push(`Latest unresolved auditor finding: ${audit.report.slice(0, 300)}`);
   }

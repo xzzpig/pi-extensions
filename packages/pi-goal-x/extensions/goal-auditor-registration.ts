@@ -174,6 +174,7 @@ interface ActiveAuditorRegistration {
 }
 
 let activeRegistration: ActiveAuditorRegistration | undefined;
+let registrationGeneration = 0;
 
 /**
  * The default auditor this module handed to the installed pi-subagents owner
@@ -193,6 +194,7 @@ export function getDefaultGoalAuditorRegistration(): { name: string; definition:
 
 /** Release the runtime registration (session shutdown, reload, re-registration). */
 export function disposeDefaultGoalAuditor(): void {
+	registrationGeneration += 1;
 	activeRegistration?.dispose();
 	activeRegistration = undefined;
 }
@@ -214,9 +216,11 @@ export async function registerDefaultGoalAuditor(
 	} = {},
 ): Promise<AuditorRegistrationResult> {
 	disposeDefaultGoalAuditor();
+	const generation = registrationGeneration;
 	const resolve = options.resolveLaunchContract ?? resolveSubagentLaunchContract;
 	const projectTrusted = options.isProjectTrusted?.() ?? false;
 	const availability = await resolveDefaultAuditorAvailability(cwd, resolve, projectTrusted);
+	if (generation !== registrationGeneration) return { registered: false, reason: "unavailable" };
 	if (availability !== "free") {
 		return { registered: false, reason: availability === "taken" ? "shadowed" : "unavailable" };
 	}

@@ -79,4 +79,5 @@ test("thinkingLevelChoices marks the current level and offers (default)", () => 
 	assert.equal(thinkingLevelChoices(undefined)[0], "  (default)");
 	assert.equal(thinkingLevelChoices(undefined).length, 8, "default + seven levels");
 	assert.deepEqual(AUDITOR_THINKING_LEVELS.at(-1), "max", "max is offered as the last level");
+	assert.ok(thinkingLevelChoices(undefined).some(choice => choice.trim() === "max"));
 });

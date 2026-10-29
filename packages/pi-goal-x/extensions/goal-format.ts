@@ -2,6 +2,7 @@ import { type Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { restoreDisplayUsage } from "./goal-model-display.ts";
 import { goalCardCoordination } from "./goal-audit-supervisor-handoff.ts";
+import { commandInstructions, type GoalCommands } from "./goal-controls.ts";
 import {
 	formatDuration,
 	formatTokenValue,
@@ -10,7 +11,7 @@ import {
 } from "./goal-core.ts";
 import { buildTaskSummary } from "./goal-policy.ts";
 import { countTaskSubtree } from "./goal-task-count.ts";
-import { latestAuditorResultForGoal, latestEventsForGoal, type GoalLedgerEvent } from "./goal-ledger.ts";
+import { latestAuditorResultForGoal, latestAuditForGoal, latestEventsForGoal, type GoalLedgerEvent } from "./goal-ledger.ts";
 import { GOAL_PROGRESS_TOOL_NAMES } from "./goal-tool-names.ts";
 import {
 	asRecord,
@@ -66,8 +67,8 @@ export function formatAuditUsage(usage: { tokens: number; costUsd: number; turns
 	return `Audit cost: $${Math.max(0, usage.costUsd).toFixed(4)} · ${formatTokenValue(usage.tokens)}${turnLabel}`;
 }
 
-export function detailedSummary(goal: GoalRecord | null): string {
-	if (!goal) return "No goal is set. Use /goal <objective> or /sisyphus <objective> to start immediately.";
+export function detailedSummary(goal: GoalRecord | null, commands?: GoalCommands): string {
+	if (!goal) return commandInstructions("No goal is set. Use /goal <objective> or /sisyphus <objective> to start immediately.", commands);
 	const lines = [
 		`Goal: ${goal.objective}`,
 		`Status: ${statusLabel(goal)}`,
@@ -386,6 +387,7 @@ export function buildGoalHistoryBlock(goal: GoalRecord | null, ledgerEvents: Goa
 	if (!goal) return "";
 	const lines: string[] = [];
 	const audit = latestAuditorResultForGoal(ledgerEvents, goal.id);
+ if (latestAuditForGoal(ledgerEvents, goal.id)?.type === "audit_started") lines.push("Latest audit: no recorded result.");
 	if (audit) {
 		lines.push(`Last audit: ${audit.verdict} (${audit.at.slice(0, 10)}) — ${truncateText(audit.report, 90)}`);
 	}

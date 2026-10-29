@@ -1,0 +1,16 @@
+name: Set up the pi-goal-x workspace
+
+description: Install the pi-goal-x workspace with pnpm.
+
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@v4
+      with:
+        version: 11.13.1
+    - name: Install workspace dependencies
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: >-
+        pnpm install --filter '@xzzpig/pi-goal-x...'
+        --frozen-lockfile --ignore-scripts

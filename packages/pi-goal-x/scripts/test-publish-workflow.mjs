@@ -6,8 +6,18 @@ const workflow = readFileSync(new URL('../.github/workflows/publish.yml', import
 const step = workflow.split('      - name: Publish exact tarball with OIDC and verify registry')[1].split('      - name: Create GitHub release')[0];
 const script = step.split("<<'NODE'\n")[1].split('\n          NODE')[0].replace(/^\s*import .*;\n/gm, '');
 const run = new (Object.getPrototypeOf(async function () {}).constructor)('fs', 'assert', 'execFileSync', 'fetch', 'process', 'setTimeout', 'console', script);
-const pkg = {name: 'pi-goal-x', version: '0.31.8', integrity: 'sha512-fixture', shasum: 'fixture'};
+const pkg = {name: '@xzzpig/pi-goal-x', version: '0.31.8', integrity: 'sha512-fixture', shasum: 'fixture'};
 const metadata = {version: pkg.version, dist: {integrity: pkg.integrity, shasum: pkg.shasum}};
+
+test('publication tests its final tarball after packing and before publishing', () => {
+ const packed = workflow.indexOf('      - name: Pack once and smoke-test recovery CLI');
+ const smoke = workflow.indexOf('      - name: Test the exact publication tarball');
+ const publish = workflow.indexOf('      - name: Publish exact tarball with OIDC and verify registry');
+ assert.ok(packed >= 0 && smoke > packed && publish > smoke);
+ const configuration = workflow.slice(smoke, workflow.indexOf('      - uses:', smoke));
+ assert.match(configuration, /PI_GOAL_PACKAGE_TARBALL: \$\{\{ env\.TARBALL \}\}/);
+ assert.match(configuration, /run: node scripts\/package-stabilization-check\.mjs/);
+});
 
 async function simulate({existing = false, mismatch = false, unavailable = false, latest = '0.31.7', delay = 0} = {}) {
  const result = {publishes: 0, sleeps: 0, receipts: 0};
@@ -21,7 +31,7 @@ async function simulate({existing = false, mismatch = false, unavailable = false
  };
  const fs = {readFileSync: () => JSON.stringify([pkg]), writeFileSync: (_path, data) => {assert.deepEqual(JSON.parse(data), metadata); result.receipts++;}};
  try {
-  await run(fs, assert, (command, args) => {assert.equal(command, 'npm'); assert.equal(args[0], 'publish'); result.publishes++;}, fetch, {env: {RUNNER_TEMP: '/fixture', TARBALL: '/fixture/package.tgz'}}, callback => {result.sleeps++; callback();}, {log() {}});
+  await run(fs, assert, (command, args) => {assert.equal(command, 'pnpm'); assert.equal(args[0], 'publish'); result.publishes++;}, fetch, {env: {RUNNER_TEMP: '/fixture', TARBALL: '/fixture/package.tgz'}}, callback => {result.sleeps++; callback();}, {log() {}});
  } catch (error) {result.error = error;}
  return result;
 }

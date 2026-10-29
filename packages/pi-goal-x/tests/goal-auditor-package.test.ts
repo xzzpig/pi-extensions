@@ -188,6 +188,26 @@ test("D-05/D-12: registration requests the default agent when the name is free",
 	assert.equal(owner.disposed(), 2);
 });
 
+test("a stale registration cannot replace a newer session's auditor", async () => {
+	const project = path.join(tempDir, "registration-race");
+	fs.mkdirSync(project, { recursive: true });
+	const bus = createBus();
+	const owner = installFakeOwner(bus);
+	let resolveOld!: (value: { ok: false; code: "missing_agent"; message: string }) => void;
+	const oldResolver = () => new Promise<{ ok: false; code: "missing_agent"; message: string }>((resolve) => { resolveOld = resolve; });
+	const first = registerDefaultGoalAuditor({ events: bus } as any, project, { resolveLaunchContract: oldResolver as any });
+	const second = await registerDefaultGoalAuditor({ events: bus } as any, project, {
+		resolveLaunchContract: (async () => ({ ok: false as const, code: "missing_agent" as const, message: "missing" })) as any,
+	});
+	resolveOld({ ok: false, code: "missing_agent", message: "missing" });
+	assert.equal(second.registered, true);
+	assert.equal((await first).registered, false);
+	assert.deepEqual(owner.names, ["goal-auditor"]);
+	assert.ok(getDefaultGoalAuditorRegistration());
+	disposeDefaultGoalAuditor();
+	assert.equal(owner.disposed(), 1);
+});
+
 test("D-04/D-12: registration is skipped when a configured goal-auditor exists", async () => {
 	const project = path.join(tempDir, "shadowed-project");
 	fs.mkdirSync(project, { recursive: true });

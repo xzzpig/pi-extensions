@@ -18,6 +18,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    working-directory: packages/pi-goal-x
+
 concurrency:
   group: npm-publish
   cancel-in-progress: false
@@ -52,33 +56,33 @@ jobs:
           import fs from 'node:fs';
           import assert from 'node:assert/strict';
           const pkg = JSON.parse(fs.readFileSync('package.json'));
-          const lock = JSON.parse(fs.readFileSync('package-lock.json'));
-          assert.equal(pkg.name, 'pi-goal-x');
+          const versions = JSON.parse(fs.readFileSync('../../versions.json'));
+          assert.equal(pkg.name, '@xzzpig/pi-goal-x');
           assert.equal(`v${pkg.version}`, process.env.RELEASE_TAG);
-          assert.equal(lock.version, pkg.version);
-          assert.equal(lock.packages[''].version, pkg.version);
+          assert.equal(versions['pi-goal-x'], pkg.version);
           NODE
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
+      - name: Install workspace dependencies
+        uses: ./packages/pi-goal-x/.github/actions/fork-setup
       - name: Use verified OIDC-capable npm
         run: npm install --global npm@11.19.0
-      - run: npm ci
-      - run: npm run check
-      - run: npm run lint
-      - run: npm run test:all
-      - run: npm run test:selfcheck
-      - run: npm run context:gate
-      - run: npm run context:provider-check
-      - run: npm audit --omit=dev
-      - run: npm run bench:gate:naf
+      - run: pnpm run check
+      - run: pnpm run lint
+      - run: pnpm run test:all -- --selfcheck
+      - run: pnpm run context:gate
+      - run: pnpm run context:provider-check
+      - run: pnpm run context:cache-gate
+      - run: pnpm audit --prod
+      - run: pnpm run bench:gate:naf
       - name: Download release ranking
         if: env.DRY_RUN != 'true'
         uses: actions/download-artifact@v4
         with:
           artifact-ids: ${{ needs.ranking.outputs.artifact_id }}
-          path: assets
+          path: packages/pi-goal-x/assets
           merge-multiple: true
       - name: Apply release ranking to package
         if: env.DRY_RUN != 'true'
@@ -86,16 +90,35 @@ jobs:
       - name: Pack once and smoke-test recovery CLI
         run: |
           mkdir -p "$RUNNER_TEMP/release"
-          npm pack --json --pack-destination "$RUNNER_TEMP/release" > "$RUNNER_TEMP/release/pack.json"
+          pnpm pack --json --pack-destination "$RUNNER_TEMP/release" \
+            > "$RUNNER_TEMP/release/pnpm-pack.json"
           node --input-type=module <<'NODE'
           import fs from 'node:fs';
           import path from 'node:path';
-          const [pkg] = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/release/pack.json`));
-          fs.appendFileSync(process.env.GITHUB_ENV, `TARBALL=${path.join(process.env.RUNNER_TEMP, 'release', pkg.filename)}\n`);
+          import { createHash } from 'node:crypto';
+          const dir = `${process.env.RUNNER_TEMP}/release`;
+          const packed = JSON.parse(fs.readFileSync(`${dir}/pnpm-pack.json`));
+          const bytes = fs.readFileSync(packed.filename);
+          const hash = createHash('sha512').update(bytes).digest('base64');
+          const pkg = {
+            name: packed.name, version: packed.version,
+            filename: path.basename(packed.filename),
+            integrity: `sha512-${hash}`,
+            shasum: createHash('sha1').update(bytes).digest('hex'),
+          };
+          fs.writeFileSync(`${dir}/pack.json`, JSON.stringify([pkg]));
+          fs.appendFileSync(process.env.GITHUB_ENV,
+            `TARBALL=${packed.filename}\n`);
           NODE
+          tarball=$(jq -r '.filename' "$RUNNER_TEMP/release/pnpm-pack.json")
           mkdir -p "$RUNNER_TEMP/package-smoke"
-          tar -xzf "$RUNNER_TEMP/release/pi-goal-x-${RELEASE_TAG#v}.tgz" -C "$RUNNER_TEMP/package-smoke"
+          tar -xzf "$tarball" -C "$RUNNER_TEMP/package-smoke"
           node "$RUNNER_TEMP/package-smoke/package/scripts/recover-session-checkpoints.mjs" --help
+      - name: Test the exact publication tarball
+        env:
+          PI_GOAL_PACKAGE_TARBALL: ${{ env.TARBALL }}
+          PI_GOAL_PACKAGE_EVIDENCE: ${{ runner.temp }}/release/stabilization
+        run: node scripts/package-stabilization-check.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: npm-${{ env.RELEASE_TAG }}-${{ github.run_attempt }}
@@ -104,7 +127,9 @@ jobs:
       - name: Rehearse publication
         if: env.DRY_RUN == 'true'
         # --force skips npm's existing-version check only in this non-writing rehearsal.
-        run: npm publish "$TARBALL" --dry-run --force --access public --tag latest
+        run: >-
+          pnpm publish "$TARBALL" --dry-run --force
+          --access public --tag latest --no-git-checks
       - name: Publish exact tarball with OIDC and verify registry
         if: env.DRY_RUN != 'true'
         shell: bash
@@ -114,18 +139,23 @@ jobs:
           import assert from 'node:assert/strict';
           import { execFileSync } from 'node:child_process';
           const [pkg] = JSON.parse(fs.readFileSync(`${process.env.RUNNER_TEMP}/release/pack.json`));
-          const url = `https://registry.npmjs.org/${pkg.name}/${pkg.version}`;
+          const packageUrl = `https://registry.npmjs.org/${
+            encodeURIComponent(pkg.name)}`;
+          const url = `${packageUrl}/${pkg.version}`;
           const response = await fetch(url);
           const isNewVersion = response.status === 404;
           if (isNewVersion) {
-            const latestResponse = await fetch(`https://registry.npmjs.org/${pkg.name}/latest`);
+            const latestResponse = await fetch(`${packageUrl}/latest`);
             if (!latestResponse.ok) throw new Error(`Cannot read latest: ${latestResponse.status}`);
             const latest = (await latestResponse.json()).version;
             const nextParts = pkg.version.split('.').map(Number);
             const oldParts = latest.split('.').map(Number);
             const firstDifferent = nextParts.findIndex((value, i) => value !== oldParts[i]);
             assert(firstDifferent >= 0 && nextParts[firstDifferent] > oldParts[firstDifferent], 'Refusing to move latest backwards');
-            execFileSync('npm', ['publish', process.env.TARBALL, '--access', 'public', '--tag', 'latest', '--provenance'], { stdio: 'inherit' });
+            execFileSync('pnpm', [
+              'publish', process.env.TARBALL, '--access', 'public',
+              '--tag', 'latest', '--provenance', '--no-git-checks',
+            ], { stdio: 'inherit' });
           } else {
             if (!response.ok) throw new Error(`Registry lookup failed: ${response.status}`);
             assert.equal((await response.json()).dist.integrity, pkg.integrity, 'Published version differs from this tarball');
@@ -149,7 +179,7 @@ jobs:
           if (isNewVersion) {
             let latestVerified = false;
             for (let attempt = 0; attempt < 60; attempt++) {
-              const latest = await fetch(`https://registry.npmjs.org/${pkg.name}/latest`);
+              const latest = await fetch(`${packageUrl}/latest`);
               if (latest.ok && (await latest.json()).version === pkg.version) {
                 latestVerified = true;
                 break;
@@ -200,8 +230,15 @@ jobs:
         run: |
           [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || exit 1
           git merge-base --is-ancestor "refs/tags/$RELEASE_TAG" origin/main
-          git show "refs/tags/$RELEASE_TAG:package.json" > "$RUNNER_TEMP/release-package.json"
-          node -e 'const p = require(process.env.RUNNER_TEMP + "/release-package.json"); if (p.name !== "pi-goal-x" || "v" + p.version !== process.env.RELEASE_TAG) process.exit(1)'
+          git show "refs/tags/$RELEASE_TAG:packages/pi-goal-x/package.json" \
+            > "$RUNNER_TEMP/release-package.json"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          const p = JSON.parse(readFileSync(
+            process.env.RUNNER_TEMP + '/release-package.json', 'utf8'));
+          if (p.name !== '@xzzpig/pi-goal-x' ||
+              `v${p.version}` !== process.env.RELEASE_TAG) process.exit(1);
+          NODE
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -228,5 +265,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ranking-${{ env.RELEASE_TAG }}-${{ github.run_attempt }}
-          path: assets/ranking.json
+          path: packages/pi-goal-x/assets/ranking.json
           if-no-files-found: error

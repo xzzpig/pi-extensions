@@ -35,9 +35,11 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { KeyId } from "@earendil-works/pi-tui";
+import { renameAtomicSync } from "./storage/atomic-rename.ts";
+import { GOAL_COMMANDS, GOAL_KEY_ACTIONS, PAUSE_ORDERS, parseCommandPaths, parseGoalKeybinding, type GoalCommands, type GoalKeybinding, type PauseOrder } from "./goal-controls.ts";
 
-export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export const GOAL_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type ThinkingLevel = typeof GOAL_THINKING_LEVELS[number];
 
 export const DEFAULT_AUDITOR_AGENT = "goal-auditor";
 /**
@@ -150,23 +152,31 @@ export interface GoalAuditorSettings {
 // ── sparse keybinding layers ────────────────────────────────────────────────
 
 export interface GoalDashboardKeybindings {
-	toggleExpand: KeyId;
-	scrollUp: KeyId;
-	scrollDown: KeyId;
+	toggleExpand: GoalKeybinding;
+	scrollUp: GoalKeybinding;
+	scrollDown: GoalKeybinding;
+	scrollPageUp?: GoalKeybinding;
+	scrollPageDown?: GoalKeybinding;
+	scrollFirst?: GoalKeybinding;
+	scrollLast?: GoalKeybinding;
+	collapse?: GoalKeybinding;
+	up?: GoalKeybinding;
+	down?: GoalKeybinding;
+	pageUp?: GoalKeybinding;
+	pageDown?: GoalKeybinding;
+	first?: GoalKeybinding;
+	last?: GoalKeybinding;
 }
-
-/** Sparse dashboard keybindings: only overridden leaves are present. */
-export interface GoalDashboardKeybindingsLayer {
-	toggleExpand?: KeyId;
-	scrollUp?: KeyId;
-	scrollDown?: KeyId;
-}
-
+export type GoalDashboardKeybindingsLayer = Partial<GoalDashboardKeybindings>;
 export interface GoalKeybindings {
 	dashboard: GoalDashboardKeybindings;
+	pause?: GoalKeybinding;
+	toggleAuditor?: GoalKeybinding;
+	interruptAudit?: GoalKeybinding;
+	dialog?: Partial<Record<import("./goal-controls.ts").GoalDialogAction, GoalKeybinding>>;
+	commands?: Partial<Record<import("./goal-controls.ts").GoalCommandId, GoalKeybinding>>;
 }
-
-export interface GoalKeybindingsLayer {
+export interface GoalKeybindingsLayer extends Omit<GoalKeybindings, "dashboard"> {
 	dashboard?: GoalDashboardKeybindingsLayer;
 }
 
@@ -187,7 +197,9 @@ export const DEFAULT_NETWORK_RECOVERY_MAX_DELAY_MS = 80_000;
 /** Default downward scan depth for unregistered nested repositories. */
 export const DEFAULT_CHANGE_MANIFEST_DEPTH = 1;
 
-export function formatGoalKeybinding(key: string): string {
+export function formatGoalKeybinding(key: GoalKeybinding | undefined): string {
+	if (Array.isArray(key)) return key.length ? key.map(k => formatGoalKeybinding(k)).join(" / ") : "Unbound";
+	if (!key) return "Unbound";
 	return key.split("+").map((part) => ({
 		ctrl: "Ctrl",
 		control: "Ctrl",
@@ -235,7 +247,11 @@ export interface GoalSettingsResolvedShape {
 	 * finite allowance exists. Display only; enforcement is unaffected.
 	 */
 	showAutonomousRuns?: boolean;
+	/** Include context-window occupancy in new prompt snapshots (off by default). */
+	showContextUsage?: boolean;
 	strictExecutionContract?: boolean;
+	/** Delay repeated executions without recognized work (off by default). */
+	idleContinuationBackoff?: boolean;
 	/**
 	 * Maximum objective length in characters (0/unset = no limit, the
 	 * default; >0 caps objectives in create_goal, propose_goal_draft, and
@@ -244,6 +260,8 @@ export interface GoalSettingsResolvedShape {
 	objectiveMaxChars?: number;
 	/** Keyboard shortcuts for the compact task list and dashboard expansion. */
 	keybindings?: GoalKeybindings;
+	commands?: GoalCommands;
+	pauseOrder?: PauseOrder;
 	/** PR #29: suppress the unfocused goal widget + status hint (default false). */
 	hideUnfocusedBanner?: boolean;
 	/** Issue #72: suppress the model-facing [PI GOAL UNFOCUSED] prompt (default false). */
@@ -322,7 +340,7 @@ export type GoalSettings = ResolvedGoalSettings;
 export const PI_GOAL_SETTINGS_FILE_ENV = "PI_GOAL_SETTINGS_FILE";
 export const PI_GOAL_GLOBAL_SETTINGS_FILE_ENV = "PI_GOAL_GLOBAL_SETTINGS_FILE";
 
-const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const THINKING_LEVELS = new Set<string>(GOAL_THINKING_LEVELS);
 const CHANGE_MANIFEST_MODES = new Set(["auto", "off"]);
 
 // ── pure path resolution ────────────────────────────────────────────────────
@@ -450,12 +468,6 @@ function asTimerSafePositiveInt(value: unknown): number | undefined {
 	return parsed;
 }
 
-function asKeybinding(value: unknown): KeyId | undefined {
-	const key = asNonEmptyString(value);
-	if (!key) return undefined;
-	return key as KeyId;
-}
-
 function asThinkingLevel(value: unknown): ThinkingLevel | undefined {
 	const text = asNonEmptyString(value);
 	return text && THINKING_LEVELS.has(text) ? text as ThinkingLevel : undefined;
@@ -528,10 +540,14 @@ const ALLOWED_SETTINGS_KEYS = new Set([
 	"stallTimeoutMinutes",
 	"maxAutonomousRuns",
 	"strictExecutionContract",
+	"idleContinuationBackoff",
 	"objectiveMaxChars",
 	"keybindings",
+	"commands",
+	"pauseOrder",
 	"hideUnfocusedBanner",
 	"showAutonomousRuns",
+	"showContextUsage",
 	"hideUnfocusedPrompt",
 	"goalsRoot",
 	"oracle",
@@ -548,9 +564,6 @@ const ALLOWED_ORACLE_KEYS = new Set([
 	"projectResources",
 	"maxFailedAttemptsPerBlocker",
 ]);
-
-const ALLOWED_KEYBINDING_KEYS = new Set(["dashboard"]);
-const ALLOWED_DASHBOARD_KEYBINDING_KEYS = new Set(["toggleExpand", "scrollUp", "scrollDown"]);
 
 /**
  * Parse raw JSON content into a sparse layer plus diagnostics. Unknown keys
@@ -583,6 +596,7 @@ export function parseSettingsLayer(
 
 	for (const [key, value] of Object.entries(record)) {
 		switch (key) {
+			case "idleContinuationBackoff":
 			case "strictExecutionContract":
 			case "disableTasks":
 			case "disableContracts":
@@ -590,6 +604,7 @@ export function parseSettingsLayer(
 			case "auditorProjectResources":
 			case "hideUnfocusedBanner":
 			case "showAutonomousRuns":
+			case "showContextUsage":
 			case "hideUnfocusedPrompt": {
 				const parsed = asBool(value);
 				if (parsed === undefined) {
@@ -686,38 +701,42 @@ export function parseSettingsLayer(
 				diagnostics.push(...parsed.diagnostics);
 				break;
 			}
-			case "keybindings": {
+			case "pauseOrder": {
+				if (!PAUSE_ORDERS.some(order => order.id === value)) diagnostics.push(diagnostic("invalid_value", "pauseOrder must be together, goal-first or turn-first", key));
+				else layer.pauseOrder = value as PauseOrder;
+				break;
+			}
+			case "commands": {
 				if (!value || typeof value !== "object" || Array.isArray(value)) {
-					diagnostics.push(diagnostic("invalid_nested_key", "keybindings must be an object", key));
-					break;
+					diagnostics.push(diagnostic("invalid_nested_key", "commands must be an object", key)); break;
 				}
-				const kbRecord = value as Record<string, unknown>;
-				const sparse: GoalKeybindingsLayer = {};
-				for (const [kbKey, kbValue] of Object.entries(kbRecord)) {
-					if (!ALLOWED_KEYBINDING_KEYS.has(kbKey)) {
-						diagnostics.push(diagnostic("unknown_key", `unknown keybindings key: ${kbKey}`, `keybindings.${kbKey}`));
-						continue;
-					}
-					if (kbKey !== "dashboard") continue;
-					if (!kbValue || typeof kbValue !== "object" || Array.isArray(kbValue)) {
-						diagnostics.push(diagnostic("invalid_nested_key", "keybindings.dashboard must be an object", "keybindings.dashboard"));
-						continue;
-					}
-					const dash: GoalDashboardKeybindingsLayer = {};
-					for (const [dashKey, dashValue] of Object.entries(kbValue as Record<string, unknown>)) {
-						if (!ALLOWED_DASHBOARD_KEYBINDING_KEYS.has(dashKey)) {
-							diagnostics.push(diagnostic("unknown_key", `unknown dashboard keybinding: ${dashKey}`, `keybindings.dashboard.${dashKey}`));
-							continue;
-						}
-						const bound = asKeybinding(dashValue);
-						if (bound === undefined) {
-							diagnostics.push(diagnostic("invalid_value", `${dashKey} must be a non-empty key id`, `keybindings.dashboard.${dashKey}`));
-							continue;
-						}
-						dash[dashKey as keyof GoalDashboardKeybindingsLayer] = bound;
-					}
-					sparse.dashboard = dash;
+				const commands: GoalCommands = {};
+				for (const [id, routes] of Object.entries(value)) {
+					if (!GOAL_COMMANDS.some(([action]) => action === id)) { diagnostics.push(diagnostic("unknown_key", `unknown command action: ${id}`, `commands.${id}`)); continue; }
+					const parsed = parseCommandPaths(routes);
+					if (!parsed) diagnostics.push(diagnostic("invalid_value", "Expected an array of command paths, or [] to disable", `commands.${id}`));
+					else commands[id as keyof GoalCommands] = parsed;
 				}
+				layer.commands = commands;
+				break;
+			}
+			case "keybindings": {
+				const sparse: Record<string, unknown> = {};
+				const visit = (record: unknown, prefix: string[], target: Record<string, unknown>): void => {
+					if (!record || typeof record !== "object" || Array.isArray(record)) { diagnostics.push(diagnostic("invalid_nested_key", `${prefix.join(".")} must be an object`, prefix.join("."))); return; }
+					for (const [name, binding] of Object.entries(record)) {
+						const path = [...prefix, name];
+						const exact = GOAL_KEY_ACTIONS.some(action => action.path.join(".") === path.join("."));
+						if (exact) {
+							const parsed = parseGoalKeybinding(binding);
+							if (parsed === undefined) diagnostics.push(diagnostic("invalid_value", "Expected a Pi key name, key list, or [] to disable", path.join(".")));
+							else target[name] = parsed;
+						} else if (GOAL_KEY_ACTIONS.some(action => action.path.slice(0, path.length).join(".") === path.join("."))) {
+							const nested: Record<string, unknown> = {}; visit(binding, path, nested); target[name] = nested;
+						} else diagnostics.push(diagnostic("unknown_key", `unknown keybinding: ${path.join(".")}`, path.join(".")));
+					}
+				};
+				visit(value, ["keybindings"], sparse);
 				// SAFETY: `sparse` is built key-by-key above through the validated
 				// parse/normalize path, so its runtime shape is a GoalKeybindings.
 				layer.keybindings = sparse as unknown as GoalKeybindings;
@@ -1335,6 +1354,11 @@ function resolvedSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv): Settings
 		globalValue: global.layer.showAutonomousRuns,
 		defaultValue: true,
 	}));
+	const showContextUsage = track("showContextUsage", resolveLeaf<boolean>({
+		projectValue: project.layer.showContextUsage,
+		globalValue: global.layer.showContextUsage,
+		defaultValue: false,
+	}));
 	const hideUnfocusedPrompt = track("hideUnfocusedPrompt", resolveLeaf<boolean>({
 		projectValue: project.layer.hideUnfocusedPrompt,
 		globalValue: global.layer.hideUnfocusedPrompt,
@@ -1378,6 +1402,7 @@ function resolvedSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv): Settings
 		globalValue: global.layer.oracle?.maxFailedAttemptsPerBlocker,
 		defaultValue: 2,
 	}));
+	const idleContinuationBackoff = track("idleContinuationBackoff", resolveLeaf<boolean>({projectValue: project.layer.idleContinuationBackoff, globalValue: global.layer.idleContinuationBackoff, defaultValue: false}));
 	const strictExecutionContract = track("strictExecutionContract", resolveLeaf<boolean>({
 		projectValue: project.layer.strictExecutionContract,
 		globalValue: global.layer.strictExecutionContract,
@@ -1415,25 +1440,24 @@ function resolvedSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv): Settings
 		envVar: "PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS",
 	}));
 
-	const keybindings: GoalKeybindings = {
-		dashboard: {
-			toggleExpand: track(pathKey("keybindings", "dashboard", "toggleExpand"), resolveLeaf<KeyId>({
-				projectValue: project.layer.keybindings?.dashboard?.toggleExpand,
-				globalValue: global.layer.keybindings?.dashboard?.toggleExpand,
-				defaultValue: DEFAULT_GOAL_KEYBINDINGS.dashboard.toggleExpand,
-			})),
-			scrollUp: track(pathKey("keybindings", "dashboard", "scrollUp"), resolveLeaf<KeyId>({
-				projectValue: project.layer.keybindings?.dashboard?.scrollUp,
-				globalValue: global.layer.keybindings?.dashboard?.scrollUp,
-				defaultValue: DEFAULT_GOAL_KEYBINDINGS.dashboard.scrollUp,
-			})),
-			scrollDown: track(pathKey("keybindings", "dashboard", "scrollDown"), resolveLeaf<KeyId>({
-				projectValue: project.layer.keybindings?.dashboard?.scrollDown,
-				globalValue: global.layer.keybindings?.dashboard?.scrollDown,
-				defaultValue: DEFAULT_GOAL_KEYBINDINGS.dashboard.scrollDown,
-			})),
-		},
-	};
+	const keybindings = { dashboard: {} } as unknown as GoalKeybindings;
+	for (const action of GOAL_KEY_ACTIONS) {
+		const get = (layer: GoalSettingsLayer): GoalKeybinding | undefined => {
+			let cursor: unknown = layer;
+			for (const key of action.path) cursor = (cursor as Record<string, unknown> | undefined)?.[key];
+			return cursor as GoalKeybinding | undefined;
+		};
+		const resolved = track(action.path.join("."), resolveLeaf<GoalKeybinding>({ projectValue: get(project.layer), globalValue: get(global.layer), defaultValue: action.defaults }));
+		let target = keybindings as unknown as Record<string, unknown>;
+		const configured = get(project.layer) !== undefined || get(global.layer) !== undefined;
+		// Keep the ordinary, uncustomized settings fast path as small as before.
+		if (!configured && !(action.path[1] === "dashboard" && ["toggleExpand", "scrollUp", "scrollDown"].includes(action.path[2]!))) continue;
+		for (const segment of action.path.slice(1, -1)) target = (target[segment] ??= {}) as Record<string, unknown>;
+		target[action.path.at(-1)!] = resolved;
+	}
+	const commands: GoalCommands = {};
+	for (const [id] of GOAL_COMMANDS) commands[id] = track(`commands.${id}`, resolveLeaf<string[]>({ projectValue: project.layer.commands?.[id], globalValue: global.layer.commands?.[id], defaultValue: [id] }));
+	const pauseOrder = track("pauseOrder", resolveLeaf<PauseOrder>({ projectValue: project.layer.pauseOrder, globalValue: global.layer.pauseOrder, defaultValue: "together" }));
 
 	const value: ResolvedGoalSettings = {
 		disableTasks,
@@ -1474,13 +1498,17 @@ function resolvedSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv): Settings
 		auditorProjectResources,
 		hideUnfocusedBanner,
 		showAutonomousRuns,
+		showContextUsage,
 		hideUnfocusedPrompt,
 		goalsRoot,
 		stallTimeoutMinutes,
 		maxAutonomousRuns,
+		idleContinuationBackoff,
 		strictExecutionContract,
 		objectiveMaxChars,
 		keybindings,
+		...((Object.keys(global.layer.commands ?? {}).length || Object.keys(project.layer.commands ?? {}).length) ? { commands } : {}),
+		pauseOrder,
 		networkRecovery: {
 			maxAttempts: networkRecoveryMaxAttempts,
 			maxDelayMs: networkRecoveryMaxDelayMs,
@@ -1518,7 +1546,9 @@ function copyAuditorSettings(auditor: GoalAuditorSettings): GoalAuditorSettings 
 function copyResolvedSettings(value: ResolvedGoalSettings): ResolvedGoalSettings {
 	return {...value,
 		...(value.auditor ? {auditor: copyAuditorSettings(value.auditor)} : {}),
-		...(value.keybindings ? {keybindings: {dashboard: {...value.keybindings.dashboard}}} : {}),
+		...(value.keybindings ? {keybindings: Object.keys(value.keybindings).length === 1 && Object.values(value.keybindings.dashboard).every(binding => typeof binding === "string")
+			? { dashboard: { ...value.keybindings.dashboard } } : structuredClone(value.keybindings)} : {}),
+		...(value.commands ? {commands: structuredClone(value.commands)} : {}),
 		...(value.networkRecovery ? {networkRecovery: {...value.networkRecovery}} : {}),
 		...(value.oracle ? {oracle: {...value.oracle}} : {}),
 	};
@@ -1527,7 +1557,7 @@ function copyResolvedSettings(value: ResolvedGoalSettings): ResolvedGoalSettings
 /** Return caller-owned resolved values and provenance; cached layer reads keep their existing contract. */
 export function loadSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv = process.env): SettingsSnapshot {
 	const snapshot = resolvedSettingsSnapshot(cwd, env);
-	return {...snapshot, value: copyResolvedSettings(snapshot.value), provenance: new Map(Array.from(snapshot.provenance, ([key, value]) => [key, {...value}])), diagnostics: [...snapshot.diagnostics]};
+	return {...snapshot, value: copyResolvedSettings(snapshot.value), provenance: new Map(Array.from(snapshot.provenance, ([key, value]) => [key, {...value, value: Array.isArray(value.value) ? [...value.value] : value.value}])), diagnostics: [...snapshot.diagnostics]};
 }
 
 /**
@@ -1549,6 +1579,8 @@ export interface MutateSettingsInput {
 	cwd: string;
 	env?: NodeJS.ProcessEnv;
 	mutation: SettingsMutation;
+	/** Optional UI validation, run against the fresh layer while its write lock is held. */
+	validate?: (next: GoalSettingsLayer, current: GoalSettingsLayer) => void;
 }
 
 export class SettingsMutationError extends Error {
@@ -1672,7 +1704,7 @@ function atomicWriteJson(target: string, value: unknown, options: { defaultMode:
 		fs.fsyncSync(fd);
 		fs.closeSync(fd);
 		fd = undefined;
-		fs.renameSync(temp, target);
+		renameAtomicSync(temp, target);
 	} catch (error) {
 		if (fd !== undefined) {
 			try {
@@ -1790,6 +1822,7 @@ export function mutateSettingsLayer(input: MutateSettingsInput): SettingsSnapsho
 		if (reparsed.diagnostics.some((d) => d.code === "invalid_value" || d.code === "invalid_nested_key")) {
 			throw new SettingsMutationError(`Mutation produced invalid ${input.scope} settings`, reparsed.diagnostics);
 		}
+		input.validate?.(reparsed.layer, current.layer);
 
 		atomicWriteJson(target, next, { defaultMode: 0o600 });
 		invalidateSettingsCachePath(target);
@@ -1869,6 +1902,7 @@ function buildPersistedLayer(settings: GoalSettings): Record<string, unknown> {
 	if (settings.auditorProjectResources !== undefined) persisted.auditorProjectResources = settings.auditorProjectResources;
 	if (settings.hideUnfocusedBanner !== undefined) persisted.hideUnfocusedBanner = settings.hideUnfocusedBanner;
 	if (settings.showAutonomousRuns !== undefined) persisted.showAutonomousRuns = settings.showAutonomousRuns;
+	if (settings.showContextUsage !== undefined) persisted.showContextUsage = settings.showContextUsage;
 	if (settings.goalsRoot !== undefined) persisted.goalsRoot = settings.goalsRoot;
 	if (settings.hideUnfocusedPrompt !== undefined) persisted.hideUnfocusedPrompt = settings.hideUnfocusedPrompt;
 	if ((settings as { networkRecovery?: ResolvedGoalNetworkRecoverySettings }).networkRecovery) {
@@ -1889,13 +1923,14 @@ function buildPersistedLayer(settings: GoalSettings): Record<string, unknown> {
 		if (so.maxFailedAttemptsPerBlocker !== undefined) o.maxFailedAttemptsPerBlocker = so.maxFailedAttemptsPerBlocker;
 		if (Object.keys(o).length > 0) persisted.oracle = o;
 	}
+	if (settings.idleContinuationBackoff !== undefined) persisted.idleContinuationBackoff = settings.idleContinuationBackoff;
 	if (settings.strictExecutionContract !== undefined) persisted.strictExecutionContract = settings.strictExecutionContract;
 	if (settings.maxAutonomousRuns !== undefined) persisted.maxAutonomousRuns = settings.maxAutonomousRuns;
 	if (settings.stallTimeoutMinutes !== undefined) persisted.stallTimeoutMinutes = settings.stallTimeoutMinutes;
 	if (settings.objectiveMaxChars !== undefined) persisted.objectiveMaxChars = settings.objectiveMaxChars;
-	if (settings.keybindings?.dashboard) {
-		persisted.keybindings = { dashboard: { ...settings.keybindings.dashboard } };
-	}
+	if (settings.keybindings) persisted.keybindings = structuredClone(settings.keybindings);
+	if (settings.commands) persisted.commands = structuredClone(settings.commands);
+	if (settings.pauseOrder) persisted.pauseOrder = settings.pauseOrder;
 	return persisted;
 }
 
@@ -1968,14 +2003,17 @@ export function effectiveSettingsReport(cwd: string, env: NodeJS.ProcessEnv = pr
 		{ key: "auditor.permissionProfile", label: "auditor permission profile (next session)", format: () => snapshot.value.auditor?.permissionProfile ?? "(unset)" },
 		{ key: "hideUnfocusedBanner", label: "hide unfocused banner", format: () => String(snapshot.value.hideUnfocusedBanner) },
 		{ key: "showAutonomousRuns", label: "show autonomous runs line", format: () => String(snapshot.value.showAutonomousRuns) },
+		{ key: "showContextUsage", label: "show context usage line", format: () => String(snapshot.value.showContextUsage) },
 		{ key: "goalsRoot", label: "goals root (reload to change)", format: () => snapshot.value.goalsRoot ?? ".pi/goals" },
 		{ key: "hideUnfocusedPrompt", label: "hide unfocused prompt", format: () => String(snapshot.value.hideUnfocusedPrompt) },
+		{ key: "idleContinuationBackoff", label: "slow repeated idle replies (opt-in)", format: () => String(snapshot.value.idleContinuationBackoff) },
 		{ key: "strictExecutionContract", label: "explicit execution contracts (opt-in)", format: () => String(snapshot.value.strictExecutionContract) },
 		{ key: "maxAutonomousRuns", label: "autonomous run allowance", format: () => snapshot.value.maxAutonomousRuns === 0 ? "0 (disabled)" : String(snapshot.value.maxAutonomousRuns ?? "unlimited (default)") },
 		{ key: "stallTimeoutMinutes", label: "stall timeout (minutes)", format: () => String(snapshot.value.stallTimeoutMinutes) },
 		{ key: "objectiveMaxChars", label: "max objective length (0 = none)", format: () => String(snapshot.value.objectiveMaxChars) },
 		{ key: "networkRecovery", label: "network recovery attempts (0 = unbounded)", format: () => String(snapshot.value.networkRecovery?.maxAttempts ?? 0) },
 		{ key: "networkRecovery", label: "network recovery max delay (ms)", format: () => String(snapshot.value.networkRecovery?.maxDelayMs ?? DEFAULT_NETWORK_RECOVERY_MAX_DELAY_MS) },
+		{ key: "pauseOrder", label: "pause order", format: () => snapshot.value.pauseOrder ?? "together" },
 		{ key: "keybindings", label: "dashboard keybindings", format: () => `${snapshot.value.keybindings!.dashboard.toggleExpand}, ${snapshot.value.keybindings!.dashboard.scrollUp}, ${snapshot.value.keybindings!.dashboard.scrollDown}` },
 	];
 	for (const row of rows) {
@@ -1987,6 +2025,14 @@ export function effectiveSettingsReport(cwd: string, env: NodeJS.ProcessEnv = pr
 	}
 	if (snapshot.value.auditorProjectResources === true) {
 		lines.push(`  NOTE: ${AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE}`);
+	}
+	for (const [id] of GOAL_COMMANDS) {
+		const source = snapshot.provenance.get(`commands.${id}`)?.source ?? "default";
+		lines.push(`  ${id}: ${(snapshot.provenance.get(`commands.${id}`)?.value as string[]).map(route => `/${route}`).join(", ") || "disabled"} (${source})`);
+	}
+	for (const action of GOAL_KEY_ACTIONS) {
+		const source = snapshot.provenance.get(action.path.join("."));
+		lines.push(`  ${action.label}: ${formatGoalKeybinding(source?.value as GoalKeybinding)} (${source?.source ?? "default"})`);
 	}
 	lines.push(`  project settings file: ${snapshot.project.path}`);
 	lines.push(`  global settings file: ${snapshot.global.path}`);

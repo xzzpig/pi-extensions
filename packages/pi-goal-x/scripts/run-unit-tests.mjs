@@ -41,7 +41,7 @@ if (testFiles.length === 0) {
 if (wantWriteManifest) {
 	writeFileSync(manifestPath, JSON.stringify({
 		version: 1,
-		note: "Expected test-entry manifest for the runner self-check (npm run test:selfcheck). Regenerate with: node scripts/run-unit-tests.mjs --write-manifest",
+		note: "Expected test-entry manifest for the runner self-check (pnpm run test:selfcheck). Regenerate with: node scripts/run-unit-tests.mjs --write-manifest",
 		unitFiles: unitFiles.map((file) => file.replace(projectRoot, ".")),
 		integrationFiles: integrationFiles.map((file) => file.replace(projectRoot, ".")),
 		e2eFiles: e2eFiles.map((file) => file.replace(projectRoot, ".")),
@@ -87,7 +87,7 @@ if (wantSelfCheck) {
 const startedAt = Date.now();
 // `--test-isolation=none` (single-process suite, shared module state) is only
 // accepted by Node >= 23.4; probe the running binary and omit it on older
-// releases so the same script works across the supported Node range (22.15+).
+// releases so the same script works across the supported Node range (22.19+).
 const { planTestGroups, groupArgs } = await import("./test-groups.mjs");
 const { validateForkTestList } = await import("./fork-test-runner.mjs");
 // The fork suite list is part of this runner's contract: a broken list must fail

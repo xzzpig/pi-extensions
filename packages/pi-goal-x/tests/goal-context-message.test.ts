@@ -185,7 +185,10 @@ test("session_compact re-sends authoritative context and the next model request 
 		assert.match(after.at(-1)!.content, /Token budget|token budget|100/);
 		assert.doesNotMatch(after.at(-1)!.content, /Time spent:|Tokens used: 25|Context snapshot:/);
 
-		const result = await handlers.get("context")?.({ messages: [{ role: "user", content: "compacted summary", timestamp: 1 }] }, ctx);
+		const result = await handlers.get("context_with_system")?.({ messages: [
+			{ role: "system", content: "base prompt" },
+			{ role: "user", content: "compacted summary", timestamp: 1 },
+		] }, ctx);
 		const messages = (result as { messages?: Array<{ role?: string; customType?: string; content?: string }> } | undefined)?.messages ?? [];
 		const liveContext = messages.find(message => message.role === "custom" && message.customType === LIVE_CONTEXT_TYPE && message.content?.startsWith(`[PI GOAL ACTIVE goalId=${f.goal.id}]`));
 		assert.ok(liveContext, "active policy is re-injected after compaction");

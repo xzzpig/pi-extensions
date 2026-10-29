@@ -1,14 +1,13 @@
 /** Capture a real SDK provider payload before dispatch; no HTTP request is sent. */
 import assert from 'node:assert/strict';
 import * as piAI from '@earendil-works/pi-ai';
-import {stream as streamResponses} from '../../../../node_modules/@earendil-works/pi-ai/dist/api/openai-responses.js';
+import {codingAgentRoot, streamResponses} from './fork-sdk-paths.mjs';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {createAgentSession, DefaultResourceLoader, ModelRuntime, SessionManager, SettingsManager} from '@earendil-works/pi-coding-agent';
 import goalExtension from '../../extensions/goal.ts';
 import {captureOne} from './capture-context.mjs';
-import {FIXTURES} from './fixtures.mjs';
 import {runGoalCompletionAuditor} from '../../extensions/goal-auditor.ts';
 import {runBlockerOracle} from '../../extensions/goal-oracle.ts';
 
@@ -16,8 +15,8 @@ const work=fs.mkdtempSync(path.join(os.tmpdir(),'goal-wire-check-'));
 // Exercise Responses caller compatibility resolution, not merely its converter.
 const registered=[];
 goalExtension({registerTool:tool=>registered.push(tool),registerCommand(){},on(){},getActiveTools:()=>[],setActiveTools(){},appendEntry(){},registerMessageRenderer(){}});
-const responseTools=registered.filter(tool=>['create_goal','get_goal','update_goal_task','propose_goal_draft'].includes(tool.name)).map(({name,description,parameters})=>({name,description,parameters}));
-assert.equal(responseTools.length,4);
+const responseTools=registered.filter(tool=>['create_goal','get_goal','update_goal','update_goal_task','propose_goal_draft'].includes(tool.name)).map(({name,description,parameters})=>({name,description,parameters}));
+assert.equal(responseTools.length,5);
 for(const supportsStrictMode of [undefined,false,true]) {
  let payload;
  const model={id:'fixture',name:'fixture',api:'openai-responses',provider:'opencode',baseUrl:'http://127.0.0.1:1/v1',reasoning:false,input:['text'],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:200000,maxTokens:128,...(supportsStrictMode === undefined ? {} : {compat:{supportsStrictMode}})};
@@ -42,9 +41,7 @@ console.log('Responses compatibility: 3 real adapter payloads; no network reques
 let count=0;
 try {
  for (const id of ['active-regular-no-tasks','current-contracted-task','tasks-disabled','guided-drafting-question']) {
-  const expected=await captureOne(id);
-  const scenario=FIXTURES[id]();
-  const cwd='/tmp/goal-context-capture';
+  await captureOne(id, {inspect: async (expected, {cwd, scenario}) => {
   const manager=SessionManager.inMemory(cwd);
   if(scenario.goal) manager.appendCustomEntry('pi-goal-focus',{version:1,focusedGoalId:scenario.goal.id,reason:'created'});
   if(scenario.draftPrompt) manager.appendCustomEntry('pi-goal-draft',{version:1,mode:'goal',seed:'build the thing',startedAt:'2026-08-23T12:00:00.000Z',auditorEnabled:true});
@@ -61,7 +58,7 @@ try {
   const defs=payload.tools.map(t=>t.function);
   assert.deepEqual(defs.filter(t=>expected.tools.some(x=>x.name===t.name)).map(t=>t.name).sort(),expected.tools.map(t=>t.name).sort());
   for(const tool of expected.tools){const wire=defs.find(t=>t.name===tool.name);assert.equal(wire.description,tool.description);assert.deepEqual(wire.parameters,JSON.parse(JSON.stringify(tool.schema)));}
-  const sdkRoot=fs.realpathSync(new URL('../../../../node_modules/@earendil-works/pi-coding-agent',import.meta.url));
+  const sdkRoot=fs.realpathSync(codingAgentRoot);
   const actualSystem=payload.messages.filter(m=>m.role==='system'||m.role==='developer').map(m=>m.content).join('\n').replaceAll(sdkRoot,'/sdk').replaceAll(cwd,'/fixture');
   const expectedSystem=expected.baseSystem+expected.extensionSystem;
   if(actualSystem!==expectedSystem){fs.writeFileSync(path.join(work,'actual.txt'),actualSystem);fs.writeFileSync(path.join(work,'expected.txt'),expectedSystem);}
@@ -73,11 +70,11 @@ try {
    for(const text of texts)assert.ok(wireText.includes(JSON.stringify(text).slice(1,-1)),`${id}: conversation content omitted`);
   }
   count++;
+  }});
  }
  for(const id of ['completion-audit','oracle-consultation']) {
-  const expected=(await captureOne(id)).childRequests[0];
-  const scenario=FIXTURES[id]();
-  const cwd='/tmp/goal-context-capture';
+  await captureOne(id, {inspect: async (captured, {cwd, scenario}) => {
+  const expected=captured.childRequests[0];
   const runtime=await ModelRuntime.create({authPath:path.join(work,'auth.json'),modelsPath:null,allowModelNetwork:false,refreshOnCreate:false});
   runtime.registerProvider('capture',{baseUrl:'http://127.0.0.1:1/v1',api:'openai-completions',apiKey:'fixture-only',models:[{id:'fixture',name:'fixture',reasoning:false,input:['text'],cost:{input:0,output:0,cacheRead:0,cacheWrite:0},contextWindow:200000,maxTokens:128}]});
   const model=runtime.getModel('capture','fixture');
@@ -94,6 +91,7 @@ try {
   assert.deepEqual(payload.tools.map(t=>t.function.name).sort(),expected.tools.map(t=>t.name).sort());
   assert.ok(JSON.stringify(payload.messages).includes(JSON.stringify(expected.messages[0].content).slice(1,-1)),`${id}: full child request matches`);
   count++;
+  }});
  }
  console.log(`[provider-crosscheck] PASS: ${count} real SDK payloads; no network requests sent`);
 } finally {fs.rmSync(work,{recursive:true,force:true});}

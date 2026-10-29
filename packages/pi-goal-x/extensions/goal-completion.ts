@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { createAuditLifecycle } from "./fork-audit-lifecycle.ts";
+import { goalStorageContext } from "./storage/goal-root.ts";
 import { type AgentToolResult, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { GOAL_AUDIT_ENTRY, detailedSummary, formatAuditUsage, goalDetails } from "./goal-format.ts";
 import { goalModelAuditRejectionText, goalModelDetailedSummary } from "./goal-model-view.ts";
@@ -10,10 +13,10 @@ import {
 import { loadGoalSettings } from "./goal-settings.ts";
 import { runGoalCompletionAuditor, appendAuditUsageEntry, type GoalAuditorResult } from "./goal-auditor.ts";
 import { withAuditSupervisorHandoff } from "./goal-audit-supervisor-handoff.ts";
-import { appendAuditSupervisorUsageEntry, type GoalAuditorSupervisorHandoff } from "./goal-auditor-delegation.ts";
+import { appendAuditSupervisorUsageEntry, type GoalAuditorSessionHandle, type GoalAuditorSupervisorHandoff } from "./goal-auditor-delegation.ts";
 import { loadGoalSettingsWithAuditorOverride } from "./goal-auditor-override.ts"; // [fork] S1: per-goal completion-auditor override
 import { nowIso, type GoalRecord } from "./goal-record.ts";
-import { latestEventsForGoal, latestAuditorResultForGoal, goalRuntimeEvents } from "./goal-ledger.ts";
+import { latestEventsForGoal, latestSettledAuditorResultForGoal, goalRuntimeEvents, type GoalLedgerEvent } from "./goal-ledger.ts";
 import { mergeGoalPromptFromDisk } from "./storage/goal-files.ts";
 import { renderGoalChangeManifest } from "./goal-change-delta.ts";
 import { deleteChangeBaseline } from "./goal-change-baseline.ts";
@@ -115,6 +118,7 @@ export async function runGoalCompletionFlow(
 	ctx: ExtensionContext,
 	completionSummary?: string,
 ): Promise<AgentToolResult<unknown>> {
+	const auditStorage = goalStorageContext(ctx);
 	let handoff: GoalAuditorResult["supervisorHandoff"];
 	let auditGoalId: string | undefined;
 	const result = await runGoalCompletionFlowInner(core, ctx, completionSummary, (auditor, goalId) => {
@@ -125,7 +129,7 @@ export async function runGoalCompletionFlow(
 	// side channel actually spent something. It is billed to the ORIGINAL audit
 	// target, so a focus change during the dialog cannot move the cost to another goal.
 	if (handoff && handoff.usage.turns > 0 && auditGoalId) {
-		appendAuditSupervisorUsageEntry(core, ctx, auditGoalId, handoff.records[0]?.requestId ?? "", handoff.usage);
+		appendAuditSupervisorUsageEntry(core, auditStorage, auditGoalId, handoff.records[0]?.requestId ?? "", handoff.usage);
 	}
 	return withAuditSupervisorHandoff(withSupervisorUsage(result, handoff?.usage), handoff);
 }
@@ -164,16 +168,14 @@ async function runGoalCompletionFlowInner(
 
 	const auditTarget = mergeGoalPromptFromDisk(ctx, core.state.goal);
 	const completionFocus = core.focusedOperationToken(auditTarget.id);
-	// Append ledger: completion requested
-	try {
-		core.goalService.appendEvents(ctx, [{
-			type: "completion_requested",
-			goalId: auditTarget.id,
-			at: nowIso(),
-		}]);
-	} catch {
-		// Ledger append failure should not block completion
-	}
+	const storage = goalStorageContext(ctx);
+	const auditId = randomUUID();
+	const append = (event: GoalLedgerEvent) => core.goalService.appendEvents(storage, [event], { immediate: true });
+	const persistenceError = (): AgentToolResult<unknown> => ({ isError: true, content: [{ type: "text", text: "The audit outcome could not be persisted. The goal remains open; inspect the storage diagnostic and retry." }], details: goalDetails(core.state.goal), terminate: false });
+	core.activeAudit?.cancel("A newer completion attempt replaced this audit.");
+	// The request itself is best-effort; the subsequent audit start and outcome
+	// records are mandatory before the goal can be completed.
+	append({ type: "completion_requested", goalId: auditTarget.id, at: nowIso() });
 	// [fork] S1: the goal's per-goal auditor override merges over the global
 	// settings; without an override this returns the exact global settings.
 	const settings = loadGoalSettingsWithAuditorOverride(ctx.cwd, auditTarget.id);
@@ -204,6 +206,9 @@ function commitGoalCompletion(core: GoalCore, ctx: ExtensionContext, opts: {
 	terminate?: boolean;
 	trailing?: string[];
 }): CompletionCommitResult {
+	if (!core.isFocusedOperationCurrent(opts.completionFocus)) return { ...core.focusedOperationCancelledResult("Goal completion", opts.completionFocus), ok: false };
+	core.reconcileFocusedGoalFromDisk(ctx);
+	if (core.state.goal?.revision !== opts.goal.revision) return { ok: false, content: [{ type: "text", text: "Goal completion failed: the goal changed during the audit. Recheck the current requirements and retry." }], details: goalDetails(core.state.goal), terminate: false };
 	core.accountProgress(ctx);
 	core.auditProgress = null;
 	core.goalWidgetComponentRef.current?.invalidate();
@@ -212,7 +217,7 @@ function commitGoalCompletion(core: GoalCore, ctx: ExtensionContext, opts: {
 		completeResult = core.goalService.apply(ctx, {
 			reconcile: false,
 			focusToken: opts.completionFocus,
-			mutate: () => ({ ...opts.goal, status: "complete" as const, stopReason: "agent" as const, updatedAt: nowIso() }),
+			mutate: (current) => ({ ...current, status: "complete" as const, stopReason: "agent" as const, updatedAt: nowIso() }),
 		});
 	} catch (err) {
 		// The authoritative file write throws on failure; surface it as a typed
@@ -251,25 +256,13 @@ function commitGoalCompletion(core: GoalCore, ctx: ExtensionContext, opts: {
 // records remain readable and honored for compatibility; no model tool or
 // task dialog creates new per-goal bypass state).
 if (auditTarget.skipAuditor) {
+	if (!append({ type: "audit_skipped", auditId, goalId: auditTarget.id, reason: "disabled", provider: auditorSettings?.provider, model: auditorSettings?.model, thinkingLevel: auditorSettings?.thinkingLevel, at: nowIso() })) return persistenceError();
 	core.auditMessages.enqueue(ctx, {
 		customType: GOAL_AUDIT_ENTRY,
 		content: `Goal completed — per-goal auditor disabled.`,
 		display: true,
 		details: { phase: "skipped", goalId: auditTarget.id, auditor: auditorLabel },
 	});
-	try {
-		core.goalService.appendEvents(ctx, [{
-			type: "audit_skipped",
-			goalId: auditTarget.id,
-			reason: "disabled",
-			provider: auditorSettings?.provider,
-			model: auditorSettings?.model,
-			thinkingLevel: auditorSettings?.thinkingLevel,
-			at: nowIso(),
-		}]);
-	} catch {
-		// Ledger append failure should not block completion
-	}
 	return commitGoalCompletion(core, ctx, {
 		goal: auditTarget,
 		completionFocus,
@@ -281,25 +274,13 @@ if (auditTarget.skipAuditor) {
 // the auditor, records audit_skipped, and proceeds through the normal
 // deferred-completion path. No model-side bypass flag is required.
 if (auditorSettings?.disabled === true) {
+	if (!append({ type: "audit_skipped", auditId, goalId: auditTarget.id, reason: "disabled", provider: auditorSettings?.provider, model: auditorSettings?.model, thinkingLevel: auditorSettings?.thinkingLevel, at: nowIso() })) return persistenceError();
 	core.auditMessages.enqueue(ctx, {
 		customType: GOAL_AUDIT_ENTRY,
 		content: `Goal completed — auditor disabled in settings.`,
 		display: true,
 		details: { phase: "skipped", goalId: auditTarget.id, auditor: auditorLabel },
 	});
-	try {
-		core.goalService.appendEvents(ctx, [{
-			type: "audit_skipped",
-			goalId: auditTarget.id,
-			reason: "disabled",
-			provider: auditorSettings?.provider,
-			model: auditorSettings?.model,
-			thinkingLevel: auditorSettings?.thinkingLevel,
-			at: nowIso(),
-		}]);
-	} catch {
-		// Ledger append failure should not block completion
-	}
 	return commitGoalCompletion(core, ctx, {
 		goal: auditTarget,
 		completionFocus,
@@ -307,7 +288,23 @@ if (auditorSettings?.disabled === true) {
 	});
 }
 
-	// Auditor is enabled — run the normal audit flow
+	// Auditor is enabled — one owner-bound attempt and one terminal ledger event.
+	let parkedSession: GoalAuditorSessionHandle | undefined;
+	let parkedCancellation: Promise<GoalAuditorResult> | undefined;
+	const cancelParked = (session: GoalAuditorSessionHandle) => parkedCancellation ??= Promise.resolve().then(() => session.cancel());
+	const { run, settle } = createAuditLifecycle(core, storage, auditTarget.id, auditId, () => {
+		if (parkedSession) void cancelParked(parkedSession).catch((error) => {
+			console.error("[pi-goal] Failed to cancel the parked audit:", error instanceof Error ? error.message : String(error));
+		});
+	});
+	const sessionOwner = core.sessionOwner;
+	core.activeAudit = run;
+	const current = () => core.activeAudit === run && core.isFocusedOperationCurrent(completionFocus) && run.phase !== "settled";
+	try {
+	if (!append({ type: "audit_started", auditId, goalId: auditTarget.id, provider: auditorSettings?.provider, model: auditorSettings?.model, thinkingLevel: auditorSettings?.thinkingLevel, at: nowIso() })) {
+		run.cancel("Audit could not start because its ledger entry failed.");
+		return persistenceError();
+	}
 	core.auditMessages.enqueue(ctx, {
 		customType: GOAL_AUDIT_ENTRY,
 		content: [
@@ -320,19 +317,6 @@ if (auditorSettings?.disabled === true) {
 	});
 	if (!core.isFocusedOperationCurrent(completionFocus)) {
 		return core.focusedOperationCancelledResult("Goal completion", completionFocus);
-	}
-	// Append ledger: audit started
-	try {
-		core.goalService.appendEvents(ctx, [{
-			type: "audit_started",
-			goalId: auditTarget.id,
-			provider: auditorSettings?.provider,
-			model: auditorSettings?.model,
-			thinkingLevel: auditorSettings?.thinkingLevel,
-			at: nowIso(),
-		}]);
-	} catch {
-		// Ledger append failure should not block completion
 	}
 	// Set up the high-level dashboard before dispatching the delegated child.
 	const auditStartedAt = Date.now();
@@ -357,7 +341,7 @@ if (auditorSettings?.disabled === true) {
 	// Create a dedicated AbortController for the audit so Escape can cancel the
 	// exact structured-delegation attempt without touching other child runs.
 	core.auditAbortController?.abort();
-	const completionAuditController = new AbortController();
+	const completionAuditController = run.controller;
 	core.auditAbortController = completionAuditController;
 
 	// P1-6: warm start — seed the auditor with the parent-rendered ledger tail
@@ -365,7 +349,7 @@ if (auditorSettings?.disabled === true) {
 	// auditor.warmContext: false skips the injection entirely.
 	const ledger = goalRuntimeEvents(ctx, auditTarget.id);
 	const warmTail = settings.auditor?.warmContext === false ? [] : latestEventsForGoal(ledger, auditTarget.id, 8);
-	const previousAudit = latestAuditorResultForGoal(ledger, auditTarget.id);
+	const previousAudit = latestSettledAuditorResultForGoal(ledger, auditTarget.id);
 	let warmContext = warmTail.length > 0
 		? `Recent goal events (from the shared ledger):\n${warmTail.map((e) => `- ${e.at} ${e.type}${"taskId" in e ? ` (task ${e.taskId})` : ""}${"evidence" in e && e.evidence ? ` evidence: ${e.evidence}` : ""}`).join("\n")}`
 		: null;
@@ -378,6 +362,7 @@ if (auditorSettings?.disabled === true) {
 	// is exactly what it was before this feature. It is evidence about the
 	// workspace, never a substitute for the executor claim's untrusted marking.
 	const changeManifest = await renderGoalChangeManifest(ctx, auditTarget.id);
+	if (!current()) return core.focusedOperationCancelledResult("Goal completion", completionFocus);
 
 	let auditor: GoalAuditorResult;
 	try {
@@ -409,6 +394,7 @@ if (auditorSettings?.disabled === true) {
 			// to continue it (see the interrupted branch below).
 			parkOnAbort: true,
 			onProgress: (progress) => {
+				if (!current() || run.phase !== "running") return;
 				core.auditProgress = {
 					...progress,
 					auditorLabel,
@@ -426,7 +412,7 @@ if (auditorSettings?.disabled === true) {
 		};
 	} finally {
 		if (core.auditAbortController === completionAuditController) core.auditAbortController = null;
-		core.stopAuditAnimation();
+		if (core.activeAudit === run) core.stopAuditAnimation();
 	}
 
 	onAuditorResult?.(auditor, auditTarget.id);
@@ -434,10 +420,15 @@ if (auditorSettings?.disabled === true) {
 	// so its spend never reaches this session's own turn accounting. Record it as
 	// a separate ledger entry (goal.usage.tokensUsed stays parent-turn-only, so no
 	// token budget changes) and surface the same numbers on the audit card below.
-	appendAuditUsageEntry(core, ctx, auditTarget.id, auditor.usage);
-	if (!core.isFocusedOperationCurrent(completionFocus)) {
-		core.auditProgress = null;
-		core.goalWidgetComponentRef.current?.invalidate();
+	appendAuditUsageEntry(core, storage, auditTarget.id, auditor.usage);
+	parkedSession = auditor.interrupted ? auditor.session : undefined;
+	if (!current()) {
+		if (parkedSession) {
+			const cancelled = await cancelParked(parkedSession);
+			onAuditorResult?.(cancelled, auditTarget.id);
+			appendAuditUsageEntry(core, storage, auditTarget.id, cancelled.usage);
+			return withAuditorUsage(core.focusedOperationCancelledResult("Goal completion", completionFocus), cancelled.usage);
+		}
 		return withAuditorUsage(core.focusedOperationCancelledResult("Goal completion", completionFocus), auditor.usage);
 	}
 
@@ -455,26 +446,28 @@ if (auditorSettings?.disabled === true) {
 		try {
 			userChoice = await showEscapeDialog(ctx, auditTarget.objective);
 		} finally {
-			core.exitGoalModal();
+			if (core.sessionOwner === sessionOwner) core.exitGoalModal();
 		}
 		// Consume the transient abort state recorded by the low-level callback.
 		core.auditAborted = false;
-		if (!core.isFocusedOperationCurrent(completionFocus)) {
+		if (!current()) {
 			// Focus moved on while the dialog was open: kill the parked child so it
 			// does not keep running unattended, then return the focus result.
-			const cancelled = await auditor.session.cancel();
+			const cancelled = await cancelParked(auditor.session);
 			// The cancelled attempt is terminal: its coordination record and side
 			// usage belong to THIS audit target, never to whatever goal is focused now.
 			onAuditorResult?.(cancelled, auditTarget.id);
-			appendAuditUsageEntry(core, ctx, auditTarget.id, cancelled.usage);
+			appendAuditUsageEntry(core, storage, auditTarget.id, cancelled.usage);
 			return withAuditorUsage(core.focusedOperationCancelledResult("Goal completion", completionFocus), cancelled.usage);
 		}
 
 		if (userChoice === "complete_without_audit") {
 			// The child was kept alive across the dialog; cancel it now.
-			const cancelled = await auditor.session.cancel();
+			const cancelled = await cancelParked(auditor.session);
 			onAuditorResult?.(cancelled, auditTarget.id);
-			appendAuditUsageEntry(core, ctx, auditTarget.id, cancelled.usage);
+			appendAuditUsageEntry(core, storage, auditTarget.id, cancelled.usage);
+			// The one canonical ledger outcome must be durable before reporting completion.
+			if (!settle({ type: "audit_skipped", auditId, goalId: auditTarget.id, reason: "user_aborted", provider: auditorSettings?.provider, model: auditorSettings?.model, thinkingLevel: auditorSettings?.thinkingLevel, at: nowIso() })) return withAuditorUsage(persistenceError(), cancelled.usage);
 			// ── Mark complete without audit ────────────────────────────
 			core.auditMessages.enqueue(ctx, {
 				customType: GOAL_AUDIT_ENTRY,
@@ -482,20 +475,6 @@ if (auditorSettings?.disabled === true) {
 				display: true,
 				details: { phase: "skipped", goalId: auditTarget.id, auditor: auditorLabel },
 			});
-			// The one canonical ledger outcome for this choice.
-			try {
-				core.goalService.appendEvents(ctx, [{
-					type: "audit_skipped",
-					goalId: auditTarget.id,
-					reason: "user_aborted",
-					provider: auditorSettings?.provider,
-					model: auditorSettings?.model,
-					thinkingLevel: auditorSettings?.thinkingLevel,
-					at: nowIso(),
-				}]);
-			} catch {
-				// Ledger append failure should not block completion
-			}
 			// Deferred archival: set goal complete in memory + write the active file
 			// WITHOUT archiving; archival happens at turn_end so the agent can
 			// recognise the skipped audit before the goal is archived.
@@ -511,6 +490,7 @@ if (auditorSettings?.disabled === true) {
 		// ── Continue audit with the SAME delegated subagent ─────────────
 		// Re-arm the audit display, then keep waiting on the original attempt.
 		// Its verdict drives the shared approve/disapprove handling below.
+		run.phase = "running";
 		const resumedAt = Date.now();
 		core.auditProgress = {
 			recentOutput: [],
@@ -543,8 +523,8 @@ if (auditorSettings?.disabled === true) {
 		// The resumed attempt is terminal: account its spend, then re-check focus
 		// (it may have moved while the resumed audit was running) before verdicts.
 		onAuditorResult?.(auditor, auditTarget.id);
-		appendAuditUsageEntry(core, ctx, auditTarget.id, auditor.usage);
-		if (!core.isFocusedOperationCurrent(completionFocus)) {
+		appendAuditUsageEntry(core, storage, auditTarget.id, auditor.usage);
+		if (!current()) {
 			core.auditProgress = null;
 			core.goalWidgetComponentRef.current?.invalidate();
 			return withAuditorUsage(core.focusedOperationCancelledResult("Goal completion", completionFocus), auditor.usage);
@@ -562,15 +542,17 @@ if (auditorSettings?.disabled === true) {
 		try {
 			userChoice = await showEscapeDialog(ctx, auditTarget.objective);
 		} finally {
-			core.exitGoalModal();
+			if (core.sessionOwner === sessionOwner) core.exitGoalModal();
 		}
 		// Consume the transient abort state recorded by the low-level callback.
 		core.auditAborted = false;
-		if (!core.isFocusedOperationCurrent(completionFocus)) {
+		if (!current()) {
 			return withAuditorUsage(core.focusedOperationCancelledResult("Goal completion", completionFocus), auditor.usage);
 		}
 
 		if (userChoice === "complete_without_audit") {
+			// The one canonical ledger outcome must be durable before reporting completion.
+			if (!settle({ type: "audit_skipped", auditId, goalId: auditTarget.id, reason: "user_aborted", provider: auditorSettings?.provider, model: auditorSettings?.model, thinkingLevel: auditorSettings?.thinkingLevel, at: nowIso() })) return withAuditorUsage(persistenceError(), auditor.usage);
 			// ── Mark complete without audit ────────────────────────────
 			core.auditMessages.enqueue(ctx, {
 				customType: GOAL_AUDIT_ENTRY,
@@ -578,20 +560,6 @@ if (auditorSettings?.disabled === true) {
 				display: true,
 				details: { phase: "skipped", goalId: auditTarget.id, auditor: auditorLabel },
 			});
-			// The one canonical ledger outcome for this choice.
-			try {
-				core.goalService.appendEvents(ctx, [{
-					type: "audit_skipped",
-					goalId: auditTarget.id,
-					reason: "user_aborted",
-					provider: auditorSettings?.provider,
-					model: auditorSettings?.model,
-					thinkingLevel: auditorSettings?.thinkingLevel,
-					at: nowIso(),
-				}]);
-			} catch {
-				// Ledger append failure should not block completion
-			}
 			// Deferred archival: set goal complete in memory + write the active file
 			// WITHOUT archiving; archival happens at turn_end so the agent can
 			// recognise the skipped audit before the goal is archived.
@@ -603,6 +571,7 @@ if (auditorSettings?.disabled === true) {
 				trailing: ["The goal is complete. Provide a final summary of what was accomplished."],
 			}), auditor.usage);
 		}
+		if (!settle({ type: "audit_result", auditId, goalId: auditTarget.id, verdict: "error", report: "Audit aborted — the goal remains active and work continues.", at: nowIso() })) return withAuditorUsage(persistenceError(), auditor.usage);
 		// ── Continue working ────────────────────────────────────────
 		// The goal stays active: no pause, no stop marker, no skip event.
 		core.goalWidgetComponentRef.current?.invalidate();
@@ -624,19 +593,9 @@ if (auditorSettings?.disabled === true) {
 		};
 		core.goalWidgetComponentRef.current?.invalidate();
 	}
-	// Append ledger: audit result
+	// A terminal result is claimed once against the original owner's ledger.
 	const verdict = auditor.approved ? "approved" : auditor.error ? "error" : "disapproved" as const;
-	try {
-		core.goalService.appendEvents(ctx, [{
-			type: "audit_result",
-			goalId: auditTarget.id,
-			verdict,
-			report: auditor.output || "Auditor produced no output.",
-			at: nowIso(),
-		}]);
-	} catch {
-		// Ledger append failure should not block completion
-	}
+	if (!settle({ type: "audit_result", auditId, goalId: auditTarget.id, verdict, report: auditor.output || auditor.error || "Auditor produced no output.", at: nowIso() })) return withAuditorUsage(persistenceError(), auditor.usage);
 	if (!auditor.approved) {
 		// Clear auditor progress to restore normal widget state, then show the
 		// §15.4 result card briefly so the required next work is visible before
@@ -692,4 +651,7 @@ if (auditorSettings?.disabled === true) {
 		completionFocus,
 		auditorReport: auditor.output,
 	}), auditor.usage);
+	} finally {
+		if (run.phase !== "settled") run.cancel("Completion audit ended without a terminal result.");
+	}
 }

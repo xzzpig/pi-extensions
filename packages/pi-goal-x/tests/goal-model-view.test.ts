@@ -78,10 +78,10 @@ test("active model prompt drops context/time counters and empty limit placeholde
     new URL("../extensions/goal-events.ts", import.meta.url),
     "utf8",
   );
-  assert.doesNotMatch(
+  assert.match(
     eventsSource,
-    /ctx\.getContextUsage\?\.\(\)/,
-    "the runtime hook never reads context occupancy",
+    /settings\.showContextUsage === true\s*\?\s*ctx\.getContextUsage\?\.\(\)/,
+    "the runtime hook reads context occupancy only after explicit opt-in",
   );
 });
 
@@ -587,7 +587,7 @@ test("audit display remains isolated from delegated child context", () => {
   );
   assert.match(
     source,
-    /if \(isDelegatedGoalSession\(\)\)[\s\S]*?filterGoalSessionContext\(event\.messages, true\)[\s\S]*?return;/,
+    /if \(isDelegatedGoalSession\(\)\)[\s\S]*?registerGoalContext\(pi,\s*messages\s*=>\s*filterGoalSessionContext\(messages, true\)\)[\s\S]*?return;/,
   );
   assert.match(source, /registerGoalEvents\(core\)/);
   assert.equal(GOAL_AUDIT_ENTRY, "pi-goal-audit-event");

@@ -1,8 +1,24 @@
 # Publishing releases
 
+## Fork workspace
+
+`@xzzpig/pi-goal-x` uses the repository-root `pnpm-lock.yaml`; it has no
+package-local npm lockfile and `npm ci` is not supported. Install from the
+monorepo root with `pnpm install --frozen-lockfile`, and keep the fork's
+`package.json` version and root `versions.json` entry in sync. Use `pnpm pack`
+so workspace dependencies are resolved in the tarball. The fork's normal
+release flow is the repository-owned `scripts/publish-all.sh`; publication
+requires explicit maintainer authorization.
+
+The imported workflow below retains its upstream repository guard and is not
+an automatic publication path for this fork. The remaining notes describe the
+upstream release process rather than granting authorization to publish.
+
+## Upstream release reference
+
 The `Publish npm` GitHub Actions workflow publishes through npm Trusted Publishing (OIDC). Agents need GitHub push/workflow access; no npm write token or recurring npm 2FA prompt is needed. Account 2FA stays enabled.
 
-Bump package.json and package-lock.json together, update the changelog, and merge the release into main. Push a stable version tag matching package metadata:
+For the fork, update the package version, root `versions.json` and changelog together. The upstream process uses a stable version tag matching its package metadata:
 
 ```sh
 git tag -a vX.Y.Z -m 'Release vX.Y.Z'
