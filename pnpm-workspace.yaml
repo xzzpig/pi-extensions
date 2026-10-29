@@ -23,10 +23,21 @@ catalog:
 # Keep the @earendil-works core tree the host-facing packages compile against
 # at the version the host pi runs (1.1.0). Without these, pi-coding-agent's
 # caret ranges pull newer releases (e.g. pi-agent-core 1.4.0) into dev-time
-# types. Selectors are scoped to ^1.1.0 requests: pi-subagents keeps its own
-# literal 1.0.0 SDK baseline (the shim fixture in test/fixtures is 1.0.0-shaped
-# and its subtree record documents that baseline), so its pins stay untouched.
+# types. The subagents fork now requires Pi 1.2.0; parent-specific overrides
+# preserve its SDK baseline even though 1.2.0 also satisfies the wider ^1.1.0
+# selectors. Its coding-agent shim remains a separate fixture.
 overrides:
+  "@xzzpig/pi-subagents>@earendil-works/pi-agent-core": "1.2.0"
+  "@xzzpig/pi-subagents>@earendil-works/pi-ai": "1.2.0"
+  "@xzzpig/pi-subagents>@earendil-works/pi-tui": "1.2.0"
+  "@earendil-works/pi-coding-agent@1.2.0>@earendil-works/pi-agent-core": "1.2.0"
+  "@earendil-works/pi-coding-agent@1.2.0>@earendil-works/pi-ai": "1.2.0"
+  "@earendil-works/pi-coding-agent@1.2.0>@earendil-works/pi-codemode": "1.2.0"
+  "@earendil-works/pi-coding-agent@1.2.0>@earendil-works/pi-mcp": "1.2.0"
+  "@earendil-works/pi-coding-agent@1.2.0>@earendil-works/pi-tui": "1.2.0"
+  "@earendil-works/pi-coding-agent@1.2.0>undici": "8.12.3"
+  "@earendil-works/pi-agent-core@1.2.0>@earendil-works/pi-ai": "1.2.0"
+  "@earendil-works/pi-ai@1.2.0>@earendil-works/pi-telemetry": "1.2.0"
   "@earendil-works/chord@^1.1.0": "1.1.0"
   "@earendil-works/pi-agent-core@^1.1.0": "1.1.0"
   "@earendil-works/pi-ai@^1.1.0": "1.1.0"

@@ -352,7 +352,11 @@ for record in "${CANDIDATES[@]}"; do
   if [ "$DRY_RUN" -eq 1 ]; then
     size="$(
       cd "$ROOT/packages/$dir" &&
-        npm pack --dry-run 2>&1 | grep -E 'package size|unpacked size' | tr '\n' ' ' || true
+        if [ "$dir" = "pi-subagents" ]; then
+          pnpm pack --dry-run
+        else
+          npm pack --dry-run
+        fi 2>&1 | grep -E 'package size|unpacked size' | tr '\n' ' ' || true
     )"
     echo "todo    $tag (registry latest=${latest:-none}) ${size}"
     PUBLISHED+=("$tag")
