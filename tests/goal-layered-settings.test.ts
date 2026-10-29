@@ -17,6 +17,7 @@ import {
 	goalGlobalSettingsPath,
 	goalSettingsPath,
 	loadGoalSettings,
+	saveGoalSettingsFileConfig,
 	loadSettingsSnapshot,
 	readSettingsLayer,
 	mutateSettingsLayer,
@@ -61,6 +62,51 @@ describe("path resolution", () => {
 });
 
 describe("layering matrix", () => {
+	it("context display defaults off and preserves both values, provenance and override removal", () => {
+		withTempDir(dir => {
+			const env = {PI_GOAL_GLOBAL_SETTINGS_FILE: path.join(dir, "global.json")};
+			const change = (scope: SettingsScope, op: "set" | "unset", value?: unknown) => mutateSettingsLayer({scope, cwd: dir, env, mutation: op === "set" ? {op, path: ["showContextUsage"], value} : {op, path: ["showContextUsage"]}});
+			assert.equal(loadGoalSettings(dir, env).showContextUsage, false);
+			for (const value of [false, true]) {
+				change("global", "set", value);
+				assert.equal(loadGoalSettings(dir, env).showContextUsage, value);
+				assert.equal(loadSettingsSnapshot(dir, env).provenance.get("showContextUsage")?.source, "global");
+				change("project", "set", !value);
+				assert.equal(loadGoalSettings(dir, env).showContextUsage, !value);
+				assert.equal(loadSettingsSnapshot(dir, env).provenance.get("showContextUsage")?.source, "project");
+				const bytes = fs.readFileSync(goalSettingsPath(dir, env), "utf8");
+				assert.equal(JSON.parse(bytes).showContextUsage, !value);
+				for (const invalid of [1, null, "off"]) assert.throws(() => change("project", "set", invalid), SettingsMutationError);
+				assert.equal(fs.readFileSync(goalSettingsPath(dir, env), "utf8"), bytes);
+				change("project", "unset");
+				assert.equal(loadGoalSettings(dir, env).showContextUsage, value);
+			}
+			change("global", "unset");
+			assert.equal(loadGoalSettings(dir, env).showContextUsage, false);
+			saveGoalSettingsFileConfig(dir, {showContextUsage: false});
+			assert.equal(JSON.parse(fs.readFileSync(goalSettingsPath(dir, env), "utf8")).showContextUsage, false, "sparse legacy saves retain explicit false too");
+		});
+	});
+	it("idle backoff defaults off and preserves explicit project false, inheritance and reopen", () => {
+		withTempDir(dir => {
+			const env = { PI_GOAL_GLOBAL_SETTINGS_FILE: path.join(dir, "global.json") };
+			invalidateGoalSettingsCache();
+			assert.equal(loadGoalSettings(dir, env).idleContinuationBackoff, false);
+			const change = (scope: SettingsScope, mutation: Parameters<typeof mutateSettingsLayer>[0]["mutation"]) => mutateSettingsLayer({ scope, cwd: dir, env, mutation });
+			for (const invalid of [1, null, "enabled"]) assert.throws(() => change("project", { op: "set", path: ["idleContinuationBackoff"], value: invalid }), SettingsMutationError);
+			change("global", { op: "set", path: ["idleContinuationBackoff"], value: true });
+			assert.equal(loadSettingsSnapshot(dir, env).provenance.get("idleContinuationBackoff")?.source, "global");
+			assert.equal(loadGoalSettings(dir, env).idleContinuationBackoff, true);
+			change("project", { op: "set", path: ["idleContinuationBackoff"], value: false });
+			invalidateGoalSettingsCache();
+			assert.equal(loadGoalSettings(dir, env).idleContinuationBackoff, false);
+			assert.equal(loadSettingsSnapshot(dir, env).provenance.get("idleContinuationBackoff")?.source, "project");
+			change("project", { op: "unset", path: ["idleContinuationBackoff"] });
+			assert.equal(loadGoalSettings(dir, env).idleContinuationBackoff, true);
+			change("global", { op: "unset", path: ["idleContinuationBackoff"] });
+			assert.equal(loadGoalSettings(dir, env).idleContinuationBackoff, false);
+		});
+	});
 	it("no global file behaves identically to project-only resolution", () => {
 		withTempDir((dir) => {
 			const env = { PI_GOAL_GLOBAL_SETTINGS_FILE: path.join(dir, "no-global.json") };

@@ -1,3 +1,5 @@
+import { commandHint, type GoalCommands } from "./goal-controls.ts";
+import type { GoalKeybindings } from "./goal-settings.ts";
 /**
  * /goal-status text builder (plan §13).
  *
@@ -10,7 +12,7 @@
 
 import { truncateText } from "./goal-core.ts";
 import type { GoalLedgerEvent, GoalLedgerEvent as LedgerEvent } from "./goal-ledger.ts";
-import { latestAuditorResultForGoal, latestEventsForGoal } from "./goal-ledger.ts";
+import { latestAuditorResultForGoal, latestAuditForGoal, latestEventsForGoal } from "./goal-ledger.ts";
 import type { GoalRecord, GoalTask } from "./goal-record.ts";
 import { deriveGoalDashboardModel, formatCompactTokens, formatDashboardDuration } from "./widgets/goal-dashboard-model.ts";
 import {
@@ -31,7 +33,10 @@ export const PLAIN_THEME = {
 } as never;
 
 export interface GoalStatusTextOptions {
+	commands?: GoalCommands;
+	keybindings?: GoalKeybindings;
 	maxAutonomousRuns?: number;
+	idleContinuationBackoff?: boolean;
 	goal: GoalRecord | null;
 	focused: boolean;
 	otherOpenGoals: number;
@@ -67,13 +72,15 @@ export function buildGoalStatusText(options: GoalStatusTextOptions): string {
 	if (options.health) return buildHealthStatus(options, width);
 	if (!options.goal) {
 		return options.otherOpenGoals > 0
-			? renderUnfocusedDashboard(options.otherOpenGoals, PLAIN_THEME, width).join("\n")
-			: "No goal is set. Use /goal <objective> or /sisyphus <objective> to start immediately.";
+			? renderUnfocusedDashboard(options.otherOpenGoals, PLAIN_THEME, width, options.commands).join("\n")
+			: `No goal is set. Use ${commandHint("goal", options.commands)} or ${commandHint("sisyphus", options.commands)} to draft a goal.`;
 	}
 	const events = options.ledgerEvents ?? [];
 	const model = deriveGoalDashboardModel(options.goal, {
 		focused: options.focused,
 		maxAutonomousRuns: options.maxAutonomousRuns,
+		idleContinuationBackoff: options.idleContinuationBackoff,
+		commands: options.commands,
 		otherOpenGoals: options.otherOpenGoals,
 		ledgerEvents: events,
 	});
@@ -84,7 +91,7 @@ export function buildGoalStatusText(options: GoalStatusTextOptions): string {
 	}
 
 	const parts: string[] = [];
-	parts.push(renderCompactDashboard(model, PLAIN_THEME, width, { footerHint: "Run /goal-status verbose for full detail" }).join("\n"));
+	parts.push(renderCompactDashboard(model, PLAIN_THEME, width, { footerHint: `Run ${commandHint("goal-status", options.commands)} verbose for full detail`, keybindings: options.keybindings?.dashboard, auditorKey: options.keybindings?.toggleAuditor }).join("\n"));
 	if (model.currentTask) {
 		parts.push(renderCurrentTaskBlock(model, PLAIN_THEME, width).join("\n"));
 	}
@@ -92,6 +99,7 @@ export function buildGoalStatusText(options: GoalStatusTextOptions): string {
 		parts.push(renderActivityBlock(model.recentActivity, PLAIN_THEME, width).join("\n"));
 	}
 	const audit = latestAuditorResultForGoal(events, model.goalId);
+ if (latestAuditForGoal(events, model.goalId)?.type === "audit_started") parts.push("Latest audit: no recorded result.");
 	if (audit) {
 		parts.push(lastAuditBlock(audit, width));
 	}
@@ -261,6 +269,7 @@ function buildVerboseStatus(goal: GoalRecord, model: ReturnType<typeof deriveGoa
 		}
 	}
 	const audit = latestAuditorResultForGoal(events, goal.id);
+ if (latestAuditForGoal(events, goal.id)?.type === "audit_started") lines.push("", "Latest audit: no recorded result.");
 	if (audit) {
 		lines.push("", `Last audit (${audit.at.slice(0, 10)}): ${audit.verdict}`);
 		lines.push(truncateText(audit.report.replace(/\s+/g, " "), 400));

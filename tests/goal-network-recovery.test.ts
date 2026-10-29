@@ -568,11 +568,10 @@ test("lifecycle: a successful turn resets the recovery counter and clears pendin
 		delete process.env.PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS;
 	}
 });
-// ── pi 1.0.0 session_compact_failed ─────────────────────────────────────────
+// ── Failed compaction ─────────────────────────────────────────────────────
 
-test("session_compact_failed warns the user instead of failing silently (pi 1.0.0)", async () => {
-	// pi 1.0.0 added `session_compact_failed`. The extension already charges
-	// progress to the goal at `session_before_compact`, so a failed compaction
+test("session_compact_failed warns the user instead of failing silently", async () => {
+	// The extension charges progress at `session_before_compact`, so a failure
 	// must not leave the goal silently uncompacted — that is how a long-running
 	// goal walks into the same context overflow on the next turn.
 	const { cwd, goal } = fixtureCwd();
@@ -596,6 +595,33 @@ test("session_compact_failed warns the user instead of failing silently (pi 1.0.
 	assert.match(message, /threshold/, "the warning names the trigger reason");
 	assert.match(message, /provider rejected the summarization request/, "the warning carries the error text");
 	assert.match(message, /stays active/i, "the goal is not silently stopped");
+});
+
+for (const phase of ["startup", "success", "network-error"]) test(`lifecycle: settlement abort after ${phase} pauses without continuation or recovery`, async () => {
+	const { cwd, goal } = fixtureCwd();
+	const h = createHarness(cwd);
+	try {
+		await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
+		await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: "continue", systemPromptOptions: {} }, h.ctx);
+		if (phase !== "startup") await h.handlers["agent_end"]!({ messages: phase === "network-error" ? [{ role: "assistant", stopReason: "error", errorMessage: REPORTED_503_MESSAGE }] : [] }, idleCtx(h.ctx));
+		await h.handlers["agent_settled"]!({ aborted: true }, idleCtx(h.ctx));
+		assert.equal(h.core.state.goal?.status, "paused");
+		assert.equal(await countCheckpoints(h), 0);
+		assert.ok(!h.notifications.some(n => /Retrying the goal/.test(n.message)));
+	} finally { h.core.scheduler.shutdown(); h.core.runtime.clearContinuationState(); }
+});
+
+test("lifecycle: an aborted settlement does not pause a replacement goal", async () => {
+	const { cwd, goal } = fixtureCwd();
+	const h = createHarness(cwd);
+	await startSession(h.handlers, h.ctx, sessionEntriesFor(goal));
+	await h.handlers["before_agent_start"]!({ systemPrompt: "base", prompt: "continue", systemPromptOptions: {} }, h.ctx);
+	await h.handlers["agent_end"]!({ messages: [] }, idleCtx(h.ctx));
+	h.core.state.goal = { ...goal, id: "replacement-goal", status: "active" };
+	await h.handlers["agent_settled"]!({ aborted: true }, idleCtx(h.ctx));
+	assert.equal(h.core.state.goal.status, "active");
+	assert.equal(await countCheckpoints(h), 0);
+	h.core.scheduler.shutdown(); h.core.runtime.clearContinuationState();
 });
 
 test("session_compact_failed stays silent when the user aborted or no goal is focused", async () => {

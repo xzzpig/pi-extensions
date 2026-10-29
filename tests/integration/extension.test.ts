@@ -448,7 +448,9 @@ describe("five-tool handler integration", () => {
 				await start(h);
 				await h.commands.get("goal-settings").handler("", h.ctx);
 				const lines = firstOptions.filter((o) => o.startsWith("  ") && !o.startsWith("  ───"));
-				assert.equal(lines.length, 20, `all twenty rows rendered, got: ${lines.join(" | ")}`);
+				assert.equal(lines.length, 22, `all settings rows rendered, got: ${lines.join(" | ")}`);
+				assert.ok(lines.includes("  slow repeated idle replies (opt-in): false (default)"));
+				assert.ok(lines.includes("  show context usage line: false (default)"));
 				assert.ok(lines.some((l) => l === "  show autonomous runs line: true (default)"), "the runs-line setting is listed and defaults to on");
 				assert.ok(lines.some((l) => l === "  auditor disabled: true (project override)"));
 				assert.ok(lines.some((l) => l === "  provider: anthropic (project override)"));
@@ -558,9 +560,10 @@ describe("five-tool handler integration", () => {
 					"  thinking_level: low (project override)", "medium",
 					"  thinking_level: medium (project override)", "high",
 					"  thinking_level: high (project override)", "xhigh",
+					"  thinking_level: xhigh (project override)", "max",
 					"Done",
 				];
-				const inputs = ["off", "minimal", "low", "medium", "high", "xhigh"];
+				const inputs = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 				const h = createHarness({
 					cwd: f.cwd, sessionEntries: f.sessionEntries, hasUI: true,
 					select: async () => selects.shift(),
@@ -569,10 +572,10 @@ describe("five-tool handler integration", () => {
 				await start(h);
 				await h.commands.get("goal-settings").handler("", h.ctx);
 				const saved = readSettings(f.cwd);
-				assert.equal(saved.thinking_level, "xhigh", "all six levels accepted in sequence");
+				assert.equal(saved.thinking_level, "max", "all seven levels accepted in sequence");
 				// Unknown value is rejected with a warning and nothing is persisted.
 				const notifiesBefore = h.notifies.length;
-				const selects2 = ["  thinking_level: xhigh (project override)", "bogus", "Done"];
+				const selects2 = ["  thinking_level: max (project override)", "bogus", "Done"];
 				const inputs2 = ["bogus"];
 				const h2 = createHarness({
 					cwd: f.cwd, sessionEntries: f.sessionEntries, hasUI: true,
@@ -583,7 +586,7 @@ describe("five-tool handler integration", () => {
 				await h2.commands.get("goal-settings").handler("", h2.ctx);
 				assert.ok(h2.notifies.some((n) => n.level === "warning" && n.msg.includes("thinking_level must be one of")),
 					"unknown thinking level warns");
-				assert.equal(readSettings(f.cwd).thinking_level, "xhigh", "rejected value is not persisted");
+				assert.equal(readSettings(f.cwd).thinking_level, "max", "rejected value is not persisted");
 			} finally {
 				f.cleanup();
 			}

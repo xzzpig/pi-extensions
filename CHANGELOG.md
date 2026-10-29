@@ -4,6 +4,59 @@ All notable changes to pi-goal-x are documented here.
 
 ## [Unreleased]
 
+## [0.34.1] — 2026-10-27
+
+Includes #118.
+
+### Fixed
+
+- Complete session cleanup after Pi invalidates a context, keep outgoing writes in their original project, and settle interrupted completion audits once against the audited goal. A newer unfinished audit no longer shows an older verdict (#113, #109).
+- Accept provider-filled empty `update_goal` arguments and payload-free ready filler alongside lifecycle status. Report real field conflicts as tool errors before flushing pending work (#115, #117).
+- Exclude skipped tasks from pending counts so complete-and-skipped task trees can reach the independent completion auditor (#110, #111).
+- Leave every Goal shortcut to a focused Pi dialog or foreign capturing overlay, including Escape and remapped pause keys (#114, #116).
+
+### Changed
+
+- Hide context-window occupancy in new goal prompt snapshots by default. Enable `showContextUsage` in `/goal-settings` to display it; accounting, budgets, compaction and retained prompt prefixes keep their existing behavior (#112).
+
+## [0.34.0] — 2026-10-24
+
+Includes #107.
+
+### Changed
+
+- Require Pi 1.4 or newer (1.x) and Node 22.19 or newer. Use native prompt preparation and remove older-host compatibility checks.
+
+### Fixed
+
+- Reject stale goal checkpoints without pausing or changing the replacement goal; valid saved work can continue after rejection (#104).
+- Preserve Pi's system prompt and tool deltas from the first request, including across goal context filtering, model changes and compaction (#97).
+- Accept matching redundant task arguments and empty optional task IDs; reject conflicting fields and malformed batches without partial changes (#91, #92).
+- Retry brief Windows sharing failures during atomic file replacement, with bounded delays and cleanup of failed temporary writes (#94).
+
+## [0.33.0] — 2026-10-24
+
+Includes #105 and #106.
+
+### Added
+
+- A Controls screen in `/goal-settings` for command names and aliases, every public goal shortcut, goal-dialog keys and project/global inheritance. Commands can use subcommands such as `/goal edit`; `/goal-settings` stays available for recovery.
+- Configurable pause order: stop goal and turn together (the default), pause the goal first, or stop the turn first and wait for the user. Moving the pause key keeps Pi's interrupt available as a turn-only stop.
+
+### Changed
+
+- Controls keep the saved pause choice selected, show inheritance on narrow screens, and support paging through long lists. Questionnaire hints follow remapped keys while answer editing keeps Pi's text controls.
+- CI uses three jobs for the same seven Pi versions, combines duplicate checks, runs isolated workflows concurrently, and skips runtime work for prose/assets-only changes.
+- Develop and test against Pi 1.4.0. Use its native custom-turn prompt preparation while retaining the fallback for older hosts, honor startup cancellation, and run CLI checks against the repository's SDK.
+- Accept `max` thinking for the completion auditor and blocker Oracle in settings and the selector.
+
+### Fixed
+
+- Skip audit-message settlement callbacks whose Pi context was invalidated by session replacement or reload, preserving replacement-session messages and scheduling intent (#90).
+- Goal execution requests use the current Pi prompt and tool profile from their first request, including direct creation, draft confirmation, resume and reload. This fixes stale or missing prompt guidance on structured-transcript hosts without changing host internals.
+- Restore immediate continuation by default. Enable **slow repeated idle replies (opt-in)** in `/goal-settings` → **Advanced execution** (`idleContinuationBackoff: true`) to slow repeated idle replies (#100). Delays persist and can be disabled live. Set a finite `maxAutonomousRuns` for a hard stop; pacing alone does not guarantee loop termination.
+- Expose the project/global settings scope switch and keep delay timing and resume controls visible in the compact widget.
+
 ## [0.32.3] — 2026-10-02
 
 ### Fixed

@@ -249,6 +249,26 @@ token/time intervals per turn; a goal never double-charges the same interval.
 `GoalRuntime` (goal-runtime.ts) owns continuation scheduling, the stale
 checkpoint state, the turn-stop guard, and one-shot steering reminders.
 
+`GoalScheduler` persists dispatch intent and allowance consumption. Default
+continuation is immediate. Explicit `idleContinuationBackoff=true` also records a
+bounded idle streak and earliest next attempt: one immediate continuation, then
+30 seconds doubling to five minutes. Work accumulates over the whole logical run;
+content snapshots exclude usage, revisions and scheduler writes. Disabled pacing
+skips those snapshots. Settings are rechecked at scheduling and admission; opting
+out removes saved delay metadata without renewing consumption. Resume and genuine
+host input reset pacing; strict waits and provider recovery remain independent.
+
+Pi 1.4 prepares goal-triggered turns natively. The extension uses
+`context_with_system` to filter its messages and add current goal state after
+Pi has restored the system prompt and tool declarations. System messages stay
+at their original history boundaries, including deltas from other extensions.
+`agent_settled.aborted` stops continuation/recovery and pauses the associated
+goal. Rejected stale checkpoints settle without changing the replacement goal.
+
+Audit display messages flush only at idle settlement and remain scoped to their
+session. If Pi has invalidated a settlement context, the handler skips it before
+consuming continuation intent or changing the replacement session's queue.
+
 An optional `token_budget` may be set at creation. When accounted usage
 reaches the budget, `accountProgress` transitions the goal to the distinct
 `budget_limited` status exactly once (status leaves `active`, so accounting
@@ -306,11 +326,10 @@ npm run check
 ```
 
 `test:unit`, `test:integration`, and `test:all` automatically discover test
-entries and run them in one Node process with small test-only adapters for the
+entries and run them with small test-only adapters for the
 SDK values used by handlers. This avoids loading unrelated model-provider and
-TUI media modules. The fast path requires Node 22.15+; `test:serial` remains
-the slow, real-SDK, process-isolated
-compatibility path. The suites cover: surface baselines (lifecycle-dependent goal tool
+TUI media modules. The fast path requires Node 22.19+; `test:serial` remains
+the slow, real-SDK, process-isolated alternative. The suites cover: surface baselines (lifecycle-dependent goal tool
 profile and fourteen commands), golden file/ledger fixtures, stale-continuation behavior,
 GoalService mutation boundary, runtime/accounting, token-budget transitions,
 task-tool consolidation, verification contracts, the independent auditor,
