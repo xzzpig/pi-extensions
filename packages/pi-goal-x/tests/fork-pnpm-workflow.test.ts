@@ -10,6 +10,7 @@ test("the fork uses the root pnpm lockfile for installation and packing", () => 
  assert.match(setup, /pnpm\/action-setup@v4/);
  assert.match(setup, /pnpm install --filter '@xzzpig\/pi-goal-x\.\.\.'/);
  assert.match(setup, /--frozen-lockfile --ignore-scripts/);
+ assert.match(setup, /pnpm --filter @xzzpig\/pi-subagents run prepack/);
  for (const file of ["ci.yml", "publish.yml"]) {
   const workflow = read(`.github/workflows/${file}`);
   assert.match(workflow, /working-directory: packages\/pi-goal-x/);

@@ -14,3 +14,7 @@ runs:
       run: >-
         pnpm install --filter '@xzzpig/pi-goal-x...'
         --frozen-lockfile --ignore-scripts
+    - name: Build the workspace auditor dependency
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: pnpm --filter @xzzpig/pi-subagents run prepack

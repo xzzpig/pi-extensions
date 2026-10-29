@@ -32,13 +32,14 @@
 | D-07 | 审计通过普通文本中的 `<approved/>` / `<disapproved/>` 标记表达裁决                                      | 审计通过 schema-validated `{verdict, report, findings}` 结构化结果表达裁决                                                                                                                                                                                                                           | 文本伪批准、缺失字段和 schema-invalid 结果均不能完成目标                                                                                                        |
 | D-08 | `pi-goal-x` 自动打开 live transcript overlay，并通过 `/goal-audit` 在当前 session 内重开最近 transcript | 删除 goal-owned transcript overlay、`/goal-audit`、内存 transcript 状态及其专用依赖；详细 review 过程统一在 `pi-subagents` Fleet/transcript 视图查看                                                                                                                                                 | 命令和 overlay 不再存在，审计不会自动弹窗；Fleet 可查看 child 原生消息、thinking、工具活动/results 和 retry；五阶段 dashboard/result card 按 `I-17`/`I-18` 保持 |
 | D-09 | 审计复用父会话 `modelRuntime`，包括 runtime-only API key 和动态 provider                                | 子 Pi 使用磁盘认证、环境变量及自身加载的 provider extensions                                                                                                                                                                                                                                         | 存储认证与环境认证可用；runtime-only 父进程覆盖不会被误称为已继承                                                                                               |
-| D-10 | Esc 通过父进程 `AbortController` 直接调用嵌套 session abort                                             | Esc 发送带 request/owner/node 完整 identity 的精确 delegation cancel                                                                                                                                                                                                                                 | 只取消当前审计 attempt，不影响其他子代理，并等待唯一终态                                                                                                        |
+| D-10 | Esc 通过父进程 `AbortController` 直接中止嵌套 session                                                   | Esc 驻停同一 delegation；用户选择继续时恢复该审计，选择无审计完成时精确取消该 attempt                                                                                                                                                                                                                | 继续使用同一审计员与旁路；绕过仅取消对应 request/owner/node，不影响其他子代理                                                                                   |
 | D-11 | 工具、扩展和模型初始化问题通常汇总为嵌套审计错误                                                        | 子代理 preflight 提供缺失 agent/tool/provider、timeout、budget 等分类错误；对运行时注册 agent 做运行时感知回退（磁盘视图 `missing_agent` 时以 `discoverAgentsWithRuntime` 合并视图解析并校验协议工具），只有真正解析不到才 fail closed，裸 `pi -e` 会话中运行时注册的默认 auditor 正常通过 preflight | 所有非成功状态都 fail closed 且返回可操作诊断；运行时注册的默认 auditor 不再报 `Unknown agent: goal-auditor`                                                    |
 | D-12 | 审计角色和 system prompt 固定在 `pi-goal-x` 代码中，仅 provider/model/thinking 可配置                   | 默认 `goal-auditor` 由 `pi-goal-x` 在 `session_start` 通过 pi-subagents 运行时注册契约注册（定义由代码持有）；用户通过嵌套 `auditor.*` 定义层合并定制，或以 `auditor.agent` 选择完全自定义的 agent                                                                                                   | 默认 agent 无需包内 markdown 即可发现；定义层合并规则生效；既有 provider/model/thinking override 仍可覆盖请求                                                   |
 | D-13 | 用户必须通过 `pi-subagents` 管理工具或手工创建文件才能复制并定制默认 auditor agent                      | 内容定制统一走嵌套 `auditor.*` 设置（提示注入层与定义层）；`/goal-subagent-eject` 命令移除；此前 eject 出的 user/project `goal-auditor.md` 继续以配置 agent 身份生效                                                                                                                                 | 配置注入的各块按固定顺序渲染并转义；`/goal-subagent-eject` 不再注册；存在同名配置 agent 时运行时注册被跳过且审计使用该 agent                                    |
 | D-14 | 提示注入与定义定制能力不存在，审计任务 prompt 完全固定                                                  | 新增提示注入层：`checklist`（整体替换默认清单）、`checklistExtra`、`evidenceRequests`、`strictness`（strict/lenient 注入对应姿态文本）、`instructions`（`<operator_instructions>` 块）、`reportFormat`（报告格式要求），按固定顺序渲染在审计清单之后                                                 | 全部转义后注入；未设置任一字段时任务 prompt 与改造前字节一致；清单替换后协议尾两行（进度上报与 structured_output 裁决约定）仍然保留                             |
 
 | D-15 | 审计监督问题唤醒主模型并可能使审计员 detach、原 audit 提前失败 | 当前精确 audit 的监督问题由隔离只读旁路答复，完成工具保持阻塞，审计员不 detach，真正终态与协调记录在原工具结果中一次性返回 | 主模型回合数为零、detach 为零、同一 child、唯一终态、无效/未解决答复 fail closed、记录与独立 usage 回流，最终真实 Pi/TUI + tmux + 真实 provider E2E |
+| D-16 | 原 fork 对审计台账写入采用尽力记录，失败不阻止完成 | 采用上游 fail-closed：审计开始、跳过或结果记录无法写入时目标保持未完成；请求与用量记录仍尽力写入 | 分别注入开始、跳过、结果和请求写入失败，验证持久化错误与目标状态 |
 
 **必须保持不变：**
 
@@ -50,9 +51,9 @@
 | I-04 | 审计不读取或写入父会话历史，默认不继承项目 context、skills 或扩展                                                                                                                                               | 默认 auditor agent SHALL 保持独立上下文与资源隔离                                                                                          | fresh context 且默认 agent inheritance 均关闭                                |
 | I-05 | 只有审计明确批准才能进入正常完成事务                                                                                                                                                                            | 只有 schema-valid `approved` SHALL 完成目标                                                                                                | approved report 被记录并进入同一 commit path                                 |
 | I-06 | 审计拒绝或运行错误会保持目标 active，并把反馈返回执行者                                                                                                                                                         | SHALL 保持该状态与可重试行为                                                                                                               | disapproved/error 后目标文件和 focus 未被完成或归档                          |
-| I-07 | ledger 记录 `completion_requested`、`audit_started` 以及唯一的 `audit_result` 或 `audit_skipped`                                                                                                                | SHALL 保持事件种类、顺序、verdict 语义和单一终态                                                                                           | approved、disapproved、error、skip 各分支均断言 ledger                       |
+| I-07 | ledger 记录完成请求、审计开始与唯一终态                                                                                                                                                                         | SHALL 保持审计事件顺序、verdict 语义和单一终态；关键记录写入失败按 D-16 阻止完成，完成请求尽力记录                                         | approved、disapproved、error、skip 和写入失败各分支均断言 ledger             |
 | I-08 | completion focus token、stale-operation 检查、单一完成事务、stop marker 和 deferred archival 防止并发错误完成                                                                                                   | SHALL 保持事务边界，不允许 child 直接修改 goal 或 ledger                                                                                   | stale focus 不提交；成功仍由原完成事务写入和延迟归档                         |
-| I-09 | Esc 后用户可选择"无审计完成"或"继续工作"；取消本身不批准目标                                                                                                                                                    | SHALL 保持两个选择及其既有 goal/ledger 结果                                                                                                | 只有用户明确 bypass 才完成，继续工作保持 active                              |
+| I-09 | Esc 后用户可选择无审计完成或继续处理审计                                                                                                                                                                        | SHALL 保留无审计完成与继续同一审计两个选择；取消本身不批准目标                                                                             | 只有明确 bypass 才完成；继续审计复用原 child 与 attempt                      |
 | I-10 | 临时错误重试耗尽、明确拒绝或审计错误后不会自动重新发起整个 review                                                                                                                                               | SHALL 仍要求后续重新调用 `update_goal({status:"complete"})`                                                                                | 单次请求只产生一个 logical audit attempt，失败后可手动重试                   |
 | I-11 | `pi-goal-x` 的 provider/model/thinkingLevel 设置可选择审计模型与 thinking                                                                                                                                       | SHALL 映射为 delegation request override                                                                                                   | 有配置时精确覆盖，无配置时使用 agent/default model                           |
 | I-12 | 用户能看到审计开始、运行进度、批准/拒绝/错误结果和 auditor label                                                                                                                                                | SHALL 保持这些状态可观察，允许文案和 transcript 来源按 `D-08` 变化                                                                         | UI/model events 覆盖 started、running、approved、rejected、error             |
@@ -80,6 +81,20 @@
 
 - **WHEN** 验证发现改造后的可观察行为与改造前不同且该差异没有对应 `D-*` 条目
 - **THEN** 验证 MUST 失败，并在继续实现前更新和重新评审本规格或修复该回归
+
+### Requirement: 审计关键记录的持久化失败必须阻止完成
+
+完成流程 MUST 在启动审计、跳过审计及记录审计结果时立即持久化对应的 `audit_started`、`audit_skipped` 或 `audit_result`。若关键记录无法写入，系统 MUST 保持目标未完成，返回可操作的持久化错误并允许重试；不得提前宣称目标已完成。`completion_requested` 与审计用量记录仍为尽力写入，失败本身不阻止后续关键审计记录或完成。
+
+#### Scenario: 审计关键记录写入失败
+
+- **WHEN** 审计开始、跳过或终态记录无法持久化
+- **THEN** 目标保持打开，调用方收到持久化错误；系统不宣称目标完成
+
+#### Scenario: 非关键请求记录写入失败
+
+- **WHEN** `completion_requested` 无法写入但审计开始及结果可以持久化，且审计明确批准
+- **THEN** 审计与完成流程可以继续，仍须遵守现有焦点、版本和任务门控
 
 ### Requirement: 基线驱动的测试与验收证据
 
@@ -794,24 +809,35 @@
 
 ### Requirement: 主模型输入不包含非必要目标遥测
 
-系统 SHALL 从 `pi-goal-x` 新生成的主模型可见内容中移除当前上下文 token 数、模型上下文窗口大小、占用比例和上下文遥测不可用占位；SHALL 移除目标累计耗时、没有有效 lifetime token budget 时的累计 token 消耗、没有有限运行额度时的运行次数统计，以及插件生成的审计成本/token/回合统计。系统 MUST NOT 用接近上下文上限作为暂停、阻塞、完成或要求用户另开会话的新增条件。
+当上游设置 `showContextUsage` 未配置或为 `false` 时，系统 SHALL 从 `pi-goal-x` 新生成的主模型可见内容中移除当前上下文 token 数、模型上下文窗口大小、占用比例和上下文遥测不可用占位；当用户显式配置为 `true` 时，活动目标的实时提示 SHALL 可包含上游格式的当前上下文快照（宿主不可用时包含 unavailable 占位）。无论该开关取值如何，系统 SHALL 移除目标累计耗时、没有有效 lifetime token budget 时的累计 token 消耗、没有有限运行额度时的运行次数统计，以及插件生成的审计成本/token/回合统计。系统 MUST NOT 用接近上下文上限作为暂停、阻塞、完成或要求用户另开会话的新增条件。
 
 删除 SHALL 覆盖新生成的自动提示、目标上下文和状态消息、所有目标工具的模型可见返回、详细/历史查询、插件生成的压缩摘要及恢复说明。查询历史账本后新生成的返回属于本范围；已经存在于会话中的旧返回不属于本范围。仅属于 UI、持久化记录或宿主内部计费的数据不属于模型可见内容；如果这些数据通过模型可读取的结构化返回被暴露，SHALL 同样应用精简规则。
 
 #### Scenario: 高上下文占用不进入主模型请求
 
-- **WHEN** 一个未完成的 active 目标没有消费预算或有限运行额度，宿主报告上下文占用为 99%，目标还累积了大量 token 与耗时
+- **WHEN** `showContextUsage` 未配置或为 `false`，一个未完成的 active 目标没有消费预算或有限运行额度，宿主报告上下文占用为 99%，目标还累积了大量 token 与耗时
 - **THEN** 新生成的目标内容提供执行所需信息而不提供这些遥测；目标状态、续跑资格和完成 gate 不因遥测数值而改变
 
 #### Scenario: 上下文遥测不可用时不输出占位
 
-- **WHEN** 宿主无法提供上下文用量
+- **WHEN** `showContextUsage` 未配置或为 `false`，且宿主无法提供上下文用量
 - **THEN** 插件新生成内容不提供 `Context snapshot: unavailable` 或替代的空值/零值占用提示
+
+#### Scenario: 显式开启上下文快照
+
+- **WHEN** 用户在全局或项目设置中显式启用 `showContextUsage`，活动目标的宿主报告当前上下文用量
+- **THEN** 新生成的实时目标提示包含当前上下文 token 数、容量和占比；不附加无预算累计 token、累计耗时或审计成本，目标执行与真实预算规则不变
+- **AND** 宿主无法提供用量时按上游格式提供 `Context snapshot: unavailable`；关闭开关后不生成新的上下文快照
+
+#### Scenario: 关闭快照与请求前缀
+
+- **WHEN** 同一会话先启用再关闭 `showContextUsage`，且目标策略与宿主会话历史没有其他失效变化
+- **THEN** 请求可保留此前发送的快照以维持上游缓存前缀，但最新状态表明显示已关闭且不再生成新的占用读数；预算或其他执行约束变化仍按既有失效规则处理
 
 #### Scenario: 所有生成渠道使用同一边界
 
 - **WHEN** 主模型通过自动目标提示、创建/调整/更新/完成目标工具返回、`get_goal` 默认/verbose/历史查询和压缩恢复内容获取目标信息
-- **THEN** 各渠道新生成的内容均不包含对应被移除的插件遥测，工具调用不会成为新内容的统计旁路；旧会话返回保持原样
+- **THEN** 各渠道新生成的内容均不包含对应被移除的插件遥测；显式启用的上下文快照只进入实时目标提示，工具调用不会成为统计旁路；旧会话返回保持原样
 
 ### Requirement: 主模型保留真实消费和运行约束
 
@@ -820,7 +846,7 @@
 #### Scenario: 有效消费预算仍可指导收尾
 
 - **WHEN** 目标设置 lifetime token budget 且已有消费
-- **THEN** 主模型能够获取真实预算的总额、已用与剩余数量以及消费约束含义，不会收到上下文容量快照；预算耗尽时既有收尾规则保持有效
+- **THEN** 主模型能够获取真实预算的总额、已用与剩余数量以及消费约束含义；上下文容量快照仅在显式启用时提供，预算耗尽时既有收尾规则保持有效
 
 #### Scenario: 有限运行额度与关闭续跑保持有效
 
@@ -900,7 +926,7 @@
 
 #### Scenario: 遥测单独变化不增长请求尾部
 
-- **WHEN** 既无预算、也无有限运行额度的同一目标在执行状态不变时仅更新上下文用量、累计 token、耗时或无上限运行计数
+- **WHEN** `showContextUsage` 未启用，既无预算、也无有限运行额度的同一目标在执行状态不变时仅更新上下文用量、累计 token、耗时或无上限运行计数
 - **THEN** 目标生成内容保持相同，不因这些变化追加新的尾部观测消息
 
 #### Scenario: 工具循环与会话切换安全
@@ -910,12 +936,12 @@
 
 ### Requirement: 遥测精简不扩大系统改造范围
 
-系统 MUST 保持工具名称、参数 schema、存储版本和生命周期事务不变；MUST NOT 为本优化新增配置开关、命令、依赖、上下文阈值、强制压缩逻辑或新的自主停止策略。本规格声明的主模型呈现差异 SHALL 作为对既有生命周期兼容基线的补充，其余既有完成审计和消息通道契约保持有效。
+系统 MUST 保持工具名称、参数 schema、存储版本和生命周期事务不变；除采纳上游默认关闭的 `showContextUsage` 外，MUST NOT 为本优化新增配置开关、命令、依赖、上下文阈值、强制压缩逻辑或新的自主停止策略。本规格声明的主模型呈现差异 SHALL 作为对既有生命周期兼容基线的补充，其余既有完成审计和消息通道契约保持有效。
 
 #### Scenario: 比较改造前后公共契约
 
 - **WHEN** 对比候选实现与本变更起点的工具注册、有效设置、目标状态转换、UI、审计输入和宿主压缩处理
-- **THEN** 除已声明的新生成主模型呈现与新历史查询字段选择差异外契约保持不变，未出现新工具/配置或因上下文比例而自主停止的条件
+- **THEN** 除已声明的新生成主模型呈现、新历史查询字段选择和上游 `showContextUsage` 开关外契约保持不变，未出现其他新工具/配置或因上下文比例而自主停止的条件
 
 ### Requirement: 完成审计监督问答在旁路同步闭环
 

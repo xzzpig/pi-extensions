@@ -352,7 +352,7 @@ for record in "${CANDIDATES[@]}"; do
   if [ "$DRY_RUN" -eq 1 ]; then
     size="$(
       cd "$ROOT/packages/$dir" &&
-        if [ "$dir" = "pi-subagents" ]; then
+        if [ "$dir" = "pi-subagents" ] || [ "$dir" = "pi-goal-x" ]; then
           pnpm pack --dry-run
         else
           npm pack --dry-run

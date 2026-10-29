@@ -4,9 +4,10 @@
 
 `@xzzpig/pi-goal-x` uses the repository-root `pnpm-lock.yaml`; it has no
 package-local npm lockfile and `npm ci` is not supported. Install from the
-monorepo root with `pnpm install --frozen-lockfile`, and keep the fork's
-`package.json` version and root `versions.json` entry in sync. Use `pnpm pack`
-so workspace dependencies are resolved in the tarball. The fork's normal
+monorepo root with `pnpm install --frozen-lockfile`, then build the linked
+workspace dependency with `pnpm --filter @xzzpig/pi-subagents run prepack`.
+Keep the fork's `package.json` version and root `versions.json` entry in sync.
+Use `pnpm pack` so workspace dependencies are resolved in the tarball. The fork's normal
 release flow is the repository-owned `scripts/publish-all.sh`; publication
 requires explicit maintainer authorization.
 
