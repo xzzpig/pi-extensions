@@ -5,7 +5,6 @@ import { Type } from "typebox";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createAtomicJsonWriter } from "../../shared/atomic-json.ts";
-import { requireSuccessfulCommandResult } from "./fork-command-result.ts";
 import { watchAsyncControlInbox, requestAsyncCommand, type CommandRequest } from "../background/control-channel.ts";
 
 export const CHILD_COMMAND_TOOL = "subagent_command";
@@ -40,6 +39,10 @@ function childCommandStatePath(channelDir: string): string {
 export function readChildCommandState(channelDir: string): ChildCommandState | undefined {
 	try { return JSON.parse(fs.readFileSync(childCommandStatePath(channelDir), "utf8")) as ChildCommandState; }
 	catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
+}
+/** True when the child's native command controller manages `toolCallId`, so command controls can target that call. */
+export function retainsChildCommand(channelDir: string, toolCallId: string): boolean {
+	return readChildCommandState(channelDir)?.commands.some((command) => command.toolCallId === toolCallId) === true;
 }
 function active(job: CommandJob): boolean { return job.snapshot.endedAt === undefined; }
 function text(result: AgentToolResult<unknown>): string {
@@ -141,9 +144,10 @@ export function createChildCommandRuntime(channelDir: string) {
 					const execution = Promise.resolve().then(() => tool.execute(toolCallId, args, commandSignal, (update) => {
 						job.snapshot.output = text(update);
 						if (job.snapshot.state === "running") onUpdate?.(update);
-					}, ctx)).then(requireSuccessfulCommandResult).then((result) => {
+					}, ctx)).then((result) => {
 						job.snapshot.output = text(result);
-						job.snapshot.state = "completed";
+						// Preserve explicit command cancellation while Pi 1.2 returns failed results.
+						job.snapshot.state = controller.signal.aborted ? "cancelled" : result.isError ? "failed" : "completed";
 						const fullOutputPath = (result.details as { fullOutputPath?: string } | undefined)?.fullOutputPath;
 						if (fullOutputPath) job.snapshot.fullOutputPath = fullOutputPath;
 						return result;

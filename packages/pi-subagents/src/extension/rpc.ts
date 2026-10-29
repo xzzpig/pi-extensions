@@ -7,6 +7,7 @@ import { deliverAsyncRunStop } from "../runs/foreground/async-stop-action.ts";
 import { reconcileAsyncRun } from "../runs/background/stale-run-reconciler.ts";
 import type { SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import { resolveCurrentSessionId } from "../shared/session-identity.ts";
+import { ownerSessionIds, ownsRun } from "../runs/shared/run-ownership.ts";
 import {
 	type AsyncJobStep,
 	type Details,
@@ -14,7 +15,9 @@ import {
 	type TokenUsage,
 	DIRS,
 	SUBAGENT_ASYNC_COMPLETE_EVENT,
+	SUBAGENT_ASYNC_STARTED_EVENT,
 	SUBAGENT_CHILD_STATUS_EVENT,
+	SUBAGENT_JOBS_CHANGED_EVENT,
 	SUBAGENT_PROCESS_TERMINAL_EVENT,
 	SUBAGENT_LIFECYCLE_ARTIFACT_VERSION,
 	type SubagentChildStatusEvent,
@@ -193,6 +196,7 @@ function buildFleetStatus(
 	}
 
 	let totalActive = 0;
+	const asyncOwners = ownerSessionIds(authoritativeSessionId);
 	const candidates: FleetCandidate[] = [];
 	const addCandidate = (candidate: FleetCandidate) => {
 		totalActive += 1;
@@ -221,7 +225,7 @@ function buildFleetStatus(
 		}
 	}
 	for (const job of state.asyncJobs.values()) {
-		if (job.sessionId !== authoritativeSessionId || !activeState(job.status)) continue;
+		if (!asyncOwners.has(job.sessionId) || !activeState(job.status)) continue;
 		const startedAt = job.startedAt ?? job.updatedAt;
 		if (job.mode === "workflow") {
 			addCandidate({
@@ -470,8 +474,10 @@ function pingData(ctx: ExtensionContext | null, options: RegisterSubagentRpcBrid
 			request: SUBAGENT_RPC_REQUEST_EVENT,
 			replyPrefix: SUBAGENT_RPC_REPLY_EVENT_PREFIX,
 			asyncComplete: SUBAGENT_ASYNC_COMPLETE_EVENT,
+			asyncStarted: SUBAGENT_ASYNC_STARTED_EVENT,
 			childStatus: SUBAGENT_CHILD_STATUS_EVENT,
 			processTerminal: SUBAGENT_PROCESS_TERMINAL_EVENT,
+			jobsChanged: SUBAGENT_JOBS_CHANGED_EVENT,
 		},
 		session: sessionData(ctx),
 	};
@@ -608,7 +614,7 @@ function stopAsyncRun(
 	const initialStatus = readStatus(location.asyncDir);
 	const initialRunId = initialStatus?.runId ?? location.resolvedId ?? path.basename(location.asyncDir);
 	if (!initialStatus) throw new SubagentRpcError("not_found", `Status file not found for async run '${initialRunId}'.`);
-	if (!currentSessionId || initialStatus.sessionId !== currentSessionId) {
+	if (!ownsRun(currentSessionId, initialStatus.sessionId)) {
 		throw new SubagentRpcError("not_found", `Async run '${initialRunId}' was not found in the active session.`);
 	}
 
@@ -682,7 +688,7 @@ function stopAsyncRun(
 	}
 	const runId = status?.runId ?? initialRunId;
 	if (!status) throw new SubagentRpcError("not_found", `Status file not found for async run '${runId}'.`);
-	if (status.sessionId !== currentSessionId) {
+	if (!ownsRun(currentSessionId, status.sessionId)) {
 		throw new SubagentRpcError("not_found", `Async run '${runId}' was not found in the active session.`);
 	}
 	const pausedWholeRun = status.state === "paused" && childId === undefined;

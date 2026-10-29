@@ -151,6 +151,11 @@ describe("scripted workflow runtime", () => {
 		assert.equal(invalidRunKey.ok, false);
 		assert.ok(invalidRunKey.errors.some((error) => error.message.includes("runs.run key")));
 
+		const objectRunKey = validateWorkflowScript(`const plan = await runs.run({ key: "plan", agent: "scout", task: "x" });\nreturn plan.output;`);
+		assert.equal(objectRunKey.ok, false);
+		assert.ok(objectRunKey.errors.some((error) => error.message.includes("got an object as the first argument") && error.message.includes(`runs.run("plan", { agent, task })`)));
+		assert.equal(validateWorkflowScript(`const runs = { run: (item) => item.task };\nreturn runs.run({ task: "x" });`).ok, true);
+
 		for (const script of [
 			`return runs.run("single", { agent: "worker", task: undefined });`,
 			`return runs.all([{ key: "same", agent: "worker", task: undefined }]);`,
@@ -917,6 +922,29 @@ describe("scripted workflow runtime", () => {
 				],
 			},
 		]);
+	});
+
+	it("keeps lane board text within 256 UTF-8 bytes without splitting characters", async () => {
+		for (const [input, expected] of [
+			["a".repeat(257), "a".repeat(253) + "..."],
+			["é".repeat(129), "é".repeat(126) + "..."],
+			["界".repeat(86), "界".repeat(84) + "..."],
+			["😀".repeat(65), "😀".repeat(63) + "..."],
+			["a".repeat(249) + "😀tail", "a".repeat(249) + "😀..."],
+			["界".repeat(85) + "a", "界".repeat(85) + "a"],
+		]) {
+			const result = await runWorkflowScript({
+				script: `return await runs.lanes([{ key: "lane", stages: [{ key: "check", agent: "worker", task: "check" }] }]);`,
+				async launch(key) {
+					return { key, ok: false, output: "", error: input, structuredOutput: { verdict: input }, artifactPaths: [] };
+				},
+				async status() { throw new Error("Unexpected status lookup"); },
+			});
+			const stage = (result.value as Array<{ stages: Array<{ error: string; verdict: string }> }>)[0]!.stages[0]!;
+			assert.equal(stage.error, expected);
+			assert.equal(stage.verdict, expected);
+			assert.ok(Buffer.byteLength(stage.error, "utf8") <= 256);
+		}
 	});
 
 	it("gives actionable guidance for a retained stage-0 resume", async () => {
@@ -2420,6 +2448,16 @@ describe("scripted workflow runtime", () => {
 		assert.deepEqual(result.children.map((child) => child.key), ["bad"]);
 	});
 
+	it("names the (key, params) form when runs.run gets an object", async () => {
+		const result = await runWorkflowScript({
+			script: `try { await runs.run({ key: "plan", agent: "worker", task: "x" }); } catch (e) { return e.message; }`,
+			async launch(key) { return { key, ok: true, output: "", artifactPaths: [] }; },
+			async status(key) { return { key, ok: true, output: "", artifactPaths: [] }; },
+		});
+		assert.match(String(result.value), /got an object as the first argument\. Use runs\.run\("plan", \{ agent, task \}\)/);
+		assert.deepEqual(result.children, []);
+	});
+
 	it("rejects an unawaited runs.lanes launch", async () => {
 		await assert.rejects(
 			runWorkflowScript({
@@ -2475,6 +2513,24 @@ describe("scripted workflow runtime", () => {
 					&& error.message.includes("does not support nested async functions")
 					&& error.partial.children.length === 0,
 			);
+		}
+	});
+
+	it("survives garbage collection of finished workers for portable workflow parity", async () => {
+		const bun = (globalThis as { Bun?: { gc(force: boolean): void } }).Bun;
+		for (let run = 0; run < 3; run++) {
+			const result = await runWorkflowScript({
+				script: `const child = await runs.run("gc", { agent: "worker", task: "run" }); return child.output;`,
+				timeoutMs: 5_000,
+				async launch(key) { return { key, ok: true, output: `done ${key}`, artifactPaths: [] }; },
+				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
+			});
+			assert.equal(result.value, "done gc");
+		}
+		// Bun's Worker finalizer revokes the filename whenever an eval option was passed; collecting must not throw.
+		for (let pass = 0; pass < 5; pass++) {
+			bun?.gc(true);
+			await new Promise((resolve) => setTimeout(resolve, 50));
 		}
 	});
 
@@ -3013,8 +3069,8 @@ describe("scripted workflow runtime", () => {
 			});
 
 			await runMessageCaptured;
-			controller.abort(new Error("Workflow stopped by user."));
-			await assert.rejects(workflow, (error: unknown) => error instanceof WorkflowScriptError && error.message === "Workflow stopped by user.");
+			controller.abort(new Error("Workflow stopped."));
+			await assert.rejects(workflow, (error: unknown) => error instanceof WorkflowScriptError && error.message === "Workflow stopped.");
 			deliverCapturedRunMessage?.();
 			await new Promise((resolve) => queueMicrotask(resolve));
 			assert.equal(launchCount, 0);
@@ -3034,7 +3090,7 @@ describe("scripted workflow runtime", () => {
 				signal: controller.signal,
 				onTrace(trace) {
 					const started = trace.some((entry) => entry.operation === "run" && entry.key === "slow" && entry.state === "started");
-					if (started && !controller.signal.aborted) controller.abort(new Error("Workflow stopped by user."));
+					if (started && !controller.signal.aborted) controller.abort(new Error("Workflow stopped."));
 				},
 				admit() {
 					admitCount += 1;
@@ -3046,7 +3102,7 @@ describe("scripted workflow runtime", () => {
 				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
 			}),
 			(error: unknown) => error instanceof WorkflowScriptError
-				&& error.message === "Workflow stopped by user."
+				&& error.message === "Workflow stopped."
 				&& error.partial.trace.some((entry) => entry.operation === "run" && entry.key === "slow" && entry.state === "stopped")
 				&& !error.partial.trace.some((entry) => entry.operation === "run" && entry.key === "slow" && entry.state === "failed"),
 		);
@@ -3079,10 +3135,10 @@ describe("scripted workflow runtime", () => {
 		});
 
 		await admissionStarted;
-		controller.abort(new Error("Workflow stopped by user."));
+		controller.abort(new Error("Workflow stopped."));
 		assert.equal(admissionSignal?.aborted, true);
 		await assert.rejects(workflow, (error: unknown) => error instanceof WorkflowScriptError
-			&& error.message === "Workflow stopped by user."
+			&& error.message === "Workflow stopped."
 			&& error.partial.trace.some((entry) => entry.operation === "run" && entry.key === "slow" && entry.state === "stopped")
 			&& !error.partial.trace.some((entry) => entry.operation === "run" && entry.key === "slow" && entry.state === "failed"));
 		resolveAdmission();
@@ -3149,10 +3205,10 @@ describe("scripted workflow runtime", () => {
 				async status(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
 			});
 			await launchStarted;
-			controller.abort(new Error("Workflow stopped by user."));
+			controller.abort(new Error("Workflow stopped."));
 			await assert.rejects(workflow, (error: unknown) => error instanceof WorkflowScriptError
-				&& error.message === "Workflow stopped by user."
-				&& error.partial.trace.some((entry) => entry.operation === "run" && entry.key === "slow" && entry.state === "stopped" && entry.error === "Workflow stopped by user.")
+				&& error.message === "Workflow stopped."
+				&& error.partial.trace.some((entry) => entry.operation === "run" && entry.key === "slow" && entry.state === "stopped" && entry.error === "Workflow stopped.")
 				&& !error.partial.trace.some((entry) => entry.operation === "run" && entry.key === "slow" && entry.state === "failed"));
 			workflowSettled = true;
 			resolveLaunch({ key: "slow", ok: true, output: "done", artifactPaths: [], results: [] });
@@ -3173,7 +3229,7 @@ describe("scripted workflow runtime", () => {
 				signal: controller.signal,
 				onTrace(trace) {
 					const started = trace.some((entry) => entry.operation === "status" && entry.key === "probe" && entry.state === "started");
-					if (started && !controller.signal.aborted) controller.abort(new Error("Workflow stopped by user."));
+					if (started && !controller.signal.aborted) controller.abort(new Error("Workflow stopped."));
 				},
 				async launch(key) { return { key, ok: true, output: "ok", artifactPaths: [] }; },
 				async status(key) {
@@ -3182,7 +3238,7 @@ describe("scripted workflow runtime", () => {
 				},
 			}),
 			(error: unknown) => error instanceof WorkflowScriptError
-				&& error.message === "Workflow stopped by user."
+				&& error.message === "Workflow stopped."
 				&& error.partial.trace.some((entry) => entry.operation === "status" && entry.key === "probe" && entry.state === "started")
 				&& !error.partial.trace.some((entry) => entry.operation === "status" && entry.key === "probe" && entry.state === "completed"),
 		);
@@ -3209,9 +3265,9 @@ describe("scripted workflow runtime", () => {
 		});
 
 		await statusStarted;
-		controller.abort(new Error("Workflow stopped by user."));
+		controller.abort(new Error("Workflow stopped."));
 		await assert.rejects(workflow, (error: unknown) => error instanceof WorkflowScriptError
-			&& error.message === "Workflow stopped by user."
+			&& error.message === "Workflow stopped."
 			&& error.partial.trace.some((entry) => entry.operation === "status" && entry.key === "probe" && entry.state === "started")
 			&& !error.partial.trace.some((entry) => entry.operation === "status" && entry.key === "probe" && entry.state === "completed"));
 		const finalTraceLength = traceLengths.at(-1);
@@ -3419,6 +3475,14 @@ describe("scripted workflow runtime", () => {
 		const result = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", "--require", preload, fixture], { encoding: "utf-8" });
 		assert.equal(result.status, 0, result.stderr);
 		assert.deepEqual(JSON.parse(result.stdout), { ok: true, value: { output: "pong" } });
+	});
+
+	it("runs Promise.all and other Promise statics when the host freezes Promise", () => {
+		const preload = path.resolve("test/fixtures/frozen-promise-statics-preload.cjs");
+		const fixture = path.resolve("test/fixtures/frozen-promise-statics-workflow.ts");
+		const result = spawnSync(process.execPath, ["--experimental-strip-types", "--no-warnings", "--require", preload, fixture], { encoding: "utf-8" });
+		assert.equal(result.status, 0, result.stderr);
+		assert.deepEqual(JSON.parse(result.stdout), { ok: true, value: { outputs: ["pong", "pong", "pong"], d: "ready" } });
 	});
 
 	it("rejects an unavailable recovery target without falling back from a stale cwd", {

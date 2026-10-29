@@ -129,6 +129,7 @@ Method notes:
 Capability advertisements on `ping`:
 
 - `events.asyncComplete` — exact process-local completion correlation after RPC `spawn`.
+- `events.jobsChanged`, `events.asyncStarted`, `events.childStatus`, `events.processTerminal` — the event names a host can listen to instead of polling `status` (see [Refresh a host view without polling](#refresh-a-host-view-without-polling)).
 - `managementActions` — exact schedule management actions accepted by RPC `manage`.
 - `launchResolvedExtensions` — the optional launch-resolved extension projection in status details.
 - `runtimeAcknowledgedExtensions` — the optional child-runtime acknowledgement projection and event name.
@@ -140,6 +141,20 @@ Capability advertisements on `ping`:
 - `cost: { version: 1 }` — the `cost` method is available and returns the versioned report shape above.
 
 Structured delegation progress updates carry `runId` as soon as foreground execution allocates it, so a caller can retain the package-owned revival target even if its own tool turn is interrupted before the terminal response. Foreground `details.results[]` rows also include a numeric `index` that is unique within the run and stable across partial progress snapshots and the final result; use `(runId, index)` instead of row position to correlate single, counted parallel, and chain children.
+
+### Refresh a host view without polling
+
+A host that shows background subagent activity (an editor panel, a footer, a status bar) can read `status` when something changed instead of on a timer:
+
+1. Subscribe to the names under `ping.events`: `jobsChanged`, `asyncStarted`, `childStatus`, `asyncComplete`, and `processTerminal`.
+2. Read `status` once, when the host starts or reconnects. Events are not replayed after a host restart, and subscribing first means a change during that read still triggers another one.
+3. When any of the events fires, read `status` again. Events can arrive in bursts and can repeat, so coalesce them in the host, for example one `status` read per 250 ms, and keep a refresh that arrives while a read is in flight for after it ends.
+
+`subagent:jobs-changed` carries only `{ version: 1 }`. It fires whenever the parent's background job view changes: a run starts, moves to another step (no other event reports a chain or parallel run's step changes), reports new activity (a tool, a turn, tokens, or output), finishes, or is cleared from the widget. While a child streams output this can be about once per second per run. Starts and finishes fire right away; step and activity changes fire when the parent next reads the run's status file, which on macOS is a check every 5 seconds. It fires only in sessions with a UI, which covers interactive and RPC mode; print mode (`pi -p`) and SDK embeddings without a UI do not get it. It fires even when the async widget is turned off.
+
+Foreground children are not background jobs. Their progress arrives as updates to the parent's `subagent` tool call (Pi's `tool_execution_update` events), with the `details.results[]` rows described above.
+
+To rebuild what ran in a session after a reload, read the records the session file already holds: the `subagent` tool result's `details.results[]` for foreground runs and the `subagent-notify` message's `details.runs[]` for background runs (see [Host session lifetime and completion wakes](#host-session-lifetime-and-completion-wakes)). The `cost` method returns per-child rows built from the same records.
 
 ### Direct async launch correlation
 
@@ -212,14 +227,14 @@ This contract is process-local. It does not register agents in child sessions or
 
 ## External jobs in FleetView
 
-Use `pi-subagents/external-runs` to publish display-only current-session jobs owned by another extension:
+Use `@xzzpig/pi-subagents/external-runs` to publish display-only current-session jobs owned by another extension:
 
 ```ts
 import {
   registerExternalRun,
   updateExternalRun,
   unregisterExternalRun,
-} from "pi-subagents/external-runs";
+} from "@xzzpig/pi-subagents/external-runs";
 
 registerExternalRun({
   id: "dependency-review",
@@ -353,6 +368,33 @@ Results:
 
 Live update events are bounded progress snapshots, not patches, so consumers should replace the prior snapshot rather than merge it as a delta. Structured delegation coalesces heartbeats whose delegation-visible progress and recent output are unchanged; a duration-only heartbeat therefore does not produce another update. The terminal response remains authoritative for the complete result, error, and final usage details.
 
+Both `:update` and terminal `:response` optionally include one bounded `providerDiagnostics` snapshot:
+
+```ts
+{
+  errorCount: number,
+  lastError?: {
+    kind: "rate_limited" | "transient_other" | "unknown",
+    message: string,
+    at: number,
+  },
+  retry?: {
+    phase: "backoff" | "in_flight",
+    attempt: number,
+    maxAttempts: number,
+    delayMs: number,
+    scheduledAt: number,
+  },
+}
+```
+
+- Coverage is **observed assistant-request errors and Pi retries**, not every provider-internal HTTP attempt. Healthy long reasoning does not invent diagnostics; absence means no observation, not proof that no internal retry happened.
+- `errorCount` increments once per failed assistant `message_end` (`stopReason: "error"`), including repeated identical errors and errors without an `errorMessage`. It does not count retry scheduling, tool failures, aborts, or compaction. The first error is reported immediately, even with no output or tokens and before Pi schedules any retry.
+- Only the failed message's `errorMessage` is classified, never assistant content or tool text. `rate_limited` requires explicit throttling evidence. Text that mentions quota or billing, or says credits, balance, or an account or usage limit is exhausted, is reported as `unknown`, even when it also carries throttling or transient wording, so account exhaustion never looks like transient throttling. Other Pi-recognized transient errors use `transient_other`; anything else uses `unknown`. This classification is observational and does not change Pi's retry policy or the delegation's status/error behavior.
+- `lastError.message` is a short fixed safe description, **not** the raw provider error/body. Raw diagnostics remain in existing child artifacts. No HTTP status or provider code is inferred or exposed here. `at` and `scheduledAt` are observation-time Unix timestamps in milliseconds.
+- `auto_retry_start` schedules `backoff`; `attempt` is the 1-based retry attempt, `maxAttempts` is Pi's retry budget, and `delayMs` is Pi's planned delay, **not** a claimed server `Retry-After`. The next `agent_start`/`turn_start` changes the phase to `in_flight`. `auto_retry_end` ends the sequence after success, exhaustion, or cancellation; it is not a backoff-finished event.
+- Cumulative error history survives recovery and unrelated replacement updates. `retry` is active-only and is absent from every terminal response, including cancellation and timeout. Historical errors alone do not turn a recovered completed result into a failure.
+
 Bounds:
 
 - Schemas are capped at 64 KiB; tasks and returned text/structured values are capped at 1 MiB, with smaller bounds on identity/configuration strings and a maximum `timeoutMs` of 2,147,483,647.
@@ -388,6 +430,8 @@ const restriction = registerSubagentCapabilityCeiling({
 // restriction.dispose() removes only this provider's registration.
 ```
 
+Register with **`ctx.sessionManager.getSessionId()`**; a ceiling registered by session file path does not apply.
+
 Semantics:
 
 - Active registrations intersect their `allowedTools` and `allowedAgents` sets and OR `denyExtensions`.
@@ -413,16 +457,16 @@ const dispose = registerBackgroundWorkProvider({
   name: "my-background-extension",
   wakeChannels: ["my-extension:job-finished"],
   listActiveWork: (context) => jobs
-    .filter((job) => job.status === "running" && (!context || job.ownerSessionId === context.sessionId))
+    .filter((job) => job.status === "running" && (!context || context.sessionIds.includes(job.ownerSessionId)))
     .map((job) => ({ id: job.id, sessionId: job.ownerSessionId })),
-  reconcile: ({ sessionId, nowMs }) => reconcileJobs(sessionId, nowMs),
+  reconcile: ({ sessionIds, nowMs }) => reconcileJobs(sessionIds, nowMs),
 });
 ```
 
 Semantics:
 
-- Each item needs a stable provider-local ID and the exact Pi session ID that owns it. `bg_wait` captures those identities rather than a count, so one job finishing while another starts still satisfies first-completion waits without losing the replacement.
-- `listActiveWork` receives an optional `{ sessionId, nowMs }` context during snapshots. Providers can use `sessionId` to avoid scanning unrelated work; existing zero-argument `() => items` providers continue to work, and returned items are still validated and filtered to the exact requested session.
+- Each item needs a stable provider-local ID and the session that owns it, as either `ctx.sessionManager.getSessionId()` or the session file path (`ctx.sessionManager.getSessionFile()`); both are accepted. `bg_wait` captures those identities rather than a count, so one job finishing while another starts still satisfies first-completion waits without losing the replacement.
+- `listActiveWork` receives an optional `{ sessionId, sessionIds, nowMs }` context during snapshots, and `reconcile` receives the same fields. `sessionIds` holds every form of the current session (its file path when it has one, and its session id); `sessionId` is the first of them. Providers can use them to avoid scanning unrelated work; existing zero-argument `() => items` providers continue to work, and returned items are still validated and filtered to the current session. Each provider is called once per snapshot.
 - It filters snapshots to the active session, fails closed if a provider disappears while its work is tracked, and surfaces malformed snapshots or provider errors with provider context.
 - Wake channels only shorten polling; validated snapshots remain authoritative.
 - Providers share a registry through `Symbol.for("pi-subagents.background-work.v1")`, allowing independently loaded extension modules to meet in one Pi process.
@@ -431,6 +475,10 @@ Semantics:
 Children do not gain provider tools or extensions automatically. Add `bg_wait` to the child agent's `tools` allowlist and load each provider through `extensions` or `subagentOnlyExtensions`. The parent's effective `waitTool` setting reaches every child through its typed runtime config; `PI_SUBAGENT_WAIT_TOOL_ENABLED` keeps precedence in the parent.
 
 Local foreground children never load the parent's ambient extensions: they share the parent's process, and loading them would start a second copy of every ambient extension, including this one, inside it. They do inherit the providers the parent's extensions registered, so a provider extension's models resolve in a local foreground child. Pane-native remote foreground children instead use the remote machine's provider discovery and configuration. Agents that need MCP tools (`mcpDirectTools`, or MCP tools from an ambient adapter such as pi-mcp-adapter) must run as background children (`async: true`), which load the ambient extensions inside the detached runner process unless the agent sets `extensions` or the capability ceiling denies extensions.
+
+The runner hosts many child sessions in one process and keeps working after each one ends: a background child's extensions see `session_shutdown` with reason `"quit"` in print mode, but the process does not exit with it. An extension that acts on process exit at that point (for example by force-exiting a headless run) should first check `process.env.PI_SUBAGENT_RUNNER_PID === String(process.pid)`, which is true only inside the runner. `PI_SUBAGENT_CHILD=1` cannot make that distinction: processes spawned from a child, such as a headless `pi` started by its bash tool, inherit both variables but have their own pid.
+
+A local foreground child ends the same way, but it runs inside the parent Pi process, which is not a runner and sets no marker. An extension configured into a foreground child (through the agent's `extensions` or `subagentOnlyExtensions`) must not act on process exit at `session_shutdown`.
 
 ## External job provider bridge
 
@@ -596,7 +644,7 @@ The API returns discriminated structured results with canonical project root, bi
 
 A host that embeds this extension owns whether completion wakes can be delivered at all.
 
-Ordinary async and foreground completion wakes use `registerSubagentNotify` and `sendCompletion`. They listen for completion events and deliver through `pi.sendMessage(..., { triggerTurn })`. When the parent is idle, every pi-subagents notice that should start a turn (completions, supervisor asks, control and steering notices, wait subscriptions) is instead appended without a turn, followed by one short user message, `Subagent updates above.`, sent with `pi.sendUserMessage`. Pi runs `before_agent_start` only for prompts, so this keeps extension-set system prompt sections in the woken run. A busy parent still gets the notice as a steering message. Session shutdown stops the result watcher and disposes this completion notifier. `createWaitSubscriptionManager` is separate: it is the explicit non-blocking `bg_wait` subscription path for work without native notification, not the ordinary completion wake path.
+Ordinary async and foreground completion wakes use `registerSubagentNotify` and `sendCompletion`. They listen for completion events and deliver through `pi.sendMessage(..., { triggerTurn })`. When the parent is idle, every pi-subagents notice that should start a turn (completions, supervisor asks, control and steering notices, wait subscriptions) starts the run itself with `triggerTurn: true`; Pi runs `before_agent_start` for that run, so extension-set system prompt sections stay in it. Each such notice ends with what the parent should do (for completions, `Parent action: ...`), and no separate user message is sent. If another extension's wake (pi-intercom's, through the shared `Symbol.for("pi.idle-wake.v1")` reservation) is already starting the run, the notice is appended without a turn and that run picks it up. A busy parent still gets the notice as a steering message. After the user aborts a parent run in a host with a UI, these notices are only appended, with no turn, until the next parent run starts. Session shutdown stops the result watcher and disposes this completion notifier. `createWaitSubscriptionManager` is separate: it is the explicit non-blocking `bg_wait` subscription path for work without native notification, not the ordinary completion wake path.
 
 Each completion notice is a custom message with `customType: "subagent-notify"`. Its `content` is the text the model reads. Pi does not send `details` to the model, so hosts can use it to match a notice to its runs by id without parsing the text. `details.runs` has one entry per finished run, in the order of the notice. A grouped notice has several entries. Each entry has `agent` and `status` (`completed`, `failed`, `paused` or `stopped`). When known, an entry also has these fields:
 
@@ -612,7 +660,7 @@ Detached children do not stop when the session does. They are the host process's
 
 This matters because "is the parent busy?" is the wrong idle signal. A parent that launches a detached run and hands control back — which is what the async launch output tells it to do — is not prompting, streaming, compacting, or running a shell command. A host that reaps sessions on those signals alone will dispose exactly the session that was waiting to be woken.
 
-When pi-subagents runs inside a compatible pi-web host, it discovers the versioned `Symbol.for("@agegr/pi-web/session-liveness/v1")` registry and registers one provider for the current session. The provider reports live `queued`/`running` async jobs, active nested descendants (including foreground routes retained after their direct parent settles), foreground controls that still have a scheduling owner or active child, async runs that ended but whose result has not reached the parent (including a rejected send waiting for retry), completion notifications until Pi starts the wake message (`message_start`), even when Pi queued it behind the current turn or past `agent_settled`, and a wake prompt sent to an idle parent until its run starts (`agent_start`). Accepted wakes remain owned by the same Pi session manager and session UUID across extension reloads, until they start. Independent session managers never share this ownership, and changing the UUID on an existing manager discards the old session's wakes. A wake message Pi discards without starting keeps the session live until the session shuts down for a reason other than reload. A wake prompt whose run has not started 10 seconds later, while the parent is idle, no longer keeps the session live: an input handler consumed it or it failed, and its notices are already in the session. Retained terminal history, future schedules, and wait subscriptions do not make a session live by themselves. The registration is replaced on session changes and released during runtime shutdown or reload; other hosts remain unaffected.
+When pi-subagents runs inside a compatible pi-web host, it discovers the versioned `Symbol.for("@agegr/pi-web/session-liveness/v1")` registry and registers one provider for the current session. The provider reports live `queued`/`running` async jobs, active nested descendants (including foreground routes retained after their direct parent settles), foreground controls that still have a scheduling owner or active child, async runs that ended but whose result has not reached the parent (including a rejected send waiting for retry), completion notifications until Pi starts the wake message (`message_start`), even when Pi queued it behind the current turn or past `agent_settled`, and a turn-triggering notice sent to an idle parent until its run starts (`agent_start`). Accepted wakes remain owned by the same Pi session manager and session UUID across extension reloads, until they start. Independent session managers never share this ownership, and changing the UUID on an existing manager discards the old session's wakes. A wake message Pi discards without starting keeps the session live until the session shuts down for a reason other than reload. An idle wake whose run has not started 10 seconds later, while the parent is idle, stops holding the session live on its own; a completion notice whose run never started is still held by the undelivered-notice tracking above until the session shuts down, which records it for replay at the next start. Retained terminal history, future schedules, and wait subscriptions do not make a session live by themselves. The registration is replaced on session changes and released during runtime shutdown or reload; other hosts remain unaffected.
 
 If your host reclaims idle sessions, keep a session alive while it still has live detached work:
 
@@ -623,6 +671,10 @@ If your host reclaims idle sessions, keep a session alive while it still has liv
 - Match `sessionId` in `status.json` against both forms. It is resolved as `getSessionFile() ?? getSessionId()`, so it is normally the parent's session *file path*, but a session that is not persisted records a bare session id instead.
 
 The symptom when this is missed is quiet and easy to misattribute: subagents appear never to report back, which looks like a fault in this extension rather than in the host that disposed the listener.
+
+## Component screens over RPC
+
+`/subagents-fleet`, `/subagents-stop` and the `/subagents` model and thinking pickers draw a `ctx.ui.custom()` component in the TUI. In every other mode they fall back to text or `ctx.ui.select`, because stock Pi RPC defines `custom()` as a no-op. A host that runs Pi in RPC mode and renders `custom()` components itself, such as pi-web, can set `PI_SUBAGENTS_COMPONENT_UI=1` in Pi's environment to get the component screens.
 
 ## Runtime files
 
@@ -654,4 +706,4 @@ The main runtime files in this repository:
 
 ### Published package vs source checkout
 
-The npm tarball ships TypeScript compiler output with the same file layout and a compiled `index.js` entry. A Git checkout continues to run `index.ts` directly, so local extension development does not require a build step. Run `npm run pack:pkg` to build and pack the same artifact published to npm.
+The npm tarball ships compiled JavaScript and declarations alongside an esbuild-bundled module graph. Pi loads `bundle/index.js`, and public subpaths resolve to bundled entrypoints with their corresponding declarations. The compiled file layout remains available for child processes and asset paths. A Git checkout continues to run `index.ts` directly, so local extension development does not require a build step. Install the repository's frozen pnpm workspace first, then run `pnpm run pack:pkg` to build and pack the same `dist-pkg` artifact published to npm.

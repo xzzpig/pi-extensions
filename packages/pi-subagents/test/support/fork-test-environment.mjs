@@ -1,8 +1,7 @@
 // Fork harness: preserve the lightweight shim for mock-only suites while testing
-// upstream's real-SDK contracts against the pinned workspace Pi installation.
+// upstream's real-SDK contracts against the plugin's Pi 1.2 minimum.
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { registerHooks } from "node:module";
 import "./isolated-temp-root.mjs";
 
 // Project discovery considers USERPROFILE a home boundary even on Unix. Keep
@@ -11,30 +10,32 @@ import "./isolated-temp-root.mjs";
 process.env.USERPROFILE = process.env.PI_SUBAGENTS_TEMP_ROOT;
 fs.mkdirSync(process.env.HOME, { recursive: true });
 
+// These mocked child-session tests do not exercise Git. Avoid scanning the
+// caller's potentially huge, unmerged worktree for every foreground attempt.
+if (path.basename(process.argv[1] ?? "") === "run-child-session.test.ts") {
+	const isolatedCwd = path.join(process.env.PI_SUBAGENTS_TEMP_ROOT, "child-session-cwd");
+	fs.mkdirSync(isolatedCwd, { recursive: true });
+	process.env.GIT_CEILING_DIRECTORIES = process.env.PI_SUBAGENTS_TEMP_ROOT;
+	process.chdir(isolatedCwd);
+}
+
 const realSdkSuites = new Set([
 	"child-commands.test.ts",
 	"child-prompt-sections.test.ts",
 	"child-session-commands.test.ts",
+	"child-session-append-system.test.ts",
 	"command-action.test.ts",
 	"declaration-pinning.test.ts",
+	"fork-tool-declarations.test.ts",
+	"fork-context.test.ts",
 	"in-process-child.test.ts",
 	"notify.test.ts",
 	"parent-wake.test.ts",
+	"required-child-extensions.test.ts",
 	"session-liveness-delivery.test.ts",
 	"subagent-messages.test.ts",
+	"subagent-prompt-runtime.test.ts",
 ]);
 if (realSdkSuites.has(path.basename(process.argv[1] ?? ""))) {
-	const sdkRoot = new URL("../../../../node_modules/@earendil-works/pi-coding-agent/", import.meta.url);
-	const manifest = JSON.parse(fs.readFileSync(new URL("package.json", sdkRoot), "utf8"));
-	if (manifest.name !== "@earendil-works/pi-coding-agent" || manifest.version !== "1.1.0") {
-		throw new Error("Real-SDK suites require the pinned workspace Pi 1.1.0 package.");
-	}
-	const sdkEntry = new URL(manifest.exports["."].import, sdkRoot).href;
-	registerHooks({
-		resolve(specifier, context, nextResolve) {
-			return specifier === "@earendil-works/pi-coding-agent"
-				? { url: sdkEntry, shortCircuit: true }
-				: nextResolve(specifier, context);
-		},
-	});
+	await import("./fork-real-sdk.mjs");
 }

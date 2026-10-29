@@ -28,12 +28,13 @@ for (const mode of ["failure", "cancel", "run-abort"] as const) {
 		};
 		try {
 			const pending = commands.wrap(tool).execute("failed", {}, controller.signal, undefined, {} as never);
-			const rejected = assert.rejects(pending, /Command exited with code 7/);
 			await started;
 			if (mode === "cancel") commands.operate("cancel", "failed");
 			else if (mode === "run-abort") controller.abort();
 			else complete();
-			await rejected;
+			const result = await pending;
+			assert.equal(result.isError, true);
+			assert.match(result.content[0]!.type === "text" ? result.content[0].text : "", /Command exited with code 7/);
 			const snapshot = commands.state().commands[0]!;
 			assert.equal(snapshot.state, mode === "cancel" ? "cancelled" : "failed");
 			assert.ok(snapshot.endedAt);

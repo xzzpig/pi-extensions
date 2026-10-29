@@ -29,15 +29,15 @@ const hostPeerPackages = [
 ] as const;
 const expectedHostPeerRanges = {
 	"@earendil-works/pi-agent-core": "*",
-	"@earendil-works/pi-ai": ">=1.0.0 <2",
+	"@earendil-works/pi-ai": ">=1.2.0 <2",
 	"@earendil-works/pi-coding-agent": "*",
 	"@earendil-works/pi-tui": "*",
 	typebox: "*",
 } satisfies Record<(typeof hostPeerPackages)[number], string>;
 const expectedHostDevVersions = {
-	"@earendil-works/pi-agent-core": "1.0.0",
-	"@earendil-works/pi-ai": "1.0.0",
-	"@earendil-works/pi-tui": "1.0.0",
+	"@earendil-works/pi-agent-core": "1.2.0",
+	"@earendil-works/pi-ai": "1.2.0",
+	"@earendil-works/pi-tui": "1.2.0",
 	typebox: "1.3.27",
 } satisfies Record<Exclude<(typeof hostPeerPackages)[number], "@earendil-works/pi-coding-agent">, string>;
 
@@ -117,15 +117,16 @@ function collectSourceFiles(dir: string): string[] {
 test("published extension APIs use supported package entrypoints", async () => {
 	const packageJson = JSON.parse(fs.readFileSync(path.join(projectRoot, "package.json"), "utf-8"));
 
-	// Fork: @xzzpig/pi-subagents publishes directly to npm (unlike upstream's
-	// private checkout + dist-pkg repack flow), so the manifest must stay public.
+	// The public workspace package publishes the compiled, bundled dist-pkg artifact.
 	assert.equal(packageJson.private, undefined, "the fork checkout must stay publishable");
 	assert.equal(packageJson.publishConfig?.access, "public");
+	assert.equal(packageJson.publishConfig?.directory, "dist-pkg");
 	assert.equal(packageJson.name, "@xzzpig/pi-subagents");
 	assert.deepEqual(packageJson.pi?.extensions, ["./index.ts"]);
 	assert.equal(packageJson.files?.includes("index.ts"), true);
 	assert.equal(packageJson.files?.includes("*.mjs"), true);
 	assert.equal(fs.existsSync(path.join(projectRoot, "async-retention-discovery-worker.mjs")), true);
+	assert.equal(packageJson.files?.includes("workflow-script-worker.cjs"), true);
 	const entrySource = fs.readFileSync(path.join(projectRoot, "index.ts"), "utf-8");
 	assert.match(entrySource, /import type \{\} from "\.\/src\/types\/pi-runtime-compat\.d\.ts";/);
 	assert.equal(entrySource.includes('export { default } from "./src/extension/index.ts";'), false);
@@ -234,6 +235,10 @@ test("direct dependency declarations are exact version pins", () => {
 				assert.equal(version, "file:./test/fixtures/pi-coding-agent-shim");
 				continue;
 			}
+			if (name === "pi-subagents-test-sdk") {
+				assert.equal(version, "npm:@earendil-works/pi-coding-agent@1.2.0");
+				continue;
+			}
 			assert.match(version, exactVersionPattern, `${section}.${name} should use an exact version`);
 		}
 	}
@@ -257,7 +262,7 @@ test("host-owned development packages use the supported SDK baseline", () => {
 	assert.equal(
 		packageJson.devDependencies?.["@earendil-works/pi-coding-agent"],
 		"file:./test/fixtures/pi-coding-agent-shim",
-		"pi-coding-agent should use the local type/runtime shim until upstream Pi no longer pins vulnerable Undici",
+		"mock-only suites use the lightweight Pi shim; real-SDK suites use the separately pinned Pi 1.2 alias",
 	);
 });
 

@@ -3,6 +3,10 @@ name: Release
 on:
   workflow_dispatch:
 
+defaults:
+  run:
+    working-directory: packages/pi-subagents
+
 permissions:
   contents: read
   id-token: write
@@ -22,11 +26,9 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-      - name: Install devDependencies
-        run: npm ci --ignore-scripts
+      - name: Install workspace dependencies
+        uses: ./packages/pi-subagents/.github/actions/fork-setup
       - name: Run tests
-        run: npm run test:all
-      - name: Build published package
-        run: npm run build:pkg
-      - name: Publish to npm
-        run: npm publish ./dist-pkg --provenance
+        run: pnpm run test:all
+      - name: Build and publish the bundled artifact
+        run: pnpm publish --no-git-checks --provenance

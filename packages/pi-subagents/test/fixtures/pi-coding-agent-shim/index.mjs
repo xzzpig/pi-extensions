@@ -87,6 +87,10 @@ export class SessionManager {
 	getSessionDir() { return this.sessionDir; }
 	getHeader() { return this.header; }
 	getEntries() { return this.entries; }
+	buildSessionProjection() {
+		const entries = this.entries.map((sourceEntry) => ({ sourceEntry, messages: sourceEntry.type === "message" ? [sourceEntry.message] : [] }));
+		return { entries, messages: entries.flatMap((entry) => entry.messages), thinkingLevel: "off", model: null };
+	}
 
 	createBranchedSession(leafId) {
 		const id = randomUUID();

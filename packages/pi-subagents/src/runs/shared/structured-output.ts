@@ -10,11 +10,13 @@ import type { JsonSchemaObject } from "../../shared/types.ts";
 import type { ResolvedAcceptanceReportMode } from "./acceptance.ts";
 
 export const MISSING_STRUCTURED_OUTPUT_CALL_ERROR = "Missing structured_output call; this step has outputSchema and must finish by calling structured_output.";
+export const STRUCTURED_OUTPUT_FOLLOW_UP = "You ended without calling `structured_output`. Call it now with your result. Do not repeat the work.";
 export const MISSING_STRUCTURED_ACCEPTANCE_REPORT_ERROR = "Missing acceptanceReport in structured_output call; acceptance.report is \"on\".";
 export const STRUCTURED_OUTPUT_REJECTION_ERROR = "structured_output was invoked but no valid output was captured.";
 export const INVALID_STRUCTURED_OUTPUT_SCHEMA_ERROR = "Structured output invocation was rejected: invalid outputSchema.";
 export const STRUCTURED_OUTPUT_VALIDATOR_UNAVAILABLE_ERROR = "Structured output invocation was rejected: validator unavailable.";
 export const MAX_STRUCTURED_OUTPUT_REJECTION_ERROR_BYTES = 4096;
+const MAX_LISTED_ALLOWED_VALUES = 20;
 
 function utf8Prefix(value: string, maxBytes: number): string {
 	if (Buffer.byteLength(value, "utf8") <= maxBytes) return value;
@@ -152,7 +154,7 @@ interface JsonSchemaValidationError {
 	keyword?: string;
 	schemaPath?: string;
 	instancePath?: string;
-	params?: { failingKeyword?: string; requiredProperties?: string[] };
+	params?: { failingKeyword?: string; requiredProperties?: string[]; allowedValues?: unknown[]; allowedValue?: unknown };
 	message?: string;
 }
 
@@ -324,6 +326,14 @@ function formatValidationError(error: JsonSchemaValidationError): string[] {
 	const pathText = error.instancePath ? error.instancePath.replace(/^\//, "").replace(/\//g, ".") : "root";
 	if (error.keyword === "required" && error.params?.requiredProperties?.length) {
 		return error.params.requiredProperties.map((property) => `${pathText === "root" ? property : `${pathText}.${property}`}: is required`);
+	}
+	if (error.keyword === "enum" && error.params?.allowedValues?.length) {
+		const values = error.params.allowedValues;
+		const extra = values.length - MAX_LISTED_ALLOWED_VALUES;
+		return [`${pathText}: must be one of ${values.slice(0, MAX_LISTED_ALLOWED_VALUES).map((value) => JSON.stringify(value)).join(", ")}${extra > 0 ? `, and ${extra} more` : ""}`];
+	}
+	if (error.keyword === "const" && error.params && "allowedValue" in error.params) {
+		return [`${pathText}: must be ${JSON.stringify(error.params.allowedValue)}`];
 	}
 	return [`${pathText}: ${error.message}`];
 }

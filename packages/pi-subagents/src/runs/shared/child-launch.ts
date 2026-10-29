@@ -14,7 +14,7 @@ import {
 	type LaunchResolvedChildExtensions,
 	type ResolvedToolBudget,
 	type RunFanoutBudgetDescriptor,
-	type HerdrMachineReference,
+	type PlacementMachineReference,
 } from "../../shared/types.ts";
 import type { NestedPathEntry } from "./nested-path.ts";
 import { extensionOnlyMcpServers, type McpRuntimeSnapshotHost, type ResolvedMcpDirectToolSelection } from "./mcp-direct-tool-allowlist.ts";
@@ -63,7 +63,7 @@ export function inheritedChildRuntime(config: ChildRuntimeConfig | undefined): I
 }
 
 export interface BuildInProcessChildLaunchInput {
-	machine?: HerdrMachineReference;
+	machine?: PlacementMachineReference;
 	remoteSkillNames?: string[];
 	remoteReads?: string[] | false;
 	parentSessionId?: string;
@@ -174,7 +174,7 @@ function inheritedCapabilityCeiling(inherited: InheritedChildRuntime | undefined
 	return inherited?.capabilityCeiling;
 }
 
-/** Environment values external child extensions read; only the runner applies them. */
+/** Environment values external child extensions read, including fork-selected profiles. */
 function childProcessEnv(input: BuildInProcessChildLaunchInput, toolPlan: PiLaunchToolPlan, sandboxEnv?: Record<string, string | undefined>): Record<string, string | undefined> {
 	const env: Record<string, string | undefined> = {};
 	env[PI_SUBAGENT_EXTENSION_BINDINGS_ENV] = encodeExtensionBindings(input.extensionBindings);
@@ -359,10 +359,13 @@ export function buildInProcessChildLaunch(input: BuildInProcessChildLaunchInput)
 		requiredExtensions: toolPlan.requiredExtensions,
 		ambientExtensions,
 		hooks: capturedHooks.hooks,
+		// Foreground children must receive their own bindings (or clear inherited
+		// bindings), while retaining the fork's pinned profile selections.
 		...(input.host === "runner" || childEnv
 			? { processEnv: { ...childProcessEnv(input, toolPlan, childEnv), ...profilePin } }
-			: { processEnv: profilePin }),
+			: { processEnv: { ...profilePin, [PI_SUBAGENT_EXTENSION_BINDINGS_ENV]: encodeExtensionBindings(input.extensionBindings) } }),
 		transientProcessEnv,
+		...(input.host === "parent" ? { restoreProcessEnv: true } : {}),
 		runtime: config,
 		noSkills: !input.inheritSkills,
 		noContextFiles: !input.inheritProjectContext,

@@ -20,7 +20,7 @@ import { parseChain, parseJsonChain } from "./chain-serializer.ts";
 import { mergeAgentsForScope } from "./agent-selection.ts";
 import { projectScopeRequiresTrustMessage } from "./agent-scope.ts";
 import { closestMatch } from "../shared/edit-distance.ts";
-import { parseFrontmatter, parseFrontmatterList } from "./frontmatter.ts";
+import { parseFrontmatter, parseFrontmatterList, parseUnquotedList } from "./frontmatter.ts";
 import { buildRuntimeName, parsePackageName } from "./identity.ts";
 import { parseModelScopeConfig, type ModelScopeConfig } from "../runs/shared/model-scope.ts";
 export { BUILTIN_AGENT_NAMES } from "./builtin-names.ts";
@@ -31,6 +31,7 @@ import { validatePermissionRules, type PermissionRules } from "../runs/shared/pe
 import { parseThinkingLevel, type ThinkingLevel } from "../shared/thinking-ceiling.ts";
 import { validateSandboxProfileName } from "../shared/sandbox-profile.ts";
 import { validatePermissionProfileName } from "../shared/permission-profile.ts";
+import { THINKING_LEVELS } from "../shared/model-info.ts";
 import { assertJsonSchemaObject } from "../runs/shared/structured-output.ts";
 import { normalizeCapabilityCeilingAllowedAgents } from "../runs/shared/capability-ceiling.ts";
 
@@ -123,6 +124,15 @@ interface BuiltinAgentOverrideConfig {
 	sandbox?: string;
 	permissionProfile?: string;
 }
+
+/** Every field an `agentOverrides` entry may set; the Record type keeps it equal to BuiltinAgentOverrideConfig. */
+const BUILTIN_OVERRIDE_FIELDS: Record<keyof BuiltinAgentOverrideConfig, true> = {
+	description: true, advertise: true, machine: true, output: true, outputMode: true, defaultReads: true, model: true,
+	defaultProvider: true, fast: true, thinking: true, systemPromptMode: true, inheritProjectContext: true,
+	inheritGlobalContext: true, inheritSkills: true, defaultContext: true, acceptanceRole: true, disabled: true,
+	systemPrompt: true, skills: true, tools: true, excludeTools: true, allowNestedSubagents: true, allowedAgents: true,
+	extensions: true, subagentOnlyExtensions: true, mutationTools: true, toolBudget: true, sandbox: true, permissionProfile: true,
+};
 
 interface BuiltinAgentOverrideInfo {
 	scope: "user" | "project";
@@ -1087,6 +1097,11 @@ function parseBuiltinOverrideEntry(
 	if (Object.hasOwn(input, "launcher")) {
 		throw new Error(`Builtin override '${name}' in '${filePath}' sets 'launcher', which settings overrides do not support; set 'launcher' in a user agent file instead.`);
 	}
+	for (const key of Object.keys(input)) {
+		if (Object.hasOwn(BUILTIN_OVERRIDE_FIELDS, key)) continue;
+		const suggestion = closestMatch(key, Object.keys(BUILTIN_OVERRIDE_FIELDS));
+		throw new Error(`Builtin override '${name}' in '${filePath}' has unknown field '${key}'.${suggestion ? ` Did you mean '${suggestion}'?` : ""}`);
+	}
 	const override: BuiltinAgentOverrideConfig = {};
 
 	if ("description" in input) {
@@ -1126,8 +1141,9 @@ function parseBuiltinOverrideEntry(
 	}
 
 	if ("thinking" in input) {
-		if (typeof input.thinking === "string" || input.thinking === false) override.thinking = input.thinking;
-		else throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'thinking'; expected a string or false.`);
+		const level = THINKING_LEVELS.find((candidate) => candidate === input.thinking);
+		if (level !== undefined || input.thinking === false) override.thinking = level ?? false;
+		else throw new Error(`Builtin override '${name}' in '${filePath}' has invalid 'thinking'; expected one of ${THINKING_LEVELS.join(", ")}, or false.`);
 	}
 
 	if ("systemPromptMode" in input) {
@@ -2236,11 +2252,11 @@ function loadAgentsFromDefinitionFiles(files: AgentDefinitionFile[], source: Age
 			else if (frontmatter.advertise === "false") advertise = false;
 			else throw new Error(`Agent '${localName}' has invalid advertise frontmatter; expected true or false.`);
 		}
-		const rawTools = parseFrontmatterList(frontmatter.tools);
+		const rawTools = parseUnquotedList(frontmatter.tools);
 		const parsedTools = splitToolList(rawTools);
 		const tools = parsedTools.tools ?? [];
 		const mcpDirectTools = parsedTools.mcpDirectTools ?? [];
-		const excludeTools = parseFrontmatterList(frontmatter.excludeTools);
+		const excludeTools = parseUnquotedList(frontmatter.excludeTools);
 		const parsedAllowedAgents = parseFrontmatterList(frontmatter.allowedAgents);
 		const allowedAgents = parsedAllowedAgents === undefined ? undefined : normalizeCapabilityCeilingAllowedAgents(parsedAllowedAgents);
 		const defaultReads = parseFrontmatterList(frontmatter.defaultReads);
@@ -2306,9 +2322,9 @@ function loadAgentsFromDefinitionFiles(files: AgentDefinitionFile[], source: Age
 			else throw new Error(`Agent '${localName}' has invalid acceptanceRole frontmatter; expected 'read-only' or 'writer'.`);
 		}
 
-		const extensions = resolveAgentRelativeExtensionPaths(parseFrontmatterList(frontmatter.extensions), filePath);
-		const subagentOnlyExtensions = resolveAgentRelativeExtensionPaths(parseFrontmatterList(frontmatter.subagentOnlyExtensions), filePath);
-		const mutationTools = parseFrontmatterList(frontmatter.mutationTools);
+		const extensions = resolveAgentRelativeExtensionPaths(parseUnquotedList(frontmatter.extensions), filePath);
+		const subagentOnlyExtensions = resolveAgentRelativeExtensionPaths(parseUnquotedList(frontmatter.subagentOnlyExtensions), filePath);
+		const mutationTools = parseUnquotedList(frontmatter.mutationTools);
 		let fast: boolean | undefined;
 		if (frontmatter.fast !== undefined) {
 			if (frontmatter.fast === "true") fast = true;
@@ -2820,8 +2836,7 @@ function buildAgentDiscoverySources(cwd: string, preferredModelProvider: string 
 	const watchPaths = new Set<string>([
 		userSettingsPath,
 		...(projectSettingsPath ? [projectSettingsPath] : []),
-		...projectDiscoveryWatchPaths(effectiveCwd),
-		...findProjectRootCandidates(effectiveCwd).map((root) => path.join(getProjectConfigDir(root), "settings.json")),
+		...(projectTrusted ? [...projectDiscoveryWatchPaths(effectiveCwd), ...findProjectRootCandidates(effectiveCwd).map((root) => path.join(getProjectConfigDir(root), "settings.json"))] : []),
 		...userScanDirs.watchPaths,
 		...projectScanDirs.watchPaths,
 		...packageSubagentPaths.watchPaths,

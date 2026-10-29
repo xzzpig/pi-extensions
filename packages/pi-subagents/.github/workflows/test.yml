@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+defaults:
+  run:
+    working-directory: packages/pi-subagents
+
 # A new push to a PR branch supersedes its running checks. Other runs get a unique group,
 # because a shared group would queue main runs and drop all but the newest pending one.
 concurrency:
@@ -46,22 +50,22 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24
-      - name: Install devDependencies
-        run: npm ci --ignore-scripts
+      - name: Install workspace dependencies
+        uses: ./packages/pi-subagents/.github/actions/fork-setup
       - name: Typecheck
         if: matrix.typecheck
-        run: npm run typecheck
+        run: pnpm run typecheck
       - name: Native tool activation schema budgets
         if: matrix.typecheck
-        run: npm run test:smoke:tool-activation
+        run: pnpm run test:smoke:tool-activation
       - name: Unit tests
-        run: node --experimental-strip-types --import ./test/support/isolated-temp-root.mjs --test ${{ matrix.testArgs }} test/unit/*.test.ts
+        run: node --experimental-strip-types --import ./test/support/isolated-temp-root.mjs --import ./test/support/fork-test-environment.mjs --test ${{ matrix.testArgs }} test/unit/*.test.ts
       - name: Integration tests
         timeout-minutes: 10
         env:
           NODE_DISABLE_COMPILE_CACHE: '1'
           PI_SUBAGENTS_TERMINAL_EVIDENCE_DIR: ${{ runner.temp }}/1906-terminal-evidence
-        run: node --experimental-strip-types --import ./test/support/register-loader.mjs --test ${{ matrix.testArgs }} test/integration/*.test.ts
+        run: node --experimental-strip-types --import ./test/support/register-loader.mjs --import ./test/support/fork-test-environment.mjs --test ${{ matrix.testArgs }} test/integration/*.test.ts
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
@@ -77,9 +81,9 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24
-      - run: npm ci --ignore-scripts
+      - uses: ./packages/pi-subagents/.github/actions/fork-setup
       - name: Calendar local-time and scheduler regressions
-        run: node --experimental-strip-types --import ./test/support/isolated-temp-root.mjs --test test/unit/calendar-schedule.test.ts test/unit/scheduled-runs.test.ts
+        run: node --experimental-strip-types --import ./test/support/isolated-temp-root.mjs --import ./test/support/fork-test-environment.mjs --test test/unit/calendar-schedule.test.ts test/unit/scheduled-runs.test.ts
 
   worktree-cleanup-recovery:
     runs-on: macos-latest
@@ -89,9 +93,9 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24
-      - run: npm ci --ignore-scripts
+      - uses: ./packages/pi-subagents/.github/actions/fork-setup
       - name: Worktree cleanup and lock recovery regressions
-        run: node --experimental-strip-types --import ./test/support/isolated-temp-root.mjs --test test/unit/worktree-cleanup-plan.test.ts test/unit/worktree-lock.test.ts test/unit/parallel-handoff.test.ts
+        run: node --experimental-strip-types --import ./test/support/isolated-temp-root.mjs --import ./test/support/fork-test-environment.mjs --test test/unit/worktree-cleanup-plan.test.ts test/unit/worktree-lock.test.ts test/unit/parallel-handoff.test.ts
 
   schedule-claim-contention:
     runs-on: macos-latest
@@ -101,9 +105,9 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24
-      - run: npm ci --ignore-scripts
+      - uses: ./packages/pi-subagents/.github/actions/fork-setup
       - name: Focused regressions
-        run: node --experimental-strip-types --import ./test/support/isolated-temp-root.mjs --test test/unit/schedule-claim-preservation.test.ts
+        run: node --experimental-strip-types --import ./test/support/isolated-temp-root.mjs --import ./test/support/fork-test-environment.mjs --test test/unit/schedule-claim-preservation.test.ts
 
   native-nested-wait:
     strategy:
@@ -117,14 +121,35 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24
-      - run: npm ci --ignore-scripts
+      - uses: ./packages/pi-subagents/.github/actions/fork-setup
       - name: Install native Pi SDK
-        run: npm install --prefix "${{ runner.temp }}/native-host" --no-package-lock --ignore-scripts @earendil-works/pi-coding-agent@0.86.1
+        run: npm install --prefix "${{ runner.temp }}/native-host" --no-package-lock --ignore-scripts @earendil-works/pi-coding-agent@1.2.0
       - name: Native nested result consumption
         env:
           PI_SUBAGENTS_NATIVE_PI_ROOT: ${{ runner.temp }}/native-host/node_modules/@earendil-works/pi-coding-agent
           NODE_DISABLE_COMPILE_CACHE: '1'
         run: node --experimental-strip-types --import ./test/support/isolated-temp-root.mjs --import ./test/support/native-peer-loader.mjs --test test/integration/nested-async-wait.test.ts
+
+  native-mcp-readiness:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      - uses: ./packages/pi-subagents/.github/actions/fork-setup
+      - name: Install native Pi SDK
+        run: npm install --prefix "${{ runner.temp }}/native-host" --no-package-lock --ignore-scripts @earendil-works/pi-coding-agent@1.2.0
+      - name: Native MCP connection readiness and cancellation
+        env:
+          PI_SUBAGENTS_NATIVE_PI_ROOT: ${{ runner.temp }}/native-host/node_modules/@earendil-works/pi-coding-agent
+          NODE_DISABLE_COMPILE_CACHE: '1'
+        run: node --experimental-strip-types --import ./test/support/isolated-temp-root.mjs --import ./test/support/native-peer-loader.mjs --test test/integration/builtin-mcp-readiness.test.ts
 
   bun-workflow-script:
     runs-on: ubuntu-latest
@@ -137,8 +162,8 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - name: Install devDependencies
-        run: npm ci --ignore-scripts
+      - name: Install workspace dependencies
+        uses: ./packages/pi-subagents/.github/actions/fork-setup
       - name: WorkflowScript Bun parity tests
         run: >-
           bun test test/unit/scripted-workflow.test.ts
@@ -158,8 +183,11 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
+          node-version: 24
+      - uses: ./packages/pi-subagents/.github/actions/fork-setup
+      - uses: actions/setup-node@v5
+        with:
           node-version: ${{ matrix.node }}
-      - run: npm ci --ignore-scripts
       - run: node test/smoke/runner-loader-capability.mjs ${{ matrix.loader }}
 
   clean-install:
@@ -168,13 +196,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pi-version: ["0.86.1", "1.0.0"]
+        pi-version: ["1.2.0"]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-node@v5
         with:
+          node-version: 24
+      - uses: ./packages/pi-subagents/.github/actions/fork-setup
+      - uses: actions/setup-node@v5
+        with:
           node-version: 22.19.0
-      - run: npm ci --ignore-scripts
       - name: Real Pi ${{ matrix.pi-version }} background child smoke
         run: node --experimental-strip-types test/smoke/clean-install.mjs "${{ runner.temp }}/clean-install-smoke-${{ matrix.pi-version }}" ${{ matrix.pi-version }}
       - uses: actions/upload-artifact@v4
@@ -195,10 +226,10 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 24
-      - name: Install controller dependencies and isolation tool
+      - uses: ./packages/pi-subagents/.github/actions/fork-setup
+      - name: Install isolation tool
         run: |
           node -e 'const a = require("node:assert/strict"); a.equal(process.platform, "linux"); a.equal(process.arch, "x64");'
-          npm ci --ignore-scripts
           # Bubblewrap needs only the runner's Ubuntu mirror (sources.list), not its third-party repositories (sources.list.d).
           sudo apt-get -o Dir::Etc::sourceparts=- update
           sudo apt-get -o Dir::Etc::sourceparts=- install -y bubblewrap
@@ -215,13 +246,13 @@ jobs:
       - name: Complete isolated official binary matrix
         run: node test/smoke/standalone-matrix.mjs "$RUNNER_TEMP/pi-official/pi/pi" "$RUNNER_TEMP/standalone-matrix"
       - name: Provision npm host for public launch regression
-        run: node test/smoke/clean-install.mjs "$RUNNER_TEMP/npm-background-sdk" 0.86.1
+        run: node test/smoke/clean-install.mjs "$RUNNER_TEMP/npm-background-sdk" 1.2.0
       - name: Isolated real npm public launch
         run: node test/smoke/npm-background.mjs "$RUNNER_TEMP/npm-background-sdk" "$RUNNER_TEMP/npm-background"
       - name: Require completed Linux smoke receipts
         run: |
           node -e 'const a = require("node:assert/strict"); const r = require(process.env.RUNNER_TEMP + "/standalone-matrix/matrix.json"); a.equal(r.complete, true); a.equal(r.cases.length, 18); a.ok(r.cases.every(c => c.exitCode === 0 && !c.error));'
-          node -e 'const a = require("node:assert/strict"); const r = require(process.env.RUNNER_TEMP + "/npm-background/npm-launch.json"); a.equal(r.publicLaunch, true); a.equal(r.runtime, "Node"); a.equal(r.version, "0.86.1"); a.equal(r.network, "unshared");'
+          node -e 'const a = require("node:assert/strict"); const r = require(process.env.RUNNER_TEMP + "/npm-background/npm-launch.json"); a.equal(r.publicLaunch, true); a.equal(r.runtime, "Node"); a.equal(r.version, "1.2.0"); a.equal(r.network, "unshared");'
       - name: Collect bounded lifecycle evidence
         id: evidence
         if: always()

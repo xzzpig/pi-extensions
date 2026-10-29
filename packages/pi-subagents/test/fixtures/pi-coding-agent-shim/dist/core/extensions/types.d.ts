@@ -495,6 +495,11 @@ export interface ContextEvent {
     type: "context";
     messages: AgentMessage[];
 }
+/** Pi 1.2 event after prompt/tool restoration, before a provider call. */
+export interface ContextWithSystemEvent {
+    type: "context_with_system";
+    messages: AgentMessage[];
+}
 /** Fired before a provider request is sent. Can replace the payload. */
 export interface BeforeProviderRequestEvent {
     type: "before_provider_request";
@@ -814,7 +819,7 @@ export declare function isToolCallEventType<TName extends string, TInput extends
     input: TInput;
 };
 /** Union of all event types */
-export type ExtensionEvent = ProjectTrustEvent | ResourcesDiscoverEvent | SessionEvent | ContextEvent | BeforeProviderRequestEvent | BeforeProviderHeadersEvent | AfterProviderResponseEvent | BeforeAgentStartEvent | AgentStartEvent | AgentEndEvent | AgentBeforeSettleEvent | AgentSettledEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolExecutionEndEvent | ModelSelectEvent | ThinkingLevelSelectEvent | UserBashEvent | InputEvent | ToolCallEvent | ToolResultEvent;
+export type ExtensionEvent = ProjectTrustEvent | ResourcesDiscoverEvent | SessionEvent | ContextEvent | ContextWithSystemEvent | BeforeProviderRequestEvent | BeforeProviderHeadersEvent | AfterProviderResponseEvent | BeforeAgentStartEvent | AgentStartEvent | AgentEndEvent | AgentBeforeSettleEvent | AgentSettledEvent | TurnStartEvent | TurnEndEvent | MessageStartEvent | MessageUpdateEvent | MessageEndEvent | ToolExecutionStartEvent | ToolExecutionUpdateEvent | ToolExecutionEndEvent | ModelSelectEvent | ThinkingLevelSelectEvent | UserBashEvent | InputEvent | ToolCallEvent | ToolResultEvent;
 export interface ContextEventResult {
     messages?: AgentMessage[];
 }
@@ -907,6 +912,7 @@ export interface ExtensionAPI {
     on(event: "session_before_tree", handler: ExtensionHandler<SessionBeforeTreeEvent, SessionBeforeTreeResult>): () => void;
     on(event: "session_tree", handler: ExtensionHandler<SessionTreeEvent>): () => void;
     on(event: "context", handler: ExtensionHandler<ContextEvent, ContextEventResult>): () => void;
+    on(event: "context_with_system", handler: ExtensionHandler<ContextWithSystemEvent, ContextEventResult>): () => void;
     on(event: "before_provider_request", handler: ExtensionHandler<BeforeProviderRequestEvent, BeforeProviderRequestEventResult>): () => void;
     on(event: "before_provider_headers", handler: ExtensionHandler<BeforeProviderHeadersEvent>): () => void;
     on(event: "after_provider_response", handler: ExtensionHandler<AfterProviderResponseEvent>): () => void;

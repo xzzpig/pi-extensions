@@ -45,6 +45,7 @@ import {
 	hasEmptyTerminalAssistantResponse,
 	formatEmptyTerminalAssistantResponseError,
 	extractToolArgsPreview,
+	assistantMessageError,
 	extractTextFromContent,
 	MAX_STREAMED_RECENT_TOOLS,
 	boundStreamedRecentTools,
@@ -59,18 +60,19 @@ import { createJsonlWriter } from "../../shared/jsonl-writer.ts";
 import { createOrcaProgressTab, type OrcaProgressTab } from "../shared/orca-progress-tabs.ts";
 import { clearSandboxStartupDiagnostic, readSandboxStartupDiagnostic } from "../shared/sandbox-startup-diagnostics.ts";
 import { resolvePermissionRules } from "../shared/permissions.ts";
-import { applyThinkingSuffix, deriveForkPromptCacheKey } from "../shared/child-tool-plan.ts";
+import { applyThinkingSuffix, deriveForkPromptCacheKey, supervisorChannelDir } from "../shared/child-tool-plan.ts";
+import { retainsChildCommand } from "../shared/child-commands.ts";
 import { deriveChildSessionName } from "../../shared/child-session-name.ts";
 import { assertAgentAllowedByCapabilityCeiling, intersectSubagentCapabilityCeilings, resolveCurrentSubagentCapabilityCeiling } from "../shared/capability-ceiling.ts";
 import { qualifyModelWithProvider, resolveEffectiveThinking } from "../../shared/model-info.ts";
 import { assertThinkingWithinCeiling, intersectThinkingCeilings } from "../../shared/thinking-ceiling.ts";
-import { formatStructuredOutputRejectionError, MISSING_STRUCTURED_ACCEPTANCE_REPORT_ERROR, MISSING_STRUCTURED_OUTPUT_CALL_ERROR } from "../shared/structured-output.ts";
+import { formatStructuredOutputRejectionError, MISSING_STRUCTURED_ACCEPTANCE_REPORT_ERROR, MISSING_STRUCTURED_OUTPUT_CALL_ERROR, STRUCTURED_OUTPUT_FOLLOW_UP } from "../shared/structured-output.ts";
 import { formatMidToolExitError, isOrdinaryToolForMidToolExit } from "../shared/process-signal.ts";
 import { formatChildToolDiagnostic } from "../shared/tool-availability.ts";
 import { formatChildModelResolutionDiagnostic, formatInheritedProviderDiagnostic, isChildModelResolutionFailure } from "../shared/model-resolution-diagnostic.ts";
 import { planAbortRecovery } from "../shared/abort-recovery.ts";
 import { buildTimeoutRecoverySummary, collectTrackedMutationEvidence, snapshotTrackedMutations } from "../shared/mutation-evidence.ts";
-import { captureSingleOutputSnapshot, extractChildWrittenOutput, finalizeSingleOutput, formatSavedOutputReference, hasSingleOutputChangedSinceSnapshot, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
+import { captureSingleOutputSnapshot, extractChildWrittenOutput, finalizeSingleOutput, formatSavedOutputReference, hasSingleOutputChangedSinceSnapshot, isSettlementFatalOutputError, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
 import {
 	formatSubagentModelVerificationError,
 	isContextOverflow,
@@ -107,6 +109,8 @@ import {
 import { buildInProcessChildLaunch, createReportedChildSessionInput } from "../shared/child-launch.ts";
 import { childSessionFactory, childSessionHasQueuedMessages, projectChildSessionEventForJson, type ChildSession, type ChildSessionEvent } from "../shared/child-session.ts";
 import { reconcileAttemptUsage } from "../shared/usage-reconciliation.ts";
+import { clearProviderRetry, observeProviderDiagnostics, snapshotProviderDiagnostics } from "../../shared/provider-diagnostics.ts";
+import { isRexLocalMachine } from "../shared/rex-machine.ts";
 
 const artifactOutputByResult = new WeakMap<SingleResult, string>();
 const acceptanceOutputByResult = new WeakMap<SingleResult, string>();
@@ -241,6 +245,7 @@ function snapshotProgress(progress: AgentProgress): AgentProgress {
 		...progress,
 		task: PROMPT_REDACTED,
 		skills: progress.skills ? [...progress.skills] : undefined,
+		providerDiagnostics: snapshotProviderDiagnostics(progress.providerDiagnostics),
 		recentTools: boundStreamedRecentTools(progress.recentTools),
 		recentOutput: boundStreamedRecentOutput(progress.recentOutput),
 	};
@@ -252,6 +257,7 @@ function snapshotResult(result: SingleResult, progress: AgentProgress): SingleRe
 		task: PROMPT_REDACTED,
 		messages: result.outputMode === "file-only" && result.savedOutputPath ? undefined : result.messages ? [...result.messages] : undefined,
 		usage: { ...result.usage },
+		providerDiagnostics: snapshotProviderDiagnostics(result.providerDiagnostics),
 		skills: result.skills ? [...result.skills] : undefined,
 		controlEvents: result.controlEvents ? result.controlEvents.map((event) => ({ ...event })) : undefined,
 		progress,
@@ -276,6 +282,7 @@ function snapshotStreamResult(result: SingleResult, progress: AgentProgress): Si
 }
 
 interface StructuredDelegationProgressState {
+	providerDiagnostics?: AgentProgress["providerDiagnostics"];
 	currentTool?: string;
 	currentToolArgs?: string;
 	recentOutput: string[];
@@ -289,6 +296,7 @@ interface StructuredDelegationProgressState {
 
 function captureStructuredDelegationProgressState(progress: AgentProgress, result: SingleResult): StructuredDelegationProgressState {
 	return {
+		providerDiagnostics: progress.providerDiagnostics,
 		currentTool: progress.currentTool,
 		currentToolArgs: progress.currentToolArgs,
 		recentOutput: [...progress.recentOutput],
@@ -306,7 +314,9 @@ function structuredDelegationProgressChanged(
 	progress: AgentProgress,
 	result: SingleResult,
 ): boolean {
-	if (previous.currentTool !== progress.currentTool
+	// Observations replace internal diagnostics; no transcript walk or serialization on heartbeats.
+	if (previous.providerDiagnostics !== progress.providerDiagnostics
+		|| previous.currentTool !== progress.currentTool
 		|| previous.currentToolArgs !== progress.currentToolArgs
 		|| previous.activityState !== progress.activityState
 		|| previous.model !== (progress.model ?? result.model)
@@ -357,6 +367,7 @@ async function runSingleAttempt(
 		orcaProgressTab?: OrcaProgressTab;
 		launchWarnings: { emitted: boolean };
 		verifyModel: boolean;
+		providerDiagnostics?: SingleResult["providerDiagnostics"];
 	},
 ): Promise<SingleResult> {
 	const effectiveThinking = options.thinkingOverride ?? agent.thinking;
@@ -483,6 +494,7 @@ async function runSingleAttempt(
 		exitCode: 0,
 		outputState: "absent",
 		messages: [],
+		providerDiagnostics: shared.providerDiagnostics,
 		usage: emptyUsage(),
 		model: modelArg,
 		...(resolvedThinking ? { thinking: resolvedThinking } : {}),
@@ -513,6 +525,7 @@ async function runSingleAttempt(
 	let cacheWriteUsageComplete = true;
 
 	const progress: AgentProgress = {
+		providerDiagnostics: result.providerDiagnostics,
 		index: options.index ?? 0,
 		agent: agent.name,
 		...(childSessionName ? { sessionName: childSessionName } : {}),
@@ -555,7 +568,9 @@ async function runSingleAttempt(
 		};
 		return result;
 	}
-	const mutationSnapshot = options.machine ? { source: "tracked-files" as const, trackedOnly: true as const, cwd: options.cwd ?? runtimeCwd, dirtyFiles: [], fingerprints: {}, unavailable: "Local Git evidence is not authoritative for a pane-native remote run." } : snapshotTrackedMutations(options.cwd ?? runtimeCwd);
+	// A machine 'local' child edits this disk, so its local Git evidence is authoritative, as for an unplaced run.
+	const mutationCwd = isRexLocalMachine(options.machine) ? options.machine.cwd : options.cwd ?? runtimeCwd;
+	const mutationSnapshot = options.machine && !isRexLocalMachine(options.machine) ? { source: "tracked-files" as const, trackedOnly: true as const, cwd: mutationCwd, dirtyFiles: [], fingerprints: {}, unavailable: "Local Git evidence is not authoritative for a pane-native remote run." } : snapshotTrackedMutations(mutationCwd);
 	let structuredOutputToolInvoked = false;
 	let structuredOutputMessageStartIndex: number | undefined;
 	let toolAvailabilityError: string | undefined;
@@ -609,8 +624,11 @@ async function runSingleAttempt(
 				timeoutHardFinishTimer = undefined;
 			}
 		};
+		const startup = new AbortController();
 		const abortChild = (): void => {
-			if (!session || sessionSettled || lifecycleFinished) return;
+			if (sessionSettled || lifecycleFinished) return;
+			startup.abort();
+			if (!session) return;
 			void session.abort().catch(() => {
 				// The session settles through its prompt promise; abort failures are not separately actionable.
 			});
@@ -666,6 +684,8 @@ async function runSingleAttempt(
 		let agentSettledReceived = false;
 		let queuedDrainHold = false;
 		let compactionStartedReceived = false;
+		let terminalAgentEndReceived = false;
+		let compactionAfterFinalOpen = false;
 		let finalDrainTimer: NodeJS.Timeout | undefined;
 		let finalHardFinishTimer: NodeJS.Timeout | undefined;
 		let watchdogTailTimer: NodeJS.Timeout | undefined;
@@ -708,7 +728,8 @@ async function runSingleAttempt(
 			if (sessionSettled || finalDrainTimer || lifecycleFinished) return;
 			finalDrainTimer = setTimeout(() => {
 				if (lifecycleFinished || sessionSettled) return;
-				if (capture.finalDrainHeld() || observeQueuedDrainHold()) {
+				// Pi runs auto-compaction after the final agent_end and only then emits agent_settled.
+				if (capture.finalDrainHeld() || observeQueuedDrainHold() || compactionAfterFinalOpen) {
 					finalDrainTimer = undefined;
 					armFinalDrainTimer();
 					return;
@@ -722,9 +743,7 @@ async function runSingleAttempt(
 					if (lifecycleFinished || sessionSettled) return;
 					settle(undefined, true);
 				}, HARD_FINISH_MS);
-				finalHardFinishTimer.unref?.();
 			}, FINAL_STOP_GRACE_MS);
-			finalDrainTimer.unref?.();
 		};
 		function armWatchdogTail(): void {
 			if ((!cleanTerminalAssistantStopReceived && !agentSettledReceived) || watchdogTailTimer || lifecycleFinished || sessionSettled) return;
@@ -742,12 +761,20 @@ async function runSingleAttempt(
 			}, childWatchdog?.watchdogTailTimeoutMs ?? 120_000);
 			watchdogTailTimer.unref?.();
 		}
-		const applyChildLifecycle = (action: ChildLifecycleAction): void => {
+		const applyChildLifecycle = (action: ChildLifecycleAction, event?: { type?: string; willRetry?: unknown }): void => {
 			if (action === "cancel-drain") {
-				cleanTerminalAssistantStopReceived = false;
+				// After a clean final stop, a non-retrying agent_end may be the child's last event
+				// (Pi may not emit agent_settled), so it re-arms the drain instead of cancelling it.
+				terminalAgentEndReceived = event?.type === "agent_end" && event.willRetry !== true && cleanTerminalAssistantStopReceived;
 				agentSettledReceived = false;
 				clearFinalDrainTimers();
 				clearWatchdogTailTimer();
+				if (terminalAgentEndReceived) {
+					startFinalDrain();
+					return;
+				}
+				cleanTerminalAssistantStopReceived = false;
+				compactionAfterFinalOpen = false;
 				return;
 			}
 			if (action === "start-drain") startFinalDrain();
@@ -809,7 +836,9 @@ async function runSingleAttempt(
 		};
 
 		let activeLongRunningNotified = false;
-		let pendingToolResult: { tool: string; path?: string; mutates: boolean; startedAt?: number } | undefined;
+		type PendingToolResult = { tool: string; path?: string; mutates: boolean; startedAt?: number };
+		const pendingToolResultsByCallId = new Map<string, PendingToolResult>();
+		let pendingToolResult: PendingToolResult | undefined;
 		// Pi host versions may represent one tool result as either a dedicated
 		// tool_result_end event or a message_end whose message role is toolResult.
 		// Remember correlated ids so normalizing both forms cannot duplicate output.
@@ -876,7 +905,7 @@ async function runSingleAttempt(
 		const mutatingFailures = createMutatingFailureState();
 		const mutatingFailureWindowMs = 5 * 60_000;
 		const currentToolDurationMs = (now: number) => progress.currentToolStartedAt ? Math.max(0, now - progress.currentToolStartedAt) : undefined;
-		const emitNeedsAttention = (now: number, input: { message?: string; reason?: ControlEvent["reason"]; recentFailureSummary?: string; currentTool?: string; toolCallId?: string; currentPath?: string; currentToolDurationMs?: number } = {}): boolean => {
+		const emitNeedsAttention = (now: number, input: { message?: string; reason?: ControlEvent["reason"]; recentFailureSummary?: string; currentTool?: string; toolCallId?: string; hasCommandController?: boolean; currentPath?: string; currentToolDurationMs?: number } = {}): boolean => {
 			if (!controlConfig.enabled) return false;
 			const previous = progress.activityState;
 			progress.activityState = "needs_attention";
@@ -896,6 +925,7 @@ async function runSingleAttempt(
 				toolCount: progress.toolCount,
 				currentTool: input.currentTool ?? progress.currentTool,
 				toolCallId: input.toolCallId,
+				hasCommandController: input.hasCommandController,
 				currentToolDurationMs: input.currentToolDurationMs ?? currentToolDurationMs(now),
 				currentPath: input.currentPath ?? progress.currentPath,
 				recentFailureSummary: input.recentFailureSummary,
@@ -948,11 +978,13 @@ async function runSingleAttempt(
 			if (toolAttentionTarget) {
 				toolAttentionTarget.attentionEmitted = true;
 				const durationMs = Math.max(0, now - toolAttentionTarget.startedAt);
+				const toolCallId = toolAttentionTarget.key.startsWith("id:") ? toolAttentionTarget.key.slice(3) : undefined;
 				return emitNeedsAttention(now, {
 					message: `${agent.name} has had tool '${toolAttentionTarget.tool}' open for ${Math.floor(durationMs / 1000)}s`,
 					reason: "tool_open_threshold",
 					currentTool: toolAttentionTarget.tool,
-					toolCallId: toolAttentionTarget.key.startsWith("id:") ? toolAttentionTarget.key.slice(3) : undefined,
+					toolCallId,
+					hasCommandController: Boolean(toolCallId && retainsChildCommand(supervisorChannelDir(options.runId, agent.name, options.index ?? 0), toolCallId)),
 					currentPath: toolAttentionTarget.path,
 					currentToolDurationMs: durationMs,
 				});
@@ -1012,13 +1044,17 @@ async function runSingleAttempt(
 			}
 			result.messages!.push(message);
 			const resultText = extractTextFromContent(message.content);
-			// The result event's own tool name is authoritative; the single pending slot can
-			// describe a different, overlapping call and serves only as a fallback.
+			const keyedSnapshot = callId ? pendingToolResultsByCallId.get(callId) : undefined;
+			if (callId && keyedSnapshot) pendingToolResultsByCallId.delete(callId);
+			const toolSnapshot = keyedSnapshot ?? pendingToolResult;
+			if (!keyedSnapshot || pendingToolResult === keyedSnapshot) pendingToolResult = undefined;
+			// The result event's own tool name is authoritative; the snapshot is a fallback.
 			const resultToolName = completion.toolName ?? (message as { toolName?: unknown }).toolName;
 			const blockedTool = (typeof resultToolName === "string" && resultToolName.length > 0
 				? resultToolName
-				: undefined) ?? pendingToolResult?.tool;
-			if (options.toolBudget && isToolBudgetBlockedMessage(options.toolBudget, resultText, blockedTool)) {
+				: undefined) ?? toolSnapshot?.tool;
+			const budgetBlocked = Boolean(options.toolBudget && isToolBudgetBlockedMessage(options.toolBudget, resultText, blockedTool));
+			if (options.toolBudget && budgetBlocked) {
 				result.toolBudgetBlocked = true;
 				result.toolBudget = toolBudgetState(
 					options.toolBudget,
@@ -1027,9 +1063,7 @@ async function runSingleAttempt(
 				);
 			}
 			appendRecentOutput(progress, resultText.split("\n").slice(-10));
-			const toolSnapshot = pendingToolResult;
-			pendingToolResult = undefined;
-			if (toolSnapshot?.mutates && didMutatingToolFail(resultText)) {
+			if (toolSnapshot?.mutates && !budgetBlocked && message.role === "toolResult" && didMutatingToolFail(message)) {
 				recordMutatingFailure(mutatingFailures, {
 					tool: toolSnapshot.tool,
 					path: toolSnapshot.path,
@@ -1061,10 +1095,16 @@ async function runSingleAttempt(
 			if (evt.type === "compaction_start") {
 				compactionStartedReceived = true;
 				if (agentSettledReceived) afterCompactionSettlement = true;
+				if (terminalAgentEndReceived) compactionAfterFinalOpen = true;
 			}
 			if (evt.type === "compaction_end" && evt.willRetry === true) {
 				compactionStartedReceived = false;
 				afterCompactionSettlement = false;
+			}
+			if (evt.type === "compaction_end" && evt.willRetry !== true && compactionAfterFinalOpen) {
+				compactionAfterFinalOpen = false;
+				clearFinalDrainTimers();
+				startFinalDrain();
 			}
 			if (evt.type === "turn_start" || evt.type === "agent_start" || evt.type === "auto_retry_start") {
 				queuedDrainHold = false;
@@ -1092,7 +1132,7 @@ async function runSingleAttempt(
 				agentSettledReceived = true;
 				afterCompactionSettlement = compactionStartedReceived;
 			}
-			applyChildLifecycle(lifecycleAction);
+			applyChildLifecycle(lifecycleAction, evt);
 
 			if (isChildWatchdogStatusEvent(evt)) {
 				if (!childWatchdog) return;
@@ -1117,6 +1157,13 @@ async function runSingleAttempt(
 			}
 
 			const now = Date.now();
+			const providerDiagnostics = observeProviderDiagnostics(result.providerDiagnostics, evt, now);
+			if (providerDiagnostics !== result.providerDiagnostics) {
+				result.providerDiagnostics = providerDiagnostics;
+				progress.providerDiagnostics = providerDiagnostics;
+				// message_end already emits synchronously below; retry-only transitions need their own update.
+				if (evt.type !== "message_end") fireUpdate();
+			}
 			progress.durationMs = now - startTime;
 			progress.lastActivityAt = now;
 			updateActivityState(now);
@@ -1136,10 +1183,11 @@ async function runSingleAttempt(
 				}
 				progress.toolCount++;
 				if (options.toolBudget) {
-					result.toolBudget = toolBudgetState(options.toolBudget, progress.toolCount);
+					result.toolBudget = toolBudgetState(options.toolBudget, progress.toolCount, result.toolBudget?.blockedTool);
 				}
 				const mutates = isMutatingTool(evt.toolName, toolArgs, agent.mutationTools);
 				pendingToolResult = { tool: evt.toolName ?? "tool", path: activeTool?.path, mutates, startedAt: now };
+				if (typeof evt.toolCallId === "string" && evt.toolCallId) pendingToolResultsByCallId.set(evt.toolCallId, pendingToolResult);
 				fireUpdate();
 			}
 
@@ -1202,7 +1250,7 @@ async function runSingleAttempt(
 							if (modelVerificationError && !result.error) result.error = modelVerificationError;
 						}
 					}
-					if (evt.message.errorMessage) assistantError = evt.message.errorMessage;
+					if (evt.message.errorMessage) assistantError = assistantMessageError(evt.message);
 					else if (hasToolCall && evt.message.stopReason === "toolUse") {
 						// A recovered request can finish via a terminating tool, without a text stop.
 						assistantError = undefined;
@@ -1362,7 +1410,7 @@ async function runSingleAttempt(
 			const toolDiagnosticError = diagnostic ? formatChildToolDiagnostic(diagnostic, { host: "parent" }) : undefined;
 			toolAvailabilityError = toolDiagnosticError;
 			result.runtimeAcknowledgedExtensions = capture.runtimeAcknowledgedExtensions();
-			if (session?.machineEvidence) result.nativeMachine = { provider: "herdr", machineId: session.machineEvidence.machineId, ...(session.machineEvidence.initial ? { initialGit: session.machineEvidence.initial } : {}), ...(session.machineEvidence.final ? { finalGit: session.machineEvidence.final } : {}) };
+			if (session?.machineEvidence) result.nativeMachine = { provider: session.machineEvidence.provider, machineId: session.machineEvidence.machineId, ...(session.machineEvidence.initial ? { initialGit: session.machineEvidence.initial } : {}), ...(session.machineEvidence.final ? { finalGit: session.machineEvidence.final } : {}) };
 			let closeError = result.error ?? toolDiagnosticError ?? assistantError;
 			const promptErrorMessage = promptError === undefined ? undefined : promptError instanceof Error ? promptError.message : String(promptError);
 			if (promptError !== undefined) childPromptFailed = true;
@@ -1468,6 +1516,7 @@ async function runSingleAttempt(
 		void (async () => {
 			try {
 				const input = createReportedChildSessionInput(launch, shared.transcriptWriter);
+				input.signal = startup.signal;
 				const created = await childSessions.create(input);
 				if (lifecycleFinished) {
 					void created.dispose();
@@ -1501,6 +1550,24 @@ async function runSingleAttempt(
 				messageBaseline = created.messages.length;
 				// A runtime replacement can stop a child that detached while it was still being created.
 				if (!hostStopReason) await created.prompt(`Task: ${task}`);
+				// A structured child that finished normally without calling structured_output gets one more turn (#2997).
+				if (options.structuredOutput
+					&& !structuredOutputToolInvoked
+					&& !sessionSettled
+					&& !lifecycleFinished
+					&& !hostStopReason
+					&& !created.shutDown
+					&& !abortedBySignal
+					&& !interruptedByControl
+					&& !result.timedOut
+					&& !forcedTermination
+					&& !result.error
+					&& !assistantError
+					&& !capture.toolDiagnostic()
+					&& !(progress.currentTool && isOrdinaryToolForMidToolExit(progress.currentTool))) {
+					applyChildLifecycle("cancel-drain");
+					await created.prompt(STRUCTURED_OUTPUT_FOLLOW_UP);
+				}
 				settle(undefined);
 			} catch (error) {
 				settle(error ?? new Error("Child session failed."));
@@ -1508,6 +1575,8 @@ async function runSingleAttempt(
 		})();
 	});
 	result.exitCode = exitCode;
+	result.providerDiagnostics = clearProviderRetry(result.providerDiagnostics);
+	progress.providerDiagnostics = result.providerDiagnostics;
 	if (afterCompactionSettlement) {
 		(result as AbortRecoverySingleResult)[AFTER_COMPACTION_SETTLEMENT] = true;
 	}
@@ -1610,7 +1679,7 @@ async function runSingleAttempt(
 		durationMs: progress.durationMs,
 	};
 	const remoteGitChanged = result.nativeMachine?.initialGit && result.nativeMachine.finalGit ? result.nativeMachine.initialGit.head !== result.nativeMachine.finalGit.head || result.nativeMachine.initialGit.dirty !== result.nativeMachine.finalGit.dirty : undefined;
-	const mutationEvidence = result.nativeMachine ? { source: "tracked-files" as const, trackedOnly: true as const, changedFiles: [], attemptedMutation: remoteGitChanged === true, ...(remoteGitChanged === undefined ? { unavailable: "Remote Git before/after evidence was incomplete." } : {}) } : collectTrackedMutationEvidence(mutationSnapshot, options.cwd ?? runtimeCwd);
+	const mutationEvidence = result.nativeMachine && !isRexLocalMachine(options.machine) ? { source: "tracked-files" as const, trackedOnly: true as const, changedFiles: [], attemptedMutation: remoteGitChanged === true, ...(remoteGitChanged === undefined ? { unavailable: "Remote Git before/after evidence was incomplete." } : {}) } : collectTrackedMutationEvidence(mutationSnapshot, mutationCwd);
 
 	const acceptanceOutput = getFinalOutput(result.messages ?? []);
 	const structuredText = result.structuredOutput === undefined ? undefined : JSON.stringify(result.structuredOutput, null, 2);
@@ -1658,9 +1727,11 @@ async function runSingleAttempt(
 			fullOutput = stripAcceptanceReport(resolvedOutput.fullOutput);
 			result.savedOutputPath = resolvedOutput.savedPath;
 			result.outputSaveError = resolvedOutput.saveError;
-			if (resolvedOutput.fatalError) {
+			if (isSettlementFatalOutputError(resolvedOutput, options.outputMode)) {
 				result.exitCode = 1;
 				result.error = result.error ? `${result.error}\n${resolvedOutput.saveError}` : resolvedOutput.saveError;
+				progress.status = "failed";
+				progress.error = result.error;
 			}
 			if (resolvedOutput.savedPath) {
 				result.outputReference = formatSavedOutputReference(resolvedOutput.savedPath, fullOutput);
@@ -1852,7 +1923,7 @@ async function runSyncCompletionInner(
 			error: "Skills not found: pi-subagents",
 		}, options.context));
 	}
-	const systemPrompt = buildEffectiveSystemPrompt({ agent, resolvedSkills, cwd: skillCwd, ...(options.outputPath ? { outputPath: options.outputPath } : {}) });
+	const systemPrompt = buildEffectiveSystemPrompt({ agent, resolvedSkills, cwd: skillCwd });
 
 	const { model: selectedModel, requestedModel } = resolveModelSelection(
 		options.modelOverride ?? agent.model,
@@ -1985,6 +2056,7 @@ async function runSyncCompletionInner(
 			orcaProgressTab,
 			launchWarnings,
 			verifyModel,
+			providerDiagnostics: lastResult?.providerDiagnostics,
 		});
 		lastResult = attemptResult;
 		sumUsage(aggregateUsage, attemptResult.usage);

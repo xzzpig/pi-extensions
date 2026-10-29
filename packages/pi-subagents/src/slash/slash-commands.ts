@@ -18,6 +18,7 @@ import {
 import type { SubagentParamsLike } from "../runs/foreground/subagent-executor.ts";
 import { findModelInfo, toModelInfo } from "../shared/model-info.ts";
 import { shortenPath } from "../shared/formatters.ts";
+import { canRenderComponents } from "../shared/extension-context.ts";
 import { listAsyncRuns, formatAsyncRunProgressLabel, type AsyncRunSummary } from "../runs/background/async-status.ts";
 import { encodeInspectReply, handleInspectRpcArgs, INSPECT_WIDGET_KEY } from "../runs/background/inspect-rpc.ts";
 import { listScheduledRunSummaries } from "../runs/background/scheduled-runs.ts";
@@ -38,6 +39,7 @@ import {
 import {
 	SLASH_RESULT_TYPE,
 	SLASH_TEXT_RESULT_TYPE,
+	SLASH_TEXT_VIEW_ONLY_DETAILS,
 	SLASH_SUBAGENT_CANCEL_EVENT,
 	SLASH_SUBAGENT_REQUEST_EVENT,
 	SLASH_SUBAGENT_RESPONSE_EVENT,
@@ -146,7 +148,7 @@ const makeProviderCompletions = (state: SubagentState) => (prefix: string) => {
 };
 
 function sendSlashText(pi: ExtensionAPI, text: string): void {
-	pi.sendMessage({ customType: SLASH_TEXT_RESULT_TYPE, content: text, display: true });
+	pi.sendMessage({ customType: SLASH_TEXT_RESULT_TYPE, content: text, display: true, details: SLASH_TEXT_VIEW_ONLY_DETAILS });
 }
 
 async function withSlashStatus<T>(
@@ -172,7 +174,9 @@ type StopSelectorTarget = {
 	actionLabel: string;
 };
 
-type StopSelectorResult = { confirmed: boolean; target?: StopSelectorTarget };
+type StopAllTarget = Omit<StopSelectorTarget, "kind" | "id"> & { kind: "all"; ids: string[] };
+type StopPickerTarget = StopSelectorTarget | StopAllTarget;
+type StopSelectorResult = { confirmed: boolean; target?: StopPickerTarget };
 
 function commandForTarget(target: StopSelectorTarget): string {
 	return target.kind === "scheduled"
@@ -230,6 +234,12 @@ function stopFallbackText(targets: StopSelectorTarget[]): string {
 	return lines.join("\n");
 }
 
+function stopPickerTargets(targets: StopSelectorTarget[]): StopPickerTarget[] {
+	const ids = targets.filter((target) => target.kind === "async").map((target) => target.id);
+	if (ids.length < 2) return targets;
+	return [{ kind: "all", ids, label: `${ids.length} async runs`, detail: ids.join(", "), actionLabel: "stop all" }, ...targets];
+}
+
 function selectForegroundDetachControl(state: SubagentState, requested: string) {
 	const controls = [...state.foregroundControls.values()];
 	if (requested) {
@@ -251,10 +261,10 @@ class SubagentsStopSelector implements Component {
 	private confirming = false;
 	private readonly tui: TUI;
 	private readonly theme: Theme;
-	private readonly targets: StopSelectorTarget[];
+	private readonly targets: StopPickerTarget[];
 	private readonly done: (result: StopSelectorResult) => void;
 
-	constructor(tui: TUI, theme: Theme, targets: StopSelectorTarget[], done: (result: StopSelectorResult) => void) {
+	constructor(tui: TUI, theme: Theme, targets: StopPickerTarget[], done: (result: StopSelectorResult) => void) {
 		this.tui = tui;
 		this.theme = theme;
 		this.targets = targets;
@@ -304,9 +314,8 @@ class SubagentsStopSelector implements Component {
 			const target = this.targets[index]!;
 			const selected = index === this.selected;
 			const marker = selected ? "›" : " ";
-				const actionLabel = target.actionLabel;
-			const action = target.kind === "scheduled" ? this.theme.fg("warning", actionLabel) : this.theme.fg("accent", actionLabel);
-			const labelWidth = Math.max(0, contentWidth - marker.length - actionLabel.length - 2);
+			const action = target.kind === "scheduled" ? this.theme.fg("warning", target.actionLabel) : this.theme.fg("accent", target.actionLabel);
+			const labelWidth = Math.max(0, contentWidth - marker.length - target.actionLabel.length - 2);
 			lines.push(`${marker} ${action} ${target.label.slice(0, labelWidth)}`);
 			if (selected) lines.push(this.theme.fg("dim", `  ${target.detail}`.slice(0, contentWidth)));
 		}
@@ -314,8 +323,8 @@ class SubagentsStopSelector implements Component {
 		lines.push("");
 		if (this.confirming) {
 			const target = this.targets[this.selected]!;
-			lines.push(this.theme.fg("warning", `Confirm: ${target.actionLabel} ${target.id}?`));
-			if (target.kind === "async") lines.push(this.theme.fg("dim", "Stop ends this run; use interrupt for a resumable pause."));
+			lines.push(this.theme.fg("warning", `Confirm: ${target.actionLabel} ${target.kind === "all" ? target.label : target.id}?`));
+			if (target.kind !== "scheduled") lines.push(this.theme.fg("dim", target.kind === "all" ? "Stop ends these runs; scheduled runs are not paused." : "Stop ends this run; use interrupt for a resumable pause."));
 			lines.push(this.theme.fg("dim", "Enter/Y confirms · N returns · Esc cancels"));
 		} else {
 			lines.push(this.theme.fg("dim", "↑↓/jk select · Enter confirm · Esc cancel"));
@@ -397,7 +406,7 @@ async function requestSlashRun(
 				const tool = update.currentTool ? ` ${update.currentTool}` : "";
 				const count = update.toolCount ?? 0;
 				const liveDetailKey = keyText("app.tools.expand");
-				ctx.ui.setStatus("subagent-slash", `${count} tools${tool} | ${liveDetailKey} live detail`);
+				ctx.ui.setStatus("subagent-slash", `${count} tools${tool}${liveDetailKey ? ` | ${liveDetailKey} live detail` : ""}`);
 			} catch (error) {
 				if (isStaleExtensionContextError(error)) {
 					finish(() => reject(error));
@@ -620,7 +629,7 @@ export function registerSlashCommands(
 	};
 	const showFleet = async (ctx: ExtensionContext) => {
 		state.lastUiContext = ctx;
-		if (ctx.mode !== "tui") {
+		if (!canRenderComponents(ctx)) {
 			await runCommand(ctx, { action: "status", view: "fleet" });
 			return;
 		}
@@ -803,7 +812,7 @@ export function registerSlashCommands(
 				ctx.ui.notify(message, "error");
 				return;
 			}
-			if (ctx.mode !== "tui") {
+			if (!canRenderComponents(ctx)) {
 				sendSlashText(pi, stopFallbackText(targets));
 				return;
 			}
@@ -813,10 +822,14 @@ export function registerSlashCommands(
 			}
 
 			const result = await ctx.ui.custom<StopSelectorResult>(
-				(tui, theme, _kb, done) => new SubagentsStopSelector(tui, theme, targets, done),
+				(tui, theme, _kb, done) => new SubagentsStopSelector(tui, theme, stopPickerTargets(targets), done),
 				{ overlay: true, overlayOptions: { anchor: "center", width: 88, maxHeight: "80%" } },
 			);
 			if (!result?.confirmed || !result.target) return;
+			if (result.target.kind === "all") {
+				for (const id of result.target.ids) await runCommand(ctx, { action: "stop", id });
+				return;
+			}
 			if (result.target.kind === "scheduled") {
 				await runCommand(ctx, { action: "schedule.pause", id: result.target.id });
 				return;

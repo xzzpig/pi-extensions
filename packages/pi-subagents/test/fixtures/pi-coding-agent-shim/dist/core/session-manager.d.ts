@@ -124,6 +124,16 @@ export interface SessionTreeNode {
     /** Timestamp of the latest label change for this entry, if any */
     labelTimestamp?: string;
 }
+export interface ProjectedSessionEntry {
+    sourceEntry: SessionEntry;
+    messages: AgentMessage[];
+}
+export interface SessionProjection {
+    entries: ProjectedSessionEntry[];
+    messages: AgentMessage[];
+    thinkingLevel: string;
+    model: { provider: string; modelId: string } | null;
+}
 export interface SessionContext {
     messages: AgentMessage[];
     thinkingLevel: string;
@@ -147,7 +157,7 @@ export interface SessionInfo {
     firstMessage: string;
     allMessagesText: string;
 }
-export type ReadonlySessionManager = Pick<SessionManager, "getCwd" | "getSessionDir" | "getSessionId" | "getSessionFile" | "getLeafId" | "getLeafEntry" | "getEntry" | "getLabel" | "getBranch" | "buildContextEntries" | "getHeader" | "getEntries" | "getTree" | "getSessionName">;
+export type ReadonlySessionManager = Pick<SessionManager, "getCwd" | "getSessionDir" | "getSessionId" | "getSessionFile" | "getLeafId" | "getLeafEntry" | "getEntry" | "getLabel" | "getBranch" | "buildContextEntries" | "buildSessionProjection" | "getHeader" | "getEntries" | "getTree" | "getSessionName">;
 export declare function assertValidSessionId(id: string): void;
 /** Exported for testing */
 export declare function migrateSessionEntries(entries: FileEntry[]): void;
@@ -279,6 +289,8 @@ export declare class SessionManager {
      * Uses tree traversal from current leaf.
      */
     buildSessionContext(): SessionContext;
+    /** Build the Pi 1.2 active session projection. */
+    buildSessionProjection(): SessionProjection;
     /**
      * Get session header.
      */
