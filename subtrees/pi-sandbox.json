@@ -4,11 +4,11 @@
   "prefix": "packages/pi-sandbox",
   "source": "https://github.com/carderne/pi-sandbox.git",
   "remote": "upstream-pi-sandbox",
-  "ref": "v0.7.2",
-  "version": "0.7.2",
-  "upstreamCommit": "1391cdfac55f989116d8a26b8924906e017974f1",
+  "ref": "v0.7.3",
+  "version": "0.7.3",
+  "upstreamCommit": "6a0681e8dba42e259607e146ff585178348931da",
   "squash": true,
-  "lastSyncedAt": "2026-10-27T15:19:30+08:00",
+  "lastSyncedAt": "2026-10-30T12:51:19+08:00",
   "notes": "Forked from carderne/pi-sandbox. The fork adds optional pi-tool-display bash rendering decoration (falling back to built-in rendering when pi-tool-display is absent), named sandbox profiles for subagents, the per-session SandboxService profile layer, a runtime in-memory profile registry (registerSandboxProfiles; user sandbox.json definitions of the same name keep priority), network.disabled, and protectNonexistentFiles passthrough. The project-scoped profile contract lives in openspec (change add-project-scoped-profiles, spec project-sandbox-profiles); the runtime registration contract lives in openspec change add-pi-openspec-x (design D4).",
   "knownDebt": [
     {
@@ -34,6 +34,21 @@
       "path": "packages/pi-sandbox/src/ui.ts",
       "reason": "The fork wraps these upstream-origin calls in its own try/catch seam, so the deeper indentation is required by the fork structure; restoring upstream bytes fails `oxfmt --check`, the package's own formatter gate.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
+    },
+    {
+      "kind": "lint",
+      "path": "packages/pi-sandbox/src/config.ts",
+      "reason": "The JSON.parse boundary and subsequent typeof guard are unchanged from the pre-sync fork and upstream v0.7.3. Both parseConfig callers catch failures; the write path intentionally rethrows a descriptive error to avoid overwriting invalid config."
+    },
+    {
+      "kind": "lint",
+      "path": "packages/pi-sandbox/src/extension.ts",
+      "reason": "The profile-startup error helper's unknown parameter is unchanged from the pre-sync fork and is narrowed before use; retain the existing error boundary under the current-change-only policy."
+    },
+    {
+      "kind": "lint",
+      "path": "packages/pi-sandbox/src/ui.ts",
+      "reason": "The upstream v0.7.3 focus probe returns unknown and uses Reflect.get for the guarded Pi 0.80 focusedComponent fallback; callers narrow the result with instanceof CustomEditor. Preserve the upstream compatibility boundary."
     }
   ],
   "reapplyOnSync": [
@@ -58,7 +73,8 @@
     "keep the sandbox-runtime.ts pattern seam delegating glob syntax to fork-filesystem-paths.ts so all globs are anchored to baseCwd, while upstream retains literal and canonical paths for non-globs; preserve the runtime call forwarding the execution cwd and abort signal",
     "the upstream sandbox-runtime test expects globs anchored to the session cwd rather than raw relative text",
     "preserve the fork's Bash write-denial monitor, output fallback, permission prompts and guarded retry in extension.ts and sandbox-runtime.ts even though upstream v0.7.2 removed its Bash write-failure inference; the removed upstream shell-error recognizer now lives in the fork-only write-denial.ts",
-    "the upstream blocked-execution session test is headless because the fork's interactive write-denial path intentionally retains guarded retries"
+    "the upstream blocked-execution session test is headless because the fork's interactive write-denial path intentionally retains guarded retries",
+    "resolve the opt-in access tools against the selected profile's effective config, enforce named-profile denyRead, and pass individual tool cancellation to permission prompts through fork-prompt-signal.ts; adapt the upstream access-tool fixture to Pi's ExtensionToolContext"
   ],
   "doNotReintroduce": [
     "do not introduce gratuitous upstream-file formatting drift; keep fork behavior tests in fork-only files, with only necessary upstream assertion adaptations for the native network.disabled contract and @xzzpig package identity",
