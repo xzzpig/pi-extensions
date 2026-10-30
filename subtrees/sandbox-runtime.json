@@ -14,7 +14,7 @@
     {
       "kind": "other",
       "path": "packages/sandbox-runtime/package.json",
-      "reason": "The exact typescript 5.6.3 pin is deliberate (upstream's build depends on it); do not widen without a build check.",
+      "reason": "The fork deliberately pins TypeScript 5.6.3 while upstream uses ^5.6.3; widen only after a build compatibility check. The upstream-preserved npm lock still resolves 5.9.3, as it did before the v0.0.77 sync; the workspace pnpm lock governs the fork build.",
       "recordedAt": "2026-09-28T02:09:09+08:00"
     },
     {
@@ -44,7 +44,6 @@
     "keep src/sandbox/fork-network.ts (isNetworkDisabled) as the consolidated network.disabled precedence with its two sandbox-manager.ts call sites",
     "keep pathEntryLstatExists exported (plus the root re-export) for the pi-sandbox fork, whose duplicate pathEntryExists was removed",
     "keep the protectNonexistentFiles tests in fork-only test/sandbox/protect-nonexistent-files.test.ts",
-    "keep the fork-only proxy socket Nagle and Android/Termux platform regression tests added with upstream v0.0.77",
     "pass denyMandatoryCwdFiles and protectNonexistentFiles independently into linuxGetMandatoryDenyPaths; filter its deduplicated mandatory result through the fork-only mandatoryDenyFilter without filtering explicit denyWithinAllow paths; keep the pathEntryLstatExists re-export from linux-sandbox-utils.ts and the package root",
     "keep the optional per-command cwd on ISandboxManager.wrapWithSandbox and its implementation, pass it through FsWriteRestrictionConfig to Linux mandatory scans and macOS mandatory static/glob rules, and forward the existing wrapWithSandboxArgv cwd into the string wrapper; omission still defaults to process.cwd without global chdir"
   ],
