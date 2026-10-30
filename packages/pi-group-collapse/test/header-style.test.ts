@@ -37,6 +37,7 @@ import { GroupCollapseRuntime } from "../src/runtime.ts";
 import { summaryLine } from "../src/view.ts";
 import {
   GROUP_HEADER_LABEL,
+  groupFooterLine,
   groupHeaderLine,
   type HeaderTheme,
 } from "../src/header-style.ts";
@@ -82,6 +83,24 @@ const stubTheme = (
     `${overrides[slot] ?? SGR[slot] ?? "\x1b[39m"}${text}\x1b[39m`,
   bg: (slot, text) =>
     `${overrides[slot] ?? SGR[slot] ?? "\x1b[49m"}${text}\x1b[49m`,
+});
+
+test("group footer is one themed line and safely omitted when it cannot fit", () => {
+  expect(groupFooterLine({ width: 1 })).toBeUndefined();
+  const plainFooter = groupFooterLine({ width: 16 });
+  expect(plainFooter).toBeDefined();
+  expect(visibleWidth(plainFooter ?? "")).toBeLessThanOrEqual(16);
+  expect(visible(plainFooter ?? "")).toContain("收起分组");
+  const themedFooter = groupFooterLine({ width: 16, theme: stubTheme() });
+  expect(themedFooter).toBeDefined();
+  expect(visibleWidth(themedFooter ?? "")).toBe(16);
+  expect(themedFooter).toContain(SGR.accent);
+  const newThemeFooter = groupFooterLine({
+    width: 16,
+    theme: stubTheme({ accent: "\x1b[36m" }),
+  });
+  expect(newThemeFooter).toContain("\x1b[36m");
+  expect(visible(newThemeFooter ?? "")).toBe(visible(themedFooter ?? ""));
 });
 
 /** Every mandatory foreground slot of the SDK's Theme class. */
@@ -646,10 +665,13 @@ describe("runtime header decoration", () => {
       expect(visible(open[titleRow])).toContain(EXPANDED);
       // The thinking body below the title is the run's own output.
       expect(visible(open.join("\n"))).toContain("ALPHA-THOUGHT");
-      // Exactly one decorated row in this frame.
-      expect(open.filter((line) => visible(line).includes(LABEL)).length).toBe(
-        1,
-      );
+      // Exactly one group header and one separate group-level footer.
+      expect(
+        open.filter((line) => visible(line).includes(`${EXPANDED} ${LABEL}`)),
+      ).toHaveLength(1);
+      expect(
+        open.filter((line) => visible(line).includes("收起分组")),
+      ).toHaveLength(1);
     } finally {
       runtime.onSessionShutdown();
     }

@@ -24,6 +24,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, stripTerminalSequences } from "@earendil-works/pi-tui";
 import { GroupCollapseRuntime } from "../src/runtime.ts";
+import { readExpandTarget } from "../src/expand-target.ts";
 
 const WIDTH = 80;
 
@@ -142,6 +143,42 @@ describe("first-startup resume binding", () => {
     // The binding requested the one repaint that makes the folded first
     // frame visible; it does not leave the host showing raw content.
     expect(renderRequests.length).toBe(1);
+    runtime.onSessionShutdown();
+  });
+
+  test("command-opening a reconstructed folded group retains its title and footer", () => {
+    initTheme();
+    const runtime = new GroupCollapseRuntime({ notify: () => {} });
+    const branch = settledBranch();
+    const { receiver } = startupReceiver(branch);
+    runtime.onSessionStart({
+      mode: "tui",
+      cwd: "/tmp/no-config-resume",
+      getBranch: () => branch,
+    });
+    receiver.renderInitialMessages();
+    expect(runtime.debugFoldedIds()).toEqual([1]);
+    expect(runtime.expandAll()).toBe(1);
+    const child = receiver.chatContainer.children[0] as ToolExecutionComponent;
+    const rows = child.render(WIDTH).map(stripTerminalSequences);
+    const header = rows.findIndex((row) => row.includes("▾ 分组"));
+    const footer = rows.findIndex((row) => row.includes("收起分组"));
+    expect(header).toBeGreaterThanOrEqual(0);
+    expect(footer).toBeGreaterThan(header);
+    expect(rows.join("\n")).toContain("done resume-tool");
+    const headerTarget = readExpandTarget(child)?.resolveLocalTarget(
+      header,
+      WIDTH,
+    );
+    const footerTarget = readExpandTarget(child)?.resolveLocalTarget(
+      footer,
+      WIDTH,
+    );
+    expect(footerTarget?.component).toBe(headerTarget?.component);
+    expect(footerTarget?.expanded).toBe(false);
+    footerTarget?.component.setExpanded(false);
+    expect(renderedText(receiver)).toContain("▸ 分组");
+    expect(renderedText(receiver)).not.toContain("done resume-tool");
     runtime.onSessionShutdown();
   });
 

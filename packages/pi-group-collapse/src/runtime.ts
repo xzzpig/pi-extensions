@@ -29,11 +29,23 @@ import {
   ToolExecutionComponent,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
+import { Text, stripTerminalSequences } from "@earendil-works/pi-tui";
 import {
   bindComponent,
+  bindNotificationSpacer,
+  clearNotificationSpacers,
+  forgetNotificationSpacer,
+  footerAtRow,
+  headerRowAtWidth,
   installRenderProjection,
   managedRunAtRow,
+  probeProjectedLines,
+  refreshNotificationSpacer,
+  type GroupBoundaryEdges,
+  type GroupBoundaryGaps,
+  type ProjectedComponent,
   type Projection,
+  type ShellRole,
 } from "./host-adapter.ts";
 import {
   loadGroupCollapseConfig,
@@ -63,7 +75,7 @@ import {
   type PatchInstallResult,
 } from "./patch-registry.ts";
 import { summaryLine } from "./view.ts";
-import { groupHeaderLine } from "./header-style.ts";
+import { groupFooterLine, groupHeaderLine } from "./header-style.ts";
 import {
   isValidExpandTarget,
   publishExpandTarget,
@@ -185,6 +197,13 @@ export class GroupCollapseRuntime {
   /** The live host receiver, remembered for post-rebuild rescans. */
   private activeReceiver: HostReceiver | undefined;
   private knownComponents = new WeakSet<object>();
+  private componentPositions = new WeakMap<
+    object,
+    { receiver: WeakRef<HostReceiver>; index: number }
+  >();
+  /** Weak component lookup for jumping over a folded group's hidden members. */
+  private componentsByKey = new Map<string, WeakRef<object> | null>();
+  private positionReceiver: WeakRef<HostReceiver> | undefined;
   private displayAllowed = false;
   private sessionActive = false;
   private configIssuesNotified = false;
@@ -299,6 +318,9 @@ export class GroupCollapseRuntime {
     );
     this.adoptRebuilt(rebuilt);
     this.knownComponents = new WeakSet();
+    this.componentPositions = new WeakMap();
+    this.componentsByKey = new Map();
+    this.positionReceiver = undefined;
     this.assistantStates = new WeakMap();
     // The per-container known count dies with the view: keeping it would
     // make the next scan see "nothing alive but N known" and re-enter this
@@ -343,6 +365,7 @@ export class GroupCollapseRuntime {
     this.viewIndex = undefined;
     this.widthFallbacks.clear();
     this.widthFallbackRevision = -1;
+    clearNotificationSpacers();
   }
 
   onSessionShutdown(): void {
@@ -361,6 +384,9 @@ export class GroupCollapseRuntime {
     this.widthFallbacks.clear();
     this.widthFallbackRevision = -1;
     this.knownComponents = new WeakSet();
+    this.componentPositions = new WeakMap();
+    this.componentsByKey = new Map();
+    this.positionReceiver = undefined;
     this.assistantStates = new WeakMap();
     this.knownCounts = new WeakMap();
     this.customStates = new WeakMap();
@@ -501,13 +527,36 @@ export class GroupCollapseRuntime {
       this.rebuildViewFromLastBranch(receiver);
       rebuilt = true;
     }
-    for (const child of children) {
+    const receiverRef =
+      this.positionReceiver?.deref() === receiver
+        ? this.positionReceiver
+        : new WeakRef(receiver);
+    this.positionReceiver = receiverRef;
+    for (let index = 0; index < children.length; index++) {
+      const child = children[index];
       if (typeof child !== "object" || child === null) continue;
+      const position = this.componentPositions.get(child);
+      if (
+        !position ||
+        position.receiver !== receiverRef ||
+        position.index !== index
+      ) {
+        this.componentPositions.set(child, { receiver: receiverRef, index });
+      }
+      refreshNotificationSpacer(child, children[index + 1], receiver, index);
       // First sight vs re-scan: member classes re-classify idempotently,
       // structural boundaries apply only once, at their display position.
       const isNew = !this.knownComponents.has(child);
       this.knownComponents.add(child);
       this.classifyAndApply(child, isNew);
+      const key = boundKeyOf(child);
+      if (key !== undefined) {
+        const existing = this.componentsByKey.get(key);
+        if (existing === undefined)
+          this.componentsByKey.set(key, new WeakRef(child));
+        else if (existing !== null && existing.deref() !== child)
+          this.componentsByKey.set(key, null);
+      }
     }
     this.setKnownCountFor(receiver, children.length);
     // Repaint once when bindings changed underneath an already-rendered
@@ -562,6 +611,19 @@ export class GroupCollapseRuntime {
     if (isNew) {
       publishExpandTarget(child, (localRow, width) => {
         const key = boundKeyOf(child) ?? "";
+        const footer = footerAtRow(child, localRow, width);
+        if (footer !== undefined) {
+          if (!this.isCurrentComponent(child)) return undefined;
+          const memberKey =
+            footer.run === undefined ? key : `${key}#t${footer.run}`;
+          return this.localExpandTarget(memberKey, 0, width, "footer");
+        }
+        const headerRow = headerRowAtWidth(child, width);
+        if (headerRow !== undefined) {
+          return localRow === headerRow
+            ? this.localExpandTarget(key, 0, width)
+            : undefined;
+        }
         // A managed thinking row of an assistant message resolves to that
         // row's own group, not to the carrier chain.
         const run = managedRunAtRow(child, localRow);
@@ -800,7 +862,12 @@ export class GroupCollapseRuntime {
     let opened = 0;
     for (const segment of this.model.currentSegments()) {
       if (segment.turn === activeTurn) continue;
-      if (this.store.isFolded(segment.id)) opened += 1;
+      if (this.store.isFolded(segment.id)) {
+        opened += 1;
+        // Reconstructed groups are already folded, but adoption clears the
+        // transient history set. Preserve their group controls when opened.
+        this.wasEverFolded.add(segment.id);
+      }
       this.store.open(segment.id);
     }
     if (opened > 0 && this.activeReceiver !== undefined) {
@@ -953,7 +1020,10 @@ export class GroupCollapseRuntime {
     // for later scans. (The split itself already happened in the model.)
     for (const { key, component } of updates) {
       if (this.model.member(key)) this.groupedNotifications.add(component);
-      else this.groupedNotifications.delete(component);
+      else {
+        this.groupedNotifications.delete(component);
+        if (component instanceof Text) forgetNotificationSpacer(component);
+      }
     }
   }
 
@@ -971,6 +1041,7 @@ export class GroupCollapseRuntime {
       const component = invalidation.component as object;
       keys.push(identityOf(component));
       this.groupedNotifications.delete(component);
+      if (component instanceof Text) forgetNotificationSpacer(component);
     }
     this.model.invalidateMembers(keys);
   }
@@ -1050,10 +1121,19 @@ export class GroupCollapseRuntime {
     const render = installRenderProjection(
       (component, width) => this.projectionFor(component, width),
       {
-        onSummaryClick: (component, width, run) =>
-          this.toggleAtShellRow(component, width, run),
-        resolveSummaryTarget: (component, width, run) =>
-          this.resolveShellTarget(component, width, run)?.component,
+        onSummaryClick: (component, width, run, role) =>
+          this.toggleAtShellRow(component, width, run, role),
+        resolveSummaryTarget: (component, width, run, role) =>
+          this.resolveShellTarget(component, width, run, role)?.component,
+        isNotificationReceiver: (receiver) => receiver === this.activeReceiver,
+        groupBoundary: (component, width, edges) =>
+          this.groupBoundary(component, width, edges),
+        onNotificationSpacerUnavailable: () => {
+          this.notifications.notify(
+            "group-collapse: notification spacing unavailable; original spacing will remain visible",
+            "warning",
+          );
+        },
         onUnfittable: (component, width) => {
           const key = boundKeyOf(component);
           const segment =
@@ -1160,11 +1240,24 @@ export class GroupCollapseRuntime {
     );
     this.notificationObserver = createNotificationObserver({
       onNotification: (notification) => {
+        const component = notification.component;
+        if (typeof component !== "object" || component === null) return;
         this.observeNotification(
-          notification.component as object,
+          component,
           notification.level,
           notification.text,
         );
+        if (!(component instanceof Text)) return;
+        forgetNotificationSpacer(component);
+        const receiver = notification.receiver;
+        const spacer = notification.spacer;
+        if (!spacer || !isHostReceiver(receiver)) return;
+        if (!this.model.member(identityOf(component))) return;
+        const children = receiver.chatContainer.children;
+        const index = children.length - 2;
+        if (children[index] === spacer && children[index + 1] === component) {
+          bindNotificationSpacer(spacer, component, receiver, index);
+        }
       },
       // The batch callbacks are what this runtime uses: one host status
       // change can touch every tracked line, and the model must drop or
@@ -1480,6 +1573,28 @@ export class GroupCollapseRuntime {
               }
               return this.headerLine(this.summaryOf(runSegment), w, true);
             },
+            footerForRun: (run, w) => {
+              const segmentId = runSegments.get(run);
+              const runSegment =
+                segmentId === undefined
+                  ? undefined
+                  : this.index().byId.get(segmentId);
+              if (
+                !runSegment ||
+                runSegment.turn === activeTurn ||
+                this.store.isFolded(runSegment.id)
+              )
+                return undefined;
+              if (
+                !this.isCurrentComponent(component) ||
+                !this.everFolded(runSegment) ||
+                !this.summaryFits(runSegment, w)
+              )
+                return undefined;
+              if (runSegment.members.at(-1)?.key !== `${messageKey}#t${run}`)
+                return undefined;
+              return this.footerLine(w);
+            },
           };
         }
       }
@@ -1507,7 +1622,12 @@ export class GroupCollapseRuntime {
       return undefined;
     }
     const carrier = segment.members[0]?.key === key;
+    const lastMember = segment.members.at(-1)?.key === key;
     const token = { segmentId: segment.id };
+    const footerFor = (w: number) =>
+      this.isCurrentComponent(component) && this.summaryFits(segment, w)
+        ? this.footerLine(w)
+        : undefined;
 
     if (folded && carrier) {
       return {
@@ -1525,7 +1645,11 @@ export class GroupCollapseRuntime {
         token,
         titleFor: (w: number) =>
           this.headerLine(this.summaryOf(segment), w, true),
+        footerFor: lastMember ? footerFor : undefined,
       };
+    }
+    if (lastMember && this.everFolded(segment)) {
+      return { kind: "footer", footerFor };
     }
     return undefined;
   }
@@ -1546,6 +1670,128 @@ export class GroupCollapseRuntime {
       expanded,
       theme: this.currentTheme(),
     });
+  }
+
+  private footerLine(width: number): string | undefined {
+    return groupFooterLine({ width, theme: this.currentTheme() });
+  }
+
+  /** A footer must still belong to the currently indexed main view. */
+  private isCurrentComponent(component: unknown): boolean {
+    if (typeof component !== "object" || component === null) return false;
+    const position = this.componentPositions.get(component);
+    const host = position?.receiver.deref();
+    return (
+      position !== undefined &&
+      host !== undefined &&
+      host === this.activeReceiver &&
+      host.chatContainer.children[position.index] === component
+    );
+  }
+
+  /** Resolve group-edge gaps from proven neighboring main-transcript rows. */
+  private groupBoundary(
+    component: ProjectedComponent,
+    width: number,
+    edges: GroupBoundaryEdges,
+  ): GroupBoundaryGaps {
+    const position = this.componentPositions.get(component);
+    const host = position?.receiver.deref();
+    const children = host?.chatContainer.children;
+    if (
+      !position ||
+      !host ||
+      host !== this.activeReceiver ||
+      !children ||
+      children[position.index] !== component
+    ) {
+      return { before: undefined, after: false };
+    }
+    type Adjacent =
+      | { kind: "found"; lines: string[]; startsWithGroup: boolean }
+      | { kind: "none" | "unknown" };
+    const adjacent = (from: number, direction: -1 | 1): Adjacent => {
+      for (
+        let index = from + direction;
+        index >= 0 && index < children.length;
+        index += direction
+      ) {
+        const candidate = children[index];
+        if (
+          typeof candidate === "object" &&
+          candidate !== null &&
+          this.projectionFor(candidate, width)?.kind === "hide"
+        )
+          continue;
+        const probe = probeProjectedLines(candidate, width);
+        // An unknown or failing component is not proof of a tight boundary.
+        if (probe === undefined) return { kind: "unknown" };
+        if (probe.lines.length > 0) return { kind: "found", ...probe };
+      }
+      return { kind: "none" };
+    };
+    const blank = (line: string) => stripTerminalSequences(line).trim() === "";
+    const previous = edges.start
+      ? adjacent(position.index, -1)
+      : ({ kind: "none" } as const);
+    let endIndex = position.index;
+    let endCandidate: Adjacent | undefined;
+    if (edges.end) {
+      const componentKey = boundKeyOf(component);
+      const memberKey =
+        componentKey && edges.endRun !== undefined
+          ? `${componentKey}#t${edges.endRun}`
+          : componentKey;
+      const segment =
+        memberKey === undefined
+          ? undefined
+          : this.index().byMember.get(memberKey);
+      const last = segment?.members.at(-1);
+      if (segment && last && this.store.isFolded(segment.id)) {
+        const lastComponentKey =
+          last.kind === "thinking" ? last.key.replace(/#t\d+$/, "") : last.key;
+        const lastComponent = this.componentsByKey
+          .get(lastComponentKey)
+          ?.deref();
+        const lastPosition =
+          lastComponent === undefined
+            ? undefined
+            : this.componentPositions.get(lastComponent);
+        if (
+          lastComponent &&
+          boundKeyOf(lastComponent) === lastComponentKey &&
+          lastPosition?.receiver.deref() === host &&
+          children[lastPosition.index] === lastComponent &&
+          lastPosition.index >= position.index
+        ) {
+          endIndex = lastPosition.index;
+          // The final member can share an assistant component with visible
+          // text. Inspect that projected component before jumping past it.
+          if (
+            lastComponent !== component &&
+            this.projectionFor(lastComponent, width)?.kind !== "hide"
+          ) {
+            const probe = probeProjectedLines(lastComponent, width);
+            if (probe === undefined) endCandidate = { kind: "unknown" };
+            else if (probe.lines.length > 0)
+              endCandidate = { kind: "found", ...probe };
+          }
+        }
+      }
+    }
+    const next = edges.end
+      ? (endCandidate ?? adjacent(endIndex, 1))
+      : ({ kind: "none" } as const);
+    return {
+      before:
+        previous.kind === "unknown"
+          ? undefined
+          : previous.kind === "found" &&
+            !blank(previous.lines[previous.lines.length - 1]),
+      // Adjacent groups share one gap, owned by the second group's header.
+      after:
+        next.kind === "found" && !blank(next.lines[0]) && !next.startsWithGroup,
+    };
   }
 
   private currentTheme(): Theme | undefined {
@@ -1643,6 +1889,7 @@ export class GroupCollapseRuntime {
     key: string,
     localRow: number,
     width: number,
+    role: ShellRole = "header",
   ): ExpandTarget | undefined {
     if (localRow !== 0) return undefined;
     const segment = this.index().byMember.get(key);
@@ -1652,16 +1899,23 @@ export class GroupCollapseRuntime {
       : undefined;
     if (segment.turn === activeTurn) return undefined;
     if (!this.everFolded(segment)) return undefined;
-    const carrier = segment.members[0]?.key === key;
-    if (!carrier) return undefined;
-    // Only a summary/title that actually fits the width renders a row to
-    // hit — folded or expanded alike, each measured with its own row's
-    // disclosure marker.
-    const line = summaryLine(this.summaryOf(segment), {
-      width,
-      expanded: !this.store.isFolded(segment.id),
-    });
-    if (line === undefined) return undefined;
+    const folded = this.store.isFolded(segment.id);
+    if (role === "footer") {
+      if (folded || segment.members.at(-1)?.key !== key) return undefined;
+      if (
+        !this.summaryFits(segment, width) ||
+        this.footerLine(width) === undefined
+      )
+        return undefined;
+    } else {
+      if (segment.members[0]?.key !== key) return undefined;
+      // Only a summary/title that fits the width renders a row to hit.
+      const line = summaryLine(this.summaryOf(segment), {
+        width,
+        expanded: !folded,
+      });
+      if (line === undefined) return undefined;
+    }
     const handle = this.groupHandle(segment.id);
     // `expanded` is the direction a plain click sets, not the state.
     return { component: handle, expanded: !handle.expanded };
@@ -1682,13 +1936,16 @@ export class GroupCollapseRuntime {
     component: object,
     width: number,
     run?: number,
+    role: ShellRole = "header",
   ): ExpandTarget | undefined {
+    if (role === "footer" && !this.isCurrentComponent(component))
+      return undefined;
     const key = boundKeyOf(component);
     if (key === undefined) return undefined;
     // A click on a managed thinking row resolves to that row's own group;
     // otherwise the carrier chain applies.
     if (run !== undefined) {
-      const target = this.localExpandTarget(`${key}#t${run}`, 0, width);
+      const target = this.localExpandTarget(`${key}#t${run}`, 0, width, role);
       if (target && isValidExpandTarget(target)) return target;
       return undefined;
     }
@@ -1700,7 +1957,7 @@ export class GroupCollapseRuntime {
       }
     }
     for (const candidate of candidates) {
-      const target = this.localExpandTarget(candidate, 0, width);
+      const target = this.localExpandTarget(candidate, 0, width, role);
       if (target && isValidExpandTarget(target)) return target;
     }
     return undefined;
@@ -1710,8 +1967,9 @@ export class GroupCollapseRuntime {
     component: object,
     width: number,
     run?: number,
+    role: ShellRole = "header",
   ): boolean {
-    const target = this.resolveShellTarget(component, width, run);
+    const target = this.resolveShellTarget(component, width, run, role);
     if (!target) return false;
     target.component.setExpanded(target.expanded);
     return true;

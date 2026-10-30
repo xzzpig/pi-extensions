@@ -1,6 +1,6 @@
 {
   "name": "@xzzpig/pi-group-collapse",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Fold a settled turn's tools, thinking, and selected special messages into one-line summaries, keeping the original rendering one click away.",
   "type": "module",
   "license": "MIT",

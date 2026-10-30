@@ -37,12 +37,21 @@ Older or unsupported host component layouts fail safely without hiding content.
   follows the host theme when it provides a panel color. Expanding keeps
   the same title with `▾` and restores the members' original rendering
   byte-for-byte — no member list, no indentation, no changes to members'
-  own expand states. Narrow terminals omit the label before sacrificing
-  statistics or exception markers.
-- **Independent group objects**: a summary click toggles the group, never
-  the first tool inside it. Works with pi-starline's click resolution (via
-  a versioned explicit-target protocol) and without it; drags, double
-  clicks, selections, links, and wheel events keep their native meaning.
+  own expand states. When the group was opened and its actual end can be
+  located safely, a single `▴ 收起分组` row at the end collapses that
+  same group without changing any member's own expand state. Narrow
+  terminals omit the label before sacrificing statistics or exception
+  markers; if the bottom control cannot fit or be safely located, it is
+  omitted and the title and commands remain available.
+- **Group spacing**: provably owned placeholders of hidden thinking and
+  notifications fold with their members. A group gets a single external
+  blank line when needed next to visible content; existing spacing and
+  meaningful content are preserved rather than globally trimmed.
+- **Independent group objects**: a title or bottom-control click toggles
+  the group, never the tool or message carrying that row. Works with
+  pi-starline's click resolution (via a versioned explicit-target protocol)
+  and without it; drags, double clicks, selections, links, and wheel
+  events keep their native meaning.
 
 ## Configuration
 
@@ -123,10 +132,12 @@ a warning.
   visible and forms a boundary.
 - If the host no longer exposes all required notification-source methods,
   notification grouping is disabled and a warning is shown once per session.
-  Notifications stay visible; ordinary tool grouping remains available.
+  Notifications stay visible; ordinary tool grouping remains available. If
+  the notification-spacing seam is unavailable, original notification
+  spacing remains visible and a warning explains the fallback.
 - Works alongside pi-tool-display, pi-thinking-collapse, and pi-starline;
   none of them need to be disabled. With pi-starline absent (or its click
-  feature off) the plugin handles summary clicks itself.
+  feature off) the plugin handles title and bottom-control clicks itself.
 
 ## Development
 

@@ -19,7 +19,15 @@
  * them; this file only adds coexistence evidence.
  */
 
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+  vi,
+} from "vitest";
 import {
   AssistantMessageComponent,
   CustomMessageComponent,
@@ -269,11 +277,13 @@ describe("combination matrix", () => {
   });
 
   describe("pi-tool-display real renderers under the projection", () => {
-    beforeAll(() => {
+    // Each case reuses tool id t1; isolate views so unrelated cases do not
+    // turn into duplicate host components and synthetic inter-group gaps.
+    beforeEach(() => {
       startRuntime();
     });
 
-    afterAll(() => {
+    afterEach(() => {
       stopRuntime();
     });
 
@@ -365,7 +375,7 @@ describe("combination matrix", () => {
     test("a renderer-declared hidden output stays hidden under the group", () => {
       // pi-tool-display's hidden mode: the renderer yields an empty body.
       const hiddenDefinition = {
-        renderResult: () => ({ render: (width: number) => [] as string[] }),
+        renderResult: () => ({ render: (_width: number) => [] as string[] }),
       };
       const tool = toolWith("read", "t1", { path: "/tmp/x" }, hiddenDefinition);
       settleOneTool(tool);
@@ -427,7 +437,8 @@ describe("combination matrix", () => {
   });
 });
 
-/** Plain click on the shell row via the component's own mouse path. */
+/** Separate plain clicks via the component's own mouse path. */
+const lastCompositionClick = new WeakMap<object, number>();
 function dispatchToggle(component: object): void {
   const handler = (
     component as unknown as {
@@ -447,6 +458,18 @@ function dispatchToggle(component: object): void {
     alt: false,
     ctrl: false,
   });
-  handler.call(component, event("press"));
-  handler.call(component, event("release"));
+  // These matrix assertions exercise separate clicks, not a double-click.
+  // Advance only this synchronous dispatch beyond the native 500 ms window.
+  const now = Math.max(
+    Date.now(),
+    (lastCompositionClick.get(component) ?? 0) + 501,
+  );
+  lastCompositionClick.set(component, now);
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+  try {
+    handler.call(component, event("press"));
+    handler.call(component, event("release"));
+  } finally {
+    clock.mockRestore();
+  }
 }

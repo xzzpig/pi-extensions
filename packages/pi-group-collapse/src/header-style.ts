@@ -113,6 +113,20 @@ export function groupHeaderLine(
   return paintBackground(theme, row, options.width);
 }
 
+/** A single group-level control at the end of an expanded group. */
+export function groupFooterLine(options: {
+  readonly width: number;
+  readonly theme?: HeaderTheme;
+}): string | undefined {
+  const text = "▴ 收起分组";
+  if (visibleWidth(text) > options.width) return undefined;
+  return paintBackground(
+    options.theme,
+    paintForeground(options.theme, "accent", text),
+    options.width,
+  );
+}
+
 function markerColor(marker: string): ThemeColor {
   return marker === "✗" ? "error" : "warning";
 }

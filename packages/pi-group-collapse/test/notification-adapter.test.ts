@@ -19,7 +19,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { InteractiveMode, initTheme } from "@earendil-works/pi-coding-agent";
-import { Container } from "@earendil-works/pi-tui";
+import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import {
   boundStatusComponentOf,
   createNotificationObserver,
@@ -119,6 +119,28 @@ describe("notification observer", () => {
     expect(receiver.chatContainer.children).toContain(info.component);
     expect(receiver.chatContainer.children).toContain(warning.component);
     expect(receiver.chatContainer.children).toContain(error.component);
+    for (const item of [info, warning, error]) {
+      const index = receiver.chatContainer.children.indexOf(
+        item.component as never,
+      );
+      expect(item.spacer).toBe(receiver.chatContainer.children[index - 1]);
+      expect(item.spacer).toBeInstanceOf(Spacer);
+    }
+  });
+
+  test("an unproven replacement beside a notification is never claimed as its spacer", () => {
+    const receiver = makeReceiver();
+    notifications = [];
+    const foreign = new Text("foreign component", 0, 0);
+    receiver.ui.requestRender = () => {
+      const children = receiver.chatContainer.children;
+      if (children.length >= 2) children[children.length - 2] = foreign;
+    };
+    prototype.showExtensionNotify.call(receiver, "unproven spacer", "info");
+    expect(notifications).toHaveLength(1);
+    expect(notifications[0].spacer).toBeUndefined();
+    expect(receiver.chatContainer.children).toContain(foreign);
+    expect(foreign.render(80).join("\n")).toContain("foreign component");
   });
 
   test("core-originated status lines are never claimed", () => {
@@ -145,6 +167,8 @@ describe("notification observer", () => {
     expect(first.reusedTail).toBe(false);
     expect(second.reusedTail).toBe(true);
     expect(second.component).toBe(first.component);
+    expect(second.spacer).toBe(first.spacer);
+    expect(second.spacer).toBe(receiver.chatContainer.children[0]);
     // Still exactly one Spacer/ThemedText pair in the container.
     expect(receiver.chatContainer.children.length).toBe(2);
     expect(boundStatusComponentOf(receiver)).toBe(first.component);

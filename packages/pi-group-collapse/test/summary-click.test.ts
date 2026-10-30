@@ -17,7 +17,7 @@
  *   toggle, in every combination.
  */
 
-import { beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
   AssistantMessageComponent,
   CustomMessageComponent,
@@ -31,6 +31,7 @@ import {
   stripTerminalSequences,
 } from "@earendil-works/pi-tui";
 import { GroupCollapseRuntime } from "../src/runtime.ts";
+import { readExpandTarget } from "../src/expand-target.ts";
 
 const WIDTH = 80;
 
@@ -138,20 +139,72 @@ describe("native summary clicks", () => {
   });
 
   test("a plain click on a tool-carried summary toggles exactly once", () => {
-    const tool = foldedToolGroup(runtime, receiver);
-    expect(tool.render(WIDTH).length).toBe(1); // folded
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    try {
+      const tool = foldedToolGroup(runtime, receiver);
+      expect(tool.render(WIDTH).length).toBe(1); // folded
 
-    dispatch(tool, at("press", 2, 0));
-    const result = dispatch(tool, at("release", 2, 0));
-    expect(result).toEqual({ handled: true, render: true });
-    const expanded = tool.render(WIDTH);
-    expect(expanded.length).toBeGreaterThan(1);
-    expect(plain(expanded)).toContain("echo t1");
+      dispatch(tool, at("press", 2, 0));
+      const result = dispatch(tool, at("release", 2, 0));
+      expect(result).toEqual({ handled: true, render: true });
+      const expanded = tool.render(WIDTH);
+      expect(expanded.length).toBeGreaterThan(1);
+      expect(plain(expanded)).toContain("echo t1");
 
-    // Click again collapses — one click never flips twice.
-    dispatch(tool, at("press", 2, 0));
-    dispatch(tool, at("release", 2, 0));
-    expect(tool.render(WIDTH).length).toBe(1);
+      // A separate click after the double-click window collapses again.
+      clock.mockReturnValue(1_600);
+      dispatch(tool, at("press", 2, 0));
+      dispatch(tool, at("release", 2, 0));
+      expect(tool.render(WIDTH).length).toBe(1);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("a second same-cell release after Starline toggles does not toggle again", () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(10_000);
+    try {
+      const tool = foldedToolGroup(runtime, receiver);
+      tool.render(WIDTH);
+      const target = readExpandTarget(tool)?.resolveLocalTarget(0, WIDTH);
+      expect(target).toBeDefined();
+      // Pi receives the first press, then Starline consumes its release and
+      // invokes the shared group target directly. The native component sees
+      // the second press/release when Starline leaves double-click selection
+      // to Pi; it must not undo the first toggle.
+      expect(dispatch(tool, at("press", 2, 0))).toBeUndefined();
+      target?.component.setExpanded(true);
+      tool.render(WIDTH);
+      clock.mockReturnValue(10_100);
+      expect(dispatch(tool, at("press", 2, 0))).toBeUndefined();
+      expect(dispatch(tool, at("release", 2, 0))).toBeUndefined();
+      dispatch(tool, at("click", 2, 0, { clickCount: 1 }));
+      expect(plain(tool.render(WIDTH))).toContain("▾ 分组");
+      expect(plain(tool.render(WIDTH))).toContain("收起分组");
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  test("a second same-cell native click remains a selection", () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(20_000);
+    try {
+      const tool = foldedToolGroup(runtime, receiver);
+      tool.render(WIDTH);
+      dispatch(tool, at("press", 2, 0));
+      expect(dispatch(tool, at("release", 2, 0))).toEqual({
+        handled: true,
+        render: true,
+      });
+      tool.render(WIDTH);
+      clock.mockReturnValue(20_100);
+      expect(dispatch(tool, at("press", 2, 0))).toBeUndefined();
+      expect(dispatch(tool, at("release", 2, 0))).toBeUndefined();
+      dispatch(tool, at("click", 2, 0, { clickCount: 1 }));
+      expect(plain(tool.render(WIDTH))).toContain("▾ 分组");
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   test("press alone (an upstream consumer took the release) toggles nothing", () => {
@@ -225,12 +278,14 @@ describe("native summary clicks", () => {
     ]);
     runtime.handlePiEvent({ type: "agent_start" });
     const note = new Text("Observational memory: stored", 1, 0);
+    const original = note.render(WIDTH);
     receiver.chatContainer.addChild(note);
     runtime.debugRegisterNotification(
       note,
       "info",
       "Observational memory: stored",
     );
+    runtime.syncReceiver(receiver);
     runtime.handlePiEvent({
       type: "agent_end",
       messages: [{ role: "assistant", stopReason: "stop" }],
@@ -241,10 +296,18 @@ describe("native summary clicks", () => {
     dispatch(note, at("press", 1, 0));
     const result = dispatch(note, at("release", 1, 0));
     expect(result).toEqual({ handled: true, render: true });
-    // Expanded: the notification's own line renders again below the title.
+    // The added title and footer are group UI; the member stays byte-identical.
     const expanded = note.render(WIDTH);
-    expect(expanded.length).toBe(2);
+    expect(expanded).toHaveLength(original.length + 2);
+    expect(expanded.slice(1, -1)).toEqual(original);
     expect(plain(expanded)).toContain("Observational memory: stored");
+    expect(plain([expanded.at(-1) ?? ""])).toContain("收起分组");
+    dispatch(note, at("press", 1, expanded.length - 1));
+    expect(dispatch(note, at("release", 1, expanded.length - 1))).toEqual({
+      handled: true,
+      render: true,
+    });
+    expect(note.render(WIDTH)).toHaveLength(1);
   });
 
   test("clicks below a title reach the original handler in original coordinates", () => {

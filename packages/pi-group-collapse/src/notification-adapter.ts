@@ -48,7 +48,7 @@
  */
 
 import { InteractiveMode } from "@earendil-works/pi-coding-agent";
-import { stripTerminalSequences } from "@earendil-works/pi-tui";
+import { Spacer, stripTerminalSequences } from "@earendil-works/pi-tui";
 import {
   installPrototypePatch,
   type PatchInstallResult,
@@ -72,6 +72,8 @@ export type ObservedNotification = {
   readonly receiver: unknown;
   /** True when the host reused the existing tail line instead of appending. */
   readonly reusedTail: boolean;
+  /** The adjacent host spacer, only when its identity and ownership are proven. */
+  readonly spacer?: Spacer;
 };
 
 export type NotificationInvalidation = {
@@ -197,6 +199,21 @@ function contentCouplingOf(
 function statusLineOf(value: unknown): StatusLine | undefined {
   if (typeof value !== "object" || value === null) return undefined;
   return value as StatusLine;
+}
+
+/** Verify the host appended exactly the expected spacer/notification pair. */
+function appendedSpacer(
+  receiver: StatusReceiver,
+  component: unknown,
+  before: number,
+  previousTail: unknown,
+): Spacer | undefined {
+  const children = receiver.chatContainer.children;
+  if (children.length !== before + 2) return undefined;
+  if (before > 0 && children[before - 1] !== previousTail) return undefined;
+  if (children[before + 1] !== component) return undefined;
+  const spacer = children[before];
+  return spacer instanceof Spacer ? spacer : undefined;
 }
 
 /**
@@ -397,7 +414,10 @@ export function createNotificationObserver(
           "notification-status-exit",
           ({ predecessor, receiver, args }) => {
             const record = receiver as StatusReceiver;
-            const childrenBefore = record.chatContainer.children.length;
+            const before = record.chatContainer.children;
+            const childrenBefore = before.length;
+            const previousTail = before[childrenBefore - 1];
+            const previousSpacer = before[childrenBefore - 2];
             try {
               return predecessor.apply(receiver, args);
             } finally {
@@ -416,12 +436,24 @@ export function createNotificationObserver(
                 // content (the notification callback reveals that update).
                 state.boundStatusComponent = tail;
                 trackLine(record, tail, "info", text);
+                const children = record.chatContainer.children;
+                const spacer = reusedTail
+                  ? previousTail === tail &&
+                    previousSpacer instanceof Spacer &&
+                    record.lastStatusSpacer === previousSpacer &&
+                    children[children.length - 2] === previousSpacer &&
+                    children[children.length - 1] === tail
+                    ? previousSpacer
+                    : undefined
+                  : appendedSpacer(record, tail, childrenBefore, previousTail);
                 callbacks.onNotification({
                   level: "info",
                   text,
                   component: tail,
                   receiver: record,
                   reusedTail,
+                  spacer:
+                    spacer === record.lastStatusSpacer ? spacer : undefined,
                 });
                 reconcileTail(record, { level: "info", text }, tail);
               } else {
@@ -440,14 +472,19 @@ export function createNotificationObserver(
           "showError",
           "notification-error-exit",
           ({ predecessor, receiver, args }) => {
+            const record = receiver as StatusReceiver;
+            const before = record.chatContainer.children.length;
+            const previousTail = record.chatContainer.children[before - 1];
             try {
               return predecessor.apply(receiver, args);
             } finally {
               reportAppend(
-                receiver as StatusReceiver,
+                record,
                 "error",
                 args[0],
                 callbacks,
+                before,
+                previousTail,
               );
             }
           },
@@ -457,14 +494,19 @@ export function createNotificationObserver(
           "showWarning",
           "notification-warning-exit",
           ({ predecessor, receiver, args }) => {
+            const record = receiver as StatusReceiver;
+            const before = record.chatContainer.children.length;
+            const previousTail = record.chatContainer.children[before - 1];
             try {
               return predecessor.apply(receiver, args);
             } finally {
               reportAppend(
-                receiver as StatusReceiver,
+                record,
                 "warning",
                 args[0],
                 callbacks,
+                before,
+                previousTail,
               );
             }
           },
@@ -503,9 +545,13 @@ function reportAppend(
   level: NotificationLevel,
   message: unknown,
   callbacks: NotificationObserverCallbacks,
+  before: number,
+  previousTail: unknown,
 ): void {
   if (stateFor(receiver).entryDepth <= 0) return;
   const children = receiver.chatContainer.children;
+  // A failed or incompatible host exit must not claim the previous tail.
+  if (children.length <= before) return;
   const component = children[children.length - 1];
   if (component === undefined) return;
   callbacks.onNotification({
@@ -514,6 +560,7 @@ function reportAppend(
     component,
     receiver,
     reusedTail: false,
+    spacer: appendedSpacer(receiver, component, before, previousTail),
   });
 }
 

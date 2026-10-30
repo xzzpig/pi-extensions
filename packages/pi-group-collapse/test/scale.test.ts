@@ -9,14 +9,17 @@
  * scale with members, not members-per-render × group size).
  */
 
-import { beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
   ToolExecutionComponent,
   initTheme,
 } from "@earendil-works/pi-coding-agent";
 import { Container } from "@earendil-works/pi-tui";
 import { GroupCollapseRuntime } from "../src/runtime.ts";
-import { debugSkippedBodyRenders } from "../src/host-adapter.ts";
+import {
+  debugSkippedBodyRenders,
+  type Projection,
+} from "../src/host-adapter.ts";
 import { compileRules, type CompiledRules, type Rule } from "../src/rules.ts";
 import { loadGroupCollapseConfig } from "../src/config.ts";
 
@@ -139,6 +142,82 @@ describe("large-scale grouping performance", () => {
     }
     expect(lookups.count).toBe(lookupsAfterBuild);
     expect(debugSkippedBodyRenders.value).toBe(25 * (N - 1));
+  });
+
+  test("boundary and endpoint work scales linearly across adjacent groups", () => {
+    const measure = (groups: number): number => {
+      const localRuntime = new GroupCollapseRuntime({ notify: () => {} });
+      const localReceiver = { chatContainer: new Container() };
+      localRuntime.onSessionStart({
+        mode: "tui",
+        cwd: "/tmp/project",
+        getBranch: () => [],
+      });
+      try {
+        for (let group = 0; group < groups; group++) {
+          localRuntime.handlePiEvent({ type: "agent_start" });
+          for (let member = 0; member < 2; member++) {
+            const id = `group-${group}-tool-${member}`;
+            const component = new ToolExecutionComponent(
+              "bash",
+              id,
+              { command: `echo ${id}` },
+              {},
+              undefined,
+              stubUi() as never,
+              "/tmp",
+            );
+            component.updateResult(
+              { content: [{ type: "text", text: id }], isError: false },
+              false,
+            );
+            localReceiver.chatContainer.addChild(component);
+            localRuntime.syncReceiver(localReceiver);
+            localRuntime.handlePiEvent({
+              type: "tool_execution_end",
+              toolCallId: id,
+              isError: false,
+            });
+          }
+          localRuntime.handlePiEvent({
+            type: "agent_end",
+            messages: [{ role: "assistant", stopReason: "stop" }],
+          });
+          localRuntime.handlePiEvent({
+            type: "agent_before_settle",
+            outcome: "completed",
+          });
+          localRuntime.handlePiEvent({ type: "agent_settled", aborted: false });
+        }
+        localReceiver.chatContainer.render(WIDTH);
+        // SAFETY: this test only observes the runtime's existing private
+        // projection calls; it does not replace their result or behavior.
+        const observed = localRuntime as unknown as {
+          projectionFor(
+            component: unknown,
+            width?: number,
+          ): Projection | undefined;
+        };
+        const calls = vi.spyOn(observed, "projectionFor");
+        localReceiver.chatContainer.render(WIDTH);
+        const count = calls.mock.calls.length;
+        calls.mockRestore();
+        return count;
+      } finally {
+        localRuntime.onSessionShutdown();
+      }
+    };
+    const small = measure(20);
+    const large = measure(40);
+    if (process.env.PIGC_REPORT_BOUNDARY_COUNTS === "1") {
+      console.log(
+        `boundary projection calls: groups=20 ${small}; groups=40 ${large}`,
+      );
+    }
+    expect(small).toBeGreaterThan(0);
+    // The count includes all projections and neighbor probes, not elapsed
+    // time. Doubling group count must not approach a quadratic quadrupling.
+    expect(large).toBeLessThanOrEqual(2 * small + 12);
   });
 
   test("projection resolution is index-backed, not a per-member scan", () => {

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2 — Group spacing and bottom collapse
+
+- Fold proven hidden-thinking and notification spacers with their members, and keep one deduplicated group boundary when adjacent visible content needs separation.
+- Add a single group-level collapse control at the actual end of an opened group, using the same target as its title without changing individual member rendering or expansion.
+- Preserve click geometry and selection behavior for group boundaries and the bottom control, including Starline's explicit-target path; omit the control when it cannot fit or be safely located.
+- Keep the title and bottom control available when a restored, previously folded group is opened by command.
+- Prevent a second same-cell click from toggling the group again when Starline's click handling and Pi's native selection path interact.
+
 ## 0.1.1 — Recovery fixes and group title bars
 
 - Bind restored transcript components on initial startup and after in-process session replacement, without requiring a manual reload.
