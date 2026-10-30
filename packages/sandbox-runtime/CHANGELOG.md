@@ -5,6 +5,16 @@ This fork tracks [`carderne/sandbox-runtime`](https://github.com/carderne/sandbo
 (itself derived from Anthropic's sandbox-runtime) via git subtree; entries below
 describe only fork-specific deviations from upstream.
 
+## 0.0.75
+
+### Changed
+
+- Synced upstream `v0.0.76` → `v0.0.77`: recognize Android/Termux as Linux and
+  disable Nagle on the sandbox network proxy and bridge sockets.
+- Preserved the fork's per-command cwd, `network.disabled`, and
+  `protectNonexistentFiles` policy seams and mechanically regenerated the
+  package lock with the upstream dependency graph.
+
 ## 0.0.74
 
 ### Changed
