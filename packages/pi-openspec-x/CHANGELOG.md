@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1
+
+- Support Pi 1.2+ custom-message wakeups in child report handlers. A wakeup
+  retains the current user-dispatch attempt without allowing an unverified
+  message to authorize a report; a new user dispatch creates a fresh attempt.
+- Include the extension's generated public type declaration in the package.
+
 ## 0.2.0
 
 Child report tools are now scoped to the subagents that own them, and the

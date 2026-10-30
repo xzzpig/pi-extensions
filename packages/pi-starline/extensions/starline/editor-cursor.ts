@@ -13,6 +13,8 @@
  *               its shape and blink follow the terminal's own configuration
  */
 
+import { applyMarkedCursorStyle } from "./fork-editor-cursor.ts";
+
 export type EditorCursorStyle = "block" | "underline" | "terminal";
 
 export function parseEditorCursorStyle(value: unknown): EditorCursorStyle {
@@ -41,6 +43,7 @@ function isSingleGrapheme(text: string): boolean {
 
 /** Restyle the software cursor in one rendered line. */
 export function applyEditorCursorStyle(line: string, style: EditorCursorStyle): string {
+	if (style !== "block") line = applyMarkedCursorStyle(line, style);
 	if (style === "block" || !line.includes("\x1b[7m")) return line;
 	return line.replace(REVERSE_RUN, (match, run: string) => {
 		if (!isSingleGrapheme(run)) return match;

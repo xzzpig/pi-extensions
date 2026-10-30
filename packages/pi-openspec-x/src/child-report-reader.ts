@@ -12,12 +12,12 @@
  * ingestion; it never adds a model-fillable parameter, and the parent
  * re-validates `report` against the original tool schema.
  *
- * The attempt is the anti-forgery anchor: `before_agent_start` records a fresh
- * random `attemptId` plus the SHA-256 of the actual prompt in a
- * `pi-openspec-x/child-report-attempt:v1` session entry. A report is only
- * attributable to the turn whose attempt it names, so a resumed child that
- * reuses the same session file cannot smuggle an earlier run's report into the
- * current dispatch.
+ * The attempt is the anti-forgery anchor: for each user dispatch,
+ * `before_agent_start` records a fresh random `attemptId` plus the SHA-256 of
+ * the actual prompt in a `pi-openspec-x/child-report-attempt:v1` session entry.
+ * A report is attributable only to the dispatch whose attempt it names, so a
+ * resumed child that reuses the same session file cannot smuggle an earlier
+ * run's report into the current dispatch.
  *
  * Deliberately NOT here: any reading of pi-subagents' private `AsyncStatus`
  * or lifecycle constants (design D3). This module declares the minimal v3
@@ -164,9 +164,9 @@ export function beginChildReportAttempt(
 /** Human-readable refusal text for a report that cannot be attributed. */
 export function attemptUnavailableMessage(agent: string): string {
   return (
-    `Report rejected: no child report attempt is recorded for ${agent} in this turn. ` +
+    `Report rejected: no child report attempt is recorded for ${agent} in this dispatch. ` +
     `The parent cannot attribute this report to a verified run, so it would be ignored; ` +
-    `the attempt entry is written by this extension at the start of every turn.`
+    `the attempt entry is written by this extension at the start of each user dispatch.`
   );
 }
 
@@ -175,7 +175,7 @@ export function attemptUnavailableMessage(agent: string): string {
  *
  * The wrapped tool keeps the original name, schema, confirmation text and
  * `sequential` execution mode; only `details` changes into the envelope. When
- * the current turn has no persisted attempt, the call fails explicitly instead
+ * the current dispatch has no persisted attempt, the call fails explicitly instead
  * of returning a report the parent would have to discard.
  */
 export function registerChildReportTool(
@@ -185,6 +185,13 @@ export function registerChildReportTool(
   let current: ChildReportAttemptOutcome | undefined;
 
   pi.on("before_agent_start", (event: BeforeAgentStartEvent, ctx) => {
+    // Pi 1.2+ also fires this hook when a custom message wakes the same child.
+    // It is not a new user dispatch: keep its existing attempt, or continue to
+    // reject reports if no dispatch has been recorded. Pi 1.1 never fired this
+    // hook for such a wake and has no messageType field.
+    if ("messageType" in event && event.messageType === "custom") return;
+    current = undefined;
+    if (!("prompt" in event) || typeof event.prompt !== "string") return;
     current = beginChildReportAttempt(pi, ctx, {
       agent: options.agent,
       prompt: event.prompt,

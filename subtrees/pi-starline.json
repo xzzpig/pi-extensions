@@ -13,8 +13,18 @@
   "knownDebt": [
     {
       "kind": "other",
+      "path": "packages/pi-starline/extensions/starline/editor-cursor.ts",
+      "reason": "The minimal fork-only cursor adapter call is needed for underline and terminal cursor styles on Pi 1.2+ while preserving Pi 1.1 behavior. Remove it when upstream supports both cursor encodings."
+    },
+    {
+      "kind": "other",
       "path": "packages/pi-starline/package.json",
       "reason": "Fork release packaging adds declaration build/prepack scripts and dist plus fork release notes to upstream's extensions/types allowlist. Required by the repository publish contract; removable if upstream adopts the same declaration distribution."
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-starline/package-lock.json",
+      "reason": "The lockfile root identity and version track the independently published fork and are updated mechanically with npm. Remove this divergence if the upstream lockfile is no longer retained."
     },
     {
       "kind": "other",
@@ -47,6 +57,16 @@
       "kind": "lint",
       "path": "packages/pi-starline/extensions/starline/format.ts",
       "reason": "The usage-entry double cast is unchanged in both the pre-sync fork and upstream v0.9.0; keep inherited source bytes under the current-change-only policy."
+    },
+    {
+      "kind": "lint",
+      "path": "packages/pi-starline/extensions/starline/mouse/api-consumer.ts",
+      "reason": "The existing fork mouse API version guard triggers one biome useOptionalChain warning; retain its current behavior for this cursor-compatibility release."
+    },
+    {
+      "kind": "lint",
+      "path": "packages/pi-starline/test/pill-click.test.ts",
+      "reason": "The upstream-identical pill click test triggers one biome noConfusingVoidType warning; keep its upstream bytes to avoid an unrelated fork edit."
     },
     {
       "kind": "lint",
@@ -92,6 +112,7 @@
     }
   ],
   "reapplyOnSync": [
+    "editor-cursor.ts calls fork-editor-cursor.ts to restyle Pi 1.2+ marked software cursors while retaining the upstream Pi 1.1 SGR path; retain fork-editor-cursor-compat.test.ts",
     "mouse features register with the local @xzzpig/pi-mouse-events extension instead of patching TuiAltScreen.prototype (optional peer >=0.2.0 <3, devDep workspace:*); without it fork mouse features are off, with one console note per process; click-away observes shared mouse events and the optional shared pointer API handles hover without a Starline patch",
     "mouse/api-consumer.ts reads Symbol.for('pi-mouse-events.api.v2') and rejects any candidate whose version !== 2, so an older v1 publisher is rejected rather than misread",
     "keep test/contract/mouse-api.test.ts pinning that key plus the version:1 rejection fixture",

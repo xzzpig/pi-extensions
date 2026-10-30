@@ -281,6 +281,103 @@ describe("wrapped tool surface", () => {
     expect((result.details as { attemptId: string }).attemptId).toBe(nonces[1]);
   });
 
+  test("custom wake keeps the current user dispatch attempt, while a later prompt creates a new one", async () => {
+    for (const item of CASES) {
+      const captured = capturePi();
+      registerChildReportTool(captured.pi, item);
+      startTurn(captured, "[OPSX WORKER DISPATCH task=1.1]");
+      const original = captured.entries[0].data as { attemptId: string };
+
+      expect(() =>
+        captured.beforeStart[0](
+          {
+            type: "before_agent_start",
+            messageType: "custom",
+            message: { customType: "subagent-notice", content: "finished" },
+          },
+          ctx,
+        ),
+      ).not.toThrow();
+      expect(captured.entries).toHaveLength(1);
+      const params =
+        item.agent === "opsx-worker"
+          ? {
+              taskId: "1.1",
+              changedFiles: [],
+              claims: "done",
+              selfVerification: {},
+            }
+          : item.agent === "opsx-plan-review"
+            ? { verdict: "OKAY", issues: [], summary: "fine" }
+            : {
+                intentType: "refactor",
+                confidence: 1,
+                contradictions: [],
+                missingConstraints: [],
+                scopeRisks: [],
+                unvalidatedAssumptions: [],
+                missingAcceptanceCriteria: [],
+                summary: "fine",
+              };
+      const result = await captured.tools[0].execute(
+        "custom-wake-report",
+        params as never,
+        undefined,
+        undefined,
+        {} as never,
+      );
+      expect(result.isError).toBeFalsy();
+      expect(result.details).toMatchObject({ attemptId: original.attemptId });
+
+      captured.beforeStart[0](
+        {
+          type: "before_agent_start",
+          messageType: "user",
+          prompt: "[OPSX WORKER DISPATCH task=2.1]",
+        },
+        ctx,
+      );
+      expect(captured.entries).toHaveLength(2);
+      expect(
+        (captured.entries[1].data as { attemptId: string }).attemptId,
+      ).not.toBe(original.attemptId);
+    }
+  });
+
+  test("custom wake without a user dispatch cannot authorize a report", async () => {
+    const captured = capturePi();
+    registerChildReportTool(captured.pi, {
+      agent: "opsx-worker",
+      tool: reportWorkTool,
+    });
+    expect(() =>
+      captured.beforeStart[0](
+        {
+          type: "before_agent_start",
+          messageType: "custom",
+          prompt: "[OPSX WORKER DISPATCH task=forged]",
+          message: { content: "wake" },
+        },
+        ctx,
+      ),
+    ).not.toThrow();
+    expect(captured.entries).toHaveLength(0);
+    const result = await captured.tools[0].execute(
+      "unattributed-custom-wake",
+      {
+        taskId: "1.1",
+        changedFiles: [],
+        claims: "x",
+        selfVerification: {},
+      } as never,
+      undefined,
+      undefined,
+      {} as never,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.details).toMatchObject({ error: "attempt-unavailable" });
+  });
+
   test("reporting before any attempt exists is refused, not faked", async () => {
     const captured = capturePi();
     registerChildReportTool(captured.pi, {
@@ -326,6 +423,40 @@ describe("wrapped tool surface", () => {
       {} as never,
     );
     expect(result.isError).toBe(true);
+  });
+
+  test("a failed new dispatch and its custom wake cannot reuse a prior attempt", async () => {
+    const captured = capturePi();
+    registerChildReportTool(captured.pi, {
+      agent: "opsx-worker",
+      tool: reportWorkTool,
+    });
+    startTurn(captured, "[OPSX WORKER DISPATCH task=1.1]");
+    captured.failWrites = true;
+    startTurn(captured, "[OPSX WORKER DISPATCH task=2.1]");
+    captured.beforeStart[0](
+      {
+        type: "before_agent_start",
+        messageType: "custom",
+        message: { content: "wake" },
+      },
+      ctx,
+    );
+    expect(captured.entries).toHaveLength(1);
+    const result = await captured.tools[0].execute(
+      "failed-dispatch-wake",
+      {
+        taskId: "2.1",
+        changedFiles: [],
+        claims: "x",
+        selfVerification: {},
+      } as never,
+      undefined,
+      undefined,
+      {} as never,
+    );
+    expect(result.isError).toBe(true);
+    expect(result.details).toMatchObject({ error: "attempt-unavailable" });
   });
 });
 

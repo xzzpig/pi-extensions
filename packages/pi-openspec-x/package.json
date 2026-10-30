@@ -1,6 +1,6 @@
 {
   "name": "@xzzpig/pi-openspec-x",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "OpenSpec workflow for the pi coding agent: spec-driven planning and implementation via dedicated subagents, sandboxed /opsx:plan and /opsx:implement commands.",
   "keywords": [
     "pi-package",
@@ -25,6 +25,7 @@
   "files": [
     "index.ts",
     "src",
+    "dist",
     "README.md",
     "CHANGELOG.md",
     "LICENSE",
@@ -37,7 +38,9 @@
   },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:types": "rollup -c rollup.dts.config.mjs",
+    "prepack": "pnpm run build:types"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": ">=1.0.0 <2",
@@ -49,6 +52,8 @@
   "devDependencies": {
     "@earendil-works/pi-coding-agent": "catalog:",
     "@types/node": "catalog:",
+    "rollup": "^4.62.2",
+    "rollup-plugin-dts": "^6.4.1",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

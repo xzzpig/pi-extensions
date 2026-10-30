@@ -287,6 +287,12 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 24.12.4
+      rollup:
+        specifier: ^4.62.2
+        version: 4.62.4
+      rollup-plugin-dts:
+        specifier: ^6.4.1
+        version: 6.5.1(rollup@4.62.4)(typescript@5.9.3)
       typescript:
         specifier: 'catalog:'
         version: 5.9.3

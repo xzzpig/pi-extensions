@@ -1,5 +1,10 @@
 # Fork release notes
 
+## 0.7.1 — Pi cursor compatibility
+
+- Restore `underline` and `terminal` editor cursor styles on Pi 1.2 and later while preserving the existing Pi 1.1 cursor path.
+- The previous published fork version was 0.5.1. This release also includes the upstream syncs and fork changes recorded in 0.6.0 and 0.7.0 below.
+
 ## 0.7.0 — Upstream v0.9.0 sync
 
 - Adopt the compact editor layout, `editorMinRows`, configurable pill row, live throughput, and turn timing. The old editor metadata row is removed and its status placement maps to the right-hand footer.
