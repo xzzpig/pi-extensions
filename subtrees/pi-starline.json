@@ -4,11 +4,11 @@
   "prefix": "packages/pi-starline",
   "source": "https://github.com/Andy8647/pi-starline.git",
   "remote": "upstream-pi-starline",
-  "ref": "v0.6.1",
-  "version": "0.6.1",
-  "upstreamCommit": "523c0f2cdc938af3cef0595cd28e2e1c02e9c730",
+  "ref": "v0.9.0",
+  "version": "0.9.0",
+  "upstreamCommit": "84e7106dd0ed3797f187691fd76d269de737b6ed",
   "squash": true,
-  "lastSyncedAt": "2026-10-28T02:28:25+08:00",
+  "lastSyncedAt": "2026-10-30T14:44:15+08:00",
   "notes": "Forked from Andy8647/pi-starline. The shared mouse API contract lives in openspec/specs/mouse-api; fork behavior and releases are documented in the package README and FORK-CHANGELOG.",
   "knownDebt": [
     {
@@ -33,6 +33,20 @@
       "kind": "other",
       "path": "packages/pi-starline/extensions/starline/queue-rows.ts",
       "reason": "Use Function.prototype.apply.call to preserve predecessor dispatch while satisfying the local no-Reflect.apply rule; remove if upstream adopts equivalent forwarding or the rule changes."
+    },
+    {
+      "kind": "other",
+      "reason": "Retain the user-message renderer and its configuration, tests and documentation after upstream moved that responsibility to pi-tidy. Both load orders were tested with pi-tidy v0.5.0; isolated rendering shows the visible renderer can depend on patch order. Document pi-tidy userMessageStyle off for users who want Starline styling."
+    },
+    {
+      "kind": "lint",
+      "path": "packages/pi-starline/extensions/starline/prototype-patch-registry.ts",
+      "reason": "The generic prototype-patch boundary accepts object targets, forwards predecessor calls and returns unknown because it handles multiple unrelated Pi methods. Its reported lint findings are unchanged from the pre-sync fork; preserve the existing behavior under the current-change-only policy."
+    },
+    {
+      "kind": "lint",
+      "path": "packages/pi-starline/extensions/starline/format.ts",
+      "reason": "The usage-entry double cast is unchanged in both the pre-sync fork and upstream v0.9.0; keep inherited source bytes under the current-change-only policy."
     },
     {
       "kind": "lint",
@@ -91,10 +105,12 @@
     "keep typed pointer-shape prototype and safe Function.prototype.apply.call forwarding in pointer-shape.ts and queue-rows.ts when upstream changes these methods",
     "keep clickToToggleExpandable (default true) across the config.ts sites and the test files; clickToExpandTools is not restored anywhere",
     "keep handlesMouse() deleted, mouse/hit-test.ts at fork HEAD, key-text.ts at upstream bytes as the single source with tool-box.ts/index.ts importing keyTextFor from ./key-text, and capabilities.ts's D8 type tightening (<T extends object>)",
-    "keep Pi peer ranges >=1.0.0 <2 with catalog devDependencies; retain the optional pi-mouse-events v2 API contract"
+    "keep Pi peer ranges >=1.0.0 <2 with catalog devDependencies; retain the optional pi-mouse-events v2 API contract",
+    "Preserve the user-message renderer deleted by upstream: retain its configuration fields and settings command, install and register its render/invalidate adapters, preserve the fork user-message tests and documentation, and use fork-transcript-copy.ts for configured rails alongside pi-tidy cleaning."
   ],
   "doNotReintroduce": [
     "expect recurring modify/delete conflicts on every pull: upstream deleted these files and the fork keeps them — extensions/starline/mouse/tool-box.ts, mouse/component-tree.ts, test/contract/tool-box-hint.test.ts, test/mouse/tool-box.test.ts, test/mouse/component-tree.test.ts, test/contract/transcript-layout.test.ts",
-    "keep editor-wheel.test.ts's 9 lint/style warnings and shim.ts's 2 noConfusingVoidType warnings by deliberate non-change"
+    "keep editor-wheel.test.ts's 9 lint/style warnings and shim.ts's 2 noConfusingVoidType warnings by deliberate non-change",
+    "Do not restore the removed editor metadata row or its settings; use the upstream compact editor and map legacy editor status placement to the footer right."
   ]
 }
