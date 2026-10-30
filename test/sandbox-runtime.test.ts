@@ -12,9 +12,11 @@ import { DEFAULT_CONFIG, mergeConfigLayers } from "../src/config.ts";
 import { canonicalizePath } from "../src/policy.ts";
 import {
   buildRuntimeConfig,
+  clearSessionAllowances,
   createSandboxedBashOps,
   resolveAllowances,
   supportsNodeEnvProxy,
+  supportsSandboxPlatform,
 } from "../src/sandbox-runtime.ts";
 
 function shellQuote(value: string): string {
@@ -70,6 +72,13 @@ function backgroundNodeCommand(cwd: string, source: string): { command: string; 
   ].join(" ");
   return { command, pidPath };
 }
+
+test("Platform sandbox support", () => {
+  assert.equal(supportsSandboxPlatform("android"), true);
+  assert.equal(supportsSandboxPlatform("win32"), false);
+  assert.equal(supportsSandboxPlatform("linux"), true);
+  assert.equal(supportsSandboxPlatform("darwin"), true);
+});
 
 test("buildRuntimeConfig adds session allowances without mutating config", () => {
   const runtime = buildRuntimeConfig(DEFAULT_CONFIG, {
@@ -279,14 +288,16 @@ test("denyMandatoryCwdFiles survives the config layer merge", () => {
   assert.equal(merged.filesystem?.denyMandatoryCwdFiles, false);
 });
 
-test("buildRuntimeConfig exposes the bundled seccomp helper on Linux", () => {
-  const runtime = buildRuntimeConfig(DEFAULT_CONFIG, undefined, "linux");
+test("buildRuntimeConfig exposes the bundled seccomp helper on Linux and Android", () => {
   const runtimeEntryUrl = import.meta.resolve("@carderne/sandbox-runtime");
   const seccompPath = canonicalizePath(
     fileURLToPath(new URL("../vendor/seccomp", runtimeEntryUrl)),
   );
 
-  assert.equal(runtime.filesystem?.allowRead?.includes(seccompPath), true);
+  for (const platform of ["linux", "android"] as const) {
+    const runtime = buildRuntimeConfig(DEFAULT_CONFIG, undefined, platform);
+    assert.equal(runtime.filesystem?.allowRead?.includes(seccompPath), true);
+  }
 });
 
 test("resolveAllowances makes configured and session write paths readable", () => {
@@ -414,4 +425,15 @@ test("network.disabled omits allowedDomains so the runtime skips network isolati
   // Default (not disabled) still emits the allowlist.
   const normal = buildRuntimeConfig(DEFAULT_CONFIG);
   assert.equal(Array.isArray(normal.network?.allowedDomains), true);
+});
+
+test("clearSessionAllowances empties the grant lists in place", () => {
+  const allowances = { domains: ["a.com"], readPaths: ["/r"], writePaths: ["/w"] };
+  const { domains, readPaths, writePaths } = allowances;
+  clearSessionAllowances(allowances);
+  assert.deepEqual(allowances, { domains: [], readPaths: [], writePaths: [] });
+  // Same arrays: closures holding them see the cleared state.
+  assert.equal(allowances.domains, domains);
+  assert.equal(allowances.readPaths, readPaths);
+  assert.equal(allowances.writePaths, writePaths);
 });
