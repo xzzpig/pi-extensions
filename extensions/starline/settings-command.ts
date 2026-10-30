@@ -48,7 +48,6 @@ const extensionStatusPlacementValues: ExtensionStatusPlacement[] = [
 	"left",
 	"middle",
 	"right",
-	"editor",
 ];
 const extensionStatusColorModeValues: ExtensionStatusColorMode[] = ["themed", "original"];
 const contextStyleValues: ContextStyle[] = ["text", "gauge", "text+gauge"];
@@ -61,7 +60,7 @@ type FeatureState = "enabled" | "disabled";
 const featureStateValues: FeatureState[] = ["enabled", "disabled"];
 const settingsSections = ["coloring", "features", "layout", "pills", "extensionSegments"] as const;
 
-type ColorSettingId = "starship" | "editorMessages";
+type ColorSettingId = "starship" | "editorChrome";
 type FeatureSettingId = keyof UiFeaturesConfig;
 type SettingsSection = (typeof settingsSections)[number];
 type LayoutSettingId = "contextStyle" | "pathDisplay" | "pathDepth" | "branchLength" | "iconMode";
@@ -89,14 +88,14 @@ type SettingsCommandDeps = {
 
 const colorSettingLabels: Record<ColorSettingId, string> = {
 	starship: "Starship/footer colors",
-	editorMessages: "Editor + previous messages",
+	editorChrome: "Editor and selectors",
 };
 
 const colorSettingDescriptions: Record<ColorSettingId, string> = {
 	starship:
 		"Choose whether footer runtime/git/context colors use Pi theme tokens or terminal palette styles.",
-	editorMessages:
-		"Choose whether editor and previous user-message borders/rails use Pi theme colors or terminal palette styles.",
+	editorChrome:
+		"Choose whether the editor's and selectors' borders and rail use Pi theme colors or terminal palette styles. User messages are styled by pi-tidy.",
 };
 
 const featureSettingLabels: Record<FeatureSettingId, string> = {
@@ -106,8 +105,7 @@ const featureSettingLabels: Record<FeatureSettingId, string> = {
 };
 
 const featureSettingDescriptions: Record<FeatureSettingId, string> = {
-	editor:
-		"Enable or disable Starline's custom editor, selector borders, and previous-message chrome.",
+	editor: "Enable or disable Starline's custom editor and selector borders.",
 	statusLine: "Enable or disable Starline's custom footer/status line.",
 	copyFriendly:
 		"Hide editor and previous-message rail glyphs for cleaner native terminal selection.",
@@ -162,11 +160,17 @@ function pillSegmentLabel(name: string): string {
 /**
  * Values a row cycles through: `off`, then every position the bar can hold.
  *
- * One past the current length is offered so a hidden segment can be appended;
- * for a segment already in the bar, that value is its "move to the end".
+ * A segment that is not on the bar gets one extra value so it can be appended to
+ * the end. A segment that is already on the bar must not get it: appending it
+ * would put it back where it already is, so the cycle would bounce between the
+ * last position and a number that renders as that same position, and `off` would
+ * become unreachable — which is exactly how a segment at the end of the bar got
+ * stuck.
  */
-function pillSegmentValues(shown: number): string[] {
-	const positions = Array.from({ length: shown + 1 }, (_, index) => String(index + 1));
+function pillSegmentValues(shown: number, onBar: boolean): string[] {
+	const positions = Array.from({ length: onBar ? shown : shown + 1 }, (_, index) =>
+		String(index + 1),
+	);
 	return ["off", ...positions];
 }
 
@@ -204,7 +208,7 @@ function isColorSource(value: string): value is ColorSource {
 }
 
 function isColorSettingId(value: string): value is ColorSettingId {
-	return value === "starship" || value === "editorMessages";
+	return value === "starship" || value === "editorChrome";
 }
 
 function isFeatureSettingId(value: string): value is FeatureSettingId {
@@ -250,14 +254,8 @@ function isLayoutSettingId(value: string): value is LayoutSettingId {
 	);
 }
 
-function editorMessageValue(config: PolishedTuiConfig): ColorSource | "mixed" {
-	return config.colorSources.editor === config.colorSources.userMessages
-		? config.colorSources.editor
-		: "mixed";
-}
-
 function patchForSetting(id: ColorSettingId, value: ColorSource): Partial<ColorSourcesConfig> {
-	return id === "starship" ? { starship: value } : { editor: value, userMessages: value };
+	return id === "starship" ? { starship: value } : { editor: value };
 }
 
 function featureValue(enabled: boolean): FeatureState {
@@ -373,7 +371,7 @@ function buildItems(
 			id: key,
 			label: colorSettingLabels[key],
 			description: colorSettingDescriptions[key],
-			currentValue: key === "starship" ? config.colorSources.starship : editorMessageValue(config),
+			currentValue: key === "starship" ? config.colorSources.starship : config.colorSources.editor,
 			values: colorSourceValues,
 		}));
 	}
@@ -459,14 +457,15 @@ function buildItems(
 
 	if (section === "pills") {
 		const segments = config.pill.segments;
-		const values = pillSegmentValues(segments.length);
 		const row = (name: string, label: string): SettingItem => {
 			const position = pillSegmentPosition(segments, name);
+			const onBar = position > 0;
+			const values = pillSegmentValues(segments.length, onBar);
 			return {
 				id: pillSegmentSettingId(name),
 				label,
-				description: `Position in the bar (1 is leftmost). Space cycles off → 1…${segments.length + 1}.`,
-				currentValue: position > 0 ? String(position) : "off",
+				description: `Position in the bar (1 is leftmost). Space cycles off → 1…${values.length - 1}.`,
+				currentValue: onBar ? String(position) : "off",
 				values,
 			};
 		};
