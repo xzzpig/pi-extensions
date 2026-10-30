@@ -17,7 +17,6 @@ import { basename, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
 	configPath,
-	DEFAULT_EDITOR_METADATA_FORMAT,
 	defaultConfig,
 	getExtensionStatusColorMode,
 	isExtensionStatusColorMode,
@@ -147,20 +146,22 @@ describe("mergeConfig", () => {
 		});
 	});
 
-	it("defaults editorMetadataFormat and preserves non-empty strings", () => {
-		expect(defaultConfig.editorMetadataFormat).toBe(DEFAULT_EDITOR_METADATA_FORMAT);
-		for (const value of [undefined, null, 123, true]) {
-			expect(mergeConfig({ editorMetadataFormat: value }).editorMetadataFormat).toBe(
-				DEFAULT_EDITOR_METADATA_FORMAT,
-			);
-		}
-		expect(mergeConfig({ editorMetadataFormat: "$model · $provider" }).editorMetadataFormat).toBe(
-			"$model · $provider",
-		);
-		expect(mergeConfig({ editorMetadataFormat: "   " }).editorMetadataFormat).toBe("   ");
-		// An explicit "" means "show nothing", so the model and thinking segments can
-		// move to the footer without the editor still spelling them out.
-		expect(mergeConfig({ editorMetadataFormat: "" }).editorMetadataFormat).toBe("");
+	it("drops the metadata row while preserving Starline's user-message settings", () => {
+		const config = mergeConfig({
+			editorMetadataFormat: "$model",
+			userMessagePaddingY: 0,
+			colors: { editorModel: "accent", userMessageBorder: "accent" },
+			colorSources: { userMessages: "terminal" },
+		});
+		expect(config).not.toHaveProperty("editorMetadataFormat");
+		expect(config.colors).not.toHaveProperty("editorModel");
+		expect(config.userMessagePaddingY).toBe(0);
+		expect(config.colors.userMessageBorder).toBe("accent");
+		expect(config.colorSources).toEqual({
+			starship: "theme",
+			editor: "theme",
+			userMessages: "terminal",
+		});
 	});
 
 	it("accepts custom project refresh intervals and 0 to disable polling", () => {
@@ -502,7 +503,9 @@ describe("mergeConfig", () => {
 					alpha: "left",
 					beta: "off",
 					gamma: "right",
+					// The 0.8 metadata row; its statuses move to the footer's right.
 					delta: "editor",
+					epsilon: "nowhere",
 				},
 				colorModes: {
 					alpha: "original",
@@ -519,7 +522,7 @@ describe("mergeConfig", () => {
 				alpha: "left",
 				beta: "off",
 				gamma: "right",
-				delta: "editor",
+				delta: "right",
 			},
 			colorModes: {
 				alpha: "original",
@@ -568,32 +571,16 @@ describe("mergeConfig", () => {
 		});
 	});
 
-	it("accepts optional editor and user-message chrome color overrides", () => {
+	it("accepts optional editor chrome color overrides", () => {
 		const config = mergeConfig({
 			colors: {
 				editorAccent: "bold purple",
 				editorBorder: "#89b4fa",
-				editorModel: "accent",
-				editorProvider: "text",
-				editorThinking: "muted",
-				editorThinkingMinimal: "thinkingMinimal",
-				editorThinkingLow: "thinkingLow",
-				editorThinkingMedium: "thinkingMedium",
-				editorThinkingHigh: "thinkingHigh",
-				editorThinkingXhigh: "thinkingXhigh",
 			},
 		});
 
 		expect(config.colors.editorAccent).toBe("bold purple");
 		expect(config.colors.editorBorder).toBe("#89b4fa");
-		expect(config.colors.editorModel).toBe("accent");
-		expect(config.colors.editorProvider).toBe("text");
-		expect(config.colors.editorThinking).toBe("muted");
-		expect(config.colors.editorThinkingMinimal).toBe("thinkingMinimal");
-		expect(config.colors.editorThinkingLow).toBe("thinkingLow");
-		expect(config.colors.editorThinkingMedium).toBe("thinkingMedium");
-		expect(config.colors.editorThinkingHigh).toBe("thinkingHigh");
-		expect(config.colors.editorThinkingXhigh).toBe("thinkingXhigh");
 	});
 
 	it("ignores invalid known values at runtime instead of trusting starline.json", () => {
@@ -612,7 +599,6 @@ describe("mergeConfig", () => {
 				editorAccent: "neon",
 				editorPrompt: "accent",
 				editorBorder: "also-neon",
-				editorThinkingHigh: "thinkingHigh",
 			},
 			colorSources: {
 				starship: "neon",
@@ -630,7 +616,6 @@ describe("mergeConfig", () => {
 		expect(config.colors.editorAccent).toBeUndefined();
 		expect(config.colors.editorPrompt).toBe("accent");
 		expect(config.colors.editorBorder).toBeUndefined();
-		expect(config.colors.editorThinkingHigh).toBe("thinkingHigh");
 		expect(config.colorSources).toEqual({
 			starship: "theme",
 			editor: "terminal",
@@ -643,8 +628,8 @@ describe("mergeConfig", () => {
 			mergeConfig({ colorSources: { starship: "terminal", editor: "theme" } }).colorSources,
 		).toEqual({ starship: "terminal", editor: "theme", userMessages: "theme" });
 		expect(
-			mergeConfig({ colorSources: { starship: "neon", userMessages: "terminal" } }).colorSources,
-		).toEqual({ starship: "theme", editor: "theme", userMessages: "terminal" });
+			mergeConfig({ colorSources: { starship: "neon", editor: "terminal" } }).colorSources,
+		).toEqual({ starship: "theme", editor: "terminal", userMessages: "theme" });
 	});
 
 	it("accepts valid UI feature preferences and ignores invalid values", () => {
@@ -736,18 +721,18 @@ describe("mergeConfig", () => {
 				)}\n`,
 			);
 
-			const config = saveColorSourcesPatch({ userMessages: "terminal" }, path);
+			const config = saveColorSourcesPatch({ editor: "theme" }, path);
 			const raw = JSON.parse(readFileSync(path, "utf8"));
 
 			expect(config.colorSources).toEqual({
 				starship: "theme",
-				editor: "terminal",
-				userMessages: "terminal",
+				editor: "theme",
+				userMessages: "theme",
 			});
 			expect(raw.colorSources).toEqual({
 				starship: "neon",
-				editor: "terminal",
-				userMessages: "terminal",
+				editor: "theme",
+				userMessages: "invalid",
 				extra: "terminal",
 			});
 		} finally {

@@ -46,6 +46,7 @@ import { emptyGitStatus } from "./git";
 import { setActiveGitStatus } from "./git-live";
 import { LiveContextController } from "./live-context";
 import { forgetLiveSession, installLiveSessionCapture } from "./live-session";
+import { LiveTpsController } from "./live-tps";
 import { installMouseFeaturesOn } from "./mouse";
 import { getMouseEventsApi } from "./mouse/api-consumer";
 import { setActiveEditor } from "./mouse/editor-mouse";
@@ -74,6 +75,7 @@ import {
 	SUBAGENT_TOOL_NAME,
 	setActiveSubagentFleet,
 } from "./subagent-fleet";
+import { TurnClock } from "./turn-clock";
 import { PolishedEditor, WrappedPolishedEditor } from "./ui";
 import { installUserMessageStyle } from "./user-message";
 import { setWorkingIndicator } from "./working-indicator";
@@ -137,6 +139,8 @@ export default function (pi: ExtensionAPI) {
 		if (sessionLifecycle.isCurrent()) requestFooterRender?.();
 	};
 	const liveContext = new LiveContextController(sessionLifecycle, refresh);
+	const liveTps = new LiveTpsController();
+	const turnClock = new TurnClock();
 	const getActiveTheme = () => activeTheme;
 	const getCurrentConfig = () => currentConfig;
 	/**
@@ -393,22 +397,7 @@ export default function (pi: ExtensionAPI) {
 		const sessionTheme = ctx.ui.theme;
 		const factory = ((tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager) => {
 			syncHardwareCursor(tui);
-			const editor = new PolishedEditor(
-				tui,
-				theme,
-				keybindings,
-				sessionTheme,
-				getCurrentConfig,
-				() => ({
-					modelLabel: state.modelLabel,
-					modelId: state.modelId,
-					modelName: state.modelName,
-					providerLabel: state.providerLabel,
-					sessionName: ctx.sessionManager.getSessionName() ?? "",
-				}),
-				getThinkingLevel,
-				() => getActiveExtensionStatuses(),
-			);
+			const editor = new PolishedEditor(tui, theme, keybindings, sessionTheme, getCurrentConfig);
 			applyPasteCollapse(editor);
 			// Nothing on Pi's renderer points at the live editor, and the
 			// extension API hands out the factory rather than what it built — so
@@ -429,20 +418,7 @@ export default function (pi: ExtensionAPI) {
 			syncHardwareCursor(tui);
 			const base = baseFactory(tui, theme, keybindings);
 			applyPasteCollapse(base);
-			const wrapped = new WrappedPolishedEditor(
-				base,
-				sessionTheme,
-				getCurrentConfig,
-				() => ({
-					modelLabel: state.modelLabel,
-					modelId: state.modelId,
-					modelName: state.modelName,
-					providerLabel: state.providerLabel,
-					sessionName: ctx.sessionManager.getSessionName() ?? "",
-				}),
-				getThinkingLevel,
-				() => getActiveExtensionStatuses(),
-			);
+			const wrapped = new WrappedPolishedEditor(base, sessionTheme, getCurrentConfig);
 			// Two references, because these are two different objects here: the
 			// wrapper is what gets mounted and hit-tested, while the draft's
 			// visual lines live on the base editor it delegates to.
@@ -520,6 +496,8 @@ export default function (pi: ExtensionAPI) {
 				getActiveExtensionStatuses = fn ?? (() => new Map());
 			},
 			getLiveContext: () => liveContext.get(),
+			getLiveTps: () => liveTps.value(),
+			getTurnTiming: () => turnClock.timing(),
 			getThinkingLevel,
 		});
 		footerInstalled = true;
@@ -644,6 +622,8 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", async (_event, ctx) => {
 		sessionLifecycle.start();
 		liveContext.clear();
+		liveTps.clear();
+		turnClock.clear();
 		// A resumed session keeps its original header, and reporting the moment this
 		// process attached to it would make the elapsed-time segment read 0s forever.
 		state.sessionStartEpoch = resolveSessionStartEpoch(readSessionHeader(ctx));
@@ -709,6 +689,8 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		liveContext.clear();
+		liveTps.clear();
+		turnClock.clear();
 		cleanupUi(ctx);
 	});
 
@@ -719,10 +701,14 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("agent_start", (event, ctx) => {
 		liveContext.clear();
+		// The window resets per run; the value it already measured stays on the pill.
+		liveTps.beginTurn();
+		turnClock.begin();
 		syncInteractiveState(event, ctx);
 	});
 	pi.on("agent_end", (event, ctx) => {
 		liveContext.clear();
+		turnClock.end();
 		syncInteractiveAndProjectState(event, ctx);
 	});
 	pi.on("model_select", (event, ctx) => {
@@ -733,6 +719,7 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_info_changed", syncInteractiveState);
 	pi.on("message_update", (event) => {
 		liveContext.update(event.message);
+		if (liveTps.observe(event.assistantMessageEvent)) refresh();
 	});
 	pi.on("message_end", (event, ctx) => {
 		// Pi notifies extensions before persisting a successful message, so retain its live
@@ -742,6 +729,10 @@ export default function (pi: ExtensionAPI) {
 			(event.message.stopReason === "error" || event.message.stopReason === "aborted")
 		) {
 			liveContext.clear();
+		} else if (event.message.role === "assistant") {
+			// The stream's `done` event never reaches an extension, so the output count
+			// has to be closed here, where the finished message arrives with its usage.
+			liveTps.complete(event.message.usage?.output ?? 0);
 		}
 		syncInteractiveAndProjectStateWithUsage(event, ctx);
 	});

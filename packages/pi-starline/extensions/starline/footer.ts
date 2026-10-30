@@ -16,6 +16,7 @@ import { collectExtensionStatusSegments, sanitizeExtensionStatusText } from "./e
 import {
 	buildContextDisplayLabel,
 	buildSessionDurationLabel,
+	buildTpsLabel,
 	contextColorTier,
 	formatCwdLabel,
 	formatOsLabel,
@@ -33,7 +34,8 @@ import { closePillBubble, isPillBubbleOpenFor, type PillAnchor } from "./pill-bu
 import type { FooterState } from "./state";
 import { renderStyleForSource } from "./style";
 import { subagentsSegmentText } from "./subagent-fleet";
-import { modelPillIcon, readWorkingFrame } from "./working-indicator";
+import type { TurnTiming } from "./turn-clock";
+import { modelPillLabel } from "./working-indicator";
 
 /**
  * Pi's component mouse event and result. Pi dispatches to `handleMouse` from
@@ -98,6 +100,10 @@ export function installFooter(
 		scheduleProjectRefresh: (ctx: ExtensionContext) => void;
 		setExtensionStatusesGetter?: (fn: (() => ReadonlyMap<string, string>) | undefined) => void;
 		getLiveContext?: () => LiveContextOverride | undefined;
+		/** Decode throughput of the latest assistant message, or undefined before one landed. */
+		getLiveTps?: () => number | undefined;
+		/** The current run's elapsed time, and the last run's total. */
+		getTurnTiming?: () => TurnTiming;
 		getThinkingLevel?: () => string | undefined;
 	},
 ): void {
@@ -126,7 +132,7 @@ export function installFooter(
 			const visibleSpans: PillSpan[] = [];
 			const anchors = new Map<string, PillAnchor>();
 			for (const span of spans) {
-				// The bar is drawn after a one-column pad, and the line may have been cut
+				// The bar starts `columnOffset` columns in, and the line may have been cut
 				// again after the bar was; clamp to what the terminal actually shows.
 				const startColumn = Math.min(lineWidth, span.startColumn + columnOffset);
 				const endColumn = Math.min(lineWidth, span.endColumn + columnOffset);
@@ -297,11 +303,12 @@ export function installFooter(
 							colorSource,
 							config.colors.model,
 							// While the agent works the spinner takes the icon's slot at the same
-							// display width, so the pill never resizes.
-							withIcon(
-								modelPillIcon(config.icons.model, readWorkingFrame(iconMode === "ascii")),
-								state.modelLabel,
-							),
+							// display width, so the pill never resizes, and the run's elapsed time
+							// joins the name behind it.
+							modelPillLabel(config.icons.model, state.modelLabel, {
+								ascii: iconMode === "ascii",
+								timing: hooks.getTurnTiming?.(),
+							}),
 						)
 					: "";
 				// "off" reads as no thinking at all, matching the editor metadata line.
@@ -343,6 +350,8 @@ export function installFooter(
 							: config.colors.contextNormal;
 				const contextDisplay = withIcon(config.icons.context, contextLabel);
 				const costDisplay = withIcon(config.icons.cost, state.costLabel);
+				const tpsLabel = buildTpsLabel(hooks.getLiveTps?.());
+				const tpsDisplay = tpsLabel ? withIcon(config.icons.tps, tpsLabel) : "";
 				// The one pill shows a percentage; the rest of these numbers are only
 				// on screen while its bubble is open.
 				const contextTabTokens = useLiveContext ? liveContext.tokens : undefined;
@@ -427,6 +436,8 @@ export function installFooter(
 							return renderStyleForSource(theme, colorSource, contextColor, contextDisplay);
 						case "cost":
 							return renderStyleForSource(theme, colorSource, config.colors.cost, costDisplay);
+						case "tps":
+							return renderStyleForSource(theme, colorSource, config.colors.tps, tpsDisplay);
 						case "package_version":
 							return state.packageVersion?.version
 								? renderStyleForSource(
@@ -481,6 +492,8 @@ export function installFooter(
 							return contextColor;
 						case "cost":
 							return config.colors.cost;
+						case "tps":
+							return config.colors.tps;
 						case "sessionDuration":
 							return config.colors.sessionDuration;
 						case "username":
@@ -509,7 +522,7 @@ export function installFooter(
 					theme,
 					colorSource,
 					config.pill,
-					Math.max(0, width - 2),
+					width,
 					{
 						ascii: iconMode === "ascii",
 						onSpan: (span) => spans.push(span),
@@ -521,9 +534,10 @@ export function installFooter(
 					clearPillAnchors();
 					return [""];
 				}
-				const columnOffset = width > 2 ? 1 : 0;
-				const line = truncateToWidth(width > 2 ? ` ${bar} ` : bar, width, "");
-				rememberPillSpans(width, spans, columnOffset, visibleWidth(line));
+				// Flush left, in the editor's first column: the bar's round cap sits
+				// under the editor's rail rather than a column to its right.
+				const line = truncateToWidth(bar, width, "");
+				rememberPillSpans(width, spans, 0, visibleWidth(line));
 				return [line];
 			},
 		};

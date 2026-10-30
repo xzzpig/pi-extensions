@@ -138,14 +138,10 @@ export function migrateFixedEditorKeys(raw: Record<string, unknown>): {
 }
 
 /**
- * Where a third-party status is drawn.
- *
- * `editor` is the right-hand side of the editor's metadata row, alongside the
- * vim-mode label and the copy/paste hints — not the footer. It needs Starline's
- * own footer installed to have data at all, because the status map only reaches
- * the extension through the footer factory.
+ * Where in the footer a third-party status is drawn, or `off`. Up to 0.8 there
+ * was also `editor`, the editor's metadata row; see `readExtensionStatusPlacement`.
  */
-export type ExtensionStatusPlacement = "off" | "left" | "middle" | "right" | "editor";
+export type ExtensionStatusPlacement = "off" | "left" | "middle" | "right";
 export type ExtensionStatusColorMode = "themed" | "original";
 /**
  * How much of a status is drawn: its text as published, or just its number.
@@ -192,12 +188,10 @@ export type ExtensionStatusesConfig = {
 
 const DEFAULT_PROJECT_REFRESH_INTERVAL_MS = 30_000;
 const MIN_PROJECT_REFRESH_INTERVAL_MS = 5_000;
-export const DEFAULT_EDITOR_METADATA_FORMAT = "$model  $provider(  $thinking)";
 
 export type PolishedTuiConfig = {
 	projectRefreshIntervalMs: number;
 	pill: PillConfig;
-	editorMetadataFormat: string;
 	contextStyle: ContextStyle;
 	segmentOptions: SegmentOptionsConfig;
 	editorModelLabel: ModelLabelSource;
@@ -206,9 +200,11 @@ export type PolishedTuiConfig = {
 	editorClickCursor: boolean;
 	/** Collapse pastes at this many lines. 11 (default) leaves Pi's threshold alone. */
 	pasteCollapseLines: number;
-	/** Blank rows inside the editor box, above the input and above the metadata row. */
+	/** Blank rows inside the editor box, above and below the input. */
 	editorPaddingY: number;
-	/** Blank rows inside the previous-message box, above and below the body. */
+	/** The input area's height floor: a shorter draft is followed by blank rows. */
+	editorMinRows: number;
+	/** Blank rows above and below a Starline user message. */
 	userMessagePaddingY: number;
 	contextThresholds: ContextThresholds;
 	pathDisplay: PathDisplayConfig;
@@ -229,6 +225,8 @@ export type PolishedTuiConfig = {
 		contextWarning: ColorSpec;
 		contextError: ColorSpec;
 		cost: ColorSpec;
+		/** Decode throughput of the latest assistant message. */
+		tps: ColorSpec;
 		runtimePrefix: ColorSpec;
 		extensionStatus: ColorSpec;
 		sessionDuration: ColorSpec;
@@ -241,18 +239,8 @@ export type PolishedTuiConfig = {
 		editorAccent?: ColorSpec;
 		editorPrompt?: ColorSpec;
 		editorBorder?: ColorSpec;
-		/** Unset falls back to editorBorder, which is upstream's behaviour. */
 		userMessageBorder?: ColorSpec;
-		/** Unset follows the theme's userMessageText colour. */
 		userMessageText?: ColorSpec;
-		editorModel?: ColorSpec;
-		editorProvider?: ColorSpec;
-		editorThinking?: ColorSpec;
-		editorThinkingMinimal?: ColorSpec;
-		editorThinkingLow?: ColorSpec;
-		editorThinkingMedium?: ColorSpec;
-		editorThinkingHigh?: ColorSpec;
-		editorThinkingXhigh?: ColorSpec;
 	};
 	colorSources: ColorSourcesConfig;
 	features: UiFeaturesConfig;
@@ -265,7 +253,6 @@ export const configPath = join(getAgentDir(), "starline.json");
 export const defaultConfig: PolishedTuiConfig = {
 	projectRefreshIntervalMs: DEFAULT_PROJECT_REFRESH_INTERVAL_MS,
 	pill: DEFAULT_PILL_CONFIG,
-	editorMetadataFormat: DEFAULT_EDITOR_METADATA_FORMAT,
 	contextStyle: "text",
 	segmentOptions: {
 		context: { format: "full" },
@@ -277,6 +264,7 @@ export const defaultConfig: PolishedTuiConfig = {
 	editorClickCursor: true,
 	pasteCollapseLines: 11,
 	editorPaddingY: 1,
+	editorMinRows: 1,
 	userMessagePaddingY: 1,
 	contextThresholds: { warning: 70, error: 90 },
 	pathDisplay: { mode: "basename", depth: 0 },
@@ -302,6 +290,7 @@ export const defaultConfig: PolishedTuiConfig = {
 		contextWarning: "bold yellow",
 		contextError: "bold red",
 		cost: "bold green",
+		tps: "bright-black",
 		runtimePrefix: "",
 		extensionStatus: "bright-black",
 		sessionDuration: "yellow",
@@ -471,9 +460,8 @@ function normalizeIconOverrides(record: Record<string, unknown>): Partial<IconGl
  * A named colour palette, so a whole scheme can be restated in one place
  * instead of repeating hex values across every segment.
  *
- * Expansion is scoped to colour records only — `footerFormat` and
- * `editorMetadataFormat` use `$name` for their own format variables and must
- * never be touched by it.
+ * Expansion is scoped to colour records only — keys and other strings are
+ * never touched by it.
  */
 export type Palette = Record<string, string>;
 
@@ -543,6 +531,7 @@ function normalizeColors(record: Record<string, unknown>): Partial<PolishedTuiCo
 		contextWarning: colorValue(record, "contextWarning"),
 		contextError: colorValue(record, "contextError"),
 		cost: colorValue(record, "cost"),
+		tps: colorValue(record, "tps"),
 		runtimePrefix: colorValue(record, "runtimePrefix"),
 		extensionStatus: colorValue(record, "extensionStatus"),
 		sessionDuration: colorValue(record, "sessionDuration"),
@@ -552,19 +541,11 @@ function normalizeColors(record: Record<string, unknown>): Partial<PolishedTuiCo
 		username: colorValue(record, "username"),
 		time: colorValue(record, "time"),
 		os: colorValue(record, "os"),
-		userMessageBorder: colorValue(record, "userMessageBorder"),
-		userMessageText: colorValue(record, "userMessageText"),
 		editorAccent: colorValue(record, "editorAccent"),
 		editorPrompt: colorValue(record, "editorPrompt"),
 		editorBorder: colorValue(record, "editorBorder"),
-		editorModel: colorValue(record, "editorModel"),
-		editorProvider: colorValue(record, "editorProvider"),
-		editorThinking: colorValue(record, "editorThinking"),
-		editorThinkingMinimal: colorValue(record, "editorThinkingMinimal"),
-		editorThinkingLow: colorValue(record, "editorThinkingLow"),
-		editorThinkingMedium: colorValue(record, "editorThinkingMedium"),
-		editorThinkingHigh: colorValue(record, "editorThinkingHigh"),
-		editorThinkingXhigh: colorValue(record, "editorThinkingXhigh"),
+		userMessageBorder: colorValue(record, "userMessageBorder"),
+		userMessageText: colorValue(record, "userMessageText"),
 	});
 }
 
@@ -596,6 +577,15 @@ function parsePasteCollapseLines(value: unknown): number {
 /** Box padding is 0 or 1 rows; anything else falls back to the default. */
 function parseBoxPadding(value: unknown, fallback: number): number {
 	return value === 0 || value === 1 ? value : fallback;
+}
+
+const MAX_EDITOR_MIN_ROWS = 10;
+
+function parseEditorMinRows(value: unknown): number {
+	if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+		return defaultConfig.editorMinRows;
+	}
+	return Math.min(MAX_EDITOR_MIN_ROWS, value);
 }
 
 function normalizeSegmentOptions(value: unknown): SegmentOptionsConfig {
@@ -647,13 +637,17 @@ function normalizeGitMetricsConfig(record: Record<string, unknown>): GitMetricsC
 }
 
 export function isExtensionStatusPlacement(value: unknown): value is ExtensionStatusPlacement {
-	return (
-		value === "off" ||
-		value === "left" ||
-		value === "middle" ||
-		value === "right" ||
-		value === "editor"
-	);
+	return value === "off" || value === "left" || value === "middle" || value === "right";
+}
+
+/**
+ * A stored placement, read leniently: `editor` named the editor's metadata row,
+ * which 0.9 removed, so those statuses move to the right of the footer rather
+ * than disappearing.
+ */
+function readExtensionStatusPlacement(value: unknown): ExtensionStatusPlacement | undefined {
+	if (value === "editor") return "right";
+	return isExtensionStatusPlacement(value) ? value : undefined;
 }
 
 export function isExtensionStatusColorMode(value: unknown): value is ExtensionStatusColorMode {
@@ -664,15 +658,15 @@ function normalizeExtensionStatuses(
 	record: Record<string, unknown>,
 	palette: Palette = {},
 ): ExtensionStatusesConfig {
-	const defaultPlacement = isExtensionStatusPlacement(record.defaultPlacement)
-		? record.defaultPlacement
-		: defaultConfig.extensionStatuses.defaultPlacement;
+	const defaultPlacement =
+		readExtensionStatusPlacement(record.defaultPlacement) ??
+		defaultConfig.extensionStatuses.defaultPlacement;
 	const placements = isRecord(record.placements)
 		? Object.fromEntries(
-				Object.entries(record.placements).filter(
-					(entry): entry is [string, ExtensionStatusPlacement] =>
-						isExtensionStatusPlacement(entry[1]),
-				),
+				Object.entries(record.placements).flatMap(([key, value]) => {
+					const placement = readExtensionStatusPlacement(value);
+					return placement ? [[key, placement]] : [];
+				}),
 			)
 		: {};
 	const colorModes = isRecord(record.colorModes)
@@ -883,14 +877,9 @@ export function mergeConfig(parsed: unknown): PolishedTuiConfig {
 	const mouse = isRecord(config.mouse)
 		? normalizeMouseConfig(config.mouse as Record<string, unknown>)
 		: defaultConfig.mouse;
-	const editorMetadataFormat = stringValue(config, "editorMetadataFormat");
 	return {
 		projectRefreshIntervalMs: parseProjectRefreshIntervalMs(config.projectRefreshIntervalMs),
 		pill: normalizePillConfig(config.pill),
-		// An explicit "" means "show nothing", which is how the model/thinking
-		// segments get moved down to the footer without leaving an empty row.
-		// Only a missing or non-string value falls back to the default.
-		editorMetadataFormat: editorMetadataFormat ?? DEFAULT_EDITOR_METADATA_FORMAT,
 		contextStyle: parseContextStyle(config.contextStyle),
 		segmentOptions: normalizeSegmentOptions(config.segmentOptions),
 		editorModelLabel: parseEditorModelLabel(config.editorModelLabel),
@@ -898,6 +887,7 @@ export function mergeConfig(parsed: unknown): PolishedTuiConfig {
 		editorClickCursor: config.editorClickCursor !== false,
 		pasteCollapseLines: parsePasteCollapseLines(config.pasteCollapseLines),
 		editorPaddingY: parseBoxPadding(config.editorPaddingY, defaultConfig.editorPaddingY),
+		editorMinRows: parseEditorMinRows(config.editorMinRows),
 		userMessagePaddingY: parseBoxPadding(
 			config.userMessagePaddingY,
 			defaultConfig.userMessagePaddingY,

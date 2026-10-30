@@ -89,12 +89,12 @@ import { activeEditor, pointerOverEditor } from "./editor-mouse";
 import { scrollEditorBy } from "./editor-scroll";
 import { editorVisualRowCount } from "./editor-text-cursor";
 import { nativeCopyHandler } from "./fork-native-clipboard";
+import { cleanForkTranscriptRows } from "./fork-transcript-copy";
 import { type SharedWheelHandler, sharedWheelRegistrar } from "./fork-wheel-compat";
 import { type BoxLike, scrollContentLinesFor } from "./hit-test";
 import { keyTextFor } from "./key-text";
 import { externalEditorName, selectionHintText } from "./selection-state";
 import { type ExpandTarget, expandKeyText, expandTargetAt } from "./tool-box";
-import { cleanTranscriptRows } from "./transcript-copy";
 
 /** Pi's interrupt chord — refused by the range-delete branch, never consumed. */
 const CTRL_C = "\x03";
@@ -277,7 +277,7 @@ export function activeSelectionHintText(): string | null {
 		);
 	} catch {
 		// The renderer is best effort; a receiver that has moved on offers no
-		// hint rather than breaking the metadata row.
+		// hint rather than breaking the editor's top rule.
 		return null;
 	}
 }
@@ -444,11 +444,12 @@ function transcriptSelectionText(
 	if (receiver.hasOverlay?.()) return undefined;
 	const sourceLines = scrollContentLinesFor(receiver.currentLayout?.root, scrollView);
 	if (!sourceLines) return undefined;
-	const cleaned = cleanTranscriptRows(
+	const cleaned = cleanForkTranscriptRows(
 		sourceLines,
 		bounds.start.row,
 		bounds.end.row,
 		config.icons.rail,
+		config.features?.editor ?? true,
 	);
 	if (!cleaned.changed) return undefined;
 	const adjusted: SelectionBounds = {
@@ -731,8 +732,8 @@ function moveCaretForPress(
  * which is what `scrollEditorBy` does.
  *
  * The window it scrolls within is Pi's own `max(5, rows * 0.3)`, taken from the
- * terminal rather than from the box's rect: the rect includes Starline's border
- * and metadata rows, and guessing how many of those there are would put the
+ * terminal rather than from the box's rect: the rect includes Starline's border,
+ * padding and filler rows, and guessing how many of those there are would put the
  * boundary in the wrong place. Without a row count there is nothing to compute
  * it from, so the notch falls through.
  */

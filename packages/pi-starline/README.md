@@ -10,7 +10,7 @@ Starline makes Pi's fullscreen mode feel like a finished terminal app:
 
 - **See the state:** a pill footer with directory, git, runtime, model, context and cost; click one for the numbers behind it.
 - **Act on it:** click a pill to switch model or thinking level, see what is queued, or list running subagents.
-- **Type comfortably:** a bordered input box with the model inside the frame, paste collapse, and a `ctrl+g` hint for your `$EDITOR`.
+- **Type comfortably:** a compact bordered input box, paste collapse, and a `ctrl+g` hint for your `$EDITOR`.
 - **Drive with the mouse:** select and copy anywhere, click to move the caret, wheel to scroll the draft.
 
 ## Features
@@ -21,8 +21,8 @@ Starline makes Pi's fullscreen mode feel like a finished terminal app:
 - A colour palette with `$name` references; the bar is built from `pill.segments`, in your order.
 - One `git` pill: branch, dirty markers and any operation in progress together. Click it for the changed files, ahead/behind and stashes. The list is read-only, because an agent may be running in the same tree.
 - One `context` pill: the percentage, and nothing else. Click it for the window size, tokens used, session in/out totals and the cache rate.
-- Other extensions' statuses from `ctx.ui.setStatus()` as pills, on either side, or on the editor row.
-- The model pill's icon spins while the agent works.
+- Other extensions' statuses from `ctx.ui.setStatus()` as pills, on either side or in the middle.
+- The model pill's icon spins while the agent works, and the pill counts the run's elapsed time; when the run ends the number stays as the total it reached.
 - No git pill on the bar means no `git status`: the refresh only reads the repository when something on the bar shows it.
 
 **Clickable pills**
@@ -37,7 +37,8 @@ Starline makes Pi's fullscreen mode feel like a finished terminal app:
 
 **Editor**
 
-- Bordered input box with an accent rail, the model and provider inside the frame, and matching user-message boxes.
+- Bordered input box with an accent rail, as tall as its text; paste, selection and `ctrl+g` hints ride its top rule. `editorMinRows` keeps it a fixed minimum height.
+- This fork retains Starline's full-width user-message rails and their existing colour and padding settings. If pi-tidy also styles messages, the visible renderer can depend on load order; set `tidy.userMessageStyle` to `"off"` in Pi's `settings.json` to leave user messages to Starline.
 - Copy-friendly mode drops the rail glyphs so terminal selection copies less chrome.
 
 **Mouse** (Pi's `tuiMode: "fullscreen"`)

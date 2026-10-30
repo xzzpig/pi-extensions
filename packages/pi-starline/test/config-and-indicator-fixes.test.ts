@@ -32,6 +32,28 @@ describe("a broken config file says so", () => {
 	});
 });
 
+describe("Starline user message settings", () => {
+	it("continue to load without a moved-to-pi-tidy warning", () => {
+		const path = tempConfig(
+			JSON.stringify({
+				userMessagePaddingY: 0,
+				colors: { userMessageBorder: "accent", cwd: "bold red" },
+				colorSources: { userMessages: "terminal" },
+			}),
+		);
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const config = loadConfig(path);
+		const calls = warn.mock.calls.map((call) => String(call[0]));
+		warn.mockRestore();
+
+		expect(config.colors.cwd).toBe("bold red");
+		expect(config.userMessagePaddingY).toBe(0);
+		expect(config.colors.userMessageBorder).toBe("accent");
+		expect(config.colorSources.userMessages).toBe("terminal");
+		expect(calls).toHaveLength(0);
+	});
+});
+
 describe("the pill spinner follows icons.mode", () => {
 	const frame = (ascii: boolean) => {
 		setWorkingIndicator({

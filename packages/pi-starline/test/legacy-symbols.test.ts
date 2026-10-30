@@ -141,13 +141,11 @@ function makeEditor(config: PolishedTuiConfig) {
 		{} as never,
 		makeTheme(),
 		() => config,
-		() => ({ modelLabel: "m", providerLabel: "p" }),
-		() => "off",
 	);
 }
 
 describe("polished-frame split marker", () => {
-	const config = { ...defaultConfig, editorMetadataFormat: "the-meta" };
+	const config = defaultConfig;
 
 	it("exposes the splitter under both the starline and legacy keys on a starline-built editor", () => {
 		const inner = makeEditor(config) as unknown as Record<PropertyKey, unknown>;
@@ -170,13 +168,7 @@ describe("polished-frame split marker", () => {
 			configurable: true,
 		});
 
-		const wrapped = new WrappedPolishedEditor(
-			inner as never,
-			makeTheme(),
-			() => config,
-			() => ({ modelLabel: "m2", providerLabel: "p2" }),
-			() => "off",
-		);
+		const wrapped = new WrappedPolishedEditor(inner as never, makeTheme(), () => config);
 
 		// If the legacy-key fallback were removed, splitBaseFrame would be
 		// undefined and the inner frame would render twice instead of once.

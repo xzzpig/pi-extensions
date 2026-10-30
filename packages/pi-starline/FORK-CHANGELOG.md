@@ -1,5 +1,11 @@
 # Fork release notes
 
+## 0.7.0 — Upstream v0.9.0 sync
+
+- Adopt the compact editor layout, `editorMinRows`, configurable pill row, live throughput, and turn timing. The old editor metadata row is removed and its status placement maps to the right-hand footer.
+- Retain Starline's user-message renderer, its padding and colour settings, and the shared editor/message colour controls. If pi-tidy also styles messages, patch order can determine the visible renderer; set `tidy.userMessageStyle` to `"off"` to leave user messages to Starline.
+- Preserve the fork's shared mouse, clipboard and wheel integrations, pi-zentui markers, and group-expand compatibility. Clean-copy supports the configured Starline rail alongside upstream pi-tidy frames.
+
 ## 0.6.0 — Upstream v0.6.1 sync
 
 - Adopt upstream's pill-only status bar, clickable pills, bubbles and keyboard actions. The old text-footer configuration is removed.
