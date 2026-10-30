@@ -4,11 +4,11 @@
   "prefix": "packages/pi-subagents",
   "source": "https://github.com/nicobailon/pi-subagents.git",
   "remote": "upstream-pi-subagents",
-  "ref": "v0.83.1",
-  "version": "v0.83.1",
-  "upstreamCommit": "312082429bda07714fe0fe7729fe8d4935de4c5a",
+  "ref": "v0.84.0",
+  "version": "v0.84.0",
+  "upstreamCommit": "0398b9e8d6f03dc6054dbf13dfe851c7a20bff3a",
   "squash": true,
-  "lastSyncedAt": "2026-10-29T04:27:00+08:00",
+  "lastSyncedAt": "2026-10-30T10:03:30+08:00",
   "notes": "Forked from nicobailon/pi-subagents. Capability contracts live in openspec (specs fleet-native-transcript and subagent-context-injection; the changes under openspec/changes/ for the rest); fork doc chapters live in docs/fork-extensions.md.",
   "knownDebt": [
     {
@@ -31,7 +31,7 @@
     {
       "kind": "lint",
       "path": "packages/pi-subagents/src/runs/background/async-execution.ts",
-      "reason": "Upstream-original signature spawnRunner(cfg: object, ...) (upstream 649, and cfg: object at upstream 420) kept byte-identical per the 2026-09-17 decision: no per-site retyping or suppressions inside upstream files. Finding re-checked each sync.",
+      "reason": "The upstream-original spawnRunner(cfg: object, ...) signature and the best-effort empty catch removing the startup file are unchanged from the pre-sync fork and upstream. They remain under the current-change-only policy; revisit if upstream changes those sites.",
       "recordedAt": "2026-09-28T02:09:09+08:00"
     },
     {
@@ -95,6 +95,11 @@
     },
     {
       "kind": "lint",
+      "path": "packages/pi-subagents/workflow-script-worker.cjs",
+      "reason": "The v0.84.0 security-hardened upstream worker has two unchecked JSON.parse and two Reflect.apply findings. The worker is retained byte-identical to upstream under the current-change-only policy; revisit when upstream changes or documents these sites."
+    },
+    {
+      "kind": "lint",
       "path": "packages/pi-subagents/scripts/build-package.mjs",
       "reason": "The no-runtime-typeof finding checks untrusted manifest export targets before string operations. The guard is identical to both upstream v0.83.1 and pre-sync HEAD and is retained under the current-change-only policy.",
       "recordedAt": "2026-10-29T04:27:00+08:00"
@@ -137,7 +142,7 @@
     }
   ],
   "reapplyOnSync": [
-    "v0.74.0 sync (2026-10-02): keep the fork's projectTrusted threading — upstream v0.74.0 added its own sessionProjectTrust(ctx)/projectTrusted fields and call sites for the same untrusted-project feature the fork already implements; on conflict keep the fork's currentProjectTrusted(input.ctx)/currentProjectTrusted(ctx) calls and trustedProjectCwd spreads, drop upstream's duplicate projectTrusted field declarations (async-execution.ts AsyncExecutionContext, child-launch.ts BuildInProcessChildLaunchInput, shared/types.ts) and duplicate object-literal properties (execution.ts, subagent-executor.ts at the executeAsyncSingle/runSync ctx sites)",
+    "v0.74.0 sync (2026-10-02): keep the fork's projectTrusted threading — upstream v0.74.0 added its own sessionProjectTrust(ctx)/projectTrusted fields and call sites for the same untrusted-project feature the fork already implements; on conflict keep the fork's currentProjectTrusted(input.ctx)/currentProjectTrusted(ctx) calls and trustedProjectCwd spreads, drop upstream's duplicate projectTrusted field declarations (async-execution.ts AsyncExecutionContext, child-launch.ts BuildInProcessChildLaunchInput, shared/types.ts) and duplicate object-literal properties (execution.ts, subagent-executor.ts at the executeAsyncSingle/runSync ctx sites). Preserve the upstream parentProviderRegistry field and its diagnostic helper alongside the fork trust field.",
     "v0.74.0 sync (2026-10-02): the shim fixture's dist/core/system-prompt.d.ts declares NormalizedBuildSystemPromptOptions (selectedTools + sections required) and the fixture's BeforeAgentStartEvent.systemPromptOptions uses it, mirroring real Pi 1.0.0 — upstream's 0.99-era fixture only had optional selectedTools and no sections, which fails the fork's strict typecheck on the 0.74.0 before_agent_start advertise handler",
     "v0.74.0 sync (2026-10-02): merge upstream's new fields/functions alongside the fork's: preflight runtimeSnapshotHost next to sandbox/permissionProfile/hostAvailableBuiltins, child-session selectedBuiltinMcpExtension/missingBuiltinMcpTools next to captureProcessEnv/restoreProcessEnv, child-tool-plan builtinMcpTools next to hostAvailableBuiltins, fleet.ts keeps the native-transcript imports plus upstream's runningTone/childThinkingLevel, index.ts imports buildAdvertisedAgentCatalog + the fork's mergeAgentsForScope (appendAdvertisedAgentPrompt is gone upstream)",
     "Pi 1.0.0 baseline (2026-10-02): child-session.ts ChildSession wrappers call .then(() => undefined) on session.steer/followUp (Pi 1.0.0 returns Promise<QueuedInputDisposition>; the fork API stays Promise<void>). The shim fixture version is 1.0.0, so TypeScript's package-id dedup unifies it with the real 1.0.0 host inside consumer programs (pi-goal-x, pi-openspec-x) and those programs typecheck the fork sources against real 1.0.0 types — keep the .then wrappers when re-applying",
