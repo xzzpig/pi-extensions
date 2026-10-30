@@ -24,6 +24,7 @@
         {
           default = pkgs.mkShell {
             packages = [
+              pkgs.asciinema
               pkgs.git
               pkgs.jq
               pkgs.nodejs_24

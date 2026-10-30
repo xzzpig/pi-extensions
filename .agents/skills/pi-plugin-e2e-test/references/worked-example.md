@@ -1,5 +1,10 @@
 # Worked example: pi-goal-x end-to-end validation
 
+> Historical scenario reference: the original run did not retain asciinema
+> recordings. Do not treat its results as satisfying the current recording
+> gate. For a new run, use the current wrapper as shown below and retain a
+> cast for every start/resume, plus step marks and a replay review.
+
 A real run that exercised every level of this workflow. The plugin under
 test was `packages/pi-goal-x` (a goal-lifecycle extension) plus its runtime
 companion `@xzzpig/pi-subagents` (provides the delegation bridge the
@@ -13,7 +18,14 @@ $S start goalx \
   packages/pi-goal-x/extensions/goal.ts \
   ~/.pi/agent/npm/node_modules/@xzzpig/pi-subagents/index.ts
 $S capture goalx 40
+$S mark goalx "01: startup extensions visible; PASS"
 ```
+
+Use `direnv exec .` for wrapper commands; provide asciinema CLI 3+ in that
+environment (on NixOS, a temporary `nix-shell -p asciinema` suffices). Use a
+fresh name if `/tmp/pi-e2e-goalx` already exists. Before each scenario below,
+add a descriptive `mark`; after checking the result, mark PASS/FAIL with the
+actual observation.
 
 The startup pane must contain `[Extensions]  @xzzpig/pi-subagents@0.9.0,
 goal.ts`. The "Failed to load theme ... Fell back to dark theme." line was
@@ -56,8 +68,10 @@ model turns — exactly the contract the plugin documents.
 
 1. Start a second goal, then `/goal-pause` a few seconds in: the widget
    switched to `goal: paused`.
-2. `stop`, relaunch the same command with `--continue`: the replayed
-   transcript and the `goal: paused` widget proved state survived restart.
+2. `$S stop goalx`, then `$S resume goalx`: the wrapper relaunches with
+   `--continue` and starts a new cast without replacing the first one. The
+   replayed transcript and the `goal: paused` widget prove state survived
+   restart.
 3. `/goal-resume` → fresh snapshot + checkpoint pair in `entries`, model
    re-verified the artifact, completed, audit approved, goal archived.
 
@@ -81,6 +95,19 @@ a live session.
 
 ## Teardown
 
-`$S stop goalx` — the tmux session is gone; `/tmp/pi-e2e-goalx/` (sessions
+`$S stop goalx` — wait for clean `pi-exit` and `recorder-exit` markers before
+removing the tmux session. Keep `/tmp/pi-e2e-goalx/` (sessions, artifacts,
+recordings, step indexes, and captures) for the report.
 
-- artifacts) is kept for the report and cleaned by the OS later.
+Replay **both** the initial run and the resume run in a terminal:
+
+```bash
+asciinema play /tmp/pi-e2e-goalx/recordings/run-<first-id>/session.cast
+asciinema play /tmp/pi-e2e-goalx/recordings/run-<resume-id>/session.cast
+```
+
+Report the actual cast paths, key step offsets, observed results, and which
+portions were visually reviewed. If no visual replay was performed, state
+"recorded, visual replay pending" rather than asserting UI success. Copy
+evidence to a user-approved retained location if it must survive `/tmp`
+cleanup; never upload recordings or commit them by default.
