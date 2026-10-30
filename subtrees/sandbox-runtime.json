@@ -4,11 +4,11 @@
   "prefix": "packages/sandbox-runtime",
   "source": "https://github.com/carderne/sandbox-runtime.git",
   "remote": "upstream-sandbox-runtime",
-  "ref": "v0.0.76",
-  "version": "0.0.76",
-  "upstreamCommit": "b2d73b46ca6b15991cde29a45e988b328c8c971d",
+  "ref": "v0.0.77",
+  "version": "0.0.77",
+  "upstreamCommit": "0d653440a1089d1ad71aa0a37d621dc677c26651",
   "squash": true,
-  "lastSyncedAt": "2026-10-10T06:28:00Z",
+  "lastSyncedAt": "2026-10-30T11:07:56+08:00",
   "notes": "Forked from carderne/sandbox-runtime (itself derived from Anthropic's sandbox-runtime). The fork adds filesystem.protectNonexistentFiles so embedders can skip bwrap placeholder mounts for not-yet-existing dangerous files, and network.disabled so a session can run with all network policy enforcement off. Published locally as @xzzpig/sandbox-runtime: it is a support library for pi-sandbox rather than a Pi plugin, so this record keeps the plain upstream-derived name instead of the pi-* plugin convention.",
   "knownDebt": [
     {
@@ -22,6 +22,21 @@
       "path": "packages/sandbox-runtime/README.md",
       "reason": "Upstream's README carries a stray `<<<<<<< HEAD` line at column 0; the fork indents it two spaces because it sits inside a markdown list, and restoring column 0 fails the root `prettier --check`.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
+    },
+    {
+      "kind": "lint",
+      "path": "packages/sandbox-runtime/.github/workflows/release.yml",
+      "reason": "Seven line-length findings are unchanged in both the pre-sync fork and upstream v0.0.77; preserve the upstream release workflow under the current-change-only policy and revisit when upstream reformats it."
+    },
+    {
+      "kind": "lint",
+      "path": "packages/sandbox-runtime/tsconfig.test.json",
+      "reason": "The optional test-wide TypeScript check reports 68 errors, exactly matching the pre-sync fork with the same toolchain; the package's source typecheck passes. Reconcile the upstream test types separately."
+    },
+    {
+      "kind": "test",
+      "path": "packages/sandbox-runtime/test/sandbox/**",
+      "reason": "User accepted the reproduced host-specific verification exceptions for the v0.0.77 sync. On this NixOS/agent sandbox host seccomp observation emits no events because SECCOMP_FILTER_FLAG_NEW_LISTENER returns EBUSY; root-deny execution fails because bwrap cannot mount on the existing /sbin symlink; external proxy/SSH cases are intermittent or constrained. Observation, root-deny and network failures were reproduced on the pre-sync fork. Run the unchanged tests on a host with a free seccomp listener, compatible mount layout and network access."
     }
   ],
   "reapplyOnSync": [
@@ -29,6 +44,7 @@
     "keep src/sandbox/fork-network.ts (isNetworkDisabled) as the consolidated network.disabled precedence with its two sandbox-manager.ts call sites",
     "keep pathEntryLstatExists exported (plus the root re-export) for the pi-sandbox fork, whose duplicate pathEntryExists was removed",
     "keep the protectNonexistentFiles tests in fork-only test/sandbox/protect-nonexistent-files.test.ts",
+    "keep the fork-only proxy socket Nagle and Android/Termux platform regression tests added with upstream v0.0.77",
     "pass denyMandatoryCwdFiles and protectNonexistentFiles independently into linuxGetMandatoryDenyPaths; filter its deduplicated mandatory result through the fork-only mandatoryDenyFilter without filtering explicit denyWithinAllow paths; keep the pathEntryLstatExists re-export from linux-sandbox-utils.ts and the package root",
     "keep the optional per-command cwd on ISandboxManager.wrapWithSandbox and its implementation, pass it through FsWriteRestrictionConfig to Linux mandatory scans and macOS mandatory static/glob rules, and forward the existing wrapWithSandboxArgv cwd into the string wrapper; omission still defaults to process.cwd without global chdir"
   ],
