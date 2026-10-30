@@ -9,6 +9,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as nodeModule from "node:module";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ParentProviderRegistry } from "../shared/child-session.ts";
 import { discoverAgents, formatUnknownAgentError, unknownAgentDiagnosticContext, type AgentConfig, type UnknownAgentDiagnosticContext } from "../../agents/agents.ts";
 import { createAtomicJsonWriter, writePrivateAtomicJson } from "../../shared/atomic-json.ts";
 import { childCacheRetentionEnv } from "../../shared/child-cache-retention.ts";
@@ -198,6 +199,19 @@ modelResponseAliases?: Record<string, string[]>;
 	runnerLaunchers?: Record<string, string[]>;
 	/** The executor's own child runtime when the launch comes from an in-process child. */
 	childRuntime?: ChildRuntimeConfig;
+	/** The parent's model registry, read at launch to name a provider an extension registered there. */
+	parentProviderRegistry?: Pick<ParentProviderRegistry, "getRegisteredProviderIds">;
+}
+
+/**
+ * A runner child without the ambient extensions does not load the parent extension that
+ * registered its model's provider, and still resolves the model when a built-in provider
+ * has the same id. Name that provider so a failed run can say so.
+ */
+function parentExtensionProviderForChild(ctx: AsyncExecutionContext, disableAmbientExtensions: boolean, model: string | undefined, availableModels: AvailableModelInfo[] | undefined, preferredProvider: string | undefined): string | undefined {
+	if (!disableAmbientExtensions || !ctx.parentProviderRegistry) return undefined;
+	const provider = findModelInfo(model, availableModels, preferredProvider)?.provider;
+	return provider && ctx.parentProviderRegistry.getRegisteredProviderIds().includes(provider) ? provider : undefined;
 }
 
 export const DEFAULT_ASYNC_TIMEOUT_MS = 30 * 60 * 1000;
@@ -1278,6 +1292,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			hostAvailableBuiltins,
 		});
 		const launchResolvedExtensions = externalRunner ? undefined : projectLaunchResolvedChildExtensions(toolPlan);
+		const parentExtensionProvider = externalRunner || machine ? undefined : parentExtensionProviderForChild(ctx, toolPlan.disableAmbientExtensions, selectedModel, availableModels, a.modelProvider ?? ctx.currentModelProvider);
 		if (externalRunner && permissionRules) {
 			throw new AsyncStartValidationError(`Agent '${a.name}' uses runner.type='${externalRunnerType}', which cannot enforce native Pi child permission rules.`);
 		}
@@ -1309,6 +1324,7 @@ export function buildAsyncRunnerSteps(id: string, params: AsyncRunnerStepBuildPa
 			thinking: resolveEffectiveThinking(selectedModel, effectiveThinking),
 			...(thinkingCeiling ? { thinkingCeiling } : {}),
 			launchResolvedExtensions,
+			...(parentExtensionProvider ? { parentExtensionProvider } : {}),
 			...(requestedModel ? { requestedModel } : {}),
 			...(primaryModelFromParent ? { skipPrimaryModelVerification: true } : {}),
 			...(availableModels && availableModels.length > 0 ? { modelVerificationRegistry: availableModels } : {}),
@@ -2145,6 +2161,7 @@ export function executeAsyncSingle(
 		hostAvailableBuiltins,
 	});
 	const launchResolvedExtensions = externalRunner ? undefined : projectLaunchResolvedChildExtensions(toolPlan);
+	const parentExtensionProvider = externalRunner || machine ? undefined : parentExtensionProviderForChild(ctx, toolPlan.disableAmbientExtensions, selectedModel, availableModels, agentConfig.modelProvider ?? ctx.currentModelProvider);
 	const fast = params.fast ?? agentConfig.fast;
 	const launchThinking = resolveEffectiveThinking(selectedModel, effectiveThinking);
 	const { definitionDigest, launchContractDigest } = resolveLaunchBinding({
@@ -2275,6 +2292,7 @@ export function executeAsyncSingle(
 						...(params.fast ?? agentConfig.fast ? { fast: params.fast ?? agentConfig.fast } : {}),
 						thinking: resolveEffectiveThinking(selectedModel, effectiveThinking),
 						...(thinkingCeiling ? { thinkingCeiling } : {}),
+						...(parentExtensionProvider ? { parentExtensionProvider } : {}),
 						...(requestedModel ? { requestedModel } : {}),
 						...(modelOrigin === "inherited" ? { skipPrimaryModelVerification: true } : {}),
 						...(availableModels && availableModels.length > 0 ? { modelVerificationRegistry: availableModels } : {}),

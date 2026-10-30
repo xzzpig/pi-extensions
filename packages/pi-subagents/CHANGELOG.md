@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.24.0] - 2026-10-30 (fork)
+
+### Security
+
+- Sync upstream `v0.83.1` → `v0.84.0`, including the workflow-script sandbox
+  hardening for GHSA-6v8j-6w28-2w8r and the corresponding regression tests.
+
+### Changed
+
+- Adopt upstream's 90-day retention window for resumable background runs and
+  results, while retaining its existing reference and active-run protections.
+- Explain when a background child cannot load an extension-provided model while
+  preserving the fork's trust, sandbox, and permission-profile launch seams.
+
 ## [0.23.0] - 2026-10-29 (fork)
 
 ### Changed
@@ -110,6 +124,23 @@
   adopted.
 
 ## Upstream changes
+
+## [0.84.0] - 2026-10-28
+
+### Highlights
+
+- Security fix: workflow scripts can no longer reach the Pi process outside their sandbox. Upgrade if you use workflow scripts.
+- A locked-down background agent that fails because one of your extensions' providers did not load in it now says which provider and how to load it.
+- Old background runs are now actually deleted from disk.
+
+### Security
+
+- Workflow scripts could reach the Pi process outside their sandbox. Upgrade to this version; see [GHSA-6v8j-6w28-2w8r](https://github.com/nicobailon/pi-subagents/security/advisories/GHSA-6v8j-6w28-2w8r) for affected versions and a workaround. Workflow scripts can no longer set `Error.prepareStackTrace`, and a script that calls `import()`, which always failed inside a workflow, is now rejected before it runs.
+
+### Fixed
+
+- Old background runs are now deleted from disk. Background runs are meant to be removed 30 days after they finish, but a run was kept forever while its Pi session file still existed, and session files are never deleted, so almost no run was ever removed. A run whose session still exists is now kept for 90 days, so you can still resume it for that long, and is then removed like any other finished run. Thanks to [@LCorleone](https://github.com/LCorleone) for the report and fix, and [@isjiajia01](https://github.com/isjiajia01) for reproducing it. (#3098)
+- A background agent that loads no ambient extensions (for example one with `extensions: []`) now says so when it fails on a model whose provider one of your extensions registers or overrides. That extension never loaded in the child, so the child sent its requests through the built-in provider of the same name and failed with an unrelated provider error. The failure now names the provider and how to load its extension for that agent. Thanks to [@Yivas](https://github.com/Yivas) for the report. (#3100)
 
 ## [0.83.1] - 2026-10-27
 
