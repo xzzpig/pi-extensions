@@ -48,6 +48,10 @@ Install ripgrep before enabling the extension:
 | Linux (Arch) | `sudo pacman -S ripgrep` |
 | From source / other | <https://github.com/BurntSushi/ripgrep#installation> |
 
+Experimental Android/Termux support uses the Linux backend and requires `ripgrep`,
+`which`, `socat`, and a [compatible `bwrap`](https://gist.github.com/spurreiter/caa34d367b7ebbd82806a640bf41157a).
+Support depends on the device's kernel and isolation capabilities.
+
 If `which rg` succeeds in your shell but pi still reports `rg not
 found`, pi is being launched from a parent process whose `PATH` does
 not include the directory containing `rg` (common when GUI launchers
@@ -78,6 +82,7 @@ Note below that the order of precedence for filesystem read and write are opposi
 ```json
 {
   "enabled": true,
+  "enableAccessRequestTool": false, // Enable sandbox_status and sandbox_request_access
   "sandboxUserShell": false,       // Sandbox commands entered with `!`. Defaults to true
   "permissionPromptTimeoutSeconds": 600, // Defaults to 10 minutes; 0 waits indefinitely
   "allowBrowserProcess": true,     // If you want to use agent-browser or similar Chrome setup
@@ -254,6 +259,12 @@ Alt+S                            toggle sandboxing on/off for the session
 /sandbox-allow write <path>      prompt to add a path to allowWrite
 ```
 
+With `enableAccessRequestTool: true`, the agent can use `sandbox_status` to inspect
+current rules, including session-only grants, and `sandbox_request_access` to ask
+for additional access with a reason. Already-allowed requests do not prompt.
+Approvals return the actual rule and scope to the agent, including any edits you
+make in the permission prompt.
+
 ## What it does
 
 ### Optional rendering with @xzzpig/pi-tool-display
@@ -287,8 +298,20 @@ checked against the same filesystem policy. The OS-level sandbox cannot cover
 these tools because they run directly in the Node.js process rather than in a
 subprocess.
 
-When a block is triggered, a prompt appears with four options. Permission prompts
-automatically select **Abort (keep blocked)** after 10 minutes by default. Set
+When a block is triggered, a permission widget appears above the input editor with
+four options. Concurrent requests are queued per extension instance. The widget
+accepts input while the main Pi editor (including `CustomEditor` subclasses) has
+focus; other dialogs keep their own keyboard input, and permission selection
+resumes when they close. Operation cancellation, sandbox disable, and session
+shutdown abort pending requests without granting access. The input draft is left
+untouched.
+
+Focus inspection uses Pi's `getFocusedComponent()` when available and the
+`focusedComponent` instance field on Pi 0.80. If neither is available, the request
+fails rather than intercepting input without knowing which dialog owns it.
+
+Permission prompts automatically select **Abort (keep blocked)** after 10 minutes
+by default. Set
 `permissionPromptTimeoutSeconds` to a positive number to use a different timeout,
 or set it to `0` to wait indefinitely. A timeout never grants permission.
 

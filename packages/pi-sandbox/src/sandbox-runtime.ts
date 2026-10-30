@@ -62,8 +62,15 @@ const canonicalizeFilesystemPatterns = (paths: string[], baseCwd?: string) =>
     }),
   );
 
+const isPlatformLinuxOrAndroid = (platform: NodeJS.Platform) =>
+  platform === "linux" || platform === "android";
+
+export function supportsSandboxPlatform(platform: NodeJS.Platform = process.platform): boolean {
+  return platform === "darwin" || isPlatformLinuxOrAndroid(platform);
+}
+
 function sandboxRuntimeReadPaths(platform: NodeJS.Platform): string[] {
-  if (platform !== "linux") return [];
+  if (!isPlatformLinuxOrAndroid(platform)) return [];
 
   // apply-seccomp executes inside the Bubblewrap namespace, so broad rules
   // such as denyRead: ["/home"] must not hide the runtime's bundled helper.
@@ -179,6 +186,13 @@ export function updateSandboxConfig(
 export function supportsNodeEnvProxy(version: string): boolean {
   const [major, minor] = version.split(".").map(Number);
   return (major === 22 && minor >= 21) || major >= 24;
+}
+
+/** Drop session-only grants in place, so a later re-enable starts clean. */
+export function clearSessionAllowances(allowances: SessionAllowances): void {
+  allowances.domains.length = 0;
+  allowances.readPaths.length = 0;
+  allowances.writePaths.length = 0;
 }
 
 const EXIT_STDIO_GRACE_MS = 100;

@@ -5,6 +5,18 @@ This fork tracks [`carderne/pi-sandbox`](https://github.com/carderne/pi-sandbox)
 via git subtree; entries below describe only fork-specific deviations from
 upstream.
 
+## 0.8.2
+
+### Changed
+
+- **Synced upstream `v0.7.2` → `v0.7.3`**: serialize cancellable
+  permission widgets, clear session grants when disabling the sandbox, improve
+  literal domain detection, add opt-in access tools, and recognize Android/Termux.
+- Preserved profile-specific hard denials and effective configuration in the
+  new access tools, along with the fork's write-denial diagnostics and guarded
+  retries. Individual tool cancellation also dismisses pending permission
+  prompts without granting access.
+
 ## 0.8.1
 
 ### Changed
