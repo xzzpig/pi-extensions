@@ -118,11 +118,33 @@ pnpm run test:release                          # isolated release regression tes
 # pnpm run publish:all --only pi-notify
 ```
 
-Run commands inside the repository direnv/Nix environment. Bun is additionally
-needed for sandbox-runtime tests; on NixOS use `direnv exec . nix-shell -p bun
-ripgrep bubblewrap socat python3 --run 'node scripts/release.mjs --pack --check-all'`.
-CI installs a pinned Bun and the OS test dependencies explicitly. jq and tar are
-required; Ubuntu runners supply them.
+Run commands inside the repository direnv/Nix environment. Linux checks involving
+sandbox-runtime additionally need Bun, gcc, strip, static libc/libseccomp development
+libraries, bubblewrap, socat, ripgrep and Python. On NixOS, supply these through an
+ephemeral shell with a static toolchain (the upstream script invokes `gcc` and
+`strip`, so prefixed cross-toolchains need matching aliases). jq and tar are also
+required. CI installs its compiler and libseccomp development packages explicitly.
+
+## Linux sandbox test prerequisites
+
+Both CI and publishing workflows explicitly run `scripts/ci-sandbox-setup.sh` on
+the disposable GitHub-hosted Linux runner. It applies the upstream-recommended
+AppArmor/user-namespace settings only when the kernel exposes those settings,
+verifies successful changes, then exercises nested user/PID/network namespaces
+with bubblewrap. A failed update or capability probe stops the job immediately;
+there is no `continue-on-error` or blanket ignore. The helper refuses local,
+self-hosted and non-Linux environments. Local release commands never invoke it
+or change kernel settings.
+
+The Linux release gate for sandbox-runtime runs `build:seccomp` before its
+TypeScript build, typecheck and complete tests. `vendor/seccomp/<arch>/apply-seccomp`
+is ignored by Git, so a clean checkout must compile it; `tsc` alone cannot create
+it. Full-check CI exercises this dependency even when only another plugin changed.
+Generated native helpers remain untracked and must not be committed.
+
+Local unit tests mock privileged commands and verify the environment guard,
+settings failures, nested namespace preflight and native-build ordering. They do
+not substitute for running the full OS suite on the updated GitHub runner.
 
 `artifacts/release/plan.json` records the registry, pending packages and skipped
 versions. `artifacts.json` records the verified archive paths, entry counts and

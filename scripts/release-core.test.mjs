@@ -66,6 +66,32 @@ test("clean-workspace checks build public artifacts before self/consumer checks"
   ]);
   assert.deepEqual(gatePackages([b, dependency], [b]), [dependency, b]);
 });
+test("Linux sandbox-runtime builds the ignored seccomp helper before TypeScript and tests", () => {
+  const runtime = {
+    name: "@xzzpig/sandbox-runtime",
+    scripts: {
+      "build:seccomp": "native",
+      build: "tsc",
+      typecheck: "tsc --noEmit",
+      test: "bun test",
+    },
+  };
+  assert.deepEqual(checkScripts(runtime, "linux"), [
+    "build:seccomp",
+    "build",
+    "typecheck",
+    "test",
+  ]);
+  assert.deepEqual(checkScripts(runtime, "darwin"), [
+    "build",
+    "typecheck",
+    "test",
+  ]);
+  assert.deepEqual(
+    checkScripts({ ...runtime, name: "@xzzpig/pi-other" }, "linux"),
+    ["build", "typecheck", "test"],
+  );
+});
 test("stable numeric comparison and prerelease rejection", async () => {
   assert.equal(compare("1.10.0", "1.9.0"), 1);
   await assert.rejects(

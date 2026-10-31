@@ -21,7 +21,7 @@
     "publish:all": "bash scripts/publish-all.sh",
     "publish:check": "bash scripts/publish-all.sh --dry-run",
     "publish:pack": "node scripts/release.mjs --pack",
-    "test:release": "node --test scripts/release-core.test.mjs"
+    "test:release": "node --test scripts/release-core.test.mjs scripts/ci-sandbox-setup.test.mjs"
   },
   "devDependencies": {
     "prettier": "3.6.2"

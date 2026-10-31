@@ -56,7 +56,12 @@ node scripts/release.mjs --pack --check-all
 run build hooks. `publish:pack` additionally performs release gates and builds
 and validates tarballs, but never uploads. Both target registry.npmjs.org by
 default. Files under `artifacts/release` are local evidence, not source changes.
-Builds may require Bun for sandbox-runtime's tests; CI installs it explicitly.
+Linux sandbox-runtime checks require Bun and a gcc/strip toolchain with static
+libc/libseccomp development libraries; the gate builds the ignored apply-seccomp
+helper before TypeScript and tests. CI also explicitly configures and probes
+namespace support on disposable GitHub-hosted Linux runners. The guarded helper
+scripts/ci-sandbox-setup.sh must not be used to change a local/self-hosted machine;
+local release commands never invoke it. See the operational guide for OS tools.
 
 The packer runs each package's own prepack/postpack, checks extension/export/bin
 and type entries, bundled dependencies, workspace conversion, forbidden paths,

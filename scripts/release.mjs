@@ -47,9 +47,16 @@ export function gatePackages(all, candidates) {
     true,
   );
 }
-export function checkScripts(p) {
+export function checkScripts(p, platform = process.platform) {
   const scripts = p.scripts ?? {},
     checks = [];
+  // Native helpers are ignored by Git and must exist before clean-checkout tests.
+  if (
+    p.name === "@xzzpig/sandbox-runtime" &&
+    platform === "linux" &&
+    scripts["build:seccomp"]
+  )
+    checks.push("build:seccomp");
   if (scripts.build) checks.push("build");
   if (scripts["build:types"]) checks.push("build:types");
   // A clean workspace may link this package's own public imports to dist-pkg.

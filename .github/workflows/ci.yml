@@ -33,7 +33,10 @@ jobs:
       - name: Install OS sandbox test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bubblewrap socat ripgrep python3 strace zsh
+          sudo apt-get install -y \
+            bubblewrap socat ripgrep python3 strace zsh gcc libseccomp-dev
+      - name: Prepare and verify sandbox namespaces (temporary runner only)
+        run: bash scripts/ci-sandbox-setup.sh
       - run: pnpm install --frozen-lockfile
       - run: pnpm run test:release
       - run: pnpm exec prettier --check .
