@@ -264,7 +264,7 @@ export interface GoalSettingsResolvedShape {
 	pauseOrder?: PauseOrder;
 	/** PR #29: suppress the unfocused goal widget + status hint (default false). */
 	hideUnfocusedBanner?: boolean;
-	/** Issue #72: suppress the model-facing [PI GOAL UNFOCUSED] prompt (default false). */
+	/** Deprecated compatibility key: still parsed and persisted, but no longer controls model input (openspec change silence-unfocused-goal-prompts). */
 	hideUnfocusedPrompt?: boolean;
 	goalsRoot?: string;
 	/** Issue #26: opt-in read-only blocker Oracle configuration (sparse). */
@@ -2005,7 +2005,6 @@ export function effectiveSettingsReport(cwd: string, env: NodeJS.ProcessEnv = pr
 		{ key: "showAutonomousRuns", label: "show autonomous runs line", format: () => String(snapshot.value.showAutonomousRuns) },
 		{ key: "showContextUsage", label: "show context usage line", format: () => String(snapshot.value.showContextUsage) },
 		{ key: "goalsRoot", label: "goals root (reload to change)", format: () => snapshot.value.goalsRoot ?? ".pi/goals" },
-		{ key: "hideUnfocusedPrompt", label: "hide unfocused prompt", format: () => String(snapshot.value.hideUnfocusedPrompt) },
 		{ key: "idleContinuationBackoff", label: "slow repeated idle replies (opt-in)", format: () => String(snapshot.value.idleContinuationBackoff) },
 		{ key: "strictExecutionContract", label: "explicit execution contracts (opt-in)", format: () => String(snapshot.value.strictExecutionContract) },
 		{ key: "maxAutonomousRuns", label: "autonomous run allowance", format: () => snapshot.value.maxAutonomousRuns === 0 ? "0 (disabled)" : String(snapshot.value.maxAutonomousRuns ?? "unlimited (default)") },

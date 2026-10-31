@@ -2,6 +2,12 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.12.0] — 2026-11-01 (fork release)
+
+### Changed
+
+- 未聚焦会话不再向模型提供任何其他目标引导：请求上下文不再生成 `[PI GOAL UNFOCUSED]` 提醒，载入/恢复/取消聚焦也不再追加隐藏的 `pi-goal-steering-event` 消息。旧键 `hideUnfocusedPrompt` 仍可解析、分层和保存，但不再影响行为，也不再出现在设置菜单与设置摘要中；`hideUnfocusedBanner` 继续独立控制未聚焦 UI。焦点仍为人工所有，需要焦点的工具校验、过期 checkpoint 拦截、聚焦目标的上下文/恢复/审计均不变；已持久化的旧消息原样重放，不做清洗或重写。
+
 ## [0.11.1]
 
 ### Fixed

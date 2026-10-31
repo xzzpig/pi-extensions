@@ -488,7 +488,7 @@ describe("five-tool handler integration", () => {
 				assert.ok(lines.some((l) => l === "  subtaskDepth: 3 (project override)"));
 				assert.ok(lines.some((l) => l === "  autoSelectSingleGoal: false (default)"));
 				assert.ok(lines.some((l) => l === "  hideUnfocusedBanner: false (default)"));
-				assert.ok(lines.some((l) => l === "  hideUnfocusedPrompt: false (default)"));
+				assert.ok(!lines.some((l) => l.startsWith("  hideUnfocusedPrompt:")), "the retired reminder setting is no longer a settings row");
 				assert.ok(lines.some((l) => l === "  stall timeout (minutes): 0 (default)"));
 				assert.ok(lines.some((l) => l === "  max objective length (0 = none): 0 (default)"), "objective length row defaults to 0");
 			} finally {

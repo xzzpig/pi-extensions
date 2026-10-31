@@ -509,7 +509,7 @@ environment > project layer > global layer > defaults
 | Task tracking (`disableTasks`) | Turn task lists on or off. Set to `true` to disable them. |
 | Subtask depth (`subtaskDepth`) | Limit how many levels of subtasks the agent can create. |
 | Completion requirements (`disableContracts`) | Turn explicit goal and task completion requirements on or off. Set to `true` to disable them. |
-| Unfocused reminder (`hideUnfocusedPrompt`) | When a session has no focused goal but open goals exist in the selected pool, the agent receives a `[PI GOAL UNFOCUSED]` reminder on every request. Set to `true` to stop that reminder. Defaults to `false`. This is independent of `hideUnfocusedBanner`, which hides only the unfocused widget and status hint. Neither setting selects or resumes a goal; the separate `autoSelectSingleGoal` setting still applies. |
+| Unfocused reminder (retired) | An unfocused session receives no `[PI GOAL UNFOCUSED]` reminder and no other-goal guidance in its model input; the legacy `hideUnfocusedPrompt` key is still accepted but has no effect. `hideUnfocusedBanner` still hides only the unfocused widget and status hint. Neither selects or resumes a goal; the separate `autoSelectSingleGoal` setting still applies. |
 | Auditor disabled | Turn off independent completion review. |
 | Auditor provider, model, and thinking level | Choose which model reviews completed work and its reasoning effort. |
 

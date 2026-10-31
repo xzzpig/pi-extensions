@@ -9,7 +9,7 @@
   "upstreamCommit": "27d9facf49e66ee677770a74e26198a8bdcada8a",
   "squash": true,
   "lastSyncedAt": "2026-10-29T16:24:28Z",
-  "notes": "Forked from the pi-goal-x upstream. Capability contracts live in openspec (spec goal-completion-auditing; the goal-persisted-event-channels spec for the persisted message channels; the S1/S2 auditor seams for pi-openspec-x live in openspec change add-pi-openspec-x, design D10; and openspec change minimize-goal-model-telemetry / goal-lifecycle for the main-model view boundary) and in the package-local spec specs/2026-09-12-escape-foreign-ui-prompt-guard for the Escape/ui-prompt guard.",
+  "notes": "Forked from the pi-goal-x upstream. Capability contracts live in openspec (spec goal-completion-auditing; the goal-persisted-event-channels spec for the persisted message channels; the S1/S2 auditor seams for pi-openspec-x live in openspec change add-pi-openspec-x, design D10; openspec change minimize-goal-model-telemetry / goal-lifecycle for the main-model view boundary; and openspec change silence-unfocused-goal-prompts for the retired unfocused model reminder) and in the package-local spec specs/2026-09-12-escape-foreign-ui-prompt-guard for the Escape/ui-prompt guard.",
   "knownDebt": [
     {
       "kind": "other",
@@ -176,7 +176,8 @@
     "审计监督只读旁路(2026-10-19):同步时保留 fork 在 goal-completion.ts 的单外层完成 wrapper(捕获初次与 resume 的 supervisorHandoff 后一次性回流)、goal-auditor-delegation.ts 的协调错误先锁定再精确取消、终态冻结与 appendAuditSupervisorUsageEntry、goal-ledger.ts 的 audit_supervisor_usage 事件与校验分支、goal-model-view.ts 两处谓词对该事件的排除,以及 goal-events.ts/goal-state.ts 的旁路生命周期失效挂点。goal-audit-sidechannel.ts、goal-audit-context-snapshot.ts、goal-audit-supervisor-handoff.ts 为 fork-only 新模块,不写入任何上游文件。测试入口侧同样需要重放:run-unit-tests.mjs 的分组执行(unit/integration 用 stub adapter、tests/integration/goal-audit-sidechannel-sdk.test.ts 单独一组且清空 NODE_OPTIONS、所有非空组都执行并传播首个失败)、scripts/test-groups.mjs 的分组计划、scripts/fork-test-runner.mjs 的 fork suite 清单(必须排除 live E2E)、以及 scripts/test-adapter-hooks.mjs 中为快照转发的 buildSessionContext 捕获;--selfcheck 必须检查清单后退出。",
     "For the Pi 1.4 Responses and continuation SDK workers, adapt upstream fixtures to the fork constant tool surface and structured pi-subagents delegation. Use the real pi-subagents owner for lifecycle scenarios, a bounded event-owner fixture for the installed-Responses regression, and allow sufficient child-process startup time without weakening assertions.",
     "在 goal-runtime.ts 最终发送路径保留同步 veto 调用点：位于原有 idle/pending readiness 检查后、authorize/claim 前；veto 不分配额度、checkpoint 序号或消息，放行后复核目标身份与宿主 readiness，busy 时仍按原 50ms 间隔重试。goal-state.ts 将该 hook 接到 fork-only goal-auto-continue-gate.ts，以当前 sessionId/goalId 发出事件；协议实现与行为测试留在 fork-only 文件。",
-    "Keep the fork-only docs/auto-continuation-gate.md in the published package by retaining its explicit entry in package.json's files list."
+    "Keep the fork-only docs/auto-continuation-gate.md and docs/unfocused-sessions.md in the published package by retaining their explicit entries in package.json's files list.",
+    "在 goal-events.ts 的 currentGoalContextParts 与 goal-state.ts 的 focus 变更/会话载入路径上删除上游重新引入的未聚焦模型提醒：请求侧 [PI GOAL UNFOCUSED] 分支与 pi-goal-steering-event 发送都不得恢复；保留其 stale-checkpoint 分支、focus entry 写入与 UI 更新。旧键 hideUnfocusedPrompt 继续解析/分层/保存但不进入设置菜单与设置摘要。"
   ],
   "doNotReintroduce": [
     "Do not restore upstream repository.url as the fork publishing source; npm provenance must identify the actual build repository.",
@@ -187,6 +188,7 @@
     "不重引入已持久化旧 Goal-X 消息/旧工具结果的请求时遥测清洗、JSON 碎片解析或 cursor 链重组；新输出精简不改变 delegated auditor/Oracle 的既有隔离",
     "Do not restore a package-local npm lock or npm ci workflow: this fork uses the root pnpm workspace lock and a workspace pi-subagents dependency.",
     "Do not replace Escape continue-audit with upstream continue-working: resume the same parked auditor; only explicit bypass may complete without audit.",
-    "Do not bypass the final synchronous goal-auto-continue veto for eligible current-session native subagent work; a veto is one-shot, consumes no autonomous allowance or checkpoint sequence, creates no retry timer, and does not intercept native child-result/supervisor wakes. The contract is openspec/specs/goal-lifecycle/spec.md."
+    "Do not bypass the final synchronous goal-auto-continue veto for eligible current-session native subagent work; a veto is one-shot, consumes no autonomous allowance or checkpoint sequence, creates no retry timer, and does not intercept native child-result/supervisor wakes. The contract is openspec/specs/goal-lifecycle/spec.md.",
+    "Do not reintroduce a model-facing unfocused reminder or an unfocused steering message: an unfocused session must stay silent about other open goals, and focus stays human-owned via tool/checkpoint gates and explicit user commands (openspec/specs/goal-lifecycle/spec.md, change silence-unfocused-goal-prompts)."
   ]
 }

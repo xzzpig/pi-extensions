@@ -97,7 +97,7 @@ By default goals stay in `<cwd>/.pi/goals`. Set `goalsRoot` in your project or g
 
 Worktrees pointing to the same root share goals, archives, ledger and locks; focus remains session-local and execution ownership still requires explicit resume. The working directory for tools and audits is unchanged. Existing goals are not moved automatically. Reload/reopen the session after changing roots; `/goal-refresh` refreshes the selected pool. `/goal-status verbose` shows the effective location. Saved goal paths remain logical `.pi/goals/...` paths within that selected pool.
 
-`hideUnfocusedPrompt: true` suppresses ordinary unfocused reminders to the model independently of `hideUnfocusedBanner`; neither changes focus or bypasses stale-checkpoint checks.
+An unfocused session receives no model-facing `[PI GOAL UNFOCUSED]` reminder and no other-goal guidance; the legacy `hideUnfocusedPrompt` key is still accepted but no longer has any effect. `hideUnfocusedBanner` still hides only the unfocused widget and status hint. Neither changes focus or bypasses stale-checkpoint checks. See [unfocused sessions](unfocused-sessions.md).
 
 dashboard 显示跨回合累计消费；新生成的主模型内容只保留有效 lifetime spending cap 与执行约束，不提供上下文占用/容量/百分比。已持久化的旧消息与工具返回不处理，宿主压缩独立运行；边界见[主模型新生成内容](main-model-view.md)。
 

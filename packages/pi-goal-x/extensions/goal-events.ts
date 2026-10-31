@@ -1,5 +1,5 @@
 import { goalStorageContext, type GoalStorageContext } from "./storage/goal-root.ts";
-import { commandHint, commandInstructions } from "./goal-controls.ts";
+import { commandHint } from "./goal-controls.ts";
 import { cacheGoalHistory } from "./goal-prompt-cache.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { invalidateAuditSidechannels } from "./goal-audit-sidechannel.ts";
@@ -32,7 +32,6 @@ import { LiveTailRetention } from "./goal-live-retention.ts";
 import { contextSwitchCounters } from "./fork-context-retention.ts";
 import {
 	staleContinuationPrompt,
-	unfocusedOpenGoalsPrompt,
 	untrustedObjectiveBlock,
 } from "./prompts/goal-prompts.ts";
 import { goalModelPromptParts } from "./goal-model-view.ts";
@@ -522,14 +521,9 @@ export function registerGoalEvents(core: GoalCore): void {
 		const getPromptLedger = () => promptLedger ??= { events: core.state.goal ? goalRuntimeEvents(ctx, core.state.goal.id) : [], malformed: 0 };
 
 		if (!core.state.goal) {
-			// Issue #72: hideUnfocusedPrompt opts out of the model-facing
-			// unfocused reminder only. The stale-checkpoint guard above and
-			// all focused-goal context below are unaffected.
-			if (loadGoalSettings(ctx.cwd).hideUnfocusedPrompt === true) return;
-			const openCount = otherOpenGoalCount(core.goalsById, null);
-			if (openCount > 0) {
-				return { state: commandInstructions(unfocusedOpenGoalsPrompt(openCount), core.loadedCommands) };
-			}
+			// No focused goal: request-only state stays empty. Focus is human-owned,
+			// so an unfocused session neither gets other-goal reminders nor asks the
+			// model to select one; the stale-checkpoint guard above still applies.
 			return;
 		}
 		if (core.state.goal.status === "complete") return;

@@ -5,8 +5,8 @@ import { goalStorageContext, goalStorageRoot } from "./storage/goal-root.ts";
 import { invalidateAuditSidechannelsForOwner } from "./goal-audit-sidechannel.ts";
 import { type AgentToolResult, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
-import { FOCUS_ENTRY, STATE_ENTRY, GOAL_CONTEXT_EVENT_ENTRY, GOAL_EVENT_ENTRY, GOAL_STATE_EVENT_ENTRY, GOAL_STEERING_EVENT_ENTRY, goalDetails } from "./goal-format.ts";
-import { goalContextMessagePrompt, goalStateSnapshotPrompt, budgetReachedReminderNote, unfocusedOpenGoalsPrompt } from "./prompts/goal-prompts.ts";
+import { FOCUS_ENTRY, STATE_ENTRY, GOAL_CONTEXT_EVENT_ENTRY, GOAL_EVENT_ENTRY, GOAL_STATE_EVENT_ENTRY, goalDetails } from "./goal-format.ts";
+import { goalContextMessagePrompt, goalStateSnapshotPrompt, budgetReachedReminderNote } from "./prompts/goal-prompts.ts";
 import { loadGoalSettings, loadGoalSettingsFileConfig } from "./goal-settings.ts";
 import { deleteChangeBaseline } from "./goal-change-baseline.ts";
 import { ALL_REGISTERED_GOAL_TOOLS } from "./goal-tool-names.ts";
@@ -331,9 +331,6 @@ export function createGoalCore(
 	// §10: unified dashboard expansion state (compact vs expanded task view),
 	// owned by the core so it survives host-side widget re-instantiation.
 	let dashboardExpanded = false;
-	// Edge-triggered flag for the one-shot unfocused-with-open-goals steering
-	// message; reset whenever a goal becomes focused.
-	let unfocusedNotified = false;
 
 	// Per-turn flags reset in turn_start (#4, C9 fix).
 	// goalWorkToolCalledThisTurn: tracks meaningful work attempts for Oracle.
@@ -664,35 +661,7 @@ export function createGoalCore(
 		} catch {
 			// Ledger append failure should not crash focus change
 		}
-		notifyUnfocusedIfNeeded(ctx);
 		updateUI(ctx);
-	}
-
-	/**
-	 * Unfocused-with-open-goals is a one-shot steering message now (the old
-	 * per-turn system-prompt block is gone). Edge-triggered: once per
-	 * unfocused spell, reset the moment a goal is focused again.
-	 */
-	function notifyUnfocusedIfNeeded(_ctx: ExtensionContext): void {
-		if (focusedGoalId) {
-			unfocusedNotified = false;
-			return;
-		}
-		if (unfocusedNotified || openGoals().length === 0) return;
-		unfocusedNotified = true;
-		try {
-			pi.sendMessage(
-				{
-					customType: GOAL_STEERING_EVENT_ENTRY,
-					content: unfocusedOpenGoalsPrompt(openGoals().length),
-					display: false,
-					details: { reason: "unfocused", timestamp: Date.now() },
-				},
-				{ triggerTurn: false },
-			);
-		} catch {
-			// Steering must never crash session load or focus changes.
-		}
 	}
 
 	function updateFocusedGoal(next: GoalRecord, ctx: ExtensionContext, shouldPersist = true): void {
@@ -1060,9 +1029,7 @@ export function createGoalCore(
 		updateUI(ctx);
 		// Re-supply the full goal context when this branch has no copy after its
 		// last compaction (restart after compaction, cross-branch focus, legacy
-		// sessions upgrading to the message channel). Also fires the one-shot
-		// unfocused notice on the transition edge.
-		notifyUnfocusedIfNeeded(ctx);
+		// sessions upgrading to the message channel).
 		ensureGoalContextMessage(ctx);
 	}
 
