@@ -1,5 +1,12 @@
 # Fork release notes
 
+## 0.7.2 — pill text contrast on terminal-owned palettes
+
+- Pick the pill text colour from the 256-colour cube (`38;5;16` black, `38;5;231` white) instead of the basic ANSI codes `30`/`97`. The basic codes belong to the terminal theme: herdr renders ANSI black as `#616161`, which left the automatic "dark" text at 1.76:1 on the muted pill background and 2.62:1 on the model pill. The cube's black and white are fixed by the standard, so contrast now holds in any palette (5.4–9.4:1 for the footer's default backgrounds).
+- The change is two constants plus their comment in `extensions/starline/pill.ts`. It covers pill bodies, the thin divider drawn between same-background pills, and the bubble's selected row, all of which share `contrastTextSgr()`. Backgrounds, separators, caps, widths and click targets are unchanged, and an explicit `fg:` in `colors.*` still wins.
+- Backgrounds that land on the terminal's own 16 colours are painted in reverse video (`\x1b[49m` + the palette colour as foreground + `\x1b[7m`): the palette colour stays the background and the text becomes the terminal's default background, a pair the palette is designed to keep readable. Only the terminal knows those RGBs — the standard table turned `48;5;3` into "dark yellow" when herdr paints it `#61AFEE`, which is why the contrast guess cannot be trusted there. Measured on the same pills: 2.62:1 → 8.61:1 (model/cwd) and 3.07:1 → 10.11:1 (cost); known-RGB backgrounds keep the cube black/white and land at 9.12:1. The predicate and SGR builders live in the fork-only `extensions/starline/fork-pill-legibility.ts`, with one seam each in `pill.ts` and `pill-bubble.ts`.
+- Fork coverage lives in `test/fork-pill-contrast.test.ts`; `subtrees/pi-starline.json` records the sync-time re-apply. Drop the constants divergence once upstream stops deriving legibility from the terminal's basic palette, and the reverse-video seam once upstream handles terminal-owned backgrounds itself.
+
 ## 0.7.1 — Pi cursor compatibility
 
 - Restore `underline` and `terminal` editor cursor styles on Pi 1.2 and later while preserving the existing Pi 1.1 cursor path.

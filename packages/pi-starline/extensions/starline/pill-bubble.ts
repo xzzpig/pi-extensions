@@ -36,6 +36,7 @@ import type {
 	PillBubbleHandle,
 	PillBubbleSource,
 } from "../../types/pill-api";
+import { reverseVideoSgr } from "./fork-pill-legibility";
 import { requestPointerShape } from "./mouse/pointer-shape";
 import { contrastTextSgr } from "./pill";
 import { resolveBackgroundSgr, type ThemeLike, toForegroundSgr } from "./style";
@@ -211,7 +212,10 @@ function buildBubble(input: {
 	const width = Math.max(8, Math.floor(input.width));
 	const innerWidth = Math.max(1, width - 4);
 	const background = input.background;
-	const foreground = input.foreground || contrastTextSgr(background);
+	// A background the terminal owns has no knowable RGB, so its row is painted in
+	// reverse video: palette colour behind, terminal default background as text.
+	const reverse = input.foreground ? "" : (reverseVideoSgr(background) ?? "");
+	const foreground = input.foreground || (reverse ? "" : contrastTextSgr(background));
 	// The outline is the pill's colour as a foreground on the terminal's own
 	// background; nothing inside the box is filled.
 	const line = `${DEFAULT_BG}${toForegroundSgr(background) ?? ""}`;
@@ -222,7 +226,7 @@ function buildBubble(input: {
 		// underline covers the words and not the margin around them.
 		`${side} ${style}${text}${STYLE_OFF}${" ".repeat(Math.max(0, innerWidth - visibleWidth(text)))} ${side}`;
 	const selectedRow = (text: string) =>
-		`${side}${background}${foreground} ${text}${" ".repeat(
+		`${side}${reverse || background}${foreground} ${text}${" ".repeat(
 			Math.max(0, innerWidth - visibleWidth(text)),
 		)} ${RESET}${side}`;
 

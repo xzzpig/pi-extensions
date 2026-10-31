@@ -228,13 +228,13 @@ describe("backgroundSgrToRgb", () => {
 
 describe("contrastTextSgr", () => {
 	it("uses dark text on light backgrounds and light text on dark ones", () => {
-		expect(contrastTextSgr(MAUVE_BG)).toBe("\x1b[30m");
-		expect(contrastTextSgr(GREEN_BG)).toBe("\x1b[30m");
-		expect(contrastTextSgr("\x1b[48;2;30;30;46m")).toBe("\x1b[97m");
+		expect(contrastTextSgr(MAUVE_BG)).toBe("\x1b[38;5;16m");
+		expect(contrastTextSgr(GREEN_BG)).toBe("\x1b[38;5;16m");
+		expect(contrastTextSgr("\x1b[48;2;30;30;46m")).toBe("\x1b[38;5;231m");
 	});
 
-	it("emits basic colour codes, which every terminal renders", () => {
-		expect(["\x1b[30m", "\x1b[97m"]).toContain(contrastTextSgr("\x1b[48;5;99m"));
+	it("emits the 256-colour cube's fixed black and white", () => {
+		expect(["\x1b[38;5;16m", "\x1b[38;5;231m"]).toContain(contrastTextSgr("\x1b[48;5;99m"));
 	});
 });
 
@@ -350,7 +350,7 @@ describe("renderPillBar", () => {
 			{ key: "a", text: "aaa", spec: "syntaxKeyword" },
 			{ key: "b", text: "bbb", spec: "syntaxKeyword" },
 		];
-		expect(bar(same)).toContain(`${MAUVE_BG}\x1b[30m`);
+		expect(bar(same)).toContain(`${MAUVE_BG}\x1b[38;5;16m`);
 	});
 
 	it("truncates to the given width", () => {

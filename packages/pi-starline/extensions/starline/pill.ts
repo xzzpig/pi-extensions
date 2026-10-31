@@ -13,6 +13,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 import type { ColorSource, ColorSpec } from "./config";
 import type { ExtensionStatusSegment } from "./extension-status";
+import { hasExplicitForeground, reverseVideoSgr } from "./fork-pill-legibility";
 import {
 	EXTENSION_STATUS_PREFIX,
 	EXTENSION_STATUS_SEGMENT,
@@ -25,9 +26,13 @@ const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
 const DEFAULT_BG = "\x1b[49m";
 
-/** Text colours are the basic named codes, which every terminal renders correctly. */
-const TEXT_DARK = "\x1b[30m";
-const TEXT_LIGHT = "\x1b[97m";
+/**
+ * Text colours are the 256-colour cube's black and white (16/231), whose values
+ * the standard fixes. The basic named codes are not fixed: a terminal theme may
+ * map ANSI black to a mid grey, which leaves mid-tone pills hard to read.
+ */
+const TEXT_DARK = "\x1b[38;5;16m";
+const TEXT_LIGHT = "\x1b[38;5;231m";
 
 /** Catppuccin surface1 — the neutral for segments whose spec names no colour. */
 const NEUTRAL_BG = "\x1b[48;2;69;71;90m";
@@ -164,6 +169,8 @@ type PreparedPill = {
 	bg: string;
 	fg: string;
 	bold: boolean;
+	/** Body SGR for a terminal-owned background, which paints text in reverse. */
+	reverse: string;
 };
 
 const XTERM_CUBE_LEVELS = [0, 95, 135, 175, 215, 255];
@@ -250,19 +257,25 @@ function prepare(
 		if (!text || visibleWidth(text) === 0) continue;
 
 		if (input.keepStyling) {
-			pills.push({ key: input.key, text, bg: neutral, fg: "", bold: false });
+			pills.push({ key: input.key, text, bg: neutral, fg: "", bold: false, reverse: "" });
 			continue;
 		}
 
 		const resolved = resolveColorSpec(theme, source, input.spec);
 		const bg = resolved.bg ?? resolveBackgroundSgr(theme, source, input.spec) ?? neutral;
-		// An explicit fg: in the spec wins; otherwise pick for legibility.
+		// An explicit fg: in the spec wins. A background the terminal owns has no
+		// knowable RGB, so reverse video hands both sides to the palette instead of
+		// guessing from the standard table.
+		const explicitFg = hasExplicitForeground(input.spec);
+		const reverse = explicitFg ? "" : (reverseVideoSgr(bg) ?? "");
+		const specFg = explicitFg || (resolved.bg && resolved.fg) ? resolved.fg : undefined;
 		pills.push({
 			key: input.key,
 			text,
 			bg,
-			fg: resolved.bg && resolved.fg ? resolved.fg : contrastTextSgr(bg),
+			fg: reverse ? "" : (specFg ?? contrastTextSgr(bg)),
 			bold: config.bold || resolved.bold,
+			reverse,
 		});
 	}
 
@@ -319,7 +332,7 @@ export function renderPillBar(
 		// The left cap opens the bar in the first pill's colour, so it belongs to it.
 		const startColumn = index === 0 ? capStart : column;
 		const bodyStartColumn = column;
-		emit(`${pill.bg}${pill.fg}${pill.bold ? BOLD : ""} ${pill.text} ${RESET}`);
+		emit(`${pill.reverse || pill.bg}${pill.fg}${pill.bold ? BOLD : ""} ${pill.text} ${RESET}`);
 		const bodyEndColumn = column;
 
 		const next = pills[index + 1];
@@ -329,7 +342,8 @@ export function renderPillBar(
 			// default to the same theme colour, which merged them into one blob.
 			// Fall back to the thin divider in the text colour, which stays visible.
 			if (separator && pill.bg === next.bg) {
-				emit(`${pill.bg}${pill.fg || contrastTextSgr(pill.bg)}${THIN_SEPARATOR}${RESET}`);
+				const dividerFg = pill.reverse ? "" : pill.fg || contrastTextSgr(pill.bg);
+				emit(`${pill.reverse || pill.bg}${dividerFg}${THIN_SEPARATOR}${RESET}`);
 			} else if (separator) {
 				const arrowFg = toForegroundSgr(pill.bg);
 				// Without a usable foreground the arrow would be invisible; letting the

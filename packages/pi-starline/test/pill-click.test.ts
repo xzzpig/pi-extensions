@@ -675,8 +675,14 @@ describe("pill actions", () => {
 			const width =
 				(options as { overlayOptions?: { width?: number } }).overlayOptions?.width ?? 40;
 			const bubble = (factory as BubbleFactory)({}, theme, {}, vi.fn());
+			// The selected row is painted in the pill's background, or in reverse video
+			// when that background is one of the terminal's own 16 colours.
 			const highlighted = () =>
-				plain(bubble.render(width).find((line) => line.includes("\x1b[48;5;3m")) ?? "");
+				plain(
+					bubble
+						.render(width)
+						.find((line) => line.includes("\x1b[48;5;3m") || line.includes("\x1b[7m")) ?? "",
+				);
 
 			// Opens with the current level highlighted, not with nothing.
 			expect(highlighted()).toContain("● high");
