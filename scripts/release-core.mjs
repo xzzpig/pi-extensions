@@ -241,12 +241,7 @@ export function integrity(file) {
 }
 export async function publishArtifacts(
   artifacts,
-  {
-    upload,
-    lookup,
-    delay = () => new Promise((r) => setTimeout(r, 5000)),
-    report = console.log,
-  },
+  { upload, lookup, report = console.log, warn = console.warn },
 ) {
   for (const a of artifacts) {
     const existing = await lookup(a.name, a.version);
@@ -255,21 +250,25 @@ export async function publishArtifacts(
       continue;
     }
     await upload(a);
-    let verified = false;
-    for (let i = 0; i < 12; i++) {
-      const remote = await lookup(a.name, a.version);
-      if (remote) {
-        if (remote.dist?.integrity !== a.integrity)
-          throw new Error(`Registry integrity mismatch: ${a.name}`);
-        verified = true;
-        break;
-      }
-      if (i < 11) await delay();
-    }
-    if (!verified)
-      throw new Error(
-        `Published version not verifiable: ${a.name}@${a.version}`,
+    const tag = `${a.name}@${a.version}`;
+    let remote;
+    try {
+      // npm may still be processing an accepted upload. Confirmation is best-effort.
+      remote = await lookup(a.name, a.version);
+      if (!remote)
+        warn(
+          `warning: ${tag}: npm publish succeeded; version not visible yet (registry confirmation pending)`,
+        );
+    } catch (error) {
+      warn(
+        `warning: ${tag}: npm publish succeeded; registry confirmation unavailable: ${error.message}`,
       );
-    report(`published ${a.name}@${a.version}`);
+    }
+    // Keep integrity validation outside the lookup catch: real mismatches remain fatal.
+    if (remote && remote.dist?.integrity !== a.integrity)
+      throw new Error(`Registry integrity mismatch: ${a.name}`);
+    report(
+      `published ${tag} (${remote ? "registry verified" : "registry confirmation pending"})`,
+    );
   }
 }

@@ -91,10 +91,15 @@ cancelling an upload in progress.
 
 ## Failures and verification
 
-npm multi-package releases cannot be atomic. A command error, failed registry
-query or unverifiable upload fails the run. Preserve logs and investigate; a
-rerun skips successfully published exact versions and retries missing ones.
-Each new upload must match the SHA-512 integrity of its verified local archive.
+npm multi-package releases cannot be atomic. Pre-upload registry query errors
+and npm publish command failures fail the run. Once npm publish succeeds, the
+upload is accepted even if npm is still processing it. A single best-effort
+post-upload lookup checks SHA-512 integrity when metadata is visible; a missing
+version or query exception only warns, without polling or blocking later uploads.
+An observed integrity mismatch remains fatal. Success logs explicitly distinguish
+registry-verified uploads from confirmation-pending uploads. Preserve logs and
+investigate failures; a rerun skips existing exact versions and retries missing
+ones. Do not republish or bump a version solely because confirmation is pending.
 Never fix a failed run by overwriting a published version: npm versions are
 immutable. Prepare a new version if the published artifact itself is wrong.
 

@@ -7,10 +7,11 @@ package manifests before release; CI never writes versions or pushes commits.
 Discovery includes public `@xzzpig/pi-*` packages, excluding `pi-components` and
 `sandbox-runtime`. Exact versions already on npm are skipped. New releases must
 be stable and newer than every stable version in the registry. Network and
-permission failures are errors, not evidence that a version is absent.
+permission failures before upload are errors, not evidence that a version is
+absent. After a successful npm publish, registry confirmation is best-effort.
 
 Release phases are plan → gates → pack all → validate all → publish in dependency
-order → verify. The exact validated tarballs are uploaded; npm does not rebuild
+order → best-effort confirmation. The exact validated tarballs are uploaded; npm does not rebuild
 packages at publish time. pnpm pack retains package-specific prepack/postpack and
 publishConfig.directory handling, including subagents' dist-pkg and sandbox's
 bundled runtime. Private support dependencies are built and tested but never
@@ -35,10 +36,15 @@ audit must be available or fetched from the recorded sources, never silently
 skipped. Package-specific runtime tests requiring models/interactive TUI remain
 separate from unattended unit checks.
 
-Multi-package npm publishing is not atomic. A failed upload or failed registry
-verification stops the release. Re-run after investigation: existing exact
-versions are skipped, missing versions are retried. An already-published package
-cannot be overwritten or rolled back by this workflow.
+Multi-package npm publishing is not atomic. A failed upload or an observed
+registry integrity mismatch stops the release. A successful npm publish counts
+as an accepted release: a temporarily invisible version or failed post-upload
+query only warns and does not block later packages. There is no visibility
+polling loop; one best-effort lookup checks integrity when metadata is available.
+Success logs distinguish registry-verified uploads from confirmation-pending
+uploads. Re-run failures after investigation: existing exact versions are skipped,
+missing versions are retried. An already-published package cannot be overwritten
+or rolled back by this workflow.
 
 ## One-time setup and rollout
 
@@ -70,7 +76,7 @@ cannot be overwritten or rolled back by this workflow.
    and only set to a single reviewed plugin. Do not push main between enabling the
    variable and that controlled first dispatch unless ready to release all pending
    versions. Disable the variable again if not ready for broad automation.
-6. Inspect successful upload and registry integrity verification. GitHub-hosted
+6. Inspect successful uploads and any best-effort registry confirmation warnings. GitHub-hosted
    runners and npm CLI >=11.5.1 are required by the current npm OIDC service.
    Public-repository/public-package OIDC releases generate provenance automatically.
    No NPM_TOKEN, NODE_AUTH_TOKEN or local npm login is needed for CI publication.
@@ -96,7 +102,8 @@ This implementation never configures external accounts automatically.
 - Run `pnpm run test:release`, `pnpm run publish:check` and
   `pnpm run publish:pack --only pi-notify` (substitute intended packages).
 - Commit/push only with operator authorization. An enabled main workflow discovers
-  pending versions, runs gates, packs all, uploads in order and verifies integrity.
+  pending versions, runs gates, packs all, uploads in order and checks integrity
+  when registry metadata is available.
 - No version change means no new version is published. Existing versions are not
   compared byte-for-byte to the working tree and cannot be overwritten.
 
@@ -130,11 +137,13 @@ Never commit generated archives or authentication state.
 - Keep NPM_AUTO_PUBLISH unset/false to disable future uploads. It does not cancel
   a running upload; do not interrupt ongoing publication merely to change policy.
 - Re-run a failed main workflow, or dispatch it on main with dry_run=false and
-  only set to affected package directory names. Authentication/registry failures
-  are hard errors, not evidence a package is absent.
+  only set to affected package directory names. Pre-upload registry errors and
+  npm publish failures remain hard errors. Post-upload lookup failures only warn;
+  they do not mean a successful upload needs to be repeated.
 - If package A published and B failed, a rerun skips A and retries B. If registry
-  verification was uncertain, inspect npm first. New successful uploads are
-  checked against their validated tarball integrity.
+  confirmation was pending, allow npm processing to finish and inspect npm before
+  retrying. When post-upload metadata is visible, integrity must match the
+  validated tarball; a mismatch still fails the release.
 - If an existing npm version has bad contents, prepare a **new** version. Do not
   delete/reuse the same version or silently move latest backward.
 - All active OpenSpec changes currently block packing/release conservatively.

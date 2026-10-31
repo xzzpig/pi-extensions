@@ -258,37 +258,125 @@ test("all-artifact publish order, partial failure and idempotent retry", async (
   });
   assert.deepEqual(uploads, [a.name, b.name, b.name]);
 });
-test("verification uncertainty, network failure and integrity mismatch are fatal", async () => {
-  const artifact = { ...a, integrity: "sha512-correct" };
-  await assert.rejects(
-    publishArtifacts([artifact], {
-      lookup: async () => null,
-      upload: async () => {},
-      delay: async () => {},
-    }),
-    /not verifiable/,
+test("accepted uploads not yet visible warn once and continue without polling", async () => {
+  const artifacts = [a, b].map((p) => ({ ...p, integrity: "sha512-correct" }));
+  const uploads = [],
+    warnings = [],
+    reports = [];
+  let lookups = 0;
+  await publishArtifacts(artifacts, {
+    lookup: async () => {
+      lookups++;
+      return null;
+    },
+    upload: async (p) => {
+      uploads.push(p.name);
+    },
+    warn: (message) => warnings.push(message),
+    report: (message) => reports.push(message),
+  });
+  assert.deepEqual(uploads, [a.name, b.name]);
+  assert.equal(lookups, 4); // One pre-upload and one post-upload lookup per package.
+  assert.equal(warnings.length, 2);
+  assert.ok(
+    warnings.every((message) =>
+      message.includes("npm publish succeeded; version not visible yet"),
+    ),
   );
-  let uploaded = false;
-  await assert.rejects(
-    publishArtifacts([artifact], {
-      lookup: async () => {
-        if (uploaded) throw new Error("network");
+  assert.equal(reports.length, 2);
+  assert.ok(
+    reports.every((message) =>
+      message.includes("registry confirmation pending"),
+    ),
+  );
+});
+test("post-upload query errors warn and allow later packages to publish", async () => {
+  for (const failure of ["network", "HTTP 403", "invalid JSON"]) {
+    const artifacts = [a, b].map((p) => ({
+      ...p,
+      integrity: "sha512-correct",
+    }));
+    const uploads = [],
+      warnings = [],
+      reports = [];
+    await publishArtifacts(artifacts, {
+      lookup: async (name) => {
+        if (uploads.includes(name)) throw new Error(failure);
         return null;
       },
-      upload: async () => {
-        uploaded = true;
+      upload: async (p) => {
+        uploads.push(p.name);
       },
-    }),
-    /network/,
-  );
-  uploaded = false;
+      warn: (message) => warnings.push(message),
+      report: (message) => reports.push(message),
+    });
+    assert.deepEqual(uploads, [a.name, b.name]);
+    assert.equal(reports.length, 2);
+    assert.equal(warnings.length, 2);
+    assert.ok(
+      warnings.every(
+        (message) =>
+          message.includes(failure) &&
+          message.includes("npm publish succeeded"),
+      ),
+    );
+  }
+});
+test("pre-upload query errors still fail without uploading", async () => {
+  let uploads = 0;
+  const warnings = [];
   await assert.rejects(
-    publishArtifacts([artifact], {
-      lookup: async () => (uploaded ? { dist: { integrity: "wrong" } } : null),
-      upload: async () => {
-        uploaded = true;
+    publishArtifacts([a], {
+      lookup: async () => {
+        throw new Error("pre-upload network failure");
       },
+      upload: async () => {
+        uploads++;
+      },
+      warn: (message) => warnings.push(message),
     }),
-    /integrity/,
+    /pre-upload network failure/,
   );
+  assert.equal(uploads, 0);
+  assert.deepEqual(warnings, []);
+});
+test("observed registry integrity mismatches remain fatal and stop later uploads", async () => {
+  const artifacts = [a, b].map((p) => ({ ...p, integrity: "sha512-correct" }));
+  const uploads = [],
+    warnings = [],
+    reports = [];
+  await assert.rejects(
+    publishArtifacts(artifacts, {
+      lookup: async (name) =>
+        uploads.includes(name) ? { dist: { integrity: "wrong" } } : null,
+      upload: async (p) => {
+        uploads.push(p.name);
+      },
+      warn: (message) => warnings.push(message),
+      report: (message) => reports.push(message),
+    }),
+    /Registry integrity mismatch/,
+  );
+  assert.deepEqual(uploads, [a.name]);
+  assert.deepEqual(warnings, []);
+  assert.deepEqual(reports, []);
+});
+test("visible matching uploads report verified success without warnings", async () => {
+  const artifact = { ...a, integrity: "sha512-correct" };
+  let uploaded = false;
+  const warnings = [],
+    reports = [];
+  await publishArtifacts([artifact], {
+    lookup: async () =>
+      uploaded ? { dist: { integrity: artifact.integrity } } : null,
+    upload: async () => {
+      uploaded = true;
+    },
+    warn: (message) => warnings.push(message),
+    report: (message) => reports.push(message),
+  });
+  assert.deepEqual(warnings, []);
+  assert.deepEqual(reports, [
+    `published ${a.name}@${a.version} (registry verified)`,
+  ]);
 });
