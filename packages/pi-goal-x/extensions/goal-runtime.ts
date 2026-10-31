@@ -20,6 +20,8 @@ const POST_STOP_ALLOWED = new Set<string>(POST_STOP_ALLOWED_TOOLS);
 
 export interface GoalRuntimeHooks {
 	authorize?(ctx: ExtensionContext, goal: GoalRecord): Record<string, unknown> | null;
+	/** Synchronous final veto before an automatic checkpoint claims allowance or appends messages. */
+	shouldDeferAutoContinue?(ctx: ExtensionContext, goal: GoalRecord): boolean;
 	recover?(ctx: ExtensionContext): void;
 	dispatchFailed?(ctx: ExtensionContext): void;
 	/** Dispatch a hidden follow-up checkpoint message (pi.sendMessage + triggerTurn). */
@@ -183,26 +185,55 @@ export class GoalRuntime {
 			if (this.continuationQueuedFor === scheduledGoalId) this.continuationQueuedFor = null;
 			return;
 		}
-		const authorization = this.hooks.authorize?.(ctx, goal);
+		let deferred = false;
+		try {
+			deferred = this.hooks.shouldDeferAutoContinue?.(ctx, goal) ?? false;
+		} catch {
+			// A failed optional veto hook must not authorize a checkpoint by default.
+			deferred = true;
+		}
+		if (deferred) return;
+
+		// A synchronous listener may change focus or enqueue host work. Re-read both
+		// after the event so the veto hook cannot make a stale checkpoint actionable.
+		const currentGoal = this.hooks.getGoal();
+		if (!currentGoal || currentGoal.id !== scheduledGoalId || !this.hooks.isActionable(scheduledGoalId)) {
+			if (this.continuationQueuedFor === scheduledGoalId) this.continuationQueuedFor = null;
+			return;
+		}
+		try {
+			ready = !ctx.hasPendingMessages() && ctx.isIdle();
+		} catch {
+			if (this.continuationQueuedFor === scheduledGoalId) this.continuationQueuedFor = null;
+			return;
+		}
+		if (!ready) {
+			this.continuationScheduledFor = scheduledGoalId;
+			this.continuationTimer = setTimeout(() => this.sendQueuedContinuation(ctx, scheduledGoalId), CONTINUATION_IDLE_RETRY_MS);
+			this.continuationTimer.unref?.();
+			return;
+		}
+
+		const authorization = this.hooks.authorize?.(ctx, currentGoal);
 		if (!authorization) return;
 		this.checkpointSeq += 1;
-		this.continuationQueuedFor = goal.id;
-		this.hooks.sendStateSnapshot(ctx, goal, this.checkpointSeq);
+		this.continuationQueuedFor = currentGoal.id;
+		this.hooks.sendStateSnapshot(ctx, currentGoal, this.checkpointSeq);
 		const details: GoalCheckpointDetailsV3 = {
 			version: 3,
 			generation: String(authorization.generation),
 			dispatchId: String(authorization.dispatchId),
 			kind: "checkpoint",
-			goalId: goal.id,
+			goalId: currentGoal.id,
 			status: "active",
-			revision: goal.revision ?? 0,
+			revision: currentGoal.revision ?? 0,
 			checkpointSeq: this.checkpointSeq,
 			timestamp: Date.now(),
 		};
 		try {
 			// SAFETY: sendFollowUp takes an opaque details bag; GoalCheckpointDetailsV3
 			// is the concrete shape written by this call site only.
-			this.hooks.sendFollowUp(checkpointTriggerPrompt(goal.id), details as unknown as Record<string, unknown>);
+			this.hooks.sendFollowUp(checkpointTriggerPrompt(currentGoal.id), details as unknown as Record<string, unknown>);
 		}
 		catch { this.hooks.dispatchFailed?.(ctx); }
 	}

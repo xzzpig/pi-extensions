@@ -1437,6 +1437,7 @@ function appendStepToAsyncChain(input: {
 		pi: input.deps.pi,
 		cwd: input.ctx.cwd,
 		currentSessionId: resolveCurrentSessionId(input.ctx.sessionManager),
+		completionOwnerId: input.deps.state.completionOwnerId,
 		parentSessionId: input.ctx.sessionManager.getSessionId() ?? undefined,
 		parentSessionFile: input.ctx.sessionManager.getSessionFile() ?? undefined,
 		currentModelProvider: parentModel?.provider,
@@ -3634,6 +3635,7 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 		pi: deps.pi,
 		cwd: ctx.cwd,
 		currentSessionId: data.parentSessionId!,
+		completionOwnerId: deps.state.completionOwnerId,
 		parentSessionId: data.parentPiSessionId,
 		parentSessionFile: ctx.sessionManager.getSessionFile() ?? undefined,
 		currentModelProvider: parentModel?.provider,
@@ -3770,6 +3772,7 @@ async function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			parentWorkflowRunId: params.workflowParentRunId,
 			workflowKey: params.workflowKey,
 			lane: params.lane,
+			scheduleOrigin: params.scheduleOrigin,
 			workflowAwaitAsync: params.workflowAwaitAsync,
 		}));
 		return waitForWorkflowAsyncSingleResult(params, asyncResult, { runId: id, task: params.task ?? "", signal: data.signal, state: deps.state, pi: deps.pi, kill: deps.kill });
@@ -6065,6 +6068,7 @@ export function createSubagentExecutor(deps: ExecutorDeps): {
 						sessionId: currentSessionId ?? undefined,
 						completionOwnerId,
 						mode: "workflow",
+						...(requestParams.scheduleOrigin ? { scheduleOrigin: requestParams.scheduleOrigin } : {}),
 						agent: "workflow",
 						goal: derivedObjective.trim() ? PROMPT_REDACTED : undefined,
 						...(timeout !== undefined ? { timeoutMs: timeout, deadlineAt: startedAt + timeout } : {}),

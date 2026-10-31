@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.24.1] - 2026-10-31 (fork)
+
+### Fixed
+
+- Coordinate goal auto-continuation with current-session async, workflow and
+  detached foreground runs while their native parent wake or result handoff is
+  pending. Preserve completion ownership and scheduled wake policy through
+  live and restored job projections without intercepting native notifications.
+
 ## [0.24.0] - 2026-10-30 (fork)
 
 ### Security

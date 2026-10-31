@@ -30,6 +30,7 @@
     ".tests/goal-auditor-package.test.ts",
     ".tests/goal-auditor-selector.test.ts",
     ".tests/goal-auditor.test.ts",
+    ".tests/goal-auto-continue-runtime.test.ts",
     ".tests/goal-budget.test.ts",
     ".tests/goal-cache-regression.test.ts",
     ".tests/goal-change-baseline.test.ts",
@@ -127,6 +128,7 @@
   "integrationFiles": [
     ".tests/integration/extension.test.ts",
     ".tests/integration/goal-audit-sidechannel-sdk.test.ts",
+    ".tests/integration/goal-auto-continue-gate-sdk.test.ts",
     ".tests/integration/goal-change-manifest.test.ts"
   ],
   "e2eFiles": [

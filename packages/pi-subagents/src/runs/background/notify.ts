@@ -163,6 +163,8 @@ export interface CompletionNotifier {
 	deliver(result: CompletionNotification): Promise<boolean>;
 	/** True while a completion is batched, being sent, or accepted as a wake that Pi has not started yet. */
 	hasPendingDelivery(): boolean;
+	/** True only while a completion with a native turn-wake contract is pending or accepted but not started. */
+	hasPendingWake(): boolean;
 	/** Releases a completion wake once Pi starts it (native message_start). */
 	messageStarted(message: AgentMessage): void;
 	/** Adopts wakes a reloaded notifier left queued for the same session manager and session UUID. */
@@ -880,6 +882,7 @@ export default function registerSubagentNotify(
 ): CompletionNotifier {
 	const seen = new Map<string, number>();
 	const pending = new Map<string, Promise<boolean>>();
+	const pendingWakeKeys = new Set<string>();
 	const ttlMs = COMPLETION_SEND_TTL_MS;
 	const now = options.now ?? Date.now;
 	const sendRegistry = options.sendRegistry ?? processCompletionSendRegistry;
@@ -902,6 +905,7 @@ export default function registerSubagentNotify(
 		for (const item of items) {
 			if (reason) traceNotification(reason, item.trace);
 			pending.delete(item.key);
+			pendingWakeKeys.delete(item.key);
 			if (accepted) markSeenWithTtl(seen, item.key, now(), ttlMs);
 			item.resolve(accepted);
 		}
@@ -989,6 +993,7 @@ export default function registerSubagentNotify(
 			triggerTurn: result.triggerTurn !== false && scheduledCompletionTriggersTurn(result.scheduleOrigin, details.status),
 			resolve,
 		};
+		if (item.triggerTurn) pendingWakeKeys.add(key);
 		if (notificationDebug.enabled) item.trace = traceIdentity(result);
 		if (details.source === "foreground") {
 			emit([item]);
@@ -1100,6 +1105,7 @@ export default function registerSubagentNotify(
 	return {
 		deliver,
 		hasPendingDelivery: () => pending.size > 0 || unstartedWakes.length > 0,
+		hasPendingWake: () => !pi.isHeld() && (pendingWakeKeys.size > 0 || unstartedWakes.length > 0),
 		messageStarted(message) {
 			if (message.role !== "custom" || message.customType !== "subagent-notify") return;
 			const index = unstartedWakes.indexOf(message.content as string);

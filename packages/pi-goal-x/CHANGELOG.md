@@ -2,6 +2,12 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.11.1]
+
+### Fixed
+
+- 协同 pi-subagents 延后有原生唤醒契约的后台工作期间的目标自动续跑，避免子代理结果或监督请求到达前重复发起 checkpoint、消耗自主运行额度。无监听者时保留原有续跑行为，用户输入及原生唤醒不受拦截。
+
 ## [0.11.0]
 
 ### Changed

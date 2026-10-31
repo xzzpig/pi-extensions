@@ -174,6 +174,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			toolCallId: run.toolCallId,
 			status: run.state,
 			sessionId: run.sessionId,
+			completionOwnerId: run.completionOwnerId,
 			activityState: run.activityState,
 			lastActivityAt: run.lastActivityAt,
 			currentTool: run.currentTool,
@@ -183,6 +184,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			toolCount: run.toolCount,
 			steering: run.steering,
 			mode: run.mode,
+			scheduleOrigin: run.scheduleOrigin,
 			context: run.context,
 			cwd: run.cwd,
 			sessionRoot: run.sessionRoot,
@@ -502,6 +504,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 				else runningJobIds.delete(job.asyncId);
 				if (!isTerminalJobStatus(job.status)) cancelCleanup(job.asyncId);
 				job.sessionId = status.sessionId ?? job.sessionId;
+				job.completionOwnerId = status.completionOwnerId ?? job.completionOwnerId;
 				job.activityState = status.activityState;
 				job.lastActivityAt = status.lastActivityAt ?? job.lastActivityAt;
 				job.currentTool = status.currentTool;
@@ -511,6 +514,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 				job.toolCount = status.toolCount ?? job.toolCount;
 				job.steering = status.steering ?? job.steering;
 				job.mode = status.mode;
+				job.scheduleOrigin = status.scheduleOrigin ?? job.scheduleOrigin;
 				job.parentWorkflowRunId = status.parentWorkflowRunId ?? job.parentWorkflowRunId;
 				job.workflowKey = status.workflowKey ?? job.workflowKey;
 				job.lane = status.lane ?? job.lane;
@@ -766,6 +770,7 @@ export function createAsyncJobTracker(pi: Pick<ExtensionAPI, "events">, state: S
 			...(typeof info.sessionId === "string" ? { sessionId: info.sessionId } : {}),
 			...(typeof info.completionOwnerId === "string" ? { completionOwnerId: info.completionOwnerId } : {}),
 			mode: info.mode ?? (info.chain ? "chain" : "single"),
+			scheduleOrigin: info.scheduleOrigin,
 			description: info.goal ?? info.task,
 			agents,
 			chainStepCount: info.chainStepCount,

@@ -103,6 +103,7 @@ export interface AsyncRunSummary {
 	asyncDir: string;
 	toolCallId?: string;
 	sessionId?: string;
+	completionOwnerId?: string;
 	state: "queued" | "running" | "complete" | "failed" | "partial" | "paused" | "stopped" | "rejected";
 	error?: string;
 	activityState?: ActivityState;
@@ -114,6 +115,7 @@ export interface AsyncRunSummary {
 	toolCount?: number;
 	steering?: SteeringStatus;
 	mode: SubagentRunMode;
+	scheduleOrigin?: AsyncStatus["scheduleOrigin"];
 	context?: ContextSummary;
 	sandbox?: string;
 	permissionProfile?: string;
@@ -439,6 +441,7 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string 
 		asyncDir,
 		...(status.toolCallId ? { toolCallId: status.toolCallId } : {}),
 		...(status.sessionId ? { sessionId: status.sessionId } : {}),
+		...(status.completionOwnerId ? { completionOwnerId: status.completionOwnerId } : {}),
 		state: status.state,
 		...(status.error ? { error: status.error } : {}),
 		activityState,
@@ -450,6 +453,7 @@ function statusToSummary(asyncDir: string, status: AsyncStatus & { cwd?: string 
 		toolCount: status.toolCount,
 		steering: status.steering,
 		mode: status.mode,
+		...(status.scheduleOrigin ? { scheduleOrigin: status.scheduleOrigin } : {}),
 		...(summarizeContextModes(summarizedSteps.map((step) => step.context)) ? { context: summarizeContextModes(summarizedSteps.map((step) => step.context)) } : {}),
 		...(sandbox ? { sandbox } : {}),
 		...(permissionProfile ? { permissionProfile } : {}),

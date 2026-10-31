@@ -58,6 +58,7 @@ import {
 	type ResolvedControlConfig,
 	type ResolvedToolBudget,
 	type RunFanoutBudgetDescriptor,
+	type ScheduleOrigin,
 	type ToolBudgetConfig,
 	type SubagentRunMode,
 	type SteeringRecoveryDescriptor,
@@ -278,6 +279,7 @@ interface AsyncChainParams {
 	parentWorkflowRunId?: string;
 	workflowKey?: string;
 	lane?: WorkflowLaneMetadata;
+	scheduleOrigin?: ScheduleOrigin;
 	activeAsyncCapacity?: ActiveAsyncCapacityHandle;
 }
 
@@ -359,6 +361,7 @@ requiredExtensions?: RequiredChildExtensionSnapshot;
 	parentWorkflowRunId?: string;
 	workflowKey?: string;
 	lane?: WorkflowLaneMetadata;
+	scheduleOrigin?: ScheduleOrigin;
 	workflowAwaitAsync?: boolean;
 	activeAsyncCapacity?: ActiveAsyncCapacityHandle;
 	externalJobFollowUp?: {
@@ -1723,6 +1726,7 @@ export function executeAsyncChain(
 				...(initialCompletionOwnerId ? { completionOwnerId: initialCompletionOwnerId } : {}),
 				completionOwnerProcess,
 				mode: resultMode,
+				...(params.scheduleOrigin ? { scheduleOrigin: params.scheduleOrigin } : {}),
 				state: "running",
 				startedAt: initialStatusAt,
 				lastUpdate: initialStatusAt,
@@ -1842,6 +1846,7 @@ export function executeAsyncChain(
 				isParallelStep(s) ? `[${s.parallel.map((t) => t.agent).join("+")}]` : isDynamicParallelStep(s) ? `expand:${s.parallel.agent}` : (s as SequentialStep).agent,
 			),
 			chainStepCount: eventChain.length,
+			...(params.scheduleOrigin ? { scheduleOrigin: params.scheduleOrigin } : {}),
 			parallelGroups,
 			workflowGraph,
 			cwd: runnerCwd,
@@ -2397,6 +2402,7 @@ export function executeAsyncSingle(
 				...(initialCompletionOwnerId ? { completionOwnerId: initialCompletionOwnerId } : {}),
 				completionOwnerProcess,
 				mode: "single",
+				...(params.scheduleOrigin ? { scheduleOrigin: params.scheduleOrigin } : {}),
 				...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
 				state: "running",
 				startedAt: initialStatusAt,
@@ -2475,6 +2481,7 @@ export function executeAsyncSingle(
 			sessionId: ctx.currentSessionId,
 			completionOwnerId: ctx.completionOwnerId ?? currentCompletionOwnerId(),
 			mode: "single",
+			...(params.scheduleOrigin ? { scheduleOrigin: params.scheduleOrigin } : {}),
 			...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
 			agent,
 			...(sandbox ? { sandbox } : {}),

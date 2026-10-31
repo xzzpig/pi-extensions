@@ -11,7 +11,10 @@
  */
 
 /** Integration files that must run against the REAL SDK, never the stub adapter. */
-export const SDK_TEST_FILES = ["tests/integration/goal-audit-sidechannel-sdk.test.ts"];
+export const SDK_TEST_FILES = [
+	"tests/integration/goal-audit-sidechannel-sdk.test.ts",
+	"tests/integration/goal-auto-continue-gate-sdk.test.ts",
+];
 
 /**
  * @param {{ unitFiles: string[], integrationFiles: string[] }} discovered

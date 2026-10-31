@@ -41,6 +41,7 @@ import { newGoalScheduler } from "./goal-scheduler-state.ts";
 import { GoalScheduler } from "./goal-scheduler.ts";
 import { GoalRuntime } from "./goal-runtime.ts";
 import { GoalAuditMessages } from "./goal-session-safety.ts";
+import { shouldDeferGoalAutoContinue } from "./goal-auto-continue-gate.ts";
 import {
 	focusedGoalFromPool,
 	openGoalsFromPool,
@@ -346,6 +347,20 @@ export function createGoalCore(
 	let interruption: GoalInterruption;
 	const runtime = new GoalRuntime({
 		authorize: ctx => scheduler.claim(ctx),
+		shouldDeferAutoContinue: (ctx, goal) => {
+			const events = pi.events;
+			// A host/test runtime without the process event bus has no gate listeners;
+			// preserve the legacy continuation behavior in that compatibility case.
+			if (!events || typeof events.emit !== "function") return false;
+			try {
+				const sessionId = ctx.sessionManager.getSessionId();
+				if (!sessionId) return true;
+				return shouldDeferGoalAutoContinue(events, { sessionId, goalId: goal.id });
+			} catch {
+				// No reliable parent-session identity means no listener can safely scope its decision.
+				return true;
+			}
+		},
 		recover: ctx => scheduler.recover(ctx),
 		dispatchFailed: ctx => scheduler.failedDispatch(ctx),
 		sendFollowUp: (content, details) => {

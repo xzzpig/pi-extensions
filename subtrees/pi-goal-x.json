@@ -92,7 +92,7 @@
     {
       "kind": "test",
       "path": "packages/pi-goal-x/tests/integration/extension.test.ts",
-      "reason": "User-approved verification exception for minimize-goal-model-telemetry: test:all reports the nine settings/profile failures listed in that change's validation.md. This change does not alter the current constant tool surface or nested settings contract; removing the debt requires a separately authorized integration-test reconciliation."
+      "reason": "User-approved verification exception for minimize-goal-model-telemetry: test:all reports the nine settings/profile failures listed in that change's validation.md. Gate re-triage ran this file with the same adapter on both the working tree and a detached HEAD baseline; both produced the same nine failures, so this gate does not introduce them. The gate does not alter the settings handler or profile-install path; removing this debt requires a separately authorized integration-test reconciliation."
     },
     {
       "kind": "lint",
@@ -167,7 +167,9 @@
     "Keep experiments/context/fork-sdk-paths.mjs as the installation-depth-independent SDK resolution seam for capture-context.mjs and provider-crosscheck.mjs; retain structural, pre-dispatch provider capture.",
     "重放 docs/advanced-usage.md 与 CHANGELOG Unreleased 的新内容边界：新生成主模型内容精简，旧 session/工具返回不处理；保持 dashboard/ledger/auditor 统计，不改版本",
     "审计监督只读旁路(2026-10-19):同步时保留 fork 在 goal-completion.ts 的单外层完成 wrapper(捕获初次与 resume 的 supervisorHandoff 后一次性回流)、goal-auditor-delegation.ts 的协调错误先锁定再精确取消、终态冻结与 appendAuditSupervisorUsageEntry、goal-ledger.ts 的 audit_supervisor_usage 事件与校验分支、goal-model-view.ts 两处谓词对该事件的排除,以及 goal-events.ts/goal-state.ts 的旁路生命周期失效挂点。goal-audit-sidechannel.ts、goal-audit-context-snapshot.ts、goal-audit-supervisor-handoff.ts 为 fork-only 新模块,不写入任何上游文件。测试入口侧同样需要重放:run-unit-tests.mjs 的分组执行(unit/integration 用 stub adapter、tests/integration/goal-audit-sidechannel-sdk.test.ts 单独一组且清空 NODE_OPTIONS、所有非空组都执行并传播首个失败)、scripts/test-groups.mjs 的分组计划、scripts/fork-test-runner.mjs 的 fork suite 清单(必须排除 live E2E)、以及 scripts/test-adapter-hooks.mjs 中为快照转发的 buildSessionContext 捕获;--selfcheck 必须检查清单后退出。",
-    "For the Pi 1.4 Responses and continuation SDK workers, adapt upstream fixtures to the fork constant tool surface and structured pi-subagents delegation. Use the real pi-subagents owner for lifecycle scenarios, a bounded event-owner fixture for the installed-Responses regression, and allow sufficient child-process startup time without weakening assertions."
+    "For the Pi 1.4 Responses and continuation SDK workers, adapt upstream fixtures to the fork constant tool surface and structured pi-subagents delegation. Use the real pi-subagents owner for lifecycle scenarios, a bounded event-owner fixture for the installed-Responses regression, and allow sufficient child-process startup time without weakening assertions.",
+    "在 goal-runtime.ts 最终发送路径保留同步 veto 调用点：位于原有 idle/pending readiness 检查后、authorize/claim 前；veto 不分配额度、checkpoint 序号或消息，放行后复核目标身份与宿主 readiness，busy 时仍按原 50ms 间隔重试。goal-state.ts 将该 hook 接到 fork-only goal-auto-continue-gate.ts，以当前 sessionId/goalId 发出事件；协议实现与行为测试留在 fork-only 文件。",
+    "Keep the fork-only docs/auto-continuation-gate.md in the published package by retaining its explicit entry in package.json's files list."
   ],
   "doNotReintroduce": [
     "do not restore the temp-dir PI_SUBAGENT_EXTRA_AGENT_DIRS materialization",
@@ -176,6 +178,7 @@
     "do not introduce context occupancy/window/percentage into new main-model output unless the upstream showContextUsage setting is explicitly enabled; do not reintroduce cumulative elapsed time, unbudgeted lifetime token totals, or plugin-added audit cost/token/turn telemetry; keep real budgets, finite run constraints, execution state and recovery guidance",
     "不重引入已持久化旧 Goal-X 消息/旧工具结果的请求时遥测清洗、JSON 碎片解析或 cursor 链重组；新输出精简不改变 delegated auditor/Oracle 的既有隔离",
     "Do not restore a package-local npm lock or npm ci workflow: this fork uses the root pnpm workspace lock and a workspace pi-subagents dependency.",
-    "Do not replace Escape continue-audit with upstream continue-working: resume the same parked auditor; only explicit bypass may complete without audit."
+    "Do not replace Escape continue-audit with upstream continue-working: resume the same parked auditor; only explicit bypass may complete without audit.",
+    "Do not bypass the final synchronous goal-auto-continue veto for eligible current-session native subagent work; a veto is one-shot, consumes no autonomous allowance or checkpoint sequence, creates no retry timer, and does not intercept native child-result/supervisor wakes. The contract is openspec/specs/goal-lifecycle/spec.md."
   ]
 }

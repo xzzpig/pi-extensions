@@ -77,6 +77,7 @@ import { buildActiveRunsSection } from "./active-runs-prompt.ts";
 import { createWaitSubscriptionManager } from "../runs/background/wait-subscriptions.ts";
 import { drainOutstandingWork } from "../runs/background/auto-drain.ts";
 import registerSubagentNotify from "../runs/background/notify.ts";
+import { registerGoalAutoContinueGate } from "../goal-auto-continue-gate.ts";
 import { createParentWake } from "../shared/parent-wake.ts";
 import { handleSubagentSteeringNotice, type SubagentSteeringMessageDetails } from "./steering-notices.ts";
 import { SUBAGENT_CHILD_ENV, SUBAGENT_PARENT_SESSION_ENV } from "../runs/shared/child-runtime-config.ts";
@@ -408,6 +409,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		: undefined;
 	let goalTurnId = 0;
 	let releaseHostSessionLiveness = () => {};
+	let disposeGoalAutoContinueGate = () => {};
 	const scheduledStoreRoot = config.scheduledRuns?.storeRoot === undefined ? undefined : resolveScheduledStoreRoot(config.scheduledRuns.storeRoot);
 	const scheduledRunManager = createScheduledRunManager({
 		config,
@@ -950,6 +952,7 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		}),
 		pi.events.on(SUBAGENT_CONTROL_EVENT, controlEventHandler),
 		pi.events.on(SUBAGENT_STEERING_NOTICE_EVENT, steeringNoticeHandler),
+		() => disposeGoalAutoContinueGate(),
 		herdrStatusBridge.dispose,
 		rpcBridge.dispose,
 	];
@@ -1302,8 +1305,17 @@ export default function registerSubagentExtension(pi: ExtensionAPI): void {
 		startSessionMaintenance();
 		scheduleModulePreload();
 		const recovering = event.reason === "startup" || event.reason === "reload" || event.reason === "resume";
+		disposeGoalAutoContinueGate();
 		resetSessionState(ctx, recovering, event.previousSessionFile);
 		refreshContextInjectionSnapshot(ctx);
+		disposeGoalAutoContinueGate = registerGoalAutoContinueGate(pi, {
+			state,
+			ownership: resultDeliveryOwnership,
+			notifier: completionNotifier,
+			parentWake,
+			isHeld: parentWake.isHeld,
+			owedResultRunIds,
+		});
 		releaseHostSessionLiveness();
 		const sessionId = ctx.sessionManager.getSessionId();
 		const sessionFile = ctx.sessionManager.getSessionFile();

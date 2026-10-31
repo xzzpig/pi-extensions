@@ -1761,6 +1761,7 @@ export interface AsyncStartedEvent {
 	sessionId?: string;
 	completionOwnerId?: string;
 	mode?: SubagentRunMode;
+	scheduleOrigin?: ScheduleOrigin;
 	agent?: string;
 	agents?: string[];
 	/** Redacted prompt marker for the first child task; workflow roots may omit this field. */
@@ -2154,6 +2155,7 @@ export interface AsyncJobState {
 	toolCount?: number;
 	steering?: SteeringStatus;
 	mode?: SubagentRunMode;
+	scheduleOrigin?: ScheduleOrigin;
 	/** Run-level context summary derived from step contexts. */
 	context?: "fresh" | "fork" | "mixed";
 	agents?: string[];
