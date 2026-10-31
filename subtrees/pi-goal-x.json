@@ -12,6 +12,12 @@
   "notes": "Forked from the pi-goal-x upstream. Capability contracts live in openspec (spec goal-completion-auditing; the goal-persisted-event-channels spec for the persisted message channels; the S1/S2 auditor seams for pi-openspec-x live in openspec change add-pi-openspec-x, design D10; and openspec change minimize-goal-model-telemetry / goal-lifecycle for the main-model view boundary) and in the package-local spec specs/2026-09-12-escape-foreign-ui-prompt-guard for the Escape/ui-prompt guard.",
   "knownDebt": [
     {
+      "kind": "other",
+      "path": "packages/pi-goal-x/package.json",
+      "reason": "Fork npm publication must identify xzzpig/pi-extensions as repository.url for OIDC provenance; upstream identity remains in this subtree record and package homepage. This minimal metadata divergence remains while publishing the fork.",
+      "recordedAt": "2026-10-31T00:00:00Z"
+    },
+    {
       "kind": "lint",
       "path": "packages/pi-goal-x/experiments/context/run-gate.mjs",
       "reason": "pi-lens finding on upstream-original code (JSON.parse without try/catch); left unchanged per the policy of keeping upstream bytes rather than adding inline suppressions.",
@@ -146,6 +152,7 @@
     }
   ],
   "reapplyOnSync": [
+    "Keep package.json repository.url at git+https://github.com/xzzpig/pi-extensions.git for fork OIDC publishing; retain upstream source identity in subtree metadata.",
     "Use the root pnpm lockfile, remove the upstream package-lock.json, and reapply the pnpm workspace CI, packing, and fork publication-documentation adaptations. After an ignore-scripts install, build pi-subagents via its prepack script because pnpm links the dependency to its generated dist-pkg.",
     "keep goal-prompts.ts upstream space-indent inside cachedPrompt/retainedTaskChars, and keep goal-policy.ts byte-identical",
     "re-apply the settings nested auditor group (legacy flat aliases fold into auditor.* leaves, nested wins per file, no deprecated_key diagnostics); map any new upstream flat auditor setting through the nested group",
@@ -172,6 +179,7 @@
     "Keep the fork-only docs/auto-continuation-gate.md in the published package by retaining its explicit entry in package.json's files list."
   ],
   "doNotReintroduce": [
+    "Do not restore upstream repository.url as the fork publishing source; npm provenance must identify the actual build repository.",
     "do not restore the temp-dir PI_SUBAGENT_EXTRA_AGENT_DIRS materialization",
     "do not adopt upstream's auditor checklist rewording, its <approved/> verdict protocol, or its runGoalQuestionnaire flow (the fork keeps baseChecklist/auditor.checklist, structured_output and the fork questionnaire UI)",
     "do not revert the tsconfig target from ES2023 (ES2022 breaks typecheck)",

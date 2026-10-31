@@ -12,6 +12,12 @@
   "notes": "Forked from the pi-btw upstream. The transcript-builder contract lives in openspec (spec transcript-builder-api).",
   "knownDebt": [
     {
+      "kind": "other",
+      "path": "packages/pi-btw/package.json",
+      "reason": "Fork npm publication must identify xzzpig/pi-extensions as repository.url for OIDC provenance; upstream identity remains in this subtree record and package homepage. This minimal metadata divergence remains while publishing the fork.",
+      "recordedAt": "2026-10-31T00:00:00Z"
+    },
+    {
       "kind": "deleted",
       "path": "packages/pi-btw/package-lock.json",
       "reason": "Upstream package-lock.json is deleted on every sync (it resurrects on each pull) and is never consumed by this pnpm monorepo; delete it again with git rm packages/pi-btw/package-lock.json after each subtree pull.",
@@ -25,6 +31,7 @@
     }
   ],
   "reapplyOnSync": [
+    "Keep package.json repository.url at git+https://github.com/xzzpig/pi-extensions.git for fork OIDC publishing; retain upstream source identity in subtree metadata.",
     "re-apply the pi-components migration and outcome threading in extensions/btw.ts, keeping the [BTW SESSION BOUNDARY] marker intact",
     "adapt upstream tests asserting the upstream renderer's 'You  <text>' user-row badge format to plain-text assertions (the fork renderer has no You label)",
     "bump upstream tests asserting SessionManager.appendMessage call counts by +1 because the fork's boundary message is also seeded",
@@ -34,6 +41,7 @@
     "'applies distinct theme treatment' must keep its user-row assertion color-mode agnostic (\\\\x1b[48;2; truecolor or \\\\x1b[49m default background): pi 1.1 themes leave headless runs on the default background, so a truecolor-only assertion fails without proving anything about the renderer"
   ],
   "doNotReintroduce": [
+    "Do not restore upstream repository.url as the fork publishing source; npm provenance must identify the actual build repository.",
     "do not adopt upstream's overlay renderer (buildOverlayTranscript plus its per-entry helpers): rendering stays on pi-components renderTranscriptLines",
     "do not adopt upstream's markdownTheme/managesMouseReporting/rebuildTranscriptLines additions; SGR mouse-reporting and ownsMouseReporting stay fork-only",
     "keep the dead removeTranscriptTurn import removed, and keep 'skills' dropped from package.json files (the directory stays to avoid subtree delete conflicts)"

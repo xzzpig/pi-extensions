@@ -71,3 +71,12 @@ install options.
 [`AGENTS.md`](AGENTS.md) is the orientation for developers and AI agents
 working on this repository; the project skills in
 [`.agents/skills/`](./.agents/skills) are the normative workflow documentation.
+
+## Publishing
+
+Public plugins can be published automatically on pushes to `main` using npm
+Trusted Publishing (OIDC), without a stored npm publishing token. Versions,
+CHANGELOGs and `versions.json` remain manually managed. Uploads are disabled
+until the repository variable `NPM_AUTO_PUBLISH` is explicitly set to `true`.
+See [automatic publishing](./docs/automatic-publishing.md) for one-time setup,
+local verification, first-release review and recovery instructions.

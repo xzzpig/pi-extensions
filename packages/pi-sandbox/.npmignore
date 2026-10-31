@@ -1,0 +1,8 @@
+# Fork-only publication hygiene: runtime sources and bundled dependencies remain.
+/test/
+/.github/
+/AGENTS.md
+/tsconfig.json
+/oxfmt.config.ts
+/.prettierignore
+/scripts/

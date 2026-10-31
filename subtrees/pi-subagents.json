@@ -12,6 +12,12 @@
   "notes": "Forked from nicobailon/pi-subagents. Capability contracts live in openspec (specs fleet-native-transcript and subagent-context-injection; the changes under openspec/changes/ for the rest); fork doc chapters live in docs/fork-extensions.md.",
   "knownDebt": [
     {
+      "kind": "other",
+      "path": "packages/pi-subagents/package.json",
+      "reason": "Fork npm publication must identify xzzpig/pi-extensions as repository.url for OIDC provenance; upstream identity remains in this subtree record and package homepage. This minimal metadata divergence remains while publishing the fork.",
+      "recordedAt": "2026-10-31T00:00:00Z"
+    },
+    {
       "kind": "lint",
       "reason": "~72 pi-lens blocking findings across ~40 upstream-original files (no-unknown-returns, require-safety-comment-for-as-unknown-as, unchecked-throwing-call, error-swallowing) plus known false positives. By the 2026-09-17 decision the fork keeps upstream code byte-identical instead of adding per-site suppressions; re-checked on each sync.",
       "recordedAt": "2026-09-28T02:09:09+08:00"
@@ -152,6 +158,7 @@
     }
   ],
   "reapplyOnSync": [
+    "Keep package.json repository.url at git+https://github.com/xzzpig/pi-extensions.git for fork OIDC publishing; retain upstream source identity in subtree metadata.",
     "v0.74.0 sync (2026-10-02): keep the fork's projectTrusted threading — upstream v0.74.0 added its own sessionProjectTrust(ctx)/projectTrusted fields and call sites for the same untrusted-project feature the fork already implements; on conflict keep the fork's currentProjectTrusted(input.ctx)/currentProjectTrusted(ctx) calls and trustedProjectCwd spreads, drop upstream's duplicate projectTrusted field declarations (async-execution.ts AsyncExecutionContext, child-launch.ts BuildInProcessChildLaunchInput, shared/types.ts) and duplicate object-literal properties (execution.ts, subagent-executor.ts at the executeAsyncSingle/runSync ctx sites). Preserve the upstream parentProviderRegistry field and its diagnostic helper alongside the fork trust field.",
     "v0.74.0 sync (2026-10-02): the shim fixture's dist/core/system-prompt.d.ts declares NormalizedBuildSystemPromptOptions (selectedTools + sections required) and the fixture's BeforeAgentStartEvent.systemPromptOptions uses it, mirroring real Pi 1.0.0 — upstream's 0.99-era fixture only had optional selectedTools and no sections, which fails the fork's strict typecheck on the 0.74.0 before_agent_start advertise handler",
     "v0.74.0 sync (2026-10-02): merge upstream's new fields/functions alongside the fork's: preflight runtimeSnapshotHost next to sandbox/permissionProfile/hostAvailableBuiltins, child-session selectedBuiltinMcpExtension/missingBuiltinMcpTools next to captureProcessEnv/restoreProcessEnv, child-tool-plan builtinMcpTools next to hostAvailableBuiltins, fleet.ts keeps the native-transcript imports plus upstream's runningTone/childThinkingLevel, index.ts imports buildAdvertisedAgentCatalog + the fork's mergeAgentsForScope (appendAdvertisedAgentPrompt is gone upstream)",
@@ -191,6 +198,7 @@
     "gate-goal-auto-continuation (2026-10-31): preserve all upstream seams needed by the fork's current-parent wake gate: extension/index.ts installs/replaces/disposes the listener around resetSessionState; notify.ts tracks pendingWakeKeys and exposes held-aware hasPendingWake; shared/types.ts, async-execution.ts, async-status.ts, async-job-tracker.ts and subagent-executor.ts carry scheduleOrigin through single/chain/workflow starts, status and restore projections; subagent-executor.ts passes state.completionOwnerId into both AsyncExecutionContext paths, and async-status.ts/async-job-tracker.ts preserve it through AsyncRunSummary, summaryToJob and live refreshJob. Live Pi showed active jobs were omitted or misclassified without these identity and wake-policy projections. Reapply the equivalent lifecycle, notification, scheduleOrigin and owner-propagation seams after sync."
   ],
   "doNotReintroduce": [
+    "Do not restore upstream repository.url as the fork publishing source; npm provenance must identify the actual build repository.",
     "do not re-port the fork multi-model loop onto execution.ts or subagent-runner.ts",
     "do not re-add the streamFn option-naming divergence (upstream ships agentStreamOptions())",
     "Do not raise the Pi SDK baseline without updating both shim declarations and runtime behavior, the pinned real-SDK alias, parent-specific overrides and real-SDK tests; do not reintroduce the old Pi 1.1 compatibility path after the user selected Pi >=1.2.",

@@ -1,0 +1,41 @@
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.22.1
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 11.13.1
+          run_install: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.11
+      - run: >-
+          npm install --global npm@11.13.0
+          --registry https://registry.npmjs.org
+      - name: Install OS sandbox test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap socat ripgrep python3 strace zsh
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run test:release
+      - run: pnpm exec prettier --check .
+      - name: Check and pack all public plugins (never publish)
+        run: node scripts/release.mjs --pack --check-all

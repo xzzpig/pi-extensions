@@ -19,7 +19,9 @@
     "audit:fork-divergence": "bash .agents/skills/pi-fork-divergence/scripts/audit-fork-divergence.sh --all",
     "verify": "pnpm run audit:fork-divergence && pnpm exec prettier --check .",
     "publish:all": "bash scripts/publish-all.sh",
-    "publish:check": "bash scripts/publish-all.sh --dry-run"
+    "publish:check": "bash scripts/publish-all.sh --dry-run",
+    "publish:pack": "node scripts/release.mjs --pack",
+    "test:release": "node --test scripts/release-core.test.mjs"
   },
   "devDependencies": {
     "prettier": "3.6.2"

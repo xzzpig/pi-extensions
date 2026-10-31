@@ -12,8 +12,9 @@ describe("package identity", () => {
 		expect(pkg.version).toMatch(/^\d+\.\d+\.\d+$/);
 	});
 
-	it("points every url at this fork's repository", () => {
-		const urls = [pkg.repository.url, pkg.homepage, pkg.bugs.url, pkg.pi.image];
+	it("identifies the publishing fork while retaining upstream reference urls", () => {
+		expect(pkg.repository.url).toBe("git+https://github.com/xzzpig/pi-extensions.git");
+		const urls = [pkg.homepage, pkg.bugs.url, pkg.pi.image];
 		for (const url of urls) {
 			expect(url).toContain("Andy8647/pi-starline");
 			expect(url).not.toContain("lmilojevicc");

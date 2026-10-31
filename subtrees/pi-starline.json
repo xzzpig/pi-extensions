@@ -13,6 +13,17 @@
   "knownDebt": [
     {
       "kind": "other",
+      "path": "packages/pi-starline/test/package-identity.test.ts",
+      "reason": "The upstream identity assertion must distinguish the fork OIDC repository URL from upstream homepage/bugs/image references. Keep this assertion adaptation while fork publishing uses xzzpig/pi-extensions."
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-starline/package.json",
+      "reason": "Fork npm publication must identify xzzpig/pi-extensions as repository.url for OIDC provenance; upstream identity remains in this subtree record and package homepage. This minimal metadata divergence remains while publishing the fork.",
+      "recordedAt": "2026-10-31T00:00:00Z"
+    },
+    {
+      "kind": "other",
       "path": "packages/pi-starline/extensions/starline/editor-cursor.ts",
       "reason": "The minimal fork-only cursor adapter call is needed for underline and terminal cursor styles on Pi 1.2+ while preserving Pi 1.1 behavior. Remove it when upstream supports both cursor encodings."
     },
@@ -112,6 +123,8 @@
     }
   ],
   "reapplyOnSync": [
+    "Adapt test/package-identity.test.ts to assert repository.url identifies xzzpig/pi-extensions while upstream homepage/bugs/image references remain Andy8647/pi-starline.",
+    "Keep package.json repository.url at git+https://github.com/xzzpig/pi-extensions.git for fork OIDC publishing; retain upstream source identity in subtree metadata.",
     "editor-cursor.ts calls fork-editor-cursor.ts to restyle Pi 1.2+ marked software cursors while retaining the upstream Pi 1.1 SGR path; retain fork-editor-cursor-compat.test.ts",
     "mouse features register with the local @xzzpig/pi-mouse-events extension instead of patching TuiAltScreen.prototype (optional peer >=0.2.0 <3, devDep workspace:*); without it fork mouse features are off, with one console note per process; click-away observes shared mouse events and the optional shared pointer API handles hover without a Starline patch",
     "mouse/api-consumer.ts reads Symbol.for('pi-mouse-events.api.v2') and rejects any candidate whose version !== 2, so an older v1 publisher is rejected rather than misread",
@@ -130,6 +143,7 @@
     "Preserve the user-message renderer deleted by upstream: retain its configuration fields and settings command, install and register its render/invalidate adapters, preserve the fork user-message tests and documentation, and use fork-transcript-copy.ts for configured rails alongside pi-tidy cleaning."
   ],
   "doNotReintroduce": [
+    "Do not restore upstream repository.url as the fork publishing source; npm provenance must identify the actual build repository.",
     "expect recurring modify/delete conflicts on every pull: upstream deleted these files and the fork keeps them — extensions/starline/mouse/tool-box.ts, mouse/component-tree.ts, test/contract/tool-box-hint.test.ts, test/mouse/tool-box.test.ts, test/mouse/component-tree.test.ts, test/contract/transcript-layout.test.ts",
     "keep editor-wheel.test.ts's 9 lint/style warnings and shim.ts's 2 noConfusingVoidType warnings by deliberate non-change",
     "Do not restore the removed editor metadata row or its settings; use the upstream compact editor and map legacy editor status placement to the footer right."
