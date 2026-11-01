@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { createConfigReloadFixture } from "./helpers/config-reload-fixture.ts";
 import test from "node:test";
 import {
   UserMessageComponent,
@@ -977,11 +977,10 @@ test("11: each tool override call clones parameters independently", () => {
 // ---------------------------------------------------------------------------
 
 test("12: config-store reloads config on fingerprint change between calls", () => {
-  const configUrl = new URL("../config.json", import.meta.url);
-  const originalConfigJson = readFileSync(configUrl, "utf8");
+  const { configFile, cleanup } = createConfigReloadFixture();
 
   try {
-    const initialResult = loadToolDisplayConfig();
+    const initialResult = loadToolDisplayConfig(configFile);
 
     // Config is cached, but if we change the file, fingerprint changes.
     // Since local extension config can intentionally differ from defaults,
@@ -991,11 +990,11 @@ test("12: config-store reloads config on fingerprint change between calls", () =
     assert.equal(typeof initialResult.config.searchOutputMode, "string");
 
     // saveToolDisplayConfig clears the cache, forcing a re-read
-    const saveResult = saveToolDisplayConfig(initialResult.config);
+    const saveResult = saveToolDisplayConfig(initialResult.config, configFile);
     assert.ok(saveResult.success, "config saved successfully (cache cleared)");
 
     // After save, cache is cleared. Next load re-reads from disk.
-    const afterSaveResult = loadToolDisplayConfig();
+    const afterSaveResult = loadToolDisplayConfig(configFile);
     assert.ok(afterSaveResult.config, "config re-loaded after cache clear");
     assert.equal(
       afterSaveResult.config.readOutputMode,
@@ -1008,7 +1007,7 @@ test("12: config-store reloads config on fingerprint change between calls", () =
       "re-loaded search output mode matches saved config",
     );
   } finally {
-    writeFileSync(configUrl, originalConfigJson, "utf8");
+    cleanup();
   }
 });
 

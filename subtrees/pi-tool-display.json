@@ -20,10 +20,12 @@
     "the optional getToolPresentation/presentationRevision members, the ToolPresentationSnapshot/render-context/display-capabilities types and the docs path reference in tool-display-api-consumer.d.ts",
     "the docs/tool-presentation-provider.md entry in package.json files so the consumer contract ships in the tarball",
     "keep the type-publishing build (rollup.dts.config.mjs, exports types -> dist/public.d.ts via prepack)",
+    "保留 tests/reload-behavior.test.ts 的配置隔离最小接缝：导入 createConfigReloadFixture，向 load/save 显式传同一个临时 configFile，并在 finally 调用 cleanup；保留原有断言，不备份或恢复包根及用户配置。",
     "保留 fork 独立发布版本、CHANGELOG 发布条目与仓库 versions.json 的一致性；不要用 upstream 版本替换 fork 版本。"
   ],
   "doNotReintroduce": [
     "do not re-add the fork-only formatEarlierLinesHint/buildTailPreviewText copies or the unreachable empty-lines branch: upstream's optional label and take:'head'|'tail' params cover both",
-    "package-lock.json keeps upstream bytes at the upstream version across fork releases — do not hand-edit it"
+    "package-lock.json keeps upstream bytes at the upstream version across fork releases — do not hand-edit it",
+    "不要恢复 reload 测试对被忽略的包根 config.json 的依赖，也不要通过 CI 创建占位配置或跳过断言来掩盖干净 checkout 失败。"
   ]
 }

@@ -98,3 +98,28 @@ BTW 保留源码入口；subagents 保留编译后的 `bundle/index.js` 与共�
 - 真实 Pi 录屏验收沿用归档报告的已审证据，本次仅升级版本/依赖与文档，没有改动展示运行时代码，也未重跑旧场景。
 - 不声称任意 Pi 版本、真实外部 SSH 或不同窗口宽度的像素级一致。
 - `.pi/pi-goal-x-settings.json` 是原有本地配置改动，不在本次提交中。
+
+## 后续：CI 干净 checkout 配置测试修复
+
+实际发布任务 [41311668699 / 124863160288](https://github.com/xzzpig/pi-extensions/actions/runs/41311668699/job/124863160288)
+在 npm 上传之前被 tool-display 测试阻止：773 项中 772 通过、1 失败。
+`reload-behavior.test.ts:981` 无条件备份被忽略的包根 `config.json`，干净 checkout 不含该文件，抛出 ENOENT。
+该备份文件也不是 load/save 默认操作的用户配置路径。本地恰好存在该 ignored 文件，掩盖了测试隔离缺陷。
+
+修复仅涉及测试及维护记录：原用例使用独占临时配置路径并显式传给 load/save，finally 删除临时目录；原有断言全部保留。
+新增两个 fork-only 回归分别验证缺失配置的读取/保存/清理，以及不调用 save 清缓存时，外部磁盘修改通过 fingerprint 被发现。
+不提交本地配置、不在 CI 创建占位配置、不改生产代码，不需要再次提升尚未发布的版本。
+
+验证证据：
+
+- 修复前通过 `git archive HEAD` 导出已提交源码，过滤运行原用例：1 项失败，同样 ENOENT（`/tmp/pi-release-clean-repro-FxdjYI/result.log`）。
+- 修复后在独立 detached worktree `/tmp/pi-config-reload-fix/clean` 覆盖测试修复，以 `pnpm install --frozen-lockfile` 重新安装依赖（没有沿用原工作区 node_modules），退出 0。
+- 最初尝试共享已安装依赖时，pnpm 因 worktree 依赖状态不同而请求重新安装，并在无 TTY 环境中退出；未关闭依赖校验，改为上述独立冻结安装后重跑。
+- 新增 helper 首次格式检查有 warning，随后仅格式化新 fork-only 文件并重新检查通过；未格式化 upstream 测试文件。
+- 干净 worktree 中 tool-display typecheck 通过，完整测试 **775/775** 通过；测试前后包根 `config.json` 均不存在。
+- 同一 worktree 执行正式候选命令 `node scripts/release.mjs --pack --only pi-btw,pi-subagents,pi-tool-display --output /tmp/pi-config-reload-fix/packs`，退出 0：components 39、BTW 259、tool-display 775 通过，subagents 4430 通过 / 16 跳过 / 0 失败；三个候选包实际打包成功，未上传。
+- 候选门槛中的 fork-divergence 审计通过；本地原有包根配置哈希验证保持不变。
+
+完整日志：`/tmp/pi-config-reload-fix/clean-install.log`、`clean-tests.log`、`clean-pack.log`；
+最终包清单及 integrity 为 `/tmp/pi-config-reload-fix/packs/artifacts.json`。
+此处通过的是本地干净环境候选验证，不冒充远端 Actions 已重新运行或发布成功，也不撤销前文额外全仓 OS/strict 限制。
