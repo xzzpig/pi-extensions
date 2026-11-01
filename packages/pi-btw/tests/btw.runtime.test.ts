@@ -2459,6 +2459,10 @@ describe("btw runtime behavior", () => {
       "thinking",
       "tool-call",
       "tool-result",
+      // A tool call ends the assistant segment, so the post-tool message_end
+      // keeps its own thinking/answer entries instead of merging into the
+      // pre-tool segment.
+      "thinking",
       "assistant-text",
       "turn-boundary",
     ]);
@@ -2473,8 +2477,9 @@ describe("btw runtime behavior", () => {
       isError: false,
       streaming: false,
     });
-    expect(entries[5]).toMatchObject({ type: "assistant-text", text: "The package is pi-btw.", streaming: false });
-    expect(entries[6]).toMatchObject({ type: "turn-boundary", phase: "end" });
+    expect(entries[5]).toMatchObject({ type: "thinking", text: "Inspecting package.json", streaming: false });
+    expect(entries[6]).toMatchObject({ type: "assistant-text", text: "The package is pi-btw.", streaming: false });
+    expect(entries[7]).toMatchObject({ type: "turn-boundary", phase: "end" });
   });
 
   it("renders tool, thinking, result, and turn-separator rows in the overlay transcript", async () => {
@@ -2542,8 +2547,11 @@ describe("btw runtime behavior", () => {
     let entries = transcriptEntries(overlay);
     expect(findLatest(entries, (entry: any) => entry.type === "thinking")).toMatchObject({
       text: "Inspecting package.json",
-      streaming: true,
+      // The tool call ends the pre-tool assistant segment; the turn itself is
+      // still streaming while the tool runs (status assertion below).
+      streaming: false,
     });
+    expect(overlay.statusText.text).toContain("running tool: read");
     expect(findLatest(entries, (entry: any) => entry.type === "tool-call")).toMatchObject({
       toolName: "read",
       args: { path: "package.json" },

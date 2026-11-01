@@ -3,6 +3,18 @@
 All notable changes to the internal `@xzzpig/pi-components` shared library are
 documented here.
 
+## 0.5.0
+
+### Added
+
+- **可选启用的 `TranscriptPresenter`（`@xzzpig/pi-components/transcript-presenter`）。**
+  在既有 `TranscriptEntry` 值之上的有状态展示层：按稳定消息段保留原生用户/助手
+  组件，把真实流式状态传给 Pi 的 `AssistantMessageComponent`，在内容更新和缩放后
+  保留原生思考块的点击状态，暴露组件行范围与规范化鼠标分发，支持本地统一思考切换
+  （包括通过 Pi 原生 `MouseRegion` 点击路径展开已完成的块），并提供显式的
+  `sync`/`render`/`invalidate`/`clear`/`dispose` 生命周期钩子。既有
+  `renderTranscriptLines` 与 `TranscriptViewport` 行为不变。
+
 ## 0.4.0
 
 ### Added

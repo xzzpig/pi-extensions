@@ -94,7 +94,7 @@ importers:
   packages/pi-btw:
     dependencies:
       '@xzzpig/pi-components':
-        specifier: 0.4.0
+        specifier: 0.5.0
         version: link:../pi-components
     devDependencies:
       '@earendil-works/pi-ai':
@@ -441,7 +441,7 @@ importers:
         specifier: 0.5.1
         version: 0.5.1
       '@xzzpig/pi-components':
-        specifier: 0.4.0
+        specifier: 0.5.0
         version: link:../pi-components
       acorn:
         specifier: 8.18.0

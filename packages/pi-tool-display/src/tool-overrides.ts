@@ -54,6 +54,7 @@ import {
   MCP_PROXY_PROMPT_SNIPPET,
   toRecord,
 } from "./tool-metadata.js";
+import { attachToolPresentationApi, bindToolPresentationOwner, disposeToolPresentationApi, recordToolPresentation, resolveToolPresentationCapabilities } from "./tool-presentation.js";
 import { BUILT_IN_TOOL_OVERRIDE_NAMES } from "./types.js";
 import { toCustomToolOverrideKind, toCustomToolOutputMode, normalizeCustomToolOverrideEntry } from "./config-store.js";
 import type {
@@ -206,6 +207,7 @@ const decoratedTools = new Set<RuntimeToolDefinition>();
 
 function registerRuntimeTool(pi: ExtensionAPI, tool: RuntimeToolDefinition): void {
   pi.registerTool(tool as unknown as ToolDefinition);
+  recordToolPresentation(pi, tool);
 }
 
 function captureToolPropertyDescriptors(
@@ -604,6 +606,10 @@ function resolvePendingDiffPreview(
   previewKey: string | undefined,
   compute: () => PendingDiffPreviewData | undefined,
 ): PendingDiffPreviewData | undefined {
+  if (!resolveToolPresentationCapabilities(context).localWorkspace) {
+    return undefined;
+  }
+
   const previewState = getPendingDiffPreviewState(context, stateKey);
   if (!previewState) {
     return compute();
@@ -1670,6 +1676,7 @@ function installToolDisplayApi(getConfig: ConfigGetter): ToolDisplayApi {
     },
   };
 
+  attachToolPresentationApi(api, getConfig);
   (globalThis as GlobalWithToolDisplayApi)[TOOL_DISPLAY_API_KEY] = api;
   drainPendingToolDisplayDecorations(api);
   return api;
@@ -1690,12 +1697,14 @@ export function registerToolDisplayOverrides(
 ): void {
   clearBuiltInToolCache();
   const toolDisplayApi = installToolDisplayApi(getConfig);
+  bindToolPresentationOwner(pi, toolDisplayApi);
   registerCleanup(() => {
     restoreToolPropertyDescriptors(decoratedToolDescriptors, decoratedTools);
     const globalWithApi = globalThis as GlobalWithToolDisplayApi;
     if (globalWithApi[TOOL_DISPLAY_API_KEY] === toolDisplayApi) {
       delete globalWithApi[TOOL_DISPLAY_API_KEY];
     }
+    disposeToolPresentationApi(toolDisplayApi);
   });
   const bootstrapTools = getBuiltInTools(process.cwd());
   const builtInPromptMetadata = createLazyPromptMetadata(bootstrapTools);
@@ -1916,12 +1925,16 @@ export function registerToolDisplayOverrides(
       }
 
       const config = getConfig();
-      const executionMeta = getWriteExecutionMeta(
-        context,
-        writeExecutionMetaByToolCallId,
-      );
+      const capabilities = resolveToolPresentationCapabilities(context);
+      const executionMeta = capabilities.executionMetadata
+        ? getWriteExecutionMeta(context, writeExecutionMetaByToolCallId)
+        : undefined;
       return renderWriteDiffResult(
-        content,
+        // Denying execution metadata also drops the inferred "empty previous
+        // file" diff: a real overwrite must not render as a created file. The
+        // existing fallback shows the actual result text (or a neutral
+        // completion) instead of fabricating previous content.
+        capabilities.executionMetadata ? content : undefined,
         {
           expanded: options.expanded,
           filePath: getToolPathArg(context?.args),

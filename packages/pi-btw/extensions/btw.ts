@@ -1,18 +1,10 @@
 import {
-  appendEntry,
   createTranscriptState,
-  ensureToolCall,
-  ensureTurn,
   findLatestEntry,
-  finishTurn,
   hasStreamingTranscriptEntry,
-  renderTranscriptLines,
   type ToolComponentLookup,
   type TranscriptEntry,
   type TranscriptState,
-  type TranscriptToolResultPayload,
-  upsertText,
-  upsertToolResult,
 } from "@xzzpig/pi-components/transcript";
 import {
   buildSessionContext,
@@ -29,6 +21,7 @@ import {
   type ExtensionCommandContext,
   type ExtensionContext,
   type ResourceLoader,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import {
   type AssistantMessage,
@@ -38,7 +31,7 @@ import {
 } from "@earendil-works/pi-ai";
 import {
   Box,
-  Container,
+  type Component,
   Input,
   Key,
   Markdown,
@@ -46,16 +39,29 @@ import {
   matchesKey,
   truncateToWidth,
   visibleWidth,
-  wrapTextWithAnsi,
   type Focusable,
   type KeybindingsManager,
   type KeyId,
   type OverlayHandle,
   type OverlayOptions,
   type TUI,
+  type TuiMouseEvent,
+  type TuiMouseEventResult,
 } from "@earendil-works/pi-tui";
 import { loadBtwExtensionResources, readBtwExtensionSources, readBtwWorkspaceMode } from "./btw-extension-tools";
 import { createBtwSshWorkspace, type BtwSshWorkspace } from "./btw-ssh-workspace";
+import {
+  BtwToolDisplayAdapter,
+  BtwTranscriptDisplay,
+  readBtwToolDisplayApi,
+} from "./btw-transcript-display";
+import { BtwToolComponents } from "./btw-tool-components";
+import {
+  BTW_OVERLAY_TRANSCRIPT_TOP,
+  isBtwSgrMouseSequence,
+  mapBtwOverlayTranscriptMouse,
+} from "./btw-overlay-interaction";
+import { applyBtwTranscriptEvent, createBtwTranscriptMutationTracker } from "./btw-transcript-ingestion";
 
 export const BTW_COMMANDS = [
   { name: "btw", description: "Continue a side conversation in a focused BTW modal. Add --save to also persist a visible note." },
@@ -77,6 +83,8 @@ const BTW_MODEL_OVERRIDE_TYPE = "btw-model-override";
 const BTW_THINKING_OVERRIDE_TYPE = "btw-thinking-override";
 const BTW_DEFAULT_FOCUS_SHORTCUTS: readonly KeyId[] = [Key.alt("/"), Key.super("/"), Key.ctrlAlt("w")];
 const BTW_FOCUS_KEYS_ENV = "PI_BTW_FOCUS_KEYS";
+const BTW_DEFAULT_THINKING_SHORTCUTS: readonly KeyId[] = [Key.ctrl("t")];
+const BTW_THINKING_KEYS_ENV = "PI_BTW_THINKING_KEYS";
 const BTW_FOCUS_MODIFIERS = new Set(["ctrl", "shift", "alt", "super"]);
 // Mirrors the SpecialKey union in @earendil-works/pi-tui keys.d.ts (lower-cased).
 const BTW_FOCUS_SPECIAL_KEYS = new Set([
@@ -99,9 +107,25 @@ const BTW_FOCUS_SYMBOL_KEYS = new Set([
  * usable entries remain, the defaults are kept so focus toggling never becomes impossible.
  */
 export function resolveBtwFocusShortcuts(env: NodeJS.ProcessEnv = process.env): KeyId[] {
-  const raw = env[BTW_FOCUS_KEYS_ENV];
+  return resolveBtwShortcutList(env[BTW_FOCUS_KEYS_ENV], BTW_DEFAULT_FOCUS_SHORTCUTS);
+}
+
+/**
+ * Resolve the BTW-local thinking visibility toggle. Defaults to Ctrl+T; users can
+ * override it with PI_BTW_THINKING_KEYS using the same comma-separated grammar as
+ * the focus shortcuts. Invalid or blank values keep the default so the keyboard
+ * path always remains available.
+ */
+export function resolveBtwThinkingShortcuts(env: NodeJS.ProcessEnv = process.env): KeyId[] {
+  return resolveBtwShortcutList(env[BTW_THINKING_KEYS_ENV], BTW_DEFAULT_THINKING_SHORTCUTS);
+}
+
+function resolveBtwShortcutList(
+  raw: string | undefined,
+  defaults: readonly KeyId[],
+): KeyId[] {
   if (typeof raw !== "string" || raw.trim() === "") {
-    return [...BTW_DEFAULT_FOCUS_SHORTCUTS];
+    return [...defaults];
   }
 
   const seen = new Set<string>();
@@ -115,7 +139,7 @@ export function resolveBtwFocusShortcuts(env: NodeJS.ProcessEnv = process.env): 
     shortcuts.push(candidate as KeyId);
   }
 
-  return shortcuts.length > 0 ? shortcuts : [...BTW_DEFAULT_FOCUS_SHORTCUTS];
+  return shortcuts.length > 0 ? shortcuts : [...defaults];
 }
 
 /**
@@ -178,6 +202,7 @@ export function describeFocusShortcuts(shortcuts: readonly KeyId[]): string {
 
 const BTW_FOCUS_SHORTCUTS: readonly KeyId[] = resolveBtwFocusShortcuts();
 const BTW_FOCUS_SHORTCUTS_LABEL = describeFocusShortcuts(BTW_FOCUS_SHORTCUTS);
+const BTW_THINKING_SHORTCUTS: readonly KeyId[] = resolveBtwThinkingShortcuts();
 
 function matchesBtwFocusShortcut(data: string): boolean {
   return BTW_FOCUS_SHORTCUTS.some((shortcut) => matchesKey(data, shortcut));
@@ -271,7 +296,6 @@ type ResolvedBtwSettings = {
 
 // Entry and state shapes are owned by @xzzpig/pi-components; these aliases
 // keep the historical local names readable without duplicating the structure.
-type BtwTurnOutcome = import("@xzzpig/pi-components/transcript").TranscriptTurnOutcome;
 type BtwTranscriptEntry = TranscriptEntry;
 
 type BtwTranscript = BtwTranscriptEntry[];
@@ -296,6 +320,9 @@ type OverlayRuntime = {
   close?: () => void;
   finish?: () => void;
   setDraft?: (value: string) => void;
+  setDisplay?: (display: BtwTranscriptDisplay) => void;
+  theme?: ExtensionContext["ui"]["theme"];
+  tui?: TUI;
   closed?: boolean;
 };
 
@@ -606,72 +633,12 @@ function buildBtwSeedState(
   };
 }
 
-function toToolResultPayload(value: unknown): TranscriptToolResultPayload | null {
-  if (value === undefined || value === null) {
-    return null;
-  }
-  if (typeof value === "object") {
-    return value as TranscriptToolResultPayload;
-  }
-  if (typeof value === "string") {
-    return { content: [{ type: "text", text: value }] };
-  }
-  return { content: [{ type: "text", text: String(value) }] };
-}
-
-// Entry/state construction is delegated to the shared library so replayed
-// records and live events share one ingestion path and component registry.
-function createEmptyTranscriptState(): BtwTranscriptState {
-  // Default-collapsed tool output, matching Pi's main transcript behavior.
-  return createTranscriptState();
-}
-
 // The overlay caches rendered transcript lines across frames. The shared
 // library mutates entries IN PLACE (upsertText rewrites text on the latest
 // entry; finishTurn flips streaming=false across the whole finished turn), so
-// identity checks cannot detect changes — every mutation must bump this
-// version through the wrappers below.
-let transcriptVersion = 0;
-
-function bumpTranscriptVersion(): void {
-  transcriptVersion++;
-}
-
-const mutAppendEntry: typeof appendEntry = (...args) => {
-  bumpTranscriptVersion();
-  return appendEntry(...args);
-};
-const mutEnsureTurn: typeof ensureTurn = (...args) => {
-  bumpTranscriptVersion();
-  return ensureTurn(...args);
-};
-const mutFinishTurn: typeof finishTurn = (...args) => {
-  bumpTranscriptVersion();
-  return finishTurn(...args);
-};
-const mutEnsureToolCall: typeof ensureToolCall = (...args) => {
-  bumpTranscriptVersion();
-  return ensureToolCall(...args);
-};
-const mutUpsertText: typeof upsertText = (...args) => {
-  bumpTranscriptVersion();
-  return upsertText(...args);
-};
-const mutUpsertToolResult: typeof upsertToolResult = (...args) => {
-  bumpTranscriptVersion();
-  return upsertToolResult(...args);
-};
-
-function ensureTranscriptTurnForUserMessage(state: BtwTranscriptState): number {
-  if (state.currentTurnId !== null) {
-    const currentAssistant = findLatestEntry(state, state.currentTurnId, "assistant-text");
-    if (currentAssistant && !currentAssistant.streaming) {
-      mutFinishTurn(state, state.currentTurnId);
-    }
-  }
-
-  return mutEnsureTurn(state);
-}
+// identity checks cannot detect changes — the fork-only tracker bumps a
+// version for every live event and every replay/failure mutation.
+const transcriptMutations = createBtwTranscriptMutationTracker();
 
 function extractMessageText(message: { content?: string | AssistantMessage["content"] | UserMessage["content"] }): string {
   if (typeof message.content === "string") {
@@ -695,119 +662,34 @@ function upsertUserMessageEntry(state: BtwTranscriptState, turnId: number, text:
   const existing = findLatestEntry(state, turnId, "user-message");
   if (existing) {
     existing.text = text;
-    bumpTranscriptVersion();
+    transcriptMutations.bump();
     return;
   }
 
-  mutAppendEntry(state, { type: "user-message", turnId, text });
-}
-
-function applyAssistantMessageToTranscript(
-  state: BtwTranscriptState,
-  turnId: number,
-  message: AssistantMessage,
-  streaming: boolean,
-): void {
-  const assistantMessage = message;
-  const thinking = extractThinking(assistantMessage);
-  const answer = extractMessageText(assistantMessage);
-
-  if (thinking) {
-    mutUpsertText(state, turnId, "thinking", thinking, streaming);
-  }
-
-  if (answer) {
-    mutUpsertText(state, turnId, "assistant-text", answer, streaming);
-  }
+  transcriptMutations.appendEntry(state, { type: "user-message", turnId, text });
 }
 
 function applyTranscriptEvent(state: BtwTranscriptState, event: AgentSessionEvent): void {
-  switch (event.type) {
-    case "turn_start": {
-      mutEnsureTurn(state);
-      return;
-    }
-    case "message_start": {
-      if (event.message.role === "user") {
-        const turnId = ensureTranscriptTurnForUserMessage(state);
-        upsertUserMessageEntry(state, turnId, extractMessageText(event.message));
-        return;
-      }
-
-      if (event.message.role === "assistant") {
-        const turnId = mutEnsureTurn(state);
-        applyAssistantMessageToTranscript(state, turnId, event.message, true);
-      }
-      return;
-    }
-    case "message_update": {
-      if (event.message.role !== "assistant") {
-        return;
-      }
-
-      const turnId = mutEnsureTurn(state);
-      applyAssistantMessageToTranscript(state, turnId, event.message, true);
-      return;
-    }
-    case "message_end": {
-      if (event.message.role === "user") {
-        const turnId = ensureTranscriptTurnForUserMessage(state);
-        upsertUserMessageEntry(state, turnId, extractMessageText(event.message));
-        return;
-      }
-
-      if (event.message.role === "assistant") {
-        const turnId = mutEnsureTurn(state);
-        applyAssistantMessageToTranscript(state, turnId, event.message, false);
-      }
-      return;
-    }
-    case "tool_execution_start": {
-      const turnId = mutEnsureTurn(state);
-      mutEnsureToolCall(state, turnId, event.toolCallId, event.toolName, event.args);
-      state.toolComponents.handleStart(event.toolCallId, event.toolName, event.args);
-      return;
-    }
-    case "tool_execution_update": {
-      const turnId = state.toolCalls.get(event.toolCallId)?.turnId ?? mutEnsureTurn(state);
-      const result = toToolResultPayload(event.partialResult);
-      mutUpsertToolResult(state, turnId, event.toolCallId, event.toolName, result, false, true);
-      state.toolComponents.handleUpdate(event.toolCallId, event.toolName, result);
-      return;
-    }
-    case "tool_execution_end": {
-      const turnId = state.toolCalls.get(event.toolCallId)?.turnId ?? mutEnsureTurn(state);
-      const result = toToolResultPayload(event.result);
-      mutUpsertToolResult(state, turnId, event.toolCallId, event.toolName, result, event.isError, false);
-      state.toolComponents.handleEnd(event.toolCallId, event.toolName, result, event.isError);
-      return;
-    }
-    case "turn_end": {
-      const stopReason = event.message.role === "assistant" ? event.message.stopReason : "stop";
-      const outcome: BtwTurnOutcome =
-        stopReason === "aborted" ? "aborted" : stopReason === "error" ? "failed" : "completed";
-      mutFinishTurn(state, undefined, outcome);
-      return;
-    }
-    default:
-      return;
-  }
+  // Live ingestion stays in the shared event path (fork-only wrapper) so a
+  // turn keeps one assistant segment per real message instead of merging a
+  // second message after a tool call into the first one.
+  applyBtwTranscriptEvent(state, event, transcriptMutations.bump);
 }
 
 function appendPersistedTranscriptTurn(state: BtwTranscriptState, details: BtwDetails): void {
-  const turnId = mutEnsureTurn(state);
+  const turnId = transcriptMutations.ensureTurn(state);
   upsertUserMessageEntry(state, turnId, details.question);
   if (details.thinking) {
-    mutUpsertText(state, turnId, "thinking", details.thinking, false);
+    transcriptMutations.upsertText(state, turnId, "thinking", details.thinking, false);
   }
-  mutUpsertText(state, turnId, "assistant-text", details.answer, false);
-  mutFinishTurn(state, turnId);
+  transcriptMutations.upsertText(state, turnId, "assistant-text", details.answer, false);
+  transcriptMutations.finishTurn(state, turnId);
 }
 
 function setTranscriptFailure(state: BtwTranscriptState, message: string): void {
-  const turnId = state.currentTurnId ?? state.lastTurnId ?? mutEnsureTurn(state);
-  mutUpsertText(state, turnId, "assistant-text", `❌ ${message}`, false);
-  mutFinishTurn(state, turnId, "failed");
+  const turnId = state.currentTurnId ?? state.lastTurnId ?? transcriptMutations.ensureTurn(state);
+  transcriptMutations.upsertText(state, turnId, "assistant-text", `❌ ${message}`, false);
+  transcriptMutations.finishTurn(state, turnId, "failed");
 }
 
 function getCompletedExchangeCount(entries: BtwTranscript): number {
@@ -966,7 +848,7 @@ function getOverlayTitle(mode: BtwThreadMode): string {
   return "BTW";
 }
 
-export class BtwOverlayComponent extends Container implements Focusable {
+export class BtwOverlayComponent implements Component, Focusable {
   private readonly input: Input;
   private readonly handleRawInput: (data: string) => void;
   private readonly statusText: Text;
@@ -984,12 +866,20 @@ export class BtwOverlayComponent extends Container implements Focusable {
   private readonly onDismissCallback: () => void;
   private readonly onUnfocusCallback: () => void;
   private readonly onToggleWidthCallback: () => void;
+  private readonly getThinkingShortcuts: () => readonly KeyId[];
   private readonly tui: TUI;
   private readonly theme: ExtensionContext["ui"]["theme"];
   private transcriptScrollOffset = 0;
   private transcriptViewportHeight = 8;
   private followTranscript = true;
-  private transcriptRenderCache: { version: number; width: number; lines: string[] } | null = null;
+  private transcriptRenderCache: {
+    version: number;
+    width: number;
+    lines: string[];
+    displayRevision: number;
+  } | null = null;
+  private transcriptDisplay: BtwTranscriptDisplay;
+  private ownsTranscriptDisplay: boolean;
   private ownsMouseReporting = false;
   private _focused = false;
   private modeTextValue = "";
@@ -1026,8 +916,10 @@ export class BtwOverlayComponent extends Container implements Focusable {
     onUnfocus: () => void,
     onToggleWidth: () => void,
     getWorkspaceLabel: () => string = () => "local",
+    resolveToolDefinition?: (toolName: string) => ToolDefinition | undefined,
+    getThinkingShortcuts: () => readonly KeyId[] = () => BTW_THINKING_SHORTCUTS,
+    transcriptDisplay?: BtwTranscriptDisplay,
   ) {
-    super();
     this.tui = tui;
     this.theme = theme;
     this.keybindings = keybindings;
@@ -1042,6 +934,28 @@ export class BtwOverlayComponent extends Container implements Focusable {
     this.onDismissCallback = onDismiss;
     this.onUnfocusCallback = onUnfocus;
     this.onToggleWidthCallback = onToggleWidth;
+    this.getThinkingShortcuts = getThinkingShortcuts;
+
+    if (transcriptDisplay) {
+      // Thread-owned display: closing this window only detaches the TUI, so
+      // message/tool components and their expansion choices survive reopen.
+      this.transcriptDisplay = transcriptDisplay;
+      this.ownsTranscriptDisplay = false;
+      this.transcriptDisplay.setTheme(theme);
+      this.transcriptDisplay.attachTui(tui);
+    } else {
+      this.transcriptDisplay = new BtwTranscriptDisplay({
+        theme,
+        // Re-read the registry on every lookup so a replaced transcript state
+        // is visible to the same overlay.
+        toolComponents: { get: (toolCallId) => this.readToolComponents().get(toolCallId) },
+        resolveToolDefinition,
+        emptyText: "No BTW thread yet. Ask a side question to start one.",
+        assistantLabel: "Assistant",
+        tui,
+      });
+      this.ownsTranscriptDisplay = true;
+    }
 
     this.modeText = new Text("", 1, 0);
     this.summaryText = new Text("", 1, 0);
@@ -1175,18 +1089,6 @@ export class BtwOverlayComponent extends Container implements Focusable {
     return this.theme.fg("border", `${left}${"─".repeat(innerWidth)}${right}`);
   }
 
-  private wrapTranscript(lines: string[], innerWidth: number): string[] {
-    const wrapped: string[] = [];
-    for (const line of lines) {
-      if (!line) {
-        wrapped.push("");
-        continue;
-      }
-      wrapped.push(...wrapTextWithAnsi(line, Math.max(1, innerWidth)));
-    }
-    return wrapped;
-  }
-
   private getDialogHeight(): number {
     const terminalRows = process.stdout.rows ?? 30;
     return Math.max(18, Math.min(32, Math.floor(terminalRows * 0.78)));
@@ -1200,7 +1102,39 @@ export class BtwOverlayComponent extends Container implements Focusable {
     this.tui.requestRender();
   }
 
+  /**
+   * Replaces the thread-owned display after a thread reset/session switch
+   * without closing the overlay. The old display is disposed (or detached if
+   * it was a test-local instance); the new one attaches to the same TUI.
+   */
+  setTranscriptDisplay(display: BtwTranscriptDisplay): void {
+    if (this.transcriptDisplay === display) return;
+    if (this.ownsTranscriptDisplay) {
+      this.transcriptDisplay.dispose();
+    } else {
+      this.transcriptDisplay.detachTui();
+    }
+    this.transcriptDisplay = display;
+    this.ownsTranscriptDisplay = false;
+    this.transcriptDisplay.setTheme(this.theme);
+    this.transcriptDisplay.attachTui(this.tui);
+    this.transcriptRenderCache = null;
+    this.transcriptScrollOffset = 0;
+    this.followTranscript = true;
+    this.tui.requestRender();
+  }
+
+  invalidate(): void {
+    this.input.invalidate();
+    this.transcriptDisplay.invalidate();
+  }
+
   dispose(): void {
+    if (this.ownsTranscriptDisplay) {
+      this.transcriptDisplay.dispose();
+    } else {
+      this.transcriptDisplay.detachTui();
+    }
     // Only undo the modes we actually enabled. In fullscreen mode pi-tui owns
     // mouse reporting; writing the disable sequence here would break message
     // scrolling until the TUI is restarted.
@@ -1223,6 +1157,70 @@ export class BtwOverlayComponent extends Container implements Focusable {
     return (button & 1) === 0 ? -3 : 3;
   }
 
+  /**
+   * Routes overlay-local mouse events to the presenter. Presses inside the
+   * transcript are consumed so Pi synthesizes a click; wheel events scroll the
+   * BTW transcript only while the overlay owns focus. Footer/input rows and
+   * scrolled-out transcript lines are never mapped to a message component.
+   */
+  handleMouse(
+    event: TuiMouseEvent,
+  ): TuiMouseEventResult | undefined {
+    if (event.type === "wheel") {
+      if (!this.focused) return undefined;
+      const delta = event.wheelDelta ?? 0;
+      if (delta === 0) return undefined;
+      this.scrollTranscript(delta * 3);
+      return { handled: true };
+    }
+
+    if (event.type !== "press" && event.type !== "click") return undefined;
+    // Leave Shift+drag to the host's text selection path.
+    if (event.shift) return undefined;
+
+    if (!this.focused) {
+      // The first press focuses the overlay; TUI then routes the click here.
+      return event.type === "press" ? { handled: true, focus: true } : undefined;
+    }
+
+    // A provider/component repaint may have changed row heights since the last
+    // draw. Refresh the display revision before trusting the cached layout.
+    const displayRevision = this.transcriptDisplay.refresh();
+    if (!this.transcriptRenderCache || this.transcriptRenderCache.displayRevision !== displayRevision) {
+      this.transcriptRenderCache = null;
+      return undefined;
+    }
+
+    const mapped = this.mapTranscriptMouse(event);
+    if (!mapped) return undefined;
+    if (event.type === "press") return { handled: true };
+
+    if (this.transcriptDisplay.handleMouse(mapped)) {
+      this.invalidateTranscriptRenderCache();
+    }
+    return { handled: true };
+  }
+
+  private invalidateTranscriptRenderCache(): void {
+    this.transcriptRenderCache = null;
+    this.tui.requestRender();
+  }
+
+  private mapTranscriptMouse(event: TuiMouseEvent): TuiMouseEvent | undefined {
+    const cached = this.transcriptRenderCache;
+    const dialogWidth = Math.max(24, event.width);
+    const innerWidth = Math.max(22, dialogWidth - 2);
+    if (!cached || cached.width !== innerWidth) return undefined;
+    return mapBtwOverlayTranscriptMouse(event, {
+      transcriptTop: BTW_OVERLAY_TRANSCRIPT_TOP,
+      transcriptHeight: this.transcriptViewportHeight,
+      scrollOffset: this.transcriptScrollOffset,
+      contentLeft: this.borderless ? 0 : 1,
+      contentWidth: innerWidth,
+      lineCount: cached.lines.length,
+    });
+  }
+
   handleInput(data: string): void {
     if (matchesBtwFocusShortcut(data)) {
       this.onUnfocusCallback();
@@ -1234,11 +1232,21 @@ export class BtwOverlayComponent extends Container implements Focusable {
       return;
     }
 
+    if (this.getThinkingShortcuts().some((shortcut) => matchesKey(data, shortcut))) {
+      this.transcriptDisplay.toggleThinkingVisibility();
+      this.invalidateTranscriptRenderCache();
+      return;
+    }
+
     const mouseScrollDelta = this.getMouseScrollDelta(data);
     if (mouseScrollDelta !== null) {
       this.scrollTranscript(mouseScrollDelta);
       return;
     }
+
+    // Regular mode has no normalized click route. Consume non-wheel SGR
+    // reports instead of letting them reach the composer as text.
+    if (isBtwSgrMouseSequence(data)) return;
 
     if (this.handleCompletionInput(data)) return;
 
@@ -1283,34 +1291,41 @@ export class BtwOverlayComponent extends Container implements Focusable {
     return visibleWidth(line) > width ? truncateToWidth(line, width, "") : line;
   }
 
-  override render(width: number): string[] {
+  render(width: number): string[] {
     const dialogWidth = Math.max(24, width);
     const innerWidth = Math.max(22, dialogWidth - 2);
     // Rebuild the transcript blocks only when the transcript changed (version
     // bumped by any state mutation) or the width moved: user/assistant messages
     // go through the main-window components (markdown-aware), tool blocks stay
-    // textual. Component output is already wrapped to innerWidth, so the extra
-    // wrap below only guards long tool-result lines. Without the cache every
-    // streaming frame would re-run the full markdown render for the whole
-    // transcript.
+    // textual. The presenter already lays every line out to innerWidth, so use
+    // its lines verbatim: re-wrapping here would split native tool diffs,
+    // borders, and tables and break their geometry. `frameLine` only clips an
+    // overlong line to the overlay width; it never creates a second line.
+    // Without the cache every streaming frame would re-run the full markdown
+    // render for the whole transcript.
     const transcriptVersion = this.getTranscriptVersion();
+    const displayRevision = this.transcriptDisplay.refresh();
     const cached = this.transcriptRenderCache;
     let transcriptLines: string[];
-    if (cached && cached.version === transcriptVersion && cached.width === innerWidth) {
+    if (
+      cached &&
+      cached.version === transcriptVersion &&
+      cached.width === innerWidth &&
+      cached.displayRevision === displayRevision
+    ) {
       transcriptLines = cached.lines;
     } else {
-      transcriptLines = this.wrapTranscript(
-        renderTranscriptLines(this.readTranscriptEntries(), {
-          width: innerWidth,
-          theme: this.theme,
-          emptyText: "No BTW thread yet. Ask a side question to start one.",
-          assistantLabel: "Assistant",
-          thinkingLabel: "Thinking",
-          toolComponents: this.readToolComponents(),
-        }),
+      const frame = this.transcriptDisplay.renderFrame(
+        this.readTranscriptEntries(),
         innerWidth,
       );
-      this.transcriptRenderCache = { version: transcriptVersion, width: innerWidth, lines: transcriptLines };
+      transcriptLines = frame.lines;
+      this.transcriptRenderCache = {
+        version: transcriptVersion,
+        width: innerWidth,
+        lines: transcriptLines,
+        displayRevision: frame.revision,
+      };
     }
     const dialogHeight = this.getDialogHeight();
     const chromeHeight = BTW_OVERLAY_CHROME_LINES;
@@ -1392,7 +1407,8 @@ export class BtwOverlayComponent extends Container implements Focusable {
     const status = this.getStatus() ?? "Ready. Enter submits; Escape dismisses without clearing.";
     this.statusTextValue = status;
     this.statusText.setText(this.statusTextValue);
-    this.hintsTextValue = `↑↓ select/scroll · Tab complete · Enter · ${BTW_FOCUS_SHORTCUTS_LABEL} focus · Alt+w width · Esc`;
+    const thinkingShortcutLabel = describeFocusShortcuts(this.getThinkingShortcuts());
+    this.hintsTextValue = `↑↓ select/scroll · Tab complete · Enter · ${thinkingShortcutLabel} thinking · ${BTW_FOCUS_SHORTCUTS_LABEL} focus · Alt+w width · Esc`;
     this.hintsText.setText(this.hintsTextValue);
     this.tui.requestRender();
   }
@@ -1403,13 +1419,62 @@ export default function (pi: ExtensionAPI) {
   let pendingMode: BtwThreadMode = "contextual";
   let btwModelOverride: SessionModel | null = null;
   let btwThinkingOverride: SessionThinkingLevel | null = null;
-  let transcriptState = createEmptyTranscriptState();
   let overlayStatus: string | null = null;
   let overlayDraft = "";
   let overlayWidthMode: BtwOverlayWidthMode = "window";
   let overlayRuntime: OverlayRuntime | null = null;
   let lastUiContext: ExtensionContext | ExtensionCommandContext | null = null;
   let activeBtwSession: BtwSessionRuntime | null = null;
+  // Retain the current thread's workspace mode across close/dispose. The live
+  // session is intentionally null while a failed/closed SSH thread is still on
+  // screen; deriving local preview permission from that absence would let a
+  // provider rebuild read local files for remote tool output.
+  let btwWorkspaceIsLocal = true;
+  const btwToolDisplay = new BtwToolDisplayAdapter({
+    getChildToolDefinition: (toolName) => activeBtwSession?.session.getToolDefinition?.(toolName),
+    // Public host seam: the child session's own renderer resolvers in load
+    // order. The base is the child's registered definition, so a resolver that
+    // wraps next() sees the child's renderers — never the parent session's —
+    // and an ordinary built-in definition still resolves to no renderer, which
+    // keeps the display provider in charge for that phase.
+    getChildToolRenderers: (toolName, childDefinition) => {
+      const session = activeBtwSession?.session;
+      const runner = session?.extensionRunner;
+      const resolveToolRenderers = runner?.resolveToolRenderers;
+      if (typeof resolveToolRenderers !== "function") return undefined;
+      return resolveToolRenderers.call(runner, toolName, () => childDefinition);
+    },
+    isLocalWorkspace: () => btwWorkspaceIsLocal,
+    getDisplayApi: () => readBtwToolDisplayApi(),
+    onDiagnostic: (diagnostic) => {
+      const ctx = lastUiContext;
+      if (ctx?.hasUI) {
+        // Defer: the diagnostic can be raised while the overlay is rendering.
+        queueMicrotask(() => notify(ctx, diagnostic.message, "warning"));
+      }
+    },
+  });
+  let btwToolComponents: BtwToolComponents | null = null;
+  let transcriptDisplay: BtwTranscriptDisplay | null = null;
+
+  // Entry/state construction is delegated to the shared library so replayed
+  // records and live events share one ingestion path and component registry.
+  function createEmptyTranscriptState(
+    resolveToolDefinition?: (toolName: string) => ToolDefinition | undefined,
+    cwd?: string,
+  ): BtwTranscriptState {
+    const options = {
+      ...(resolveToolDefinition ? { resolveToolDefinition } : {}),
+      ...(cwd ? { cwd } : {}),
+    };
+    const state = createTranscriptState(options);
+    // Default-collapsed tool output, matching Pi's main transcript behavior.
+    // The fork-only registry keeps slots stable across provider revisions.
+    btwToolComponents = new BtwToolComponents(options);
+    state.toolComponents = btwToolComponents;
+    return state;
+  }
+  let transcriptState = createEmptyTranscriptState(btwToolDisplay.resolveToolDefinition);
   let btwLifecycleGeneration = 0;
   let btwSubmissionQueue = Promise.resolve();
   let btwSessionCreationQueue = Promise.resolve();
@@ -1424,6 +1489,37 @@ export default function (pi: ExtensionAPI) {
       activeCtx.ui.setWidget("btw", undefined);
       overlayRuntime?.refresh?.();
     }
+  }
+
+  function disposeBtwTranscriptDisplay(): void {
+    transcriptDisplay?.dispose();
+    transcriptDisplay = null;
+    btwToolComponents?.dispose();
+    btwToolComponents = null;
+  }
+
+  function ensureBtwTranscriptDisplay(
+    theme: ExtensionContext["ui"]["theme"],
+    tui: TUI,
+  ): BtwTranscriptDisplay {
+    if (!transcriptDisplay) {
+      transcriptDisplay = new BtwTranscriptDisplay({
+        theme,
+        toolComponents: transcriptState.toolComponents,
+        resolveToolDefinition: (toolName) => btwToolDisplay.resolveToolDefinition(toolName),
+        emptyText: "No BTW thread yet. Ask a side question to start one.",
+        assistantLabel: "Assistant",
+        tui,
+        getDisplayProvider: () => btwToolDisplay.displayProvider,
+        rebuildToolComponents: () => btwToolComponents?.rebuild(),
+      });
+      btwToolComponents?.setRequestRender(() => transcriptDisplay?.requestRender());
+    } else {
+      transcriptDisplay.setTheme(theme);
+      transcriptDisplay.attachTui(tui);
+    }
+    btwToolComponents?.attachTui(tui);
+    return transcriptDisplay;
   }
 
   function setOverlayStatus(status: string | null, ctx?: ExtensionContext | ExtensionCommandContext): void {
@@ -1917,6 +2013,10 @@ export default function (pi: ExtensionAPI) {
         return null;
       }
       activeBtwSession = created;
+      // Once a remote workspace has been observed, keep the retained
+      // transcript conservative until reset/restore discards its remote tool
+      // slots. A later local child must not upgrade old remote entries.
+      if (created.workspace) btwWorkspaceIsLocal = false;
     } catch (error) {
       if (generation !== btwLifecycleGeneration) return null;
       const message = `Could not start BTW session: ${error instanceof Error ? error.message : String(error)}`;
@@ -1951,6 +2051,8 @@ export default function (pi: ExtensionAPI) {
       if (overlayRuntime === runtime) {
         overlayRuntime = null;
       }
+      transcriptDisplay?.detachTui();
+      btwToolComponents?.detachTui();
       runtime.finish?.();
     };
 
@@ -1961,8 +2063,11 @@ export default function (pi: ExtensionAPI) {
       .custom<void>(
         async (tui, theme, keybindings, done) => {
           // Route native tool component repaint requests (streaming bash
-          // output, elapsed-time intervals) to the live TUI.
-          transcriptState.toolComponents.attachTui(tui);
+          // output, elapsed-time intervals) to the live TUI. The thread-owned
+          // display keeps message/tool components across close/reopen.
+          const display = ensureBtwTranscriptDisplay(theme, tui);
+          runtime.theme = theme;
+          runtime.tui = tui;
           runtime.finish = () => {
             done();
           };
@@ -1972,7 +2077,7 @@ export default function (pi: ExtensionAPI) {
             theme,
             keybindings,
             () => transcriptState.entries,
-            () => transcriptVersion,
+            () => transcriptMutations.version,
             () => transcriptState.toolComponents,
             () => overlayStatus,
             () => pendingMode,
@@ -1991,6 +2096,9 @@ export default function (pi: ExtensionAPI) {
               void toggleOverlayWidth(ctx);
             },
             () => activeBtwSession?.workspace?.label ?? "local",
+            (toolName) => btwToolDisplay.resolveToolDefinition(toolName),
+            undefined,
+            display,
           );
 
           overlay.focused = runtime.handle?.isFocused() ?? true;
@@ -2001,6 +2109,9 @@ export default function (pi: ExtensionAPI) {
           runtime.refresh = () => {
             overlay.focused = runtime.handle?.isFocused() ?? false;
             overlay.refresh();
+          };
+          runtime.setDisplay = (nextDisplay) => {
+            overlay.setTranscriptDisplay(nextDisplay);
           };
           runtime.close = () => {
             overlayDraft = overlay.getDraft();
@@ -2280,11 +2391,18 @@ export default function (pi: ExtensionAPI) {
     mode: BtwThreadMode = "contextual",
   ): Promise<void> {
     invalidateBtwLifecycle();
+    const openRuntime = overlayRuntime;
     await disposeBtwSession();
+    disposeBtwTranscriptDisplay();
+    btwWorkspaceIsLocal = true;
     pendingThread = [];
     pendingMode = mode;
-    transcriptState = createEmptyTranscriptState();
-    bumpTranscriptVersion();
+    transcriptState = createEmptyTranscriptState(btwToolDisplay.resolveToolDefinition, ctx.cwd);
+    transcriptMutations.bump();
+    if (overlayRuntime === openRuntime && openRuntime?.theme && openRuntime.tui) {
+      const display = ensureBtwTranscriptDisplay(openRuntime.theme, openRuntime.tui);
+      openRuntime.setDisplay?.(display);
+    }
     setOverlayDraft("");
     setOverlayStatus(null, ctx);
     if (persist) {
@@ -2296,13 +2414,20 @@ export default function (pi: ExtensionAPI) {
 
   async function restoreThread(ctx: ExtensionContext): Promise<void> {
     invalidateBtwLifecycle();
+    const openRuntime = overlayRuntime;
     await disposeBtwSession();
+    disposeBtwTranscriptDisplay();
+    btwWorkspaceIsLocal = true;
     pendingThread = [];
     pendingMode = "contextual";
     btwModelOverride = null;
     btwThinkingOverride = null;
-    transcriptState = createEmptyTranscriptState();
-    bumpTranscriptVersion();
+    transcriptState = createEmptyTranscriptState(btwToolDisplay.resolveToolDefinition, ctx.cwd);
+    transcriptMutations.bump();
+    if (overlayRuntime === openRuntime && openRuntime?.theme && openRuntime.tui) {
+      const display = ensureBtwTranscriptDisplay(openRuntime.theme, openRuntime.tui);
+      openRuntime.setDisplay?.(display);
+    }
     overlayDraft = "";
     lastUiContext = ctx;
     overlayStatus = null;
@@ -2479,7 +2604,7 @@ export default function (pi: ExtensionAPI) {
       }
       if (response.stopReason === "aborted") {
         const abortedTurnId = transcriptState.currentTurnId ?? transcriptState.lastTurnId;
-        if (abortedTurnId !== null) mutFinishTurn(transcriptState, abortedTurnId, "aborted");
+        if (abortedTurnId !== null) transcriptMutations.finishTurn(transcriptState, abortedTurnId, "aborted");
         setOverlayStatus("⏹ Aborted. Press Esc again to dismiss the BTW overlay.", ctx);
         return;
       }
@@ -2692,6 +2817,7 @@ export default function (pi: ExtensionAPI) {
     invalidateBtwLifecycle();
     await disposeBtwSession();
     dismissOverlay();
+    disposeBtwTranscriptDisplay();
   });
 
   for (const shortcut of BTW_FOCUS_SHORTCUTS) {

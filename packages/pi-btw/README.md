@@ -77,6 +77,7 @@ pi install /absolute/path/to/pi-btw
 
 ## Overlay controls
 
+- `Ctrl+T` 切换当前 BTW 线程的思考可见性，不修改主会话；如果终端或 Pi 核心占用了默认键，可用 `PI_BTW_THINKING_KEYS` 改键（页脚显示解析后的实际键）
 - `Alt+w` toggles the overlay between the framed window layout (inset from the terminal edges) and a full-width layout
 - full-width mode makes terminal Shift+drag selection capture only the dialog's own text, which is handy for copying without pulling in surrounding main-screen content
 - window mode keeps the full box frame; full-width mode drops the side borders and corner glyphs (keeping only horizontal rules) so those border columns never land inside a drag selection
@@ -89,6 +90,8 @@ pi install /absolute/path/to/pi-btw
 - while BTW is streaming, the first `Esc` aborts the request and keeps its partial transcript visible; press `Esc` again to dismiss
 - while BTW is idle, `Esc` dismisses the overlay immediately
 - BTW now opens top-centered so the main session remains visible underneath it
+- 全屏模式支持对可见思考/工具行进行规范化点击；普通模式保留键盘控制和滚轮，但不承诺转录行可点击
+- 兼容矩阵、提供者能力探测、SSH/元数据限制和不支持效果见 [`docs/transcript-display.md`](docs/transcript-display.md)
 
 ### `/btw:new [question]`
 
@@ -274,6 +277,24 @@ Sometimes you want to:
 - ask a clarifying question while the main agent keeps working
 - think through next steps without derailing the current turn
 - explore an idea, then inject it back once it's ready
+
+## 转录显示兼容性
+
+overlay 使用 Pi 原生消息和工具组件，并接入可选的有状态展示器。思考可以点击或
+本地切换；streaming 状态会保留；保留的展开选择在缩放和关闭/重开后仍有效。加载
+可选的 `pi-tool-display` 提供者时，其七种受支持内置工具的样式会通过只读能力
+探测应用；BTW 不借用父执行或 previous-content 元数据，SSH workspace 禁用本地
+预览读取。
+
+本次发布准备版本为 pi-btw 0.11.1（内嵌 pi-components 0.5.0），尚未实际发布；
+不要假设旧版 npm 包已经包含这些变更。完整矩阵、键位配置、提供者 API v1 探测、回退行为、SSH 限制和不支持
+的插件效果见 [`docs/transcript-display.md`](docs/transcript-display.md)。
+
+真实普通/全屏 TUI 已在隔离的 Pi 1.4.0 + 真实模型上验收（含 asciinema 回放、
+显示插件启用/禁用、重开/缩放/工具失败）；本地 tarball 的真实消费者入口与内嵌
+pi-components 加载也已在 `/tmp` 验证，Pi 核心仍为 peers。命令、退出码与差异结论见
+[`verification.md`](../../openspec/changes/archive/2026-11-01-align-btw-transcript-presentation/verification.md)
+批次 4.2/4.3。真实外部 SSH 传输、任意 Pi 版本和像素级对齐不在验收范围内。
 
 ## Development
 

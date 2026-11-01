@@ -4,6 +4,14 @@ All notable changes to the `@xzzpig/pi-btw` fork are documented here. This
 fork tracks [`dbachelder/pi-btw`](https://github.com/dbachelder/pi-btw) via git
 subtree; entries below describe only fork-specific deviations from upstream.
 
+## 0.11.1 — 2026-11-01
+
+### 修复与改进
+
+- 使用 pi-components 0.5.0 的可选有状态展示器，保留真实思考流式状态、完成折叠、逐块点击与本地可配置 Ctrl+T；关闭重开和缩放保留展开选择。
+- 接入只读工具显示提供者与子会话公开 renderer 解析链；同名子会话 renderer 逐字段优先，next() 基线保持为子会话自身定义。
+- 修复消息分段、缓存失效、renderer 故障隔离及 SSH 本地预览边界，不扩大工具执行权限；原生 Markdown 表格仍按可用宽度降级。
+
 ## 0.11.0
 
 ### Changed

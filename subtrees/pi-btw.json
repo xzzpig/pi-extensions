@@ -32,18 +32,30 @@
   ],
   "reapplyOnSync": [
     "Keep package.json repository.url at git+https://github.com/xzzpig/pi-extensions.git for fork OIDC publishing; retain upstream source identity in subtree metadata.",
-    "re-apply the pi-components migration and outcome threading in extensions/btw.ts, keeping the [BTW SESSION BOUNDARY] marker intact",
+    "重新应用 extensions/btw.ts 的 pi-components 迁移、共享实时事件摄入和 outcome 传递，保留 [BTW SESSION BOUNDARY] 标记：applyTranscriptEvent 委派给 btw-transcript-ingestion，transcript state 使用 btw-transcript-display resolver，overlay 通过 BtwTranscriptDisplay 渲染。工具显示适配器取得子会话 getToolDefinition(name) 的 childDefinition，并将同一对象作为公开 extensionRunner.resolveToolRenderers(name, () => childDefinition) 的基线；合法 next() 包装必须能访问子会话自己的定义。子会话自定义 renderer 逐字段优先于同名 tool-display provider，普通内置定义没有 renderer 时仍由 provider 补样式。",
+    "re-apply the fork-only overlay interaction seam: BtwOverlayComponent implements Component rather than Container, handleMouse maps overlay-local coordinates through btw-overlay-interaction into TranscriptPresenter rows, and the local thinking toggle uses the resolved PI_BTW_THINKING_KEYS shortcut (default Ctrl+T) advertised in the footer",
+    "re-apply the thread-owned transcript display and revision-cache seam: BtwTranscriptDisplay keeps the presenter/theme proxy across overlay close/reopen, BtwToolComponents rebuilds supported built-in tool components when the display-provider identity or presentationRevision changes, and the overlay caches lines by transcript version, width, and display revision",
     "adapt upstream tests asserting the upstream renderer's 'You  <text>' user-row badge format to plain-text assertions (the fork renderer has no You label)",
+    "adapt the upstream transcript-entry tests to the shared segmenting ingestion: a tool call ends the assistant segment, so a post-tool message_end is a separate thinking/assistant-text entry and pre-tool thinking is no longer streaming",
     "bump upstream tests asserting SessionManager.appendMessage call counts by +1 because the fork's boundary message is also seeded",
     "delete package-lock.json again if a future subtree pull resurrects it",
     "keep the Pi 1.x peer ranges and workspace catalog devDependencies instead of upstream SDK pins",
     "the upstream completion test fixture supplies the fork overlay's transcript-version and tool-component lookup callbacks before the status callback",
-    "'applies distinct theme treatment' must keep its user-row assertion color-mode agnostic (\\\\x1b[48;2; truecolor or \\\\x1b[49m default background): pi 1.1 themes leave headless runs on the default background, so a truecolor-only assertion fails without proving anything about the renderer"
+    "'applies distinct theme treatment' must keep its user-row assertion color-mode agnostic (\\\\x1b[48;2; truecolor or \\\\x1b[49m default background): pi 1.1 themes leave headless runs on the default background, so a truecolor-only assertion fails without proving anything about the renderer",
+    "re-apply the BTW display workspace seam: isLocalWorkspace reads a retained thread workspace mode that is set false when a remote child session is created (and never upgraded by a later local child while remote tool slots remain), reset to local only on thread reset/restore, not derived from live activeBtwSession presence",
+    "re-apply the README transcript-display compatibility section/link that points at docs/transcript-display.md so the fork-only matrix remains discoverable",
+    "保留 fork 独立发布版本、CHANGELOG 发布条目与仓库 versions.json 的一致性；不要用 upstream 版本替换 fork 版本。"
   ],
   "doNotReintroduce": [
     "Do not restore upstream repository.url as the fork publishing source; npm provenance must identify the actual build repository.",
-    "do not adopt upstream's overlay renderer (buildOverlayTranscript plus its per-entry helpers): rendering stays on pi-components renderTranscriptLines",
+    "do not adopt upstream's overlay renderer (buildOverlayTranscript plus its per-entry helpers): rendering stays on the pi-components TranscriptPresenter through BtwTranscriptDisplay",
     "do not adopt upstream's markdownTheme/managesMouseReporting/rebuildTranscriptLines additions; SGR mouse-reporting and ownsMouseReporting stay fork-only",
-    "keep the dead removeTranscriptTurn import removed, and keep 'skills' dropped from package.json files (the directory stays to avoid subtree delete conflicts)"
+    "do not restore the per-turn upsert-based assistant ingestion (applyAssistantMessageToTranscript): live events stay on the shared applyAgentSessionEvent path so a second assistant message after a tool call appends instead of overwriting the first",
+    "do not add @xzzpig/pi-tool-display as a runtime dependency or import it from BTW; probe the global pi-tool-display.api.v1 key and fall back to native rendering when it is missing, legacy, or unsupported",
+    "do not route raw terminal mouse coordinates to transcript components or restore an input-only overlay; keep the normalized overlay-local handleMouse mapping, the local thinking toggle, and the footer key hint",
+    "do not recreate the transcript display per overlay or cache lines by transcript version/width alone; keep the thread-owned display, provider-revision tool rebuild, and detach/attach lifecycle",
+    "keep the dead removeTranscriptTurn import removed, and keep 'skills' dropped from package.json files (the directory stays to avoid subtree delete conflicts)",
+    "do not derive display localWorkspace from activeBtwSession presence or upgrade it on a local child while remote tool slots remain; keep remote permission conservative until reset/restore",
+    "不要把子会话公开 renderer 解析链的基线改为空值、父 provider 或父工具定义；保留 () => childDefinition，使 next() 取得同一子会话注册定义，避免重新引入同名 renderer 被覆盖或包装失效。"
   ]
 }

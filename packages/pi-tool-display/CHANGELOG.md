@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-11-01
+
+### 修复与改进
+
+- 在现有 API v1 增加可选只读 getToolPresentation 与 presentationRevision，支持七种内置工具的展示快照，不共享执行能力。
+- 按安装实例绑定提供者，支持配置修订、reload/dispose 与只读消费端类型；增加本地预览和父执行元数据拒借能力，缺失元数据时使用实际结果文本回退。
+
 ## [0.1.2] - 2026-09-19
 
 ### Changed
