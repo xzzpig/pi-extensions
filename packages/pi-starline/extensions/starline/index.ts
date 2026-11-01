@@ -36,6 +36,7 @@ import {
 	markEditorFactory,
 } from "./editor-factory-marker";
 import { installFooter } from "./footer";
+import { installMcpPillAdapter } from "./fork-mcp-pill";
 import {
 	buildSessionDurationLabel,
 	compactionFailureNotice,
@@ -107,6 +108,8 @@ export default function (pi: ExtensionAPI) {
 	// Published before anything else so a bridge that registers in `session_start`
 	// finds it, whichever order the extensions were loaded in.
 	publishPillApi();
+	// Fork-only: pi-mcp-adapter's `mcp` status pill opens the adapter's own panel.
+	installMcpPillAdapter(pi);
 
 	const state: FooterState = createInitialState(emptyGitStatus());
 	// The git pill's bubble reads the same object the footer draws from, so a
