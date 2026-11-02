@@ -1,5 +1,13 @@
 # Fork release notes
 
+## 0.9.1 — panel interaction fixes
+
+- The same entrance toggles: pressing the `+N` pill again, clicking the same shortened pill, re-running `/starline statuses` or the settings row puts the panel away instead of stacking another one or warning about "an open dialog" — that dialog was the panel itself. Asking for a _different_ entry replaces it with one focused there.
+- A click outside the box dismisses the panel. The frame and the padding are claimed by the panel itself, and with `@xzzpig/pi-mouse-events` loaded the shared pointer stream closes it for clicks anywhere else on screen — the bar included, which Pi never delivers to an overlay. The press that dismisses cannot reopen it (that one echo is swallowed), so `+N` while open closes rather than closing and reopening. Clicks on the gap between entries keep the panel open.
+- When another dialog already owns the screen the entrances stay silent: no panel and no notice, for the mouse and the command alike.
+- Clicking an entry runs its action when it has one, exactly like Enter, and with pill-click semantics: `model` and `thinking` open their pickers rather than stepping to the next value (only the bare `/starline model` command steps). Read-only entries only take the selection.
+- Closing by Esc, by an action or by Pi tearing the overlay down now clears the panel's screen rectangle as well, so the next `+N` press opens it again instead of being mistaken for a click outside a panel that is already gone.
+
 ## 0.9.0 — status overflow and the status panel
 
 - The bar is still one row, but it no longer loses pills at the right edge. A pill's content is capped by display columns (`pill.overflow.maxContentWidth`, default 32; third-party statuses 28; `cwd`/`git` 24), shortened with `…` (`...` in ascii mode), and the pills that do not fit are replaced by one `+N` pill. Every valid entry is either drawn whole or counted in `+N`; the old single truncation is what made a status disappear without saying so.

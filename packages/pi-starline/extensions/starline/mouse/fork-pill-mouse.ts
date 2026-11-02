@@ -1,10 +1,15 @@
 import type { MouseEventsApi } from "@xzzpig/pi-mouse-events/api";
 import { installPillBubbleDismiss } from "./bubble-dismiss";
+import { installStatusPanelDismiss } from "./panel-dismiss";
 import { type PointerReceiver, publishPointerEvent } from "./pointer-events";
 
-/** Feed the upstream bubble observer from the shared, non-consuming mouse slot. */
+/**
+ * Feed the overlay observers (pill bubble, status panel) from the shared,
+ * non-consuming mouse slot.
+ */
 export function installSharedPillMouse(api: MouseEventsApi): () => void {
 	const stopDismiss = installPillBubbleDismiss();
+	const stopPanelDismiss = installStatusPanelDismiss();
 	const stopEvents = api.addMouseHandler(
 		({ event, tui }) => {
 			// SAFETY: the shared API supplies the live TuiAltScreen; the observer only reads terminal.rows.
@@ -15,5 +20,6 @@ export function installSharedPillMouse(api: MouseEventsApi): () => void {
 	return () => {
 		stopEvents();
 		stopDismiss();
+		stopPanelDismiss();
 	};
 }

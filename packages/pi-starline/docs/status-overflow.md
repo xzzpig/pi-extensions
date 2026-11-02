@@ -53,8 +53,21 @@ Every entrance hands over the same way: the `+N` pill, a shortened pill with no
 action, `/starline statuses` and the settings row all close Starline's own pill
 bubble first, then check whether another dialog is already on screen (through
 `@xzzpig/pi-mouse-events`' published API when it is installed). If one is, the
-panel refuses with a notice instead of stacking; closing our own bubble first is
-what keeps that check honest, since the bubble is an overlay too.
+entrance stays quiet — no panel, no notice — because the panel cannot be shown
+over it; closing our own bubble first is what keeps that check honest, since the
+bubble is an overlay too.
+
+The same entrance toggles: pressing `+N` again, or running `/starline statuses`
+while the panel is open, puts the panel away. Asking for a _different_ entry
+replaces the open panel with one focused there. A click anywhere outside the
+panel's rows — its frame, the space around it, the bar underneath — dismisses it,
+and that click is claimed so it cannot fall through and reopen what it closed.
+
+Clicking an entry runs it when it has an action, exactly like `Enter`: the
+pointer already selected it, so a click that did nothing would look broken. It
+runs the way a pill click does, so `model` and `thinking` open their pickers
+instead of stepping to the next value (the bare `/starline model` command still
+steps). Entries with no action only take the selection.
 
 ## Publication order and identity
 

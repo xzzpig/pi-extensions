@@ -4,11 +4,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { mergeConfig } from "../extensions/starline/config";
 import { installFooter } from "../extensions/starline/footer";
 import { OVERFLOW_SUMMARY_KEY } from "../extensions/starline/fork-pill-overflow";
+import { closeStatusPanel, isStatusPanelOpen } from "../extensions/starline/fork-status-panel";
 import {
 	clearStatusPanelModel,
 	readStatusPanelModel,
 } from "../extensions/starline/fork-status-view";
 import { emptyGitStatus } from "../extensions/starline/git";
+import { installStatusPanelDismiss } from "../extensions/starline/mouse/panel-dismiss";
+import { publishPointerEvent } from "../extensions/starline/mouse/pointer-events";
 import { registerExternalPillAction } from "../extensions/starline/pill-api";
 import { closePillBubble } from "../extensions/starline/pill-bubble";
 import { createInitialState } from "../extensions/starline/state";
@@ -23,6 +26,7 @@ const plain = (text: string) => stripVTControlCharacters(text);
 
 afterEach(() => {
 	closePillBubble();
+	closeStatusPanel();
 	clearStatusPanelModel();
 });
 
@@ -64,6 +68,16 @@ function makeFooter(options: {
 					factory: componentFactory,
 					options: overlayOptions as Record<string, unknown>,
 				});
+				// Mount it the way Pi does, so the panel's open-panel handle exists and
+				// a second press can be a toggle rather than another mount. Render once
+				// so it also records the rectangle the dismissal check reads.
+				const mounted = componentFactory(
+					{ requestRender: vi.fn() },
+					theme,
+					{ matches: () => false },
+					vi.fn(),
+				) as { render?(width: number): string[] } | undefined;
+				mounted?.render?.(80);
 				return Promise.resolve(undefined);
 			}),
 			notify: vi.fn(),
@@ -251,6 +265,88 @@ describe("opening the detail view", () => {
 		const rows = component.render(60).map(plain).join("\n");
 		expect(rows).toContain("状态");
 		expect(rows).toContain("未展示");
+	});
+
+	it("closes the panel when the summary pill is pressed again", () => {
+		const { footer, custom, renderRow } = makeFooter({ statuses: statuses(12) });
+		const width = 60;
+		const text = plain(renderRow(width).line);
+		const column = text.indexOf(/\+\d+/.exec(text)?.[0] ?? "");
+		const press = () => footer.handleMouse?.({ type: "press", x: column, y: 0, width, height: 1 });
+		press();
+		expect(custom).toHaveLength(1);
+		expect(isStatusPanelOpen()).toBe(true);
+		// The same pill again is a toggle, not a second panel and not a warning.
+		press();
+		expect(custom).toHaveLength(1);
+		expect(isStatusPanelOpen()).toBe(false);
+	});
+
+	it("dismisses on any bar press and does not let that press reopen it", () => {
+		const dispose = installStatusPanelDismiss();
+		try {
+			const { footer, custom, renderRow } = makeFooter({ statuses: statuses(12) });
+			const width = 60;
+			const text = plain(renderRow(width).line);
+			const summaryColumn = text.indexOf(/\+\d+/.exec(text)?.[0] ?? "");
+			// The renderer publishes every pointer report before Pi dispatches it.
+			const press = (x: number) => {
+				publishPointerEvent({ button: 0, x, y: 41 }, { terminal: { rows: 42 } });
+				footer.handleMouse?.({ type: "press", x, y: 0, width, height: 1 });
+			};
+
+			press(summaryColumn);
+			expect(isStatusPanelOpen()).toBe(true);
+
+			// Padding on the bar is outside the panel: it goes away and the footer's
+			// own press does not bring it back.
+			press(0);
+			expect(isStatusPanelOpen()).toBe(false);
+
+			// The pill itself is outside too: one press closes, and the guard keeps the
+			// footer's toggle from reopening it in the same gesture.
+			press(summaryColumn);
+			expect(isStatusPanelOpen()).toBe(true);
+			press(summaryColumn);
+			expect(isStatusPanelOpen()).toBe(false);
+			expect(custom).toHaveLength(2);
+		} finally {
+			dispose();
+		}
+	});
+
+	it("opens again after Esc closed the panel", () => {
+		const dispose = installStatusPanelDismiss();
+		try {
+			const { footer, custom, renderRow } = makeFooter({ statuses: statuses(12) });
+			const width = 60;
+			const text = plain(renderRow(width).line);
+			const summaryColumn = text.indexOf(/\+\d+/.exec(text)?.[0] ?? "");
+			const press = () => {
+				publishPointerEvent({ button: 0, x: summaryColumn, y: 41 }, { terminal: { rows: 42 } });
+				footer.handleMouse?.({ type: "press", x: summaryColumn, y: 0, width, height: 1 });
+			};
+
+			press();
+			expect(isStatusPanelOpen()).toBe(true);
+
+			// Esc closes through the component, which must also clear the rectangle and
+			// the guard state the observer reads.
+			const panel = custom[0];
+			if (!panel) throw new Error("panel was not mounted");
+			const component = (
+				panel.factory as (...args: unknown[]) => { handleInput(data: string): void }
+			)({ requestRender: vi.fn() }, theme, { matches: () => false }, vi.fn());
+			component.handleInput("\x1b");
+			expect(isStatusPanelOpen()).toBe(false);
+
+			// The next +N press is a new gesture: it must open, not be swallowed.
+			press();
+			expect(isStatusPanelOpen()).toBe(true);
+			expect(custom).toHaveLength(2);
+		} finally {
+			dispose();
+		}
 	});
 
 	it("does not stack on an external overlay when the +N pill is pressed", () => {

@@ -267,27 +267,64 @@ describe("panel component", () => {
 		expect(component.scrollOffset()).toBeLessThanOrEqual(4);
 	});
 
-	it("runs an action only when explicitly requested", () => {
+	it("runs an entry's action on Enter, on a click, and only once", () => {
 		const current = model([
 			item("extensionStatus:mcp", "MCP: 8 servers", { actionable: true }),
 			item("extensionStatus:readonly", "plain"),
 		]);
-		const { component, onAction, onClose } = panel(current);
-		component.render(60);
-		// Merely reading, scrolling and selecting never runs anything.
-		component.handleMouse?.({ type: "move", x: 2, y: 2 });
-		component.handleMouse?.({ type: "click", x: 2, y: 2 });
-		expect(onAction).not.toHaveBeenCalled();
-		component.handleInput("\r");
-		expect(onAction).toHaveBeenCalledTimes(1);
-		expect(onAction.mock.calls[0]?.[0]).toMatchObject({ key: "extensionStatus:mcp" });
-		expect(onClose).toHaveBeenCalledTimes(1);
+		// A click on the entry runs it, exactly like Enter: hovering selected it,
+		// so a click that did nothing would look broken.
+		const clicked = panel(current);
+		const clickedRows = clicked.component.render(60);
+		const mcpRow = clickedRows.findIndex((row) => plain(row).includes("▌ mcp"));
+		expect(clicked.component.handleMouse?.({ type: "click", x: 3, y: mcpRow })).toEqual({
+			handled: true,
+		});
+		expect(clicked.onAction).toHaveBeenCalledTimes(1);
+		expect(clicked.onAction.mock.calls[0]?.[0]).toMatchObject({ key: "extensionStatus:mcp" });
+		expect(clicked.onClose).toHaveBeenCalledTimes(1);
 
-		// The read-only entry has no action to run.
-		const readOnly = panel(model([item("plain", "plain")]));
-		readOnly.component.render(60);
-		readOnly.component.handleInput("\r");
+		// Enter is still the keyboard path.
+		const keyed = panel(current);
+		keyed.component.render(60);
+		keyed.component.handleInput("\r");
+		expect(keyed.onAction).toHaveBeenCalledTimes(1);
+		expect(keyed.onClose).toHaveBeenCalledTimes(1);
+
+		// Reading and scrolling never run anything.
+		const reading = panel(current);
+		reading.component.render(60);
+		reading.component.handleMouse?.({ type: "move", x: 2, y: 2 });
+		expect(reading.onAction).not.toHaveBeenCalled();
+
+		// A read-only entry has nothing to run: the click only selects it.
+		const readOnly = panel(model([item("plain", "plain"), item("other", "other")]));
+		const readOnlyRows = readOnly.component.render(60);
+		const otherRow = readOnlyRows.findIndex((row) => plain(row).includes("other"));
+		expect(readOnly.component.handleMouse?.({ type: "click", x: 3, y: otherRow })).toEqual({
+			handled: true,
+		});
+		expect(readOnly.component.selectedKey()).toBe("other");
 		expect(readOnly.onAction).not.toHaveBeenCalled();
+		expect(readOnly.onClose).not.toHaveBeenCalled();
+	});
+
+	it("dismisses the panel when the click lands outside its rows", () => {
+		const current = model([item("extensionStatus:a", "alpha")]);
+		const { component, onClose } = panel(current, { width: 40, height: 20 });
+		const rows = component.render(40);
+		// The top rule, the bottom rule and anything below the box.
+		for (const y of [0, rows.length - 1, 41]) {
+			onClose.mockClear();
+			expect(component.handleMouse?.({ type: "click", x: 3, y })).toEqual({ handled: true });
+			expect(onClose).toHaveBeenCalledTimes(1);
+		}
+		// A click on the gap between entries belongs to no entry, so it neither
+		// runs anything nor dismisses the panel.
+		const gapRow = rows.findIndex((row, index) => index > 0 && /^│\s*│$/.test(plain(row)));
+		onClose.mockClear();
+		expect(component.handleMouse?.({ type: "click", x: 3, y: gapRow })).toEqual({ handled: true });
+		expect(onClose).not.toHaveBeenCalled();
 	});
 
 	it("runs an action from its own row on a click", () => {

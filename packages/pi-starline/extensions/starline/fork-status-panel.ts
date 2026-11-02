@@ -247,6 +247,8 @@ export type StatusPanelComponent = {
 	scrollOffset(): number;
 	/** Rows of content the last render drew; paging uses this, not a constant. */
 	viewportHeight(): number;
+	/** Where the box is on screen, for outside-click dismissal. */
+	rect(): { left: number; top: number; width: number; height: number } | undefined;
 	othersExpanded(): boolean;
 };
 
@@ -578,11 +580,22 @@ export function createStatusPanelComponent(
 			const view = lastRender;
 			if (!view) return undefined;
 			const row = event.y - view.contentTop;
-			if (row < 0 || row >= view.contentHeight) return undefined;
+			const inside = row >= 0 && row < view.contentHeight;
+			if (event.type === "move" && !inside) return undefined;
 			// The click map is the last drawn frame, so a resize cannot leave it
 			// pointing at rows the user is not looking at.
-			const line = view.lines[view.scrollTop + row];
-			if (!line) return undefined;
+			const line = inside ? view.lines[view.scrollTop + row] : undefined;
+			if (!line) {
+				// A click that lands on the frame, the padding, or anywhere outside the
+				// box is "outside": dismiss, the way the bubble dismisses. Claiming it
+				// also keeps it from falling through to the bar underneath, which would
+				// reopen the panel it is closing.
+				if (event.type === "click") {
+					options.onClose();
+					return { handled: true };
+				}
+				return undefined;
+			}
 			if (event.type === "move") {
 				// A row that belongs to nothing (the gap between entries) is not a
 				// target: claim nothing, so the pointer goes back to an arrow.
@@ -600,17 +613,46 @@ export function createStatusPanelComponent(
 				return { handled: true };
 			}
 			if (line.itemKey) select(line.itemKey);
-			if (line.action && line.itemKey) {
+			// A click on an entry runs it when it has an action, exactly like Enter:
+			// the pointer selected it, and asking the user to hit the small meta row
+			// as well would make the first click look broken. Read-only entries have
+			// nothing to run, so the click only selects them.
+			if (line.itemKey) {
 				const item = panelItemOrder(model(), showOthers).find(
 					(candidate) => candidate.key === line.itemKey,
 				);
-				run(item);
+				if (item?.actionable) {
+					// The action runs with the panel's own `command` semantics (that is what
+					// Enter does too), so a click and the keyboard behave identically.
+					run(item);
+					return { handled: true };
+				}
 			}
 			return { handled: true };
 		},
 		selectedKey: () => selectedKey,
 		scrollOffset: () => scrollTop,
 		viewportHeight: () => lastRender?.contentHeight ?? preferredHeight,
+		rect: () => {
+			const view = lastRender;
+			if (!view) return undefined;
+			// Pi centres an overlay inside the terminal margins (one cell each side):
+			// `left = margin + floor((available - layoutWidth) / 2)`, the same formula
+			// `TuiAltScreen.resolveOverlayLayout` uses. The drawn width comes from the
+			// frame, because the renderer may hand the component fewer columns than
+			// the layout reserved.
+			const columns = process.stdout.columns ?? 80;
+			const rows = process.stdout.rows ?? 24;
+			const available = { width: Math.max(1, columns - 2), height: Math.max(1, rows - 2) };
+			const layoutWidth = Math.min(preferredWidth, available.width);
+			const layoutHeight = Math.min(preferredHeight, available.height);
+			return {
+				left: 1 + Math.floor(Math.max(0, available.width - layoutWidth) / 2),
+				top: 1 + Math.floor(Math.max(0, available.height - layoutHeight) / 2),
+				width: view.outer,
+				height: view.contentHeight + (view.bordered ? 2 : 0),
+			};
+		},
 		othersExpanded: () => showOthers,
 	};
 }
@@ -646,7 +688,28 @@ function hintLabel(showOthers: boolean, innerWidth: number): string {
 	return "";
 }
 
-let active: { close: () => void } | undefined;
+let active: { close: () => void; focusKey?: string } | undefined;
+/**
+ * Where the open panel is on screen, for outside-click dismissal: Pi centres the
+ * overlay (its layout formula is mirrored below), and the drawn width is the one
+ * the component actually rendered.
+ */
+let activeRect: { left: number; top: number; width: number; height: number } | undefined;
+
+/**
+ * Set when a press dismissed the panel. That same press also reaches the bar's
+ * pill, whose handler would otherwise reopen the panel it just put away; the
+ * next open request is that echo, so it is swallowed once. Any other close
+ * clears the flag, which keeps it a one-gesture guard rather than a time window.
+ */
+let reopenBlocked = false;
+
+/** The open panel's screen rectangle, or undefined when none is up. */
+export function activeStatusPanelRect():
+	| { left: number; top: number; width: number; height: number }
+	| undefined {
+	return activeRect;
+}
 
 export function isStatusPanelOpen(): boolean {
 	return active !== undefined;
@@ -656,7 +719,28 @@ export function isStatusPanelOpen(): boolean {
 export function closeStatusPanel(): void {
 	const current = active;
 	active = undefined;
+	activeRect = undefined;
+	reopenBlocked = false;
 	current?.close();
+}
+
+/**
+ * Put the panel away because the user pressed outside it.
+ *
+ * Arms a short guard so the same press, once the footer sees it, cannot reopen
+ * the panel: the click that dismisses is not a request to open.
+ */
+export function dismissStatusPanel(): void {
+	closeStatusPanel();
+	reopenBlocked = true;
+}
+
+/**
+ * Note that a press arrived while no panel was open: whatever dismissed the last
+ * one has been dealt with, so the guard must not swallow this new gesture.
+ */
+export function resetStatusPanelDismissGuard(): void {
+	reopenBlocked = false;
 }
 
 export type ShowStatusPanelOptions = {
@@ -690,10 +774,18 @@ export function showStatusPanel(ctx: ExtensionContext, options: ShowStatusPanelO
 			const close = () => {
 				if (!mounted) return;
 				mounted = false;
-				if (active?.close === close) active = undefined;
+				// Every way out goes through here — Esc, an action, the bar, Pi tearing
+				// the overlay down — so the screen rectangle must go with it. A stale
+				// rectangle would make the outside-press observer dismiss a panel that is
+				// no longer open, and that dismissal's guard would swallow the next real
+				// open (the +N press that follows an Esc).
+				if (active?.close === close) {
+					active = undefined;
+					activeRect = undefined;
+				}
 				done(undefined);
 			};
-			active = { close };
+			active = { close, ...(options.focusKey ? { focusKey: options.focusKey } : {}) };
 			const component = createStatusPanelComponent({
 				readModel,
 				theme,
@@ -704,7 +796,11 @@ export function showStatusPanel(ctx: ExtensionContext, options: ShowStatusPanelO
 				onClose: close,
 			});
 			return {
-				render: (renderWidth: number) => component.render(renderWidth),
+				render: (renderWidth: number) => {
+					const lines = component.render(renderWidth);
+					if (active?.close === close) activeRect = component.rect();
+					return lines;
+				},
 				invalidate: () => component.invalidate(),
 				handleInput: (data: string) => {
 					component.handleInput(data);
@@ -717,7 +813,10 @@ export function showStatusPanel(ctx: ExtensionContext, options: ShowStatusPanelO
 				},
 				dispose: () => {
 					mounted = false;
-					if (active?.close === close) active = undefined;
+					if (active?.close === close) {
+						active = undefined;
+						activeRect = undefined;
+					}
 				},
 			};
 		},
@@ -728,7 +827,10 @@ export function showStatusPanel(ctx: ExtensionContext, options: ShowStatusPanelO
 	);
 
 	void mount.catch(() => {
-		if (active?.close) active = undefined;
+		if (active?.close) {
+			active = undefined;
+			activeRect = undefined;
+		}
 	});
 }
 
@@ -775,13 +877,28 @@ function externalOverlayVisible(): boolean | undefined {
  * where there is no pill on screen to point a bubble at.
  */
 export function openStatusPanel(ctx: ExtensionContext, focusKey?: string): void {
-	closePillBubble();
-	if (externalOverlayVisible() === true) {
-		if (ctx.hasUI) {
-			ctx.ui.notify("Close the open dialog first, then open the status list.", "warning");
-		}
+	// The press that just dismissed the panel also reaches the pill underneath it.
+	// That is the same gesture, not a request to open: swallow it once.
+	if (reopenBlocked) {
+		reopenBlocked = false;
 		return;
 	}
+	closePillBubble();
+	// The same entrance closes it, like a menu-bar item: pressing `+N` again, or
+	// running the command while the panel is up, puts it away instead of
+	// stacking another one or complaining about "an open dialog" — that dialog
+	// is this panel. A *different* entry is a new request, so it replaces the
+	// open panel with one focused there; only the same target toggles.
+	if (isStatusPanelOpen()) {
+		if (focusKey === undefined || focusKey === active?.focusKey) {
+			closeStatusPanel();
+			return;
+		}
+	}
+	// Some other dialog owns the screen. Mouse and command entrances both stay
+	// quiet: the panel cannot be shown over it, and a warning would only explain
+	// something the user did not ask for.
+	if (externalOverlayVisible() === true) return;
 	showStatusPanel(ctx, {
 		...(focusKey ? { focusKey } : {}),
 		onAction: (item) => {
@@ -791,7 +908,11 @@ export function openStatusPanel(ctx: ExtensionContext, focusKey?: string): void 
 			} catch {
 				return;
 			}
-			if (action) runPillAction(action, ctx, undefined, "command");
+			// A panel entry is a click target, so the action runs the way a pill click
+			// does: the model and thinking entries open their pickers instead of
+			// stepping to the next value the way the bare `/starline model` command
+			// does. No anchor is passed — an overflowed entry has no pill on screen.
+			if (action) runPillAction(action, ctx, undefined, "click");
 		},
 	});
 }
