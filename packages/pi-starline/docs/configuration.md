@@ -336,6 +336,15 @@ A status with no number keeps its text under `value`: blanking `ready` would lea
 an icon that says nothing. The format changes only what the bar draws, not what
 the publishing extension sent (its own `setStatus` text stays as it was).
 
+### Overflow, when the bar runs out of room
+
+The bar is one row. When the configured segments do not fit, `pill.overflow`
+decides which pills stay (per-key content caps, retention priority and pinning)
+and replaces the rest with one `+N` pill; `/starline statuses` always opens the
+full text of every status. See
+[Status overflow and the status panel](./status-overflow.md) for the keys, the
+defaults and what `enabled: false` restores.
+
 ## Segment display options
 
 ```json

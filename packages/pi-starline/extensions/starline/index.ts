@@ -25,6 +25,7 @@ import {
 	saveIconsModePatch,
 	saveMousePatch,
 	savePathDisplayPatch,
+	savePillOverflowPatch,
 	savePillSegmentsPatch,
 	saveUiFeaturesPatch,
 	type UiFeaturesConfig,
@@ -37,6 +38,7 @@ import {
 } from "./editor-factory-marker";
 import { installFooter } from "./footer";
 import { installMcpPillAdapter } from "./fork-mcp-pill";
+import { configureStatusView } from "./fork-status-view";
 import {
 	buildSessionDurationLabel,
 	compactionFailureNotice,
@@ -558,6 +560,12 @@ export default function (pi: ExtensionAPI) {
 		installSubagentFleet();
 		installModelSwitcher();
 		setPillBubbleAnimation(currentConfig.pill.bubbleAnimation ? BUBBLE_ANIMATION_MS : 0);
+		// `/starline statuses` must work with the status line off, where no footer
+		// has published a model to read.
+		configureStatusView({
+			getConfig: getCurrentConfig,
+			getStatuses: () => getActiveExtensionStatuses(),
+		});
 		applyConfiguredUi(ctx);
 		installMouseFeatures(ctx);
 		refresh();
@@ -591,6 +599,7 @@ export default function (pi: ExtensionAPI) {
 			stopProjectRefresh();
 			requestFooterRender = undefined;
 			getActiveExtensionStatuses = () => new Map();
+			configureStatusView(undefined);
 			lastTuiCtx = undefined;
 			if (isTuiContext(ctx)) {
 				ctx.ui.setFooter(undefined);
@@ -666,6 +675,9 @@ export default function (pi: ExtensionAPI) {
 		},
 		setPillSegments(segments: readonly string[]) {
 			currentConfig = savePillSegmentsPatch(segments);
+		},
+		setPillOverflow(patch) {
+			currentConfig = savePillOverflowPatch(patch);
 		},
 		getActiveExtensionStatuses() {
 			return getActiveExtensionStatuses();

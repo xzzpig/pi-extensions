@@ -29,6 +29,13 @@ import {
 	type UiFeaturesConfig,
 } from "./config";
 import { sanitizeExtensionStatusText } from "./extension-status";
+import type { PillOverflowConfig } from "./fork-overflow-config";
+import {
+	applyOverflowSetting,
+	handleStatusPanelCommand,
+	overflowLayoutItems,
+	overflowStatusItems,
+} from "./fork-overflow-settings";
 import { isIconMode } from "./icons";
 import { pillActionFor, runPillAction } from "./pill-actions";
 import { getPillAnchor } from "./pill-anchors";
@@ -78,6 +85,8 @@ type SettingsCommandDeps = {
 	setPathDisplay: (patch: Partial<PathDisplayConfig>) => void;
 	setGitBranch: (patch: Partial<GitBranchConfig>) => void;
 	setPillSegments: (segments: readonly string[]) => void;
+	/** Optional so fixture callers that never open this tab keep working. */
+	setPillOverflow?: (patch: Partial<PillOverflowConfig>) => void;
 	getActiveExtensionStatuses: () => ReadonlyMap<string, string>;
 	setExtensionStatusPlacement: (key: string, placement: ExtensionStatusPlacement) => void;
 	setExtensionStatusColorMode: (key: string, colorMode: ExtensionStatusColorMode) => void;
@@ -273,7 +282,7 @@ function featurePatch(id: FeatureSettingId, value: FeatureState): Partial<UiFeat
 }
 
 function usageText(): string {
-	return "Usage: /starline [editor|statusline|copy-friendly] [enable|disable|toggle], or /starline queue";
+	return "Usage: /starline [editor|statusline|copy-friendly] [enable|disable|toggle], /starline statuses, or /starline queue";
 }
 
 function featureNotification(
@@ -467,6 +476,7 @@ function buildItems(
 				currentValue: config.icons.mode,
 				values: iconModeValues,
 			},
+			...overflowLayoutItems(config),
 		];
 	}
 
@@ -527,6 +537,7 @@ function buildItems(
 				currentValue: getExtensionStatusColorMode(config, key),
 				values: extensionStatusColorModeValues,
 			},
+			...overflowStatusItems({ config, key, statusSettingPrefix: thirdPartyStatusSettingPrefix }),
 		];
 	});
 }
@@ -626,6 +637,9 @@ export function registerStarlineSettingsCommand(pi: ExtensionAPI, deps: Settings
 				runPillAction(action, ctx, getPillAnchor(actionKey), "command");
 				return;
 			}
+
+			// The status panel's keyboard entrance; see fork-overflow-settings.ts.
+			if (handleStatusPanelCommand(args, ctx)) return;
 
 			if (args.trim()) {
 				if (ctx.hasUI) ctx.ui.notify(usageText(), "warning");
@@ -785,6 +799,21 @@ export function registerStarlineSettingsCommand(pi: ExtensionAPI, deps: Settings
 									deps.requestRender();
 									ctx.ui.notify(`Click to toggle expandable: ${newValue}`, "info");
 									tui.requestRender();
+									return;
+								}
+
+								if (
+									applyOverflowSetting({
+										id,
+										newValue,
+										deps,
+										ctx,
+										statusSettingPrefix: thirdPartyStatusSettingPrefix,
+										updateValue: (value) => settingsList.updateValue(id, value),
+										requestRender: () => tui.requestRender(),
+										closeSettings: () => done(undefined),
+									})
+								) {
 									return;
 								}
 

@@ -16,6 +16,7 @@ import {
 import { basename, dirname, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { type EditorCursorStyle, parseEditorCursorStyle } from "./editor-cursor";
+import { applyOverflowPatch, type PillOverflowConfig } from "./fork-overflow-config";
 import {
 	ICON_GLYPH_KEYS,
 	type IconGlyphs,
@@ -1063,6 +1064,28 @@ export function savePillSegmentsPatch(
 	return mutateConfig(path, (record) => {
 		const existing = isRecord(record.pill) ? { ...(record.pill as Record<string, unknown>) } : {};
 		record.pill = { ...existing, segments: [...segments] };
+	});
+}
+
+/**
+ * Save a `pill.overflow` patch.
+ *
+ * Only the keys the caller names are touched, and unknown keys under the block
+ * stay where they are, so a settings change does not drop a hand-written limit
+ * for a status that is not loaded right now.
+ */
+export function savePillOverflowPatch(
+	patch: Partial<PillOverflowConfig>,
+	path = configPath,
+): PolishedTuiConfig {
+	return mutateConfig(path, (record) => {
+		const existingPill = isRecord(record.pill)
+			? { ...(record.pill as Record<string, unknown>) }
+			: {};
+		const existingOverflow = isRecord(existingPill.overflow)
+			? (existingPill.overflow as Record<string, unknown>)
+			: {};
+		record.pill = { ...existingPill, overflow: applyOverflowPatch(existingOverflow, patch) };
 	});
 }
 

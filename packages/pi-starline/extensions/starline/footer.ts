@@ -1,10 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import {
-	type TuiMouseEvent,
-	type TuiMouseEventResult,
-	truncateToWidth,
-	visibleWidth,
-} from "@earendil-works/pi-tui";
+import { type TuiMouseEvent, type TuiMouseEventResult, visibleWidth } from "@earendil-works/pi-tui";
 import {
 	type ColorSpec,
 	getExtensionStatusColor,
@@ -13,6 +8,9 @@ import {
 } from "./config";
 import { setActiveContextSnapshot } from "./context-live";
 import { collectExtensionStatusSegments, sanitizeExtensionStatusText } from "./extension-status";
+import { renderStatusBar, type StatusBarHit, type StatusBarMemo } from "./fork-status-bar";
+import { closeStatusPanel, openStatusPanel } from "./fork-status-panel";
+import { publishStatusPanelModel } from "./fork-status-view";
 import {
 	buildContextDisplayLabel,
 	buildSessionDurationLabel,
@@ -27,10 +25,11 @@ import { renderGitSegments } from "./git-segments";
 import { resolveRuntimeSymbol } from "./icons";
 import type { LiveContextOverride } from "./live-context";
 import { requestPointerShape } from "./mouse/pointer-shape";
-import { collectPillInputs, type PillSpan, renderPillBar } from "./pill";
+import { collectPillInputs, type PillSpan } from "./pill";
 import { pillActionFor, queuedSegmentText, runPillAction } from "./pill-actions";
 import { clearPillAnchors, setPillAnchors } from "./pill-anchors";
 import { closePillBubble, isPillBubbleOpenFor, type PillAnchor } from "./pill-bubble";
+import { PILL_SEGMENT_VARIABLES } from "./pill-config";
 import type { FooterState } from "./state";
 import { renderStyleForSource } from "./style";
 import { subagentsSegmentText } from "./subagent-fleet";
@@ -122,13 +121,20 @@ export function installFooter(
 		 * invalidation, nothing to keep in sync with what the footer drew.
 		 */
 		const pillSpansByWidth = new Map<number, PillSpan[]>();
+		/**
+		 * What each measured row decided: which entry a span belongs to and whether
+		 * the row summarised anything. Read only by `handleMouse`, like the spans.
+		 */
+		const overflowHitByWidth = new Map<number, StatusBarHit>();
+		/** Layout solution of the last render, kept across frames by width digest. */
+		const overflowMemo: StatusBarMemo = {};
 
 		const rememberPillSpans = (
 			width: number,
 			spans: readonly PillSpan[],
 			columnOffset: number,
 			lineWidth: number,
-		) => {
+		): PillSpan[] => {
 			const visibleSpans: PillSpan[] = [];
 			const anchors = new Map<string, PillAnchor>();
 			for (const span of spans) {
@@ -161,6 +167,7 @@ export function installFooter(
 				const oldest = pillSpansByWidth.keys().next();
 				if (!oldest.done) pillSpansByWidth.delete(oldest.value);
 			}
+			return visibleSpans;
 		};
 
 		/**
@@ -179,6 +186,8 @@ export function installFooter(
 				unsubscribeBranch();
 				hooks.setRequestRender(undefined);
 				hooks.setExtensionStatusesGetter?.(undefined);
+				publishStatusPanelModel(undefined);
+				closeStatusPanel();
 			},
 			invalidate() {},
 			/**
@@ -203,8 +212,22 @@ export function installFooter(
 				if (!spans) return undefined;
 
 				const hit = spans.find((span) => event.x >= span.startColumn && event.x < span.endColumn);
-				const action = hit === undefined ? undefined : pillActionFor(hit.key);
-				if (!hit || !action) {
+				const overflowHit = hit === undefined ? undefined : overflowHitByWidth.get(width);
+				const entry = hit === undefined ? undefined : overflowHit?.entryByKey.get(hit.key);
+				// The summary heading and the detail fallback are Starline's own targets;
+				// they never resolve through the public action registry. Identity is the
+				// frame's own columns: a status named like the summary still keeps its
+				// action.
+				const isSummary =
+					hit !== undefined &&
+					overflowHit?.summarySpan !== undefined &&
+					hit.startColumn === overflowHit.summarySpan.startColumn &&
+					hit.endColumn === overflowHit.summarySpan.endColumn;
+				const action = hit === undefined || isSummary ? undefined : pillActionFor(hit.key);
+				// A shortened pill that has no action of its own: its full text is the
+				// only useful thing it can offer.
+				const detail = !isSummary && !action && entry?.truncated ? entry : undefined;
+				if (!hit || (!action && !isSummary && !detail)) {
 					// Nothing here to click: padding at either end, a gap, or a pill that is
 					// only a read-out. For an open bubble this row is then just "outside" like
 					// the rest of the screen, and the outside-click dismissal cannot decide
@@ -233,6 +256,19 @@ export function installFooter(
 					foreground: hit.fg,
 				});
 
+				/** Starline's own targets: the summary, or a shortened read-only pill. */
+				const openDetail = (): boolean => {
+					if (isSummary) {
+						openStatusPanel(ctx, overflowHit?.summary?.firstHiddenKey);
+						return true;
+					}
+					if (detail) {
+						openStatusPanel(ctx, detail.key);
+						return true;
+					}
+					return false;
+				};
+
 				/**
 				 * The action runs on the press, not on Pi's synthesized click.
 				 *
@@ -251,7 +287,10 @@ export function installFooter(
 						pressActed = { key: hit.key, x: event.x };
 						return { handled: true };
 					}
-					runPillAction(action, ctx, anchor());
+					// A detail target has no bubble to toggle; it opens the panel, which owns
+					// its own dismissal.
+					closePillBubble();
+					if (!openDetail() && action) runPillAction(action, ctx, anchor());
 					pressActed = { key: hit.key, x: event.x };
 					return { handled: true };
 				}
@@ -277,7 +316,7 @@ export function installFooter(
 						closePillBubble();
 						return { handled: true };
 					}
-					runPillAction(action, ctx, anchor());
+					if (!openDetail() && action) runPillAction(action, ctx, anchor());
 					return { handled: true };
 				}
 
@@ -509,8 +548,9 @@ export function installFooter(
 					}
 				};
 
-				const spans: PillSpan[] = [];
-				const bar = renderPillBar(
+				// Kept at its original indentation: this is the pre-overflow input list,
+				// used unchanged when `pill.overflow.enabled` is false.
+				const legacyPillInputs = () =>
 					collectPillInputs(
 						config.pill.segments,
 						[...extensionStatuses.left, ...extensionStatuses.middle, ...extensionStatuses.right],
@@ -518,27 +558,58 @@ export function installFooter(
 						pillSpecFor,
 						(key) => getExtensionStatusColor(config, key) ?? config.colors.extensionStatus,
 						(key) => getExtensionStatusIcon(config, key),
-					),
+					);
+				const rendered = renderStatusBar({
+					config,
 					theme,
 					colorSource,
-					config.pill,
+					statuses: footerData.getExtensionStatuses(),
 					width,
-					{
-						ascii: iconMode === "ascii",
-						onSpan: (span) => spans.push(span),
-					},
-				);
+					iconMode,
+					// `renderVariable` speaks the footer's variable names, not segment names.
+					renderBuiltin: (segment) => renderVariable(PILL_SEGMENT_VARIABLES[segment] ?? segment),
+					builtinSpec: pillSpecFor,
+					statusSpec: (key) =>
+						getExtensionStatusColor(config, key) ?? config.colors.extensionStatus,
+					memo: overflowMemo,
+					legacyInputs: legacyPillInputs,
+				});
+				publishStatusPanelModel(rendered.model);
 				// Nothing has content: draw nothing rather than a bare pair of caps.
-				if (!bar) {
+				if (!rendered.line) {
 					pillSpansByWidth.delete(width);
+					overflowHitByWidth.delete(width);
 					clearPillAnchors();
 					return [""];
 				}
 				// Flush left, in the editor's first column: the bar's round cap sits
 				// under the editor's rail rather than a column to its right.
-				const line = truncateToWidth(bar, width, "");
-				rememberPillSpans(width, spans, 0, visibleWidth(line));
-				return [line];
+				const visibleSpans = rememberPillSpans(
+					width,
+					rendered.spans,
+					0,
+					visibleWidth(rendered.line),
+				);
+				// The summary is appended after every drawn pill, so the last visible
+				// span is its own — column identity survives clamping and cannot be
+				// spoofed by a status that uses the same key.
+				const summarySpan = rendered.hit.summary ? visibleSpans.at(-1) : undefined;
+				overflowHitByWidth.set(width, {
+					...rendered.hit,
+					...(summarySpan
+						? {
+								summarySpan: {
+									startColumn: summarySpan.startColumn,
+									endColumn: summarySpan.endColumn,
+								},
+							}
+						: {}),
+				});
+				if (overflowHitByWidth.size > PILL_HIT_MAP_LIMIT) {
+					const oldest = overflowHitByWidth.keys().next();
+					if (!oldest.done) overflowHitByWidth.delete(oldest.value);
+				}
+				return [rendered.line];
 			},
 		};
 

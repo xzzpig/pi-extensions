@@ -8,6 +8,12 @@
  * bar out from `pill.segments`.
  */
 
+import {
+	DEFAULT_PILL_OVERFLOW,
+	normalizePillOverflow,
+	type PillOverflowConfig,
+} from "./fork-overflow-config";
+
 export type FooterStyle = "text" | "pill";
 
 /** Glyph drawn between two pills. */
@@ -28,6 +34,8 @@ export type PillConfig = {
 	caps: PillCaps;
 	/** Unfold a pill's bubble upward from the pill instead of showing it at once. */
 	bubbleAnimation: boolean;
+	/** What happens when the configured segments do not fit one row. */
+	overflow: PillOverflowConfig;
 };
 
 export const EXTENSION_STATUS_SEGMENT = "extensionStatus";
@@ -73,6 +81,7 @@ export const DEFAULT_PILL_CONFIG: PillConfig = {
 	bold: true,
 	caps: "round",
 	bubbleAnimation: true,
+	overflow: DEFAULT_PILL_OVERFLOW,
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -166,7 +175,9 @@ function parseSegments(value: unknown): string[] {
 }
 
 export function normalizePillConfig(value: unknown): PillConfig {
-	if (!isRecord(value)) return { ...DEFAULT_PILL_CONFIG };
+	if (!isRecord(value)) {
+		return { ...DEFAULT_PILL_CONFIG, overflow: normalizePillOverflow(undefined) };
+	}
 	return {
 		segments: parseSegments(value.segments),
 		separator: parseSeparator(value.separator),
@@ -176,5 +187,6 @@ export function normalizePillConfig(value: unknown): PillConfig {
 			typeof value.bubbleAnimation === "boolean"
 				? value.bubbleAnimation
 				: DEFAULT_PILL_CONFIG.bubbleAnimation,
+		overflow: normalizePillOverflow(value.overflow),
 	};
 }
