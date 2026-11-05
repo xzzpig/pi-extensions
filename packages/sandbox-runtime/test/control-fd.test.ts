@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, beforeEach } from 'vitest'
-import { spawn, type ChildProcess } from 'child_process'
+import { type ChildProcess } from 'child_process'
+import { spawn, waitForControlReady, waitForChild, disposeChild } from './fork-control-fd-process'
 import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
@@ -17,19 +18,12 @@ describe('--control-fd', () => {
   })
 
   afterEach(async () => {
-    if (child && !child.killed) {
-      child.kill('SIGKILL')
+    try {
+      await disposeChild(child)
+    } finally {
+      child = null
+      fs.rmSync(tmpDir, { recursive: true, force: true })
     }
-    fs.rmSync(tmpDir, { recursive: true, force: true })
-    // Bun's node:child_process shim implements extra stdio 'pipe' entries
-    // (fd 3 here) via a unix socket, and tears that socket down
-    // asynchronously after the child exits. The tests above all hit the
-    // 2000ms safety timeout and SIGKILL their child, so on a fast runner
-    // the next test's spawn can race that teardown and Bun's
-    // #createStdioObject throws `Failed to connect` (connect ENOENT) —
-    // observed on linux/arm64. Yield briefly so the prior child's stdio
-    // cleanup settles before the next spawn.
-    await new Promise(r => setTimeout(r, 50))
   })
 
   it('should update config when receiving valid JSON on control fd', async () => {
@@ -61,8 +55,8 @@ describe('--control-fd', () => {
       stderr.push(data.toString())
     })
 
-    // Wait a bit for srt to initialize, then send a config update
-    await new Promise(r => setTimeout(r, 100))
+    // Wait for srt control-fd readiness, then send a config update
+    await waitForControlReady(child)
 
     const controlFd = child.stdio[3] as Writable
     const configUpdate = JSON.stringify({
@@ -72,11 +66,7 @@ describe('--control-fd', () => {
     controlFd.write(configUpdate + '\n')
 
     // Wait for process to complete
-    await new Promise<void>((resolve, reject) => {
-      child!.on('exit', () => resolve())
-      child!.on('error', reject)
-      setTimeout(() => resolve(), 2000) // Timeout safety
-    })
+    expect(await waitForChild(child)).toBe(0)
 
     // Check that config was updated - look for debug output
     const allStderr = stderr.join('')
@@ -104,18 +94,14 @@ describe('--control-fd', () => {
       stdout.push(data.toString())
     })
 
-    // Wait a bit for srt to initialize, then send invalid JSON
-    await new Promise(r => setTimeout(r, 100))
+    // Wait for srt control-fd readiness, then send invalid JSON
+    await waitForControlReady(child)
 
     const controlFd = child.stdio[3] as Writable
     controlFd.write('{ invalid json }\n')
 
     // Wait for process to complete
-    await new Promise<void>((resolve, reject) => {
-      child!.on('exit', () => resolve())
-      child!.on('error', reject)
-      setTimeout(() => resolve(), 2000) // Timeout safety
-    })
+    expect(await waitForChild(child)).toBe(0)
 
     // Process should still complete successfully
     const allStdout = stdout.join('')
@@ -138,8 +124,8 @@ describe('--control-fd', () => {
       stdout.push(data.toString())
     })
 
-    // Wait a bit for srt to initialize, then send empty lines
-    await new Promise(r => setTimeout(r, 100))
+    // Wait for srt control-fd readiness, then send empty lines
+    await waitForControlReady(child)
 
     const controlFd = child.stdio[3] as Writable
     controlFd.write('\n')
@@ -147,11 +133,7 @@ describe('--control-fd', () => {
     controlFd.write('\t\n')
 
     // Wait for process to complete
-    await new Promise<void>((resolve, reject) => {
-      child!.on('exit', () => resolve())
-      child!.on('error', reject)
-      setTimeout(() => resolve(), 2000) // Timeout safety
-    })
+    expect(await waitForChild(child)).toBe(0)
 
     // Process should still complete successfully
     const allStdout = stdout.join('')
@@ -176,11 +158,7 @@ describe('--control-fd', () => {
     })
 
     // Wait for process to complete
-    const exitCode = await new Promise<number | null>((resolve, reject) => {
-      child!.on('exit', code => resolve(code))
-      child!.on('error', reject)
-      setTimeout(() => resolve(null), 2000) // Timeout safety
-    })
+    const exitCode = await waitForChild(child)
 
     expect(exitCode).toBe(0)
     const allStdout = stdout.join('')
@@ -207,16 +185,14 @@ describe('--control-fd', () => {
       stdout.push(data.toString())
     })
 
+    await waitForControlReady(child)
+
     // Write to stdin (fd 0)
     const stdin = child.stdin as Writable
     stdin.write('hello from stdin\n')
 
     // Wait for process to complete
-    await new Promise<void>((resolve, reject) => {
-      child!.on('exit', () => resolve())
-      child!.on('error', reject)
-      setTimeout(() => resolve(), 2000) // Timeout safety
-    })
+    expect(await waitForChild(child)).toBe(0)
 
     const allStdout = stdout.join('')
     expect(allStdout).toContain('GOT: hello from stdin')
