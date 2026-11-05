@@ -1,4 +1,4 @@
-import { Type } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 export const REPORT_AUDITOR_PROGRESS_TOOL_NAME = "report_auditor_progress";

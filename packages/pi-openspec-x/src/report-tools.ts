@@ -22,7 +22,17 @@
  * call returns. There is no progress bar here — a tool may be called any
  * number of times; projection of the calls is a later concern.
  */
-import { Type } from "@earendil-works/pi-ai";
+import {
+  arr,
+  bool,
+  lit,
+  num,
+  obj,
+  opt,
+  str,
+  union,
+  type Static,
+} from "@earendil-works/pi-schema";
 import { defineTool } from "@earendil-works/pi-coding-agent";
 
 export const REPORT_GAP_ANALYSIS_TOOL_NAME = "report_gap_analysis";
@@ -33,20 +43,20 @@ export const REPORT_WORK_TOOL_NAME = "report_work";
  * One located finding. `location` is free-form ("src/cli.ts:42",
  * "tasks.md#Step 3") because artifact sections do not always map to lines.
  */
-const findingItem = Type.Object(
+const findingItem = obj(
   {
-    description: Type.String({
+    description: str({
       description:
         "The finding itself, specific enough to act on without re-deriving it.",
     }),
-    location: Type.Optional(
-      Type.String({
+    location: opt(
+      str({
         description:
           "Where the finding applies: file path, and line or section when known.",
       }),
     ),
   },
-  { additionalProperties: false },
+  { open: false },
 );
 
 /**
@@ -54,158 +64,150 @@ const findingItem = Type.Object(
  * 百分比，或等效字段). Optional: a report that carries no progress simply leaves
  * the parent's board unchanged.
  */
-const progressField = Type.Optional(
-  Type.Object(
+const progressField = opt(
+  obj(
     {
-      phase: Type.String({
+      phase: str({
         description:
           "The stage this update belongs to, e.g. reading, analyzing, editing, verifying.",
       }),
-      percentage: Type.Number({
+      percentage: num({
         description: "How far through this stage the agent is, 0 to 100.",
         minimum: 0,
         maximum: 100,
       }),
-      label: Type.Optional(
-        Type.String({
+      label: opt(
+        str({
           description:
             "Short human-readable detail for the board; defaults to the phase name.",
         }),
       ),
     },
-    { additionalProperties: false },
+    { open: false },
   ),
 );
 
-const gapAnalysisParams = Type.Object(
+const gapAnalysisParams = obj(
   {
     progress: progressField,
-    intentType: Type.String({
+    intentType: str({
       description:
         "Classified user intent, e.g. refactor, build-from-scratch, mid-sized, collaborative, architecture, or research.",
     }),
-    confidence: Type.Number({
+    confidence: num({
       description: "Confidence in the intent classification, from 0 to 1.",
       minimum: 0,
       maximum: 1,
     }),
-    contradictions: Type.Array(findingItem, {
+    contradictions: arr(findingItem, {
       description: "Requirements or statements that conflict with each other.",
     }),
-    missingConstraints: Type.Array(findingItem, {
+    missingConstraints: arr(findingItem, {
       description:
         "Constraints the request implies but never states (platform, compatibility, performance, security, ...).",
     }),
-    scopeRisks: Type.Array(findingItem, {
+    scopeRisks: arr(findingItem, {
       description:
         "Scope-inflation or gold-plating risks, including premature abstraction and over-validation.",
     }),
-    unvalidatedAssumptions: Type.Array(findingItem, {
+    unvalidatedAssumptions: arr(findingItem, {
       description:
         "Assumptions the plan relies on without evidence (environment, behavior, availability).",
     }),
-    missingAcceptanceCriteria: Type.Array(findingItem, {
+    missingAcceptanceCriteria: arr(findingItem, {
       description:
         "Outcomes that lack an agent-executable acceptance criterion (no 'user manually tests' criteria).",
     }),
-    summary: Type.String({
+    summary: str({
       description: "One-paragraph synthesis of the analysis.",
     }),
   },
-  { additionalProperties: false },
+  { open: false },
 );
 
-const planReviewParams = Type.Object(
+const planReviewParams = obj(
   {
     progress: progressField,
-    verdict: Type.Union(
-      [Type.Literal("OKAY"), Type.Literal("ITERATE"), Type.Literal("REJECT")],
-      {
-        description:
-          "OKAY: executable as written. ITERATE: workable after targeted, non-blocking revisions. REJECT: not executable as written.",
-      },
-    ),
-    issues: Type.Array(
-      Type.Object(
+    verdict: union([lit("OKAY"), lit("ITERATE"), lit("REJECT")], {
+      description:
+        "OKAY: executable as written. ITERATE: workable after targeted, non-blocking revisions. REJECT: not executable as written.",
+    }),
+    issues: arr(
+      obj(
         {
-          severity: Type.Union(
-            [
-              Type.Literal("blocker"),
-              Type.Literal("major"),
-              Type.Literal("minor"),
-            ],
-            { description: "How badly the issue threatens execution." },
-          ),
-          file: Type.Optional(
-            Type.String({
+          severity: union([lit("blocker"), lit("major"), lit("minor")], {
+            description: "How badly the issue threatens execution.",
+          }),
+          file: opt(
+            str({
               description: "Plan file the issue applies to, when located.",
             }),
           ),
-          line: Type.Optional(
-            Type.Number({
+          line: opt(
+            num({
               description: "Line number in that file, when known.",
             }),
           ),
-          description: Type.String({
+          description: str({
             description:
               "The issue, concrete and actionable (what to change, not a taste judgment).",
           }),
-          blocking: Type.Boolean({
+          blocking: bool({
             description:
               "True only for REJECT blockers; ITERATE/OKAY issues are never blocking.",
           }),
         },
-        { additionalProperties: false },
+        { open: false },
       ),
       { description: "Found issues; may be empty for a clean OKAY." },
     ),
-    summary: Type.String({
+    summary: str({
       description:
         "One-paragraph verdict rationale; for REJECT it must reference which earlier blockers (if any) are now resolved.",
     }),
   },
-  { additionalProperties: false },
+  { open: false },
 );
 
-const workReportParams = Type.Object(
+const workReportParams = obj(
   {
     progress: progressField,
-    taskId: Type.String({
+    taskId: str({
       description: "The dispatched task identifier (e.g. the tasks.md item).",
     }),
-    changedFiles: Type.Array(Type.String(), {
+    changedFiles: arr(str(), {
       description:
         "Every file this task created or modified, with paths relative to the project root.",
     }),
-    claims: Type.String({
+    claims: str({
       description:
         "What was done and what the result is. Only claims backed by evidence below.",
     }),
-    selfVerification: Type.Object(
+    selfVerification: obj(
       {
-        command: Type.Optional(
-          Type.String({
+        command: opt(
+          str({
             description:
               "The verification command actually run (e.g. build/test).",
           }),
         ),
-        result: Type.Optional(
-          Type.String({
+        result: opt(
+          str({
             description:
               "The real command output summary (exit status, failing/passing counts). Never invented.",
           }),
         ),
       },
-      { additionalProperties: false },
+      { open: false },
     ),
-    verificationPassed: Type.Optional(
-      Type.Boolean({
+    verificationPassed: opt(
+      bool({
         description:
           "Structured verdict: whether the verification actually passed. When provided the gate trusts it and does not parse the result text; when absent the result text is scanned heuristically.",
       }),
     ),
   },
-  { additionalProperties: false },
+  { open: false },
 );
 
 /** Count of non-empty finding lists, for the one-line confirmation text. */
@@ -238,7 +240,7 @@ export const reportGapAnalysisTool = defineTool({
   ],
   parameters: gapAnalysisParams,
   executionMode: "sequential",
-  async execute(_toolCallId, params) {
+  async execute(_toolCallId, params: Static<typeof gapAnalysisParams>) {
     return {
       content: [
         {
@@ -264,7 +266,7 @@ export const reportPlanReviewTool = defineTool({
   ],
   parameters: planReviewParams,
   executionMode: "sequential",
-  async execute(_toolCallId, params) {
+  async execute(_toolCallId, params: Static<typeof planReviewParams>) {
     const blocking = params.issues.filter((issue) => issue.blocking).length;
     return {
       content: [
@@ -291,7 +293,7 @@ export const reportWorkTool = defineTool({
   ],
   parameters: workReportParams,
   executionMode: "sequential",
-  async execute(_toolCallId, params) {
+  async execute(_toolCallId, params: Static<typeof workReportParams>) {
     return {
       content: [
         {

@@ -1,3 +1,4 @@
+import { lit, obj, str, union } from "@earendil-works/pi-schema";
 import type {
   AgentContext,
   AgentEvent,
@@ -16,7 +17,6 @@ import {
   convertToLlm,
 } from "@earendil-works/pi-coding-agent";
 import {
-  Type,
   createAssistantMessageEventStream,
   type Api,
   type AssistantMessage,
@@ -247,16 +247,15 @@ export function parseVerdict(value: unknown): AuditVerdict | null {
   };
 }
 
-const verdictSchema = Type.Object({
-  verdict: Type.Union([
-    Type.Literal("pass"),
-    Type.Literal("warn"),
-    Type.Literal("fail"),
-  ]),
-  message: Type.String({
-    description: "一句话说明判断依据；pass 时写“无问题”",
-  }),
-});
+const verdictSchema = obj(
+  {
+    verdict: union([lit("pass"), lit("warn"), lit("fail")]),
+    message: str({
+      description: "一句话说明判断依据；pass 时写“无问题”",
+    }),
+  },
+  { open: true },
+);
 
 /** Build the mandatory `audit_verdict` tool, capturing the last payload. */
 export function createAuditVerdictTool(

@@ -131,7 +131,11 @@ async function startOpsxSession(
   sessionId: string,
 ) {
   const sandbox = createMockPi();
-  registerSandboxExtension(sandbox.pi);
+  // The sandbox package retains its older SDK baseline; the mock implements
+  // the shared runtime surface used by both extension versions.
+  registerSandboxExtension(
+    sandbox.pi as unknown as Parameters<typeof registerSandboxExtension>[0],
+  );
   // The entry point probes pi-sandbox through a lazy dynamic import, so the
   // profile registration completes only once the awaited factory resolves.
   await piOpenspecX(createMockPi().pi);

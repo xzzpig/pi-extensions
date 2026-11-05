@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2 — 2026-11-05
+
+- Require Pi 1.5.0 or newer and build tool parameter schemas with
+  `@earendil-works/pi-schema` instead of TypeBox. Preserve existing required
+  fields, bounds, and open/closed-object validation semantics.
+
 ## 0.2.1
 
 - Support Pi 1.2+ custom-message wakeups in child report handlers. A wakeup

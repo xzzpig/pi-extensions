@@ -1,3 +1,11 @@
+import {
+  lit,
+  obj,
+  opt,
+  str,
+  union,
+  type Static,
+} from "@earendil-works/pi-schema";
 import type {
   AgentContext,
   AgentMessage,
@@ -9,7 +17,7 @@ import {
   convertToLlm,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { Type, type Model } from "@earendil-works/pi-ai";
+import { type Model } from "@earendil-works/pi-ai";
 import {
   resolveAuditModel,
   type AuditEventStream,
@@ -110,23 +118,16 @@ export function parseRuleDraft(
   return { ok: true, rule: result.rule };
 }
 
-const submitSchema = Type.Object({
-  changeType: Type.Union([
-    Type.Literal("add"),
-    Type.Literal("update"),
-    Type.Literal("remove"),
-  ]),
-  ruleJson: Type.Optional(
-    Type.String({ description: "add/update 时规则对象的 JSON 字符串" }),
-  ),
-  name: Type.Optional(Type.String({ description: "remove 时的规则名" })),
-});
+const submitSchema = obj(
+  {
+    changeType: union([lit("add"), lit("update"), lit("remove")]),
+    ruleJson: opt(str({ description: "add/update 时规则对象的 JSON 字符串" })),
+    name: opt(str({ description: "remove 时的规则名" })),
+  },
+  { open: true },
+);
 
-type SubmitParams = {
-  changeType: "add" | "update" | "remove";
-  ruleJson?: string;
-  name?: string;
-};
+type SubmitParams = Static<typeof submitSchema>;
 
 export interface ConfigureDialogViewState {
   id: string;

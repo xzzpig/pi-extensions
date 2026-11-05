@@ -2,6 +2,10 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.12.1] — 2026-11-05 (fork release)
+
+- Import `Type` directly from the existing host-provided `typebox` peer for Pi 1.5 npm SDK compatibility; keep TypeBox schemas and the Pi 1.4 minimum unchanged.
+
 ## [0.12.0] — 2026-11-01 (fork release)
 
 ### Changed

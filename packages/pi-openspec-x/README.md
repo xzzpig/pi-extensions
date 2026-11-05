@@ -2,6 +2,9 @@
 
 把 [OpenSpec](https://github.com/Fission-AI/OpenSpec) 的规范驱动流程接进 pi coding agent：从**当前安装的 openspec CLI** 现场提取官方 skill，并提供 `/opsx:plan`（深度计划 + 缺口分析 / 计划审查门）与 `/opsx:implement`（代理实现 / 主会话直实现 + 最终整体审查门）两条增强流程。
 
+Requires **Pi >=1.5.0 <2**. Tool schemas use `@earendil-works/pi-schema`,
+which is declared as a Pi peer dependency.
+
 ```bash
 pi install npm:@xzzpig/pi-openspec-x
 ```

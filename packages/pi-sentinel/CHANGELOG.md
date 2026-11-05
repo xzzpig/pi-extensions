@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2 — 2026-11-05
+
+- Require Pi 1.5.0 or newer and build tool parameter schemas with
+  `@earendil-works/pi-schema` instead of TypeBox. Preserve existing required
+  fields, bounds, and open/closed-object validation semantics.
+
 ## 0.1.1 — 2026-09-30
 
 - New `event` trigger (the sixth): a rule subscribes a plugin event-bus channel

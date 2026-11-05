@@ -20,6 +20,9 @@ to inject a finding, and it cannot recurse into itself.
 
 ## Install
 
+Requires **Pi >=1.5.0 <2**. Tool schemas use `@earendil-works/pi-schema`,
+which is declared as a Pi peer dependency.
+
 ```bash
 pi install npm:@xzzpig/pi-sentinel
 ```

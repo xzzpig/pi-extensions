@@ -17,7 +17,16 @@
  * reads the recorded approval from disk, so approval survives a restart and a
  * fresh session cannot bypass the gate.
  */
-import { Type } from "@earendil-works/pi-ai";
+import {
+  arr,
+  lit,
+  num,
+  obj,
+  opt,
+  str,
+  union,
+  type Static,
+} from "@earendil-works/pi-schema";
 import {
   defineTool,
   type ExtensionAPI,
@@ -43,61 +52,57 @@ import {
 export const OPSX_PLAN_GAP_ANALYSIS_TOOL_NAME = "opsx_plan_gap_analysis";
 export const OPSX_PLAN_VERDICT_TOOL_NAME = "opsx_plan_verdict";
 
-const usageSchema = Type.Optional(
-  Type.Object(
+const usageSchema = opt(
+  obj(
     {
-      input: Type.Number(),
-      output: Type.Number(),
-      cacheRead: Type.Number(),
-      cacheWrite: Type.Number(),
-      turns: Type.Number(),
+      input: num(),
+      output: num(),
+      cacheRead: num(),
+      cacheWrite: num(),
+      turns: num(),
     },
-    { additionalProperties: false },
+    { open: false },
   ),
 );
 
-const gapAnalysisParams = Type.Object(
+const gapAnalysisParams = obj(
   {
-    findings: Type.Array(
-      Type.String({
+    findings: arr(
+      str({
         description: "One concrete gap, specific enough to act on.",
       }),
       { description: "Gap-analysis findings; may be empty." },
     ),
-    summary: Type.Optional(Type.String()),
-    changeId: Type.Optional(
-      Type.String({
+    summary: opt(str()),
+    changeId: opt(
+      str({
         description:
           "OpenSpec change id; defaults to this session's active plan flow.",
       }),
     ),
   },
-  { additionalProperties: false },
+  { open: false },
 );
 
-const planReviewParams = Type.Object(
+const planReviewParams = obj(
   {
-    verdict: Type.Union([
-      Type.Literal("OKAY"),
-      Type.Literal("ITERATE"),
-      Type.Literal("REJECT"),
-    ]),
-    blockers: Type.Optional(
-      Type.Array(Type.String(), {
+    verdict: union([lit("OKAY"), lit("ITERATE"), lit("REJECT")]),
+    blockers: opt(
+      arr(str(), {
         description:
           "Blocking issues; at most three, each new relative to earlier rounds.",
       }),
     ),
-    summary: Type.Optional(Type.String()),
+    summary: opt(str()),
     usage: usageSchema,
-    changeId: Type.Optional(
-      Type.String({
+    changeId: opt(
+      str({
         description:
           "OpenSpec change id; defaults to this session's active plan flow.",
       }),
     ),
   },
-  { additionalProperties: false },
+  { open: false },
 );
 
 /**
@@ -149,7 +154,13 @@ export function registerPlanGateTools(pi: ExtensionAPI): void {
       ],
       parameters: gapAnalysisParams,
       executionMode: "sequential",
-      async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      async execute(
+        _toolCallId,
+        params: Static<typeof gapAnalysisParams>,
+        _signal,
+        _onUpdate,
+        ctx,
+      ) {
         const resolved = requireChangeId(ctx, params.changeId);
         if ("error" in resolved) {
           return toolText(resolved.error);
@@ -181,7 +192,13 @@ export function registerPlanGateTools(pi: ExtensionAPI): void {
       ],
       parameters: planReviewParams,
       executionMode: "sequential",
-      async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      async execute(
+        _toolCallId,
+        params: Static<typeof planReviewParams>,
+        _signal,
+        _onUpdate,
+        ctx,
+      ) {
         const resolved = requireChangeId(ctx, params.changeId);
         if ("error" in resolved) {
           return toolText(resolved.error);
