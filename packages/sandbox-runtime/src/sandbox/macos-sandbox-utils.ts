@@ -10,6 +10,7 @@ import {
   decodeSandboxedCommand,
   containsGlobChars,
   globToRegex,
+  isWithinPath,
   DANGEROUS_FILES,
   getDangerousDirectories,
 } from './sandbox-utils.js'
@@ -298,7 +299,7 @@ function generateReadRules(
   for (const denyPath of config.denyOnly || []) {
     if (containsGlobChars(denyPath)) continue
     const normalized = normalizePathForSandbox(denyPath)
-    if (allowedSubpaths.some(a => normalized.startsWith(a + '/'))) {
+    if (allowedSubpaths.some(a => isWithinPath(a, normalized))) {
       rules.push(
         `(deny file-read*`,
         `  (subpath ${escapePath(normalized)})`,
