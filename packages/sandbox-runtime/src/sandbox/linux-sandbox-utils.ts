@@ -15,6 +15,7 @@ import {
   normalizePathForSandbox,
   normalizeCaseForComparison,
   isSymlinkOutsideBoundary,
+  isWithinPath,
   encodeSandboxedCommand,
   DANGEROUS_FILES,
   getDangerousDirectories,
@@ -116,9 +117,8 @@ function findSymlinkInPath(
       const stats = fs.lstatSync(nextPath)
       if (stats.isSymbolicLink()) {
         // Check if this symlink is within an allowed write path
-        const isWithinAllowedPath = allowedWritePaths.some(
-          allowedPath =>
-            nextPath.startsWith(allowedPath + '/') || nextPath === allowedPath,
+        const isWithinAllowedPath = allowedWritePaths.some(allowedPath =>
+          isWithinPath(allowedPath, nextPath),
         )
         if (isWithinAllowedPath) {
           return nextPath
@@ -1140,9 +1140,8 @@ async function generateFilesystemArgs(
         // If not, the path is already read-only from --ro-bind / /.
         const ancestorIsWithinAllowedPath = allowedWritePaths.some(
           allowedPath =>
-            ancestorPath.startsWith(allowedPath + '/') ||
-            ancestorPath === allowedPath ||
-            normalizedPath.startsWith(allowedPath + '/'),
+            isWithinPath(allowedPath, ancestorPath) ||
+            isWithinPath(allowedPath, normalizedPath),
         )
 
         if (ancestorIsWithinAllowedPath) {
@@ -1182,10 +1181,8 @@ async function generateFilesystemArgs(
 
       // Only add deny binding if this path is within an allowed write path
       // Otherwise it's already read-only from the initial --ro-bind / /
-      const isWithinAllowedPath = allowedWritePaths.some(
-        allowedPath =>
-          normalizedPath.startsWith(allowedPath + '/') ||
-          normalizedPath === allowedPath,
+      const isWithinAllowedPath = allowedWritePaths.some(allowedPath =>
+        isWithinPath(allowedPath, normalizedPath),
       )
 
       if (isWithinAllowedPath) {
