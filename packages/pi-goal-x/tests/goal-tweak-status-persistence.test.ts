@@ -1,3 +1,4 @@
+import { tweakFixtureAnswer } from "./fork-tweak-draft-fixture.ts";
 /**
  * End-to-end regression coverage for /goal-tweak status persistence
  * (specs/2026-08-08-tweak-status-persistence, R1 / success criterion 3):
@@ -39,11 +40,12 @@ function createHarness(cwd: string): Harness {
 	let activeTools = ["read", "bash", "edit", "write"];
 	let dialogResolve: ((result: any) => void) | null = null;
 	let hasDialogPending = false;
+	const entries: unknown[] = [];
 	const pi = {
 		registerTool: (def: any) => { tools.set(def.name, def); },
 		registerCommand: (name: string, def: any) => { commands.set(name, def); },
 		on: (event: string, handler: Function) => { handlers.set(event, handler); },
-		appendEntry: () => {},
+		appendEntry: (customType: string, data: unknown) => { entries.push({ customType, data }); },
 		registerMessageRenderer: () => {},
 		sendUserMessage: () => {},
 		sendMessage: () => {},
@@ -80,7 +82,7 @@ function createHarness(cwd: string): Harness {
 		ctx,
 		commands,
 		tools,
-		dialogResult: (result: unknown) => { hasDialogPending = false; dialogResolve?.(result); },
+		dialogResult: (result: unknown) => { hasDialogPending = false; dialogResolve?.(tweakFixtureAnswer(result, entries)); },
 		hasDialog: () => hasDialogPending,
 		sessionStart: async () => { await handlers.get("session_start")?.({ reason: "start" }, ctx); },
 	};

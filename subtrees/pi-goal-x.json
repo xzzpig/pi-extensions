@@ -183,6 +183,7 @@
     "在 goal-runtime.ts 最终发送路径保留同步 veto 调用点：位于原有 idle/pending readiness 检查后、authorize/claim 前；veto 不分配额度、checkpoint 序号或消息，放行后复核目标身份与宿主 readiness，busy 时仍按原 50ms 间隔重试。goal-state.ts 将该 hook 接到 fork-only goal-auto-continue-gate.ts，以当前 sessionId/goalId 发出事件；协议实现与行为测试留在 fork-only 文件。",
     "Keep the fork-only docs/auto-continuation-gate.md and docs/unfocused-sessions.md in the published package by retaining their explicit entries in package.json's files list.",
     "在 goal-events.ts 的 currentGoalContextParts 与 goal-state.ts 的 focus 变更/会话载入路径上删除上游重新引入的未聚焦模型提醒：请求侧 [PI GOAL UNFOCUSED] 分支与 pi-goal-steering-event 发送都不得恢复；保留其 stale-checkpoint 分支、focus entry 写入与 UI 更新。旧键 hideUnfocusedPrompt 继续解析/分层/保存但不进入设置菜单与设置摘要。",
+    "目标调整差异审核：保留 goal-drafting.ts 的 withTweakReview 执行包装、TweakReview 候选/确认/summary/mutate 接缝、初步待校验展示及 renderTweakReview 结果接缝；tweak 业务字段构造已抽到 fork-only goal-tweak-projection.ts，后续上游修改恢复/预算/任务合并规则时需同步对齐。goal-drafting 与 goal-tweak-status-persistence 测试保留 fork-tweak-draft-fixture 的旧问卷夹具到新调整决策映射及初步展示断言调整；package.json files 保留 docs/goal-tweak-diff.md。新测试按清单重新生成 tests/.test-manifest.json。",
     "Keep Type imported directly from host-provided typebox in goal-core-tools.ts, goal-drafting.ts, goal-oracle.ts and goal-task-tools.ts for Pi 1.5 npm SDK type compatibility; retain the fork-only goal-auditor-progress.ts direct typebox import. Do not migrate goal-x schemas to pi-schema."
   ],
   "doNotReintroduce": [

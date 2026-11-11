@@ -1,3 +1,4 @@
+import { tweakFixtureAnswer } from "./fork-tweak-draft-fixture.ts";
 /**
  * Handler-level guided-drafting coverage (follow-up Stage 5, TECH §6):
  * confirmation decisions (confirm / continue / cancel), atomic creation with
@@ -98,7 +99,7 @@ function createHarness(cwd: string, opts: { hasUI?: boolean } = {}): Harness {
 		activeTools: () => [...activeTools],
 		toolHistory: () => toolHistory.map((t) => [...t]),
 		draftActive: () => coreRef?.goalDraftActive === true,
-		dialogResult: (result: unknown) => { hasDialogPending = false; dialogResolve?.(result); },
+		dialogResult: (result: unknown) => { hasDialogPending = false; dialogResolve?.(tweakFixtureAnswer(result, entries)); },
 		hasDialog: () => hasDialogPending,
 		selectResult: (result: string | undefined) => { selectAnswer = result; },
 		sessionStart: async () => { await handlers.get("session_start")?.({ reason: "start" }, ctx); },
@@ -267,9 +268,7 @@ test("renderCall for a tweak without explicit tasks shows the retained current l
 		// task set that will be persisted.
 		const component = proposal.renderCall(proposalParams("Tightened objective", { tasks: undefined }), theme, {});
 		const rendered = (component as { render(w: number): string[] }).render(120).join("\n");
-		assert.ok(rendered.includes("Current task list (retained unchanged):"), "retained list header shown in the scrollback presentation");
-		assert.ok(rendered.includes("[ ] keep-1: Retained task"), "retained task line shown");
-		assert.ok(rendered.includes("[ ] keep-2: Another task"), "second retained task line shown");
+		assert.match(rendered, /pending authoritative validation/, "initial render must not pretend to be the authoritative review");
 		assert.ok(!rendered.includes("Tasks derived from the objective"), "no derived phantom for a tweak");
 		assert.ok(!rendered.includes("Tasks proposed for confirmation:"), "no explicit-tasks label without an explicit list");
 
