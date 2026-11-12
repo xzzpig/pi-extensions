@@ -101,6 +101,19 @@ export function removeTrailingGlobSuffix(pathPattern: string): string {
 }
 
 /**
+ * True when `target` is `parent` itself or lives underneath it.
+ */
+export function isWithinPath(parent: string, target: string): boolean {
+  const relativePath = path.relative(parent, target)
+  if (relativePath === '') return true
+  return (
+    relativePath !== '..' &&
+    !relativePath.startsWith('..' + path.sep) &&
+    !path.isAbsolute(relativePath)
+  )
+}
+
+/**
  * Check if a symlink resolution crosses expected path boundaries.
  *
  * When resolving symlinks for sandbox path normalization, we need to ensure
