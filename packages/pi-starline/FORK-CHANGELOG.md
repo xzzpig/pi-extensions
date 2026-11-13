@@ -1,5 +1,19 @@
 # Fork release notes
 
+## 0.10.0 — Upstream v0.13.0 sync
+
+- **Synced upstream v0.9.0 → v0.13.0** (upstream minor releases → fork minor bump). Upstream rewrote the mouse subsystem, split the pill bar into a governed overflow path, and moved user-message styling toward pi-tidy. The fork keeps its `@xzzpig/pi-mouse-events` consumer architecture and its own user-message renderer, so this sync is an API integration rather than a straight merge.
+- Adopted upstream's pull-request pill (`gitPr`, coloured per state via `gitPrOpen`/`gitPrDraft`/`gitPrMerged`/`gitPrClosed`/`gitPrCount`) and the `git.issues` switch that adds the repository's open-issue count to the pull bubble.
+- Adopted `extensionStatuses.commands`: a third-party status can point its pill at an existing slash command (`procs` → `/ps`) without writing a bridge. Entries that are not `/name` or `/name args`, that carry the `extensionStatus:` prefix, that shadow a built-in segment, or that point at `/starline` are dropped and reported once per process. A bridge registration still wins over a declared command.
+- Adopted the external editor-hint API (`docs/editor-hints.md`, `editor-hint-api.ts`): other extensions can publish a hint that rides the editor's top rule, ahead of Starline's own hints so the rule's truncation cannot eat it.
+- Adopted Pi's bash-mode border painter, so the editor frame says which mode the draft is in instead of always drawing Starline's configured border.
+- Adopted the context-pill estimate: before the first turn the pill reads `~N%/window` from the static prompt-and-schemas floor instead of `0%`, and drops the `~` once a turn lands. The bubble reports the same number.
+- Adopted upstream's governed overflow row (`onOverflow`/`PillOverflow`) alongside the fork's existing `pill.overflow` governance. With `pill.overflow.enabled: false` the legacy path still renders one unbounded row and hard-truncates it, because upstream's `renderPillBar` now drops whole pills and stands a `+N` counter in their place when given a real width — that is the governance path, not the legacy one.
+- Adopted the upstream additions to the settings surface (`previousPrompt`/`latest` pill rows), the `gitPr` colour keys, and the `statusCommandName` helper.
+- Kept every fork seam: the `pi-mouse-events` consumer mouse subsystem, `clickToToggleExpandable` and `transcriptCleanCopy` (upstream moved clean copying to pi-tidy; this fork still renders and configures it), the user-message renderer and its settings, `--no-optional-locks` on every git probe, the reverse-video pill legibility pair, the `pill.overflow` governance and status panel, the MCP pill adapter, and the pi-zentui legacy symbol aliases.
+- Upstream v0.13.0 deleted `mouse/transcript-copy.ts` and `test/mouse/toolbox-frame.ts`, which fork-only modules still import; both are restored at their pre-sync bytes because the fork's clean-copy and component-tree code owns them.
+- Validation: package typecheck clean and 1623/1623 tests passing. `pnpm run audit:fork-divergence` reports undeclared=0, stale=0 for this package.
+
 ## 0.9.1 — panel interaction fixes
 
 - The same entrance toggles: pressing the `+N` pill again, clicking the same shortened pill, re-running `/starline statuses` or the settings row puts the panel away instead of stacking another one or warning about "an open dialog" — that dialog was the panel itself. Asking for a _different_ entry replaces it with one focused there.
