@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  render-benchmark:
+    name: Render benchmark
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # The table is posted back as one comment that each run overwrites. A
+      # token from a fork is read-only, so the step below skips instead.
+      pull-requests: write
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Checkout base
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .local/benchmark-base
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      - name: Install shared dependencies
+        run: |
+          pnpm install --frozen-lockfile
+          ln -s "$GITHUB_WORKSPACE/node_modules" .local/benchmark-base/node_modules
+
+      - name: Compare transcript rendering
+        env:
+          BENCH_OUTPUT: ${{ runner.temp }}/render-benchmark.json
+          BENCH_COMMENT: ${{ runner.temp }}/render-benchmark.md
+        run: pnpm bench .local/benchmark-base
+
+      - name: Comment the table on the PR
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          BODY: ${{ runner.temp }}/render-benchmark.md
+        run: |
+          set -euo pipefail
+          existing=$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+            --jq '.[] | select(.body | startswith("<!-- pi-tidy-bench -->")) | .id' | head -n1)
+          if [ -n "$existing" ]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" -F body=@"$BODY" >/dev/null
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@"$BODY" >/dev/null
+          fi
+
+      - name: Upload timing samples
+        uses: actions/upload-artifact@v4
+        with:
+          name: render-benchmark
+          path: ${{ runner.temp }}/render-benchmark.json
+          if-no-files-found: error
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          # Node >= 22.18 runs the .ts test files directly (type stripping).
+          node-version: 24
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Test
+        run: pnpm test
+
+      # The published tarball is the extension source itself — make sure the
+      # files pi loads are actually in it.
+      - name: Verify package contents
+        run: |
+          pnpm pack --pack-destination /tmp >/dev/null
+          TARBALL=$(ls /tmp/pi-tidy-*.tgz | head -1)
+          echo "packed: $TARBALL"
+          tar -tzf "$TARBALL" | sort
+          # Every module index.ts imports, directly or not — a missing one only
+          # shows up as an import error when pi loads the extension.
+          for f in $(find src -name '*.ts' | sed 's|^|package/|') package/README.md package/LICENSE; do
+            tar -tzf "$TARBALL" | grep -qx "$f" || { echo "::error::$f missing from tarball"; exit 1; }
+          done
