@@ -10,8 +10,6 @@ import {
   decodeSandboxedCommand,
   containsGlobChars,
   globToRegex,
-  DANGEROUS_FILES,
-  getDangerousDirectories,
 } from './sandbox-utils.js'
 
 import type {
@@ -48,31 +46,10 @@ export interface MacOSSandboxParams {
   ignoreViolations?: IgnoreViolationsConfig | undefined
   allowPty?: boolean
   allowBrowserProcess?: boolean
+  allowProcessSignals?: boolean
   enableWeakerNetworkIsolation?: boolean
   allowAppleEvents?: boolean
   binShell?: string
-}
-
-/**
- * Get mandatory deny patterns as glob patterns (no filesystem scanning).
- * macOS sandbox profile supports regex/glob matching directly via globToRegex().
- */
-export function macGetMandatoryDenyPatterns(cwd = process.cwd()): string[] {
-  const denyPaths: string[] = []
-
-  // Dangerous files - static paths in CWD + glob patterns for subtree
-  for (const fileName of DANGEROUS_FILES) {
-    denyPaths.push(path.resolve(cwd, fileName))
-    denyPaths.push(`**/${fileName}`)
-  }
-
-  // Dangerous directories
-  for (const dirName of getDangerousDirectories()) {
-    denyPaths.push(path.resolve(cwd, dirName))
-    denyPaths.push(`**/${dirName}/**`)
-  }
-
-  return [...new Set(denyPaths)]
 }
 
 export interface SandboxViolationEvent {
@@ -395,13 +372,7 @@ function generateWriteRules(
     }
   }
 
-  // Combine user-specified and mandatory deny patterns (no ripgrep needed on macOS)
-  const denyPaths = [
-    ...(config.denyWithinAllow || []),
-    ...macGetMandatoryDenyPatterns(config.cwd).map(p =>
-      path.resolve(config.cwd ?? process.cwd(), p),
-    ),
-  ]
+  const denyPaths = config.denyWithinAllow || []
 
   for (const pathPattern of denyPaths) {
     const normalizedPath = normalizePathForSandbox(pathPattern)
@@ -445,6 +416,7 @@ function generateSandboxProfile({
   allowMachLookup,
   allowPty,
   allowBrowserProcess = false,
+  allowProcessSignals = false,
   enableWeakerNetworkIsolation = false,
   allowAppleEvents = false,
   logTag,
@@ -460,6 +432,7 @@ function generateSandboxProfile({
   allowMachLookup?: string[]
   allowPty?: boolean
   allowBrowserProcess?: boolean
+  allowProcessSignals?: boolean
   enableWeakerNetworkIsolation?: boolean
   allowAppleEvents?: boolean
   logTag: string
@@ -475,7 +448,9 @@ function generateSandboxProfile({
     '(allow process-exec)',
     '(allow process-fork)',
     '(allow process-info* (target same-sandbox))',
-    '(allow signal (target same-sandbox))',
+    allowProcessSignals
+      ? '(allow signal)'
+      : '(allow signal (target same-sandbox))',
     '(allow mach-priv-task-port (target same-sandbox))',
     '',
     '; User preferences',
@@ -848,6 +823,7 @@ export function wrapCommandWithSandboxMacOS(
     maskedFileBinds,
     allowPty,
     allowBrowserProcess = false,
+    allowProcessSignals = false,
     enableWeakerNetworkIsolation = false,
     allowAppleEvents = false,
     binShell,
@@ -906,6 +882,7 @@ export function wrapCommandWithSandboxMacOS(
     allowMachLookup,
     allowPty,
     allowBrowserProcess,
+    allowProcessSignals,
     enableWeakerNetworkIsolation,
     allowAppleEvents,
     logTag,

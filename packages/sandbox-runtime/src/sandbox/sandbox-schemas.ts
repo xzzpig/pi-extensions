@@ -35,11 +35,6 @@ export interface FsWriteRestrictionConfig {
   cwd?: string
   allowOnly: string[]
   denyWithinAllow: string[]
-  /**
-   * When false, skip denying the built-in DANGEROUS_FILES names at the
-   * working directory root. Defaults to true. See FilesystemConfigSchema.
-   */
-  denyMandatoryCwdFiles?: boolean
 }
 
 /**

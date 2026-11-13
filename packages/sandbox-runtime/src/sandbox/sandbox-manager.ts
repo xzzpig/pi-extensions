@@ -1,7 +1,6 @@
 import { createHttpProxyServer } from './http-proxy.js'
 import { createSocksProxyServer } from './socks-proxy.js'
 import type { SocksProxyWrapper } from './socks-proxy.js'
-import { isNetworkDisabled } from './fork-network.js'
 import { createMuxProxyServer, type MuxProxyServer } from './mux-proxy.js'
 import { listenInRange } from './listen-in-range.js'
 import { SentinelRegistry } from './credential-sentinel.js'
@@ -17,7 +16,6 @@ import {
   type MitmCA,
 } from './mitm-ca.js'
 import { logForDebugging } from '../utils/debug.js'
-import { whichSync } from '../utils/which.js'
 import { getPlatform, getWslVersion } from '../utils/platform.js'
 import * as fs from 'fs'
 import { randomBytes, X509Certificate } from 'node:crypto'
@@ -144,10 +142,7 @@ export interface ISandboxManager {
   ): Promise<void>
   isSupportedPlatform(): boolean
   isSandboxingEnabled(): boolean
-  checkDependencies(ripgrepConfig?: {
-    command: string
-    args?: string[]
-  }): SandboxDependencyCheck
+  checkDependencies(): SandboxDependencyCheck
   getFsReadConfig(): FsReadRestrictionConfig
   getFsWriteConfig(): FsWriteRestrictionConfig
   getNetworkRestrictionConfig(): NetworkRestrictionConfig
@@ -167,7 +162,6 @@ export interface ISandboxManager {
     binShell?: string,
     customConfig?: Partial<SandboxRuntimeConfig>,
     abortSignal?: AbortSignal,
-    cwd?: string,
   ): Promise<string>
   wrapWithSandboxArgv(
     command: string,
@@ -702,24 +696,6 @@ function createManager(legacySingleton: boolean): ISandboxManager {
       }
     }
 
-    // Initialize network infrastructure unless network.disabled skips it.
-    // With no proxy/bridge running, wrap paths must never request proxy
-    // ports — guaranteed because they compute needsNetworkProxy from the
-    // same flag, so waitForNetworkInitialization() is never reached here.
-    if (runtimeConfig.network.disabled === true) {
-      logForDebugging(
-        '[Sandbox] network.disabled is set - skipping proxy and network bridge initialization',
-      )
-      if (runtimeConfig.credentials) {
-        logForDebugging(
-          '[Sandbox] network.disabled: credential masking has no proxy to substitute ' +
-            'sentinels on egress; masked values would reach upstreams unchanged',
-          { level: 'warn' },
-        )
-      }
-      return
-    }
-
     // Initialize network infrastructure
     initializationPromise = (async () => {
       try {
@@ -824,13 +800,9 @@ function createManager(legacySingleton: boolean): ISandboxManager {
 
   /**
    * Check sandbox dependencies for the current platform
-   * @param ripgrepConfig - Ripgrep command to check. If not provided, uses config from initialization or defaults to 'rg'
    * @returns { warnings, errors } - errors mean sandbox cannot run, warnings mean degraded functionality
    */
-  function checkDependencies(ripgrepConfig?: {
-    command: string
-    args?: string[]
-  }): SandboxDependencyCheck {
+  function checkDependencies(): SandboxDependencyCheck {
     if (!isSupportedPlatform()) {
       return { errors: ['Unsupported platform'], warnings: [] }
     }
@@ -840,14 +812,6 @@ function createManager(legacySingleton: boolean): ISandboxManager {
 
     const platform = getPlatform()
     if (platform === 'linux') {
-      // ripgrep is Linux-only: it's used by linuxGetMandatoryDenyPaths() to
-      // expand glob deny-patterns to concrete paths for bwrap. macOS seatbelt
-      // profiles take regex patterns directly, so rg is never invoked there.
-      const rgToCheck = ripgrepConfig ?? config?.ripgrep ?? { command: 'rg' }
-      if (whichSync(rgToCheck.command) === null) {
-        errors.push(`ripgrep (${rgToCheck.command}) not found`)
-      }
-
       const linuxDeps = checkLinuxDependencies({
         seccompConfig: config?.seccomp,
         bwrapPath: config?.bwrapPath,
@@ -1059,7 +1023,6 @@ function createManager(legacySingleton: boolean): ISandboxManager {
     return {
       allowOnly,
       denyWithinAllow: denyPaths,
-      denyMandatoryCwdFiles: config.filesystem.denyMandatoryCwdFiles,
     }
   }
 
@@ -1219,14 +1182,6 @@ function createManager(legacySingleton: boolean): ISandboxManager {
     return config?.allowAppleEvents
   }
 
-  function getRipgrepConfig(): { command: string; args?: string[] } {
-    return config?.ripgrep ?? { command: 'rg' }
-  }
-
-  function getMandatoryDenySearchDepth(): number {
-    return config?.mandatoryDenySearchDepth ?? 3
-  }
-
   function getSeccompConfig(): SeccompConfig | undefined {
     return config?.seccomp
   }
@@ -1275,8 +1230,8 @@ function createManager(legacySingleton: boolean): ISandboxManager {
     binShell?: string,
     customConfig?: Partial<SandboxRuntimeConfig>,
     abortSignal?: AbortSignal,
-    cwd?: string,
   ): Promise<string> {
+    abortSignal?.throwIfAborted()
     const platform = getPlatform()
 
     // filesystem.disabled bypasses ALL filesystem rule generation. Both
@@ -1339,14 +1294,6 @@ function createManager(legacySingleton: boolean): ISandboxManager {
             config?.filesystem.denyWrite ??
             [],
         ),
-        cwd,
-        // getFsWriteConfig() also returns this field, but it is not on the
-        // wrapWithSandbox() path — the platform wrappers are handed the
-        // writeConfig built here, so the flag was always undefined by the time
-        // it reached linuxGetMandatoryDenyPaths() and fell back to true.
-        denyMandatoryCwdFiles:
-          customConfig?.filesystem?.denyMandatoryCwdFiles ??
-          config?.filesystem?.denyMandatoryCwdFiles,
       }
 
       // Credential deny paths are unioned with the caller's denyRead — never
@@ -1398,29 +1345,15 @@ function createManager(legacySingleton: boolean): ISandboxManager {
       customConfig?.network?.allowedDomains !== undefined ||
       config?.network?.allowedDomains !== undefined
 
-    // network.disabled bypasses ALL network enforcement, mirroring how
-    // filesystem.disabled bypasses filesystem rule generation: platform
-    // wrappers emit permissive network rules (macOS "(allow network*)") or
-    // skip netns isolation and proxy plumbing (Linux), and no local proxy
-    // is required. Note: initialize() skips proxy/bridge startup under the
-    // same flag, so a per-call override that re-enables restrictions cannot
-    // route through a proxy that was never started — hosts would be hard-
-    // blocked instead. Call reset() + initialize() to toggle globally.
-    const networkDisabled = isNetworkDisabled(
-      customConfig?.network,
-      config?.network,
-    )
-
     // Network RESTRICTION is needed whenever network config is specified
-    // and not disabled. This includes empty allowedDomains which means
-    // "block all network"
-    const needsNetworkRestriction = hasNetworkConfig && !networkDisabled
+    // This includes empty allowedDomains which means "block all network"
+    const needsNetworkRestriction = hasNetworkConfig
 
-    // Network PROXY is needed whenever network restriction applies.
+    // Network PROXY is needed whenever network config is specified
     // Even with empty allowedDomains, we route through proxy so that:
     // 1. updateConfig() can enable network access for already-running processes
     // 2. The proxy blocks all requests when allowlist is empty
-    const needsNetworkProxy = needsNetworkRestriction
+    const needsNetworkProxy = hasNetworkConfig
 
     // Wait for network initialization only if proxy is actually needed
     if (needsNetworkProxy) {
@@ -1440,7 +1373,7 @@ function createManager(legacySingleton: boolean): ISandboxManager {
 
     switch (platform) {
       case 'macos':
-        // macOS sandbox profile supports glob patterns directly, no ripgrep needed
+        // macOS sandbox profiles support glob patterns directly.
         return wrapCommandWithSandboxMacOS({
           command,
           needsNetworkRestriction,
@@ -1461,6 +1394,8 @@ function createManager(legacySingleton: boolean): ISandboxManager {
           ignoreViolations: getIgnoreViolations(),
           allowPty,
           allowBrowserProcess,
+          allowProcessSignals:
+            customConfig?.allowProcessSignals ?? config?.allowProcessSignals,
           enableWeakerNetworkIsolation: getEnableWeakerNetworkIsolation(),
           allowAppleEvents: getAllowAppleEvents(),
           binShell,
@@ -1494,16 +1429,10 @@ function createManager(legacySingleton: boolean): ISandboxManager {
           enableWeakerNestedSandbox: getEnableWeakerNestedSandbox(),
           allowAllUnixSockets: getAllowAllUnixSockets(),
           binShell,
-          ripgrepConfig: getRipgrepConfig(),
-          mandatoryDenySearchDepth: getMandatoryDenySearchDepth(),
-          protectNonexistentFiles:
-            customConfig?.filesystem?.protectNonexistentFiles ??
-            config?.filesystem?.protectNonexistentFiles,
           seccompConfig: getSeccompConfig(),
           bwrapPath: config?.bwrapPath,
           socatPath: config?.socatPath,
           observeSocketPath: linuxMonitor?.observeSocketPath,
-          abortSignal,
         })
 
       case 'windows':
@@ -1544,7 +1473,7 @@ function createManager(legacySingleton: boolean): ISandboxManager {
    *   as the spawn `{cwd:}` option (there is no `--cwd` flag), and
    *   the `safe.directory` git-config injection derives from this — so
    *   pass the same value here as to `spawn({cwd})`. Defaults to
-   *   `process.cwd()`. Also scopes mandatory filesystem protections on macOS/Linux.
+   *   `process.cwd()`. Currently unused on macOS/Linux.
    */
   async function wrapWithSandboxArgv(
     command: string,
@@ -1559,13 +1488,7 @@ function createManager(legacySingleton: boolean): ISandboxManager {
       const hasNetworkConfig =
         customConfig?.network?.allowedDomains !== undefined ||
         config?.network?.allowedDomains !== undefined
-      // Same precedence as wrapWithSandbox(): a per-call network override
-      // owns its disabled key outright.
-      const networkDisabled = isNetworkDisabled(
-        customConfig?.network,
-        config?.network,
-      )
-      if (hasNetworkConfig && !networkDisabled) {
+      if (hasNetworkConfig) {
         if (!(await waitForNetworkInitialization()) || !managerContext) {
           throw new Error(
             'Sandbox network proxy is not initialized. Initialize the sandbox before running commands.',
@@ -1637,12 +1560,8 @@ function createManager(legacySingleton: boolean): ISandboxManager {
       // via `computeWindowsFsAccessSet`.
       return wrapCommandWithSandboxWindows({
         command,
-        httpProxyPort:
-          hasNetworkConfig && !networkDisabled ? getProxyPort() : undefined,
-        socksProxyPort:
-          hasNetworkConfig && !networkDisabled
-            ? getSocksProxyPort()
-            : undefined,
+        httpProxyPort: hasNetworkConfig ? getProxyPort() : undefined,
+        socksProxyPort: hasNetworkConfig ? getSocksProxyPort() : undefined,
         proxyAuthToken: hasNetworkConfig ? proxyAuthToken : undefined,
         // mode:'deny' env vars are structurally absent (fresh
         // srt-sandbox profile env). mode:'mask' sentinels are
@@ -1677,7 +1596,6 @@ function createManager(legacySingleton: boolean): ISandboxManager {
       binShell,
       customConfig,
       abortSignal,
-      cwd,
     )
     const shell = binShell ?? '/bin/bash'
     return { argv: [shell, '-c', wrapped], env: process.env }
@@ -1851,9 +1769,8 @@ function createManager(legacySingleton: boolean): ISandboxManager {
       // first, the connections are gone by the time close() runs and its
       // callback fires immediately (Bun reports "Server is not running.",
       // Node reports no error). Verified against both orderings.
-      const serverWithClose = server as { closeAllConnections?: () => void }
-      if (typeof serverWithClose.closeAllConnections === 'function') {
-        serverWithClose.closeAllConnections()
+      if (typeof server.closeAllConnections === 'function') {
+        server.closeAllConnections()
       }
       server.close(error => {
         if (error && error.message !== 'Server is not running.') {

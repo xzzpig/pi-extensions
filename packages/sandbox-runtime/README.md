@@ -408,6 +408,7 @@ Examples:
 - `enableWeakerNestedSandbox` - Enable weaker sandbox mode for Docker environments (boolean, default: false)
 - `enableWeakerNetworkIsolation` - Allow access to `com.apple.trustd.agent` and `com.apple.SystemConfiguration.configd` in the macOS sandbox (boolean, default: false). This is needed for Go programs (`gh`, `gcloud`, `terraform`, `kubectl`, etc.) to verify TLS certificates when using `httpProxyPort` with a MITM proxy and custom CA, and for Rust/Go programs (`uv`, `cargo`) that query system proxy/network configuration via `SCDynamicStoreCreate`. **Security warning:** enabling this opens a potential data exfiltration vector through the trustd service and exposes host network configuration (proxy settings, DNS servers) through configd.
 - `allowAppleEvents` - Allow sending Apple Events and Launch Services open requests from the macOS sandbox (boolean, default: false). Without this, commands like `open`, `osascript`, and anything that opens URLs or scripts other apps via AppleScript fail with AppleScript error `-600` ("Application isn't running") or LaunchServices errors (`-10822`, `-54`). **Security warning:** enabling this means the sandbox no longer provides code-execution isolation. A sandboxed command can launch other applications via `open` with no user prompt, and anything it launches runs outside the sandbox's filesystem and network restrictions; scripting already-running apps via Apple Events is additionally gated by the user's per-app TCC automation consent. Embedders should only source this option from trusted user-level configuration — never from project-local files in a checked-out repository, which would let an attacker-authored project elevate its own sandbox permissions.
+- `allowProcessSignals` - Allow signaling processes outside the current sandbox (macOS only, boolean, default: false). This lets a later sandboxed command stop a dev server started by an earlier command. Normal OS signal permissions still apply. Linux and Windows behavior is unchanged. **Security warning:** this is not scoped to processes started by the runtime; sandboxed code can signal unrelated processes the user has permission to signal, including terminating or suspending other applications and agents. Embedders should only source this option from trusted user-level configuration, never from project-local files in a checked-out repository. Existing processes retain their original sandbox policy; the option applies to newly wrapped commands.
 - `allowBrowserProcess` - Allow browser process operations in the macOS sandbox (boolean, default: false). Grants the additional Mach IPC, Mach bootstrap registration, process-info, IOKit, and shared-memory permissions that Chromium-based browsers need to launch and run. Required for tools like `agent-browser` that spawn a Chrome/Chromium subprocess. **Security warning:** this significantly widens the Mach IPC and process inspection surface — sandboxed code can look up arbitrary Mach services, inspect other processes, and open IOKit drivers. Filesystem and network restrictions remain enforced, but the broader IPC surface increases the risk of sandbox escape via vulnerable system services. Only enable when browser automation is needed.
 
 ### Common Configuration Recipes
@@ -509,10 +510,6 @@ Watchman accesses files outside the sandbox boundaries, which will trigger permi
   - Ubuntu/Debian: `apt-get install socat`
   - Fedora: `dnf install socat`
   - Arch: `pacman -S socat`
-- `ripgrep` - Fast search tool for deny path detection
-  - Ubuntu/Debian: `apt-get install ripgrep`
-  - Fedora: `dnf install ripgrep`
-  - Arch: `pacman -S ripgrep`
 
 **Ubuntu 24.04+ note:** These releases enable `kernel.apparmor_restrict_unprivileged_userns` by default, which allows `unshare(CLONE_NEWUSER)` but strips capabilities from the resulting namespace. Both bubblewrap and the seccomp isolation layer need capability-bearing user namespaces. Disable the restriction with:
 
@@ -534,9 +531,7 @@ The package includes pre-generated seccomp BPF filters for x86-64 and arm archit
 
 **macOS requires:**
 
-- `ripgrep` - Fast search tool for deny path detection
-  - Install via Homebrew: `brew install ripgrep`
-  - Or download from: https://github.com/BurntSushi/ripgrep/releases
+- No additional dependencies.
 
 **Windows requires:**
 
@@ -681,45 +676,9 @@ Filesystem restrictions are enforced at the OS level:
 
 **Precedence is intentionally opposite for reads vs writes:** `allowRead` overrides `denyRead`, while `denyWrite` overrides `allowWrite`. This lets you carve out readable regions within denied areas, and carve out protected regions within writable areas.
 
-### Mandatory Deny Paths (Auto-Protected Files)
+### Write Protection
 
-Certain sensitive files and directories are **always blocked from writes**, even if they fall within an allowed write path. This provides defense-in-depth against sandbox escapes and configuration tampering.
-
-**Always-blocked files:**
-
-- Shell config files: `.bashrc`, `.bash_profile`, `.zshrc`, `.zprofile`, `.profile`
-- Git config files: `.gitconfig`
-- Other sensitive files: `.ripgreprc`, `.mcp.json`
-
-These paths are blocked automatically - you don't need to add them to `denyWrite`. For example, even with `allowWrite: ["."]`, writing to `.bashrc` or `.mcp.json` will fail:
-
-```bash
-$ srt 'echo "malicious" >> .bashrc'
-/bin/bash: .bashrc: Operation not permitted
-
-$ srt 'echo "{}" > .mcp.json'
-/bin/bash: .mcp.json: Operation not permitted
-```
-
-Directories under `.claude/`, including `commands/` and `agents/`, remain writable when their parent path is in `allowWrite`.
-
-**Note (Linux):** On Linux, mandatory deny paths only block files that already exist. Non-existent files in these patterns cannot be blocked by bubblewrap's bind-mount approach. macOS uses glob patterns which block both existing and new files.
-
-**Linux search depth:** On Linux, the sandbox uses `ripgrep` to scan for dangerous files in subdirectories within allowed write paths. By default, it searches up to 3 levels deep for performance. You can configure this with `mandatoryDenySearchDepth`:
-
-```json
-{
-  "mandatoryDenySearchDepth": 5,
-  "filesystem": {
-    "allowWrite": ["."]
-  }
-}
-```
-
-- Default: `3` (searches up to 3 levels deep)
-- Range: `1` to `10`
-- Higher values provide more protection but slower performance
-- Files in CWD (depth 0) are always protected regardless of this setting
+No filenames are automatically write-protected within allowed write paths. Add sensitive configuration files to `filesystem.denyWrite` explicitly.
 
 ### Unix Socket Restrictions (Linux)
 

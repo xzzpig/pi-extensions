@@ -537,18 +537,6 @@ export const CredentialsConfigSchema = z
  * Network configuration schema for validation
  */
 export const NetworkConfigSchema = z.object({
-  disabled: z
-    .boolean()
-    .optional()
-    .describe(
-      'Disable all network policy enforcement. When true, no network rules are emitted: ' +
-        'allowedDomains/deniedDomains and proxy settings are ignored, no local proxy or Linux bridge ' +
-        'is started, macOS profiles allow all network operations ((allow network*)), and Linux skips ' +
-        '--unshare-net so sandboxed processes share the host network namespace. Filesystem and ' +
-        'credential-env restrictions still apply, but credential injection needs the proxy and ' +
-        'cannot substitute sentinels while disabled (masked values would reach upstreams unchanged). ' +
-        'Use only when the sandboxed process is trusted with full host network access.',
-    ),
   allowedDomains: z
     .array(domainPatternSchema)
     .describe('List of allowed domains (e.g., ["github.com", "*.npmjs.org"])'),
@@ -711,8 +699,7 @@ export const FilesystemConfigSchema = z.object({
     .optional()
     .describe(
       'Disable all filesystem policy enforcement. When true, no read or write rules are emitted: ' +
-        'denyRead/allowRead/allowWrite/denyWrite are ignored, and the built-in mandatory write ' +
-        'protections (shell rc files and .mcp.json) are NOT applied. Use only when the sandboxed process ' +
+        'denyRead/allowRead/allowWrite/denyWrite are ignored. Use only when the sandboxed process ' +
         'is trusted with full host filesystem access. Network and credential-env restrictions ' +
         'still apply. On Linux, /dev is still replaced by the bwrap minimal devtmpfs.',
     ),
@@ -730,31 +717,6 @@ export const FilesystemConfigSchema = z.object({
   denyWrite: z
     .array(filesystemPathSchema)
     .describe('Paths denied for writing (takes precedence over allowWrite)'),
-  protectNonexistentFiles: z
-    .boolean()
-    .optional()
-    .describe(
-      'On Linux: when true (the default), the sandbox also protects dangerous files ' +
-        '(.bashrc, .gitconfig, .mcp.json, etc.) that do not exist yet inside allowed write paths ' +
-        'by mounting read-only placeholders (/dev/null or an empty dir) over them, so sandboxed ' +
-        'commands cannot create them. bwrap materializes these placeholders as empty files/dirs on ' +
-        'the host during command execution (e.g. a temporary .bashrc in the working directory), ' +
-        'which can confuse tools like git status or lint/glob scans; they are removed after the ' +
-        'command finishes. Set to false to skip placeholders for non-existent dangerous files, so no ' +
-        'temporary files appear, at the cost of allowing sandboxed commands to create those files ' +
-        'inside allowed write paths. Existing dangerous files and user-configured denyWrite paths ' +
-        'remain protected regardless of this setting. macOS and Windows are unaffected.',
-    ),
-  denyMandatoryCwdFiles: z
-    .boolean()
-    .optional()
-    .describe(
-      'Deny writes to the built-in mandatory filenames (.gitconfig, .bashrc, .mcp.json, ...) at the ' +
-        'working directory root. Defaults to true. Denying a path that does not exist requires mounting ' +
-        '/dev/null over it, so each denied name is visible to readdir and appears in the working tree as ' +
-        'a zero-length character device that cannot be read, written or removed while the command runs. ' +
-        'Set false to avoid that; these names are still denied at any depth when they already exist.',
-    ),
 })
 
 /**
@@ -766,23 +728,6 @@ export const IgnoreViolationsConfigSchema = z
   .describe(
     'Map of command patterns to filesystem paths to ignore violations for. Use "*" to match all commands',
   )
-
-/**
- * Ripgrep configuration schema
- */
-export const RipgrepConfigSchema = z.object({
-  command: z.string().describe('The ripgrep command to execute'),
-  args: z
-    .array(z.string())
-    .optional()
-    .describe('Additional arguments to pass before ripgrep args'),
-  argv0: z
-    .string()
-    .optional()
-    .describe(
-      'Override argv[0] when spawning (for multicall binaries that dispatch on argv[0])',
-    ),
-})
 
 /**
  * Configuration for locating/invoking the `srt-win` helper (Windows
@@ -924,18 +869,15 @@ export const SandboxRuntimeConfigSchema = z
           'network restrictions), and can script running apps subject to TCC automation consent. ' +
           'Default: false.',
       ),
-    ripgrep: RipgrepConfigSchema.optional().describe(
-      'Custom ripgrep configuration (default: { command: "rg" })',
-    ),
-    mandatoryDenySearchDepth: z
-      .number()
-      .int()
-      .min(1)
-      .max(10)
+    allowProcessSignals: z
+      .boolean()
       .optional()
       .describe(
-        'Maximum directory depth to search for dangerous files on Linux (default: 3). ' +
-          'Higher values provide more protection but slower performance.',
+        'Allow signaling processes outside the current sandbox (macOS only). ' +
+          'Useful for stopping a dev server started by an earlier sandboxed command. ' +
+          'Normal OS signal permissions still apply, but this also allows signaling ' +
+          'unrelated processes owned by the user. Only enable from trusted configuration. ' +
+          'Default: false.',
       ),
     allowPty: z
       .boolean()
@@ -1172,7 +1114,6 @@ export type CredentialsConfig = z.infer<typeof CredentialsConfigSchema>
 export type IgnoreViolationsConfig = z.infer<
   typeof IgnoreViolationsConfigSchema
 >
-export type RipgrepConfig = z.infer<typeof RipgrepConfigSchema>
 export type SeccompConfig = z.infer<typeof SeccompConfigSchema>
 export type SrtWinConfig = z.infer<typeof SrtWinConfigSchema>
 export type WindowsConfig = z.infer<typeof WindowsConfigSchema>
