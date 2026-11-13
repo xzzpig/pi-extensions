@@ -1,6 +1,6 @@
 {
   "name": "pi-sandbox",
-  "version": "0.7.3",
+  "version": "0.8.1",
   "description": "OS-level sandboxing for pi with interactive permission prompts",
   "keywords": [
     "pi-package",
@@ -39,7 +39,7 @@
     "ci:test": "pnpm test"
   },
   "dependencies": {
-    "@carderne/sandbox-runtime": "^0.0.77"
+    "@carderne/sandbox-runtime": "^0.0.79"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "^0.80.0",
