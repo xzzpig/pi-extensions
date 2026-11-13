@@ -1,0 +1,76 @@
+name: Publish to npm
+
+# Trigger: create a GitHub Release (tag vX.Y.Z) or run manually.
+# npm Trusted Publisher (OIDC) — no NPM_TOKEN secret needed.
+# npm-side config must match:
+#   Organization or user:  Andy8647
+#   Repository:            pi-tidy
+#   Workflow filename:     publish.yml
+#   Environment name:      npm        (must match `environment:` below)
+#   Allowed actions:       Allow npm publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      id-token: write # required for OIDC trusted publishing + provenance
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing requires npm >= 11.5.1
+      - name: Update npm
+        run: npm install -g npm@latest
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      # Verify the release tag matches package.json version (release trigger only)
+      - name: Check version matches tag
+        if: github.event_name == 'release'
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::package.json version ($PKG_VERSION) does not match tag ($TAG_VERSION)"
+            exit 1
+          fi
+
+      # A version can already be on npm: a package's first version has to be
+      # published by hand (OIDC can't create a package), and a re-run release
+      # shouldn't go red over a publish that already happened.
+      - name: Check whether this version is already published
+        id: published
+        run: |
+          SPEC="$(node -p "require('./package.json').name")@$(node -p "require('./package.json').version")"
+          if npm view "$SPEC" version >/dev/null 2>&1; then
+            echo "$SPEC is already on npm — skipping publish"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to npm
+        if: steps.published.outputs.skip != 'true'
+        run: npm publish --provenance --access public
