@@ -14,6 +14,7 @@ import { ownsRun } from "../runs/shared/run-ownership.ts";
 import { writeAtomicJson, writePrivateAtomicJson } from "../shared/atomic-json.ts";
 import { shouldUseNativeFsWatch } from "../shared/watch-strategy.ts";
 import { MODEL_ONLY_TOOL } from "../shared/extension-context.ts";
+import { reportSessionWarning } from "../shared/session-warnings.ts";
 import {
 	SUPERVISOR_REQUEST_MESSAGE_TYPE,
 	SUPERVISOR_REPLY_ENTRY_TYPE,
@@ -64,6 +65,16 @@ interface SupervisorRequestCorrelation {
 	request: PendingSupervisorRequest;
 	state: Exclude<SupervisorRequestState, "unknown">;
 	updatedAt: number;
+}
+
+interface EndedSupervisorRequest {
+	request: PendingSupervisorRequest;
+	// "deadline": the request file went missing after the ask deadline, so the ask expired or the run stopped then.
+	lifecycle: Exclude<SupervisorRequestLifecycle, "pending" | "wrong-session"> | "deadline";
+	/** When the parent noticed the ending; also the pruning clock. */
+	endedAt: number;
+	/** When the ending happened, when the parent knows it. */
+	eventAt?: number;
 }
 
 interface SupervisorReply {
@@ -511,7 +522,7 @@ function removeRequestFile(file: string): void {
 }
 
 type SupervisorRequestLifecycle = "pending" | "resolved" | "expired" | "inactive" | "missing" | "wrong-session";
-type SupervisorRequestLifecycleObserver = (request: PendingSupervisorRequest, lifecycle: SupervisorRequestLifecycle) => void;
+type SupervisorRequestLifecycleObserver = (request: PendingSupervisorRequest, lifecycle: SupervisorRequestLifecycle, eventAt?: number) => void;
 
 function requestExpiresAt(request: SupervisorRequest, now: number): number {
 	const expiresAt = (request as { expiresAt?: unknown }).expiresAt;
@@ -627,7 +638,23 @@ export function appendSupervisorReplyEntry(pi: ExtensionAPI, request: PendingSup
 	}
 }
 
-function resolvePendingRequest(pending: Map<string, PendingSupervisorRequest>, params: IntercomParams): PendingSupervisorRequest {
+function endedRequestText(ended: EndedSupervisorRequest, runState: SubagentState): string {
+	const { request } = ended;
+	const iso = (time: number) => new Date(time).toISOString();
+	const when = ended.eventAt !== undefined ? ` at ${iso(ended.eventAt)}` : ` (noticed at ${iso(ended.endedAt)})`;
+	const subject = `Supervisor request '${request.id}' from ${request.agent} [${request.runId}#${request.childIndex}]`;
+	const runStatus = runState.asyncJobs.get(request.runId)?.status;
+	const runNow = runStatus && runStatus !== "queued" && runStatus !== "running" ? ` Run ${request.runId} is now ${runStatus}.` : "";
+	switch (ended.lifecycle) {
+		case "resolved": return `${subject} was already answered${when}.`;
+		case "expired": return `${subject} expired${when}: no reply arrived before the child's ask timeout.`;
+		case "deadline": return `${subject} ended around its ask deadline${when}: either no reply arrived before the child's ask timeout, or its run was stopped just before then.${runNow}`;
+		case "inactive": return `${subject} was closed because its child run ended${when}.${runNow}`;
+		case "missing": return `${subject} was withdrawn by the child before its ask deadline${when}. A child withdraws its request when its run is stopped, interrupted or times out, for example when a workflow aborts its other children after one fails.${runNow}`;
+	}
+}
+
+function resolvePendingRequest(pending: Map<string, PendingSupervisorRequest>, params: IntercomParams, ended: Map<string, EndedSupervisorRequest>, runState: (request: SupervisorRequest) => SubagentState): PendingSupervisorRequest {
 	const requests = [...pending.values()].filter((request) => request.expectsReply);
 	if (params.replyTo) {
 		const request = pending.get(params.replyTo);
@@ -635,6 +662,8 @@ function resolvePendingRequest(pending: Map<string, PendingSupervisorRequest>, p
 			// A child stops waiting after its ask timeout and may ask again under a new id. Its first
 			// notice can reach a busy parent after that, so name what can still be answered.
 			const current = requests.length ? `Pending now:\n${requests.map(pendingHeader).join("\n")}` : "No pending supervisor requests.";
+			const endedRequest = ended.get(params.replyTo);
+			if (endedRequest) throw new Error(`${endedRequestText(endedRequest, runState(endedRequest.request))} ${current}`);
 			throw new Error(`No pending supervisor request found for replyTo '${params.replyTo}'. It was answered, expired or withdrawn. ${current}`);
 		}
 		return request;
@@ -666,7 +695,7 @@ function publicPendingRequests(pending: Map<string, PendingSupervisorRequest>): 
 	}));
 }
 
-function buildParentSupervisorTool(pi: ExtensionAPI, pending: Map<string, PendingSupervisorRequest>, state: SubagentState, onLifecycle: SupervisorRequestLifecycleObserver, discover: () => void, runState: (request: SupervisorRequest) => SubagentState, isClaimed: (requestId: string) => boolean = () => false): ToolDefinition<typeof IntercomParamsSchema, Record<string, unknown>> {
+function buildParentSupervisorTool(pi: ExtensionAPI, pending: Map<string, PendingSupervisorRequest>, state: SubagentState, onLifecycle: SupervisorRequestLifecycleObserver, discover: () => void, runState: (request: SupervisorRequest) => SubagentState, ended: Map<string, EndedSupervisorRequest>, isClaimed: (requestId: string) => boolean = () => false): ToolDefinition<typeof IntercomParamsSchema, Record<string, unknown>> {
 	return {
 		name: NATIVE_SUPERVISOR_TOOL_NAME,
 		...MODEL_ONLY_TOOL,
@@ -688,14 +717,14 @@ function buildParentSupervisorTool(pi: ExtensionAPI, pending: Map<string, Pendin
 				return { content: [{ type: "text", text: lines.length ? lines.join("\n") : "No pending supervisor requests." }], details: { pending: publicPendingRequests(new Map(answerable.map((request) => [request.id, request]))) } };
 			}
 			if (input.action === "reply") {
-				const request = resolvePendingRequest(pending, input);
+				const request = resolvePendingRequest(pending, input, ended, runState);
 				if (isClaimed(request.id)) {
 					throw new Error(`Supervisor request ${request.id} is responder-managed; it can only be answered by its registered responder.`);
 				}
 				const reply = writeReply(request, input.message ?? "");
 				appendSupervisorReplyEntry(pi, request, reply);
 				pending.delete(request.id);
-				onLifecycle(request, "resolved");
+				onLifecycle(request, "resolved", reply.createdAt);
 				clearForegroundSupervisorAttention(request, pending, state);
 				return { content: [{ type: "text", text: `Replied to supervisor request ${request.id}.` }], details: { replyTo: request.id, runId: request.runId, agent: request.agent } };
 			}
@@ -760,10 +789,31 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 		requestCorrelations.set(key, { request, state: "resolved", updatedAt: Date.now() });
 		pruneRequestCorrelations();
 	};
-	const observeRequestLifecycle: SupervisorRequestLifecycleObserver = (request, lifecycle) => {
+	// How each request ended, so a late reply can say why it is gone instead of a generic miss.
+	const endedRequests = new Map<string, EndedSupervisorRequest>();
+	const rememberEndedRequest = (request: PendingSupervisorRequest, lifecycle: EndedSupervisorRequest["lifecycle"], eventAt: number | undefined): void => {
+		if (!request.expectsReply) return;
+		const now = Date.now();
+		endedRequests.delete(request.id);
+		endedRequests.set(request.id, { request, lifecycle, endedAt: now, ...(eventAt !== undefined ? { eventAt } : {}) });
+		for (const [id, ended] of endedRequests) {
+			if (now - ended.endedAt <= SUPERVISOR_REQUEST_CORRELATION_RETENTION_MS && endedRequests.size <= MAX_SUPERVISOR_REQUEST_CORRELATIONS) break;
+			endedRequests.delete(id);
+		}
+	};
+	const observeRequestLifecycle: SupervisorRequestLifecycleObserver = (request, lifecycle, eventAt) => {
 		settleNotices.delete(request.id);
 		if (queuedNotices.delete(request.id)) updateDeliverySubscription();
 		if (lifecycle !== "wrong-session") rememberResolvedRequest(request);
+		// A child that hits its ask deadline deletes its own request file, so a missing file past the deadline can be
+		// that timeout or a stop just before it. The parent extends a queued ask's expiresAt in memory too, so a live
+		// ask never reads as past it.
+		if (lifecycle !== "wrong-session" && lifecycle !== "pending") {
+			const now = Date.now();
+			const expiresAt = requestExpiresAt(request, now);
+			if (lifecycle === "missing" && now > expiresAt) rememberEndedRequest(request, "deadline", expiresAt);
+			else rememberEndedRequest(request, lifecycle, lifecycle === "expired" ? expiresAt : eventAt);
+		}
 		if (lifecycle !== "pending") deps.supervisorDispatcher?.observe(request.id, lifecycle);
 		updateSettleSubscription();
 	};
@@ -811,7 +861,7 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 	};
 
 	const registerParentTools = (): void => {
-		if (!hasTool(pi, NATIVE_SUPERVISOR_TOOL_NAME)) pi.registerTool(buildParentSupervisorTool(pi, pending, state, observeRequestLifecycle, () => poll(), runState, (requestId) => claimedAsks.has(requestId)));
+		if (!hasTool(pi, NATIVE_SUPERVISOR_TOOL_NAME)) pi.registerTool(buildParentSupervisorTool(pi, pending, state, observeRequestLifecycle, () => pollOnce(), runState, endedRequests, (requestId) => claimedAsks.has(requestId)));
 	};
 
 	/**
@@ -852,7 +902,7 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 		}
 	};
 
-	const poll = (): void => {
+	const pollOnce = (): void => {
 		cleanupStaleChannelsIfDue();
 		// Only display notifications require a live UI context, not request registration.
 		refreshPendingRequests(pending, state, observeRequestLifecycle, runState);
@@ -883,7 +933,7 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 					continue;
 				}
 				seenFiles.add(file);
-				observeRequestLifecycle(request, "resolved");
+				observeRequestLifecycle(request, "resolved", now);
 				cleanupRequestLifecycle(request, "resolved");
 				continue;
 			}
@@ -956,6 +1006,17 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 		}
 		channels?.retire?.();
 		updateSettleSubscription();
+	};
+
+	// Never throws: this runs from timers, watchers, setImmediate and event handlers, and Pi exits the process on an
+	// uncaught exception, so one unreadable temp directory must not end the session. Callers whose answer a model or a
+	// drain decision reads use pollOnce, so a failed scan is not mistaken for "no pending requests".
+	const poll = (): void => {
+		try {
+			pollOnce();
+		} catch (error) {
+			reportSessionWarning(state, `Supervisor channel poll failed: ${error instanceof Error ? error.message : String(error)}`, "supervisor-channel-poll");
+		}
 	};
 
 	const handleBeforeSettle = (event: AgentBeforeSettleEvent): AgentBeforeSettleEventResult | undefined => {
@@ -1146,7 +1207,7 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 		},
 		hasPendingRequests: () => {
 			if (!started) return false;
-			poll();
+			pollOnce();
 			return pending.size > 0;
 		},
 		start: () => {
@@ -1199,6 +1260,7 @@ export function createNativeSupervisorChannel(pi: ExtensionAPI, state: SubagentS
 			claimedAsks.clear();
 			settleNotices.clear();
 			requestCorrelations.clear();
+			endedRequests.clear();
 			seenFiles.clear();
 		},
 		pending,

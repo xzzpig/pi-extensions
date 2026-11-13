@@ -23,7 +23,7 @@ assert.ok(root && path.isAbsolute(root) && !fs.existsSync(root), "provide a fres
 function sha(file) { return createHash("sha256").update(fs.readFileSync(file)).digest("hex"); }
 assert.equal(sha(binary), release.binarySha256, "binary does not match the pinned official release");
 fs.mkdirSync(root, { recursive: true });
-const inputs = ["index.ts", "package.json", "../../pnpm-lock.yaml", "../../pnpm-workspace.yaml", "../../tsconfig.base.json", "../pi-components/package.json", "../pi-components/tsconfig.build.json", "../pi-components/index.ts", "scripts/build-package.mjs", "scripts/fork-stage-bundled-components.mjs", "scripts/fork-stage-public-types.mjs", "tsconfig.build.json", "tsconfig.json", "workflow-script-worker.cjs",
+const inputs = ["index.ts", "package.json", "../../pnpm-lock.yaml", "../../pnpm-workspace.yaml", "../../tsconfig.base.json", "../pi-components/package.json", "../pi-components/tsconfig.build.json", "../pi-components/index.ts", "scripts/build-package.mjs", "scripts/fork-stage-bundled-components.mjs", "scripts/fork-stage-public-types.mjs", "tsconfig.build.json", "tsconfig.json", "workflow-script-worker.cjs", "workflow-script-process.cjs",
 	...fs.readdirSync(path.join(source, "../pi-components/src"), { recursive: true }).map((file) => `../pi-components/src/${file}`),
 	...fs.readdirSync(source).filter((file) => file.endsWith(".mjs")),
 	...fs.readdirSync(path.join(source, "src"), { recursive: true }).map((file) => `src/${file}`),

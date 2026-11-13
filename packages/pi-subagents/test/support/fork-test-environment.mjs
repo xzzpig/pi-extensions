@@ -35,6 +35,7 @@ const realSdkSuites = new Set([
 	"session-liveness-delivery.test.ts",
 	"subagent-messages.test.ts",
 	"subagent-prompt-runtime.test.ts",
+	"workflow-launch-approval.test.ts",
 ]);
 if (realSdkSuites.has(path.basename(process.argv[1] ?? ""))) {
 	await import("./fork-real-sdk.mjs");

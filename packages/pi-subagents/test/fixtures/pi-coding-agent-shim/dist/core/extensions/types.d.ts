@@ -7,7 +7,7 @@
  * - Register commands, keyboard shortcuts, and CLI flags
  * - Interact with the user via UI primitives
  */
-import type { AgentMessage, AgentToolResult, AgentToolUpdateCallback, ThinkingLevel, ToolExecutionMode } from "@earendil-works/pi-agent-core";
+import type { AgentMessage, AgentTool, AgentToolCallOutcome, AgentToolResult, AgentToolUpdateCallback, ThinkingLevel, ToolExecutionMode } from "@earendil-works/pi-agent-core";
 import type { ConstrainedSamplingConfig, Message, Api, AssistantMessageEvent, AssistantMessageEventStream, Context, ImageContent, Model, OAuthCredentials, OAuthLoginCallbacks, Provider, ProviderHeaders, RefreshModelsContext, SimpleStreamOptions, TextContent, ToolResultMessage, Usage } from "@earendil-works/pi-ai";
 import type { AutocompleteItem, AutocompleteProvider, Component, EditorComponent, EditorTheme, KeyId, OverlayHandle, OverlayOptions, TUI } from "@earendil-works/pi-tui";
 import type { Static, TSchema } from "typebox";
@@ -29,7 +29,7 @@ import type { EditToolDetails } from "../tools/edit.ts";
 import type { BashToolDetails, BashToolInput, EditToolInput, FindToolDetails, FindToolInput, GrepToolDetails, GrepToolInput, LsToolDetails, LsToolInput, ReadToolDetails, ReadToolInput, WriteToolInput } from "../tools/index.ts";
 export type { ExecOptions, ExecResult } from "../exec.ts";
 export type { BuildSystemPromptOptions } from "../system-prompt.ts";
-export type { AgentToolResult, AgentToolUpdateCallback, ToolExecutionMode };
+export type { AgentTool, AgentToolCallOutcome, AgentToolResult, AgentToolUpdateCallback, ToolExecutionMode };
 export type { AppKeybinding, KeybindingsManager } from "../keybindings.ts";
 /** Options for extension UI dialogs. */
 export interface ExtensionUIDialogOptions {
@@ -244,6 +244,15 @@ export interface ExtensionContext {
     getSystemPrompt(): string;
 }
 /**
+ * Context available to a tool's execute() when the host supports nested
+ * tool calls (Pi 1.2+). Mirrors the real SDK surface used by upstream
+ * v0.88.0's deferred subagent_launch tool.
+ */
+export interface ExtensionToolContext extends ExtensionContext {
+    readonly tools: readonly AgentTool[];
+    executeTool(name: string, args: unknown, options?: { signal?: AbortSignal }): Promise<AgentToolCallOutcome>;
+}
+/**
  * Extended context for command handlers.
  * Includes session control methods only safe in user-initiated commands.
  */
@@ -336,6 +345,9 @@ export interface ToolRenderContext<TState = any, TArgs = any> {
 /**
  * Tool definition for registerTool().
  */
+/** How the model reaches a registered tool (Pi 1.2+). */
+export type ToolExposure = "direct" | "model-only" | "codemode" | "deferred" | "hidden";
+
 export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = unknown, TState = any> {
     /** Tool name (used in LLM tool calls) */
     name: string;
@@ -349,6 +361,8 @@ export interface ToolDefinition<TParams extends TSchema = TSchema, TDetails = un
     promptGuidelines?: string[];
     /** Parameter schema (TypeBox) */
     parameters: TParams;
+    /** How the model reaches the tool. Default: "direct". */
+    exposure?: ToolExposure;
     constrainedSampling?: false | ConstrainedSamplingConfig;
     /** Controls whether ToolExecutionComponent renders the standard colored shell or the tool renders its own framing. */
     renderShell?: "default" | "self";

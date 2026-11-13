@@ -44,7 +44,6 @@ export interface FakeChildResponse {
 	missingTools?: string[];
 	/** Rejects the session creation itself (a startup failure). */
 	createError?: string;
-	/** Keeps the run open until the parent aborts it. */
 	hangUntilAbort?: boolean;
 	/** After draining a post-final steer/follow-up into pending (hasQueuedMessages false), delay before `turn_start`. */
 	queuedMessageTurnStartDelayMs?: number;
@@ -70,7 +69,6 @@ export interface FakeChildSessionRecord {
 export interface FakeChildSessions {
 	readonly sessions: FakeChildSessionRecord[];
 	readonly factory: ChildSessionFactory;
-	readonly disposeCalls: number;
 	reset(): void;
 }
 
@@ -215,7 +213,6 @@ function reportedModel(model: string | undefined): string | undefined {
 
 export function createFakeChildSessions(queueDir: () => string): FakeChildSessions {
 	const sessions: FakeChildSessionRecord[] = [];
-	let disposeCalls = 0;
 	const factory: ChildSessionFactory = {
 		async create(launch) {
 			const record: FakeChildSessionRecord = { launch, task: undefined, steers: [], aborted: false, disposed: false, settled: false, scriptedFinalEmitted: false };
@@ -517,20 +514,24 @@ export function createFakeChildSessions(queueDir: () => string): FakeChildSessio
 			return session;
 		},
 		async dispose() {
-			disposeCalls += 1;
-			for (const record of sessions) {
-				if (record.session?.detached) continue;
-				if (record.session) record.session.shutDown = true;
-				await record.session?.abort();
-				record.aborted = true;
-				record.disposed = true;
-			}
+			await disposeMatching(() => true);
+		},
+		async disposeForParent(parentSessionFile) {
+			await disposeMatching((launch) => launch.parentSessionFile === parentSessionFile);
 		},
 	};
+	async function disposeMatching(matches: (launch: ChildSessionLaunch) => boolean): Promise<void> {
+		for (const record of sessions) {
+			if (record.session?.detached || !matches(record.launch)) continue;
+			if (record.session) record.session.shutDown = true;
+			await record.session?.abort();
+			record.aborted = true;
+			record.disposed = true;
+		}
+	}
 	return {
 		sessions,
 		factory,
-		get disposeCalls() { return disposeCalls; },
 		reset() { sessions.length = 0; },
 	};
 }
