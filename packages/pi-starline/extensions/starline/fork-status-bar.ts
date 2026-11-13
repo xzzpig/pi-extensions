@@ -243,13 +243,16 @@ function legacyRender(options: StatusBarOptions): StatusBarRender {
 	});
 
 	const spans: PillSpan[] = [];
+	// Render at unbounded width so no pill is dropped: `enabled: false` promises the
+	// pre-overflow pipeline, where the bar is one long row cut by `truncateToWidth`.
+	// Upstream's `renderPillBar` drops whole pills and stands a `+N` counter in
+	// their place when it is given a real width, which is the governance path.
 	const bar = renderPillBar(
-		// The legacy pipeline, unchanged: this is what `enabled: false` promises.
 		options.legacyInputs(),
 		theme,
 		colorSource,
 		config.pill,
-		width,
+		1_000_000,
 		{ ascii, onSpan: (span) => spans.push(span) },
 	);
 	if (!bar) {
@@ -265,17 +268,31 @@ function legacyRender(options: StatusBarOptions): StatusBarRender {
 	}
 
 	const line = truncateToWidth(bar, width, "");
+	// Truncation keeps a prefix, so surviving cells keep their columns; only the far
+	// end needs clamping, and a pill clipped away entirely vanishes.
+	const visible = visibleWidth(line);
+	const clampedSpans: PillSpan[] = [];
+	for (const span of spans) {
+		const startColumn = Math.min(span.startColumn, visible);
+		const endColumn = Math.min(span.endColumn, visible);
+		if (endColumn > startColumn) {
+			const bodyStartColumn = Math.min(span.bodyStartColumn, endColumn - 1);
+			const bodyEndColumn = Math.max(
+				bodyStartColumn + 1,
+				Math.min(span.bodyEndColumn, endColumn),
+			);
+			clampedSpans.push({ ...span, startColumn, endColumn, bodyStartColumn, bodyEndColumn });
+		}
+	}
+	spans.length = 0;
+	spans.push(...clampedSpans);
+
 	const visibleKeys = new Set(spans.map((span) => span.key));
 	let truncatedKey: string | undefined;
 	// Only the pill the edge lands in can be cut; a row narrower than the
 	// terminal lost nothing.
-	if (visibleWidth(line) >= width && spans.length > 0) {
-		const natural = visibleWidth(
-			renderPillBar(options.legacyInputs(), theme, colorSource, config.pill, 1_000_000, {
-				ascii,
-			}),
-		);
-		if (natural > width) truncatedKey = spans.at(-1)?.key;
+	if (visible >= width && spans.length > 0) {
+		if (visibleWidth(bar) > width) truncatedKey = spans.at(-1)?.key;
 	}
 
 	return {

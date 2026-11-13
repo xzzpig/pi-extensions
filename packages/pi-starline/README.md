@@ -31,7 +31,10 @@ Starline makes Pi's fullscreen mode feel like a finished terminal app:
 - **Thinking:** pick a level from the ones the model supports.
 - **Queue:** an inbox icon and a count while messages wait; click to read them.
 - **Subagents:** with [pi-subagents](https://github.com/nicobailon/pi-subagents), a count of running subagents; click for agent, model, time and tokens, live.
+- **Context:** click for the window split into what fills it — system prompt, tool schemas, MCP tools, memory, skills and the conversation — as a grid with a legend, plus the session's token totals.
+- **Throughput:** the last reply's tokens per second; click for a scatter of every reply's rate against how full the context was, coloured by how fast it ran.
 - **Your extension's pill:** a small published API lets any extension open the same bubble with its own content. See [Clickable pills for other extensions](https://github.com/Andy8647/pi-starline/blob/main/docs/pill-api.md).
+- **Your extension's hint:** the right end of the editor's top rule is another published slot, so an extension can say one thing there without spending a row. See [Hints on the editor's top rule](https://github.com/Andy8647/pi-starline/blob/main/docs/editor-hints.md).
 - Clicking anywhere else on screen closes the bubble, and the click still does what it would have done: the caret moves, the line gets selected.
 - Every action also runs from the keyboard as `/starline <name>`, and the pointer turns into a hand over anything clickable.
 
@@ -46,7 +49,7 @@ Starline makes Pi's fullscreen mode feel like a finished terminal app:
 The fork's mouse enhancements use [`@xzzpig/pi-mouse-events`](https://www.npmjs.com/package/@xzzpig/pi-mouse-events) rather than installing a competing mouse patch. Install it alongside Starline; without it, these enhancements and pill click-away are disabled. Pi's own component clicks remain available. Version 0.3.0 or newer also shares pointer shapes, uses Pi's native clipboard when available, and routes editor scrolling with Pi's calculated wheel delta; older v2 installations fall back to the previous copy and wheel paths.
 
 - Drag to select in the transcript or the draft; double-click keeps paths and kebab-case whole; triple-click takes a line.
-- Clean copies: Starline's rails and rule rows and pi-toolbox frames are dropped before the clipboard.
+- A selection in the draft copies the text you wrote, without the rail, the padding or a newline where a row wrapped. In the transcript, [pi-tidy](https://github.com/Andy8647/pi-tidy) takes its frames out of what you copy.
 - A selection hint says how many characters the copy key will copy.
 - Click a tool, bash box, skill or summary to toggle that component; drag selection and links remain available.
 - Click to move the caret; backspace/delete remove a selected range; the wheel scrolls the draft.
@@ -74,6 +77,8 @@ pi install npm:@xzzpig/pi-mouse-events
 pi install git:github.com/Andy8647/pi-starline
 ```
 
+Runs on macOS, Linux and Windows. On Windows, use Windows Terminal with a [Nerd Font](https://www.nerdfonts.com/) installed. A legacy console host, or a terminal left on its default font, makes the bar look nothing like the screenshots: empty boxes where the icons should be, and no mouse.
+
 What changed in each version: **[Changelog](https://github.com/Andy8647/pi-starline/blob/main/CHANGELOG.md)**.
 
 ## Configure
@@ -95,6 +100,7 @@ Everything else lives in `~/.pi/agent/starline.json`. The file is optional; miss
 - [Configuration](https://github.com/Andy8647/pi-starline/blob/main/docs/configuration.md): every option and its default.
 - [What the footer shows](https://github.com/Andy8647/pi-starline/blob/main/docs/segments.md): git status indicators and the detected runtimes.
 - [Clickable pills for other extensions](https://github.com/Andy8647/pi-starline/blob/main/docs/pill-api.md): put your extension's content in a pill.
+- [Hints on the editor's top rule](https://github.com/Andy8647/pi-starline/blob/main/docs/editor-hints.md): put one line of your extension's state on the editor.
 - [Clickable pills: design](https://github.com/Andy8647/pi-starline/blob/main/docs/clickable-pills.md): how the pills, bubbles and bridges work.
 
 ## Development

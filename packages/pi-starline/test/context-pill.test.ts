@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { contextBubbleContent } from "../extensions/starline/context-breakdown";
 import { setActiveContextSnapshot } from "../extensions/starline/context-live";
-import { contextBubbleContent, pillActionFor } from "../extensions/starline/pill-actions";
+import { pillActionFor } from "../extensions/starline/pill-actions";
 
 afterEach(() => setActiveContextSnapshot(undefined));
 
@@ -48,5 +49,10 @@ describe("context pill", () => {
 		const content = contextBubbleContent();
 		expect(content.title).toBe("Context");
 		expect(content.body).toEqual(["window 200k"]);
+	});
+
+	it("marks the title while the percentage is only estimated", () => {
+		setActiveContextSnapshot({ percent: 1.4, estimated: true, contextWindow: 1_000_000 });
+		expect(contextBubbleContent().title).toBe("~1% context");
 	});
 });

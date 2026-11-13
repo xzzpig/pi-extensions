@@ -19,6 +19,12 @@ const LEGACY_PROTOTYPE_PATCH_REGISTRY = Symbol.for("pi-zentui.prototype-patch-re
  * `TuiAltScreen.prototype` — see `mouse/index.ts`.
  */
 type PrototypePatchAdapter =
+	| "mouse-viewport-input"
+	| "mouse-wheel"
+	| "mouse-selection-event"
+	| "mouse-copy"
+	| "above-editor-gap-hide"
+	| "scroll-to-end-indicator-hide"
 	| "user-message-render"
 	| "user-message-invalidate"
 	| "selector-border-render"

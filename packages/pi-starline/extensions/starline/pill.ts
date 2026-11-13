@@ -12,8 +12,9 @@ import { stripVTControlCharacters } from "node:util";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 import type { ColorSource, ColorSpec } from "./config";
-import type { ExtensionStatusSegment } from "./extension-status";
 import { hasExplicitForeground, reverseVideoSgr } from "./fork-pill-legibility";
+import type { ExtensionStatusSegment } from "./extension-status";
+import { truncateMiddle } from "./format";
 import {
 	EXTENSION_STATUS_PREFIX,
 	EXTENSION_STATUS_SEGMENT,
@@ -26,11 +27,7 @@ const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
 const DEFAULT_BG = "\x1b[49m";
 
-/**
- * Text colours are the 256-colour cube's black and white (16/231), whose values
- * the standard fixes. The basic named codes are not fixed: a terminal theme may
- * map ANSI black to a mid grey, which leaves mid-tone pills hard to read.
- */
+/** Text colours are the basic named codes, which every terminal renders correctly. */
 const TEXT_DARK = "\x1b[38;5;16m";
 const TEXT_LIGHT = "\x1b[38;5;231m";
 
@@ -82,7 +79,23 @@ export type PillRenderOptions = {
 	ascii?: boolean;
 	/** Called once per pill that survived truncation, in left-to-right order. */
 	onSpan?: (span: PillSpan) => void;
+	/**
+	 * The pills that did not fit, in bar order.
+	 *
+	 * The bar never draws part of a pill: when it runs out of room it drops whole
+	 * pills from its right end and stands a `+N` counter in their place, so what is
+	 * missing is still countable and still reachable through that pill's bubble.
+	 * Dropping from the right makes `pill.segments` its own priority list — what is
+	 * leftmost survives longest — which is the one ordering the user already owns.
+	 */
+	onOverflow?: (dropped: readonly PillOverflow[]) => void;
 };
+
+/** A pill that did not fit, as its bubble lists it. */
+export type PillOverflow = { key: string; text: string };
+
+/** Key of the counter that stands in for the pills that did not fit. */
+export const OVERFLOW_PILL_KEY = "overflow";
 
 export type PillInput = {
 	/** Segment name, for diagnostics. */
@@ -91,6 +104,12 @@ export type PillInput = {
 	text: string;
 	/** ColorSpec the pill background is resolved from. */
 	spec: ColorSpec;
+	/**
+	 * Columns at the tail of this pill's text that a shrink must not cut. A git
+	 * pill puts its dirty counts and in-progress operation there, and those are
+	 * the part a truncated branch name must not take with it.
+	 */
+	keepTailColumns?: number;
 	/**
 	 * Keep the text's own SGR instead of recolouring it. Used for extension
 	 * statuses configured with `colorMode: "original"`, whose foreground the
@@ -132,6 +151,8 @@ export function collectPillInputs(
 	specFor: (segment: string) => ColorSpec,
 	statusSpec: (key: string) => ColorSpec,
 	statusIcon: (key: string) => string = () => "",
+	/** Columns at a built-in segment's tail that a shrink must keep. */
+	tailColumnsFor: (segment: string) => number = () => 0,
 ): PillInput[] {
 	const placedKeys = new Set(
 		segments
@@ -157,7 +178,15 @@ export function collectPillInputs(
 
 		const variable = PILL_SEGMENT_VARIABLES[segment];
 		if (!variable) continue;
-		inputs.push({ key: segment, text: renderVariable(variable), spec: specFor(segment) });
+		const keepTailColumns = tailColumnsFor(segment);
+		inputs.push({
+			key: segment,
+			text: renderVariable(variable),
+			spec: specFor(segment),
+			// Only present when there is something to protect, so a plain segment
+			// stays a two-field input.
+			...(keepTailColumns > 0 ? { keepTailColumns } : {}),
+		});
 	}
 
 	return inputs;
@@ -171,7 +200,22 @@ type PreparedPill = {
 	bold: boolean;
 	/** Body SGR for a terminal-owned background, which paints text in reverse. */
 	reverse: string;
+	/** Visible columns of `text`, measured once. */
+	width: number;
+	/** The narrowest this pill may be compressed to, in visible columns. */
+	floor: number;
+	/** Tail columns a shrink keeps verbatim. */
+	keepTailColumns: number;
 };
+
+/**
+ * How narrow a pill may get before the bar drops it instead.
+ *
+ * Two words and an ellipsis: below this a pill no longer says what it is, and the
+ * `+N` counter is the more honest thing to draw. Not configurable — there is one
+ * caller, and a knob here would be another number to get wrong.
+ */
+const SHRINK_FLOOR = 24;
 
 const XTERM_CUBE_LEVELS = [0, 95, 135, 175, 215, 255];
 
@@ -254,18 +298,33 @@ function prepare(
 
 	for (const input of inputs) {
 		const text = input.keepStyling ? input.text : stripVTControlCharacters(input.text).trim();
-		if (!text || visibleWidth(text) === 0) continue;
+		const width = visibleWidth(text);
+		if (!text || width === 0) continue;
+
+		const keepTailColumns = input.keepTailColumns ?? 0;
+		// Styling this module did not choose carries ANSI it cannot re-measure, so
+		// those pills are never compressed.
+		const floor = input.keepStyling ? width : Math.min(width, SHRINK_FLOOR + keepTailColumns);
 
 		if (input.keepStyling) {
-			pills.push({ key: input.key, text, bg: neutral, fg: "", bold: false, reverse: "" });
+			pills.push({
+				key: input.key,
+				text,
+				bg: neutral,
+				fg: "",
+				bold: false,
+				reverse: "",
+				width,
+				floor,
+				keepTailColumns,
+			});
 			continue;
 		}
 
 		const resolved = resolveColorSpec(theme, source, input.spec);
 		const bg = resolved.bg ?? resolveBackgroundSgr(theme, source, input.spec) ?? neutral;
 		// An explicit fg: in the spec wins. A background the terminal owns has no
-		// knowable RGB, so reverse video hands both sides to the palette instead of
-		// guessing from the standard table.
+		// knowable RGB, so reverse video hands both sides to the palette.
 		const explicitFg = hasExplicitForeground(input.spec);
 		const reverse = explicitFg ? "" : (reverseVideoSgr(bg) ?? "");
 		const specFg = explicitFg || (resolved.bg && resolved.fg) ? resolved.fg : undefined;
@@ -276,6 +335,9 @@ function prepare(
 			fg: reverse ? "" : (specFg ?? contrastTextSgr(bg)),
 			bold: config.bold || resolved.bold,
 			reverse,
+			width,
+			floor,
+			keepTailColumns,
 		});
 	}
 
@@ -310,6 +372,148 @@ export function renderPillBar(
 	const leftCap = wantsCaps && config.caps === "round" ? CAP_GLYPHS.left : "";
 	const rightCap = wantsCaps ? CAP_GLYPHS.right : "";
 
+	const limit = width > 0 ? width : Number.POSITIVE_INFINITY;
+	const separatorWidth = visibleWidth(separator);
+	const capsWidth = visibleWidth(leftCap) + visibleWidth(rightCap);
+	/**
+	 * Width of `kept` pills, plus an optional counter standing in for the rest.
+	 *
+	 * `size` decides what a pill costs, which is what lets the same arithmetic
+	 * answer two questions: what fits at full width, and what fits once every pill
+	 * is squeezed to its floor.
+	 */
+	const lineWidth = (
+		kept: number,
+		counter: string | undefined,
+		size: (pill: PreparedPill) => number = (pill) => pill.width,
+	): number => {
+		let total = capsWidth;
+		for (let index = 0; index < kept; index++) {
+			const pill = pills[index];
+			total += (index > 0 ? separatorWidth : 0) + (pill ? size(pill) : 0) + 2;
+		}
+		if (counter !== undefined) {
+			total += (kept > 0 ? separatorWidth : 0) + visibleWidth(counter) + 2;
+		}
+		return total;
+	};
+	/** A pill at its floor, or narrower when it was never that wide. */
+	const floored = (pill: PreparedPill) => Math.min(pill.width, pill.floor);
+	/** A pill squeezed to a uniform cap, never above its natural width. */
+	const capped = (pill: PreparedPill, level: number) =>
+		Math.min(pill.width, Math.max(level, pill.floor));
+	const counterText = (dropped: number) => `+${dropped}`;
+
+	// Everything fits until proven otherwise, which is the common case.
+	let kept = pills.length;
+	let showCounter = false;
+	let truncateFirstTo = 0;
+
+	if (lineWidth(kept, undefined) > limit) {
+		kept = 0;
+		// Compressing may be enough to keep everything, and that is the case this
+		// exists for: one wide pill should not cost the pills behind it. Judge it
+		// before anything is dropped, at each pill's floor.
+		if (lineWidth(pills.length, undefined, floored) <= limit) {
+			kept = pills.length;
+		} else {
+			// Pills are placed in order, so what does not fit comes off the right end.
+			for (let candidate = pills.length - 1; candidate >= 1; candidate--) {
+				if (lineWidth(candidate, counterText(pills.length - candidate), floored) <= limit) {
+					kept = candidate;
+					showCounter = true;
+					break;
+				}
+			}
+		}
+
+		if (kept === 0) {
+			// No pill plus the counter fits. Whole pills still count for more than
+			// the counter does, so fill with those first; only when not even one fits
+			// does the first pill lose part of its label (`Long…` rather than `+8`).
+			for (let candidate = pills.length - 1; candidate >= 1; candidate--) {
+				if (lineWidth(candidate, undefined, floored) <= limit) {
+					kept = candidate;
+					break;
+				}
+			}
+
+			if (kept === 0) {
+				const room = limit - capsWidth - 2;
+				if (room >= 1) {
+					kept = 1;
+					truncateFirstTo = room;
+				} else if (lineWidth(0, counterText(pills.length)) <= limit) {
+					showCounter = true;
+				}
+			}
+		}
+	}
+
+	const dropped = pills.slice(kept);
+	const counterPill: PreparedPill | undefined =
+		showCounter && dropped.length > 0
+			? (() => {
+					const bg = neutralBackground(theme, source);
+					const text = counterText(dropped.length);
+					const size = visibleWidth(text);
+					return {
+						key: OVERFLOW_PILL_KEY,
+						text,
+						bg,
+						fg: contrastTextSgr(bg),
+						bold: config.bold,
+						reverse: "",
+						// The counter is never compressed: it is the one pill whose whole
+						// message is its number.
+						width: size,
+						floor: size,
+						keepTailColumns: 0,
+					};
+				})()
+			: undefined;
+
+	const line: PreparedPill[] = pills.slice(0, kept);
+	if (counterPill) line.push(counterPill);
+	if (truncateFirstTo > 0 && line[0]) {
+		// Nothing fits at its floor: this is a terminal too narrow for one pill, so
+		// the single pill is cut in the middle like a compressed one. The tail is
+		// not protected here — at this width reserving it would squeeze the label
+		// out of its own pill — but a middle cut still keeps whatever of the tail
+		// the budget reaches.
+		line[0] = { ...line[0], text: truncateMiddle(line[0].text, truncateFirstTo) };
+	} else if (kept > 0) {
+		const counter = counterPill ? counterText(dropped.length) : undefined;
+		if (lineWidth(kept, counter) > limit) {
+			// The pills that were kept fit at their floors, but not at full width: give
+			// the width to the pills instead of dropping the ones behind a wide one.
+			// The level is the widest cap every kept pill accepts, so the widest are
+			// compressed and two wide pills come out even; a pill already narrower
+			// than the cap is left alone.
+			const fits = (level: number) =>
+				lineWidth(kept, counter, (pill) => capped(pill, level)) <= limit;
+			let low = 0;
+			let high = Math.max(...pills.slice(0, kept).map((pill) => pill.width));
+			while (low < high) {
+				const middle = Math.ceil((low + high) / 2);
+				if (fits(middle)) low = middle;
+				else high = middle - 1;
+			}
+			for (let index = 0; index < kept; index++) {
+				const pill = pills[index];
+				if (!pill) continue;
+				const cap = Math.max(low, pill.floor);
+				if (pill.width > cap) {
+					line[index] = {
+						...pill,
+						text: truncateMiddle(pill.text, cap, pill.keepTailColumns),
+					};
+				}
+			}
+		}
+	}
+	if (line.length === 0) return "";
+
 	let out = "";
 	// Columns the terminal will draw so far. Getting this from `visibleWidth`
 	// rather than string length is what makes CJK segment text hit the right cells.
@@ -320,30 +524,27 @@ export function renderPillBar(
 	};
 
 	const capStart = column;
-	const firstBg = pills[0]?.bg;
+	const firstBg = line[0]?.bg;
 	if (leftCap && firstBg) {
 		const capFg = toForegroundSgr(firstBg);
 		if (capFg) emit(`${DEFAULT_BG}${capFg}${leftCap}${RESET}`);
 	}
 
-	const spans: PillSpan[] = [];
-
-	pills.forEach((pill, index) => {
+	line.forEach((pill, index) => {
 		// The left cap opens the bar in the first pill's colour, so it belongs to it.
 		const startColumn = index === 0 ? capStart : column;
 		const bodyStartColumn = column;
 		emit(`${pill.reverse || pill.bg}${pill.fg}${pill.bold ? BOLD : ""} ${pill.text} ${RESET}`);
 		const bodyEndColumn = column;
 
-		const next = pills[index + 1];
+		const next = line[index + 1];
 		if (next) {
 			// A solid arrow works by being the left colour on the right colour, so
 			// it vanishes when the two pills share a background — several segments
 			// default to the same theme colour, which merged them into one blob.
 			// Fall back to the thin divider in the text colour, which stays visible.
 			if (separator && pill.bg === next.bg) {
-				const dividerFg = pill.reverse ? "" : pill.fg || contrastTextSgr(pill.bg);
-				emit(`${pill.reverse || pill.bg}${dividerFg}${THIN_SEPARATOR}${RESET}`);
+				emit(`${pill.reverse || pill.bg}${pill.reverse ? "" : pill.fg || contrastTextSgr(pill.bg)}${THIN_SEPARATOR}${RESET}`);
 			} else if (separator) {
 				const arrowFg = toForegroundSgr(pill.bg);
 				// Without a usable foreground the arrow would be invisible; letting the
@@ -357,7 +558,7 @@ export function renderPillBar(
 
 		// The arrow (or cap) is emitted before the span closes, so it belongs to
 		// the pill that points out of itself.
-		spans.push({
+		options.onSpan?.({
 			key: pill.key,
 			startColumn,
 			endColumn: column,
@@ -368,23 +569,16 @@ export function renderPillBar(
 		});
 	});
 
+	// The last line of defence: a pill whose own text is wider than the terminal
+	// still cannot be allowed to wrap the footer.
 	const rendered = width > 0 ? truncateToWidth(out, width, "") : out;
-	if (options.onSpan) {
-		// Truncation keeps a prefix, so surviving cells keep their columns; only
-		// the far end needs clamping, and a pill clipped away entirely vanishes.
-		const visible = visibleWidth(rendered);
-		for (const span of spans) {
-			const startColumn = Math.min(span.startColumn, visible);
-			const endColumn = Math.min(span.endColumn, visible);
-			if (endColumn > startColumn) {
-				const bodyStartColumn = Math.min(span.bodyStartColumn, endColumn - 1);
-				const bodyEndColumn = Math.max(
-					bodyStartColumn + 1,
-					Math.min(span.bodyEndColumn, endColumn),
-				);
-				options.onSpan({ ...span, startColumn, endColumn, bodyStartColumn, bodyEndColumn });
-			}
-		}
+	if (options.onOverflow && dropped.length > 0) {
+		options.onOverflow(
+			dropped.map((pill) => ({
+				key: pill.key,
+				text: stripVTControlCharacters(pill.text).trim(),
+			})),
+		);
 	}
 
 	return rendered;

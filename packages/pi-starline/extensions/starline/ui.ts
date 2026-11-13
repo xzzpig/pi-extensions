@@ -12,8 +12,9 @@ import {
 } from "@earendil-works/pi-tui";
 import type { PolishedTuiConfig } from "./config";
 import { applyEditorCursorStyleToLines } from "./editor-cursor";
+import { externalEditorHints } from "./editor-hint-api";
 import { activeSelectionHintText, externalEditorHintText } from "./mouse";
-import { composeHints } from "./mouse/hint";
+import { composeHints, joinHints } from "./mouse/hint";
 import { pasteExpandHintText } from "./paste-collapse";
 import {
 	EDITOR_ACCENT_FALLBACK,
@@ -88,6 +89,12 @@ type PolishedFrameOptions = {
 	/** Draft lines scrolled out of view above / below, for Pi's `↑ N more` cue. */
 	scrollTop?: number;
 	scrollBottom?: number;
+	/**
+	 * Pi's border painter for the current draft: bash mode and the thinking level
+	 * both arrive through it. Starline redraws the frame, so it has to paint
+	 * through this or the box stops telling the user which mode they are in.
+	 */
+	modeBorder?: (text: string) => string;
 	/** Reports what the frame drew: `handleMouse` bounds clicks by it, a wrapper splits by it. */
 	onFrame?: (frame: Omit<DrawnFrame, "lines">) => void;
 	splitBaseFrame?: (lines: string[]) => PolishedFrameSplit | undefined;
@@ -154,8 +161,11 @@ function composeTopRightStatus(vimStatus: string | undefined, uiTheme: Theme): s
 		activeSelectionHintText() ?? externalEditorHintText(),
 	);
 	const styled = hint ? safeThemeFg(uiTheme, "muted", hint) : undefined;
-	const parts = [vimStatus, styled].filter((part): part is string => Boolean(part));
-	return parts.length > 0 ? parts.join(" ⋅ ") : undefined;
+	// Hints from other extensions go first. `composeBorderLine` cuts this end of the
+	// rule from the right, so whatever Starline can shorten has to be behind a fact
+	// the extension cannot.
+	const external = externalEditorHints().map((text) => safeThemeFg(uiTheme, "muted", text));
+	return joinHints([...external, vimStatus, styled]) ?? undefined;
 }
 
 function plainRenderedText(line: string): string {
@@ -407,6 +417,26 @@ function readVimStatus(editor: WrappedEditor, uiTheme: Theme): string | undefine
 	return safeThemeFg(uiTheme, vimModeColor(normalized), label);
 }
 
+/**
+ * Whether Pi's painter is the bash-mode one.
+ *
+ * Pi hands the editor a painter, not a mode, and it replaces that function on
+ * every change (`bashMode` for a draft starting with `!`, a `thinking*` key
+ * otherwise). The two are told apart on a probe cell: same colour means the
+ * same mode. A theme whose thinking level shares `bashMode`'s colour would read
+ * as bash mode too, and would paint the same cells either way.
+ */
+function paintsBashMode(theme: Theme, painter: (text: string) => string): boolean {
+	const bash = (theme as { getBashModeBorderColor?: () => (text: string) => string })
+		.getBashModeBorderColor;
+	if (typeof bash !== "function") return false;
+	try {
+		return painter("\u0000") === bash.call(theme)("\u0000");
+	} catch {
+		return false;
+	}
+}
+
 function renderPolishedFrame({
 	width,
 	baseRendered,
@@ -417,6 +447,7 @@ function renderPolishedFrame({
 	borderStatus,
 	scrollTop,
 	scrollBottom,
+	modeBorder,
 	onFrame,
 	splitBaseFrame,
 }: PolishedFrameOptions): string[] {
@@ -458,14 +489,26 @@ function renderPolishedFrame({
 	const fillerRows = Math.max(0, config.editorMinRows - editorLines.length);
 	onFrame?.({ editorLines, trailingLines: autocompleteLines, fillerRows });
 
+	// An explicit `colors.editorBorder` is the user asking for one fixed colour.
+	// Left unset, bash mode paints the box the way Pi's own editor does; the
+	// thinking level keeps Starline's border, which is the look the user
+	// configured and not a mode they need to be warned about.
+	const bashBorder =
+		config.colors.editorBorder === undefined &&
+		modeBorder !== undefined &&
+		paintsBashMode(uiTheme, modeBorder)
+			? modeBorder
+			: undefined;
 	const borderPaint = (text: string) =>
-		renderStyleForSourceOrFallback(
-			uiTheme,
-			colorSource,
-			config.colors.editorBorder,
-			EDITOR_BORDER_FALLBACK,
-			text,
-		);
+		bashBorder
+			? bashBorder(text)
+			: renderStyleForSourceOrFallback(
+					uiTheme,
+					colorSource,
+					config.colors.editorBorder,
+					EDITOR_BORDER_FALLBACK,
+					text,
+				);
 	const top = composeBorderLine(
 		width,
 		{
@@ -549,6 +592,7 @@ export class PolishedEditor extends CustomEditor {
 			uiTheme: this.uiTheme,
 			config,
 			borderStatus: workingStatusForBorder(config, Math.max(1, width - 5)),
+			modeBorder: this.borderColor?.bind(this),
 			// Pi paints the draft's scroll position into the borders it draws, and both
 			// of those lines are dropped when Starline redraws the frame, so the counts
 			// are read back out of them here. Works whether the base inlines the cue
@@ -706,6 +750,7 @@ export class WrappedPolishedEditor implements EditorComponent {
 			config,
 			vimStatus: readVimStatus(this.base, this.uiTheme),
 			borderStatus: workingStatusForBorder(config, Math.max(1, width - 5)),
+			modeBorder: this.base.borderColor?.bind(this.base),
 			// The base's frame lines are dropped, so its scroll cues are read back
 			// from them and redrawn by Starline's own borders.
 			scrollTop: readScrollCount(rendered[0], "↑"),

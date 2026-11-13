@@ -26,7 +26,13 @@ import {
 	type ResolvedIcons,
 	resolveConfiguredIcons,
 } from "./icons";
-import { DEFAULT_PILL_CONFIG, normalizePillConfig, type PillConfig } from "./pill-config";
+import {
+	DEFAULT_PILL_CONFIG,
+	EXTENSION_STATUS_PREFIX,
+	normalizePillConfig,
+	PILL_SEGMENT_VARIABLES,
+	type PillConfig,
+} from "./pill-config";
 import { isSupportedColorSpec } from "./style";
 
 export type ColorSpec = string;
@@ -87,6 +93,11 @@ export type GitConfig = {
 	branch: GitBranchConfig;
 	commit: GitCommitConfig;
 	metrics: GitMetricsConfig;
+	/**
+	 * List the repository's open issues in the pull bubble. Off by default: it
+	 * changes what that bubble lists and costs the forge one more read.
+	 */
+	issues: boolean;
 };
 
 export type MouseConfig = {
@@ -185,6 +196,13 @@ export type ExtensionStatusesConfig = {
 	 * a status with no number keeps its text. Defaults to the published text.
 	 */
 	formats: Record<string, ExtensionStatusFormat>;
+	/**
+	 * Slash command a click on the status's pill runs, keyed by status key. The
+	 * shortest way to point a third-party pill at the panel its extension already
+	 * has (`procs` → `/ps`) without writing a bridge. A bridge that registers an
+	 * action for the same key wins: code beats this declaration.
+	 */
+	commands: Record<string, string>;
 };
 
 const DEFAULT_PROJECT_REFRESH_INTERVAL_MS = 30_000;
@@ -234,6 +252,12 @@ export type PolishedTuiConfig = {
 		packageVersion: ColorSpec;
 		gitCommit: ColorSpec;
 		gitMetricsAdded: ColorSpec;
+		/** The pull pill: one background per pull state, plus the bare open count. */
+		gitPrOpen: ColorSpec;
+		gitPrDraft: ColorSpec;
+		gitPrMerged: ColorSpec;
+		gitPrClosed: ColorSpec;
+		gitPrCount: ColorSpec;
 		username: ColorSpec;
 		time: ColorSpec;
 		os: ColorSpec;
@@ -275,6 +299,7 @@ export const defaultConfig: PolishedTuiConfig = {
 		branch: { maxLength: "full" },
 		commit: { hashLength: 7, onlyDetached: true, showTag: true },
 		metrics: { onlyNonzero: true, ignoreSubmodules: false },
+		issues: false,
 	},
 	icons: {
 		mode: "auto",
@@ -298,6 +323,11 @@ export const defaultConfig: PolishedTuiConfig = {
 		packageVersion: "208",
 		gitCommit: "bold green",
 		gitMetricsAdded: "bold green",
+		gitPrOpen: "bold green",
+		gitPrDraft: "bold lavender",
+		gitPrMerged: "bold purple",
+		gitPrClosed: "bold red",
+		gitPrCount: "bold purple",
 		username: "bold yellow",
 		time: "bold yellow",
 		os: "bold white",
@@ -319,6 +349,7 @@ export const defaultConfig: PolishedTuiConfig = {
 		placements: {},
 		colorModes: {},
 		formats: {},
+		commands: {},
 	},
 	mouse: {
 		enabled: true,
@@ -412,6 +443,7 @@ function parseGitConfig(value: unknown): GitConfig {
 		branch: { maxLength: normalizeGitBranchMaxLength(branch.maxLength) },
 		commit: normalizeGitCommitConfig(commit),
 		metrics: normalizeGitMetricsConfig(metrics),
+		issues: typeof value.issues === "boolean" ? value.issues : defaults.issues,
 	};
 }
 
@@ -539,6 +571,11 @@ function normalizeColors(record: Record<string, unknown>): Partial<PolishedTuiCo
 		packageVersion: colorValue(record, "packageVersion"),
 		gitCommit: colorValue(record, "gitCommit"),
 		gitMetricsAdded: colorValue(record, "gitMetricsAdded"),
+		gitPrOpen: colorValue(record, "gitPrOpen"),
+		gitPrDraft: colorValue(record, "gitPrDraft"),
+		gitPrMerged: colorValue(record, "gitPrMerged"),
+		gitPrClosed: colorValue(record, "gitPrClosed"),
+		gitPrCount: colorValue(record, "gitPrCount"),
 		username: colorValue(record, "username"),
 		time: colorValue(record, "time"),
 		os: colorValue(record, "os"),
@@ -714,6 +751,7 @@ function normalizeExtensionStatuses(
 		colors,
 		icons,
 		formats,
+		commands: parseStatusCommands(record.commands).commands,
 	};
 }
 
@@ -910,6 +948,7 @@ export function mergeConfig(parsed: unknown): PolishedTuiConfig {
 			colors: { ...extensionStatuses.colors },
 			icons: { ...extensionStatuses.icons },
 			formats: { ...extensionStatuses.formats },
+			commands: { ...extensionStatuses.commands },
 		},
 		mouse,
 	};
@@ -945,11 +984,93 @@ export function getExtensionStatusFormat(
 	return config.extensionStatuses.formats[key] ?? "full";
 }
 
+/** `/name`, optionally with arguments. Whitespace after the slash is refused. */
+const STATUS_COMMAND_PATTERN = /^\/\S+(?: .*)?$/;
+
+/** `/starline procs` would re-enter the pill lookup and recurse into itself. */
+const RESERVED_STATUS_COMMAND = "starline";
+
+/** Lowercased built-in segment names, to refuse a command for one of them. */
+const BUILTIN_SEGMENT_NAMES: Record<string, true> = Object.fromEntries(
+	Object.keys(PILL_SEGMENT_VARIABLES).map((name) => [name.toLowerCase(), true]),
+);
+
+export function statusCommandName(value: string): string {
+	const withoutSlash = value.startsWith("/") ? value.slice(1) : value;
+	const space = withoutSlash.indexOf(" ");
+	return space === -1 ? withoutSlash : withoutSlash.slice(0, space);
+}
+
+/**
+ * `extensionStatuses.commands`, split into what is usable and what was dropped.
+ *
+ * A rejected entry is dropped rather than repaired: the value is a command the
+ * user meant to type, and guessing at it would run something they did not ask
+ * for. The caller says which ones went, once per process.
+ */
+export function parseStatusCommands(value: unknown): {
+	commands: Record<string, string>;
+	rejected: string[];
+} {
+	const commands: Record<string, string> = {};
+	const rejected: string[] = [];
+	if (!isRecord(value)) return { commands, rejected };
+
+	for (const [rawKey, rawValue] of Object.entries(value)) {
+		const key = rawKey.trim();
+		// The map is already keyed by status, so the segment spelling of the same
+		// name can only be a mistake: no status key ever carries the prefix.
+		if (!key || key.startsWith(EXTENSION_STATUS_PREFIX)) {
+			rejected.push(rawKey);
+			continue;
+		}
+		// A built-in segment has an action of its own, and a status taking one over
+		// would break the rule that a status cannot hijack `queue`.
+		if (key.toLowerCase() in BUILTIN_SEGMENT_NAMES) {
+			rejected.push(rawKey);
+			continue;
+		}
+		if (typeof rawValue !== "string") {
+			rejected.push(rawKey);
+			continue;
+		}
+		const command = rawValue.trim();
+		if (
+			!STATUS_COMMAND_PATTERN.test(command) ||
+			statusCommandName(command) === RESERVED_STATUS_COMMAND
+		) {
+			rejected.push(rawKey);
+			continue;
+		}
+		commands[key] = command;
+	}
+
+	return { commands, rejected };
+}
+
 export function getExtensionStatusColorMode(
 	config: PolishedTuiConfig,
 	key: string,
 ): ExtensionStatusColorMode {
 	return config.extensionStatuses.colorModes[key] ?? DEFAULT_EXTENSION_STATUS_COLOR_MODE;
+}
+
+let warnedRejectedStatusCommands = false;
+
+/**
+ * A rejected `extensionStatuses.commands` entry does nothing on click, which is
+ * indistinguishable from a pill that was never configured. Say which ones were
+ * dropped, once per process.
+ */
+function warnRejectedStatusCommands(record: Record<string, unknown>): void {
+	if (warnedRejectedStatusCommands) return;
+	const statuses = isRecord(record.extensionStatuses) ? record.extensionStatuses : {};
+	const { rejected } = parseStatusCommands(statuses.commands);
+	if (rejected.length === 0) return;
+	warnedRejectedStatusCommands = true;
+	console.warn(
+		`[starline] Ignoring extensionStatuses.commands for ${rejected.join(", ")}: a value must be "/name" or "/name args", keyed by a status key without the extensionStatus: prefix, and must not point at /starline.`,
+	);
 }
 
 export function loadConfig(path = configPath): PolishedTuiConfig {
@@ -970,6 +1091,7 @@ export function loadConfig(path = configPath): PolishedTuiConfig {
 				"[starline] Renamed your `fixedEditor` settings to `mouse` — the fixed editor is gone and Pi's own fullscreen mode replaces it. Your choices were kept.",
 			);
 		}
+		warnRejectedStatusCommands(config);
 		return mergeConfig(config);
 	} catch (error) {
 		// Falling back to defaults is right — a broken config must not block a

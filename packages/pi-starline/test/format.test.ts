@@ -16,11 +16,13 @@ import {
 	formatGitCommitSegment,
 	formatGitMetricsSegment,
 	formatOsLabel,
+	formatPackagePillLabel,
 	formatPackageVersionSegment,
 	getUsageTotals,
 	invalidateUsageTotalsCache,
 	resolveSessionStartEpoch,
 	statusValueText,
+	truncateMiddle,
 } from "../extensions/starline/format";
 import {
 	ASCII_DEFAULT_ICONS,
@@ -290,11 +292,14 @@ describe("formatGitBranchText", () => {
 		expect(formatGitBranchText("1234567890", 10)).toBe("1234567890");
 	});
 
-	it("includes the ellipsis inside the configured visible width", () => {
-		expect(formatGitBranchText("feature", 4)).toBe("fea…");
+	it("keeps both ends of a shortened branch", () => {
+		// End truncation answered `feature/…` for every branch of the same kind: the
+		// part that tells two of them apart is at the tail.
+		expect(formatGitBranchText("feature/ABC-1234-add-a-thing", 16)).toBe("feature/…a-thing");
+		expect(formatGitBranchText("feature", 4)).toBe("fe…e");
 		expect(formatGitBranchText("feature", 1)).toBe("…");
 		const unicode = formatGitBranchText("你好世界", 5);
-		expect(unicode).toBe("你好…");
+		expect(unicode).toBe("你…界");
 		expect(visibleWidth(unicode)).toBe(5);
 	});
 });
@@ -325,6 +330,32 @@ describe("context helpers", () => {
 			}),
 		).toMatch(/^\[.{10}\] 42%\/128k$/);
 		expect(buildContextDisplayLabel({ percent: null, contextWindow: undefined })).toBe("--");
+	});
+
+	it("marks an estimated figure with a tilde and leaves the gauge alone", () => {
+		expect(
+			buildContextDisplayLabel({ percent: 1.4, contextWindow: 1_000_000, estimated: true }),
+		).toBe("~1%/1.0M");
+		expect(
+			buildContextDisplayLabel({
+				percent: 1.4,
+				contextWindow: 1_000_000,
+				format: "percent",
+				estimated: true,
+			}),
+		).toBe("~1%");
+		expect(
+			buildContextDisplayLabel({
+				percent: 1.4,
+				contextWindow: 1_000_000,
+				style: "text+gauge",
+				estimated: true,
+			}),
+		).toMatch(/^\[.{10}\] ~1%\/1\.0M$/);
+		// An unknown figure stays bare: `~?` would read like a value that was worked out.
+		expect(
+			buildContextDisplayLabel({ percent: null, contextWindow: 128_000, estimated: true }),
+		).toBe("?/128k");
 	});
 });
 
@@ -542,7 +573,7 @@ describe("formatPackageVersionSegment", () => {
 	it("renders the Starship `is <glyph> <version>` shape", () => {
 		const out = formatPackageVersionSegment(
 			makeTheme(),
-			{ ecosystem: "nodejs", version: "1.2.3" },
+			{ ecosystem: "nodejs", version: "1.2.3", file: "package.json" },
 			"terminal",
 			"nerd",
 			"",
@@ -558,7 +589,7 @@ describe("formatPackageVersionSegment", () => {
 	it("falls back to the ASCII package label in ASCII mode", () => {
 		const out = formatPackageVersionSegment(
 			makeTheme(),
-			{ ecosystem: "nodejs", version: "1.2.3" },
+			{ ecosystem: "nodejs", version: "1.2.3", file: "package.json" },
 			"terminal",
 			"ascii",
 			"",
@@ -572,7 +603,7 @@ describe("formatPackageVersionSegment", () => {
 	it("honors a configured package icon override", () => {
 		const out = formatPackageVersionSegment(
 			makeTheme(),
-			{ ecosystem: "nodejs", version: "1.2.3" },
+			{ ecosystem: "nodejs", version: "1.2.3", file: "package.json" },
 			"terminal",
 			"nerd",
 			"#", // custom override wins over mode default
@@ -580,6 +611,28 @@ describe("formatPackageVersionSegment", () => {
 		);
 		expect(out).toContain("#");
 		expect(out).not.toContain("\u{f487}");
+	});
+});
+
+describe("formatPackagePillLabel", () => {
+	const pkg = { ecosystem: "nodejs", version: "0.10.4", file: "package.json" };
+
+	it("shows the version the registry has, not the manifest's", () => {
+		expect(formatPackagePillLabel(pkg, "0.10.3", "nerd")).toBe("\u{f487} 0.10.3");
+	});
+
+	it("never marks anything unreleased", () => {
+		// Git tags are a local marker; the registry is what decides what shipped, so
+		// the pill has nothing to compare and no star to draw.
+		expect(formatPackagePillLabel(pkg, "0.10.3", "nerd")).not.toContain("*");
+	});
+
+	it("falls back to the manifest when the registry has no answer", () => {
+		expect(formatPackagePillLabel(pkg, undefined, "nerd")).toBe("\u{f487} 0.10.4");
+	});
+
+	it("renders nothing without a manifest", () => {
+		expect(formatPackagePillLabel(undefined, "0.10.3", "nerd")).toBe("");
 	});
 });
 
@@ -720,5 +773,52 @@ describe("statusValueText", () => {
 	it("leaves text with no number alone", () => {
 		expect(statusValueText("ready")).toBe("ready");
 		expect(statusValueText("")).toBe("");
+	});
+});
+
+describe("truncateMiddle", () => {
+	it("returns text that already fits untouched", () => {
+		expect(truncateMiddle("main", 8)).toBe("main");
+		expect(truncateMiddle("feature/ABC-1", 13)).toBe("feature/ABC-1");
+	});
+
+	it("keeps both ends and puts one ellipsis between them", () => {
+		expect(truncateMiddle("feature/ABC-1234-add-a-thing", 16)).toBe("feature/…a-thing");
+	});
+
+	it("never exceeds the budget, for any width and script", () => {
+		const samples = [
+			"feature/ABC-1234-add-a-thing",
+			"你好世界你好世界你好世界",
+			"🙂🙂🙂🙂🙂🙂🙂🙂",
+		];
+		for (const sample of samples) {
+			for (let budget = 0; budget <= visibleWidth(sample) + 2; budget++) {
+				const out = truncateMiddle(sample, budget);
+				expect(visibleWidth(out), `${sample} at ${budget} gave ${out}`).toBeLessThanOrEqual(
+					Math.max(0, budget),
+				);
+			}
+		}
+	});
+
+	it("cuts on grapheme boundaries rather than halving a glyph", () => {
+		const out = truncateMiddle("🙂🙂🙂🙂🙂🙂", 5);
+		// A wide glyph that does not fit is dropped, which can leave a column free.
+		expect(visibleWidth(out)).toBeLessThanOrEqual(5);
+		expect(out).not.toContain("\ufffd");
+		expect([...out].every((glyph) => glyph === "…" || glyph === "🙂")).toBe(true);
+	});
+
+	it("keeps the tail a caller asked to protect", () => {
+		const text = "feature/ABC-1234-a-really-long-branch [+2] REBASING";
+		const out = truncateMiddle(text, 30, 12);
+		expect(out.endsWith(" [+2] REBASING".slice(-12))).toBe(true);
+		expect(out).toContain("feature/");
+		expect(visibleWidth(out)).toBeLessThanOrEqual(30);
+	});
+
+	it("returns nothing for a budget of zero", () => {
+		expect(truncateMiddle("feature", 0)).toBe("");
 	});
 });

@@ -4,11 +4,11 @@
   "prefix": "packages/pi-starline",
   "source": "https://github.com/Andy8647/pi-starline.git",
   "remote": "upstream-pi-starline",
-  "ref": "v0.9.0",
-  "version": "0.9.0",
-  "upstreamCommit": "84e7106dd0ed3797f187691fd76d269de737b6ed",
+  "ref": "v0.13.0",
+  "version": "0.13.0",
+  "upstreamCommit": "b51588a932a4434d5dcc8689beed4ef1007481e0",
   "squash": true,
-  "lastSyncedAt": "2026-10-30T14:44:15+08:00",
+  "lastSyncedAt": "2026-11-14T01:00:00+08:00",
   "notes": "Forked from Andy8647/pi-starline. The shared mouse API contract lives in openspec/specs/mouse-api; fork behavior and releases are documented in the package README and FORK-CHANGELOG.",
   "knownDebt": [
     {
@@ -105,12 +105,6 @@
     },
     {
       "kind": "noise",
-      "path": "packages/pi-starline/extensions/starline/git.ts",
-      "reason": "Diff-alignment artifact: the fork's multiline call and restructuring indent these upstream-origin lines one level deeper than upstream; restoring upstream bytes fails `biome check .`, which runs inside `prepublishOnly`.",
-      "recordedAt": "2026-09-28T05:40:00+08:00"
-    },
-    {
-      "kind": "noise",
       "path": "packages/pi-starline/test/contract/mouse-install.test.ts",
       "reason": "Diff-alignment artifact: the fork's multiline call and restructuring indent these upstream-origin lines one level deeper than upstream; restoring upstream bytes fails `biome check .`, which runs inside `prepublishOnly`.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
@@ -120,6 +114,12 @@
       "path": "packages/pi-starline/test/mouse/install-wiring.test.ts",
       "reason": "Diff-alignment artifact: the fork's multiline call and restructuring indent these upstream-origin lines one level deeper than upstream; restoring upstream bytes fails `biome check .`, which runs inside `prepublishOnly`.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
+    },
+    {
+      "kind": "noise",
+      "path": "packages/pi-starline/test/mouse/install-mouse.test.ts",
+      "reason": "Diff-alignment artifact: the fork\"s pi-mouse-events consumer test is much larger than upstream v0.13.0\"s rewritten installMouse suite, so shared upstream-origin lines sit at different offsets. The fork owns this file; upstream\"s version tests an architecture the fork does not use.",
+      "recordedAt": "2026-11-14T01:05:00+08:00"
     }
   ],
   "reapplyOnSync": [
@@ -148,7 +148,13 @@
     "footer.ts keeps the governed row behind one seam: the render tail builds legacyPillInputs (the unchanged collectPillInputs call at its original indentation), calls renderStatusBar from fork-status-bar.ts, publishes the panel model with publishStatusPanelModel, and stores the returned hit map per width. handleMouse resolves the private OVERFLOW_SUMMARY_KEY pill and shortened read-only pills through openStatusPanel while leaving every registered action first; dispose publishes no model and closes the panel. Re-apply those call sites and keep the surrounding label/colour code byte-stable.",
     "settings-command.ts keeps only call-sized seams for the settings surface: the Layout tab splices ...overflowLayoutItems(config), the extension-segments tab splices ...overflowStatusItems({config, key, statusSettingPrefix}) per published status, the change handler hands every id to applyOverflowSetting(...) once, and the `/starline statuses` route is one handleStatusPanelCommand(args, ctx) call before the unknown-argument warning. The rows, value lists, presets, id parsing for priority/pinned and the close-then-mount ordering all live in extensions/starline/fork-overflow-settings.ts — re-apply the seams, not the logic, and keep every surrounding upstream line byte-stable.",
     "index.ts wires the fork sources with two calls: configureStatusView({ getConfig: getCurrentConfig, getStatuses: () => getActiveExtensionStatuses() }) in installUi and configureStatusView(undefined) in cleanupUi, plus a setPillOverflow dep that assigns savePillOverflowPatch(patch) to currentConfig. Keep those seams minimal.",
-    "docs/configuration.md keeps only the added pointer subsection (\"Overflow, when the bar runs out of room\") before \"Segment display options\"; every other line stays at upstream bytes. Do not run a formatter over this file — it re-wraps the segments example and a nested bullet that upstream wrote differently."
+    "docs/configuration.md keeps only the added pointer subsection (\"Overflow, when the bar runs out of room\") before \"Segment display options\"; every other line stays at upstream bytes. Do not run a formatter over this file — it re-wraps the segments example and a nested bullet that upstream wrote differently.",
+    "pill-actions.ts carries three SAFETY comments on the upstream-original ctx.ui.theme as unknown as ThemeLike casts (showContext/showPackage/showTps); upstream v0.13.0 ships them without one and pi-lens blocks on require-safety-comment-for-as-unknown-as. Re-apply the comments, never the casts.",
+    "format.ts carries one SAFETY comment on the upstream-original entry as unknown as UsageEntryShape cast plus one biome-ignore on tagMatchesVersion, which upstream v0.13.0 ships unused; both are needed for the pi-lens/biome gates. Re-apply the two comments.",
+    "footer.ts resolves the context pill through the upstream v0.13.0 tilde estimate (nothingRanYet/estimatedTokens/estimatedPercent via collectContextBreakdown(probeFor(ctx)), passed as estimated to buildContextDisplayLabel), keeps the git_pr renderVariable and pillSpecFor cases, and passes tailColumnsFor (git.labelTailColumns) to collectPillInputs. Re-apply those additions around the entry-22 renderStatusBar seam.",
+    "config.ts carries upstream v0.13.0\"s extensionStatuses.commands feature (parseStatusCommands, STATUS_COMMAND_PATTERN, RESERVED_STATUS_COMMAND, BUILTIN_SEGMENT_NAMES, warnRejectedStatusCommands wired into loadConfig), the git.issues field, and the gitPr* colour defaults; the fork also keeps its own transcriptCleanCopy mouse key. Re-apply those alongside the fork seams.",
+    "test/config.test.ts asserts the fork keeps transcriptCleanCopy (upstream moved it to pi-tidy) and carries the upstream commands expectations. Re-apply that one test adaptation.",
+    "fork-status-bar.ts legacyRender renders at unbounded width and clamps spans itself, because upstream v0.13.0\"s renderPillBar drops whole pills and stands a +N counter in their place when given a real width; governance off must keep the pre-overflow single truncation. Re-apply that call and the span clamp."
   ],
   "doNotReintroduce": [
     "Do not restore upstream repository.url as the fork publishing source; npm provenance must identify the actual build repository.",
