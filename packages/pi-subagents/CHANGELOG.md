@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.25.0] - 2026-11-13 (fork)
+
+### Changed
+
+- **Synced upstream `v0.84.0` → `v0.88.0`**: latest child progress in the
+  widget, paused `timeoutMs` while a child waits for a supervisor answer,
+  monotonic run clocks, truncated-reply detection, `list` search filter,
+  forked-session cleanup, workflow child-launch approval through `tool_call`
+  handlers, editor-hint API, and Pi Desktop / Windows / MCP fixes.
+- Re-applied every fork seam on the new upstream shapes: supervisor responder
+  side channel (with upstream's `endedRequests` lifecycle), context injection,
+  sandbox/permission profiles, goal auto-continuation gate, native Fleet
+  transcripts, host-available builtins, tool-budget blocked detection, and the
+  `@xzzpig` package identity.
+- Extended the lightweight SDK shim with the Pi 1.2 `ExtensionToolContext` /
+  `ToolDefinition.exposure` surface used by the new deferred
+  `subagent_launch` tool, and registered the new upstream real-SDK test in
+  `fork-test-environment.mjs`.
+- Kept the fork's shared `handleToolResult` dedup path for tool results while
+  adopting upstream's `progressText` propagation so the widget shows the
+  latest successful child progress.
+
 ## [0.24.2] - 2026-11-01 (fork)
 
 ### 维护
