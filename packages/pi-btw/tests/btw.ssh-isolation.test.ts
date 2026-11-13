@@ -295,10 +295,16 @@ function createHarness() {
     isIdle: () => true,
   } as unknown as ExtensionCommandContext;
 
+  // TUI commands return before the BTW turn finishes (#62); let the mocked turn settle.
+  async function settleBtwTurn() {
+    for (let i = 0; i < 5; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
   async function command(name: string, args = "") {
     const command = commands.get(name);
     if (!command) throw new Error(`Missing command ${name}`);
     await command.handler(args, ctx);
+    await settleBtwTurn();
   }
 
   return {
