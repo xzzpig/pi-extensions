@@ -685,7 +685,7 @@ export const NetworkConfigSchema = z.object({
             'log), so paths that exist on only some hosts are safe to list.',
         ),
     })
-    .refine(o => !o.caCertPath === !o.caKeyPath, {
+    .refine(o => Boolean(o.caCertPath) === Boolean(o.caKeyPath), {
       message: 'caCertPath and caKeyPath must be provided together',
     })
     .optional()

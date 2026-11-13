@@ -45,19 +45,13 @@
     },
     {
       "kind": "lint",
-      "path": "packages/sandbox-runtime/src/sandbox/sandbox-config.ts",
-      "reason": "ast-grep no-negation-in-equality-check on `.refine(o => !o.caCertPath === !o.caKeyPath, ...)` is a false positive on upstream-original bytes (upstream v0.0.79 L676): the expression intentionally compares two negated booleans so caCertPath/caKeyPath must be provided together; rewriting it as !(a === b) would reject both-present and both-absent. Fork-divergence discipline forbids editing or annotating upstream-original lines. Remove when upstream rewrites the refine or the rule learns this idiom.",
-      "recordedAt": "2026-11-13T00:00:00Z"
-    },
-    {
-      "kind": "lint",
       "path": "packages/sandbox-runtime/.github/workflows/integration-tests.yml",
       "reason": "Nine line-length findings on the upstream v0.0.79 integration workflow are byte-identical to upstream (the v0.0.77 release.yml findings are already declared). Keep upstream bytes under the current-change-only policy; revisit when upstream reformats the workflow.",
       "recordedAt": "2026-11-13T00:00:00Z"
     }
   ],
   "reapplyOnSync": [
-    "network.disabled schema field in sandbox-config.ts, the readdirSync withFileTypes cast in sandbox-utils.ts, and the closeAllConnections serverWithClose cast in sandbox-manager.ts",
+    "network.disabled schema field in sandbox-config.ts, the Boolean(a) === Boolean(b) form of the caCertPath/caKeyPath refine (upstream writes !a === !b, which trips no-negation-in-equality-check; equivalent under truthiness), the readdirSync withFileTypes cast in sandbox-utils.ts, and the closeAllConnections serverWithClose cast in sandbox-manager.ts",
     "keep src/sandbox/fork-network.ts (isNetworkDisabled) as the consolidated network.disabled precedence with its sandbox-manager.ts call sites (initialize guard, wrapWithSandbox and wrapWithSandboxArgv windows branch)",
     "keep pathEntryLstatExists exported from fork-only src/sandbox/fork-filesystem.ts (plus the root re-export in src/index.ts) for the pi-sandbox fork, which uses the same lstat semantics for user-configured denyWrite paths",
     "keep test/control-fd.test.ts delegated to the fork-control-fd-process helper for dynamic inherited FIFO fd3, CLI readiness, EOF, bounded completion and awaited teardown instead of Bun extra-pipe sockets and sleep/false-success timeouts"
