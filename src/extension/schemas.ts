@@ -1,9 +1,6 @@
-/**
- * TypeBox schemas for subagent tool parameters
- */
-
 import { Type } from "typebox";
 import type { DisabledFeatureSurface } from "../shared/disabled-features.ts";
+import { RUNNER_LAUNCHER_NAME_PATTERN } from "../shared/types.ts";
 import { MAX_ARGS_BYTES, MAX_ARGS_DEPTH, MAX_ARGS_FIELDS, MAX_ARGS_ITEMS } from "../workflows/workflow-resources.ts";
 
 function keepTopLevelParameterDescriptions<T>(schema: T): T {
@@ -162,6 +159,7 @@ const SubagentParamProperties = {
 		description: "Management/control only; omit for execution. validate accepts workflow: true or a script path. Discover actions with {action:\"guide\",options:{topic:\"tool-reference\"}}."
 	})),
 	capabilities: Type.Optional(Type.Boolean({ description: "list: compact capability rows/details without system prompts." })),
+	search: Type.Optional(Type.String({ minLength: 1, description: "list: case-insensitive match on agent name, alias, or description." })),
 	name: Type.Optional(Type.String({ description: "schedule.create name." })),
 	id: Type.Optional(Type.String({
 		description: "Run id/prefix for status/control."
@@ -180,6 +178,7 @@ const SubagentParamProperties = {
 	supersession: Type.Optional(Type.Unsafe({ type: "object", additionalProperties: true, description: "lane.recordSupersession evidence; read guide tool-reference." })),
 	index: Type.Optional(Type.Integer({ minimum: 0, description: "Zero-based child/transcript index." })),
 	childId: Type.Optional(Type.String({ minLength: 1, maxLength: 256, description: "Child-scoped stop identity." })),
+	drain: Type.Optional(Type.Boolean({ description: "stop: a live async workflow starts no new children; started ones finish." })),
 	toolCallId: Type.Optional(Type.String({ description: "Command tool-call id." })),
 	view: Type.Optional(Type.String({
 		enum: ["fleet", "transcript"],
@@ -247,6 +246,10 @@ const SubagentParamProperties = {
 	agentScope: Type.Optional(Type.String({ description: "user/project/both (default); project wins collisions." })),
 	cwd: Type.Optional(Type.String({ description: "Execution/project-pane directory." })),
 	machine: Type.Optional(Type.String({ minLength: 1, maxLength: 128, description: "Herdr saved machine id or label (runs an external CLI agent), a Rex host named in settings (runs a Pi child), or \"local\" (a Pi child in a Rex pane here). On another machine, cwd is a directory there." })),
+	requireLauncher: Type.Optional(Type.Object({
+		name: Type.String({ pattern: RUNNER_LAUNCHER_NAME_PATTERN.source }),
+		definitionDigest: Type.String({ pattern: "^[0-9a-f]{64}$" }),
+	}, { additionalProperties: false, description: "Top-level single async launch only: refuse unless the agent runs under this launcher with this definition digest (preflight agent.definitionDigest)." })),
 	artifacts: Type.Optional(Type.Boolean({ description: "Debug artifacts; default true." })),
 	includeProgress: Type.Optional(Type.Boolean({ description: "Full result progress; default false." })),
 	share: Type.Optional(Type.Boolean({ description: "Upload session to GitHub Gist; default false." })),

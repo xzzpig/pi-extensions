@@ -14,7 +14,7 @@ import type { MockPi } from "../support/helpers.ts";
 import { createMockPi, createTempDir, events, makeAgent, makeAgentConfigs, removeTempDir } from "../support/helpers.ts";
 import { runSync } from "../../src/runs/foreground/execution.ts";
 import { buildRunnerChildLaunch } from "../../src/runs/background/runner-child-launch.ts";
-import { childSessionFactory, createDefaultChildSessionFactory, disposeChildSessions, type ChildSessionFactory, type ChildSessionLaunch, type PiCodingAgentModule } from "../../src/runs/shared/child-session.ts";
+import { childSessionFactory, createDefaultChildSessionFactory, disposeChildSessionsForParent, type ChildSessionFactory, type ChildSessionLaunch, type PiCodingAgentModule } from "../../src/runs/shared/child-session.ts";
 import { createNestedRoute } from "../../src/runs/shared/nested-events.ts";
 import { createStructuredOutputRuntime } from "../../src/runs/shared/structured-output.ts";
 import type { ForegroundChildSessionControls, PlacementMachineReference, SingleResult } from "../../src/shared/types.ts";
@@ -162,6 +162,27 @@ describe("in-process foreground child", () => {
 			{ text: "Focus on tests.", mode: "steer" },
 			{ text: "Then update docs.", mode: "followUp" },
 		]);
+	});
+
+	it("drains completed foreground output after guidance rejection", async () => {
+		mockPi.onCall({ jsonl: [events.assistantMessage("Complete report")], keepAliveAfterFinalMessageMs: 15_000 });
+		const inner = childSessionFactory();
+		const rejecting: ChildSessionFactory = { ...inner, create: async (launch) => {
+			const session = await inner.create(launch);
+			session.steer = session.followUp = async () => { throw new Error("Child completed its acceptance report"); };
+			return session;
+		} };
+		let controls: ForegroundChildSessionControls | undefined;
+		const run = runSync(tempDir, makeAgentConfigs(["echo"]), "echo", "Task", {
+			runId: "rejected-after-report", childSessionFactory: rejecting, timeoutMs: 2_000,
+			onChildSession: (next) => { controls = next; },
+		});
+		await waitFor(() => controls !== undefined && mockPi.sessions[0]?.scriptedFinalEmitted === true);
+		await assert.rejects(controls!.steer("More guidance"), /completed/);
+		await assert.rejects(controls!.followUp("New work"), /completed/);
+		const result = await run;
+		assert.equal(result.exitCode, 0, result.error);
+		assert.equal(result.finalOutput, "Complete report");
 	});
 
 	it("does not abort when a steer arrives after the final stop and turn_start is delayed", async () => {
@@ -360,7 +381,7 @@ describe("in-process foreground child", () => {
 		assert.equal(receipt.detached, true);
 		assert.equal(receipt.detachedReason, "user request");
 		assert.equal(mockPi.sessions[0]?.aborted, false, "detach must not abort the session");
-		await disposeChildSessions();
+		await disposeChildSessionsForParent(undefined);
 		assert.equal(mockPi.sessions[0]?.aborted, false, "parent session shutdown must not abort a detached child");
 		fs.writeFileSync(release, "go");
 		await waitFor(() => terminal !== undefined);
@@ -374,7 +395,7 @@ describe("in-process foreground child", () => {
 		mockPi.onCall({ hangUntilAbort: true });
 		const run = runSync(tempDir, makeAgentConfigs(["echo"]), "echo", "Task", { runId: "shutdown-attached" });
 		await waitFor(() => mockPi.sessions[0]?.task !== undefined);
-		await disposeChildSessions();
+		await disposeChildSessionsForParent(undefined);
 		const result = await run;
 		assert.equal(result.exitCode, 1);
 		assert.equal(result.error, "Subagent stopped because the parent session shut down.");

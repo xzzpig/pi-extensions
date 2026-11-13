@@ -7,7 +7,7 @@ import { registerNativeSupervisorClient } from "../../intercom/native-supervisor
 import { permissionDecision } from "./permissions.ts";
 import type { SteerRequest } from "../background/control-channel.ts";
 import { RUNTIME_EXTENSION_ACK_EVENT, isRuntimeAcknowledgedExtensionId } from "./runtime-acknowledged-extensions.ts";
-import { createStructuredOutputToolParameters, MISSING_STRUCTURED_ACCEPTANCE_REPORT_ERROR, validateStructuredOutputValue } from "./structured-output.ts";
+import { createStructuredOutputToolParameters, MISSING_STRUCTURED_ACCEPTANCE_REPORT_ERROR, prepareStructuredOutputArguments, validateStructuredOutputValue } from "./structured-output.ts";
 import { validateAcceptanceReport } from "./acceptance.ts";
 import { formatChildToolDiagnostic } from "./tool-availability.ts";
 import { shouldBlockToolForBudget, toolBudgetBlockedMessage, toolBudgetSoftNudge } from "./tool-budget.ts";
@@ -24,6 +24,7 @@ import { inheritedNestedRouteOf } from "./nested-events.ts";
 import { registerWaitTool } from "../background/wait-tool.ts";
 import { drainOutstandingWork } from "../background/auto-drain.ts";
 import { MODEL_ONLY_TOOL } from "../../shared/extension-context.ts";
+import { DEFAULT_WAIT_TOOL_NAME, setWaitToolName } from "../../shared/wait-tool-name.ts";
 import {
 	childSupervisorMetadata,
 	evaluateChildToolDiagnostic,
@@ -325,11 +326,19 @@ export function modelBefore(messages: readonly { role: string }[], forkedAt: num
  */
 const LOADOUT_SECTIONS = new Set(["tools", "rules", "docs", "skills", "advertised_subagents", "mcp_servers", "project_context"]);
 
+/** The `<project_instructions path="…">` blocks Pi writes into a `project_context` section, by path. */
+function projectInstructionBlocks(section: string | null | undefined): Map<string, string> {
+	const blocks = new Map<string, string>();
+	for (const match of (section ?? "").matchAll(/<project_instructions\s+path=(["'])(.*?)\1\s*>[\s\S]*?<\/project_instructions>/gi)) blocks.set(match[2]!, match[0]);
+	return blocks;
+}
+
 /**
  * The child's own instructions, which a fork sends in its task message instead of its system
  * prompt: the text its own system messages (`own`) add, the sections it changed except the loadout
- * ones, the tools it can call, and its boundary. `parent` is the inherited system messages and
- * `child` the whole request.
+ * ones, the project instruction files the parent's prompt lacks (a child that works in another
+ * folder has that folder's AGENTS.md), the tools it can call, and its boundary. `parent` is the
+ * inherited system messages and `child` the whole request.
  */
 function forkInstructions(input: { parent: TranscriptMessages; child: TranscriptMessages; own: TranscriptMessages; boundary?: string }): string {
 	const parent = getCurrentSystemMessage(input.parent);
@@ -343,6 +352,9 @@ function forkInstructions(input: { parent: TranscriptMessages; child: Transcript
 	for (const [name, value] of Object.entries(child?.sections ?? {})) {
 		if (!LOADOUT_SECTIONS.has(name) && value && parent?.sections?.[name] !== value) parts.push(value);
 	}
+	const parentFiles = projectInstructionBlocks(parent?.sections?.project_context);
+	const missingFiles = [...projectInstructionBlocks(child?.sections?.project_context)].filter(([filePath]) => !parentFiles.has(filePath)).map(([, block]) => block);
+	if (missingFiles.length > 0) parts.push(["Project instructions for your working folder, which the parent's prompt does not include:", ...missingFiles].join("\n\n"));
 	if (input.boundary) parts.push(input.boundary);
 	return `<subagent_instructions>\n${parts.join("\n\n")}\n</subagent_instructions>`;
 }
@@ -597,6 +609,7 @@ function registerStructuredOutputTool(pi: ExtensionAPI, structured: NonNullable<
 		label: string;
 		description: string;
 		parameters: unknown;
+		prepareArguments: (args: unknown) => unknown;
 		execute: (_id: string, params: { value: unknown; acceptanceReport?: unknown }) => Promise<unknown>;
 	}) => void;
 	registerTool({
@@ -605,6 +618,7 @@ function registerStructuredOutputTool(pi: ExtensionAPI, structured: NonNullable<
 		label: "Structured Output",
 		description: "Submit the required final structured output for this subagent step. This terminates the step.",
 		parameters,
+		prepareArguments: (args: unknown) => prepareStructuredOutputArguments(structured.schema, args),
 		async execute(_id: string, params: { value: unknown; acceptanceReport?: unknown }) {
 			const validation = await validateStructuredOutputValue(structured.schema, params.value);
 			if (validation.status === "invalid") {
@@ -630,7 +644,6 @@ function registerStructuredOutputTool(pi: ExtensionAPI, structured: NonNullable<
 	});
 }
 
-/** Register every child-side hook the prompt runtime owns for one child session. */
 export default function registerSubagentPromptRuntime(pi: ExtensionAPI, config?: ChildRuntimeConfig, drainObservation?: import("./readonly-drain-observation.ts").ReadonlyDrainObservation): void {
 	// A path-based load has no ChildRuntimeConfig. This can happen if an
 	// ambient-extension discovery path finds the runtime module in addition to
@@ -666,6 +679,7 @@ export default function registerSubagentPromptRuntime(pi: ExtensionAPI, config?:
 	} as unknown as SubagentState;
 	const nestedRootRunId = inheritedNestedRouteOf(config)?.rootRunId;
 	// fanout-child assigns config.hasPendingSupervisorRequest after this hook registers, so read it per wait.
+	setWaitToolName(config.waitTool.name ?? DEFAULT_WAIT_TOOL_NAME);
 	if (typeof pi.registerTool === "function") registerWaitTool(pi, waitState, config.waitTool.enabled, undefined, config.waitTool.defaultTimeoutMs, { nestedRootRunId }, () => config.hasPendingSupervisorRequest?.() === true);
 	const supervisorMetadata = childSupervisorMetadata(config);
 	let nativeSupervisorClientRegistered = false;

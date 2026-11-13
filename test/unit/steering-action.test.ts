@@ -12,6 +12,7 @@ import { ASYNC_DIR, type AsyncStatus, type Details, type SteeringRecoveryDescrip
 import { runChildSession, type StepSteerHandler } from "../../src/runs/background/run-child-session.ts";
 import type { ChildSession, ChildSessionFactory } from "../../src/runs/shared/child-session.ts";
 import type { InProcessChildLaunch } from "../../src/runs/shared/child-launch.ts";
+import { recoveryDescriptorPath } from "../../src/runs/shared/run-launch-folder.ts";
 
 function createState(): SubagentState {
 	return {
@@ -68,7 +69,7 @@ it("does not acknowledge queued steering when the child transport rejects it", a
 	});
 	const steer = await registered;
 	const result = await steer({ type: "steer", id: "rejected", ts: Date.now(), message: "new direction" });
-	assert.deepEqual(result, { state: "failed", message: "transport rejected steer" });
+	assert.deepEqual(result, { state: "failed", failureKind: "rejected", message: "transport rejected steer" });
 	assert.deepEqual(outcomes, []);
 	stop?.();
 	releasePrompt();
@@ -112,7 +113,7 @@ function runningStatus(runId: string, mode: AsyncStatus["mode"] = "single", coun
 }
 
 function projectRequest(status: AsyncStatus, request: SteerRequest, states: SteeringTargetState[]): void {
-	const targets = states.map((state, index) => ({ index, state }));
+	const targets = states.map((state, index) => ({ index, state, ...(state === "failed" ? { failureKind: "rejected" as const } : {}) }));
 	status.steering ??= createSteeringStatus();
 	recordSteeringRequest(status.steering, { id: request.id, requestedAt: request.ts, source: request.source, message: request.message, targets });
 	for (const target of targets) {
@@ -142,14 +143,16 @@ async function readRequest(asyncDir: string): Promise<SteerRequest> {
 	});
 }
 
-function recoveryDescriptor(runId: string): SteeringRecoveryDescriptor {
+function recoveryDescriptor(runId: string, sessionFile?: string): SteeringRecoveryDescriptor {
 	const runFanoutBudget = createRunFanoutBudget(runId, 64);
 	budgetDirectories.push(runFanoutBudget.directory);
 	return {
 		version: 1,
 		runFanoutBudget,
 		sourceRunId: runId,
+		sessionId: "session",
 		agent: "worker-0",
+		...(sessionFile ? { sessionFile } : {}),
 		cwd: os.tmpdir(),
 		systemPromptMode: "replace",
 		inheritGlobalContext: false,
@@ -539,7 +542,7 @@ describe("acknowledged steering action", () => {
 		const sessionFile = path.join(asyncDir, "child.jsonl");
 		writeStatus(asyncDir, runningStatus(runId));
 		fs.writeFileSync(sessionFile, "", "utf-8");
-		writePrivateAtomicJson(path.join(asyncDir, "recovery-descriptor.json"), recoveryDescriptor(runId));
+		writePrivateAtomicJson(recoveryDescriptorPath(path.dirname(asyncDir), path.basename(asyncDir)), recoveryDescriptor(runId, sessionFile));
 		const routeOnly = (requestPath: string): AsyncStatus => {
 			const request = JSON.parse(fs.readFileSync(requestPath, "utf-8")) as SteerRequest;
 			const routed = runningStatus(runId);
@@ -581,8 +584,8 @@ describe("acknowledged steering action", () => {
 		const sessionFile = path.join(asyncDir, "child.jsonl");
 		writeStatus(asyncDir, runningStatus(runId));
 		fs.writeFileSync(sessionFile, "", "utf-8");
-		const descriptorPath = path.join(asyncDir, "recovery-descriptor.json");
-		writePrivateAtomicJson(descriptorPath, recoveryDescriptor(runId));
+		const descriptorPath = recoveryDescriptorPath(path.dirname(asyncDir), path.basename(asyncDir));
+		writePrivateAtomicJson(descriptorPath, recoveryDescriptor(runId, sessionFile));
 		if (process.platform !== "win32") assert.equal(fs.statSync(descriptorPath).mode & 0o777, 0o600);
 		let receivedLimits: unknown;
 		let recoveryStarted = false;
@@ -644,11 +647,56 @@ describe("acknowledged steering action", () => {
 		}
 	});
 
+	for (const stage of ["before-wait", "before-claim", "after-claim", "during-pause", "late", "unconsumed", "unsubmitted"]) {
+		it(`respects rejected versus late guidance ${stage}`, async () => {
+			const runId = `steer-rejected-${stage}-${Date.now().toString(36)}`;
+			const asyncDir = path.join(ASYNC_DIR, runId);
+			writeStatus(asyncDir, runningStatus(runId));
+			const sessionFile = path.join(asyncDir, "child.jsonl");
+			fs.writeFileSync(sessionFile, "", "utf-8");
+			writePrivateAtomicJson(recoveryDescriptorPath(path.dirname(asyncDir), path.basename(asyncDir)), recoveryDescriptor(runId, sessionFile));
+			let request!: SteerRequest;
+			let recovered = false;
+			const reject = () => {
+				const status = runningStatus(runId);
+				projectRequest(status, request, ["failed"]);
+				writeStatus(asyncDir, status);
+			};
+			try {
+				const result = await steerAsyncRun({
+					state: createState(), runId, message: "Late guidance", location: { asyncDir }, ackTimeoutMs: 10, recoveryTimeoutMs: 1_000, kill: () => true,
+					onRequestQueued(requestPath) { request = JSON.parse(fs.readFileSync(requestPath, "utf-8")); if (stage === "before-wait") reject(); },
+					onBeforeRecoveryClaim() { if (stage === "before-claim") reject(); },
+					onRecoveryCommitted() {
+						if (stage === "after-claim") reject();
+						const settle = () => {
+							const status = runningStatus(runId);
+							projectRequest(status, request, [stage === "late" ? "late" : "failed"]);
+							if (stage === "unconsumed") Object.assign(status.steering!.recent[0]!.targets[0]!, { failureKind: "unconsumed" });
+							if (stage === "unsubmitted") delete status.steering!.recent[0]!.targets[0]!.failureKind;
+							writeStatus(asyncDir, { ...status, state: "paused", endedAt: Date.now(), steps: [{ ...status.steps![0]!, status: "paused", sessionFile }] });
+						};
+						if (stage === "during-pause" || stage === "unconsumed" || stage === "unsubmitted") queueMicrotask(settle);
+						if (stage === "late") settle();
+					},
+					recover: async () => { recovered = true; return successResult("replacement"); },
+				});
+				const shouldRecover = stage === "late" || stage === "unconsumed" || stage === "unsubmitted";
+				assert.equal(recovered, shouldRecover);
+				assert.equal(result.isError, shouldRecover ? undefined : true);
+				if (!shouldRecover) {
+					assert.equal(fs.existsSync(interruptRequestPath(asyncDir)), stage === "during-pause");
+					assert.equal(fs.existsSync(path.join(asyncDir, "control", "steer-recovery", "claim.json")), false);
+				}
+			} finally { removeAsyncDir(asyncDir); }
+		});
+	}
+
 	it("leaves a single run paused when no session can be revived", async () => {
 		const runId = `steer-no-session-${Date.now().toString(36)}`;
 		const asyncDir = path.join(ASYNC_DIR, runId);
 		writeStatus(asyncDir, runningStatus(runId));
-		writePrivateAtomicJson(path.join(asyncDir, "recovery-descriptor.json"), recoveryDescriptor(runId));
+		writePrivateAtomicJson(recoveryDescriptorPath(path.dirname(asyncDir), path.basename(asyncDir)), recoveryDescriptor(runId));
 		let recovered = false;
 		let recoveryCommitted = false;
 		let routed: AsyncStatus | undefined;
@@ -658,7 +706,7 @@ describe("acknowledged steering action", () => {
 				onRequestQueued: (requestPath) => {
 					const request = JSON.parse(fs.readFileSync(requestPath, "utf-8")) as SteerRequest;
 					routed = runningStatus(runId);
-					projectRequest(routed, request, ["failed"]);
+					projectRequest(routed, request, ["routed"]);
 					writeStatus(asyncDir, routed);
 				},
 				onRecoveryCommitted: () => {

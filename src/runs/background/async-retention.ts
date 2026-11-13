@@ -13,11 +13,12 @@ import { REVIVAL_ORIGIN_FILE } from "../../workflows/workflow-revival.ts";
 import { ACTIVE_RUN_INDEX_DIR } from "./active-run-index.ts";
 import { encodeIndexSegment } from "./index-segment.ts";
 import { reconcileAsyncRun } from "./stale-run-reconciler.ts";
+import { recoveryDescriptorPath, runLaunchDir } from "../shared/run-launch-folder.ts";
 
-export const ASYNC_RETENTION_DAYS = 30;
+const ASYNC_RETENTION_DAYS = 30;
 export const ASYNC_RETENTION_BATCH_SIZE = 100;
 export const ASYNC_RETENTION_DELAY_MS = 60_000;
-export const ASYNC_RETENTION_TOMBSTONE_GRACE_MS = 24 * 60 * 60 * 1000;
+const ASYNC_RETENTION_TOMBSTONE_GRACE_MS = 24 * 60 * 60 * 1000;
 // A run or result whose session file still exists can be resumed, so it is kept this long
 // instead of ASYNC_RETENTION_DAYS. Session files outlive run dirs, so without a ceiling it is kept forever.
 export const RESUMABLE_RETENTION_DAYS = 90;
@@ -200,7 +201,8 @@ function hasNestedReferences(status: AsyncStatus): boolean {
 function hasResumableContract(runDir: string, status: AsyncStatus): boolean {
 	const statusSessionFiles = [status.sessionFile, ...(status.steps ?? []).map((step) => step.sessionFile)];
 	if (statusSessionFiles.some(existingRegularFile)) return true;
-	const descriptorPath = path.join(runDir, "recovery-descriptor.json");
+	// runDir may be a tombstone; the launch folder is keyed by the run id.
+	const descriptorPath = recoveryDescriptorPath(path.dirname(runDir), status.runId);
 	if (!fs.existsSync(descriptorPath)) return false;
 	const descriptor = readJson(descriptorPath);
 	if (!descriptor) return true;
@@ -376,9 +378,14 @@ async function computeProcessStartIdentity(pid: number): Promise<string | undefi
 	if (process.platform === "win32") {
 		// PowerShell takes ~0.5 s to start; a synchronous spawn would freeze the TUI.
 		const started = await new Promise<string>((resolve) => {
-			execFile("powershell.exe", ["-NoProfile", "-Command", `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CreationDate`], { encoding: "utf-8", windowsHide: true, timeout: 5_000 }, (error, stdout) => {
-				resolve(error ? "" : stdout.trim());
-			});
+			// Node throws instead of calling back when the executable cannot be spawned at all (spawn UNKNOWN when policy blocks PowerShell).
+			try {
+				execFile("powershell.exe", ["-NoProfile", "-Command", `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CreationDate`], { encoding: "utf-8", windowsHide: true, timeout: 5_000 }, (error, stdout) => {
+					resolve(error ? "" : stdout.trim());
+				});
+			} catch {
+				resolve("");
+			}
 		});
 		return started ? `win:${started}` : undefined;
 	}
@@ -837,6 +844,7 @@ export async function cleanupAsyncRetention(options: AsyncRetentionOptions): Pro
 					}
 					mutationStateChanged = true;
 					fs.rmSync(runDir, { recursive: true });
+					fs.rmSync(runLaunchDir(options.asyncDirRoot, status!.runId), { recursive: true, force: true });
 					removeRunTombstoneMarker(maintenanceRoot, status!.runId);
 					result.reapedTombstones += 1;
 					deletedIds.push(`run-tombstone:${status!.runId}`);
@@ -866,6 +874,8 @@ export async function cleanupAsyncRetention(options: AsyncRetentionOptions): Pro
 					continue;
 				}
 				fs.rmSync(tombstone, { recursive: true });
+				// Retention never deletes a workflow run, so this removes only a single run's recovery descriptor.
+				fs.rmSync(runLaunchDir(options.asyncDirRoot, status!.runId), { recursive: true, force: true });
 				removeRunTombstoneMarker(maintenanceRoot, status!.runId);
 				result.deletedRuns += 1;
 				deletedIds.push(`run:${status!.runId}`);

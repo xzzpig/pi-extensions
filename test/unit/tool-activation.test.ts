@@ -10,13 +10,16 @@ import registerSubagentExtension from "../../src/extension/index.ts";
 import { PI_CODING_AGENT_PACKAGE_ROOT_ENV } from "../../src/shared/utils.ts";
 import { resolvePiPackageRoot } from "../../src/runs/shared/pi-spawn.ts";
 import { registerBackgroundWorkProvider } from "../../src/api/background-work.ts";
+import { DEFAULT_WAIT_TOOL_NAME, setWaitToolName } from "../../src/shared/wait-tool-name.ts";
+import { SubagentWaitParams } from "../../src/extension/schemas.ts";
 
 type Handler = (event: any, context: any) => any;
 type Tool = { name: string; description?: string; promptSnippet?: string; parameters?: unknown; execute?: (...args: any[]) => any; sourceInfo?: { path: string } };
 
 const runtimes: Array<{ handlers: Map<string, Handler[]>; context: any }> = [];
 
-type RuntimeOptions = { config?: Record<string, unknown>; model?: unknown };
+// `branch`: the session's full message history, which getBranch returns; it defaults to the compacted context's messages.
+type RuntimeOptions = { config?: Record<string, unknown>; model?: unknown; branch?: any[] };
 const DYNAMIC: RuntimeOptions = { config: { toolActivation: "dynamic" } };
 
 function createRuntime(messages: any[] = [], excluded: string[] = [], missingApis: string[] = [], options: RuntimeOptions = {}) {
@@ -55,6 +58,7 @@ function createRuntime(messages: any[] = [], excluded: string[] = [], missingApi
 		sessionManager: {
 			getSessionId() { return "activation-session"; }, getSessionFile() { return null; }, getEntries() { return []; },
 			buildSessionContext() { return { messages }; },
+			getBranch() { return (options.branch ?? messages).map((message) => message.role === "compactionSummary" ? { type: "compaction" } : { type: "message", message }); },
 		},
 		modelRegistry: { getAvailable() { return []; } },
 	};
@@ -80,6 +84,18 @@ function createRuntime(messages: any[] = [], excluded: string[] = [], missingApi
 		handlers, tools, context,
 		active: () => [...activeNames],
 		select: (names: string[]) => { activeNames = [...names]; },
+		// Pi sets the model before model_select. `idle: false`: the switch happens during a run.
+		async switchModel(next: unknown, idle = true) {
+			const previousModel = context.model;
+			context.model = next;
+			const isIdle = context.isIdle;
+			context.isIdle = () => idle;
+			try {
+				for (const handler of handlers.get("model_select") ?? []) await handler({ type: "model_select", model: next, previousModel, source: "set" }, context);
+			} finally {
+				context.isIdle = isIdle;
+			}
+		},
 		async emit(name: string, event: any) {
 			for (const handler of handlers.get(name) ?? []) await handler(event, context);
 		},
@@ -207,12 +223,14 @@ const system = { supportsMidConvoSystemMessages: true };
 const COMPATIBLE = model("anthropic-messages", { ...system, supportsMidConvoToolChanges: true });
 const INCOMPATIBLE = model("openai-completions", { supportsMidConvoToolAdditions: true });
 
-async function startAgent(runtime: ReturnType<typeof createRuntime>): Promise<string[]> {
+// `sent: false`: the run failed before its first request, so no agent_start.
+async function startAgent(runtime: ReturnType<typeof createRuntime>, sent = true): Promise<string[]> {
 	const event = {
 		type: "before_agent_start", prompt: "continue", systemPrompt: "base",
 		systemPromptOptions: { selectedTools: runtime.active(), sections: {}, promptGuidelines: [] },
 	};
 	await runtime.emit("before_agent_start", event);
+	if (sent) await runtime.emit("agent_start", { type: "agent_start" });
 	return event.systemPromptOptions.selectedTools;
 }
 
@@ -258,9 +276,51 @@ describe("toolActivation modes", () => {
 			assert.ok(first.includes("subagent") && first.includes("read"));
 			assert.equal(first.includes("subagents_enable"), false);
 			// Switching to a capable model mid-session changes nothing.
-			runtime.context.model = COMPATIBLE;
+			await runtime.switchModel(COMPATIBLE);
 			assert.deepEqual(await startAgent(runtime), first);
 		}
+	});
+
+	it("decides a new auto session with the model chosen before the first prompt", async () => {
+		const cases: Array<[typeof COMPATIBLE, typeof COMPATIBLE, boolean]> = [[COMPATIBLE, INCOMPATIBLE, false], [INCOMPATIBLE, COMPATIBLE, true]];
+		for (const event of [{ type: "session_start", reason: "startup" }, RESUME]) {
+			for (const [startModel, firstModel, loader] of cases) {
+				const runtime = createRuntime([], [], [], { model: startModel });
+				await runtime.emit(event.type, event);
+				await runtime.switchModel(firstModel);
+				const first = await startAgent(runtime);
+				const label = `${event.reason}, ${firstModel.api}`;
+				assert.equal(first.includes("subagents_enable"), loader, `${label}: loader`);
+				for (const name of ["subagent", "contact_supervisor", "bg_wait", "subagent_supervisor"]) assert.equal(first.includes(name), !loader, `${label}: ${name}`);
+				await runtime.switchModel(startModel);
+				assert.deepEqual(await startAgent(runtime), first, `${label}: after the first request`);
+			}
+		}
+
+		const started = async () => {
+			const runtime = createRuntime([], [], [], { model: COMPATIBLE });
+			await runtime.emit("session_start", { type: "session_start", reason: "startup" });
+			return runtime;
+		};
+		const failed = await started();
+		await startAgent(failed, false);
+		await failed.switchModel(INCOMPATIBLE);
+		assert.ok((await startAgent(failed)).includes("subagent"), "retry after a failed first run");
+
+		const chosen = await started();
+		chosen.select(["read"]);
+		await chosen.switchModel(INCOMPATIBLE);
+		assert.equal((await startAgent(chosen)).includes("subagent"), false, "manual choice");
+
+		const running = await started();
+		await running.switchModel(INCOMPATIBLE, false);
+		assert.equal((await startAgent(running)).includes("subagent"), false, "switch during a run");
+
+		const recorded = createRuntime([compacted], [], [], { model: COMPATIBLE });
+		await recorded.emit(RESUME.type, RESUME);
+		await recorded.switchModel(INCOMPATIBLE);
+		const next = await startAgent(recorded);
+		assert.ok(next.includes("subagents_enable") && !next.includes("subagent"), "recorded");
 	});
 
 	it("offers the loader in auto only when the model's API can add tools mid-conversation", async () => {
@@ -298,14 +358,16 @@ describe("toolActivation modes", () => {
 		}
 	});
 
-	it("registers no loader in eager, even with a capable model or recorded loader history", async () => {
+	it("registers no loader in eager and leaves a resumed selection as Pi restored it", async () => {
 		for (const messages of [[], [declared(["read", "subagents_enable"])]]) {
 			const runtime = createRuntime(messages, [], [], { config: { toolActivation: "eager" }, model: COMPATIBLE });
-			await runtime.emit("session_start", { type: "session_start", reason: "resume" });
+			// Pi restores only recorded tools that are still registered, and eager registers no loader.
+			if (messages.length > 0) runtime.select(["read"]);
+			await runtime.emit(RESUME.type, RESUME);
 			assert.equal(runtime.tools.has("subagents_enable"), false);
 			const selectedTools = await startAgent(runtime);
-			assert.ok(selectedTools.includes("bg_wait"));
-			assert.ok(selectedTools.includes("subagent"));
+			assert.equal(selectedTools.includes("bg_wait"), messages.length === 0);
+			assert.equal(selectedTools.includes("subagent"), messages.length === 0);
 			assert.equal(selectedTools.includes("subagents_enable"), false);
 		}
 	});
@@ -353,6 +415,32 @@ describe("toolActivation modes", () => {
 			await runtime.emit("session_start", { type: "session_start", reason: "reload" });
 			const selectedTools = await startAgent(runtime);
 			for (const name of ["subagents_enable", "subagent"]) assert.equal(selectedTools.includes(name), expected.includes(name), `${label}: ${name}`);
+		}
+	});
+
+	it("keeps a wait tool recorded as bg_wait selected after waitTool.name renames it", async () => {
+		const renamed = { config: { waitTool: { name: "subagent_wait" } }, model: COMPATIBLE };
+		const reopen = async (messages: any[]) => {
+			const runtime = createRuntime(messages, [], [], renamed);
+			runtime.select(["read", "subagent", "contact_supervisor"]);
+			await runtime.emit("session_start", RESUME);
+			return runtime.active();
+		};
+		// The transcript keeps each tool's full definition, so a bg_wait record says whose bg_wait it was.
+		const withWait = (parameters: unknown) => {
+			const message = declared(["read", "subagent", "contact_supervisor"]);
+			return { ...message, toolsAdded: [...message.toolsAdded, { name: "bg_wait", description: "wait", parameters }] };
+		};
+		const otherExtensionWait = { type: "object", properties: { id: { type: "string" }, timeout: { type: "number" } } };
+		try {
+			const before = [withWait(SubagentWaitParams)];
+			assert.ok((await reopen(before)).includes("subagent_wait"), "recorded before the rename");
+			assert.equal((await reopen([withWait(otherExtensionWait)])).includes("subagent_wait"), false, "another extension's bg_wait");
+			assert.equal((await reopen([...before, withWait(otherExtensionWait)])).includes("subagent_wait"), false, "another extension's bg_wait declared later");
+			assert.equal((await reopen([...before, declared([], ["bg_wait"])])).includes("subagent_wait"), false, "removed before the rename");
+			assert.equal((await reopen([...before, declared([], ["subagent_wait"])])).includes("subagent_wait"), false, "removed after the rename");
+		} finally {
+			setWaitToolName(DEFAULT_WAIT_TOOL_NAME);
 		}
 	});
 
@@ -445,6 +533,20 @@ describe("toolActivation modes", () => {
 			{ subagents_enable: true, subagent: false, bg_wait: true });
 	});
 
+	it("keeps the selection from before an extension unload that a compaction checkpoint folded away", async () => {
+		const enabled = ["subagent", "contact_supervisor", "bg_wait", "subagent_supervisor"];
+		// The checkpoint declares the tools active when the compaction ran, which the unload had left off.
+		const checkpointed = [declared(["read"]), compacted];
+		for (const caseModel of [COMPATIBLE, INCOMPATIBLE]) {
+			await replayAll(checkpointed, { model: caseModel, branch: [declared(["read", ...enabled]), declared([], enabled), compacted] }, [], "warm unload",
+				{ subagents_enable: false, subagent: true, contact_supervisor: true, bg_wait: true, subagent_supervisor: true });
+			await replayAll(checkpointed, { model: caseModel, branch: [declared(["read", "subagents_enable"]), declared([], ["subagents_enable"]), compacted] }, [], "cold unload",
+				{ subagents_enable: true, subagent: false });
+			await replayAll([declared(["read", "bg_wait", "subagent_supervisor"]), compacted], { model: caseModel, branch: [declared(["read", ...enabled]), declared([], ["subagent", "contact_supervisor"]), compacted] }, ["bg_wait", "subagent_supervisor"], "deliberate removal",
+				{ subagents_enable: false, subagent: false });
+		}
+	});
+
 	it("keeps the loader of a lost activation state across an unload recorded after the compaction", async () => {
 		// Both the old and the new unload rule call this an unload; it pins the loader and the bg_wait restore.
 		const runtime = createRuntime([compacted, other, declared(["bg_wait", "subagent_supervisor"]), declared([], ["bg_wait", "subagent_supervisor"])], [], [], { model: COMPATIBLE });
@@ -473,11 +575,13 @@ describe("toolActivation modes", () => {
 		// The harness starts with every registered tool active, as /reload does.
 		const auto = createRuntime([other], [], [], { model: COMPATIBLE });
 		await auto.emit(RELOAD.type, RELOAD);
-		await assertOwned(auto, "intact, never declared", { subagents_enable: false, subagent: false, bg_wait: false });
+		await assertOwned(auto, "auto, never declared", { subagents_enable: false, subagent: false, bg_wait: false });
 
 		const dynamic = createRuntime([other], [], [], { ...DYNAMIC, model: INCOMPATIBLE });
 		await dynamic.emit(RELOAD.type, RELOAD);
 		await assertOwned(dynamic, "dynamic, never declared", { subagents_enable: true, subagent: false });
+		await dynamic.tools.get("subagents_enable")!.execute!("enable", {}, new AbortController().signal, undefined, dynamic.context);
+		await assertOwned(dynamic, "dynamic, enabled", { subagents_enable: true, subagent: true });
 	});
 
 	it("tells an unload from a deliberate removal after a compaction", async () => {
@@ -611,6 +715,12 @@ describe("toolActivation modes", () => {
 			runtime.select(["read", "subagents_enable", "bg_wait"]);
 			await runtime.emit("session_tree", { type: "session_tree", newLeafId: null, oldLeafId: null });
 			assert.ok(runtime.active().includes("subagent_supervisor"), "branch switch while a reply is owed");
+
+			const fresh = createRuntime([], [], [], { model: INCOMPATIBLE });
+			await fresh.emit("session_start", { type: "session_start", reason: "startup" });
+			await fresh.switchModel(COMPATIBLE);
+			const first = await startAgent(fresh);
+			assert.ok(first.includes("subagents_enable") && first.includes("subagent_supervisor"), "switched before the first prompt");
 		} finally {
 			fs.rmSync(channelDir, { recursive: true, force: true });
 		}

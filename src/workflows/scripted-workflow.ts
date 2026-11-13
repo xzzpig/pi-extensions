@@ -1,10 +1,11 @@
 import { accessSync, constants, readFileSync, realpathSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve as resolvePath } from "node:path";
-import { Worker } from "node:worker_threads";
+import { createWorkflowScriptWorker } from "./workflow-script-worker.ts";
 import { DEFAULT_GLOBAL_CONCURRENCY_LIMIT, Semaphore } from "../runs/shared/parallel-utils.ts";
 import { HOST_STEP_MAX_COUNT } from "../runs/shared/host-step-status.ts";
 import { describeGateAcceptanceConflict, parseGateInput } from "../runs/shared/acceptance.ts";
+import { REQUIRE_LAUNCHER_SHAPE_ERROR } from "../runs/shared/runner-launcher.ts";
 import type { AcceptanceRecoveryMetadata, HostStepNode, SingleResult, WorkflowScriptFailureKind } from "../shared/types.ts";
 import { normalizeWorkflowHostCommandParams, type WorkflowHostCommandParams, type WorkflowHostCommandResult } from "./host-command.ts";
 
@@ -18,6 +19,7 @@ function validGitRef(ref: unknown): ref is string {
 }
 const requireFromPackage = createRequire(import.meta.url);
 const WORKFLOW_ASSEMBLY_FLUSH_TIMEOUT_MS = 5_000;
+const WORKFLOW_DRAIN_CHILD_MESSAGE = "Workflow draining; child not started.";
 
 export interface WorkflowScriptValidationError {
 	message: string;
@@ -42,9 +44,6 @@ export interface WorkflowScriptValidationOptions {
 	/** Returns why launch-time resolution would reject this literal child agent name. */
 	agentNameError?: (name: string) => string | undefined;
 }
-
-const WORKFLOW_WORKER_URL = new URL("../../workflow-script-worker.cjs", import.meta.url);
-let nodeWorkerSource: string | undefined;
 
 export interface WorkflowScriptChildResult {
 	key: string;
@@ -211,6 +210,8 @@ export interface RunWorkflowScriptOptions {
 		set: (key: string, value: unknown) => void | Promise<void>;
 	};
 	registerStopChild?: (stop: ((key: string, message?: string) => boolean) | undefined) => void;
+	/** Drain: stop children that have not started, refuse new launches, and call `onDrained` once every started child has a result. Returns the started-child count. */
+	registerDrain?: (drain: ((onDrained: () => void) => number) | undefined) => void;
 	onTrace?: (trace: WorkflowScriptTraceEntry[]) => void;
 	onLanePlan?: (lanes: WorkflowLanePlan[]) => void;
 	onEmit?: (emits: unknown[]) => void;
@@ -277,8 +278,185 @@ const RECOVERY_REVIEW_NO_ANAPHORIC_MUTATION_CLAUSE_PATTERN = /\b(?:do not|don't|
 const RECOVERY_REVIEW_NO_DELEGATION_CLAUSE_PATTERN = /\b(?:do not|don't|must not)\s+(?:(?:launch|start|spawn|run)\b(?:(?!\b(?:and|but|then|however|nevertheless|nonetheless|yet)\b)[^,.;!?\n])*(?:workers?|reviewers?|agents?|subagents?|children|child|runs?)|(?:get|let|request|hand\s+off|assign|use|have|tell)\b(?:(?!\b(?:and|but|then|however|nevertheless|nonetheless|yet)\b)[^,.;!?\n])*(?:workers?|reviewers?|agents?|subagents?|children|child)|(?:get|let|have|tell|request)\b(?:(?!\b(?:and|but|then|however|nevertheless|nonetheless|yet)\b)[^,.;!?\n])*(?:review|implementation|fix(?:es)?|changes?|follow-up)\b(?:(?!\b(?:and|but|then|however|nevertheless|nonetheless|yet)\b)[^,.;!?\n])*\b(?:from|with|via|by)\b(?:(?!\b(?:and|but|then|however|nevertheless|nonetheless|yet)\b)[^,.;!?\n])*(?:workers?|reviewers?|agents?|subagents?|children|child)|ask\b(?:(?!\b(?:and|but|then|however|nevertheless|nonetheless|yet)\b)[^,.;!?\n])*(?:(?:workers?|reviewers?|agents?|subagents?|children|child)\b(?:(?!\b(?:and|but|then|however|nevertheless|nonetheless|yet)\b)[^,.;!?\n])*\b(?:continue|implement|review|fix|edit|write|modify|change|patch|update|delete|remove|create|follow-up)|(?:review|implementation|fix(?:es)?|changes?|follow-up)\b(?:(?!\b(?:and|but|then|however|nevertheless|nonetheless|yet)\b)[^,.;!?\n])*\b(?:from|via)\b(?:(?!\b(?:and|but|then|however|nevertheless|nonetheless|yet)\b)[^,.;!?\n])*(?:workers?|reviewers?|agents?|subagents?|children|child)))\b/gi;
 const RECOVERY_REVIEW_DELEGATION_PATTERN = /\b(?:launch|start|spawn|run)\b[^,.;!?\n]*(?:workers?|reviewers?|agents?|subagents?|children|child|runs?)\b|\b(?:delegate|hand\s+off|assign)\s+(?:remediation|implementation(?:\s+follow-up)?|changes?|fix(?:es)?|follow-up)\s+to\s+(?:(?:a|an|the)\s+)?(?:workers?|reviewers?|agents?|subagents?|children|child)\b|\b(?:get|let|have|tell|request)\b[^,.;!?\n]*(?:workers?|reviewers?|agents?|subagents?|children|child)\b[^,.;!?\n]*\b(?:continue|implement|review|fix|edit|write|modify|change|patch|update|delete|remove|create|follow-up)\b|\b(?:get|let|have|tell|request)\b[^,.;!?\n]*(?:review|implementation|fix(?:es)?|changes?|follow-up)\b[^,.;!?\n]*\b(?:from|with|via|by)\b[^,.;!?\n]*(?:workers?|reviewers?|agents?|subagents?|children|child)\b|\bask\b[^,.;!?\n]*(?:(?:workers?|reviewers?|agents?|subagents?|children|child)\b[^,.;!?\n]*\b(?:continue|implement|review|fix|edit|write|modify|change|patch|update|delete|remove|create|follow-up)|(?:review|implementation|fix(?:es)?|changes?|follow-up)\b[^,.;!?\n]*\b(?:from|via)\b[^,.;!?\n]*(?:workers?|reviewers?|agents?|subagents?|children|child))\b|\buse\b[^,.;!?\n]*(?:workers?|reviewers?|agents?|subagents?|children|child|runs?)\s+(?:for|to)\s+(?:implementation|follow-up|remediation|fix|edit|write|modify|change|patch|update|delete|remove|create)\b/i;
 const RECOVERY_REVIEW_ANAPHORIC_MUTATION_PATTERN = /\b(?:do|run|execute|perform|apply)\s+(?:it|that|this|(?:the\s+)?(?:(?:\d+(?:st|nd|rd|th)|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|last|next|previous(?:ly)?|prior|above|quoted|blocked)\s+){0,4}(?:command|example|operation|action|phrase|instruction|request|one))(?!(?:\s+(?:(?:now|still|also|already)\s+)*(?:is|are|remains?)\s+blocked\b))(?:(?:[\s,]+\w+){0,4}[\s,]+anyway|(?:(?!\b(?:and|but|then|however|nevertheless|nonetheless|yet)\b)[^,.;!?\n]){0,80})(?=\s*(?:[,.;!?\n)]|\b(?:and|but|then|however|nevertheless|nonetheless|yet)\b|$))/i;
-const RECOVERY_REVIEW_DESTRUCTIVE_COMMAND_PATTERN = /(?:^|[\s;,.`'"([{])(?:\S*\/)?(?:rm|rmdir|unlink|truncate|mv|cp|chmod|chown)\b|\bgit\b(?:\s+(?:-[A-Za-z](?:\s+(?:"[^"\n]*"|'[^'\n]*'|\S+))?|--(?:git-dir|work-tree|namespace|exec-path|config-env)(?:=(?:"[^"\n]*"|'[^'\n]*'|\S+)|\s+(?:"[^"\n]*"|'[^'\n]*'|\S+))|--[A-Za-z0-9-]+(?:=(?:"[^"\n]*"|'[^'\n]*'|\S+))?))*\s+(?:add|branch|cherry-pick|clean|commit|merge|rebase|reset|restore|revert|stash|tag|checkout|switch)\b/i;
-const RECOVERY_REVIEW_DASH_LIVE_ACTION_PATTERN = /(?:[—–]|--|\s-\s|:|\s\/\s)\s*(?:then\s+)?(?:(?:add|append|apply|change|cherry[ -]pick|clean|commit|copy|create|delete|edit|fix|implement|insert|make|merge|move|modify|mutate|open|patch|prepend|push|rebase|refactor|remove|rename|replace|revert|revise|rewrite|save|stage|stash|tag|touch|update|write)\b|(?:launch|start|spawn|run)\b[^,.;!?\n]*(?:workers?|reviewers?|agents?|subagents?|children|child|runs?)\b|(?:\S*\/)?(?:rm|rmdir|unlink|truncate|mv|cp|chmod|chown)\b|git\b[^,.;!?\n]*\b(?:add|branch|cherry-pick|clean|commit|merge|rebase|reset|restore|revert|stash|tag|checkout|switch)\b)/i;
+// A path need not cross another command-start separator: the same command can match from
+// the last such separator before its slash. Excluding those characters from the path prefix
+// preserves detection while preventing overlapping starts from rescanning the same suffix.
+const RECOVERY_REVIEW_MUTATING_PATH_COMMAND_PATTERN = /(?:^|[\s;,.`'"([{])(?:[^\s;,.`'"([{]*\/)?(?:rm|rmdir|unlink|truncate|mv|cp|chmod|chown)\b/i;
+const RECOVERY_REVIEW_WORD_CHARACTER_PATTERN = /^\w$/;
+// Each branch after a separator is checked at its own anchor, and what it needs from the rest of the
+// line or path comes from tables built in one backward pass, so many separators never rescan a suffix.
+const RECOVERY_REVIEW_DASH_SEPARATOR_AT_PATTERN = /(?:[—–]|--|\s-\s|:|\s\/\s)/iy;
+const RECOVERY_REVIEW_DASH_SEPARATOR_EXISTS_PATTERN = /(?:[—–]|--|\s-\s|:|\s\/\s)/i;
+const RECOVERY_REVIEW_DASH_ACTION_AT_PATTERN = /(?:add|append|apply|change|cherry[ -]pick|clean|commit|copy|create|delete|edit|fix|implement|insert|make|merge|move|modify|mutate|open|patch|prepend|push|rebase|refactor|remove|rename|replace|revert|revise|rewrite|save|stage|stash|tag|touch|update|write)\b/iy;
+const RECOVERY_REVIEW_DASH_LAUNCH_AT_PATTERN = /(?:launch|start|spawn|run)\b/iy;
+const RECOVERY_REVIEW_DASH_WORKER_AT_PATTERN = /(?:workers?|reviewers?|agents?|subagents?|children|child|runs?)\b/iy;
+const RECOVERY_REVIEW_DASH_GIT_AT_PATTERN = /git\b/iy;
+const RECOVERY_REVIEW_DASH_GIT_COMMAND_AT_PATTERN = /\b(?:add|branch|cherry-pick|clean|commit|merge|rebase|reset|restore|revert|stash|tag|checkout|switch)\b/iy;
+const RECOVERY_REVIEW_DASH_FILE_COMMAND_AT_PATTERN = /(?:rm|rmdir|unlink|truncate|mv|cp|chmod|chown)\b/iy;
+const RECOVERY_REVIEW_DASH_THEN_AT_PATTERN = /then/iy;
+const RECOVERY_REVIEW_DASH_LINE_STOP_CHARACTERS = ",.;!?\n";
+const RECOVERY_REVIEW_WHITESPACE_CHARACTER_PATTERN = /^\s$/;
+
+// Sticky patterns: lastIndex anchors each check. No check yields, so the shared lastIndex cannot interleave.
+function matchesDashBranchAt(pattern: RegExp, text: string, index: number): boolean {
+	pattern.lastIndex = index;
+	return pattern.test(text);
+}
+
+function dashBranchLengthAt(pattern: RegExp, text: string, index: number): number {
+	pattern.lastIndex = index;
+	const match = pattern.exec(text);
+	return match === null ? 0 : match[0].length;
+}
+
+function skipDashSeparatorWhitespace(text: string, index: number): number {
+	while (index < text.length && RECOVERY_REVIEW_WHITESPACE_CHARACTER_PATTERN.test(text.charAt(index))) index++;
+	return index;
+}
+
+// workerAhead[i] says whether the rest of the line still holds the worker word, gitCommandAhead[i]
+// the same for a git command, and pathCommandAhead[i] whether the rest of the path holds a file
+// command behind a slash.
+function acceptsDashLiveActionAt(text: string, index: number, workerAhead: Uint8Array, gitCommandAhead: Uint8Array, pathCommandAhead: Uint8Array): boolean {
+	if (matchesDashBranchAt(RECOVERY_REVIEW_DASH_ACTION_AT_PATTERN, text, index)) return true;
+	const launchLength = dashBranchLengthAt(RECOVERY_REVIEW_DASH_LAUNCH_AT_PATTERN, text, index);
+	if (launchLength > 0 && workerAhead[index + launchLength] === 1) return true;
+	if (matchesDashBranchAt(RECOVERY_REVIEW_DASH_FILE_COMMAND_AT_PATTERN, text, index) || pathCommandAhead[index] === 1) return true;
+	return matchesDashBranchAt(RECOVERY_REVIEW_DASH_GIT_AT_PATTERN, text, index) && gitCommandAhead[index + 3] === 1;
+}
+
+function mentionsDashLiveAction(text: string): boolean {
+	if (!RECOVERY_REVIEW_DASH_SEPARATOR_EXISTS_PATTERN.test(text)) return false;
+	const workerAhead = new Uint8Array(text.length + 1);
+	const gitCommandAhead = new Uint8Array(text.length + 1);
+	const pathCommandAhead = new Uint8Array(text.length + 1);
+	for (let index = text.length - 1; index >= 0; index--) {
+		const character = text.charAt(index);
+		const lineCharacter = !RECOVERY_REVIEW_DASH_LINE_STOP_CHARACTERS.includes(character);
+		const pathCharacter = !RECOVERY_REVIEW_WHITESPACE_CHARACTER_PATTERN.test(character);
+		workerAhead[index] = matchesDashBranchAt(RECOVERY_REVIEW_DASH_WORKER_AT_PATTERN, text, index) || (lineCharacter && workerAhead[index + 1] === 1) ? 1 : 0;
+		gitCommandAhead[index] = matchesDashBranchAt(RECOVERY_REVIEW_DASH_GIT_COMMAND_AT_PATTERN, text, index) || (lineCharacter && gitCommandAhead[index + 1] === 1) ? 1 : 0;
+		pathCommandAhead[index] = (character === "/" && matchesDashBranchAt(RECOVERY_REVIEW_DASH_FILE_COMMAND_AT_PATTERN, text, index + 1)) || (pathCharacter && pathCommandAhead[index + 1] === 1) ? 1 : 0;
+	}
+	for (let index = 0; index < text.length; index++) {
+		const separatorLength = dashBranchLengthAt(RECOVERY_REVIEW_DASH_SEPARATOR_AT_PATTERN, text, index);
+		if (separatorLength === 0) continue;
+		// \s* and then\s+ only cross whitespace, and no branch starts with whitespace, so the end
+		// of that whitespace run is the only anchor a branch can match at.
+		const anchor = skipDashSeparatorWhitespace(text, index + separatorLength);
+		if (acceptsDashLiveActionAt(text, anchor, workerAhead, gitCommandAhead, pathCommandAhead)) return true;
+		if (!matchesDashBranchAt(RECOVERY_REVIEW_DASH_THEN_AT_PATTERN, text, anchor)) continue;
+		const afterThen = skipDashSeparatorWhitespace(text, anchor + 4);
+		if (afterThen > anchor + 4 && acceptsDashLiveActionAt(text, afterThen, workerAhead, gitCommandAhead, pathCommandAhead)) return true;
+	}
+	return false;
+}
+
+type GitCommandState = {
+	edges: Array<{ character: RegExp; next: GitCommandState }>;
+	epsilon: GitCommandState[];
+};
+
+// This is the git branch of the dash-live check, not a shell parser. afterOption and
+// afterSpace implement (\s+OPTION)*\s+; short/special options can also take \s+V,
+// generic long options only =V. V keeps "[^"\n]*", '[^'\n]*' and \S+ alive together.
+function createMutatingGitStates(): { start: GitCommandState; accept: GitCommandState } {
+	const state = (): GitCommandState => ({ edges: [], epsilon: [] });
+	const edge = (from: GitCommandState, character: RegExp, next: GitCommandState): void => {
+		from.edges.push({ character, next });
+	};
+	const literal = (from: GitCommandState, word: string, end: GitCommandState): void => {
+		for (let index = 0; index < word.length; index++) {
+			const next = index === word.length - 1 ? end : state();
+			edge(from, new RegExp(word.charAt(index), "i"), next);
+			from = next;
+		}
+	};
+	const start = state();
+	const accept = state();
+	const afterOption = state();
+	const afterSpace = state();
+	literal(start, "git", afterOption);
+	edge(afterOption, /\s/, afterSpace);
+	edge(afterSpace, /\s/, afterSpace);
+	for (const command of ["add", "branch", "cherry-pick", "clean", "commit", "merge", "rebase", "reset", "restore", "revert", "stash", "tag", "checkout", "switch"]) {
+		literal(afterSpace, command, accept);
+	}
+
+	const value = state();
+	const beforeSeparatedValue = state();
+	const separatedValue = state();
+	edge(beforeSeparatedValue, /\s/, separatedValue);
+	edge(separatedValue, /\s/, separatedValue);
+	separatedValue.epsilon.push(value);
+
+	const shortDash = state();
+	const shortOption = state();
+	literal(afterSpace, "-", shortDash);
+	edge(shortDash, /[A-Za-z]/, shortOption);
+	shortOption.epsilon.push(afterOption, beforeSeparatedValue);
+
+	const longStart = state();
+	const longName = state();
+	literal(shortDash, "-", longStart);
+	edge(longStart, /[A-Za-z0-9-]/, longName);
+	edge(longName, /[A-Za-z0-9-]/, longName);
+	longName.epsilon.push(afterOption);
+	edge(longName, /=/, value);
+	for (const option of ["git-dir", "work-tree", "namespace", "exec-path", "config-env"]) {
+		const specialOption = state();
+		literal(longStart, option, specialOption);
+		edge(specialOption, /=/, value);
+		specialOption.epsilon.push(beforeSeparatedValue);
+	}
+
+	for (const [quote, body] of [[/"/, /[^"\n]/], [/'/, /[^'\n]/]] as const) {
+		const quotedValue = state();
+		edge(value, quote, quotedValue);
+		edge(quotedValue, body, quotedValue);
+		edge(quotedValue, quote, afterOption);
+	}
+	const plainValue = state();
+	edge(value, /\S/, plainValue);
+	edge(plainValue, /\S/, plainValue);
+	plainValue.epsilon.push(afterOption);
+	return { start, accept };
+}
+
+const MUTATING_GIT_STATES = createMutatingGitStates();
+
+function mentionsMutatingGitCommand(text: string): boolean {
+	let active = new Set<GitCommandState>();
+	let next = new Set<GitCommandState>();
+	const addState = (states: Set<GitCommandState>, state: GitCommandState): void => {
+		if (states.has(state)) return;
+		states.add(state);
+		for (const reachable of state.epsilon) addState(states, reachable);
+	};
+	// Inject starts even inside another candidate's value. Deduplicating states at each UTF-16
+	// position preserves every reading without backtracking or suffix rescans: O(n*m) time and
+	// O(m) space for this fixed graph of m states. /i (without /u) uses ASCII word boundaries.
+	for (let position = 0; position <= text.length; position++) {
+		const character = text.charAt(position);
+		const previousIsWord = RECOVERY_REVIEW_WORD_CHARACTER_PATTERN.test(text.charAt(position - 1));
+		const currentIsWord = RECOVERY_REVIEW_WORD_CHARACTER_PATTERN.test(character);
+		if (active.has(MUTATING_GIT_STATES.accept) && previousIsWord !== currentIsWord) return true;
+		if (!previousIsWord) addState(active, MUTATING_GIT_STATES.start);
+		if (position === text.length) break;
+		next.clear();
+		for (const state of active) {
+			for (const edge of state.edges) {
+				if (edge.character.test(character)) addState(next, edge.next);
+			}
+		}
+		[active, next] = [next, active];
+	}
+	return false;
+}
+
+function mentionsMutatingCommand(text: string): boolean {
+	return RECOVERY_REVIEW_MUTATING_PATH_COMMAND_PATTERN.test(text) || mentionsMutatingGitCommand(text);
+}
 
 function isExplicitReadOnlyRecoveryReview(params: Record<string, unknown>): boolean {
 	const agent = typeof params.agent === "string" ? params.agent.trim() : "";
@@ -356,12 +534,12 @@ function isExplicitReadOnlyRecoveryReview(params: Record<string, unknown>): bool
 		&& agent !== ""
 		&& /\b(?:advisor|oracle|review|reviewer)\b/i.test(agent)
 		&& RECOVERY_REVIEW_READ_ONLY_PATTERN.test(task)
-		&& !RECOVERY_REVIEW_DESTRUCTIVE_COMMAND_PATTERN.test(taskDestructiveCommandText)
+		&& !mentionsMutatingCommand(taskDestructiveCommandText)
 		&& !RECOVERY_REVIEW_MUTATION_VERB_PATTERN.test(taskMutationText)
 		&& !RECOVERY_REVIEW_DELEGATION_PATTERN.test(taskMutationText)
 		&& !RECOVERY_REVIEW_ANAPHORIC_MUTATION_PATTERN.test(taskMutationText)
-		&& !RECOVERY_REVIEW_DESTRUCTIVE_COMMAND_PATTERN.test(taskMutationText)
-		&& !RECOVERY_REVIEW_DASH_LIVE_ACTION_PATTERN.test(taskDashLiveActionText);
+		&& !mentionsMutatingCommand(taskMutationText)
+		&& !mentionsDashLiveAction(taskDashLiveActionText);
 }
 
 function recoveryBarrierMessage(sourceKey: string, target: string): string {
@@ -685,24 +863,59 @@ function directObjectPropertyValue(node: AstNode, name: string): AstNode | undef
 	return value;
 }
 
-function validateStaticBaseRef(params: AstNode, owner: string): WorkflowScriptValidationError[] {
-	if (params.type !== "ObjectExpression" || !Array.isArray(params.properties)) return [];
-	// Inspect the final definition only. A later spread or unknown key may overwrite it.
-	for (let index = params.properties.length - 1; index >= 0; index--) {
-		const property = params.properties[index];
-		if (!astNode(property) || property.type !== "Property") return [];
+function arrayElements(node: unknown): unknown[] {
+	return astNode(node) && node.type === "ArrayExpression" && Array.isArray(node.elements) ? node.elements : [];
+}
+
+/** The final definition of `name` in an object literal; undefined when a later spread or unknown key may overwrite it. */
+function finalStaticProperty(node: AstNode, name: string): AstNode | undefined {
+	if (node.type !== "ObjectExpression" || !Array.isArray(node.properties)) return undefined;
+	for (let index = node.properties.length - 1; index >= 0; index--) {
+		const property = node.properties[index];
+		if (!astNode(property) || property.type !== "Property") return undefined;
 		const key = staticPropertyKey(property);
-		if (key === undefined) return [];
-		if (key !== "baseRef") continue;
-		if (property.kind !== "init" || !astNode(property.value)) return [];
-		const valueNode = property.value;
-		const value = literalString(valueNode);
-		if ((value !== undefined || valueNode.type === "Literal") && !validGitRef(value)) {
-			return [{ message: `${owner} ${BASE_REF_VALIDATION_ERROR}`, ...nodeLocation(valueNode) }];
-		}
-		return [];
+		if (key === undefined) return undefined;
+		if (key === name) return property;
 	}
-	return [];
+	return undefined;
+}
+
+function validateStaticBaseRef(params: AstNode, owner: string): WorkflowScriptValidationError[] {
+	const property = finalStaticProperty(params, "baseRef");
+	if (property?.kind !== "init" || !astNode(property.value)) return [];
+	const valueNode = property.value;
+	const value = literalString(valueNode);
+	return (value !== undefined || valueNode.type === "Literal") && !validGitRef(value)
+		? [{ message: `${owner} ${BASE_REF_VALIDATION_ERROR}`, ...nodeLocation(valueNode) }]
+		: [];
+}
+
+// Same text as validateLaneSpecs in workflow-script-worker.cjs; a test compares the two.
+const LANE_RETAINED_RESUME_ERROR = "cannot resume a retained run id in runs.lanes; use runs.run(key, { resume: id }) outside lanes, or start the lane with an agent stage and use resume: \"previous\" later.";
+
+// A spread or unknown computed key on the lane can replace `stages`.
+function staticLane(lane: unknown): lane is AstNode {
+	return astNode(lane) && lane.type === "ObjectExpression" && Array.isArray(lane.properties)
+		&& lane.properties.every((property) => astNode(property) && property.type === "Property" && staticPropertyKey(property) !== undefined);
+}
+
+/** The launch-time first-stage resume rule, for lanes written out as literals. */
+function validateStaticLaneResumes(call: AstNode): WorkflowScriptValidationError[] {
+	const args = Array.isArray(call.arguments) ? call.arguments : [];
+	const lanes = arrayElements(args[0]);
+	const errors: WorkflowScriptValidationError[] = [];
+	for (let laneIndex = 0; laneIndex < lanes.length; laneIndex++) {
+		const lane = lanes[laneIndex];
+		// A spread shifts every later lane index the runtime reports.
+		if (astNode(lane) && lane.type === "SpreadElement") break;
+		if (!staticLane(lane)) continue;
+		const first = arrayElements(directObjectPropertyValue(lane, "stages"))[0];
+		if (!astNode(first)) continue;
+		const property = finalStaticProperty(first, "resume");
+		const resume = property?.kind === "init" ? literalString(property.value) : undefined;
+		if (resume !== undefined && resume !== "previous") errors.push({ message: `runs.lanes lane ${laneIndex} stage 0 ${LANE_RETAINED_RESUME_ERROR}`, ...nodeLocation(first) });
+	}
+	return errors;
 }
 
 // Children with their own cwd, agentScope, or resume resolve agents elsewhere, and a
@@ -721,16 +934,12 @@ function staticChildAgentNode(params: unknown): AstNode | undefined {
 
 function validateStaticChildAgents(call: AstNode, agentNameError: (name: string) => string | undefined): WorkflowScriptValidationError[] {
 	const args = Array.isArray(call.arguments) ? call.arguments : [];
-	const elements = (node: unknown): unknown[] => astNode(node) && node.type === "ArrayExpression" && Array.isArray(node.elements) ? node.elements : [];
-	// A spread or unknown computed key on the lane can replace `stages`.
-	const staticLane = (lane: unknown): lane is AstNode => astNode(lane) && lane.type === "ObjectExpression" && Array.isArray(lane.properties)
-		&& lane.properties.every((property) => astNode(property) && property.type === "Property" && staticPropertyKey(property) !== undefined);
 	const children: Array<{ owner: string; params: unknown }> = directRunsCall(call, "run")
 		? [{ owner: "runs.run", params: args[1] }]
 		: directRunsCall(call, "all")
-			? elements(args[0]).map((params) => ({ owner: "runs.all item", params }))
+			? arrayElements(args[0]).map((params) => ({ owner: "runs.all item", params }))
 			: directRunsCall(call, "lanes")
-				? elements(args[0]).flatMap((lane) => staticLane(lane) ? elements(directObjectPropertyValue(lane, "stages")).map((params) => ({ owner: "runs.lanes stage", params })) : [])
+				? arrayElements(args[0]).flatMap((lane) => staticLane(lane) ? arrayElements(directObjectPropertyValue(lane, "stages")).map((params) => ({ owner: "runs.lanes stage", params })) : [])
 				: [];
 	const errors: WorkflowScriptValidationError[] = [];
 	for (const child of children) {
@@ -744,13 +953,45 @@ function validateStaticChildAgents(call: AstNode, agentNameError: (name: string)
 
 function directRunsAllKeys(call: AstNode): Array<{ key: string; node: AstNode }> {
 	const args = Array.isArray(call.arguments) ? call.arguments : [];
-	const items = astNode(args[0]) && args[0].type === "ArrayExpression" && Array.isArray(args[0].elements) ? args[0].elements : [];
-	return items.flatMap((item) => {
+	return arrayElements(args[0]).flatMap((item) => {
 		if (!astNode(item)) return [];
 		const keyNode = directObjectPropertyValue(item, "key");
 		const key = literalString(keyNode);
 		return keyNode && key !== undefined ? [{ key, node: keyNode }] : [];
 	});
+}
+
+/** runs.all items certain to reach the runtime without a key: plain literals in the array, or the one result of a map callback. */
+function keylessRunsAllItems(call: AstNode): Array<{ node: AstNode; index?: number }> {
+	const args = Array.isArray(call.arguments) ? call.arguments : [];
+	const items = args[0];
+	if (!astNode(items)) return [];
+	if (items.type === "ArrayExpression" && Array.isArray(items.elements)) {
+		return items.elements.flatMap((item, index) => keylessItemLiteral(item) ? [{ node: item, index }] : []);
+	}
+	const callee = items.type === "CallExpression" && astNode(items.callee) && items.callee.type === "MemberExpression" && items.callee.computed !== true ? items.callee : undefined;
+	if (!callee || !astNode(callee.property) || callee.property.type !== "Identifier" || callee.property.name !== "map") return [];
+	const callback = Array.isArray(items.arguments) ? items.arguments[0] : undefined;
+	if (!astNode(callback) || (callback.type !== "ArrowFunctionExpression" && callback.type !== "FunctionExpression") || !astNode(callback.body)) return [];
+	let result: unknown = callback.body;
+	if (callback.body.type === "BlockStatement" && Array.isArray(callback.body.body)) {
+		// Only a callback whose single return is its last statement always returns that literal.
+		const returns: AstNode[] = [];
+		walkAst(callback.body, (node) => { if (node.type === "ReturnStatement") returns.push(node); }, false);
+		result = returns.length === 1 && returns[0] === callback.body.body.at(-1) ? returns[0]!.argument : undefined;
+	}
+	return keylessItemLiteral(result) ? [{ node: result }] : [];
+}
+
+/**
+ * An object literal whose own keys are all visible (no spread, getter, setter, or computed key) and has no `key`.
+ * A thenable item (`{ then: child.then }`) is awaited as a launched child, so only the runtime can check it.
+ */
+function keylessItemLiteral(node: unknown): node is AstNode {
+	return astNode(node) && node.type === "ObjectExpression" && Array.isArray(node.properties)
+		// `__proto__: base` sets the prototype, and the runtime's destructuring reads a `key` found there.
+		&& node.properties.every((property) => astNode(property) && property.type === "Property" && property.kind === "init" && property.computed !== true && staticPropertyKey(property) !== "__proto__")
+		&& !directObjectPropertyValue(node, "key") && !directObjectPropertyValue(node, "then");
 }
 
 function containsWorkflowLaunch(node: unknown): boolean {
@@ -878,7 +1119,13 @@ export function validateWorkflowScript(script: string, options: WorkflowScriptVa
 		const location = error && typeof error === "object" && "loc" in error && error.loc && typeof error.loc === "object"
 			? error.loc as { line?: unknown; column?: unknown }
 			: undefined;
-		const message = (error instanceof Error ? error.message : String(error)).replace(/\s+\(\d+:\d+\)$/, "");
+		const parserMessage = (error instanceof Error ? error.message : String(error)).replace(/\s+\(\d+:\d+\)$/, "");
+		const source = script.trim();
+		// A path passed where source is expected parses as a regex or a stray token. Keep the parser's
+		// message too: a one-token script can also be a real syntax error.
+		const message = /^\S+$/.test(source) && (/^(?:~|\.{1,2})?\//.test(source) || /\.(?:[cm]?[jt]s|json)$/.test(source))
+			? `${parserMessage}. The script looks like a file path ('${source}'): options.script takes the script's source text; pass a script file as workflow: "${source}".`
+			: parserMessage;
 		return { ok: false, errors: [{ message, ...(typeof location?.line === "number" ? { line: Math.max(1, location.line - 1) } : {}), ...(typeof location?.column === "number" ? { column: location.column + 1 } : {}) }] };
 	}
 
@@ -908,16 +1155,19 @@ export function validateWorkflowScript(script: string, options: WorkflowScriptVa
 		}
 		if (directRunsCall(node, "all")) {
 			for (const entry of directRunsAllKeys(node)) if (!KEY_PATTERN.test(entry.key)) errors.push({ message: "runs.all item key must be 1-128 characters using letters, numbers, '.', '_' or '-', and start with a letter or number.", ...nodeLocation(entry.node) });
+			if (!runsRebound) for (const item of keylessRunsAllItems(node)) {
+				const subject = item.index === undefined ? "runs.all items built by this map(...) callback have no key" : `runs.all item ${item.index} has no key`;
+				errors.push({ message: `${subject}; every runs.all item needs a stable key, for example runs.all([{ key: "review", agent, task }]).`, ...nodeLocation(item.node) });
+			}
 			const args = Array.isArray(node.arguments) ? node.arguments : [];
-			if (astNode(args[0]) && args[0].type === "ArrayExpression" && Array.isArray(args[0].elements)) {
-				for (const item of args[0].elements) if (astNode(item)) {
-					errors.push(...validateStaticBaseRef(item, "runs.all item"));
-					const message = definitelyNonJson(item);
-					if (message) errors.push({ message: `runs.all item params are invalid: ${message}.`, ...nodeLocation(item) });
-				}
+			for (const item of arrayElements(args[0])) if (astNode(item)) {
+				errors.push(...validateStaticBaseRef(item, "runs.all item"));
+				const message = definitelyNonJson(item);
+				if (message) errors.push({ message: `runs.all item params are invalid: ${message}.`, ...nodeLocation(item) });
 			}
 		}
 		if (directRunsCall(node, "host")) errors.push(...validateStaticHostCall(node));
+		if (directRunsCall(node, "lanes") && !runsRebound) errors.push(...validateStaticLaneResumes(node));
 		if (agentNameError) errors.push(...validateStaticChildAgents(node, agentNameError));
 		const boundaryValue = node.type === "CallExpression" && astNode(node.callee) && node.callee.type === "Identifier" && node.callee.name === "emit" && Array.isArray(node.arguments) && astNode(node.arguments[0])
 			? node.arguments[0]
@@ -947,7 +1197,7 @@ export function validateWorkflowScript(script: string, options: WorkflowScriptVa
 				const keys = new Set(directRunsAllKeys(declaration.init.argument).map((entry) => entry.key));
 				if (keys.size === 0) continue;
 				const args = Array.isArray(declaration.init.argument.arguments) ? declaration.init.argument.arguments : [];
-				const itemCount = astNode(args[0]) && args[0].type === "ArrayExpression" && Array.isArray(args[0].elements) ? args[0].elements.length : 0;
+				const itemCount = arrayElements(args[0]).length;
 				const arrayResultShape = Array.from({ length: itemCount });
 				for (const later of laterStatements) {
 					walkAstWithoutShadowedIdentifier(later, name, (node) => {
@@ -1085,15 +1335,9 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 	} catch (error) {
 		throw new WorkflowScriptError("Workflow parser dependency 'acorn' is unavailable from pi-subagents. Reinstall pi-subagents dependencies before launching workflowScript.", emptyPartial(), "runtime", { cause: error });
 	}
-	let worker: Worker;
+	let worker: ReturnType<typeof createWorkflowScriptWorker>;
 	try {
-		const bun = typeof process.versions.bun === "string";
-		// Bun needs a real file as its resolver base on warm transpiler-cache hits, and no eval key at all: with one,
-		// its Worker finalizer passes the URL to URL.revokeObjectURL and throws. Node keeps eval source because its
-		// eval worker does not re-resolve inherited --import preloads after a cwd change.
-		worker = bun
-			? new Worker(WORKFLOW_WORKER_URL, { workerData: { acornPath } })
-			: new Worker(nodeWorkerSource ??= readFileSync(WORKFLOW_WORKER_URL, "utf8"), { eval: true, workerData: { acornPath } });
+		worker = createWorkflowScriptWorker(acornPath);
 	} catch (error) {
 		throw new WorkflowScriptError(`Workflow worker could not start: ${error instanceof Error ? error.message : String(error)}`, emptyPartial(), "runtime", { cause: error });
 	}
@@ -1102,7 +1346,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 	const trace: WorkflowScriptTraceEntry[] = [];
 	const children = new Map<string, WorkflowScriptChildResult>();
 	const childOrder: string[] = [];
-	const launches = new Map<string, { fingerprint: string; promise: Promise<WorkflowScriptChildResult>; observed: boolean; generatedLaneKey?: string }>();
+	const launches = new Map<string, { fingerprint: string; promise: Promise<WorkflowScriptChildResult>; observed: boolean; generatedLaneKey?: string; reuseTraced?: boolean }>();
 	const steers = new Map<number, { key: string; promise: Promise<WorkflowSteerResult>; observed: boolean }>();
 	const hostCalls = new Map<number, { key: string; promise: Promise<WorkflowHostCommandResult>; observed: boolean }>();
 	const stoppedLaunches = new Set<string>();
@@ -1115,6 +1359,10 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 	let acceptanceRecoveryBarrier: { key: string } | undefined;
 	let settled = false;
 	let finishing = false;
+	let draining = false;
+	let onDrained: (() => void) | undefined;
+	// Keys past the concurrency semaphore: a drain lets these finish and stops the rest.
+	const acquiredLaunches = new Set<string>();
 	let assemblyAbortRequested = false;
 	let assemblyFlushTimer: ReturnType<typeof setTimeout> | undefined;
 	let abortError: Error | undefined;
@@ -1161,6 +1409,12 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 	const recordAcceptanceRecoveryBarrier = (key: string, result: WorkflowScriptChildResult): void => {
 		if (isAcceptanceMetadataRecovery(result)) acceptanceRecoveryBarrier = { key };
 	};
+	const drainIfIdle = (): void => {
+		if (!onDrained || [...launches.keys()].some((key) => !children.has(key))) return;
+		const done = onDrained;
+		onDrained = undefined;
+		done();
+	};
 	const stopChild = (key: string, message = `Workflow child '${key}' stopped.`): boolean => {
 		if (!launches.has(key) || children.has(key)) return false;
 		stoppedLaunches.add(key);
@@ -1178,7 +1432,18 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			error: message,
 		});
 		traceChanged();
+		drainIfIdle();
 		return true;
+	};
+	const drain = (done: () => void): number => {
+		if (!draining) {
+			draining = true;
+			onDrained = done;
+		}
+		for (const key of launches.keys()) if (!acquiredLaunches.has(key)) stopChild(key, WORKFLOW_DRAIN_CHILD_MESSAGE);
+		const started = [...launches.keys()].filter((key) => !children.has(key)).length;
+		drainIfIdle();
+		return started;
 	};
 	const notifyChildSettled = (key: string, result: WorkflowScriptChildResult): void => {
 		if (result.state === "running" || !options.onChildSettled || !options.workflowRunId) return;
@@ -1206,6 +1471,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 		}
 	};
 	options.registerStopChild?.(stopChild);
+	options.registerDrain?.(drain);
 
 	return await new Promise<WorkflowScriptResult>((resolve, reject) => {
 		const finish = (outcome: { value: unknown } | { error: Error & { workflowErrorKind?: unknown } }) => {
@@ -1220,6 +1486,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 				if (settled) return;
 				settled = true;
 				options.registerStopChild?.(undefined);
+				options.registerDrain?.(undefined);
 				if (timer) clearTimeout(timer);
 				options.signal?.removeEventListener("abort", onAbort);
 				void worker.terminate();
@@ -1295,7 +1562,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 
 		worker.on("error", (error) => finish({ error: taggedWorkflowError(`Workflow worker failed: ${error instanceof Error ? error.message : String(error)}`, "runtime") }));
 		worker.on("exit", (code) => {
-			if (!settled && code !== 0) finish({ error: taggedWorkflowError(`Workflow worker exited with code ${code}.`, "runtime") });
+			if (!settled && !finishing) finish({ error: taggedWorkflowError(`Workflow worker exited before returning a result (code ${code}).`, "runtime") });
 		});
 		worker.on("message", (message: Record<string, unknown>) => {
 			if (settled) return;
@@ -1360,7 +1627,8 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			const respond = (promise: Promise<unknown>, responsePath?: string, onBoundaryError?: (error: unknown) => void) => {
 				void promise.then(
 					(value) => {
-						if (settled) return;
+						// While draining, the script gets no answers: a refusal it throws on would abort the started children.
+						if (settled || draining) return;
 						const normalized = responsePath ? omitNonJsonWorkflowResultMetadata(value) : omitUndefinedWorkflowValues(value);
 						if (!responsePath) {
 							worker.postMessage({ type: "response", callId: message.callId, ok: true, value: normalized });
@@ -1375,7 +1643,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 						}
 					},
 					(error: unknown) => {
-						if (!settled) {
+						if (!settled && !draining) {
 							const errorKind = error instanceof Error ? (error as { workflowErrorKind?: unknown }).workflowErrorKind : undefined;
 							worker.postMessage({ type: "response", callId: message.callId, ok: false, error: error instanceof Error ? error.message : String(error), ...(isWorkflowScriptFailureKind(errorKind) ? { errorKind } : {}) });
 						}
@@ -1460,6 +1728,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 					return respond(Promise.reject(error));
 				}
 				if (acceptanceRecoveryBarrier) return respond(Promise.reject(new Error(recoveryBarrierMessage(acceptanceRecoveryBarrier.key, `runs.host('${key}')`))));
+				if (draining) return respond(Promise.reject(new Error(`runs.host('${key}') refused: the workflow is draining.`)));
 				if (!options.host) return respond(Promise.reject(new Error("runs.host is unavailable in this host context.")));
 				if (hostCalls.size >= HOST_STEP_MAX_COUNT) return respond(Promise.reject(new Error(`workflowScript supports at most ${HOST_STEP_MAX_COUNT} runs.host calls.`)));
 				const startedAt = Date.now();
@@ -1527,8 +1796,13 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			if (existing) {
 				if (existing.fingerprint !== fingerprint) return respond(Promise.reject(new Error(`Duplicate workflow key '${key}' used with incompatible launch params.`)));
 				if (callObserved) existing.observed = true;
-				trace.push({ operation: "run", key, state: "reused", ...workflowStringMetadata(params), ...(existing.generatedLaneKey ? { generatedLaneKey: existing.generatedLaneKey } : {}) });
-				traceChanged();
+				// Matching params make every later reuse entry identical, and each trace change rewrites the
+				// whole trace to status.json and events.jsonl, so a re-delivery loop would grow without bound.
+				if (!existing.reuseTraced) {
+					existing.reuseTraced = true;
+					trace.push({ operation: "run", key, state: "reused", ...workflowStringMetadata(params), ...(existing.generatedLaneKey ? { generatedLaneKey: existing.generatedLaneKey } : {}) });
+					traceChanged();
+				}
 				return respond(deliver(existing.promise), `runs.run('${key}') result`, (error) => children.set(key, responseBoundaryFailure(key, error)));
 			}
 			const permitError = options.oneUsePermit?.claim(key);
@@ -1536,6 +1810,8 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			if (options.oneUsePermit && message.args.batch !== undefined) return respond(Promise.reject(new Error("Workflow child permit does not support runs.all.")));
 			if (options.oneUsePermit && params.resume !== undefined) return respond(Promise.reject(new Error("Workflow child permit does not support retained resume.")));
 			if (params.action !== undefined) return respond(Promise.reject(new Error(`runs.run('${key}') accepts execution params only; management action is not allowed.`)));
+			// Before admission, which resolves a resume target; the executor would only see this after that.
+			if (params.requireLauncher !== undefined) return respond(Promise.reject(new Error(`runs.run('${key}'): ${REQUIRE_LAUNCHER_SHAPE_ERROR}`)));
 			if (params.workflowScript !== undefined) return respond(Promise.reject(new Error(`runs.run('${key}') cannot start a nested workflow script.`)));
 			if (params.tasks !== undefined || params.chain !== undefined || params.parallel !== undefined || params.concurrency !== undefined || params.chainDir !== undefined) {
 				return respond(Promise.reject(new Error(`runs.run('${key}') accepts one child via { agent, task }; use runs.all(...) and JavaScript control flow for orchestration.`)));
@@ -1582,7 +1858,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 					return true;
 				});
 				admission = Promise.resolve().then(() => {
-					if (settled || finishing) return;
+					if (settled || finishing || draining) return;
 					for (const call of calls) assertRecoveryBarrierAllowsRun(call.key, call.params);
 					return options.admit?.(calls, childController.signal);
 				});
@@ -1590,6 +1866,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 			}
 			let resolvedResumeLineage: string[] | undefined;
 			const promise = admission.then(async () => {
+				if (draining) stopChild(key, WORKFLOW_DRAIN_CHILD_MESSAGE);
 				if (settled || finishing || stoppedLaunches.has(key)) {
 					const reason = childController.signal.reason;
 					const text = children.get(key)?.error ?? (reason instanceof Error ? reason.message : typeof reason === "string" ? reason : "Workflow script aborted.");
@@ -1631,6 +1908,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 						const text = children.get(key)?.error ?? (reason instanceof Error ? reason.message : typeof reason === "string" ? reason : "Workflow script aborted.");
 						return stoppedChildResult(key, text);
 					}
+					acquiredLaunches.add(key);
 					const result = await options.launch(key, launchParams, childSignal, { admitted: true, batch: batch !== undefined });
 					const autoResumeParams = setupAbortResumeParams(params, result, childSignal);
 					if (!autoResumeParams) return result;
@@ -1660,6 +1938,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 				trace.push(settledEntry);
 				traceChanged();
 				notifyChildSettled(key, normalized);
+				drainIfIdle();
 				return normalized;
 			}, (error: unknown) => {
 				const text = error instanceof Error ? error.message : String(error);
@@ -1670,6 +1949,7 @@ export async function runWorkflowScript(options: RunWorkflowScriptOptions): Prom
 				trace.push({ operation: "run", key, state: "failed", durationMs: Date.now() - startedAt, ...workflowStringMetadata(params), ...(generatedLaneKey ? { generatedLaneKey } : {}), error: text });
 				traceChanged();
 				notifyChildSettled(key, failure);
+				drainIfIdle();
 				return failure;
 			});
 			launches.set(key, { fingerprint, promise, observed: callObserved, ...(generatedLaneKey ? { generatedLaneKey } : {}) });
