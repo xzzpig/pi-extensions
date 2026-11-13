@@ -5,6 +5,24 @@ This fork tracks [`carderne/pi-sandbox`](https://github.com/carderne/pi-sandbox)
 via git subtree; entries below describe only fork-specific deviations from
 upstream.
 
+## 0.9.0
+
+### Changed
+
+- **Synced upstream `v0.7.3` → `v0.8.1`**: opt-in cross-sandbox process signals
+  (`allowProcessSignals`, macOS only) and the `sandbox-runtime` v0.0.79 baseline.
+- **Accepted upstream's removal of built-in mandatory file write denies.**
+  Upstream sandbox-runtime v0.0.78 (#30) deleted the automatic protection of
+  `.bashrc` / `.gitconfig` / `.mcp.json` and the ripgrep scan that implemented
+  it. The fork therefore drops `filesystem.protectNonexistentFiles` and
+  `filesystem.denyMandatoryCwdFiles` from config types, profile merging,
+  validation, docs and tests; existing local config keys are silently ignored.
+  Write protection now comes solely from explicit `denyWrite` rules (the fork's
+  defaults `.env`, `.env.*`, `*.pem`, `*.key` are unchanged). All other fork
+  features — `network.disabled`, named profiles, project trust, tool-display
+  decoration, write-denial diagnostics and per-command cwd normalization —
+  remain.
+
 ## 0.8.2
 
 ### Changed

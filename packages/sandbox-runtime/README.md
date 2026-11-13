@@ -394,14 +394,6 @@ Examples:
 - Paths can be absolute (e.g., `/home/user/.ssh`) or relative to the current working directory (e.g., `./src`)
 - `~` expands to the user's home directory
 
-**Linux placeholder protection for dangerous files (bwrap):**
-
-- `filesystem.protectNonexistentFiles` - boolean, default: `true` (Linux only).
-- When `true` (default), the sandbox also protects dangerous files (`.bashrc`, `.gitconfig`, `.mcp.json`, etc.) that do not exist yet inside allowed write paths, by mounting read-only placeholders (`/dev/null` or an empty dir) over them. This prevents sandboxed commands from creating these files, but bwrap materializes the placeholders as empty files/dirs on the host while the command runs (e.g., a temporary `.bashrc` in the working directory), and they are removed after the command finishes.
-- Set to `false` to skip placeholders for non-existent dangerous files, so no temporary dotfiles appear on the host during execution (useful when tools like `git status` or lint/glob scans run concurrently). **Security tradeoff:** with `false`, sandboxed commands can create these dangerous files inside allowed write paths.
-- Existing dangerous files and user-configured `denyWrite` paths remain protected regardless of this setting.
-- macOS and Windows are unaffected by this option.
-
 #### Other Configuration
 
 - `ignoreViolations` - Object mapping command patterns to arrays of paths where violations should be ignored

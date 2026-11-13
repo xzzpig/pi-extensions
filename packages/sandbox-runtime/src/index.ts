@@ -48,7 +48,7 @@ export type { SandboxViolationEvent } from './sandbox/macos-sandbox-utils.js'
 export { type SandboxDependencyCheck } from './sandbox/linux-sandbox-utils.js'
 // [fork] Exported for the pi-sandbox fork, which judges user-configured
 // denyWrite paths with the same lstat semantics as the runtime.
-export { pathEntryLstatExists } from './sandbox/linux-sandbox-utils.js'
+export { pathEntryLstatExists } from './sandbox/fork-filesystem.js'
 
 // Windows install/status API
 export {

@@ -309,10 +309,6 @@ test("profile definitions reject malformed runtime fields", () => {
       expected: /network contains an invalid sandbox runtime value/,
     },
     { profile: { network: { sshProxy: "yes" } }, expected: /sshProxy' must be a boolean/ },
-    {
-      profile: { filesystem: { protectNonexistentFiles: "yes" } },
-      expected: /protectNonexistentFiles' must be a boolean/,
-    },
     { profile: { allowBrowserProcess: "yes" }, expected: /allowBrowserProcess' must be a boolean/ },
     {
       profile: { ignoreViolations: { bash: "not-an-array" } },
@@ -389,65 +385,6 @@ test("profile names and definitions fail closed when invalid or missing", () => 
         "broken",
       ),
     /allowWrite' must be an array of strings/,
-  );
-});
-
-test("profiles cannot weaken inherited protection for nonexistent denied write targets", () => {
-  assert.throws(
-    () =>
-      mergeProfileLayers(
-        DEFAULT_CONFIG,
-        {
-          filesystem: {
-            protectNonexistentFiles: true,
-            denyWrite: ["future-secret.env"],
-          },
-          profiles: {
-            strict: {
-              filesystem: { protectNonexistentFiles: false },
-            },
-          },
-        },
-        {},
-        "strict",
-      ),
-    /cannot disable 'filesystem\.protectNonexistentFiles'/,
-  );
-
-  const tightened = mergeProfileLayers(
-    DEFAULT_CONFIG,
-    { profiles: { strict: { filesystem: { protectNonexistentFiles: true } } } },
-    {},
-    "strict",
-  );
-  assert.equal(tightened.filesystem?.protectNonexistentFiles, true);
-
-  const profileHardDeny = mergeProfileLayers(
-    DEFAULT_CONFIG,
-    {
-      filesystem: { denyWrite: ["global-future-secret.env"] },
-      profiles: { strict: {} },
-    },
-    {},
-    "strict",
-  );
-  assert.equal(profileHardDeny.filesystem?.protectNonexistentFiles, true);
-
-  assert.throws(
-    () =>
-      mergeProfileLayers(
-        DEFAULT_CONFIG,
-        {
-          filesystem: { protectNonexistentFiles: true, denyWrite: ["global-future-secret.env"] },
-          profiles: {
-            strict: { inheritGlobalConfig: false, filesystem: { protectNonexistentFiles: false } },
-          },
-        },
-        { filesystem: { protectNonexistentFiles: false } },
-        "strict",
-        true,
-      ),
-    /cannot disable 'filesystem\.protectNonexistentFiles'/,
   );
 });
 
@@ -545,26 +482,6 @@ test("mergeProfileObjects clamps restricted booleans to the global profile basel
     "dev",
   );
   assert.equal(relaxed.allowBrowserProcess, true);
-});
-
-test("mergeProfileObjects cannot lower protectNonexistentFiles", () => {
-  assert.throws(
-    () =>
-      mergeProfileObjects(
-        { filesystem: { protectNonexistentFiles: true } },
-        { filesystem: { protectNonexistentFiles: false } },
-        "dev",
-      ),
-    /cannot disable 'filesystem\.protectNonexistentFiles'/,
-  );
-
-  // A project's literal denyWrite entry keeps the pre-creation hard boundary.
-  const literalDeny = mergeProfileObjects(
-    {},
-    { filesystem: { denyWrite: ["future-secret.env"] } },
-    "dev",
-  );
-  assert.equal(literalDeny.filesystem?.protectNonexistentFiles, true);
 });
 
 test("mergeProfileObjects keeps inheritGlobalConfig narrowing sticky", () => {

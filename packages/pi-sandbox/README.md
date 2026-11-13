@@ -108,19 +108,7 @@ Note below that the order of precedence for filesystem read and write are opposi
     // - empty ALLOW means no write access at all
     // - DENY takes precedence and is never prompted
     "allowWrite": [".", "/tmp"],
-    "denyWrite": [".env", ".env.*", "*.pem", "*.key"],
-
-    // Linux/bwrap only. Defaults to false so tools like `git status` and lint
-    // glob scans see the real directory while a sandboxed command runs.
-    // The runtime default (when this option is absent) is true, which mounts
-    // read-only placeholders for not-yet-existing dangerous files (.bashrc,
-    // .mcp.json, …) and leaves temporary mount-point files on the host during
-    // the command's execution.
-    // Set to true to also prevent sandboxed commands from creating those files
-    // inside allowed write paths. With the default false, literal denyWrite
-    // paths that do not exist yet (built-in defaults or your own entries) are
-    // neither created nor protected; existing files are always protected.
-    "protectNonexistentFiles": false
+    "denyWrite": [".env", ".env.*", "*.pem", "*.key"]
   }
 }
 ```
@@ -167,11 +155,8 @@ prompt. `deniedDomains`,
 `denyRead`, and `denyWrite` are unioned, so neither a profile nor an allow list
 can remove an inherited hard denial. For a named profile, `denyRead` is checked
 before the native `read` tool can prompt; ordinary sandbox configuration keeps
-its existing prompt behavior. Named profiles also force
-`protectNonexistentFiles` when their effective `denyWrite` list contains a
-literal path, so Bash cannot create a hard-denied target before it exists.
-This profile-only safeguard does not change the ordinary placeholder-free
-default. A profile cannot *declare* `disabled: true` — registration rejects it —
+its existing prompt behavior. A profile cannot *declare* `disabled: true` —
+registration rejects it —
 but it does inherit the baseline's `disabled` state. So with a global
 `network.disabled: true` a selected profile also runs with network restriction
 off, and any `allowedDomains` the profile declares is then inert (the runtime
@@ -192,8 +177,7 @@ project may replace `allowedDomains` and `allowWrite`, while `allowRead` and
 lists — a project profile can never drop or clear a global hard denial.
 Sensitive relaxations (`allowAllUnixSockets`, `allowLocalBinding`,
 `allowUnauthenticatedSocksProxy`, `allowBrowserProcess`,
-`enableWeakerNestedSandbox`, `enableWeakerNetworkIsolation`, and
-`filesystem.protectNonexistentFiles`) cannot be enabled by the project layer
+`enableWeakerNestedSandbox`, `enableWeakerNetworkIsolation`) cannot be enabled by the project layer
 unless the global profile already enables them, mirroring the same rule global
 profiles follow against the inherited baseline. `inheritGlobalConfig` governs
 only the profile-to-baseline relationship and does not participate in the
@@ -394,23 +378,6 @@ this setting alone does not make the SSH agent usable.
 > - **Write:** `denyWrite` takes precedence over `allowWrite` and is never
 >   prompted. A path in `denyWrite` is always blocked, even if it matches
 >   `allowWrite`.
-
-On Linux (bwrap), the sandbox also protects dangerous files (`.bashrc`,
-`.gitconfig`, `.mcp.json`, …) that do not exist yet inside allowed write paths.
-`filesystem.protectNonexistentFiles` defaults to `false` here so no
-placeholder files appear in the working directory while a sandboxed command runs
-(placeholder mount points would show up as empty dotfiles to `git status`, lint
-glob scans, etc.). Set it to `true` to also prevent sandboxed commands from
-creating those files inside allowed write paths.
-
-With the default `false`, any literal `denyWrite` path that does not exist yet —
-whether from the built-in defaults (`.env`, `.env.*`, `*.pem`, `*.key`) or from
-your own configuration — is neither created nor protected: sandboxed commands
-can create and write such files freely, and no placeholder appears. Paths that
-already exist on disk (including dangling symlinks) are always protected
-regardless of this setting. Glob patterns in `denyWrite` are unaffected by this
-option (they are skipped on Linux anyway), and the option has no effect on macOS
-or Windows.
 
 If neither file configures an array, its built-in defaults apply (see above for
 the defaults). Once an array is configured, only its combined global and local

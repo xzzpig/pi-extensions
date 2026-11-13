@@ -5,17 +5,7 @@ import { type SandboxRuntimeConfig } from "@xzzpig/sandbox-runtime";
 import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export type SandboxConfig = Omit<SandboxRuntimeConfig, "network" | "filesystem"> & {
-  /**
-   * `denyMandatoryCwdFiles` is added to @carderne/sandbox-runtime by PR #21.
-   * Drop it from this type once a released runtime type carries the field.
-   *
-   * When false, the runtime does not deny the built-in mandatory filenames
-   * (.gitconfig, .bashrc, .mcp.json, ...) at the working directory root, which
-   * avoids them appearing in the working tree as zero-length character devices.
-   */
-  filesystem?: NonNullable<SandboxRuntimeConfig["filesystem"]> & {
-    denyMandatoryCwdFiles?: boolean;
-  };
+  filesystem?: NonNullable<SandboxRuntimeConfig["filesystem"]>;
   enabled?: boolean;
   sandboxUserShell?: boolean;
   enableAccessRequestTool?: boolean;
@@ -88,7 +78,6 @@ export const DEFAULT_CONFIG: SandboxConfig = {
     allowRead: [".", "~/.config", "~/.local", "Library"],
     allowWrite: [".", "/tmp"],
     denyWrite: [".env", ".env.*", "*.pem", "*.key"],
-    protectNonexistentFiles: false, // [fork] opposite of the runtime default
   },
 };
 

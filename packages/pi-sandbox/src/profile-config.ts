@@ -89,7 +89,6 @@ const PROFILE_FILESYSTEM_FIELDS = new Set([
   "allowRead",
   "allowWrite",
   "denyWrite",
-  "protectNonexistentFiles",
 ]);
 const PROFILE_ARRAY_FIELDS = new Set([
   "allowedDomains",
@@ -154,23 +153,6 @@ function preserveRestrictedBoolean(
   return profile === false ? false : base;
 }
 
-function preserveProtectNonexistentFiles(
-  base: boolean | undefined,
-  profile: boolean | undefined,
-  profileName: string,
-): boolean | undefined {
-  if (profile === false && base === true) {
-    throw new Error(
-      `Sandbox profile '${profileName}' cannot disable 'filesystem.protectNonexistentFiles' because its inherited baseline requires it.`,
-    );
-  }
-  return profile === true ? true : base;
-}
-
-function hasLiteralDenyWrite(paths: readonly string[] | undefined): boolean {
-  return paths?.some((path) => !path.includes("*")) === true;
-}
-
 function mergeProfileConfig(
   base: SandboxConfig,
   profile: SandboxProfileConfig,
@@ -230,17 +212,6 @@ function mergeProfileConfig(
   // combination (the runtime never started a network proxy).
   network.disabled = profileNetwork?.disabled ?? base.network?.disabled ?? false;
   filesystem.disabled = profileFilesystem?.disabled ?? base.filesystem?.disabled ?? false;
-  filesystem.protectNonexistentFiles = preserveProtectNonexistentFiles(
-    base.filesystem?.protectNonexistentFiles,
-    profileFilesystem?.protectNonexistentFiles,
-    profileName,
-  );
-  // A selected profile makes its denyWrite entries a hard child boundary.
-  // Keep literal paths in the runtime even before they exist so bash cannot
-  // create a sensitive target that write/edit would otherwise reject.
-  if (hasLiteralDenyWrite(filesystem.denyWrite)) {
-    filesystem.protectNonexistentFiles = true;
-  }
   network.strictAllowlist = Boolean(
     base.network?.strictAllowlist || profileNetwork?.strictAllowlist,
   );
@@ -304,8 +275,6 @@ function mergeProfileConfig(
  *   empty array is a no-op rather than a clear;
  * - restricted booleans keep preserveRestrictedBoolean semantics: a project
  *   layer may only stay relaxed when the global profile already relaxes it;
- * - protectNonexistentFiles cannot be lowered, and a literal denyWrite entry
- *   keeps it on;
  * - inheritGlobalConfig: false in either layer stays false, so a project layer
  *   can narrow the inherited baseline but never widen it back.
  *
@@ -391,16 +360,6 @@ export function mergeProfileObjects(
       globalFilesystem?.denyWrite,
       projectFilesystem.denyWrite,
     );
-    filesystem.protectNonexistentFiles = preserveProtectNonexistentFiles(
-      globalFilesystem?.protectNonexistentFiles,
-      projectFilesystem.protectNonexistentFiles,
-      profileName,
-    );
-    // A literal denyWrite entry is a hard child boundary; keep it enforced
-    // even before the path exists (same rule as a single-profile load).
-    if (hasLiteralDenyWrite(filesystem.denyWrite)) {
-      filesystem.protectNonexistentFiles = true;
-    }
   }
 
   for (const field of [
@@ -453,15 +412,6 @@ function validateHardDenyConfig(config: SandboxConfigFile, label: string): void 
         `${label}.${section}.${field} must be an array of strings when selecting a sandbox profile.`,
       );
     }
-    if (section === "filesystem") {
-      const protectNonexistentFiles = (rawSection as Record<string, unknown>)
-        .protectNonexistentFiles;
-      if (protectNonexistentFiles !== undefined && typeof protectNonexistentFiles !== "boolean") {
-        throw new Error(
-          `${label}.filesystem.protectNonexistentFiles must be a boolean when selecting a sandbox profile.`,
-        );
-      }
-    }
   }
 }
 
@@ -469,7 +419,6 @@ function globalHardDenyConfig(config: SandboxConfigFile): SandboxConfigOverride 
   const deniedDomains = stringArray(config.network?.deniedDomains);
   const denyRead = stringArray(config.filesystem?.denyRead);
   const denyWrite = stringArray(config.filesystem?.denyWrite);
-  const protectNonexistentFiles = config.filesystem?.protectNonexistentFiles === true;
   return {
     ...(deniedDomains ? { network: { deniedDomains } } : {}),
     ...(denyRead || denyWrite
@@ -477,7 +426,6 @@ function globalHardDenyConfig(config: SandboxConfigFile): SandboxConfigOverride 
           filesystem: {
             ...(denyRead ? { denyRead } : {}),
             ...(denyWrite ? { denyWrite } : {}),
-            ...(protectNonexistentFiles ? { protectNonexistentFiles: true } : {}),
           },
         }
       : {}),
@@ -559,8 +507,7 @@ export function validateProfileConfig(value: unknown, profileName: string): Sand
         key === "strictAllowlist" ||
         key === "allowAllUnixSockets" ||
         key === "allowLocalBinding" ||
-        key === "allowUnauthenticatedSocksProxy" ||
-        key === "protectNonexistentFiles"
+        key === "allowUnauthenticatedSocksProxy"
       ) {
         if (typeof item !== "boolean") {
           throw new Error(`Sandbox profile '${profileName}.${section}.${key}' must be a boolean.`);
@@ -766,18 +713,6 @@ export function mergeProfileLayers(
       : configWithoutProfiles(globalConfig);
   const baseProject = projectTrusted ? configWithoutProfiles(projectConfig) : {};
   const base = mergeConfigLayers(defaults, baseGlobal, baseProject);
-  if (
-    globalConfig.filesystem?.protectNonexistentFiles === true ||
-    (projectTrusted && projectConfig.filesystem?.protectNonexistentFiles === true)
-  ) {
-    base.filesystem = {
-      denyRead: [],
-      allowWrite: [],
-      denyWrite: [],
-      ...base.filesystem,
-      protectNonexistentFiles: true,
-    };
-  }
   return mergeProfileConfig(base, profile, name);
 }
 

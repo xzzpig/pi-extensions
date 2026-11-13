@@ -1,6 +1,7 @@
 import { createHttpProxyServer } from './http-proxy.js'
 import { createSocksProxyServer } from './socks-proxy.js'
 import type { SocksProxyWrapper } from './socks-proxy.js'
+import { isNetworkDisabled } from './fork-network.js'
 import { createMuxProxyServer, type MuxProxyServer } from './mux-proxy.js'
 import { listenInRange } from './listen-in-range.js'
 import { SentinelRegistry } from './credential-sentinel.js'
@@ -696,6 +697,24 @@ function createManager(legacySingleton: boolean): ISandboxManager {
       }
     }
 
+    // Initialize network infrastructure unless network.disabled skips it.
+    // With no proxy/bridge running, wrap paths must never request proxy
+    // ports — guaranteed because they compute needsNetworkProxy from the
+    // same flag, so waitForNetworkInitialization() is never reached here.
+    if (runtimeConfig.network.disabled === true) {
+      logForDebugging(
+        '[Sandbox] network.disabled is set - skipping proxy and network bridge initialization',
+      )
+      if (runtimeConfig.credentials) {
+        logForDebugging(
+          '[Sandbox] network.disabled: credential masking has no proxy to substitute ' +
+            'sentinels on egress; masked values would reach upstreams unchanged',
+          { level: 'warn' },
+        )
+      }
+      return
+    }
+
     // Initialize network infrastructure
     initializationPromise = (async () => {
       try {
@@ -1345,15 +1364,29 @@ function createManager(legacySingleton: boolean): ISandboxManager {
       customConfig?.network?.allowedDomains !== undefined ||
       config?.network?.allowedDomains !== undefined
 
-    // Network RESTRICTION is needed whenever network config is specified
-    // This includes empty allowedDomains which means "block all network"
-    const needsNetworkRestriction = hasNetworkConfig
+    // network.disabled bypasses ALL network enforcement, mirroring how
+    // filesystem.disabled bypasses filesystem rule generation: platform
+    // wrappers emit permissive network rules (macOS "(allow network*)") or
+    // skip netns isolation and proxy plumbing (Linux), and no local proxy
+    // is required. Note: initialize() skips proxy/bridge startup under the
+    // same flag, so a per-call override that re-enables restrictions cannot
+    // route through a proxy that was never started — hosts would be hard-
+    // blocked instead. Call reset() + initialize() to toggle globally.
+    const networkDisabled = isNetworkDisabled(
+      customConfig?.network,
+      config?.network,
+    )
 
-    // Network PROXY is needed whenever network config is specified
+    // Network RESTRICTION is needed whenever network config is specified
+    // and not disabled. This includes empty allowedDomains which means
+    // "block all network"
+    const needsNetworkRestriction = hasNetworkConfig && !networkDisabled
+
+    // Network PROXY is needed whenever network restriction applies.
     // Even with empty allowedDomains, we route through proxy so that:
     // 1. updateConfig() can enable network access for already-running processes
     // 2. The proxy blocks all requests when allowlist is empty
-    const needsNetworkProxy = hasNetworkConfig
+    const needsNetworkProxy = needsNetworkRestriction
 
     // Wait for network initialization only if proxy is actually needed
     if (needsNetworkProxy) {
@@ -1488,7 +1521,13 @@ function createManager(legacySingleton: boolean): ISandboxManager {
       const hasNetworkConfig =
         customConfig?.network?.allowedDomains !== undefined ||
         config?.network?.allowedDomains !== undefined
-      if (hasNetworkConfig) {
+      // Same precedence as wrapWithSandbox(): a per-call network override
+      // owns its disabled key outright.
+      const networkDisabled = isNetworkDisabled(
+        customConfig?.network,
+        config?.network,
+      )
+      if (hasNetworkConfig && !networkDisabled) {
         if (!(await waitForNetworkInitialization()) || !managerContext) {
           throw new Error(
             'Sandbox network proxy is not initialized. Initialize the sandbox before running commands.',
@@ -1769,8 +1808,9 @@ function createManager(legacySingleton: boolean): ISandboxManager {
       // first, the connections are gone by the time close() runs and its
       // callback fires immediately (Bun reports "Server is not running.",
       // Node reports no error). Verified against both orderings.
-      if (typeof server.closeAllConnections === 'function') {
-        server.closeAllConnections()
+      const serverWithClose = server as { closeAllConnections?: () => void }
+      if (typeof serverWithClose.closeAllConnections === 'function') {
+        serverWithClose.closeAllConnections()
       }
       server.close(error => {
         if (error && error.message !== 'Server is not running.') {

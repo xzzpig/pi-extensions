@@ -4,11 +4,11 @@
   "prefix": "packages/sandbox-runtime",
   "source": "https://github.com/carderne/sandbox-runtime.git",
   "remote": "upstream-sandbox-runtime",
-  "ref": "v0.0.77",
-  "version": "0.0.77",
-  "upstreamCommit": "0d653440a1089d1ad71aa0a37d621dc677c26651",
+  "ref": "v0.0.79",
+  "version": "0.0.79",
+  "upstreamCommit": "b280dd6f47c65e906369d3e39b08e64bcc9eaaf8",
   "squash": true,
-  "lastSyncedAt": "2026-10-30T11:07:56+08:00",
+  "lastSyncedAt": "2026-11-13T17:01:56+08:00",
   "notes": "Forked from carderne/sandbox-runtime (itself derived from Anthropic's sandbox-runtime). The fork adds filesystem.protectNonexistentFiles so embedders can skip bwrap placeholder mounts for not-yet-existing dangerous files, and network.disabled so a session can run with all network policy enforcement off. Published locally as @xzzpig/sandbox-runtime: it is a support library for pi-sandbox rather than a Pi plugin, so this record keeps the plain upstream-derived name instead of the pi-* plugin convention.",
   "knownDebt": [
     {
@@ -42,19 +42,29 @@
       "kind": "other",
       "path": "packages/sandbox-runtime/test/control-fd.test.ts",
       "reason": "The control-fd integration tests deliberately use a fork-only process helper: Bun 1.3.11 extra stdio pipe sockets can fail with ENOENT even after awaited close. POSIX FIFO numeric fd inheritance preserves dynamic writes after CLI readiness without that adapter; Windows retains the native pipe transport. Remove the seam when upstream provides an equivalent reliable lifecycle and transport."
+    },
+    {
+      "kind": "lint",
+      "path": "packages/sandbox-runtime/src/sandbox/sandbox-config.ts",
+      "reason": "ast-grep no-negation-in-equality-check on `.refine(o => !o.caCertPath === !o.caKeyPath, ...)` is a false positive on upstream-original bytes (upstream v0.0.79 L676): the expression intentionally compares two negated booleans so caCertPath/caKeyPath must be provided together; rewriting it as !(a === b) would reject both-present and both-absent. Fork-divergence discipline forbids editing or annotating upstream-original lines. Remove when upstream rewrites the refine or the rule learns this idiom.",
+      "recordedAt": "2026-11-13T00:00:00Z"
+    },
+    {
+      "kind": "lint",
+      "path": "packages/sandbox-runtime/.github/workflows/integration-tests.yml",
+      "reason": "Nine line-length findings on the upstream v0.0.79 integration workflow are byte-identical to upstream (the v0.0.77 release.yml findings are already declared). Keep upstream bytes under the current-change-only policy; revisit when upstream reformats the workflow.",
+      "recordedAt": "2026-11-13T00:00:00Z"
     }
   ],
   "reapplyOnSync": [
-    "network.disabled, filesystem.protectNonexistentFiles, the readdirSync withFileTypes cast in sandbox-utils.ts, and the closeAllConnections cast in sandbox-manager.ts",
-    "keep src/sandbox/fork-network.ts (isNetworkDisabled) as the consolidated network.disabled precedence with its two sandbox-manager.ts call sites",
-    "keep pathEntryLstatExists exported (plus the root re-export) for the pi-sandbox fork, whose duplicate pathEntryExists was removed",
-    "keep the protectNonexistentFiles tests in fork-only test/sandbox/protect-nonexistent-files.test.ts",
-    "pass denyMandatoryCwdFiles and protectNonexistentFiles independently into linuxGetMandatoryDenyPaths; filter its deduplicated mandatory result through the fork-only mandatoryDenyFilter without filtering explicit denyWithinAllow paths; keep the pathEntryLstatExists re-export from linux-sandbox-utils.ts and the package root",
-    "keep the optional per-command cwd on ISandboxManager.wrapWithSandbox and its implementation, pass it through FsWriteRestrictionConfig to Linux mandatory scans and macOS mandatory static/glob rules, and forward the existing wrapWithSandboxArgv cwd into the string wrapper; omission still defaults to process.cwd without global chdir",
+    "network.disabled schema field in sandbox-config.ts, the readdirSync withFileTypes cast in sandbox-utils.ts, and the closeAllConnections serverWithClose cast in sandbox-manager.ts",
+    "keep src/sandbox/fork-network.ts (isNetworkDisabled) as the consolidated network.disabled precedence with its sandbox-manager.ts call sites (initialize guard, wrapWithSandbox and wrapWithSandboxArgv windows branch)",
+    "keep pathEntryLstatExists exported from fork-only src/sandbox/fork-filesystem.ts (plus the root re-export in src/index.ts) for the pi-sandbox fork, which uses the same lstat semantics for user-configured denyWrite paths",
     "keep test/control-fd.test.ts delegated to the fork-control-fd-process helper for dynamic inherited FIFO fd3, CLI readiness, EOF, bounded completion and awaited teardown instead of Bun extra-pipe sockets and sleep/false-success timeouts"
   ],
   "doNotReintroduce": [
     "package-lock.json preserves upstream bytes and dependency entries except the two root name fields (@xzzpig/sandbox-runtime) and two root version fields (the independent fork package version), updated mechanically from the upstream lock",
-    "the exact typescript 5.6.3 pin is deliberate \u2014 do not widen it without a build check"
+    "the exact typescript 5.6.3 pin is deliberate — do not widen it without a build check",
+    "Do not reintroduce the built-in mandatory file write denies (DANGEROUS_FILES, ripgrep scanning, linuxGetMandatoryDenyPaths, macGetMandatoryDenyPatterns), filesystem.protectNonexistentFiles or filesystem.denyMandatoryCwdFiles: upstream v0.0.78 removed the whole subsystem in #30 and the fork accepted that removal in the v0.0.79 sync (user decision). Old config keys are silently ignored. Keep pathEntryLstatExists because pi-sandbox still uses its lstat semantics for user denyWrite paths."
   ]
 }

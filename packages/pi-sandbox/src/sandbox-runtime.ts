@@ -8,7 +8,6 @@ import { type BashOperations, getShellConfig } from "@earendil-works/pi-coding-a
 import {
   createSandboxManager,
   type ISandboxManager,
-  pathEntryLstatExists,
   type SandboxRuntimeConfig,
 } from "@xzzpig/sandbox-runtime";
 
@@ -106,20 +105,10 @@ export function buildRuntimeConfig(
 ): SandboxRuntimeConfig {
   const effective = resolveAllowances(config, allowances);
 
-  // With protectNonexistentFiles=false, every literal denyWrite entry that
-  // does not exist yet is dropped — whether it comes from the built-in
-  // defaults (.env, .env.*, *.pem, *.key) or from user configuration. This
-  // keeps bwrap from materializing placeholder mount points for paths that
-  // are not there (e.g. an empty .env appearing in the project during every
-  // command). Entries that exist keep full write protection, and glob
-  // patterns pass through untouched (Linux drops them anyway; macOS is
-  // unaffected by the flag).
-  const rawDenyWrite = config.filesystem?.denyWrite ?? [];
-  const canonicalDenyWrite = canonicalizeFilesystemPatterns(rawDenyWrite, baseCwd);
-  const denyWrite =
-    config.filesystem?.protectNonexistentFiles === false
-      ? canonicalDenyWrite.filter((path) => isFilesystemGlob(path) || pathEntryLstatExists(path))
-      : canonicalDenyWrite;
+  const denyWrite = canonicalizeFilesystemPatterns(
+    config.filesystem?.denyWrite ?? [],
+    baseCwd,
+  );
 
   const { allowSSHAgentSocket: _allowSSHAgentSocket, ...networkConfig } = config.network ?? {};
 
@@ -139,10 +128,6 @@ export function buildRuntimeConfig(
       ),
       allowWrite: canonicalizeFilesystemPatterns(effective.writePaths, baseCwd),
       denyWrite,
-      protectNonexistentFiles: config.filesystem?.protectNonexistentFiles,
-      // Forwarded for @carderne/sandbox-runtime PR #21. The cast is only
-      // needed until a released runtime type carries the field.
-      denyMandatoryCwdFiles: config.filesystem?.denyMandatoryCwdFiles,
     } as SandboxRuntimeConfig["filesystem"],
     ignoreViolations: config.ignoreViolations,
     credentials: config.credentials,
@@ -337,7 +322,6 @@ export function createSandboxedBashOps(
         shell,
         undefined,
         signal,
-        cwd,
       );
 
       const child = spawn(shell, [...args, wrappedCommand], {

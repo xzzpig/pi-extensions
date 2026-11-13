@@ -421,7 +421,7 @@ profile sandbox 运行在无 UI child 中时，未被有效配置预先允许的
 
 ### Requirement: 同名 sandbox profile 合并语义
 
-项目 profile 与全局同名 profile 冲突时，系统 SHALL 合并：项目 profile 的字段覆盖或并集于全局同名 profile，但合并 MUST NOT 削弱全局的 deny 边界。数组字段沿用现有语义：allow 类（`allowRead`、`allowWrite`、`allowedDomains`、`allowUnixSockets` 等）由项目替换，deny 类（`denyRead`、`denyWrite`、`deniedDomains`、`protectNonexistentFiles` 等）取并集且不可被项目清空或移除。敏感放宽项（`allowBrowserProcess`、`enableWeaker*` 等）沿用 `preserveRestrictedBoolean` 语义：全局基线未启用的，项目 profile 不得启用。
+项目 profile 与全局同名 profile 冲突时，系统 SHALL 合并：项目 profile 的字段覆盖或并集于全局同名 profile，但合并 MUST NOT 削弱全局的 deny 边界。数组字段沿用现有语义：allow 类（`allowRead`、`allowWrite`、`allowedDomains`、`allowUnixSockets` 等）由项目替换，deny 类（`denyRead`、`denyWrite`、`deniedDomains` 等）取并集且不可被项目清空或移除。敏感放宽项（`allowBrowserProcess`、`enableWeaker*` 等）沿用 `preserveRestrictedBoolean` 语义：全局基线未启用的，项目 profile 不得启用。
 
 #### Scenario: 同名合并保留全局 deny
 

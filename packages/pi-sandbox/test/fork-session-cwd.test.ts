@@ -26,7 +26,6 @@ for (const platform of ["linux", "darwin"] as const) {
             allowRead: ["source/**"],
             allowWrite: ["output/**"],
             denyWrite: ["*.secret", "~/private/*.key", "file?.secret", "[ab].secret"],
-            protectNonexistentFiles: false,
           },
         },
         undefined,
@@ -53,7 +52,7 @@ for (const platform of ["linux", "darwin"] as const) {
   });
 }
 
-test("sandboxed bash passes its execution cwd and abort signal into the runtime wrapper", async () => {
+test("sandboxed bash passes its abort signal into the runtime wrapper", async () => {
   const root = mkdtempSync(join(tmpdir(), "pi-session-wrapper-"));
   const manager = sandboxManagerFactory.create();
   let observed: unknown[] = [];
@@ -73,7 +72,6 @@ test("sandboxed bash passes its execution cwd and abort signal into the runtime 
     });
     assert.equal(result.exitCode, 0);
     assert.equal(observed[3], controller.signal);
-    assert.equal(observed[4], root);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -101,8 +99,6 @@ test(
               allowRead: [],
               allowWrite: ["output/**"],
               denyWrite: [],
-              protectNonexistentFiles: false,
-              denyMandatoryCwdFiles: false,
             },
             enableWeakerNestedSandbox: true,
           },

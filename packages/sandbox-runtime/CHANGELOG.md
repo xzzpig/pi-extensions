@@ -5,6 +5,22 @@ This fork tracks [`carderne/sandbox-runtime`](https://github.com/carderne/sandbo
 (itself derived from Anthropic's sandbox-runtime) via git subtree; entries below
 describe only fork-specific deviations from upstream.
 
+## 0.1.0
+
+### Changed
+
+- **Synced upstream `v0.0.77` → `v0.0.79`**: cross-sandbox process signals
+  (`allowProcessSignals`, macOS only) and upstream's removal of built-in
+  mandatory file write denies (#30).
+- **Accepted the removal of the mandatory-deny subsystem.** The fork drops
+  `filesystem.protectNonexistentFiles`, `filesystem.denyMandatoryCwdFiles`,
+  `DANGEROUS_FILES`, ripgrep scanning and the three obsolete fork-only tests.
+  `pathEntryLstatExists` stays (fork-only `fork-filesystem.ts` plus the root
+  re-export) because pi-sandbox still needs its lstat semantics for
+  user-configured `denyWrite` paths. Preserved `network.disabled`, the
+  `closeAllConnections` cast, the pinned TypeScript 5.6.3, the control-fd
+  process helper and the `@xzzpig` package identity.
+
 ## 0.0.75
 
 ### Changed

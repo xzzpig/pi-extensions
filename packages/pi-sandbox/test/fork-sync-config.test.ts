@@ -61,42 +61,19 @@ test("profiles parse JSONC through the upstream parser", () => {
   }
 });
 
-test("mandatory CWD opt-out preserves profile explicit hard denies at the session cwd", () => {
-  const cwd = join(tmpdir(), "pi-sandbox-session-cwd");
-  const config = mergeProfileLayers(
-    DEFAULT_CONFIG,
-    {
-      filesystem: { denyMandatoryCwdFiles: false, protectNonexistentFiles: false },
-      profiles: { reviewer: { filesystem: { denyWrite: ["missing.secret"] } } },
-    },
-    {},
-    "reviewer",
-  );
-  const runtime = buildRuntimeConfig(config, undefined, "linux", cwd);
-  assert.equal(runtime.filesystem.denyMandatoryCwdFiles, false);
-  assert.equal(runtime.filesystem.protectNonexistentFiles, true);
-  assert.ok(runtime.filesystem.denyWrite.includes(join(cwd, "missing.secret")));
-});
-
-test("ordinary pi-sandbox opt-out still filters nonexistent literal denyWrite entries", () => {
-  const cwd = mkdtempSync(join(tmpdir(), "pi-sandbox-no-placeholders-"));
+test("profile explicit hard denies are session-relative", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "pi-sandbox-session-cwd-"));
   try {
-    const runtime = buildRuntimeConfig(
+    const config = mergeProfileLayers(
+      DEFAULT_CONFIG,
       {
-        ...DEFAULT_CONFIG,
-        filesystem: {
-          ...DEFAULT_CONFIG.filesystem!,
-          protectNonexistentFiles: false,
-          denyMandatoryCwdFiles: false,
-          denyWrite: ["missing.secret", "*.secret"],
-        },
+        profiles: { reviewer: { filesystem: { denyWrite: ["missing.secret"] } } },
       },
-      undefined,
-      "linux",
-      cwd,
+      {},
+      "reviewer",
     );
-    assert.equal(runtime.filesystem.denyMandatoryCwdFiles, false);
-    assert.deepEqual(runtime.filesystem.denyWrite, [join(cwd, "*.secret")]);
+    const runtime = buildRuntimeConfig(config, undefined, "linux", cwd);
+    assert.ok(runtime.filesystem.denyWrite.includes(join(cwd, "missing.secret")));
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }

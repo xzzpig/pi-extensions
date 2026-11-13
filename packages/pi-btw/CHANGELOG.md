@@ -4,6 +4,18 @@ All notable changes to the `@xzzpig/pi-btw` fork are documented here. This
 fork tracks [`dbachelder/pi-btw`](https://github.com/dbachelder/pi-btw) via git
 subtree; entries below describe only fork-specific deviations from upstream.
 
+## 0.11.2
+
+### Changed
+
+- **Synced upstream `v0.8.0` → `v0.8.1`**: `/btw` and its variants no longer
+  hold the main editor while the main agent is idle (TUI commands now return as
+  soon as the BTW turn starts), and the BTW child prompt no longer repeats the
+  working directory. Preserved the fork's shared pi-components transcript
+  renderer, contextual boundary marker, mouse behavior and independent package
+  identity. Fork-only test harnesses now settle detached BTW turns before
+  asserting overlays.
+
 ## 0.11.1 — 2026-11-01
 
 ### 修复与改进
