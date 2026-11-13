@@ -29,12 +29,19 @@ import {
 	saveUiFeaturesPatch,
 	type UiFeaturesConfig,
 } from "./config";
+import { setContextApi } from "./context-breakdown";
 import { setActiveContextSnapshot } from "./context-live";
+import { installAboveEditorGapHiding, rebuildWidgetSlots } from "./dock-gap";
 import {
 	getStarlineEditorBaseFactory,
 	isStarlineEditorFactory,
 	markEditorFactory,
 } from "./editor-factory-marker";
+import {
+	clearExternalEditorHints,
+	publishEditorHintApi,
+	setEditorHintRepaint,
+} from "./editor-hint-api";
 import { installFooter } from "./footer";
 import {
 	buildSessionDurationLabel,
@@ -50,7 +57,7 @@ import { LiveTpsController } from "./live-tps";
 import { installMouse } from "./mouse";
 import { setActiveEditor } from "./mouse/editor-mouse";
 import { installPasteCollapse } from "./paste-collapse";
-import { setModelSwitcher } from "./pill-actions";
+import { setModelSwitcher, setPillCommandRunner } from "./pill-actions";
 import { publishPillApi } from "./pill-api";
 import { setPillBubbleAnimation } from "./pill-bubble";
 import { probeProject } from "./project-probe";
@@ -61,6 +68,8 @@ import {
 	startProjectRefreshInterval,
 } from "./project-refresh";
 import { applyProjectRefreshToState } from "./project-state";
+import { setPullBubbleIssues } from "./pull-bubble";
+import { setActivePull } from "./pull-live";
 import { installNativeQueueRowHiding } from "./queue-rows";
 import { installSelectorBorderStyle } from "./selector-border";
 import { SessionLifecycle } from "./session-lifecycle";
@@ -73,6 +82,9 @@ import {
 	SUBAGENT_TOOL_NAME,
 	setActiveSubagentFleet,
 } from "./subagent-fleet";
+import { contextPercentAfter, setTpsHistory, TPS_ENTRY_TYPE, TpsHistory } from "./tps-history";
+import { resetTpsTier } from "./tps-tier";
+import { installTranscriptJump } from "./transcript-jump";
 import { TurnClock } from "./turn-clock";
 import { PolishedEditor, WrappedPolishedEditor } from "./ui";
 import { setWorkingIndicator } from "./working-indicator";
@@ -100,10 +112,35 @@ function isTuiContext(ctx: ExtensionContext): boolean {
  */
 const BUBBLE_ANIMATION_MS = 60;
 
+/**
+ * Every entry of the session, in order. Extensions keep their own state in
+ * custom entries, so a resumed session's throughput points come back from here.
+ */
+function readSessionEntries(ctx: ExtensionContext): Array<{
+	type?: string;
+	customType?: string;
+	data?: unknown;
+}> {
+	const sessionManager = ctx.sessionManager as { getEntries?: () => unknown[] } | undefined;
+	const entries = sessionManager?.getEntries?.() ?? ctx.sessionManager.getBranch();
+	return entries as Array<{ type?: string; customType?: string; data?: unknown }>;
+}
+
 export default function (pi: ExtensionAPI) {
 	// Published before anything else so a bridge that registers in `session_start`
 	// finds it, whichever order the extensions were loaded in.
 	publishPillApi();
+	publishEditorHintApi();
+	// The context bubble needs the tool schemas and the compaction reserve, and
+	// neither is on the context a pill action gets; hold on to the API instead.
+	setContextApi({
+		allTools: () => pi.getAllTools(),
+		activeTools: () => pi.getActiveTools(),
+		reserveTokens: () => {
+			const compaction = pi.getSettings().compaction;
+			return compaction?.enabled === false ? undefined : compaction?.reserveTokens;
+		},
+	});
 
 	const state: FooterState = createInitialState(emptyGitStatus());
 	// The git pill's bubble reads the same object the footer draws from, so a
@@ -130,12 +167,23 @@ export default function (pi: ExtensionAPI) {
 	let disposeMouse: (() => void) | undefined;
 	let cleanupSessionCapture: (() => void) | undefined;
 	let cleanupQueueRows: (() => void) | undefined;
+	let cleanupDockGap: () => void = () => {};
+	let cleanupTranscriptJump: () => void = () => {};
 
 	const refresh = () => {
 		if (sessionLifecycle.isCurrent()) requestFooterRender?.();
 	};
+	// The hint rides the editor's top rule but repaints with the footer's render
+	// loop, which is the only `tui.requestRender` Starline holds. Publishing before
+	// a session exists is still fine: the map takes the text, the frame follows.
+	setEditorHintRepaint(refresh);
 	const liveContext = new LiveContextController(sessionLifecycle, refresh);
 	const liveTps = new LiveTpsController();
+	// Each measured turn is a point on the throughput curve. The custom entry is
+	// how the points survive `--continue`; pi persists it and never sends it to the
+	// model.
+	const tpsHistory = new TpsHistory((point) => pi.appendEntry(TPS_ENTRY_TYPE, point));
+	setTpsHistory(tpsHistory);
 	const turnClock = new TurnClock();
 	const getActiveTheme = () => activeTheme;
 	const getCurrentConfig = () => currentConfig;
@@ -175,6 +223,8 @@ export default function (pi: ExtensionAPI) {
 			previousCwd: lastProjectCwd,
 			...probe,
 		});
+		// The pull bubble reads the same snapshot the pill draws from.
+		setActivePull(state.pull);
 	};
 
 	const projectRefreshScheduler = createProjectRefreshScheduler(refreshProjectState, refresh);
@@ -227,16 +277,29 @@ export default function (pi: ExtensionAPI) {
 		};
 	};
 
-	const installPrototypePatches = () => {
+	const installPrototypePatches = (ctx: ExtensionContext) => {
 		if (prototypePatchesInstalled) return;
 		cleanupPrototypePatches = installSelectorBorderStyle(getActiveTheme, getCurrentConfig);
+		// Starline draws the box, so Pi's blank separator row above it is a gap with
+		// nothing to separate. See `dock-gap.ts`.
+		cleanupDockGap = installAboveEditorGapHiding(() => getCurrentConfig().features.editor);
+		// Pi's own `↓ Jump to latest message` block is replaced by the `previousPrompt`
+		// and `latest` pills, so it is not drawn at all. See `transcript-jump.ts`.
+		cleanupTranscriptJump = installTranscriptJump();
 		prototypePatchesInstalled = true;
+		// Pi filled the slot once at startup, before this patch existed.
+		rebuildWidgetSlots(ctx);
 	};
 
-	const uninstallPrototypePatches = () => {
+	const uninstallPrototypePatches = (ctx: ExtensionContext) => {
 		cleanupPrototypePatches();
 		cleanupPrototypePatches = () => {};
+		cleanupDockGap();
+		cleanupDockGap = () => {};
+		cleanupTranscriptJump();
+		cleanupTranscriptJump = () => {};
 		prototypePatchesInstalled = false;
+		rebuildWidgetSlots(ctx);
 	};
 
 	const uninstallMouse = () => {
@@ -303,6 +366,24 @@ export default function (pi: ExtensionAPI) {
 				pi.setThinkingLevel(thinkingLevel as Parameters<typeof pi.setThinkingLevel>[0]);
 			}
 			return switched;
+		});
+	};
+
+	/**
+	 * A pill mapped to a slash command in `extensionStatuses.commands` runs it
+	 * through Pi's own command path, which is the only way to open another
+	 * extension's panel. Registered here because `pi` is here and an action only
+	 * gets the context.
+	 */
+	const installPillCommands = () => {
+		setPillCommandRunner({
+			commandFor: (key) => {
+				const commands = currentConfig.extensionStatuses.commands;
+				// A plain index would answer for `toString` and the like.
+				return Object.hasOwn(commands, key) ? commands[key] : undefined;
+			},
+			list: () => pi.getCommands(),
+			send: (text) => pi.sendUserMessage(text, { expandPromptTemplates: true }),
 		});
 	};
 
@@ -424,7 +505,7 @@ export default function (pi: ExtensionAPI) {
 			return true;
 		}
 
-		installPrototypePatches();
+		installPrototypePatches(ctx);
 		const currentStarlineBaseFactory = getStarlineEditorBaseFactory<EditorFactory>(currentFactory);
 		if (currentFactory && isStarlineEditorFactory(currentFactory)) {
 			wrappedEditorFactory = currentStarlineBaseFactory;
@@ -455,7 +536,7 @@ export default function (pi: ExtensionAPI) {
 		const currentFactory = ctx.ui.getEditorComponent();
 		if (currentFactory && !isStarlineEditorFactory(currentFactory)) return false;
 
-		uninstallPrototypePatches();
+		uninstallPrototypePatches(ctx);
 		ctx.ui.setEditorComponent(
 			editorInstallMode === "wrapper" && wrappedEditorFactory ? wrappedEditorFactory : undefined,
 		);
@@ -531,7 +612,7 @@ export default function (pi: ExtensionAPI) {
 	const installUi = (ctx: ExtensionContext) => {
 		if (!isTuiContext(ctx)) return;
 		activeTheme = ctx.ui.theme;
-		uninstallPrototypePatches();
+		uninstallPrototypePatches(ctx);
 		footerInstalled = false;
 		editorInstalled = false;
 		installedEditorFactory = undefined;
@@ -543,7 +624,11 @@ export default function (pi: ExtensionAPI) {
 		installQueueRowHiding();
 		installSubagentFleet();
 		installModelSwitcher();
+		installPillCommands();
 		setPillBubbleAnimation(currentConfig.pill.bubbleAnimation ? BUBBLE_ANIMATION_MS : 0);
+		// The pull bubble reads its own copy: `PillActionContext` carries the session,
+		// not the config.
+		setPullBubbleIssues(currentConfig.git.issues);
 		applyConfiguredUi(ctx);
 		installMousePatches();
 		refresh();
@@ -569,12 +654,15 @@ export default function (pi: ExtensionAPI) {
 			uninstallQueueRowHiding();
 			setActiveSubagentFleet(undefined);
 			setActiveGitStatus(undefined);
+			setActivePull(undefined);
 			setActiveContextSnapshot(undefined);
 			setModelSwitcher(undefined);
-			uninstallPrototypePatches();
+			setPillCommandRunner(undefined);
+			uninstallPrototypePatches(ctx);
 			setWorkingIndicator(undefined);
 			stopSessionTimer();
 			stopProjectRefresh();
+			setTpsHistory(undefined);
 			requestFooterRender = undefined;
 			getActiveExtensionStatuses = () => new Map();
 			if (isTuiContext(ctx)) {
@@ -612,6 +700,13 @@ export default function (pi: ExtensionAPI) {
 		liveContext.clear();
 		liveTps.clear();
 		turnClock.clear();
+		// A resumed session carries its earlier points in the transcript; the pill
+		// starts from the last of them instead of an empty segment.
+		tpsHistory.restore(readSessionEntries(ctx));
+		liveTps.seed(tpsHistory.all().at(-1)?.tps);
+		// The "usual rate" band belongs to one session; a resumed one starts from the
+		// middle and settles again once its own median means something.
+		resetTpsTier();
 		// A resumed session keeps its original header, and reporting the moment this
 		// process attached to it would make the elapsed-time segment read 0s forever.
 		state.sessionStartEpoch = resolveSessionStartEpoch(readSessionHeader(ctx));
@@ -679,6 +774,9 @@ export default function (pi: ExtensionAPI) {
 		liveContext.clear();
 		liveTps.clear();
 		turnClock.clear();
+		// A hint outlives neither the session nor the extension that published it.
+		clearExternalEditorHints();
+		setEditorHintRepaint(undefined);
 		cleanupUi(ctx);
 	});
 
@@ -720,7 +818,16 @@ export default function (pi: ExtensionAPI) {
 		} else if (event.message.role === "assistant") {
 			// The stream's `done` event never reaches an extension, so the output count
 			// has to be closed here, where the finished message arrives with its usage.
-			liveTps.complete(event.message.usage?.output ?? 0);
+			const output = event.message.usage?.output ?? 0;
+			if (liveTps.complete(output)) {
+				// One point per measured turn: the rate it ran at, and how full the
+				// window was when it finished.
+				const tps = liveTps.value();
+				const percent = contextPercentAfter(event.message.usage, ctx.model?.contextWindow);
+				if (tps !== undefined && percent !== undefined) {
+					tpsHistory.record({ tps, percent, at: Date.now() });
+				}
+			}
 		}
 		syncInteractiveAndProjectStateWithUsage(event, ctx);
 	});

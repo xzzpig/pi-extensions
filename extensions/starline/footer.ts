@@ -11,6 +11,7 @@ import {
 	getExtensionStatusIcon,
 	type PolishedTuiConfig,
 } from "./config";
+import { collectContextBreakdown, probeFor } from "./context-breakdown";
 import { setActiveContextSnapshot } from "./context-live";
 import { collectExtensionStatusSegments, sanitizeExtensionStatusText } from "./extension-status";
 import {
@@ -20,6 +21,7 @@ import {
 	contextColorTier,
 	formatCwdLabel,
 	formatOsLabel,
+	formatPackagePillLabel,
 	formatTimeLabel,
 	formatUsernameHostLabel,
 } from "./format";
@@ -31,11 +33,26 @@ import { collectPillInputs, type PillSpan, renderPillBar } from "./pill";
 import { pillActionFor, queuedSegmentText, runPillAction } from "./pill-actions";
 import { clearPillAnchors, setPillAnchors } from "./pill-anchors";
 import { closePillBubble, isPillBubbleOpenFor, type PillAnchor } from "./pill-bubble";
+import { setPillOverflowRows } from "./pill-overflow";
+import { pullColorSpec, pullSegmentText } from "./pull";
 import type { FooterState } from "./state";
 import { renderStyleForSource } from "./style";
 import { subagentsSegmentText } from "./subagent-fleet";
+import { activeTpsHistory } from "./tps-history";
+import { medianTps, tpsTierFor } from "./tps-tier";
 import type { TurnTiming } from "./turn-clock";
 import { modelPillLabel } from "./working-indicator";
+
+/**
+ * The two transcript moves, drawn as their own pills.
+ *
+ * Plain Unicode arrows rather than Starship glyphs: `icons.ahead` and
+ * `icons.behind` already use `↑` and `↓` inside the git pill, and two bare
+ * `↑`/`↓` pills next to it would read as more of the same. `⇡`/`⇣` are the same
+ * idea at a different weight, and both survive a terminal without a Nerd Font.
+ */
+const PREVIOUS_PROMPT_LABEL = "⇡";
+const LATEST_MESSAGE_LABEL = "⇣";
 
 /**
  * Pi's component mouse event and result. Pi dispatches to `handleMouse` from
@@ -331,15 +348,38 @@ export function installFooter(
 				const contextWindow = ctx.model?.contextWindow ?? contextUsage?.contextWindow;
 				const useLiveContext =
 					liveContext !== undefined && contextWindow !== undefined && contextWindow > 0;
+				const measuredTokens = contextUsage?.tokens;
+				const hasMeasuredContext =
+					useLiveContext || (typeof measuredTokens === "number" && measuredTokens > 0);
+				// Before the first turn pi has nothing measured to report, and the pill used
+				// to read 0% while the system prompt and the tool schemas were already paid
+				// for. The estimate is the bubble's, so both say the same number; it carries
+				// a `~` until a turn lands and drops it after.
+				//
+				// Only a session that has not run anything yet: after a compaction pi can be
+				// back to "nothing measured", and the static floor would then read as the
+				// whole window while a summary sits in it.
+				const nothingRanYet = !hasMeasuredContext && !state.hasUsage;
+				const estimatedTokens = nothingRanYet
+					? collectContextBreakdown(probeFor(ctx)).total
+					: undefined;
+				const estimatedPercent =
+					estimatedTokens !== undefined &&
+					estimatedTokens > 0 &&
+					contextWindow !== undefined &&
+					contextWindow > 0
+						? (estimatedTokens / contextWindow) * 100
+						: undefined;
 				const contextPercent = useLiveContext
 					? (liveContext.tokens / contextWindow) * 100
-					: contextUsage?.percent;
+					: (estimatedPercent ?? contextUsage?.percent);
 				const contextLabel = buildContextDisplayLabel({
 					percent: contextPercent,
 					contextWindow,
 					style: config.contextStyle,
 					asciiGauge: iconMode === "ascii",
 					format: config.segmentOptions.context.format,
+					estimated: estimatedPercent !== undefined,
 				});
 				const tier = contextColorTier(contextPercent, config.contextThresholds);
 				const contextColor =
@@ -352,11 +392,25 @@ export function installFooter(
 				const costDisplay = withIcon(config.icons.cost, state.costLabel);
 				const tpsLabel = buildTpsLabel(hooks.getLiveTps?.());
 				const tpsDisplay = tpsLabel ? withIcon(config.icons.tps, tpsLabel) : "";
+				// Slow, usual or fast *for this session*: the rate is read against the median
+				// of its finished messages, not against a number that would mean something
+				// different on every model. See `tps-tier.ts`.
+				const tpsTier = tpsTierFor(
+					hooks.getLiveTps?.(),
+					medianTps((activeTpsHistory()?.all() ?? []).map((point) => point.tps)),
+				);
+				const tpsColor =
+					tpsTier === "fast"
+						? (config.colors.tpsFast ?? config.colors.tps)
+						: tpsTier === "slow"
+							? (config.colors.tpsSlow ?? config.colors.tps)
+							: config.colors.tps;
 				// The one pill shows a percentage; the rest of these numbers are only
 				// on screen while its bubble is open.
 				const contextTabTokens = useLiveContext ? liveContext.tokens : undefined;
 				setActiveContextSnapshot({
 					percent: contextPercent ?? undefined,
+					estimated: estimatedPercent !== undefined,
 					contextWindow,
 					tokens: contextTabTokens,
 					tokenLabel: state.tokenLabel,
@@ -392,6 +446,10 @@ export function installFooter(
 							return sessionNameLabel;
 						case "git":
 							return git.label;
+						case "previous_prompt":
+							return PREVIOUS_PROMPT_LABEL;
+						case "latest":
+							return LATEST_MESSAGE_LABEL;
 						case "runtime": {
 							if (!state.runtime) return "";
 							const symbol = resolveRuntimeSymbol(
@@ -437,14 +495,19 @@ export function installFooter(
 						case "cost":
 							return renderStyleForSource(theme, colorSource, config.colors.cost, costDisplay);
 						case "tps":
-							return renderStyleForSource(theme, colorSource, config.colors.tps, tpsDisplay);
+							return renderStyleForSource(theme, colorSource, tpsColor, tpsDisplay);
 						case "package_version":
-							return state.packageVersion?.version
+							return state.packageVersion
 								? renderStyleForSource(
 										theme,
 										colorSource,
 										config.colors.packageVersion,
-										state.packageVersion.version,
+										formatPackagePillLabel(
+											state.packageVersion,
+											state.packagePublished,
+											iconMode,
+											config.icons.package,
+										),
 									)
 								: "";
 						case "git_commit":
@@ -453,6 +516,13 @@ export function installFooter(
 							return git.tag;
 						case "git_metrics":
 							return git.metrics;
+						case "git_pr":
+							return renderStyleForSource(
+								theme,
+								colorSource,
+								pullColorSpec(state.pull, config.colors),
+								pullSegmentText(state.pull, config.icons),
+							);
 						default:
 							return "";
 					}
@@ -471,6 +541,11 @@ export function installFooter(
 							return config.colors.model;
 						case "thinking":
 							return config.colors.thinking ?? thinkingThemeKey(thinkingText);
+						case "previousPrompt":
+						case "latest":
+							// No colour of its own: both are controls, not readings, so they take
+							// the bar's neutral background like any other uncoloured segment.
+							return "";
 						case "queue":
 							return config.colors.queue;
 						case "subagents":
@@ -486,6 +561,8 @@ export function installFooter(
 							return config.colors.gitCommit;
 						case "gitMetrics":
 							return config.colors.gitMetricsAdded;
+						case "gitPr":
+							return pullColorSpec(state.pull, config.colors);
 						case "runtime":
 							return state.runtime?.style ?? config.colors.runtimePrefix;
 						case "context":
@@ -493,7 +570,7 @@ export function installFooter(
 						case "cost":
 							return config.colors.cost;
 						case "tps":
-							return config.colors.tps;
+							return tpsColor;
 						case "sessionDuration":
 							return config.colors.sessionDuration;
 						case "username":
@@ -518,6 +595,9 @@ export function installFooter(
 						pillSpecFor,
 						(key) => getExtensionStatusColor(config, key) ?? config.colors.extensionStatus,
 						(key) => getExtensionStatusIcon(config, key),
+						// A squeezed git pill must keep its dirty counts and operation; the
+						// branch name is the part that gives way.
+						(segment) => (segment === "git" ? git.labelTailColumns : 0),
 					),
 					theme,
 					colorSource,
@@ -526,6 +606,9 @@ export function installFooter(
 					{
 						ascii: iconMode === "ascii",
 						onSpan: (span) => spans.push(span),
+						// The counter pill answers a click with what it is counting, so the
+						// render has to say which pills it left out. See `pill-overflow.ts`.
+						onOverflow: setPillOverflowRows,
 					},
 				);
 				// Nothing has content: draw nothing rather than a bare pair of caps.

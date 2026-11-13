@@ -90,7 +90,8 @@ Default config values — copy this and change any value you want:
 		"metrics": {
 			"onlyNonzero": true,
 			"ignoreSubmodules": false
-		}
+		},
+		"issues": false
 	},
 	"icons": {
 		"mode": "auto",
@@ -125,7 +126,12 @@ Default config values — copy this and change any value you want:
 		"gitHostGithub": "",
 		"gitHostGitlab": "",
 		"gitHostBitbucket": "",
-		"gitHostGeneric": ""
+		"gitHostGeneric": "",
+		"gitPrOpen": "",
+		"gitPrDraft": "",
+		"gitPrMerged": "",
+		"gitPrClosed": "",
+		"gitPrList": ""
 	},
 	"colors": {
 		"model": "bold blue",
@@ -139,12 +145,19 @@ Default config values — copy this and change any value you want:
 		"cacheHit": "bright-black",
 		"cost": "bold green",
 		"tps": "bright-black",
+		"tpsSlow": "yellow",
+		"tpsFast": "bold green",
 		"runtimePrefix": "",
 		"extensionStatus": "bright-black",
 		"sessionDuration": "yellow",
 		"packageVersion": "208",
 		"gitCommit": "bold green",
 		"gitMetricsAdded": "bold green",
+		"gitPrOpen": "bold green",
+		"gitPrDraft": "bold lavender",
+		"gitPrMerged": "bold purple",
+		"gitPrClosed": "bold red",
+		"gitPrCount": "bold purple",
 		"username": "bold yellow",
 		"time": "bold yellow",
 		"os": "bold white"
@@ -163,13 +176,13 @@ Default config values — copy this and change any value you want:
 		"placements": {},
 		"colorModes": {},
 		"colors": {},
-		"icons": {}
+		"icons": {},
+		"commands": {}
 	},
 	"mouse": {
 		"enabled": true,
 		"wheelRouting": true,
-		"copyNotice": true,
-		"transcriptCleanCopy": true
+		"copyNotice": true
 	}
 }
 ```
@@ -183,12 +196,12 @@ Default config values — copy this and change any value you want:
 - `icons`: every shown icon key is configurable; omit any key to use the Starline default. `icons.mode` is `auto` | `nerd` | `ascii` (default `auto`, same glyphs as nerd). ASCII mode swaps in plain fallbacks for statusline icons and runtime symbols — useful without a Nerd Font. Custom per-icon strings always win over mode defaults. Custom `icons.os` always wins; when left at the mode default, Starline maps the OS icon by platform. `rail` sets the vertical glyph drawn as the left rail of the editor frame when `copyFriendly` is disabled (default `│`; any single Unicode vertical or block glyph). `editorPrompt` controls an optional copy-friendly editor prompt glyph; the default is `""` so copy-friendly mode stays rail-free.
 - `colorSources`: `theme` maps styles through Pi theme tokens; `terminal` emits terminal colors. `/starline` switches these sources; manual JSON controls specific style values.
 - `features`: `editor` enables Starline's custom editor and selector borders. `statusLine` enables Starline's custom footer/status line. `copyFriendly` hides the editor's rail glyphs so native terminal selection copies less chrome. All three can be changed from `/starline` or direct slash-command arguments.
-- `git`: everything the git segments read, see [Git](#git). Also drives which optional probes run: a tag lookup only happens when `gitCommit` or `gitTag` is in `pill.segments`, `git diff --numstat` only for `gitMetrics`, and the remote lookup only for the `git` pill with `hostIcon` on. With none of `git`, `gitCommit`, `gitTag` or `gitMetrics` on the bar, the refresh does not read the repository at all.
+- `git`: everything the git segments read, see [Git](#git). Also drives which optional probes run: a tag lookup only happens when `gitCommit` or `gitTag` is in `pill.segments`, `git diff --numstat` only for `gitMetrics`, and the forge read only for `gitPr`, and the remote lookup only for the `git` pill with `hostIcon` on. With none of `git`, `gitCommit`, `gitTag`, `gitMetrics` or `gitPr` on the bar, the refresh does not read the repository at all.
 - `extensionStatuses`: controls third-party statuses published by other Pi extensions through `ctx.ui.setStatus()`. `defaultPlacement` and each `placements` value can be `off`, `left`, `middle`, or `right`. The `Extension segments` tab in `/starline` lists only statuses that are currently active. `editor`, which placed a status on the editor's metadata row until 0.9, is read as `right`. Publishing extensions can also make their pill clickable and open a bubble with their own detail through the pill API — see [Clickable pills for other extensions](pill-api.md).
 - The shown `editor*` values match the default `theme` source. Omit those keys to keep Starline's source-aware defaults when switching between `theme` and `terminal`.
 - `editorAccent` styles the editor rail when `features.copyFriendly` is disabled.
 - `editorPrompt` styles the copy-friendly editor prompt glyph. Omit it to use `editorAccent`, then the default accent fallback.
-- `editorBorder` styles the editor's top/bottom border color only; the border glyph stays `─`.
+- `editorBorder` styles the editor's top/bottom border color only; the border glyph stays `─`. Omit it and the box takes Pi's `bashMode` colour while the draft is a bash command (`!`), keeping Starline's own border the rest of the time; set it to pin one colour and give the mode hint up. The thinking level never recolours the border.
 - User messages in the transcript are styled by [pi-tidy](https://github.com/Andy8647/pi-tidy) since 0.9: its `userMessageStyle`, `userMessagePaddingY` and `userMessageColors`. Starline's former `userMessagePaddingY`, `colors.userMessageBorder`, `colors.userMessageText` and `colorSources.userMessages` are ignored, with a one-time warning.
 - `model` styles the `model` footer segment; `thinking` styles the `thinking` segment. Omit `thinking` to colour it by level from the theme's `thinkingOff`/`thinkingMinimal`/`thinkingLow`/`thinkingMedium`/`thinkingHigh`/`thinkingXhigh` keys.
 
@@ -255,6 +268,8 @@ The footer is a bar of coloured pills joined by seamless powerline arrows. `pill
 		"segments": [
 			"model",
 			"thinking",
+			"previousPrompt",
+			"latest",
 			"queue",
 			"cwd",
 			"git",
@@ -270,13 +285,13 @@ The footer is a bar of coloured pills joined by seamless powerline arrows. `pill
 }
 ```
 
-| Key               | Values                                                                                                                    | Meaning                                                                                                                                |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `segments`        | segment names (`cwd`, `git`, `context`, `cost`, …), plus `queue`, `subagents`, `extensionStatus`, `extensionStatus:<key>` | Order, left to right                                                                                                                   |
-| `separator`       | `powerline` (default), `powerline-thin`, `none`                                                                           | Glyph between pills                                                                                                                    |
-| `bold`            | `true` (default), `false`                                                                                                 | Bold segment text                                                                                                                      |
-| `caps`            | `round` (default), `right`, `none`                                                                                        | How the bar's ends are closed                                                                                                          |
-| `bubbleAnimation` | `true` (default), `false`                                                                                                 | Unfold a clicked pill's bubble upward from the pill (60 ms) instead of showing it at once. Applies from the next session or `/reload`. |
+| Key               | Values                                                                                                                                                | Meaning                                                                                                                                |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `segments`        | segment names (`cwd`, `git`, `context`, `cost`, …), plus `queue`, `subagents`, `previousPrompt`, `latest`, `extensionStatus`, `extensionStatus:<key>` | Order, left to right, and the order it drops pills in                                                                                  |
+| `separator`       | `powerline` (default), `powerline-thin`, `none`                                                                                                       | Glyph between pills                                                                                                                    |
+| `bold`            | `true` (default), `false`                                                                                                                             | Bold segment text                                                                                                                      |
+| `caps`            | `round` (default), `right`, `none`                                                                                                                    | How the bar's ends are closed                                                                                                          |
+| `bubbleAnimation` | `true` (default), `false`                                                                                                                             | Unfold a clicked pill's bubble upward from the pill (60 ms) instead of showing it at once. Applies from the next session or `/reload`. |
 
 Order and visibility of the bar live in `pill.segments`. The **Pills** tab in
 `/starline` edits the same list: one row per segment, and its value is the
@@ -290,12 +305,23 @@ Notes:
 
 - **The `queue` pill is clickable.** It exists only while messages are waiting for the current turn to end, so it costs no space the rest of the time. Clicking it, or running `/starline queue`, opens a bubble on the pill that says how many messages are queued and shows their first lines. The pill shows an inbox icon and the count (`icons.queue`); when Pi does not let the count be read it says `queued` instead, and with icons off it reads `3 queued`. Clicking the pill again closes the bubble. While the queue pill is enabled, Pi's own `Steering: …` rows above the editor are hidden, so the queue is shown once rather than twice; remove `queue` from `pill.segments` (or switch the status line off) and Pi's rows come back. `colors.queue` (default `bold yellow`) colours the pill and the bubble
 - **The `model` pill is clickable.** A click lists the session's scoped models — the ones ctrl+p cycles, from `enabledModels` or `--models` — with the current one marked; click another to switch. A scoped model that pins a thinking level (`provider/model:high`) brings it along, as ctrl+p does. Without a scope it lists up to eight available models and points at `/model` for the rest. `/starline model` steps to the next one from the keyboard. While the agent works its icon slot becomes a spinner and the run's elapsed time joins the name; see [The model pill](#the-model-pill).
+- **The `gitPr` pill is clickable.** It shows the number with the forge's marker (`#123` on GitHub, `!123` on GitLab), coloured by state (open, draft, merged, closed) and followed by the checks mark (`✓` passing, `✗` failing, `⋯` running). With no pull on the branch it shows how many pulls the repository has open instead (`12` in the branch pill's purple, `0` included). Clicking it lists the current user's open pulls in three groups (yours, waiting on your review, the rest you are involved in); clicking a row opens it in the browser. The list is read when the bubble opens, not on the refresh timer. See [Pull requests](#pull-requests).
 - **The `subagents` pill is clickable.** With [`pi-subagents`](https://github.com/nicobailon/pi-subagents) installed, it appears while subagents are running and says how many (`2 agents`); it disappears when they finish, and without pi-subagents it never appears. Clicking it, or running `/starline subagents`, opens the bubble with one line per run: agent (and step label), model, time running and tokens so far. `/subagents-fleet` still opens pi-subagents' own inspector for steering and stopping. The numbers come from pi-subagents' public in-process RPC, refreshed when a run starts or ends rather than on a timer. If the pill replaces pi-subagents' FleetView and async widget for you, turn those off in `~/.pi/agent/extensions/subagent/config.json` with `"fleetView": false` and `"asyncWidget": false`. `colors.subagents` (default `bold green`) colours the pill and the bubble
 - **The `thinking` pill is clickable.** A click opens the same bubble with every thinking level the model supports, the current one marked; click another level to switch. Opening it changes nothing. `off` is not offered, so the pill stays on screen. `/starline thinking` steps to the next level from the keyboard and reports the step (`medium → high`).
+- **`previousPrompt` and `latest` scroll the transcript, and they draw nothing but an arrow each** (`⇡` and `⇣`). `previousPrompt` jumps up to the previous prompt's first row, aligned to the top of the viewport; `latest` returns to the end and resumes following new output. Both are clickable, both stay on the bar all the time, and pressing one when it has nowhere to go does nothing: `latest` at the end of the transcript, `previousPrompt` when no prompt starts above the viewport. Pi's own `↓ Jump to latest message` block is not drawn while Starline is installed, so the transcript keeps its last row; Pi's keys still work (`tui.altScreen.previousPrompt`, `tui.altScreen.bottom`).
 - **Colours need no extra configuration.** A segment's existing `colors.*` entry becomes the pill background. Text colour is picked automatically for legibility unless you set `fg:` yourself.
 - `extensionStatus` is not one segment but however many other extensions have registered (balance, automode, mcp, …). Listing it expands to all of them; `extensionStatus:<key>` places one specific status, and it is not repeated by a later `extensionStatus`.
 - A status configured with `colorMode: "themed"` (the default) recolours the extension's status segment to match the rest of the bar. `colorMode: "original"` keeps the colours its own extension chose, on a neutral background.
 - Unknown segment names are dropped rather than drawn as empty pills.
+- **A bar that does not fit compresses the wide pills first.** A pill wider than
+  its share is shortened in the middle (`feature/…-add-a-thing`) and the pills
+  behind it stay on the bar; the branch pill keeps its dirty counts and operation
+  whatever it loses. Only when every pill is down to its minimum (24 columns, or
+  its own width) does the bar drop whole pills from the right and put a `+N`
+  counter in their place. That still makes `pill.segments` its own priority list —
+  the leftmost pill survives longest — so put what you want kept on the left.
+  Clicking the counter opens a bubble listing what is not on screen, with the text
+  each of those pills would have shown.
 - Where two neighbouring pills resolve to the same background, the solid arrow would be invisible (it is the left colour drawn on the right colour), so a thin divider is drawn in the text colour instead. Several segments share a default colour, so this comes up more often than it sounds.
 - In `icons.mode: "ascii"` the arrows and caps disappear; the background transitions still separate the segments.
 
@@ -331,6 +357,34 @@ number reads as one compact pill instead of `MCP: 3 servers`:
 A status with no number keeps its text under `value`: blanking `ready` would leave
 an icon that says nothing. The format changes only what the bar draws, not what
 the publishing extension sent (its own `setStatus` text stays as it was).
+
+### Point a third-party pill at its panel
+
+Some extensions have a panel of their own and a command that opens it. Map the
+status key to that command and a click opens it, without a bridge extension:
+
+```json
+{
+	"extensionStatuses": {
+		"commands": { "procs": "/ps" }
+	}
+}
+```
+
+- The key is the status key as published, without the `extensionStatus:` prefix.
+- **Only an extension command runs.** Pi sends an unmatched `/foo` down the prompt
+  path as ordinary text, so a mistyped command would start a model turn. Starline
+  reads the live command list first and notifies instead; prompt templates and
+  skills are refused for the same reason.
+- **A bridge wins.** If an extension registers a pill action for the same key
+  through the [pill API](pill-api.md), that action answers the click and this
+  setting is not reached. The `Extension segments` tab in `/starline` says which
+  one is in charge (`Click: /ps` or `Click: the bridge registered for this pill`).
+- **Built-in segments cannot be remapped.** They answer for themselves, and a
+  status taking one over would break the rule that a status cannot hijack `queue`.
+- **Only while nothing else has the editor.** A command that opens a panel
+  replaces the editor; clicking the pill again while that panel is up does
+  nothing rather than opening a second one.
 
 ## Segment display options
 
@@ -403,6 +457,17 @@ of reporting a fabricated rate. With several messages in one turn the pill
 follows the most recent one, so it settles on the last thing the model wrote. Not
 clickable: there is nothing behind it beyond the number.
 
+**The colour is relative to this session.** The rate is read against the median of
+the session's finished messages: 30% or more above it is `colors.tpsFast`, 30% or
+more below is `colors.tpsSlow`, and everything in between keeps `colors.tps`.
+A fixed threshold would not travel across models, where the same number is fast
+on one and slow on another. Two details follow from that:
+
+- The band is entered at 30% and left at 15%, so a number hovering on a threshold
+  does not blink between two colours while a message streams.
+- Fewer than four measured messages is not a median: the pill stays on
+  `colors.tps` until the session has a "usual" rate of its own.
+
 ## Git
 
 ```json
@@ -412,7 +477,8 @@ clickable: there is nothing behind it beyond the number.
 		"hostIcon": false,
 		"branch": { "maxLength": "full" },
 		"commit": { "hashLength": 7, "onlyDetached": true, "showTag": true },
-		"metrics": { "onlyNonzero": true, "ignoreSubmodules": false }
+		"metrics": { "onlyNonzero": true, "ignoreSubmodules": false },
+		"issues": false
 	}
 }
 ```
@@ -421,14 +487,71 @@ clickable: there is nothing behind it beyond the number.
 | -------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `counts`                   | `false`  | Show numbers beside the ahead/behind and stash glyphs (`!3`) instead of the glyph alone (`!`).                                                                                                                                                                                                                                                                                           |
 | `hostIcon`                 | `false`  | Replace the branch icon with the `origin` remote's forge logo: GitHub, GitLab, Bitbucket, or a generic git mark for anything else, including self-hosted instances recognised by subdomain (`gitlab.acme.com`). Repos with no `origin` keep the plain branch icon. The remote is read once and cached for ten minutes, and only read when this is on. Disabled in `icons.mode: "ascii"`. |
-| `branch.maxLength`         | `"full"` | Caps the visible width of the branch name. `full` keeps the whole name; a positive integer truncates to that width including the trailing `…`. The **Layout** tab cycles `full`, `10`, `20`, `30`, `40`, `50`.                                                                                                                                                                           |
+| `branch.maxLength`         | `"full"` | Caps the visible width of the branch name. `full` keeps the whole name (a bar that runs out of room still compresses it); a positive integer cuts to that width including one `…`. The cut is in the middle, so both the shared `feature/` prefix and the part that tells two branches apart survive. The **Layout** tab cycles `full`, `10`, `20`, `30`, `40`, `50`.                    |
 | `commit.hashLength`        | `7`      | Short-hash width for the `gitCommit` pill, clamped to `4`–`40`.                                                                                                                                                                                                                                                                                                                          |
 | `commit.onlyDetached`      | `true`   | Show the hash mainly on a detached HEAD, where the branch name is gone.                                                                                                                                                                                                                                                                                                                  |
 | `commit.showTag`           | `true`   | Append the exact-match tag (`git describe --tags --exact-match HEAD`). The lookup only runs while a tag can be shown.                                                                                                                                                                                                                                                                    |
 | `metrics.onlyNonzero`      | `true`   | Omit each zero side of `+added −deleted` independently, and hide the pill entirely at `0/0`.                                                                                                                                                                                                                                                                                             |
 | `metrics.ignoreSubmodules` | `false`  | Pass `--ignore-submodules=all` to the numstat diff.                                                                                                                                                                                                                                                                                                                                      |
+| `issues`                   | `false`  | List the repository's open issues in the `gitPr` bubble. See [Issues in the same bubble](#issues-in-the-same-bubble).                                                                                                                                                                                                                                                                    |
 
 The numstat diff is the Starship “total dirty” view: staged and unstaged combined. It piggybacks on the git refresh with a hard 2 s timeout; a metrics-only failure degrades silently without discarding fresh branch/status data. On very large monorepos the diff may lag or be omitted on timeout.
+
+### Pull requests
+
+`gitPr` is the one git segment that reads the forge instead of the repository. Add it
+next to `git`:
+
+```json
+{
+	"pill": {
+		"segments": ["cwd", "git", "gitPr", "context"]
+	}
+}
+```
+
+It asks `gh` on GitHub and `glab` on GitLab, in the repository directory, so it uses
+the login and the host configuration those CLIs already have. A pull is read for the
+current branch; when the branch has none, the repository's open count takes its place
+(`12` rather than `#12`, and `0` when nothing is open). The answer is kept for a minute
+and a failed read keeps the last good one and backs off (two minutes, doubling to ten),
+so a forge that is down or a laptop off the network costs one process occasionally
+instead of two a minute. With no `gh`/`glab`, or a forge the CLIs do not cover, there
+is nothing to show and no pill.
+
+| Key                                                                                                      | What it does                                                                                                     |
+| -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `colors.gitPrOpen`                                                                                       | The pull is open (default `bold green`).                                                                         |
+| `colors.gitPrDraft` (default `bold lavender`), `gitPrMerged` (`bold purple`), `gitPrClosed` (`bold red`) | Same, per state.                                                                                                 |
+| `colors.gitPrCount`                                                                                      | The bare open count. Defaults to `bold purple`, the same as `gitBranch`, so the two git pills read as one group. |
+| `icons.gitPrOpen` / `gitPrDraft` / `gitPrMerged` / `gitPrClosed`                                         | octicons for the four states.                                                                                    |
+| `icons.gitPrList`                                                                                        | The glyph in front of the open count.                                                                            |
+
+Review state is not on the pill: a second `✓`/`✗` next to the checks mark would be
+ambiguous at one character each. The bubble lists each pull's state, and the checks
+mark on the pill already turns red when a check fails.
+
+#### Issues in the same bubble
+
+`git.issues` adds the repository's open issues to that bubble. It is off by default:
+the bubble gets longer and the forge gets one more read.
+
+```json
+{ "git": { "issues": true } }
+```
+
+- **Mine is always listed**: `Assigned to you` and `You opened`, so a large
+  repository's backlog is never the thing you have to wade through.
+- **The rest only while it is small**: above 20 open issues the section collapses to
+  one row, `↗ All 8412 open issues`, which opens the issue list. Eight rows of a
+  four-figure backlog would be a sample dressed up as a list.
+- **A fork with issues turned off hides the section** instead of claiming there are
+  none, and a failed issue read says `Issues unavailable` while the pulls stay.
+- On GitHub the issue searches ride along with the pull searches in the same GraphQL
+  request, so turning this on costs no extra round trip there; GitLab has no combined
+  search, so it costs two or three `glab` calls.
+- The pill itself does not change. A second number on the bar — the repository's open
+  issues — would not be about the current branch, and there is nothing to do with it.
 
 ## Box height
 
@@ -452,7 +575,12 @@ second line. `1` (the default) is the height of the text alone; up to `10`. A
 click on one of those blank rows puts the caret at the end of the draft.
 
 The box has no row of its own for the model or the hints: the model is in the
-pill footer, and the hints ride the top rule (see below).
+pill footer, and the hints ride the top rule (see below). It also sits directly
+under the transcript: Pi keeps one blank row in its above-editor widget slot when
+nothing fills it, and the box draws its own edges, so Starline drops that row. An
+extension widget that really uses the slot (pi-subagents' fleet status,
+pi-processes' dock) still gets Pi's separating row above it, and turning
+`features.editor` off gives the blank row back.
 
 ## Paste collapse threshold
 
@@ -500,8 +628,7 @@ guessing would be silently pasting the wrong thing.
 	"mouse": {
 		"enabled": true,
 		"wheelRouting": true,
-		"copyNotice": true,
-		"transcriptCleanCopy": true
+		"copyNotice": true
 	}
 }
 ```
@@ -510,7 +637,7 @@ guessing would be silently pasting the wrong thing.
 
 - `enabled` — master switch for every mouse feature below. On by default.
 - `wheelRouting` — routes the mouse wheel to scroll the transcript instead of leaving it to the terminal.
-- `copyNotice` — shows a "Copied to clipboard" flash for a copy **Starline** performs, such as a clean copy. Pi confirms its own copy-on-release with its own flash regardless of this setting.
+- `copyNotice` — shows a "Copied to clipboard" flash for a copy **Starline** performs, which is a selection in the draft. Pi confirms its own copy-on-release with its own flash regardless of this setting.
   Single-box click-to-toggle is **Pi's own** since 0.86.0 — a click anywhere in a tool box's result region toggles just that box (the renderer only synthesizes a click when press and release land on the same cell, so drag-selection is unaffected), and thinking blocks, branch/compaction summaries and skill invocations toggle the same way. Starline's hint-row patch and its `clickToExpandTools` key are retired; a `mouse.clickToExpandTools` key in an old config is ignored at runtime.
 
 ## Editor cursor

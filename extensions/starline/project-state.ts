@@ -1,6 +1,7 @@
 import type { GitHost, GitReadResult } from "./git";
 import { emptyGitStatus } from "./git";
 import type { PackageVersionReadResult } from "./package-version";
+import type { PullSnapshot } from "./pull";
 import type { RuntimeReadResult } from "./runtime";
 import type { FooterState } from "./state";
 
@@ -19,6 +20,10 @@ export function applyProjectRefreshToState(
 		gitHost?: GitHost;
 		runtime: RuntimeReadResult;
 		packageVersion?: PackageVersionReadResult;
+		/** What the registry has as `latest`; undefined when not asked for. */
+		publishedVersion?: string;
+		/** Undefined when the bar does not show a pull: keep the last answer. */
+		pull?: { snapshot: PullSnapshot | undefined };
 	},
 ): string {
 	const cwdChanged = args.previousCwd !== undefined && args.previousCwd !== args.cwd;
@@ -28,6 +33,8 @@ export function applyProjectRefreshToState(
 		state.runtime = undefined;
 		state.gitHost = undefined;
 		state.packageVersion = undefined;
+		state.packagePublished = undefined;
+		state.pull = undefined;
 	}
 
 	// Undefined means "not asked for this refresh" — keep the last-good value
@@ -41,6 +48,8 @@ export function applyProjectRefreshToState(
 		Object.assign(state, emptyGitStatus());
 	}
 	// kind === "error": keep previous git fields (unless cwdChanged already cleared)
+
+	if (args.pull !== undefined) state.pull = args.pull.snapshot;
 
 	if (args.runtime.kind === "ok") {
 		state.runtime = args.runtime.runtime;
@@ -61,6 +70,8 @@ export function applyProjectRefreshToState(
 			state.packageVersion = undefined;
 		}
 	}
+
+	if (args.publishedVersion !== undefined) state.packagePublished = args.publishedVersion;
 
 	return args.cwd;
 }

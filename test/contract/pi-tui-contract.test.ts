@@ -32,13 +32,12 @@ const PATCHED_METHODS = [
 // Read, not patched — the selection itself stays Pi's, and `hasOverlay` is
 // asked the same question Pi's own press path asks before it resolves a scroll
 // view, so click-to-expand does not reach through a dialog. `getCopyOnSelect`
-// and `hasActiveSelection` are read the same way: the hint is derived from
+// and `getActiveSelectionText` are read the same way: the hint is derived from
 // them, never patched.
 const READ_METHODS = [
 	"getSelectionBounds",
-	"getSelectionColumns",
 	"getCopyOnSelect",
-	"hasActiveSelection",
+	"getActiveSelectionText",
 	"flash",
 	"hasOverlay",
 ];
@@ -94,9 +93,10 @@ function expectReplaceable(target: object, owner: string, name: string): void {
 
 /**
  * The coding-agent side the pills reach into. Wrapped: `prompt` and
- * `getContextUsage` record the live session (live-session.ts), and
- * `updatePendingMessagesDisplay` is what hides Pi's queue rows (queue-rows.ts).
- * Read: what the queue and thinking pills call on that session.
+ * `getContextUsage` record the live session (live-session.ts),
+ * `updatePendingMessagesDisplay` is what hides Pi's queue rows (queue-rows.ts),
+ * and `renderWidgetContainer` is what drops the blank row above the editor
+ * (dock-gap.ts). Read: what the queue and thinking pills call on that session.
  */
 describe("coding-agent contract", () => {
 	it.each(["prompt", "getContextUsage"])(
@@ -117,5 +117,9 @@ describe("coding-agent contract", () => {
 
 	it("InteractiveMode exposes updatePendingMessagesDisplay as a replaceable method", () => {
 		expectReplaceable(InteractiveMode.prototype, "InteractiveMode", "updatePendingMessagesDisplay");
+	});
+
+	it("InteractiveMode exposes renderWidgetContainer as a replaceable method", () => {
+		expectReplaceable(InteractiveMode.prototype, "InteractiveMode", "renderWidgetContainer");
 	});
 });

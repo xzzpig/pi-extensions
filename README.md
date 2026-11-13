@@ -31,20 +31,24 @@ Starline makes Pi's fullscreen mode feel like a finished terminal app:
 - **Thinking:** pick a level from the ones the model supports.
 - **Queue:** an inbox icon and a count while messages wait; click to read them.
 - **Subagents:** with [pi-subagents](https://github.com/nicobailon/pi-subagents), a count of running subagents; click for agent, model, time and tokens, live.
+- **Context:** click for the window split into what fills it — system prompt, tool schemas, MCP tools, memory, skills and the conversation — as a grid with a legend, plus the session's token totals.
+- **Throughput:** the last reply's tokens per second; click for a scatter of every reply's rate against how full the context was, coloured by how fast it ran.
 - **Your extension's pill:** a small published API lets any extension open the same bubble with its own content. See [Clickable pills for other extensions](https://github.com/Andy8647/pi-starline/blob/main/docs/pill-api.md).
+- **Your extension's hint:** the right end of the editor's top rule is another published slot, so an extension can say one thing there without spending a row. See [Hints on the editor's top rule](https://github.com/Andy8647/pi-starline/blob/main/docs/editor-hints.md).
 - Clicking anywhere else on screen closes the bubble, and the click still does what it would have done: the caret moves, the line gets selected.
 - Every action also runs from the keyboard as `/starline <name>`, and the pointer turns into a hand over anything clickable.
 
 **Editor**
 
-- Bordered input box with an accent rail, as tall as its text; paste, selection and `ctrl+g` hints ride its top rule. `editorMinRows` keeps it a fixed minimum height.
+- Bordered input box with an accent rail, as tall as its text; paste, selection and `ctrl+g` hints ride its top rule. `editorMinRows` keeps it a fixed minimum height, and the blank row Pi keeps above the box is dropped.
+- A `gitPr` segment for the current branch's pull or merge request, with the checks mark and the repository's open count when the branch has none. Clicking it lists your pulls, the ones waiting on your review, and the rest you are involved in — each pull once — plus a last row that opens the repository page; a row opens in the browser.
 - User messages in the transcript are styled by [pi-tidy](https://github.com/Andy8647/pi-tidy), which draws them to match.
 - Copy-friendly mode drops the rail glyphs so terminal selection copies less chrome.
 
 **Mouse** (Pi's `tuiMode: "fullscreen"`)
 
 - Drag to select in the transcript or the draft; double-click keeps paths and kebab-case whole; triple-click takes a line.
-- Clean copies: Starline's rails and rule rows and pi-toolbox frames are dropped before the clipboard.
+- A selection in the draft copies the text you wrote, without the rail, the padding or a newline where a row wrapped. In the transcript, [pi-tidy](https://github.com/Andy8647/pi-tidy) takes its frames out of what you copy.
 - A selection hint says how many characters the copy key will copy.
 - Click to move the caret; backspace/delete remove a selected range; the wheel scrolls the draft.
 
@@ -66,6 +70,8 @@ pi install npm:pi-starline
 pi install git:github.com/Andy8647/pi-starline
 ```
 
+Runs on macOS, Linux and Windows. On Windows, use Windows Terminal with a [Nerd Font](https://www.nerdfonts.com/) installed. A legacy console host, or a terminal left on its default font, makes the bar look nothing like the screenshots: empty boxes where the icons should be, and no mouse.
+
 What changed in each version: **[Changelog](https://github.com/Andy8647/pi-starline/blob/main/CHANGELOG.md)**.
 
 ## Configure
@@ -78,7 +84,7 @@ Everything else lives in `~/.pi/agent/starline.json`. The file is optional; miss
 {
 	"pill": { "segments": ["model", "cwd", "git", "context", "cost"] },
 	"colors": { "gitBranch": "bold purple" },
-	"mouse": { "transcriptCleanCopy": false }
+	"mouse": { "copyNotice": false }
 }
 ```
 
@@ -87,6 +93,7 @@ Everything else lives in `~/.pi/agent/starline.json`. The file is optional; miss
 - [Configuration](https://github.com/Andy8647/pi-starline/blob/main/docs/configuration.md): every option and its default.
 - [What the footer shows](https://github.com/Andy8647/pi-starline/blob/main/docs/segments.md): git status indicators and the detected runtimes.
 - [Clickable pills for other extensions](https://github.com/Andy8647/pi-starline/blob/main/docs/pill-api.md): put your extension's content in a pill.
+- [Hints on the editor's top rule](https://github.com/Andy8647/pi-starline/blob/main/docs/editor-hints.md): put one line of your extension's state on the editor.
 - [Clickable pills: design](https://github.com/Andy8647/pi-starline/blob/main/docs/clickable-pills.md): how the pills, bubbles and bridges work.
 
 ## Development

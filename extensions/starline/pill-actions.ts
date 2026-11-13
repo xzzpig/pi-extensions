@@ -12,10 +12,11 @@
  * `pill-bubble.ts` and is shared: this file only decides what goes in it.
  */
 
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext, SlashCommandInfo } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import { statusCommandName } from "./config";
+import { collectContextBreakdown, contextBubbleContent, probeFor } from "./context-breakdown";
 import { activeContextSnapshot } from "./context-live";
-import { formatCount } from "./format";
 import { activeGitStatus } from "./git-live";
 import {
 	cycleThinkingLevel,
@@ -23,15 +24,24 @@ import {
 	readThinkingLevels,
 	setThinkingLevel,
 } from "./live-session";
+import { activeEditor } from "./mouse/editor-mouse";
+import { type PackageSummary, packageBubbleContent, readPackageSummary } from "./package-summary";
+import { OVERFLOW_PILL_KEY } from "./pill";
 import { externalPillAction } from "./pill-api";
 import {
+	closePillBubble,
 	type PillAnchor,
 	type PillBubbleContent,
 	type PillBubbleHandle,
 	showPillBubble,
 } from "./pill-bubble";
 import { PILL_SEGMENT_VARIABLES } from "./pill-config";
+import { activePillOverflowRows } from "./pill-overflow";
+import { showPulls } from "./pull-bubble";
+import type { ThemeLike } from "./style";
 import { type FleetSnapshot, getActiveSubagentFleet } from "./subagent-fleet";
+import { activeTpsHistory, tpsBubbleContent } from "./tps-history";
+import { jumpToLatestMessage, jumpToPreviousPrompt } from "./transcript-jump";
 
 /** What an action gets: the session, and where the pill is if a click found it. */
 export type PillActionContext = {
@@ -129,14 +139,13 @@ export function queuedBubbleContent(): PillBubbleContent {
 				"Messages you send while the agent is working wait until the current turn ends, then get delivered.",
 				"This build of Pi does not expose them to the extension, so the count and the text are unknown.",
 			],
-			hint: "esc to close",
 		};
 	}
 
 	const messages = [...pending.steering, ...pending.followUp];
 	// The bubble stays open while the turn ends and the queue drains under it.
 	if (messages.length === 0) {
-		return { title: "Queued messages", body: ["Nothing is queued."], hint: "esc to close" };
+		return { title: "Queued messages", body: ["Nothing is queued."] };
 	}
 	const listed = messages.slice(0, MAX_LISTED_MESSAGES).map((message) => `· ${oneLine(message)}`);
 	if (messages.length > listed.length) {
@@ -145,7 +154,6 @@ export function queuedBubbleContent(): PillBubbleContent {
 	return {
 		title: `${messages.length} message${messages.length === 1 ? "" : "s"} queued`,
 		body: listed,
-		hint: "esc to close",
 	};
 }
 
@@ -167,7 +175,6 @@ function thinkingUnavailable(ctx: ExtensionContext): PillBubbleContent {
 		body: current
 			? [`Current level: ${current}.`, "This session cannot change it from here."]
 			: ["This model has no thinking level to change."],
-		hint: "esc to close",
 	};
 }
 
@@ -196,7 +203,7 @@ export function thinkingPickerContent(ctx: ExtensionContext): PillBubbleContent 
 						},
 					},
 		),
-		hint: "↑↓ enter · click · esc",
+		hint: "↑↓ enter · click",
 	};
 }
 
@@ -214,7 +221,7 @@ function showThinkingLevel({ ctx, pill, via }: PillActionContext): void {
 	showPillBubble(
 		ctx,
 		cycled
-			? { title: "Thinking", body: [`${cycled.from} → ${cycled.to}`], hint: "esc to close" }
+			? { title: "Thinking", body: [`${cycled.from} → ${cycled.to}`] }
 			: thinkingUnavailable(ctx),
 		pill,
 	);
@@ -236,6 +243,26 @@ let modelSwitcher: ModelSwitcher | undefined;
 
 export function setModelSwitcher(switcher: ModelSwitcher | undefined): void {
 	modelSwitcher = switcher;
+}
+
+/**
+ * The slash-command surface a configured command needs, registered by the
+ * extension entry, which holds `pi`: an action only gets the context, and
+ * neither `getCommands` nor `sendUserMessage` is on it.
+ */
+export type PillCommandRunner = {
+	/** The command a status key is configured with, read from the live config. */
+	commandFor(key: string): string | undefined;
+	/** Everything `/name` resolves to right now, for validation before sending. */
+	list(): readonly Pick<SlashCommandInfo, "name" | "source">[];
+	/** Send the command down Pi's own prompt path. */
+	send(text: string): void;
+};
+
+let pillCommandRunner: PillCommandRunner | undefined;
+
+export function setPillCommandRunner(runner: PillCommandRunner | undefined): void {
+	pillCommandRunner = runner;
 }
 
 /** Without a model scope the picker falls back to the whole catalogue, capped. */
@@ -302,7 +329,6 @@ export function modelPickerContent(ctx: ExtensionContext): PillBubbleContent {
 				current ? `Current model: ${modelLabel(current)}.` : "No model is selected.",
 				"Use /model to pick one.",
 			],
-			hint: "esc to close",
 		};
 	}
 	// The current model is a target too, opened selected, so ↑/↓ start from it.
@@ -340,7 +366,6 @@ async function showModels({ ctx, pill, via }: PillActionContext): Promise<void> 
 		{
 			title: "Model",
 			body: [`${current ? current.id : "none"} → ${next.model.id}`],
-			hint: "esc to close",
 		},
 		pill,
 	);
@@ -379,7 +404,7 @@ export function subagentsBubbleContent(fleet: FleetSnapshot, now = Date.now()): 
 	return {
 		title: total > 0 ? `${total} subagent${total === 1 ? "" : "s"} running` : "Subagents",
 		body: total > 0 ? listed : ["Nothing is running."],
-		hint: "/subagents-fleet for details · esc to close",
+		hint: "/subagents-fleet for details",
 	};
 }
 
@@ -414,50 +439,56 @@ async function showSubagents({ ctx, pill }: PillActionContext): Promise<void> {
 	});
 }
 
-/**
- * What the context pill says when clicked: the numbers the bar has no room for.
- *
- * The pill keeps the percentage; the window, the tokens used, the session's
- * in/out counts and the cache rate are all here. Same source as the pill, so the
- * two cannot disagree while a turn streams.
- */
-export function contextBubbleContent(): PillBubbleContent {
-	const snapshot = activeContextSnapshot();
-	if (!snapshot) {
-		return { title: "Context", body: ["Nothing has been sent yet."], hint: "esc to close" };
-	}
-
-	const body: string[] = [];
-	const percent =
-		snapshot.percent === undefined || !Number.isFinite(snapshot.percent)
-			? undefined
-			: Math.max(0, Math.min(100, Math.round(snapshot.percent)));
-	if (snapshot.contextWindow) {
-		const windowLabel = formatCount(snapshot.contextWindow);
-		const used = percent === undefined ? `window ${windowLabel}` : `${percent}% of ${windowLabel}`;
-		body.push(
-			snapshot.tokens === undefined ? used : `${used} · ${formatCount(snapshot.tokens)} used`,
-		);
-	}
-	if (snapshot.tokenLabel) body.push(`session ${snapshot.tokenLabel}`);
-	if (snapshot.cacheLabel) body.push(`cache ${snapshot.cacheLabel}`);
-
-	const title = percent === undefined ? "Context" : `${percent}% context`;
-	return {
-		title,
-		body: body.length > 0 ? body : ["No usage yet."],
-		hint: "esc to close",
-	};
-}
-
 function showContext({ ctx, pill }: PillActionContext): void {
-	if (!activeContextSnapshot()) {
+	// The theme and the reads are taken on every render, so the bubble follows a
+	// theme change and a model switch while it is open.
+	const theme = ctx.ui.theme as unknown as ThemeLike;
+	const read = () => collectContextBreakdown(probeFor(ctx));
+	if (read().total <= 0 && !activeContextSnapshot()) {
 		if (ctx.hasUI) ctx.ui.notify("No context usage in this session", "info");
 		return;
 	}
 	// Live: tokens grow while a turn streams, and the footer pushes a new
 	// snapshot every render.
-	const handle = showPillBubble(ctx, contextBubbleContent, pill);
+	const handle = showPillBubble(ctx, () => contextBubbleContent(read(), theme), pill);
+	whileOpen(handle, () => handle.refresh());
+}
+
+/**
+ * The package bubble: what the version on the pill is measured against.
+ *
+ * The reads are async (two git processes) so the bubble opens on the last answer
+ * and fills in, rather than delaying the click. Reopening in the same directory
+ * starts from that answer instead of an empty bubble.
+ */
+let cachedSummary: { cwd: string; summary: PackageSummary } | undefined;
+
+function showPackage({ ctx, pill }: PillActionContext): void {
+	const theme = ctx.ui.theme as unknown as ThemeLike;
+	let summary = cachedSummary?.cwd === ctx.cwd ? cachedSummary.summary : undefined;
+	const handle = showPillBubble(
+		ctx,
+		() =>
+			summary
+				? packageBubbleContent(summary, theme)
+				: { title: "Package", body: ["Reading the manifest…"] },
+		pill,
+	);
+	void readPackageSummary(ctx.cwd).then((next) => {
+		cachedSummary = { cwd: ctx.cwd, summary: next };
+		summary = next;
+		handle.refresh();
+	});
+}
+
+function showTps({ ctx, pill }: PillActionContext): void {
+	if ((activeTpsHistory()?.all().length ?? 0) === 0) {
+		if (ctx.hasUI) ctx.ui.notify("No throughput measured yet", "info");
+		return;
+	}
+	// Live: the last reply's rate lands while the bubble is open.
+	const theme = ctx.ui.theme as unknown as ThemeLike;
+	const handle = showPillBubble(ctx, () => tpsBubbleContent(theme), pill);
 	whileOpen(handle, () => handle.refresh());
 }
 
@@ -493,7 +524,7 @@ function changeLabel(code: string): string {
 export function gitBubbleContent(): PillBubbleContent {
 	const status = activeGitStatus();
 	if (!status) {
-		return { title: "Git", body: ["No repository in this project."], hint: "esc to close" };
+		return { title: "Git", body: ["No repository in this project."] };
 	}
 
 	const body: string[] = [];
@@ -528,7 +559,6 @@ export function gitBubbleContent(): PillBubbleContent {
 	return {
 		title: changes.length > 0 ? `${name} · ${changes.length} changed` : name,
 		body,
-		hint: changes.length > 0 ? "read-only · esc to close" : "esc to close",
 	};
 }
 
@@ -545,29 +575,134 @@ function showGitChanges({ ctx, pill }: PillActionContext): void {
 }
 
 /**
+ * What the bar left out, when it had to drop pills to fit.
+ *
+ * The rows are the render's, so the bubble opens on the width that drew the
+ * counter rather than on whatever was measured last. A row names the segment and
+ * repeats the text it would have shown, which is the whole point of keeping this
+ * reachable: the number is still there, one click away, instead of being clipped.
+ */
+function showOverflow({ ctx, pill }: PillActionContext): void {
+	const rows = activePillOverflowRows();
+	if (rows.length === 0) return;
+	showPillBubble(
+		ctx,
+		() => ({
+			title: `${rows.length} not on the bar`,
+			body: rows.map((row) => `${overflowLabel(row.key)}  ${row.text}`),
+			hint: "Widen the terminal to put them back",
+		}),
+		pill,
+	);
+}
+
+/** `extensionStatus:procs` reads as `procs` on a row. */
+function overflowLabel(key: string): string {
+	const separator = key.indexOf(":");
+	return separator === -1 ? key : key.slice(separator + 1);
+}
+
+function notifyWarning(ctx: ExtensionContext, message: string): void {
+	if (ctx.hasUI) ctx.ui.notify(message, "warning");
+}
+
+/**
+ * Run a `/command` from `extensionStatuses.commands` — the shortest way to open
+ * a panel another extension already has (`procs` → `/ps`) without a bridge.
+ *
+ * Only an extension command is ever sent. Pi treats an unmatched `/foo` as
+ * ordinary prompt text, so a typo or a stale entry would start a model turn
+ * instead of reporting the mistake. The check reads the same registry Pi
+ * dispatches through and runs immediately before the send, so the two cannot
+ * disagree.
+ */
+function runConfiguredCommand(command: string, ctx: ExtensionContext): void {
+	const runner = pillCommandRunner;
+	if (!runner) return;
+	// A bubble on screen would sit over the panel the command opens.
+	closePillBubble();
+	// A panel already swapped into the editor's place has focus away from the
+	// draft. Sending again would clear it without disposing it; nothing to say,
+	// since the user is looking at what the click asked for.
+	const editor = activeEditor();
+	if (editor && (editor.component as { focused?: boolean }).focused === false) return;
+
+	const name = statusCommandName(command);
+	const named = runner.list().filter((candidate) => candidate.name === name);
+	// A prompt template and an extension command may share a name; the extension
+	// one is what this setting is for, so the first of those wins.
+	const extensionCommand = named.find((candidate) => candidate.source === "extension");
+	if (!extensionCommand) {
+		const other = named[0];
+		notifyWarning(
+			ctx,
+			other
+				? `/${name} is a ${other.source}, not an extension command: it would start a model turn.`
+				: `No /${name} command in this session; check extensionStatuses.commands.`,
+		);
+		return;
+	}
+	runner.send(command);
+}
+
+/**
+ * A pill whose click runs a configured command, or undefined when this status
+ * key is not in `extensionStatuses.commands`.
+ *
+ * The action is built per lookup rather than cached, so a `/reload` of the config
+ * is what the next click sees; the lookup itself is a keyed read.
+ */
+function commandPillAction(key: string): PillAction | undefined {
+	const command = pillCommandRunner?.commandFor(key);
+	if (!command) return undefined;
+	return ({ ctx }) => runConfiguredCommand(command, ctx);
+}
+
+/**
  * Segment key → action. Segments with no entry are labels: a click on one is not
  * handled, so nothing is swallowed.
  */
 export const PILL_ACTIONS: Readonly<Partial<Record<string, PillAction>>> = {
 	context: showContext,
 	git: showGitChanges,
+	gitPr: ({ ctx, pill }) => {
+		showPulls(ctx, pill);
+	},
+	latest: jumpToLatestMessage,
 	model: showModels,
+	[OVERFLOW_PILL_KEY]: showOverflow,
+	packageVersion: showPackage,
+	previousPrompt: jumpToPreviousPrompt,
 	queue: showQueuedMessages,
 	subagents: showSubagents,
 	thinking: showThinkingLevel,
+	tps: showTps,
 };
 
 /**
  * The action for a pill span's key.
  *
  * A segment key Starline owns (a builtin segment) wins over a bridge, so a status
- * cannot hijack `queue`. Everything else is looked up in the published API, which
- * is how `extensionStatus:<key>` pills become clickable. No entry anywhere means
- * the pill is a label and the click falls through.
+ * cannot hijack `queue`. The comparison ignores case because `/starline <name>`
+ * lowercases its argument, and `gitPr` would otherwise only answer to the mouse.
+ * The `+N` counter is not a segment and never appears in `pill.segments`, so it is
+ * answered before the segment lookup. Everything else is looked up in the
+ * published API, which is how `extensionStatus:<key>` pills become clickable. No
+ * entry anywhere means the pill is a label and the click falls through.
  */
 export function pillActionFor(key: string): PillAction | undefined {
+	if (key === OVERFLOW_PILL_KEY) return PILL_ACTIONS[OVERFLOW_PILL_KEY];
 	if (key in PILL_SEGMENT_VARIABLES) return PILL_ACTIONS[key];
-	return externalPillAction(key);
+	const lowered = key.toLowerCase();
+	const segment = Object.keys(PILL_SEGMENT_VARIABLES).find(
+		(name) => name.toLowerCase() === lowered,
+	);
+	if (segment) return PILL_ACTIONS[segment];
+	// A bridge beats the configured command: code is more specific than a
+	// declaration, and it is also what makes the config a default rather than a
+	// rule. Layering them means a bridge that unregisters hands the click back to
+	// the config instead of leaving the pill inert.
+	return externalPillAction(key) ?? commandPillAction(key);
 }
 
 /**

@@ -10,6 +10,359 @@ notes, so write it for someone reading the releases page, not for someone readin
 the diff. A tag with no section here fails the release before anything reaches
 npm.
 
+## [0.13.0] - 2026-11-12
+
+One addition: the right end of the editor's top rule is now a published slot, so an
+extension can say one thing next to what it is about instead of in the footer.
+
+**Added**
+
+- **Editor hint API: one line of your extension's state on the editor's border.**
+  The right end of the top rule already carries Starline's own hints (vim mode,
+  `paste again to expand`, `N characters selected, ctrl+x to copy`). An extension can
+  now publish there too, through `Symbol.for("pi-starline.editor-hint-api.v1")` on
+  `globalThis` — the same handshake as the pill API, so nothing imports Starline and
+  nothing breaks when it is not installed. Your hint joins the slot to the left of
+  Starline's, which is the end that survives truncation on a narrow terminal, and a
+  hint that has not changed costs no repaint. Text is flattened onto one line and cut
+  at 60 columns. `pi-ide-context` 0.6.4 is the first user: while a selection is fresh
+  it reads `6 lines selected in main.ts`. See
+  [Hints on the editor's top rule](https://github.com/Andy8647/pi-starline/blob/main/docs/editor-hints.md).
+
+## [0.12.0] - 2026-11-08
+
+Four changes: a wide pill gives up width instead of taking the segments behind it
+with it, a third-party pill can open the panel its extension already has, the pull
+bubble can list the repository's issues, and copying the transcript without frames
+is pi-tidy's job now. **Update pi-tidy to 0.8.1 or newer along with this release**,
+or transcript copies bring their frames along.
+
+**Added**
+
+- **`extensionStatuses.commands`: a third-party pill that opens its extension's
+  panel.** Map a status key to a slash command (`{"procs": "/ps"}`) and a click runs
+  it, with no bridge to write. Only an extension command runs: a mistyped name, a
+  prompt template or a skill is refused with a notification, because Pi would
+  otherwise send it as a prompt and start a model turn. Built-in segments answer for
+  themselves, and an action registered through the pill API for the same key wins
+  over the configured command, so an existing bridge keeps working.
+- **`git.issues`: the repository's open issues in the pull bubble.** Off by default.
+  `Assigned to you` and `You opened` are always listed; the rest of the backlog only
+  while the repository has 20 or fewer open issues, above which one row
+  (`↗ All 8412 open issues`) opens the list instead. A fork with issues turned off
+  hides the section rather than claiming there are none, and on GitHub the issue
+  searches ride along with the pull searches, so turning this on costs no extra
+  request there. The `gitPr` pill itself does not change: a repository-wide issue
+  count says nothing about the current branch.
+- **The `Extension segments` tab in `/starline` says what a click does**, naming the
+  command or the bridge that overrides it, so a shadowed setting is visible instead
+  of silently ignored.
+
+**Changed**
+
+- **A bar that does not fit compresses the wide pills first.** A pill wider than its
+  share is shortened in the middle and the pills behind it stay on the bar; whole
+  pills are dropped, and counted, only once every pill is down to its minimum (24
+  columns, or its own width). `git.branch.maxLength: "full"` still means no configured
+  cap, but a bar that runs out of room now compresses even then.
+- **A shortened branch keeps both ends.** `formatGitBranchText` cuts in the middle, so
+  `feature/…` no longer hides the part that tells two branches apart, and the branch
+  pill keeps its dirty counts and in-progress operation whatever the name loses. A
+  numeric `maxLength` now means a middle cut rather than an end cut.
+
+**Fixed**
+
+- **A wide pill used to cost everything after it.** The layout dropped whole pills
+  from the right, so on a long `feature/…` branch `context`, `cost` and every
+  extension status went with it; with the branch first, one pill was sometimes
+  stretched across the whole bar instead.
+- **The pull bubble no longer reads forever.** A first read that failed left
+  `Reading from the forge…` on screen; it now says it could not read, and keeps the
+  row that opens the repository.
+- **A pull bubble from another directory no longer answers.** Opened after a `/cd`,
+  it showed the previous repository's lists.
+- **A long bubble no longer runs off the screen.** Its rows are fitted to the terminal
+  and a shortened group says how much of it is showing (`Yours · 5 of 40`), while the
+  rows that lead out of the bubble are never among the ones dropped.
+- **Select-to-copy leaves the frames behind too.** Starline only cleaned the copy
+  key, so with Pi's default `fullscreenCopyOnSelect: true` nothing was cleaned.
+  pi-tidy covers both.
+- **The selection hint counts what the copy key delivers,** from Pi's own selection
+  text, so it matches pi-tidy's result.
+
+**Removed**
+
+- **`mouse.transcriptCleanCopy`.** A copy with its frames now takes
+  `tidy.cleanCopy: false` in Pi's `settings.json`. The old key is ignored, so a
+  config that still has it keeps working.
+
+## [0.11.0] - 2026-11-05
+
+Pi's `↓ Jump to latest message` block is gone from the transcript, and the two
+moves it stood for are pills on the bar instead. One of them is new: there was
+no way back to the previous prompt except the keyboard.
+
+**Added**
+
+- **`previousPrompt` and `latest`, two pills that move the transcript.** They sit
+  on the bar like any other pill and draw one arrow each (`⇡` and `⇣`, not `↑`
+  and `↓`, which the git pill already uses for ahead and behind).
+  `previousPrompt` jumps to the previous prompt's first row, aligned to the top
+  of the viewport; `latest` returns to the end and resumes following new output.
+  Both stay on the bar all the time, so scrolling never reflows the bar, and a
+  press with nowhere to go does nothing instead of disappearing: `latest` at the
+  end of the transcript, `previousPrompt` when no prompt starts above the
+  viewport. `⇡` and `⇣` take the bar's neutral background — they are controls,
+  not readings, so `colors.*` is untouched. Both are placed after `thinking` by
+  default, and `/starline previousPrompt` and `/starline latest` do the same two
+  jumps from the keyboard.
+
+**Changed**
+
+- **The bar drops whole pills instead of cutting one in half.** It rendered
+  everything and truncated the line at the terminal's width, which left a pill
+  with no right cap and a label ending mid-word — and the pills it ate were the
+  ones on the right, which is where `context` and `tps` usually sit. The bar now
+  keeps the pills that fit, drops the rest whole, and stands a `+N` counter in
+  their place; clicking it lists what is not on screen with the text each of those
+  pills would have shown. `pill.segments` is therefore also the priority list: the
+  leftmost pill is the last one to go.
+
+- **Pi's scroll-to-end label is not drawn.** That block was painted over the last
+  row of the transcript, hiding the line it landed on, and it only ever offered
+  one direction. With the two pills carrying both moves, the label and its click
+  rectangle are suppressed: the row it covered is yours again, and nothing
+  invisible answers a click there. Pi's own keys (`tui.altScreen.previousPrompt`,
+  `tui.altScreen.bottom`) keep working as before.
+- **The `tps` pill's colour follows the session.** A fixed threshold would not
+  travel: 30 t/s is a fast local model and a slow frontier one, so the same
+  cut-off paints both the same colour and says nothing. The rate is now read
+  against the median of the session's finished messages — `colors.tpsFast` from
+  30% above it, `colors.tpsSlow` from 30% below, `colors.tps` in between — so the
+  colour answers "faster or slower than this session usually replies". The band
+  is entered at 30% and left at 15%, which keeps a number sitting on a threshold
+  from blinking between two colours mid-message, and fewer than four measured
+  messages stays on `colors.tps`, because that is not a median yet.
+
+**Notes**
+
+- The two segments are new, so a `pill.segments` list written by hand does not
+  have them. Add `previousPrompt` and `latest` where you want them, in
+  `starline.json` or from the **Pills** tab in `/starline`; without them the bar
+  looks exactly as it did and the label is still suppressed.
+
+## [0.10.4] - 2026-11-02
+
+A repository whose root holds more than one manifest now says so, the version
+pill says what npm actually has rather than what the manifest is about to
+release, Maven's version shows up on Windows, and the bubbles stop explaining how
+to close them.
+
+**Added**
+
+- **The packages a workspace does not declare.** `apps/web` being a pnpm member
+  said nothing about `apps/api`, `apps/ingest` and `packages/domain` sitting
+  beside it. A section after the workspace lists them: two levels deep, never
+  entering a directory that has a manifest of its own, skipping whatever the
+  workspace already listed, capped like the workspace list itself. The heading
+  names the ecosystem when they all share one (`python · not in a workspace`).
+
+**Fixed**
+
+- **A version that had not shipped read as published.** The bubble's first row
+  said `0.10.4 public` because `package.json` declared 0.10.4 and was not
+  private, which reads as if npm already had it. The registry is now asked for
+  `latest`: its version gets a `published` row of its own, the manifest's version
+  is called `unreleased` when the two differ, and with no answer from the
+  registry the row claims nothing at all. The title names the published version
+  instead of the manifest's, and with the two equal one row carries both. The pill
+  follows the same rule and shows the registry's version; the `*` that compared it
+  against a git tag is gone, because a tag is a local marker and the registry is
+  what says something shipped. The manifest's own row says `unreleased` only when
+  it is ahead of npm; a checkout that is behind says so (`older than npm`)
+  instead of being called a pending release.
+- **A mixed repository was described as one ecosystem.** The bubble showed the
+  single manifest the version happened to come from, so a pnpm workspace root
+  whose `package.json` declares no version read as a Python project and never
+  mentioned npm at all. Every manifest in the directory now gets a line, with its
+  own version (`--` when it declares none) and its file. The pill still shows one
+  number — the first manifest that has a version — and the bubble now says which
+  file that was.
+- **A row that ended in padding.** The version column is width-matched across a
+  section for the rows that carry a mark after it; the rows without one no longer
+  end in spaces.
+- **Maven's version on Windows.** The runtime probe ran `execFile("mvn",
+  ["--version"])`, and on Windows `mvn` is `mvn.cmd`, which Node refuses to start
+  without a command interpreter — the lookup died with `spawn mvn ENOENT`, the
+  error was swallowed, and the pill showed the icon with no version beside it.
+  A lookup that cannot find its command on Windows is now retried through
+  `cmd.exe /d /s /c` (or `%ComSpec%`), so `.cmd` and `.bat` shims resolve. Every
+  other platform and every command that already resolved is untouched.
+  Thanks to [@suzumiy](https://github.com/suzumiy) for the report and for
+  tracing it to the shim ([#45](https://github.com/Andy8647/pi-starline/issues/45)).
+
+**Changed**
+
+- **A manifest's platform has its own mark, and links to the package.** npm,
+  cargo, composer, pub, mix, cabal, pip, gems, maven and the rest each draw their
+  ecosystem's glyph instead of the generic package box — for npm the mark spells
+  `npm` already, so the word beside it is gone — and the row that names the
+  published version opens that package on npm. The manifest's own row is not a
+  link: it is a fact about this checkout, not about what shipped.
+- **The bubbles no longer say how to close them.** ESC closes every bubble, so
+  the line only cost a row. The hints that teach something else stay —
+  `enter opens`, `↑↓ enter · click`, `/subagents-fleet for details` — minus the
+  ESC mentioned beside it.
+
+## [0.10.3] - 2026-11-02
+
+The pull list lists each pull once and can take you to the repository, there is
+a package pill for the version and what was released, and the context pill stops
+reading `0%` on a fresh session.
+
+**Added**
+
+- **A package pill that answers "what version is this, and what was released?"**
+  The `packageVersion` segment now carries the package glyph and, when the
+  newest git tag names a different release, a `*`. Clicking it opens the
+  summary: the ecosystem, whether the manifest publishes anything, the version,
+  the tag HEAD is measured against and how far ahead it is. A workspace
+  (`pnpm-workspace.yaml`, `package.json#workspaces`, Cargo members, `go.work`,
+  `deno.json`, `[tool.uv.workspace]`) is listed package by package, each row
+  marked `changed` when the diff since the tag touched it. Nothing on that list
+  is inferred: a version comes from a manifest, "released" from a tag, and
+  "changed" from the two compared.
+- **A way into the repository from the pull bubble.** The bubble now ends with
+  `↗ Open repository`, which opens the remote's own page. The URL is built from
+  the remote the way GitHub and GitLab resolve it, so a self-hosted forge keeps
+  its own hostname and port rather than being sent to github.com.
+
+**Fixed**
+
+- **The same pull, listed twice.** The three searches are not disjoint: GitLab's
+  reviewer and assignee lists overlap, and GitHub can ignore the second half of
+  an `-author:@me -review-requested:@me` query. A pull that answered more than
+  one search was printed under both headings and counted twice. Each one now
+  appears once, under the strongest claim on it (authored, then review
+  requested, then involved).
+- **The context pill read `0%` on a fresh session** while the system prompt and
+  the tool schemas were already committed. The bubble had the number all along —
+  it estimates those tokens from the rendered prompt and the tool schemas. The
+  footer now uses the same estimate and marks it `~` (`~1%/1.0M`) until a turn
+  reports usage, then drops the mark. An unknown figure keeps the bare `?`, and
+  so does a session that has already run and is only waiting on pi to report
+  again (a compaction), where the estimate would read as the whole window.
+
+## [0.10.2] - 2026-11-01
+
+`!` colours the input box again.
+
+**Fixed**
+
+- **Bash mode had no border cue.** Pi colours the editor border from the mode it
+  is in (`bashMode` while the draft starts with `!`, a `thinking*` colour
+  otherwise), and Starline replaces those rows with its own in
+  `colors.editorBorder`. The frame now paints through Pi's painter while bash
+  mode is on, so `!` turns both rules the theme's `bashMode` colour. An explicit
+  `colors.editorBorder` still wins, and the thinking level keeps Starline's
+  border rather than recolouring the box.
+
+## [0.10.1] - 2026-11-01
+
+Copying a right-aligned user message leaves its frame behind.
+
+**Fixed**
+
+- **Copied text from an indented box.** With `tidy.userMessageAlign: "right"`,
+  pi-tidy indents the whole user message and sets the icon and clock into the
+  top border's right edge. The copier only recognised a left-aligned label on a
+  box at column 0, so it found no frame at all and fell back to Pi's verbatim
+  copy: the indentation, both `│` columns and the labelled border row all
+  reached the clipboard. Frame edges now have to sit in the same column as well
+  as be the same width, and a frame's content is trimmed at the column its own
+  left edge sits in, so an indented box copies as its text.
+- **Equal-width edges at different indents are not one box.** An indented
+  rounded edge no longer pairs with a flush one, so a box nested inside a
+  selection cannot take the rows of the box around it with it.
+
+## [0.10.0] - 2026-10-31
+
+A pull request pill, and one blank row less above the input box.
+
+**Added**
+
+- **A `gitPr` pill.** It shows the current branch's pull or merge request: the
+  forge's marker in front of the number (`#123` on GitHub, `!123` on GitLab), the
+  state in the pill's colour (open, draft, merged, closed) and a mark for the
+  checks (`✓` passing, `✗` failing, `⋯` running). With no pull on the branch it
+  shows how many the repository has open (`12`, in the branch pill's purple,
+  `0` included). Clicking it, or running `/starline gitpr`, lists your open pulls
+  in three groups (yours, waiting on your review, the rest you are involved in),
+  and a row opens in the browser.
+- **No token to configure.** The pill reads through `gh` and `glab`, in the
+  repository directory, so it uses the login and host configuration those CLIs
+  already have. A pull is kept for a minute; a failed read keeps the last answer
+  and backs off (two minutes, doubling to ten), so a forge that is down or a
+  laptop off the network costs one process occasionally instead of two a minute.
+  Without the CLI, or on a forge they do not cover, there is no pill.
+- **`colors.gitPrOpen` / `gitPrDraft` / `gitPrMerged` / `gitPrClosed` /
+  `gitPrCount`** and **`icons.gitPrOpen` / `gitPrDraft` / `gitPrMerged` /
+  `gitPrClosed` / `gitPrList`** for the pill. `icons.gitPr*` stay empty in
+  `icons.mode: "ascii"`, where the `#`/`!` marker carries the meaning.
+
+**Changed**
+
+- **One blank row less above the input box.** Pi keeps a row in its above-editor
+  widget slot even when no extension fills it; the box draws its own edges, so
+  Starline clears it. A real widget in that slot (pi-subagents' fleet status,
+  pi-processes' dock) still gets Pi's separating row, and `features.editor: false`
+  gives the row back.
+- **The git bubble no longer ends on `read-only`.** The bubble is still read-only;
+  the footer row said so once per click.
+- **The pull list is open pulls only**, on both forges.
+
+**Fixed**
+
+- **The line-metrics probe no longer rewrites `.git/index`.** `git diff HEAD
+  --numstat` takes the index lock as a side effect, and `GIT_OPTIONAL_LOCKS=0`
+  does not stop that one, so a repo with a `gitMetrics` pill was having its index
+  rewritten on every refresh. The staged and unstaged halves are now read with
+  `diff-index` and `diff-files`, which do not touch it.
+- **`/starline gitpr` reaches the pull pill.** `/starline <name>` lowercases its
+  argument, so a camelCase segment key only answered to the mouse.
+
+## [0.9.1] - 2026-10-30
+
+The context bubble shows what the window is made of, and the tps bubble plots
+speed against it.
+
+**Added**
+
+- **Context breakdown.** Clicking the context pill opens a grid of what fills the
+  window — system prompt, tool schemas, MCP tools, memory, skills and the
+  conversation — each row with its token count and share, plus free space and the
+  autocompact reserve. The split is read from Pi's own prompt sections, so it
+  follows whatever the session actually sends; memory extensions that declare
+  `memory`, `pi_memory`, `memory-context` or `local_memory`, or append a
+  `<memory>` block, are counted as memory rather than system prompt.
+- **A number before the first reply.** The bubble estimates the window from the
+  prompt and the tool schemas and says so, instead of reporting zero. Pi's own
+  count leaves both out and does not exist until a turn has reported usage.
+- **Throughput history.** Clicking the tps pill opens a scatter of every measured
+  reply: tokens per second on the y axis, the context percentage it finished at
+  on the x. Replies are coloured against the session's own top speed, the newest
+  one is a dot, and several in one cell show their count. Both axes follow the
+  data instead of a fixed 0-100%.
+- **Points survive `--continue`.** They are kept as custom entries in the session
+  file — persisted, never sent to the model — and the pill starts from the last
+  one instead of an empty segment.
+
+**Changed**
+
+- Bubbles no longer print `esc to close`: a click anywhere else already closes
+  them, and the line cost a row on every bubble. The git bubble keeps
+  `read-only`, the subagents bubble keeps its command.
+
 ## [0.9.0] - 2026-10-30
 
 The input box is as tall as its text, and user messages in the transcript are

@@ -1,7 +1,7 @@
 import { homedir, hostname, userInfo } from "node:os";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { sliceByColumn, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type {
 	ColorSource,
 	ColorSpec,
@@ -393,22 +393,40 @@ export function buildContextGauge(percent: number, width = 10, ascii = false): s
 	return `${on.repeat(filled)}${off.repeat(Math.max(0, width - filled))}`;
 }
 
+/**
+ * `~` in front of a figure that is estimated rather than measured.
+ *
+ * An unknown figure keeps the bare `?`: `~?` would read like a value that was
+ * worked out.
+ */
+function approximate(
+	label: string,
+	estimated: boolean,
+	percent: number | null | undefined,
+): string {
+	return estimated && percent !== null && percent !== undefined ? `~${label}` : label;
+}
+
 export function formatContextPercentLabel(
 	percent: number | null | undefined,
 	contextWindow: number | undefined,
+	estimated = false,
 ): string {
 	if (!contextWindow || contextWindow <= 0) return "--";
 	const percentLabel =
 		percent === null || percent === undefined
 			? "?"
 			: `${Math.max(0, Math.min(999, Math.round(percent)))}%`;
-	return `${percentLabel}/${formatCount(contextWindow)}`;
+	return `${approximate(percentLabel, estimated, percent)}/${formatCount(contextWindow)}`;
 }
 
 /** Just the rounded percentage, for `segmentOptions.context.format: "percent"`. */
-export function formatBareContextPercent(percent: number | null | undefined): string {
+export function formatBareContextPercent(
+	percent: number | null | undefined,
+	estimated = false,
+): string {
 	if (percent === null || percent === undefined || !Number.isFinite(percent)) return "?";
-	return `${Math.max(0, Math.min(999, Math.round(percent)))}%`;
+	return approximate(`${Math.max(0, Math.min(999, Math.round(percent)))}%`, estimated, percent);
 }
 
 export function buildContextDisplayLabel(options: {
@@ -417,16 +435,29 @@ export function buildContextDisplayLabel(options: {
 	style?: ContextStyle;
 	asciiGauge?: boolean;
 	format?: ContextFormat;
+	/**
+	 * The figure came from the system prompt and the tool schemas, not from a
+	 * turn pi measured, so it is marked `~`. The gauge is left alone: a bar that
+	 * is one cell long says the same thing whether or not the number is exact.
+	 */
+	estimated?: boolean;
 }): string {
-	const { percent, contextWindow, style = "text", asciiGauge = false, format = "full" } = options;
+	const {
+		percent,
+		contextWindow,
+		style = "text",
+		asciiGauge = false,
+		format = "full",
+		estimated = false,
+	} = options;
 	if (!contextWindow || contextWindow <= 0) return "--";
 
 	// "percent" drops the context window, leaving a bare threshold-coloured
 	// figure for minimal layouts. It composes with contextStyle unchanged.
 	const text =
 		format === "percent"
-			? formatBareContextPercent(percent)
-			: formatContextPercentLabel(percent, contextWindow);
+			? formatBareContextPercent(percent, estimated)
+			: formatContextPercentLabel(percent, contextWindow, estimated);
 	const numericPercent =
 		percent === null || percent === undefined || !Number.isFinite(percent)
 			? 0
@@ -479,6 +510,36 @@ export function formatPackageVersionSegment(
 	const icon = resolvePackageIcon(configuredIcon, mode);
 	const label = `${icon} ${pkg.version}`;
 	return `${renderStyleForSource(theme, colorSource, "", "is")} ${renderStyleForSource(theme, colorSource, versionStyle, label)}`;
+}
+
+/**
+ * The package pill: the version the registry has, behind the package glyph.
+ *
+ * The manifest's version is the one someone is about to release, so it is not the
+ * number to show: a pill reading `0.10.4` while npm still has `0.10.3` invites a
+ * release that has not happened. Git is not consulted either — a tag is a local
+ * marker, and the registry is the thing that decides what is out there. When the
+ * registry has no answer the manifest's version is the only fact left.
+ */
+export function formatPackagePillLabel(
+	pkg: PackageVersionResult | undefined,
+	published: string | undefined,
+	mode: IconMode = "auto",
+	configuredIcon: string = "",
+): string {
+	if (!pkg) return "";
+	const icon = resolvePackageIcon(configuredIcon, mode);
+	return `${icon} ${published ?? pkg.version}`;
+}
+
+/** `v1.2.3`, `release-1.2.3` and `@scope/pkg@1.2.3` all end in the version. */
+function tagMatchesVersion(tag: string, version: string): boolean {
+	const text = tag.trim();
+	if (text === version) return true;
+	for (const prefix of ["v", "V", "-", "/", "@", "_"]) {
+		if (text.endsWith(`${prefix}${version}`)) return true;
+	}
+	return false;
 }
 
 export type FormatCwdOptions = {
@@ -553,12 +614,45 @@ function stripAnsi(text: string): string {
 	return text.replace(/\u001B\[[0-9;]*m/g, "");
 }
 
+/**
+ * Cut `text` to `maxColumns` visible columns, keeping both ends and putting one
+ * `…` between them.
+ *
+ * End truncation keeps the shared prefix, which is exactly the part two branches
+ * of the same kind have in common: `feature/ABC-1234-add-a-thing` and
+ * `feature/ABC-5678-fix-another` both answer `feature/…`. The tail is where the
+ * difference is, and `keepTailColumns` protects a caller's own tail (a git pill's
+ * dirty counts and in-progress operation) even when the split would cut it.
+ *
+ * Cuts land on grapheme boundaries, so a wide glyph that does not fit is dropped
+ * rather than halved; the result is at most `maxColumns`, occasionally one short.
+ */
+export function truncateMiddle(text: string, maxColumns: number, keepTailColumns = 0): string {
+	if (maxColumns <= 0) return "";
+	const total = visibleWidth(text);
+	if (total <= maxColumns) return text;
+
+	// The ellipsis is one column of the budget, whatever the ends get to keep.
+	const budget = maxColumns - 1;
+	const tailColumns = Math.min(keepTailColumns, budget);
+	const room = budget - tailColumns;
+	const headColumns = Math.ceil(room / 2);
+	const tailWidth = Math.min(tailColumns + Math.floor(room / 2), budget);
+
+	const head = stripAnsi(sliceByColumn(text, 0, headColumns, true));
+	const tail = stripAnsi(sliceByColumn(text, Math.max(0, total - tailWidth), tailWidth, true));
+	const out = `${head}…${tail}`;
+	// Both slices already refuse to split a grapheme, so this only guards against
+	// an off-by-one from a wide glyph at a cut.
+	return visibleWidth(out) <= maxColumns ? out : truncateToWidth(out, maxColumns, "…");
+}
+
 export function formatGitBranchText(
 	branch: string,
 	maxLength: GitBranchMaxLength = "full",
 ): string {
 	if (maxLength === "full" || visibleWidth(branch) <= maxLength) return branch;
-	return stripAnsi(truncateToWidth(branch, maxLength, "…"));
+	return truncateMiddle(branch, maxLength);
 }
 
 export function formatUsernameHostLabel(icon: string): string {

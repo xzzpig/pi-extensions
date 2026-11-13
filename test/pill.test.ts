@@ -364,6 +364,59 @@ describe("renderPillBar", () => {
 		const out = renderPillBar([cwd, cost], theme, "theme", config, 8);
 		expect(out.endsWith("\x1b[0m")).toBe(true);
 	});
+
+	describe("when the bar does not fit", () => {
+		const inputs: PillInput[] = [
+			{ key: "model", text: "deepseek", spec: "syntaxKeyword" },
+			{ key: "cwd", text: "starline", spec: "syntaxKeyword" },
+			{ key: "context", text: "3.9%", spec: "syntaxKeyword" },
+			{ key: "tps", text: "188 t/s", spec: "syntaxKeyword" },
+		];
+
+		function render(width: number) {
+			const spans: string[] = [];
+			const dropped: { key: string; text: string }[] = [];
+			const out = renderPillBar(inputs, theme, "theme", config, width, {
+				onSpan: (span) => spans.push(span.key),
+				onOverflow: (rows) => dropped.push(...rows),
+			});
+			return { line: stripVTControlCharacters(out), spans, dropped };
+		}
+
+		it("reports nothing when everything fits", () => {
+			const { line, spans, dropped } = render(80);
+			expect(dropped).toEqual([]);
+			expect(spans).toEqual(["model", "cwd", "context", "tps"]);
+			expect(line).toContain("188 t/s");
+		});
+
+		it("drops whole pills from the right and counts them", () => {
+			// 24 cells: no room for "188 t/s" plus the counter, so it goes first.
+			const { line, spans, dropped } = render(24);
+			expect(spans).toEqual(["model", "overflow"]);
+			expect(dropped.map((row) => row.key)).toEqual(["cwd", "context", "tps"]);
+			expect(line).toContain("+3");
+		});
+
+		it("never draws part of a pill", () => {
+			for (const width of [10, 14, 18, 22, 26, 30]) {
+				const { line, dropped } = render(width);
+				expect(line).not.toMatch(/[a-z0-9] t\/s/); // no cut "188 t"
+				expect(line.length).toBeLessThanOrEqual(width);
+				// Every pill that was kept is either a whole label or not there at all.
+				for (const text of ["deepseek", "starline", "3.9%", "188 t/s"]) {
+					const cut = text.slice(0, -2);
+					expect(line.includes(cut) && !line.includes(text)).toBe(false);
+				}
+				expect(dropped.length).toBeGreaterThan(0);
+			}
+		});
+
+		it("reports the text each dropped pill would have shown", () => {
+			const { dropped } = render(24);
+			expect(dropped).toContainEqual({ key: "tps", text: "188 t/s" });
+		});
+	});
 });
 
 describe("per-status icons in the bar", () => {
@@ -407,5 +460,127 @@ describe("per-status icons in the bar", () => {
 			() => "st",
 		);
 		expect(inputs.find((input) => input.key === "balance")?.text).toBe("¥327");
+	});
+});
+
+/**
+ * A pill wider than its share used to take the whole bar with it: the layout
+ * dropped every pill behind it, and when nothing else fit it stretched that one
+ * pill across the terminal. It is now compressed first and dropped only when
+ * every pill has reached its floor.
+ */
+describe("when a wide pill does not fit", () => {
+	const wide = (text: string, extra: Partial<PillInput> = {}): PillInput => ({
+		key: "git",
+		text,
+		spec: "syntaxKeyword",
+		...extra,
+	});
+
+	/** No caps or separators keeps the arithmetic in these tests readable. */
+	function render(inputs: PillInput[], width: number) {
+		const spans: string[] = [];
+		const dropped: { key: string; text: string }[] = [];
+		const out = renderPillBar(
+			inputs,
+			theme,
+			"theme",
+			{ ...config, caps: "none", separator: "none" },
+			width,
+			{
+				onSpan: (span) => spans.push(span.key),
+				onOverflow: (rows) => dropped.push(...rows),
+			},
+		);
+		return { line: stripVTControlCharacters(out), spans, dropped };
+	}
+
+	const branch = "feature/ABC-1234-a-really-long-descriptive-branch-name";
+	const tail: PillInput[] = [
+		{ key: "cwd", text: "starline", spec: "syntaxKeyword" },
+		{ key: "context", text: "3.9%", spec: "syntaxKeyword" },
+		{ key: "tps", text: "188 t/s", spec: "syntaxKeyword" },
+	];
+
+	it("shortens the wide pill instead of dropping the ones behind it", () => {
+		const { line, spans, dropped } = render([wide(branch), ...tail], 60);
+
+		expect(dropped).toEqual([]);
+		expect(spans).toEqual(["git", "cwd", "context", "tps"]);
+		expect(line).toContain("…");
+		expect(line).toContain("188 t/s");
+		expect(line.length).toBeLessThanOrEqual(60);
+	});
+
+	it("keeps both ends of the shortened label", () => {
+		const { line } = render([wide(branch), ...tail], 60);
+
+		// End truncation kept `feature/` and hid the part that names the branch.
+		expect(line).toContain("feature/");
+		expect(line).toContain("branch-name");
+	});
+
+	it("gives a wide first pill only its share of the bar", () => {
+		// With the branch first, the old fallback stretched it over the whole width.
+		const { line, spans } = render([wide(branch), ...tail], 70);
+
+		expect(spans).toEqual(["git", "cwd", "context", "tps"]);
+		expect(line.length).toBeLessThanOrEqual(70);
+		expect(line).toContain("starline");
+	});
+
+	it("evens out two wide pills", () => {
+		const inputs = [wide(branch), { key: "cwd", text: "x".repeat(40), spec: "syntaxKeyword" }];
+		const { line } = render(inputs, 60);
+
+		// Equal caps: neither keeps its full text, and both keep their own words.
+		expect(line.match(/…/g)).toHaveLength(2);
+		expect(line.length).toBeLessThanOrEqual(60);
+	});
+
+	it("drops from the right once every pill is at its floor", () => {
+		const inputs = [wide(branch), wide("y".repeat(30)), ...tail];
+		const { spans, dropped } = render(inputs, 40);
+
+		expect(dropped.length).toBeGreaterThan(0);
+		expect(spans.at(-1)).toBe("overflow");
+	});
+
+	it("reports dropped pills with the text they would have shown", () => {
+		const inputs = [wide(branch), ...tail];
+		const { dropped } = render(inputs, 20);
+
+		expect(dropped.length).toBeGreaterThan(0);
+		expect(dropped).toContainEqual({ key: "tps", text: "188 t/s" });
+	});
+
+	it("keeps the tail a pill asked to protect", () => {
+		const inputs = [wide(`${branch} [+2] REBASING`, { keepTailColumns: 12 }), ...tail];
+		const { line } = render(inputs, 60);
+
+		// The dirty counts and the operation are what the branch name must not cost.
+		expect(line).toContain("[+2] REBASING");
+	});
+
+	it("cuts the one pill it can keep in the middle, tail and all", () => {
+		// No pill fits at its floor, so the only pill is cut — in the middle, like a
+		// compressed one. End truncation would drop the part that names the branch
+		// at its tail; here the budget simply reaches what it reaches.
+		const git = wide(`feature/ABC-1234-a-thing [+2] REBASING`, { keepTailColumns: 13 });
+		const { line, spans } = render([git], 20);
+
+		expect(spans).toEqual(["git"]);
+		expect(line).toContain("…");
+		expect(line).toContain("feature/");
+		expect(line.length).toBeLessThanOrEqual(20);
+	});
+
+	it("leaves a pill that carries its own styling whole", () => {
+		// `colorMode: "original"` text arrives painted; this module cannot re-measure
+		// a cut through ANSI it did not write, so the pill is all or nothing.
+		const painted = wide("\x1b[31m" + "z".repeat(40) + "\x1b[39m", { keepStyling: true });
+		const { line } = render([painted, ...tail], 60);
+
+		expect(line).toContain("z".repeat(40));
 	});
 });
