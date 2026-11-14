@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.3 — 2026-11-15
+
+- Fix `Cannot find module '@earendil-works/pi-schema'` on Pi 1.5. Pi neither
+  maps that specifier for extensions nor installs peer dependencies of managed
+  packages, so declaring it as a peer dependency never provided it. It is now a
+  runtime dependency, which Pi installs next to the plugin.
+
 ## 0.1.2 — 2026-11-05
 
 - Require Pi 1.5.0 or newer and build tool parameter schemas with
