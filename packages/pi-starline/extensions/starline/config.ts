@@ -76,7 +76,6 @@ export type GitBranchConfig = {
 export type ColorSourcesConfig = {
 	starship: ColorSource;
 	editor: ColorSource;
-	userMessages: ColorSource;
 };
 
 export type UiFeaturesConfig = {
@@ -103,12 +102,10 @@ export type GitConfig = {
 export type MouseConfig = {
 	enabled: boolean;
 	wheelRouting: boolean;
-	/** Show a "copied to clipboard" notice for a copy Starline itself performs. */
+	/** Show a "copied to clipboard" notice for Starline's draft-copy path. */
 	copyNotice: boolean;
 	/** Click any collapsible box (a tool box, a custom message, an expandable text) to expand or collapse it. */
 	clickToToggleExpandable: boolean;
-	/** Copy transcript selections without the painted rails, rules and frames. */
-	transcriptCleanCopy: boolean;
 };
 
 const FIXED_EDITOR_KEY_MAP: Record<string, keyof MouseConfig> = {
@@ -223,8 +220,6 @@ export type PolishedTuiConfig = {
 	editorPaddingY: number;
 	/** The input area's height floor: a shorter draft is followed by blank rows. */
 	editorMinRows: number;
-	/** Blank rows above and below a Starline user message. */
-	userMessagePaddingY: number;
 	contextThresholds: ContextThresholds;
 	pathDisplay: PathDisplayConfig;
 	git: GitConfig;
@@ -264,8 +259,6 @@ export type PolishedTuiConfig = {
 		editorAccent?: ColorSpec;
 		editorPrompt?: ColorSpec;
 		editorBorder?: ColorSpec;
-		userMessageBorder?: ColorSpec;
-		userMessageText?: ColorSpec;
 	};
 	colorSources: ColorSourcesConfig;
 	features: UiFeaturesConfig;
@@ -290,7 +283,6 @@ export const defaultConfig: PolishedTuiConfig = {
 	pasteCollapseLines: 11,
 	editorPaddingY: 1,
 	editorMinRows: 1,
-	userMessagePaddingY: 1,
 	contextThresholds: { warning: 70, error: 90 },
 	pathDisplay: { mode: "basename", depth: 0 },
 	git: {
@@ -335,7 +327,6 @@ export const defaultConfig: PolishedTuiConfig = {
 	colorSources: {
 		starship: "theme",
 		editor: "theme",
-		userMessages: "theme",
 	},
 	features: {
 		editor: true,
@@ -356,7 +347,6 @@ export const defaultConfig: PolishedTuiConfig = {
 		wheelRouting: true,
 		copyNotice: true,
 		clickToToggleExpandable: true,
-		transcriptCleanCopy: true,
 	},
 };
 
@@ -582,8 +572,6 @@ function normalizeColors(record: Record<string, unknown>): Partial<PolishedTuiCo
 		editorAccent: colorValue(record, "editorAccent"),
 		editorPrompt: colorValue(record, "editorPrompt"),
 		editorBorder: colorValue(record, "editorBorder"),
-		userMessageBorder: colorValue(record, "userMessageBorder"),
-		userMessageText: colorValue(record, "userMessageText"),
 	});
 }
 
@@ -591,7 +579,6 @@ function normalizeColorSources(record: Record<string, unknown>): ColorSourcesCon
 	return {
 		starship: colorSourceValue(record, "starship"),
 		editor: colorSourceValue(record, "editor"),
-		userMessages: colorSourceValue(record, "userMessages"),
 	};
 }
 
@@ -772,15 +759,11 @@ function normalizeMouseConfig(record: Record<string, unknown>): MouseConfig {
 				: typeof record.clickToExpandTools === "boolean"
 					? record.clickToExpandTools
 					: defaultConfig.mouse.clickToToggleExpandable,
-		transcriptCleanCopy:
-			typeof record.transcriptCleanCopy === "boolean"
-				? record.transcriptCleanCopy
-				: defaultConfig.mouse.transcriptCleanCopy,
 	};
 }
 
 function isColorSourceKey(value: string): value is keyof ColorSourcesConfig {
-	return value === "starship" || value === "editor" || value === "userMessages";
+	return value === "starship" || value === "editor";
 }
 
 function isUiFeatureKey(value: string): value is keyof UiFeaturesConfig {
@@ -927,10 +910,6 @@ export function mergeConfig(parsed: unknown): PolishedTuiConfig {
 		pasteCollapseLines: parsePasteCollapseLines(config.pasteCollapseLines),
 		editorPaddingY: parseBoxPadding(config.editorPaddingY, defaultConfig.editorPaddingY),
 		editorMinRows: parseEditorMinRows(config.editorMinRows),
-		userMessagePaddingY: parseBoxPadding(
-			config.userMessagePaddingY,
-			defaultConfig.userMessagePaddingY,
-		),
 		contextThresholds: parseContextThresholds(config.contextThresholds),
 		pathDisplay: parsePathDisplay(config.pathDisplay),
 		git,
@@ -1055,6 +1034,29 @@ export function getExtensionStatusColorMode(
 	return config.extensionStatuses.colorModes[key] ?? DEFAULT_EXTENSION_STATUS_COLOR_MODE;
 }
 
+let warnedMovedUserMessageKeys = false;
+
+/**
+ * User message styling moved to pi-tidy in 0.9. Its keys are ignored here; say
+ * so once per process rather than letting a setting stop working in silence.
+ */
+function warnMovedUserMessageKeys(record: Record<string, unknown>): void {
+	if (warnedMovedUserMessageKeys) return;
+	const colors = isRecord(record.colors) ? record.colors : {};
+	const colorSources = isRecord(record.colorSources) ? record.colorSources : {};
+	const moved = [
+		"userMessagePaddingY" in record && "userMessagePaddingY",
+		"userMessageBorder" in colors && "colors.userMessageBorder",
+		"userMessageText" in colors && "colors.userMessageText",
+		"userMessages" in colorSources && "colorSources.userMessages",
+	].filter((key): key is string => Boolean(key));
+	if (moved.length === 0) return;
+	warnedMovedUserMessageKeys = true;
+	console.warn(
+		`[starline] User messages are styled by pi-tidy now (its userMessageStyle, userMessagePaddingY and userMessageColors settings); ignoring ${moved.join(", ")}.`,
+	);
+}
+
 let warnedRejectedStatusCommands = false;
 
 /**
@@ -1091,6 +1093,7 @@ export function loadConfig(path = configPath): PolishedTuiConfig {
 				"[starline] Renamed your `fixedEditor` settings to `mouse` — the fixed editor is gone and Pi's own fullscreen mode replaces it. Your choices were kept.",
 			);
 		}
+		warnMovedUserMessageKeys(config);
 		warnRejectedStatusCommands(config);
 		return mergeConfig(config);
 	} catch (error) {
@@ -1290,9 +1293,6 @@ export function saveMousePatch(patch: Partial<MouseConfig>, path = configPath): 
 			...(patch.copyNotice !== undefined ? { copyNotice: patch.copyNotice } : {}),
 			...(patch.clickToToggleExpandable !== undefined
 				? { clickToToggleExpandable: patch.clickToToggleExpandable }
-				: {}),
-			...(patch.transcriptCleanCopy !== undefined
-				? { transcriptCleanCopy: patch.transcriptCleanCopy }
 				: {}),
 		};
 	});

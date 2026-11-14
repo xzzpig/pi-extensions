@@ -15,7 +15,7 @@ describe("patching an arbitrary method name", () => {
 		const dispose = installPrototypePatch(
 			target,
 			"handleViewportInput",
-			"user-message-render",
+			"agent-session-capture-prompt",
 			({ predecessor, receiver, args }) => {
 				calls.push(`patched:${args[0]}`);
 				return Reflect.apply(predecessor, receiver, args);
@@ -44,7 +44,7 @@ describe("patching an arbitrary method name", () => {
 		const disposeWheel = installPrototypePatch(
 			target,
 			"routeWheel",
-			"user-message-render",
+			"mouse-wheel",
 			({ predecessor, receiver, args }) => Reflect.apply(predecessor, receiver, args),
 		);
 		const disposeSelect = installPrototypePatch(

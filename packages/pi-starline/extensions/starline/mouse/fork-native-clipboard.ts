@@ -9,7 +9,7 @@ type CopyReceiver = {
 type CopyCandidates = {
 	receiver: CopyReceiver;
 	showNotice: boolean;
-	/** The editor gets first refusal, followed by the cleaned transcript. */
+	/** Candidate texts are tried in order; Starline supplies the editor draft only. */
 	texts: Array<() => string | undefined>;
 };
 

@@ -595,6 +595,8 @@ export function routeGroupedMouse(tool: GroupedTool, event: any, routing: MouseR
 // ─────────────────────────────────────────────────────────────────────────────
 
 const BOUNDARY_WRAPPER = Symbol.for("pi-toolbox:group-boundary");
+/** This component is inside its outermost boundary render. */
+const BOUNDARY_ACTIVE = Symbol.for("pi-tidy:boundary-active");
 /** This carrier's thinking was expanded by a click on its `🧠` row. */
 const THOUGHT_OPEN = Symbol.for("pi-toolbox:thought-open");
 const CARRIER_MOUSE = Symbol.for("pi-toolbox:carrier-mouse");
@@ -1059,37 +1061,49 @@ function wrapBoundaryRender(
   if (typeof render !== "function" || render[BOUNDARY_WRAPPER]) return;
   const assistant = proto === AssistantMessageComponent.prototype;
   const wrapped: RenderFn = function (this: any, ...args: any[]) {
-    // Reset before even the disabled path: old handlers survive /reload and
-    // streaming carrier/boundary transitions, but their old layout must not.
-    this[CARRIER_CLICK] = null;
-    this[MESSAGE_VIEW] = undefined;
-    const width = typeof args[0] === "number" ? args[0] : 80;
-    // Rows drawn here are final, so they must leave room for the rail. One cell too
-    // wide and pi cuts the row, closing colours included: a hover band then bleeds on.
-    const room = assistant && messageOnRail(this) ? Math.max(1, width - TURN_RAIL_CELLS) : width;
-    const how = groupingActive() ? view(this, room) : ungrouped && tidyEnabled.get() ? ungrouped : "untrimmed";
-    const options = assistant ? turnOptions.get() : undefined;
-    if (!options || (options.collapseTurns === "off" && !options.frameFinalReply)) {
-      if (this[TURN_LAYOUT]) this[TURN_LAYOUT] = undefined;
-      if (how === "hidden") return [];
-      if (how === "untrimmed") return render.apply(this, args);
-      if (typeof how === "object") return how.lines;
-      // `plain` is a step whose call pi draws itself (an expanded pinned
-      // edit) or a message with nothing to fold. Its thinking is still our
-      // row: leaving it bare makes pi's `Thinking...` float over the box.
-      return restyleThinking(this, render.apply(this, args), width, how === "rethink" || how === "plain");
+    // Only the outermost boundary wrapper may restyle. Installs run again
+    // after other extensions patch the prototypes, so an earlier wrapper can
+    // stay in the chain; with both active, the outer wrapper's child-row
+    // mapping sees the inner wrapper's already-transformed rows and repeats
+    // the first line (pi-group-collapse in between shows a retry-error frame
+    // twice). The innermost install therefore passes straight through.
+    if (this[BOUNDARY_ACTIVE]) return render.apply(this, args);
+    this[BOUNDARY_ACTIVE] = true;
+    try {
+      // Reset before even the disabled path: old handlers survive /reload and
+      // streaming carrier/boundary transitions, but their old layout must not.
+      this[CARRIER_CLICK] = null;
+      this[MESSAGE_VIEW] = undefined;
+      const width = typeof args[0] === "number" ? args[0] : 80;
+      // Rows drawn here are final, so they must leave room for the rail. One cell too
+      // wide and pi cuts the row, closing colours included: a hover band then bleeds on.
+      const room = assistant && messageOnRail(this) ? Math.max(1, width - TURN_RAIL_CELLS) : width;
+      const how = groupingActive() ? view(this, room) : ungrouped && tidyEnabled.get() ? ungrouped : "untrimmed";
+      const options = assistant ? turnOptions.get() : undefined;
+      if (!options || (options.collapseTurns === "off" && !options.frameFinalReply)) {
+        if (this[TURN_LAYOUT]) this[TURN_LAYOUT] = undefined;
+        if (how === "hidden") return [];
+        if (how === "untrimmed") return render.apply(this, args);
+        if (typeof how === "object") return how.lines;
+        // `plain` is a step whose call pi draws itself (an expanded pinned
+        // edit) or a message with nothing to fold. Its thinking is still our
+        // row: leaving it bare makes pi's `Thinking...` float over the box.
+        return restyleThinking(this, render.apply(this, args), width, how === "rethink" || how === "plain");
+      }
+      const draw = (room: number, hideThinking = false) => {
+        if (how === "hidden") return [];
+        if (how === "untrimmed") return render.call(this, room, ...args.slice(1));
+        if (typeof how === "object") return how.lines;
+        // The same native view owns both rendering and mouse geometry.
+        const turn = turnOptions.get().collapseTurns !== "off" ? turnFor(this.lastMessage) : undefined;
+        const foldedTurn = !!turn && folded(turn);
+        const skipThinking = hideThinking || (foldedTurn && Array.isArray(this.contentContainer?.children));
+        return restyleThinking(this, skipThinking ? undefined : render.call(this, room, ...args.slice(1)), room, how === "rethink" || how === "plain", hideThinking || foldedTurn);
+      };
+      return presentTurn(this, width, draw);
+    } finally {
+      this[BOUNDARY_ACTIVE] = undefined;
     }
-    const draw = (room: number, hideThinking = false) => {
-      if (how === "hidden") return [];
-      if (how === "untrimmed") return render.call(this, room, ...args.slice(1));
-      if (typeof how === "object") return how.lines;
-      // The same native view owns both rendering and mouse geometry.
-      const turn = turnOptions.get().collapseTurns !== "off" ? turnFor(this.lastMessage) : undefined;
-      const foldedTurn = !!turn && folded(turn);
-      const skipThinking = hideThinking || (foldedTurn && Array.isArray(this.contentContainer?.children));
-      return restyleThinking(this, skipThinking ? undefined : render.call(this, room, ...args.slice(1)), room, how === "rethink" || how === "plain", hideThinking || foldedTurn);
-    };
-    return presentTurn(this, width, draw);
   };
   wrapped[BOUNDARY_WRAPPER] = true;
   proto!.render = wrapped;

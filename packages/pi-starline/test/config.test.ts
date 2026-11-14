@@ -65,7 +65,6 @@ describe("mergeConfig", () => {
 		expect(config.colorSources).toEqual({
 			starship: "theme",
 			editor: "theme",
-			userMessages: "theme",
 		});
 		expect(config.features).toEqual({
 			editor: true,
@@ -97,14 +96,12 @@ describe("mergeConfig", () => {
 			wheelRouting: true,
 			copyNotice: true,
 			clickToToggleExpandable: true,
-			transcriptCleanCopy: true,
 		});
 		expect(defaultConfig.mouse).toEqual({
 			enabled: true,
 			wheelRouting: true,
 			copyNotice: true,
 			clickToToggleExpandable: true,
-			transcriptCleanCopy: true,
 		});
 	});
 
@@ -114,7 +111,6 @@ describe("mergeConfig", () => {
 			wheelRouting: false,
 			copyNotice: true,
 			clickToToggleExpandable: true,
-			transcriptCleanCopy: true,
 		});
 	});
 
@@ -126,7 +122,6 @@ describe("mergeConfig", () => {
 			wheelRouting: true,
 			copyNotice: true,
 			clickToToggleExpandable: false,
-			transcriptCleanCopy: true,
 		});
 		expect(
 			mergeConfig({ mouse: { clickToToggleExpandable: true, clickToExpandTools: false } }).mouse,
@@ -135,16 +130,7 @@ describe("mergeConfig", () => {
 			wheelRouting: true,
 			copyNotice: true,
 			clickToToggleExpandable: true,
-			transcriptCleanCopy: true,
 		});
-	});
-
-	it("keeps the transcriptCleanCopy key, which this fork retains instead of pi-tidy", () => {
-		// Upstream v0.13.0 moved transcript copying to pi-tidy and ignores this key;
-		// the fork keeps its own clean-copy renderer, so the setting still applies.
-		expect(mergeConfig({ mouse: { transcriptCleanCopy: false } }).mouse.transcriptCleanCopy).toBe(
-			false,
-		);
 	});
 
 	it("normalizes invalid mouse values", () => {
@@ -153,26 +139,23 @@ describe("mergeConfig", () => {
 			wheelRouting: true,
 			copyNotice: true,
 			clickToToggleExpandable: true,
-			transcriptCleanCopy: true,
 		});
 	});
 
-	it("drops the metadata row while preserving Starline's user-message settings", () => {
+	it("drops the metadata row and ignores moved user-message settings", () => {
 		const config = mergeConfig({
 			editorMetadataFormat: "$model",
 			userMessagePaddingY: 0,
 			colors: { editorModel: "accent", userMessageBorder: "accent" },
 			colorSources: { userMessages: "terminal" },
+			mouse: { transcriptCleanCopy: false },
 		});
 		expect(config).not.toHaveProperty("editorMetadataFormat");
+		expect(config).not.toHaveProperty("userMessagePaddingY");
 		expect(config.colors).not.toHaveProperty("editorModel");
-		expect(config.userMessagePaddingY).toBe(0);
-		expect(config.colors.userMessageBorder).toBe("accent");
-		expect(config.colorSources).toEqual({
-			starship: "theme",
-			editor: "theme",
-			userMessages: "terminal",
-		});
+		expect(config.colors).not.toHaveProperty("userMessageBorder");
+		expect(config.mouse).not.toHaveProperty("transcriptCleanCopy");
+		expect(config.colorSources).toEqual({ starship: "theme", editor: "theme" });
 	});
 
 	it("accepts custom project refresh intervals and 0 to disable polling", () => {
@@ -633,17 +616,16 @@ describe("mergeConfig", () => {
 		expect(config.colorSources).toEqual({
 			starship: "theme",
 			editor: "terminal",
-			userMessages: "theme",
 		});
 	});
 
 	it("accepts valid color source preferences and ignores invalid values", () => {
 		expect(
 			mergeConfig({ colorSources: { starship: "terminal", editor: "theme" } }).colorSources,
-		).toEqual({ starship: "terminal", editor: "theme", userMessages: "theme" });
+		).toEqual({ starship: "terminal", editor: "theme" });
 		expect(
 			mergeConfig({ colorSources: { starship: "neon", editor: "terminal" } }).colorSources,
-		).toEqual({ starship: "theme", editor: "terminal", userMessages: "theme" });
+		).toEqual({ starship: "theme", editor: "terminal" });
 	});
 
 	it("accepts valid UI feature preferences and ignores invalid values", () => {
@@ -698,7 +680,6 @@ describe("mergeConfig", () => {
 			expect(config.colorSources).toEqual({
 				starship: "terminal",
 				editor: "terminal",
-				userMessages: "theme",
 			});
 			expect(raw.unknown).toBe(true);
 			expect(raw.icons.git).toBe("git");
@@ -741,7 +722,6 @@ describe("mergeConfig", () => {
 			expect(config.colorSources).toEqual({
 				starship: "theme",
 				editor: "theme",
-				userMessages: "theme",
 			});
 			expect(raw.colorSources).toEqual({
 				starship: "neon",
@@ -764,7 +744,6 @@ describe("mergeConfig", () => {
 			expect(config.colorSources).toEqual({
 				starship: "terminal",
 				editor: "theme",
-				userMessages: "theme",
 			});
 			expect(raw).toEqual({ colorSources: { starship: "terminal" } });
 		} finally {
@@ -1146,7 +1125,6 @@ describe("saveMousePatch", () => {
 				wheelRouting: false,
 				copyNotice: true,
 				clickToToggleExpandable: true,
-				transcriptCleanCopy: true,
 			});
 		} finally {
 			rmSync(dir, { recursive: true });

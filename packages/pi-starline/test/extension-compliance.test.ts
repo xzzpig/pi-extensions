@@ -2164,13 +2164,13 @@ describe("Pi docs compliance", () => {
 			},
 		});
 
-		expect(changes).toEqual([{ editor: "terminal", userMessages: "terminal" }]);
+		expect(changes).toEqual([{ editor: "terminal" }]);
 		expect(dependencyRenderRequests).toBe(1);
 		expect(tuiRenderRequests).toBe(1);
 		expect(doneCalls).toBe(0);
 	});
 
-	it("shows mixed editor/message sources and cycles them together", async () => {
+	it("shows and cycles the editor color source independently", async () => {
 		let command: { handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
 		const changes: Partial<PolishedTuiConfig["colorSources"]>[] = [];
 		let rendered = "";
@@ -2183,7 +2183,7 @@ describe("Pi docs compliance", () => {
 			} as never,
 			{
 				sessionLifecycle: inactiveSessionLifecycle,
-				getConfig: () => configWithColorSources({ editor: "theme", userMessages: "terminal" }),
+				getConfig: () => configWithColorSources({ editor: "theme" }),
 				setColorSources(patch) {
 					changes.push(patch);
 				},
@@ -2226,9 +2226,9 @@ describe("Pi docs compliance", () => {
 			},
 		});
 
-		expect(rendered).toContain("Editor + previous messages");
-		expect(rendered).toContain("mixed");
-		expect(changes).toEqual([{ editor: "theme", userMessages: "theme" }]);
+		expect(rendered).toContain("Editor colors");
+		expect(rendered).toContain("theme");
+		expect(changes).toEqual([{ editor: "terminal" }]);
 	});
 
 	function navigateToExtensionSegmentsSection(component: { handleInput?: (data: string) => void }) {

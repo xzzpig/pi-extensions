@@ -68,7 +68,7 @@ type FeatureState = "enabled" | "disabled";
 const featureStateValues: FeatureState[] = ["enabled", "disabled"];
 const settingsSections = ["coloring", "features", "layout", "pills", "extensionSegments"] as const;
 
-type ColorSettingId = "starship" | "editorMessages";
+type ColorSettingId = keyof ColorSourcesConfig;
 type FeatureSettingId = keyof UiFeaturesConfig;
 type SettingsSection = (typeof settingsSections)[number];
 type LayoutSettingId = "contextStyle" | "pathDisplay" | "pathDepth" | "branchLength" | "iconMode";
@@ -98,14 +98,13 @@ type SettingsCommandDeps = {
 
 const colorSettingLabels: Record<ColorSettingId, string> = {
 	starship: "Starship/footer colors",
-	editorMessages: "Editor + previous messages",
+	editor: "Editor colors",
 };
 
 const colorSettingDescriptions: Record<ColorSettingId, string> = {
 	starship:
 		"Choose whether footer runtime/git/context colors use Pi theme tokens or terminal palette styles.",
-	editorMessages:
-		"Choose whether editor and previous user-message borders/rails use Pi theme colors or terminal palette styles.",
+	editor: "Choose whether editor colors use Pi theme tokens or terminal palette styles.",
 };
 
 const featureSettingLabels: Record<FeatureSettingId, string> = {
@@ -117,8 +116,7 @@ const featureSettingLabels: Record<FeatureSettingId, string> = {
 const featureSettingDescriptions: Record<FeatureSettingId, string> = {
 	editor: "Enable or disable Starline's custom editor and selector borders.",
 	statusLine: "Enable or disable Starline's custom footer/status line.",
-	copyFriendly:
-		"Hide editor and previous-message rail glyphs for cleaner native terminal selection.",
+	copyFriendly: "Hide the editor rail glyph for cleaner native terminal selection.",
 };
 
 /** Row label per bar segment. The order rows are listed in is fixed. */
@@ -221,7 +219,7 @@ function isColorSource(value: string): value is ColorSource {
 }
 
 function isColorSettingId(value: string): value is ColorSettingId {
-	return value === "starship" || value === "editorMessages";
+	return value === "starship" || value === "editor";
 }
 
 function isFeatureSettingId(value: string): value is FeatureSettingId {
@@ -267,14 +265,8 @@ function isLayoutSettingId(value: string): value is LayoutSettingId {
 	);
 }
 
-function editorMessageValue(config: PolishedTuiConfig): ColorSource | "mixed" {
-	return config.colorSources.editor === config.colorSources.userMessages
-		? config.colorSources.editor
-		: "mixed";
-}
-
 function patchForSetting(id: ColorSettingId, value: ColorSource): Partial<ColorSourcesConfig> {
-	return id === "starship" ? { starship: value } : { editor: value, userMessages: value };
+	return { [id]: value } as Partial<ColorSourcesConfig>;
 }
 
 function featureValue(enabled: boolean): FeatureState {
@@ -406,7 +398,7 @@ function buildItems(
 			id: key,
 			label: colorSettingLabels[key],
 			description: colorSettingDescriptions[key],
-			currentValue: key === "starship" ? config.colorSources.starship : editorMessageValue(config),
+			currentValue: config.colorSources[key],
 			values: colorSourceValues,
 		}));
 	}
@@ -425,7 +417,7 @@ function buildItems(
 			id: "mouse",
 			label: "Mouse features",
 			description:
-				"Wheel routing, click-to-expand tool boxes, path-aware word selection, and Starline's own copy behaviour.",
+				"Wheel routing, click-to-expand tool boxes, path-aware word selection, and draft copy behaviour.",
 			currentValue: featureValue(config.mouse.enabled),
 			values: featureStateValues,
 		});

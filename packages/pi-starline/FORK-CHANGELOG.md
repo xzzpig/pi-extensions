@@ -1,8 +1,13 @@
 # Fork release notes
 
+## 0.11.0 — pi-tidy ownership convergence
+
+- Converge with upstream's pi-tidy ownership of user-message styling and transcript clean-copy: remove Starline's fork renderer and transcript-selection cleaner. Starline now leaves transcript selections to Pi's native copy path; configure optional clean-copy through pi-tidy's `tidy.cleanCopy`.
+- Adopt upstream's once-per-process migration warning for the retired user-message keys. With pi-tidy and pi-tool-display both installed, disable pi-tool-display's **Native user message box** (`enableNativeUserMessageBox: false`) for pi-tidy to own the user-message render hook; the upstream default remains unchanged.
+
 ## 0.10.0 — Upstream v0.13.0 sync
 
-- **Synced upstream v0.9.0 → v0.13.0** (upstream minor releases → fork minor bump). Upstream rewrote the mouse subsystem, split the pill bar into a governed overflow path, and moved user-message styling toward pi-tidy. The fork keeps its `@xzzpig/pi-mouse-events` consumer architecture and its own user-message renderer, so this sync is an API integration rather than a straight merge.
+- **Synced upstream v0.9.0 → v0.13.0** (upstream minor releases → fork minor bump). Upstream rewrote the mouse subsystem, split the pill bar into a governed overflow path, and moved user-message styling toward pi-tidy. At the time of this sync the fork still retained its user-message renderer, so this was an API integration rather than a straight merge; the Unreleased entry above records the later convergence.
 - Adopted upstream's pull-request pill (`gitPr`, coloured per state via `gitPrOpen`/`gitPrDraft`/`gitPrMerged`/`gitPrClosed`/`gitPrCount`) and the `git.issues` switch that adds the repository's open-issue count to the pull bubble.
 - Adopted `extensionStatuses.commands`: a third-party status can point its pill at an existing slash command (`procs` → `/ps`) without writing a bridge. Entries that are not `/name` or `/name args`, that carry the `extensionStatus:` prefix, that shadow a built-in segment, or that point at `/starline` are dropped and reported once per process. A bridge registration still wins over a declared command.
 - Adopted the external editor-hint API (`docs/editor-hints.md`, `editor-hint-api.ts`): other extensions can publish a hint that rides the editor's top rule, ahead of Starline's own hints so the rule's truncation cannot eat it.
@@ -10,8 +15,8 @@
 - Adopted the context-pill estimate: before the first turn the pill reads `~N%/window` from the static prompt-and-schemas floor instead of `0%`, and drops the `~` once a turn lands. The bubble reports the same number.
 - Adopted upstream's governed overflow row (`onOverflow`/`PillOverflow`) alongside the fork's existing `pill.overflow` governance. With `pill.overflow.enabled: false` the legacy path still renders one unbounded row and hard-truncates it, because upstream's `renderPillBar` now drops whole pills and stands a `+N` counter in their place when given a real width — that is the governance path, not the legacy one.
 - Adopted the upstream additions to the settings surface (`previousPrompt`/`latest` pill rows), the `gitPr` colour keys, and the `statusCommandName` helper.
-- Kept every fork seam: the `pi-mouse-events` consumer mouse subsystem, `clickToToggleExpandable` and `transcriptCleanCopy` (upstream moved clean copying to pi-tidy; this fork still renders and configures it), the user-message renderer and its settings, `--no-optional-locks` on every git probe, the reverse-video pill legibility pair, the `pill.overflow` governance and status panel, the MCP pill adapter, and the pi-zentui legacy symbol aliases.
-- Upstream v0.13.0 deleted `mouse/transcript-copy.ts` and `test/mouse/toolbox-frame.ts`, which fork-only modules still import; both are restored at their pre-sync bytes because the fork's clean-copy and component-tree code owns them.
+- This v0.10.0 sync kept every fork seam then present: the `pi-mouse-events` consumer mouse subsystem, `clickToToggleExpandable`, the user-message renderer/settings and `transcriptCleanCopy`, `--no-optional-locks` on every git probe, the reverse-video pill legibility pair, the `pill.overflow` governance and status panel, the MCP pill adapter, and the pi-zentui legacy symbol aliases. The Unreleased entry above records the later removal of the user-message and transcript-copy divergences.
+- At v0.10.0, upstream v0.13.0 had deleted `mouse/transcript-copy.ts` and `test/mouse/toolbox-frame.ts`; the fork restored both because its then-current transcript cleaner and component-tree code imported them. The transcript cleaner was later removed by the Unreleased convergence above; the component-tree fixture remains.
 - Validation: package typecheck clean and 1623/1623 tests passing. `pnpm run audit:fork-divergence` reports undeclared=0, stale=0 for this package.
 
 ## 0.9.1 — panel interaction fixes
@@ -59,8 +64,8 @@
 ## 0.7.0 — Upstream v0.9.0 sync
 
 - Adopt the compact editor layout, `editorMinRows`, configurable pill row, live throughput, and turn timing. The old editor metadata row is removed and its status placement maps to the right-hand footer.
-- Retain Starline's user-message renderer, its padding and colour settings, and the shared editor/message colour controls. If pi-tidy also styles messages, patch order can determine the visible renderer; set `tidy.userMessageStyle` to `"off"` to leave user messages to Starline.
-- Preserve the fork's shared mouse, clipboard and wheel integrations, pi-zentui markers, and group-expand compatibility. Clean-copy supports the configured Starline rail alongside upstream pi-tidy frames.
+- At v0.7.0, the fork retained its then-current user-message renderer, padding/colour settings and shared editor/message colour controls. When pi-tidy was installed alongside it, patch order could determine the visible renderer; this old ownership arrangement was later removed by the Unreleased convergence above.
+- This release also preserved the fork's shared mouse, clipboard and wheel integrations, pi-zentui markers, and group-expand compatibility. Its then-current clean-copy supported the configured Starline rail alongside upstream pi-tidy frames; transcript cleaning was later removed by the Unreleased convergence above.
 
 ## 0.6.0 — Upstream v0.6.1 sync
 

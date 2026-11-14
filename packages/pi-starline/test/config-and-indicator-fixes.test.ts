@@ -32,8 +32,8 @@ describe("a broken config file says so", () => {
 	});
 });
 
-describe("Starline user message settings", () => {
-	it("continue to load without a moved-to-pi-tidy warning", () => {
+describe("user message settings that moved to pi-tidy", () => {
+	it("are named in one warning per process, and the config still loads", () => {
 		const path = tempConfig(
 			JSON.stringify({
 				userMessagePaddingY: 0,
@@ -43,14 +43,24 @@ describe("Starline user message settings", () => {
 		);
 		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 		const config = loadConfig(path);
+		loadConfig(path);
 		const calls = warn.mock.calls.map((call) => String(call[0]));
 		warn.mockRestore();
 
 		expect(config.colors.cwd).toBe("bold red");
-		expect(config.userMessagePaddingY).toBe(0);
-		expect(config.colors.userMessageBorder).toBe("accent");
-		expect(config.colorSources.userMessages).toBe("terminal");
-		expect(calls).toHaveLength(0);
+		expect(calls).toHaveLength(1);
+		expect(calls[0]).toContain("pi-tidy");
+		expect(calls[0]).toContain(
+			"userMessagePaddingY, colors.userMessageBorder, colorSources.userMessages",
+		);
+	});
+
+	it("say nothing when none are set", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		loadConfig(tempConfig(JSON.stringify({ editorPaddingY: 0 })));
+		const count = warn.mock.calls.length;
+		warn.mockRestore();
+		expect(count).toBe(0);
 	});
 });
 

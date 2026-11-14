@@ -15,6 +15,33 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ToolDefinition, ToolRendererResolver, ToolRenderers } from "@earendil-works/pi-coding-agent";
 
+// Keep upstream integration tests on the upstream behavior. Fork runtime
+// defaults are asserted separately in test/fork/fork-runtime.test.ts.
+const UPSTREAM_INTEGRATION_DEFAULTS = {
+  frameTools: true,
+  highlightBash: true,
+  frameMessages: true,
+  userMessageStyle: "frame",
+  collapseTurns: "afterRun",
+  groupTools: true,
+  backgroundJobs: true,
+  cleanCopy: true,
+  splitDiff: true,
+  codeBlocks: true,
+  hexSwatches: true,
+  dedupeErrors: true,
+  toolColors: {
+    bash: "bashMode",
+    read: "toolTitle",
+    edit: "syntaxVariable",
+    write: "syntaxVariable",
+    grep: "syntaxOperator",
+    find: "syntaxOperator",
+    ls: "syntaxOperator",
+    mcp: "customMessageLabel",
+  },
+};
+
 export function harness() {
   const tools = new Map<string, ToolDefinition>();
   const resolvers: ToolRendererResolver[] = [];
@@ -53,7 +80,7 @@ export function loadTidy(factory: (pi: ExtensionAPI) => void, pi: ExtensionAPI, 
   const dir = mkdtempSync(join(tmpdir(), "pi-tidy-renderer-"));
   const previous = process.env.PI_CODING_AGENT_DIR;
   try {
-    writeFileSync(join(dir, "settings.json"), JSON.stringify({ tidy: config }));
+    writeFileSync(dir + "/settings.json", JSON.stringify({ tidy: { ...UPSTREAM_INTEGRATION_DEFAULTS, ...config } }));
     process.env.PI_CODING_AGENT_DIR = dir;
     factory(pi);
   } finally {

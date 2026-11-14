@@ -25,8 +25,6 @@ type PrototypePatchAdapter =
 	| "mouse-copy"
 	| "above-editor-gap-hide"
 	| "scroll-to-end-indicator-hide"
-	| "user-message-render"
-	| "user-message-invalidate"
 	| "selector-border-render"
 	| "selection-marker-dedupe"
 	| "agent-session-capture-prompt"

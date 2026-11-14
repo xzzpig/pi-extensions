@@ -15,12 +15,13 @@ import { keyHint, VERSION } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { formatBashCallHighlighted } from "./tools/bash-highlight.ts";
 import { cleanCopy, installCleanCopy } from "./clean-copy.ts";
-import { patchContainerBoxes, patchMessageBoxes, patchToolBoxFrames } from "./frame.ts";
+import { patchContainerBoxes, patchMessageBoxes } from "./frame.ts";
 import { collapsedResultBudget, shrinkResultPreview } from "./tools/result-preview.ts";
 import { connectTurns } from "./turns/turn-lifecycle.ts";
 import { codeBlocksAvailable } from "./turns/turn-view.ts";
 import { turnOptions } from "./turns/turn-state.ts";
-import { DEFAULT_BASH_RESULT_LINES, loadConfig, PI_WRITE_PREVIEW_LINES } from "./config.ts";
+import { DEFAULT_BASH_RESULT_LINES, PI_WRITE_PREVIEW_LINES } from "./config.ts";
+import { installForkToolFrames, loadForkConfig } from "../fork/index.ts";
 import { agentRunning, tidyEnabled } from "./live.ts";
 import { patchBashExecutions } from "./messages/bash-mode-frame.ts";
 import { patchErrorLines } from "./messages/error-lines.ts";
@@ -171,7 +172,7 @@ function warnUnavailableRenderers(pi: ExtensionAPI, features: string[]): void {
 
 /** Pi extension entry point. */
 export default function (pi: ExtensionAPI): void {
-  const config = loadConfig();
+  const config = loadForkConfig();
   if (typeof VERSION === "string" && olderThan(VERSION, MIN_PI)) {
     pi.on("session_start", (_event, ctx) => {
       ctx.ui.notify(`pi-tidy needs pi ≥ ${MIN_PI} (this is ${VERSION}): clicks and durations won't work.`, "warning");
@@ -226,21 +227,7 @@ export default function (pi: ExtensionAPI): void {
   warnUnavailableRenderers(pi, unavailable);
 
   try {
-    patchToolBoxFrames({
-      icons: config.icons,
-      toolColors: config.toolColors,
-      groupTools: config.groupTools,
-      groupOpen: config.groupOpen,
-      alwaysShowTools: config.alwaysShowTools,
-      backgroundJobs: config.backgroundJobs,
-      hideJobNotifications: config.hideJobNotifications,
-      splitDiff: config.splitDiff,
-      splitDiffMinWidth: config.splitDiffMinWidth,
-      diffLines: config.diffLines,
-      thinkingColor: config.thinkingColor,
-      highlightBash: config.highlightBash,
-      toolRowLines: config.toolRowLines,
-    });
+    installForkToolFrames(config, pi);
     // Live job updates (pi-processes broadcasts on the shared extension bus).
     connectJobs(config.backgroundJobs ? (pi as { events?: EventBusLike }).events : undefined);
     if (config.backgroundJobs) registerNestedJobs(pi);

@@ -41,7 +41,7 @@ Starline makes Pi's fullscreen mode feel like a finished terminal app:
 **Editor**
 
 - Bordered input box with an accent rail, as tall as its text; paste, selection and `ctrl+g` hints ride its top rule. `editorMinRows` keeps it a fixed minimum height.
-- This fork retains Starline's full-width user-message rails and their existing colour and padding settings. If pi-tidy also styles messages, the visible renderer can depend on load order; set `tidy.userMessageStyle` to `"off"` in Pi's `settings.json` to leave user messages to Starline.
+- User-message styling and optional transcript clean-copy are delegated to [pi-tidy](https://github.com/Andy8647/pi-tidy). When both pi-tidy and pi-tool-display are installed, turn off `/tool-display` → **Native user message box** (`enableNativeUserMessageBox: false`) so pi-tidy owns the user-message renderer; Starline does not change pi-tool-display's default.
 - Copy-friendly mode drops the rail glyphs so terminal selection copies less chrome.
 
 **Mouse** (Pi's `tuiMode: "fullscreen"`)
@@ -49,7 +49,7 @@ Starline makes Pi's fullscreen mode feel like a finished terminal app:
 The fork's mouse enhancements use [`@xzzpig/pi-mouse-events`](https://www.npmjs.com/package/@xzzpig/pi-mouse-events) rather than installing a competing mouse patch. Install it alongside Starline; without it, these enhancements and pill click-away are disabled. Pi's own component clicks remain available. Version 0.3.0 or newer also shares pointer shapes, uses Pi's native clipboard when available, and routes editor scrolling with Pi's calculated wheel delta; older v2 installations fall back to the previous copy and wheel paths.
 
 - Drag to select in the transcript or the draft; double-click keeps paths and kebab-case whole; triple-click takes a line.
-- A selection in the draft copies the text you wrote, without the rail, the padding or a newline where a row wrapped. In the transcript, [pi-tidy](https://github.com/Andy8647/pi-tidy) takes its frames out of what you copy.
+- A selection in the draft copies the text you wrote, without the rail, the padding or a newline where a row wrapped. Transcript selections use Pi's native verbatim copy; to remove pi-tidy's rendered chrome when copying, opt in with `tidy.cleanCopy: true`.
 - A selection hint says how many characters the copy key will copy.
 - Click a tool, bash box, skill or summary to toggle that component; drag selection and links remain available.
 - Click to move the caret; backspace/delete remove a selected range; the wheel scrolls the draft.

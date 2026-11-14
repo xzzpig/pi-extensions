@@ -80,7 +80,6 @@ import {
 } from "./subagent-fleet";
 import { TurnClock } from "./turn-clock";
 import { PolishedEditor, WrappedPolishedEditor } from "./ui";
-import { installUserMessageStyle } from "./user-message";
 import { setWorkingIndicator } from "./working-indicator";
 
 type EditorFactory = NonNullable<Parameters<ExtensionContext["ui"]["setEditorComponent"]>[0]>;
@@ -238,12 +237,7 @@ export default function (pi: ExtensionAPI) {
 
 	const installPrototypePatches = () => {
 		if (prototypePatchesInstalled) return;
-		const cleanupSelectorBorderStyle = installSelectorBorderStyle(getActiveTheme, getCurrentConfig);
-		const cleanupUserMessageStyle = installUserMessageStyle(getActiveTheme, getCurrentConfig);
-		cleanupPrototypePatches = () => {
-			cleanupSelectorBorderStyle();
-			cleanupUserMessageStyle();
-		};
+		cleanupPrototypePatches = installSelectorBorderStyle(getActiveTheme, getCurrentConfig);
 		prototypePatchesInstalled = true;
 	};
 

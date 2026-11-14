@@ -73,6 +73,9 @@ an intermediate tool-calling message is never promoted. The border names the mod
 (from the message, not the current selection) with its provider glyph, clipped to `…` when it does
 not fit, and `icons: false` drops the glyph.
 
+When `pi-thinking-collapse` is installed, this fork keeps Pi's completed `Thinking… (click to expand)`
+row above the final reply frame. Pi's native click still expands and re-collapses the original thought.
+
 ## What it looks like
 
 A reply's tool calls, folded:
@@ -95,10 +98,42 @@ Click `▸ 5 calls` and it becomes a `▾` header with one row per call, each st
  │ 🧠 thinking  …
 ```
 
+## xzzpig fork behavior
+
+This package is published as `@xzzpig/pi-tidy`, forked from Andy8647's v0.9.6. The upstream
+`loadConfig()` defaults remain unchanged; at extension startup the fork applies these defaults only
+when the corresponding key is omitted:
+
+| Setting | Fork default | Notes |
+|---------|--------------|-------|
+| `frameTools` | `false` | Fork-only switch. `pi-tool-display` owns tool frames; set `true` only when you want pi-tidy's frames instead. |
+| `frameMessages` | `true` | Enabled with user-message `frame` because the upstream uses this switch for both; compaction, branch, skill and custom message boxes are therefore framed too. |
+| `collapseTurns` | `"off"` | Group/turn folding remains owned by the other installed extensions. |
+| `groupTools` | `false` | Tool grouping is opt-in. |
+| `splitDiff` | `false` | Uses the host's unified diff by default. |
+| `highlightBash` | `false` | Bash syntax highlighting is opt-in. |
+| `backgroundJobs` | `false` | Job rows are opt-in. |
+| `toolColors` | `{}` | Per-tool border colors are off with tool frames. |
+| `cleanCopy` | `false` | Set `tidy.cleanCopy` to `true` to opt into copying without pi-tidy's frames and rails. |
+| `userMessageStyle` | `"frame"` | pi-tidy owns user-message styling; `rail`, `rules`, and `off` remain available. |
+| `dedupeErrors`, `hexSwatches`, `finalReplyStyle`, `codeBlocks` | upstream defaults | These pi-tidy capabilities remain enabled by default. |
+
+To let pi-tidy exclusively style user messages when `pi-tool-display` is installed, set
+`enableNativeUserMessageBox` to `false` in `~/.pi/extensions/pi-tool-display/config.json`:
+
+```json
+{ "enableNativeUserMessageBox": false }
+```
+
+This is a user-side prerequisite; this fork does not alter pi-tool-display's upstream default.
+The fork also leaves the upstream tool-frame implementation intact: its `frameTools` switch skips
+that patch while retaining shared hover tracking for code-block copy controls. The path-copy chip
+that appears on a tool-frame border is consequently not available when `frameTools` is off.
+
 ## Installation
 
 ```bash
-pi install npm:pi-tidy
+pi install npm:@xzzpig/pi-tidy
 ```
 
 Requires pi ≥ 1.1.0 (component mouse events, tool durations); on an older pi it
@@ -107,10 +142,10 @@ write preview also need `pi.registerToolRenderer()` (pi 1.3.0). Without that API
 says so once, rather than falling back to a tool override that would stop another
 extension from loading.
 
-Or straight from the repo:
+Or straight from this repository:
 
 ```bash
-pi install git:github.com/Andy8647/pi-tidy
+pi install ./packages/pi-tidy
 ```
 
 Restart pi to activate.

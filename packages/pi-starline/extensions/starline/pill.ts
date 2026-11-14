@@ -12,8 +12,8 @@ import { stripVTControlCharacters } from "node:util";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 
 import type { ColorSource, ColorSpec } from "./config";
-import { hasExplicitForeground, reverseVideoSgr } from "./fork-pill-legibility";
 import type { ExtensionStatusSegment } from "./extension-status";
+import { hasExplicitForeground, reverseVideoSgr } from "./fork-pill-legibility";
 import { truncateMiddle } from "./format";
 import {
 	EXTENSION_STATUS_PREFIX,
@@ -544,7 +544,9 @@ export function renderPillBar(
 			// default to the same theme colour, which merged them into one blob.
 			// Fall back to the thin divider in the text colour, which stays visible.
 			if (separator && pill.bg === next.bg) {
-				emit(`${pill.reverse || pill.bg}${pill.reverse ? "" : pill.fg || contrastTextSgr(pill.bg)}${THIN_SEPARATOR}${RESET}`);
+				emit(
+					`${pill.reverse || pill.bg}${pill.reverse ? "" : pill.fg || contrastTextSgr(pill.bg)}${THIN_SEPARATOR}${RESET}`,
+				);
 			} else if (separator) {
 				const arrowFg = toForegroundSgr(pill.bg);
 				// Without a usable foreground the arrow would be invisible; letting the

@@ -1,0 +1,34 @@
+{
+  "$schema": "../schemas/subtree-metadata.schema.json",
+  "name": "pi-tidy",
+  "prefix": "packages/pi-tidy",
+  "source": "https://github.com/Andy8647/pi-tidy.git",
+  "remote": "upstream-pi-tidy",
+  "ref": "v0.9.6",
+  "version": "0.9.6",
+  "upstreamCommit": "ea4ca7c36d2501e630a7e84b41b9f6dd75c50827",
+  "squash": true,
+  "lastSyncedAt": "2026-11-14T02:19:23+08:00",
+  "notes": "Fork of Andy8647/pi-tidy. Rendering ownership, fork defaults and coexistence behavior are specified in openspec/changes/import-pi-tidy-fork; fork-only logic belongs under fork/.",
+  "reapplyOnSync": [
+    "Keep package.json name @xzzpig/pi-tidy, fork version, repository.url pointing at xzzpig/pi-extensions, and FORK-CHANGELOG.md in files while retaining upstream homepage/bugs/source identity.",
+    "In src/index.ts, load through fork/loadForkConfig and replace patchToolBoxFrames(options) with installForkToolFrames(config).",
+    "Retain the xzzpig fork section and local-install commands in README.md, including runtime defaults and the pi-tool-display enableNativeUserMessageBox prerequisite.",
+    "Keep test/renderer-harness.ts explicit about upstream integration defaults (including frameTools: true) so upstream behavior tests remain baseline-focused; fork defaults are asserted in fork-only tests.",
+    "Allow wrapped terminal output in test/third-party-edit.test.ts when asserting the edit summary and long path.",
+    "Keep package.json npm identity, repository, fork changelog files, `tsx` dev dependency, `test:e2e` script, and explicit unit-test paths (including test/renderer-harness.ts) that keep E2E files out of Node's default discovery when syncing upstream.",
+    "When syncing the final-reply renderer or Pi component compatibility, re-verify fork/thinking-row.ts: retain the collapsed Pi MouseRegion outside a framed final reply and preserve click routing, unless upstream adds an equivalent coexistence path.",
+    "Keep the component-level re-entry guard in src/tools/tool-group-view.ts (BOUNDARY_ACTIVE): only the outermost group-boundary wrapper may restyle a component; a nested install passes straight through. pi-group-collapse installs its render projection between pi-tidy's load-time and before_agent_start boundary installs, and without the guard both wrappers restyle the same rows, duplicating the first line of a framed retry error (`error ×2` drawn twice). Remove the guard only if upstream makes boundary installs position-independent."
+  ],
+  "doNotReintroduce": [
+    "Do not reintroduce suppression of Pi’s completed thinking MouseRegion by the final-reply frame; keep the collapsed row outside the frame and preserve native expand/collapse behavior."
+  ],
+  "knownDebt": [
+    {
+      "kind": "noise",
+      "path": "packages/pi-tidy/src/tools/tool-group-view.ts",
+      "reason": "Fork-only component-level re-entry guard (BOUNDARY_ACTIVE) for the group-boundary renderer: only the outermost install may restyle. pi-group-collapse's render projection installs between pi-tidy's two boundary installs; without the guard both wrappers remap the same rows and a retry error draws its error ×2 frame twice. Remove when upstream makes boundary installs position-independent.",
+      "recordedAt": "2026-11-14T00:00:00Z"
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 {
-  "name": "pi-tidy",
-  "version": "0.9.6",
+  "name": "@xzzpig/pi-tidy",
+  "version": "0.1.0",
   "type": "module",
   "packageManager": "pnpm@11.10.0",
   "description": "Tool folding for the pi agent — a reply's tool calls collapse to one clickable line; failures, edit diffs and running jobs stay visible",
@@ -20,8 +20,10 @@
   ],
   "files": [
     "src",
+    "fork",
     "README.md",
     "CHANGELOG.md",
+    "FORK-CHANGELOG.md",
     "LICENSE"
   ],
   "main": "./src/index.ts",
@@ -33,7 +35,8 @@
     }
   },
   "scripts": {
-    "test": "node --test",
+    "test": "node --test test/*.test.ts test/fork/*.test.ts test/renderer-harness.ts",
+    "test:e2e": "tsx --test test/e2e/*.e2e.ts",
     "typecheck": "tsc --noEmit",
     "bench": "node scripts/bench-compare.ts"
   },
@@ -55,11 +58,12 @@
     "@earendil-works/pi-coding-agent": "^1.5.0",
     "@earendil-works/pi-tui": "^1.5.0",
     "@types/node": "^22.0.0",
+    "tsx": "^4.22.4",
     "typescript": "^5.9.0"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Andy8647/pi-tidy.git"
+    "url": "git+https://github.com/xzzpig/pi-extensions.git"
   },
   "homepage": "https://github.com/Andy8647/pi-tidy#readme",
   "bugs": {

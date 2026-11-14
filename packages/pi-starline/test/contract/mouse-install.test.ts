@@ -44,7 +44,6 @@ function makeConfig(): () => PolishedTuiConfig {
 				copyNotice: true,
 				enabled: true,
 				clickToToggleExpandable: true,
-				transcriptCleanCopy: true,
 			},
 		}) as PolishedTuiConfig;
 }
@@ -112,11 +111,6 @@ function makeReceiver(previousScreen: string[]): Receiver {
 	return receiver;
 }
 
-function decodeOsc52(data: string): string {
-	const match = /\x1b\]52;c;([A-Za-z0-9+/=]*)\x07/.exec(data);
-	return Buffer.from(match?.[1] ?? "", "base64").toString();
-}
-
 describe("the copy features against the real receiver methods", () => {
 	let captured: CapturedHandlers | undefined;
 
@@ -126,7 +120,7 @@ describe("the copy features against the real receiver methods", () => {
 		setActiveEditor(undefined);
 	});
 
-	it("hints the verbatim selection count when nothing needs cleaning", () => {
+	it("hints the verbatim selection count for transcript selections", () => {
 		const receiver = makeReceiver([
 			"hello world   ", // trailing spaces must be trimmed, matching Pi's own .trimEnd()
 			"second row here",
@@ -137,8 +131,7 @@ describe("the copy features against the real receiver methods", () => {
 		captured = install(receiver);
 
 		// The hint binds through the API's `liveReceiver()` — the fixture
-		// receiver here. The clean copy declines (no chrome to strip), so the
-		// hint promises what Pi's own copy would deliver: the verbatim rows,
+		// receiver here. Transcript selections use Pi's native verbatim copy,
 		// through the receiver's real `getSelectionColumns` math.
 		const expectedText = ["llo world", "second row here", "end"].join("\n");
 		expect(activeSelectionHintText()).toContain(`${expectedText.length} characters selected`);
@@ -146,38 +139,6 @@ describe("the copy features against the real receiver methods", () => {
 		const handled = captured.copyHandlers[0]({ tui: receiver });
 		expect(handled).toBeUndefined();
 		expect(receiver.written).toEqual([]);
-	});
-
-	it("copies Starline's rail chrome off a transcript selection, as real OSC 52", () => {
-		const rule = "─".repeat(WIDTH);
-		const lines = [rule, ...["hello", "world"].map((line) => `│ ${line}`.padEnd(WIDTH)), rule];
-		const receiver = makeReceiver([]);
-		// A transcript selection: the anchors carry a scroll view, and the
-		// layout holds the box behind it with the rendered rows — what the
-		// clean copy reads instead of the screen.
-		const scrollView = { name: "transcript" };
-		receiver.selectionAnchor = { row: 0, col: 0, scrollView };
-		receiver.selectionFocus = { row: 3, col: WIDTH, scrollView };
-		receiver.currentLayout = {
-			root: {
-				rect: { x: 0, y: 0, width: WIDTH, height: lines.length },
-				children: [
-					{
-						scrollView,
-						scrollContentLines: lines,
-						rect: { x: 0, y: 0, width: WIDTH, height: lines.length },
-						children: [],
-					},
-				],
-			},
-		};
-		captured = install(receiver);
-
-		const handled = captured.copyHandlers[0]({ tui: receiver });
-
-		expect(handled).toEqual({ handled: true });
-		expect(receiver.written).toHaveLength(1);
-		expect(decodeOsc52(receiver.written[0])).toBe("hello\nworld");
 	});
 });
 

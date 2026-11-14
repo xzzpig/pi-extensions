@@ -16,7 +16,6 @@ Every option Starline has.
 | `pasteCollapseLines`       | number  | `11`                                                            | Line count at which a paste collapses into a marker, see [Paste collapse threshold](#paste-collapse-threshold). |
 | `editorPaddingY`           | number  | `1`                                                             | Blank rows inside the editor box, see [Box height](#box-height).                                                |
 | `editorMinRows`            | number  | `1`                                                             | Height floor for the editor's text area, see [Box height](#box-height).                                         |
-| `userMessagePaddingY`      | number  | `1`                                                             | Blank rows above and below a user message (0 or 1).                                                             |
 | `contextThresholds`        | object  | `{ "warning": 70, "error": 90 }`                                | Percentages that select the context segment's normal/warning/error colours.                                     |
 | `pathDisplay`              | object  | `{ "mode": "basename", "depth": 0 }`                            | Whether the cwd segment shows the basename or a full path, and how many trailing directories to keep.           |
 | `git`                      | object  | see [Git](#git)                                                 | Branch length, forge logo, commit and line-metric options.                                                      |
@@ -25,7 +24,7 @@ Every option Starline has.
 | `colorSources`             | object  | see [Colors](#colors)                                           | Whether each area's colours come from the Pi theme or the terminal palette.                                     |
 | `features`                 | object  | `{ "editor": true, "statusLine": true, "copyFriendly": false }` | Toggles the custom editor, the custom footer, and copy-friendly mode.                                           |
 | `extensionStatuses`        | object  | see [Pill footer](#pill-footer)                                 | Placement, colour, and icon for third-party extension statuses.                                                 |
-| `mouse`                    | object  | see [Mouse features](#mouse-features)                           | Wheel routing, click-to-expand tool boxes, path-aware word selection, and Starline's own copy behaviour.        |
+| `mouse`                    | object  | see [Mouse features](#mouse-features)                           | Wheel routing, click-to-expand tool boxes, path-aware word selection, and draft copy behaviour.                 |
 
 User config lives at `~/.pi/agent/starline.json`. The file is optional: missing or invalid known values fall back to Starline defaults, unknown keys are ignored at runtime, and `/starline` can patch color-source settings, UI feature toggles, and active third-party status placements.
 
@@ -69,7 +68,6 @@ Default config values — copy this and change any value you want:
 	"editorCursor": "block",
 	"editorPaddingY": 1,
 	"editorMinRows": 1,
-	"userMessagePaddingY": 1,
 	"contextThresholds": {
 		"warning": 70,
 		"error": 90
@@ -166,8 +164,7 @@ Default config values — copy this and change any value you want:
 	},
 	"colorSources": {
 		"starship": "theme",
-		"editor": "theme",
-		"userMessages": "theme"
+		"editor": "theme"
 	},
 	"features": {
 		"editor": true,
@@ -186,8 +183,7 @@ Default config values — copy this and change any value you want:
 		"enabled": true,
 		"wheelRouting": true,
 		"copyNotice": true,
-		"clickToToggleExpandable": true,
-		"transcriptCleanCopy": true
+		"clickToToggleExpandable": true
 	}
 }
 ```
@@ -207,7 +203,7 @@ Default config values — copy this and change any value you want:
 - `editorAccent` styles the editor rail when `features.copyFriendly` is disabled.
 - `editorPrompt` styles the copy-friendly editor prompt glyph. Omit it to use `editorAccent`, then the default accent fallback.
 - `editorBorder` styles the editor's top/bottom border color only; the border glyph stays `─`.
-- This fork retains Starline's user-message renderer. `userMessagePaddingY` controls its vertical padding; `colors.userMessageBorder`, `colors.userMessageText`, and `colorSources.userMessages` continue to control its colours. `icons.rail` selects its rail glyph. If pi-tidy is installed too, the visible renderer can depend on load order. Set `tidy.userMessageStyle` to `"off"` in Pi's `settings.json` to leave user messages to Starline.
+- User messages are styled by [pi-tidy](https://github.com/Andy8647/pi-tidy), which owns the renderer and its `tidy.userMessageStyle`, `tidy.userMessagePaddingY`, and `tidy.userMessageColors` settings. Starline ignores the former user-message keys and warns once per process. If pi-tool-display is also installed, turn off `/tool-display` → **Native user message box** (`enableNativeUserMessageBox: false`) so pi-tidy can own the render hook; Starline leaves pi-tool-display's default unchanged.
 - `model` styles the `model` footer segment; `thinking` styles the `thinking` segment. Omit `thinking` to colour it by level from the theme's `thinkingOff`/`thinkingMinimal`/`thinkingLow`/`thinkingMedium`/`thinkingHigh`/`thinkingXhigh` keys.
 
 Tip: when using copy-friendly mode, setting Pi's `editorPaddingX` to `1` in `~/.pi/agent/settings.json` keeps a small left gutter without copying a rail glyph.
@@ -615,8 +611,7 @@ guessing would be silently pasting the wrong thing.
 		"enabled": true,
 		"wheelRouting": true,
 		"copyNotice": true,
-		"clickToToggleExpandable": true,
-		"transcriptCleanCopy": true
+		"clickToToggleExpandable": true
 	}
 }
 ```
@@ -625,7 +620,7 @@ guessing would be silently pasting the wrong thing.
 
 - `enabled` — master switch for every mouse feature below. On by default.
 - `wheelRouting` — routes the mouse wheel to scroll the transcript instead of leaving it to the terminal.
-- `copyNotice` — shows a "Copied to clipboard" flash for a copy **Starline** performs, such as a clean copy. Pi confirms its own copy-on-release with its own flash regardless of this setting.
+- `copyNotice` — shows a "Copied to clipboard" flash for the draft copy Starline performs. Pi confirms its own transcript copy-on-release with its own flash regardless of this setting.
 - `clickToToggleExpandable` — clicking an expandable component anywhere in its rows toggles just that one, instead of `ctrl+o` expanding every box in the transcript. Tool boxes, bash boxes, skill blocks, branch summaries, compaction summaries and custom entries/messages all count; the direction comes from the `… ctrl+o to expand` / `… to collapse` hint row when one is on screen and from the component's own state otherwise, so a box with no hint left once expanded still closes on a click. Only a plain click toggles — press and release on the same cell, no drag in between — so dragging across a box still selects and copies its text, a double-click still word-selects, and a click on a link still opens the link. The hint row follows whatever key you have bound to `app.tools.expand`. One thing worth knowing before it surprises you:
   - **A box whose output contains the literal text `(ctrl+o to expand)` makes that line clickable too** — printing this page, say, or `cat`-ing a file that documents the keybinding. Pi draws a box's output and its hint the same way, so they cannot be told apart without matching theme colours. Clicking such a line toggles the box it is already inside; nothing else happens.
 

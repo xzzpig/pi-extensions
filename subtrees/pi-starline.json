@@ -56,10 +56,6 @@
       "reason": "Use Function.prototype.apply.call to preserve predecessor dispatch while satisfying the local no-Reflect.apply rule; remove if upstream adopts equivalent forwarding or the rule changes."
     },
     {
-      "kind": "other",
-      "reason": "Retain the user-message renderer and its configuration, tests and documentation after upstream moved that responsibility to pi-tidy. Both load orders were tested with pi-tidy v0.5.0; isolated rendering shows the visible renderer can depend on patch order. Document pi-tidy userMessageStyle off for users who want Starline styling."
-    },
-    {
       "kind": "lint",
       "path": "packages/pi-starline/extensions/starline/prototype-patch-registry.ts",
       "reason": "The generic prototype-patch boundary accepts object targets, forwards predecessor calls and returns unknown because it handles multiple unrelated Pi methods. Its reported lint findings are unchanged from the pre-sync fork; preserve the existing behavior under the current-change-only policy."
@@ -117,9 +113,9 @@
     },
     {
       "kind": "noise",
-      "path": "packages/pi-starline/test/mouse/install-mouse.test.ts",
-      "reason": "Diff-alignment artifact: the fork\"s pi-mouse-events consumer test is much larger than upstream v0.13.0\"s rewritten installMouse suite, so shared upstream-origin lines sit at different offsets. The fork owns this file; upstream\"s version tests an architecture the fork does not use.",
-      "recordedAt": "2026-11-14T01:05:00+08:00"
+      "path": "packages/pi-starline/extensions/starline/git.ts",
+      "reason": "Biome formatting (line wrapping) is required by the package's prepack lint gate; the reflow touches upstream-original lines and is a diff-alignment artifact only, with no behavior change.",
+      "recordedAt": "2026-11-15T00:00:00Z"
     }
   ],
   "reapplyOnSync": [
@@ -133,14 +129,13 @@
     "test/runtime.test.ts passes an explicit empty env to detectRuntime so ambient Nix markers cannot shadow file-marker fixtures",
     "keep the comment-only additions: ui.ts SAFETY/pi-lens-ignore notes and config.ts's empty-catch note",
     "Keep package.json TAB-indented with the fork name/version/dependencies, declaration build:types/prepack scripts, and files allowlist (extensions, dist, types, FORK-CHANGELOG.md). Keep the upstream package-identity test aligned; regenerate the package-lock root identity mechanically with npm, never by hand.",
-    "mouse/index.ts stays the fork's consumer-API rewrite; use the optional shared asynchronous copy slot for Pi's native clipboard and retain the synchronous OSC 52 fallback for older v2 publishers; prefer the shared post-component wheel slot and Pi's computed delta, falling back to the older pre-dispatch slot when unavailable",
+    "mouse/index.ts stays the fork's pi-mouse-events consumer rewrite; editor selections retain the fork's draft-copy behavior, while transcript selections fall through to Pi's native verbatim copy. Preserve the optional asynchronous copy slot and older-v2 OSC 52 fallback for editor selections, and prefer the shared post-component wheel slot/Pi-computed delta with the older pre-dispatch fallback.",
     "preserve pi-zentui legacy symbol interoperability in editor-factory-marker.ts, ui.ts and prototype-patch-registry.ts and retain test/legacy-symbols.test.ts when upstream removes the aliases",
     "delegate mouse/pointer-shape.ts requests to the shared pointer coordinator; keep the fork pill-mouse observer and adapt upstream external-layer and clipboard tests to the shared consumer architecture",
     "keep typed pointer-shape prototype and safe Function.prototype.apply.call forwarding in pointer-shape.ts and queue-rows.ts when upstream changes these methods",
     "keep clickToToggleExpandable (default true) across the config.ts sites and the test files; clickToExpandTools is not restored anywhere",
     "keep handlesMouse() deleted, mouse/hit-test.ts at fork HEAD, key-text.ts at upstream bytes as the single source with tool-box.ts/index.ts importing keyTextFor from ./key-text, and capabilities.ts's D8 type tightening (<T extends object>)",
     "keep Pi peer ranges >=1.0.0 <2 with catalog devDependencies; retain the optional pi-mouse-events v2 API contract",
-    "Preserve the user-message renderer deleted by upstream: retain its configuration fields and settings command, install and register its render/invalidate adapters, preserve the fork user-message tests and documentation, and use fork-transcript-copy.ts for configured rails alongside pi-tidy cleaning.",
     "pill.ts picks the pill text colour from the 256-colour cube (TEXT_DARK 38;5;16, TEXT_LIGHT 38;5;231) instead of the basic ANSI codes 30/97, whose values the terminal theme owns; a background on the terminal's own 16 colours is painted in reverse video via the fork-only fork-pill-legibility.ts (isTerminalOwnedBackground/reverseVideoSgr), with one seam each in pill.ts (PreparedPill.reverse, body and thin-divider prefixes) and pill-bubble.ts (selected row); an explicit fg: token (hasExplicitForeground) always keeps the user's colour and never reverses. Re-apply those seams and the matching assertions in test/pill.test.ts and test/pill-click.test.ts; test/fork-pill-contrast.test.ts covers the fork behaviour.",
     "index.ts imports installMcpPillAdapter from ./fork-mcp-pill and calls it immediately after publishPillApi(), which is the whole seam: the module owns the session_start/session_shutdown handlers, registers the default `mcp` pill action through registerExternalPillAction (builtin PILL_ACTIONS stays untouched) and dispatches the adapter's own /mcp-adapter command. Keep extensions/starline/fork-mcp-pill.ts, test/fork-mcp-pill.test.ts and test/fork-mcp-status-render.test.ts, and the FORK-CHANGELOG.md entry describing the compact-text premise and the bounded reopen guard.",
     "pill-config.ts carries the overflow block: PillConfig gains `overflow: PillOverflowConfig`, DEFAULT_PILL_CONFIG includes `overflow: DEFAULT_PILL_OVERFLOW`, and normalizePillConfig calls normalizePillOverflow(value.overflow) (returning a fresh normalized block when pill is absent). Re-apply those three seams; the normalizer and its defaults stay in fork-overflow-config.ts.",
@@ -148,12 +143,12 @@
     "footer.ts keeps the governed row behind one seam: the render tail builds legacyPillInputs (the unchanged collectPillInputs call at its original indentation), calls renderStatusBar from fork-status-bar.ts, publishes the panel model with publishStatusPanelModel, and stores the returned hit map per width. handleMouse resolves the private OVERFLOW_SUMMARY_KEY pill and shortened read-only pills through openStatusPanel while leaving every registered action first; dispose publishes no model and closes the panel. Re-apply those call sites and keep the surrounding label/colour code byte-stable.",
     "settings-command.ts keeps only call-sized seams for the settings surface: the Layout tab splices ...overflowLayoutItems(config), the extension-segments tab splices ...overflowStatusItems({config, key, statusSettingPrefix}) per published status, the change handler hands every id to applyOverflowSetting(...) once, and the `/starline statuses` route is one handleStatusPanelCommand(args, ctx) call before the unknown-argument warning. The rows, value lists, presets, id parsing for priority/pinned and the close-then-mount ordering all live in extensions/starline/fork-overflow-settings.ts — re-apply the seams, not the logic, and keep every surrounding upstream line byte-stable.",
     "index.ts wires the fork sources with two calls: configureStatusView({ getConfig: getCurrentConfig, getStatuses: () => getActiveExtensionStatuses() }) in installUi and configureStatusView(undefined) in cleanupUi, plus a setPillOverflow dep that assigns savePillOverflowPatch(patch) to currentConfig. Keep those seams minimal.",
-    "docs/configuration.md keeps only the added pointer subsection (\"Overflow, when the bar runs out of room\") before \"Segment display options\"; every other line stays at upstream bytes. Do not run a formatter over this file — it re-wraps the segments example and a nested bullet that upstream wrote differently.",
+    "README.md and docs/configuration.md document pi-tidy ownership of user-message styling, the once-per-process warning for retired user-message keys, and the pi-tool-display native-box-off precondition. docs/configuration.md also keeps the added pointer subsection (\"Overflow, when the bar runs out of room\") before \"Segment display options\"; preserve upstream bytes elsewhere and do not run a formatter over that file.",
     "pill-actions.ts carries three SAFETY comments on the upstream-original ctx.ui.theme as unknown as ThemeLike casts (showContext/showPackage/showTps); upstream v0.13.0 ships them without one and pi-lens blocks on require-safety-comment-for-as-unknown-as. Re-apply the comments, never the casts.",
     "format.ts carries one SAFETY comment on the upstream-original entry as unknown as UsageEntryShape cast plus one biome-ignore on tagMatchesVersion, which upstream v0.13.0 ships unused; both are needed for the pi-lens/biome gates. Re-apply the two comments.",
     "footer.ts resolves the context pill through the upstream v0.13.0 tilde estimate (nothingRanYet/estimatedTokens/estimatedPercent via collectContextBreakdown(probeFor(ctx)), passed as estimated to buildContextDisplayLabel), keeps the git_pr renderVariable and pillSpecFor cases, and passes tailColumnsFor (git.labelTailColumns) to collectPillInputs. Re-apply those additions around the entry-22 renderStatusBar seam.",
-    "config.ts carries upstream v0.13.0\"s extensionStatuses.commands feature (parseStatusCommands, STATUS_COMMAND_PATTERN, RESERVED_STATUS_COMMAND, BUILTIN_SEGMENT_NAMES, warnRejectedStatusCommands wired into loadConfig), the git.issues field, and the gitPr* colour defaults; the fork also keeps its own transcriptCleanCopy mouse key. Re-apply those alongside the fork seams.",
-    "test/config.test.ts asserts the fork keeps transcriptCleanCopy (upstream moved it to pi-tidy) and carries the upstream commands expectations. Re-apply that one test adaptation.",
+    "config.ts carries upstream v0.13.0 extensionStatuses.commands parsing and warning, git.issues, gitPr* defaults, and warnMovedUserMessageKeys wired into loadConfig; preserve these upstream features alongside the remaining fork config seams.",
+    "test/config.test.ts keeps upstream commands expectations and verifies retired user-message and transcript-clean-copy settings are ignored; test/extension-compliance.test.ts pins editor color-source settings independently. Reconcile these assertions with upstream config behavior.",
     "fork-status-bar.ts legacyRender renders at unbounded width and clamps spans itself, because upstream v0.13.0\"s renderPillBar drops whole pills and stands a +N counter in their place when given a real width; governance off must keep the pre-overflow single truncation. Re-apply that call and the span clamp."
   ],
   "doNotReintroduce": [
@@ -161,6 +156,7 @@
     "expect recurring modify/delete conflicts on every pull: upstream deleted these files and the fork keeps them — extensions/starline/mouse/tool-box.ts, mouse/component-tree.ts, test/contract/tool-box-hint.test.ts, test/mouse/tool-box.test.ts, test/mouse/component-tree.test.ts, test/contract/transcript-layout.test.ts",
     "keep editor-wheel.test.ts's 9 lint/style warnings and shim.ts's 2 noConfusingVoidType warnings by deliberate non-change",
     "Do not restore the removed editor metadata row or its settings; use the upstream compact editor and map legacy editor status placement to the footer right.",
-    "Do not restore the pre-overflow single-row cut as the default when the segments do not fit: the governed bar (content caps, retention prefix, +N) is the default and `pill.overflow.enabled: false` is only an explicit opt-out. Unbounded wrapping stays out; a two-line mode is a separate change with its own anchor and hit-test work."
+    "Do not restore the pre-overflow single-row cut as the default when the segments do not fit: the governed bar (content caps, retention prefix, +N) is the default and `pill.overflow.enabled: false` is only an explicit opt-out. Unbounded wrapping stays out; a two-line mode is a separate change with its own anchor and hit-test work.",
+    "Do not restore Starline-owned user-message styling or transcript-selection cleaning; pi-tidy owns those behaviors, and pi-tool-display’s upstream enableNativeUserMessageBox default stays unchanged (disable it in user configuration when pi-tidy must own the render hook)."
   ]
 }

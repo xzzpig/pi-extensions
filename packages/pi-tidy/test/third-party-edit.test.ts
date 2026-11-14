@@ -22,7 +22,7 @@ const theme = (globalThis as any)[Symbol.for("@earendil-works/pi-coding-agent:th
 const plain = (line: string) => line.replace(/\x1b\[[0-9;:]*[a-zA-Z]/g, "");
 const W = 100;
 const CHIP = chipLabels(true);
-const CWD = process.cwd();
+const CWD = "/tmp/pi-tidy-test-project";
 const PATH = `${CWD}/extension/lead-runtime.ts`;
 
 patchToolBoxFrames({ icons: true, groupTools: false, splitDiff: true, splitDiffMinWidth: 72, diffLines: 10 });
@@ -87,5 +87,5 @@ test("a moved file is named by its destination", () => {
 test("no diff in the result keeps what the renderer drew", () => {
   const rows = hashlineBox({ additions: 0, deletions: 0, files: [] }).render(W);
   const text = rows.map(plain).join("\n");
-  assert.match(text, /edited .*lead-runtime\.ts/, text);
+  assert.match(text, /edited[\s\S]*lead-runtime\.ts/, text);
 });

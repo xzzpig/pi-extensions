@@ -34,6 +34,8 @@ overrides:
   "@xzzpig/pi-sentinel>@earendil-works/pi-tui": "1.5.0"
   "@xzzpig/pi-openspec-x>@earendil-works/pi-ai": "1.5.0"
   "@xzzpig/pi-openspec-x>@earendil-works/pi-coding-agent": "1.5.0"
+  "@xzzpig/pi-tidy>@earendil-works/pi-coding-agent": "1.5.0"
+  "@xzzpig/pi-tidy>@earendil-works/pi-tui": "1.5.0"
   "@earendil-works/pi-coding-agent@1.5.0>@earendil-works/pi-agent-core": "1.5.0"
   "@earendil-works/pi-coding-agent@1.5.0>@earendil-works/pi-ai": "1.5.0"
   "@earendil-works/pi-coding-agent@1.5.0>@earendil-works/pi-codemode": "1.5.0"

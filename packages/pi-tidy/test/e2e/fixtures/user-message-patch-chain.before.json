@@ -1,0 +1,16 @@
+{
+  "pluginsLoadedInOrder": [
+    "pi-tool-display",
+    "pi-group-collapse",
+    "pi-thinking-collapse",
+    "pi-starline",
+    "pi-tidy"
+  ],
+  "piToolDisplayUserMessageBox": "disabled-pass-through",
+  "activeUserMessageRenderers": [
+    "pi-starline",
+    "pi-tidy"
+  ],
+  "piTidyToolFrames": false,
+  "piTidyHoverTracking": true
+}

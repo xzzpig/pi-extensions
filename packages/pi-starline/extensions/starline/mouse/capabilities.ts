@@ -32,8 +32,7 @@ export type MouseFeature =
 	| "clickToToggleExpandable"
 	| "editorWheelScroll"
 	| "editorClickToCaret"
-	| "editorBufferCopy"
-	| "transcriptCleanCopy";
+	| "editorBufferCopy";
 
 const CAPABILITIES: readonly MouseCapability[] = [
 	"getCopyOnSelect",
@@ -99,18 +98,6 @@ const REQUIREMENTS: Record<MouseFeature, readonly MouseCapability[]> = {
 	// `terminal` is a plain instance field — checked at the call site, where a
 	// terminal that cannot be written to makes the copy fall through to Pi.
 	editorBufferCopy: ["copySlot", "getSelectionBounds", "hasOverlay", "flash"],
-	// Shares the copy slot with editorBufferCopy. It reads the selection
-	// through `getSelectionBounds` to find the rows, through
-	// `getSelectionColumns` to slice the cleaned text along the same
-	// grapheme-aligned columns Pi would have used, and asks `hasOverlay`
-	// before trusting those rows.
-	transcriptCleanCopy: [
-		"copySlot",
-		"getSelectionBounds",
-		"getSelectionColumns",
-		"hasOverlay",
-		"flash",
-	],
 };
 
 function isCallable<T extends object>(receiver: T, name: string): boolean {

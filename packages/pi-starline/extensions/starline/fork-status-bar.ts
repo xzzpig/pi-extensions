@@ -247,14 +247,10 @@ function legacyRender(options: StatusBarOptions): StatusBarRender {
 	// pre-overflow pipeline, where the bar is one long row cut by `truncateToWidth`.
 	// Upstream's `renderPillBar` drops whole pills and stands a `+N` counter in
 	// their place when it is given a real width, which is the governance path.
-	const bar = renderPillBar(
-		options.legacyInputs(),
-		theme,
-		colorSource,
-		config.pill,
-		1_000_000,
-		{ ascii, onSpan: (span) => spans.push(span) },
-	);
+	const bar = renderPillBar(options.legacyInputs(), theme, colorSource, config.pill, 1_000_000, {
+		ascii,
+		onSpan: (span) => spans.push(span),
+	});
 	if (!bar) {
 		return {
 			line: "",
@@ -277,10 +273,7 @@ function legacyRender(options: StatusBarOptions): StatusBarRender {
 		const endColumn = Math.min(span.endColumn, visible);
 		if (endColumn > startColumn) {
 			const bodyStartColumn = Math.min(span.bodyStartColumn, endColumn - 1);
-			const bodyEndColumn = Math.max(
-				bodyStartColumn + 1,
-				Math.min(span.bodyEndColumn, endColumn),
-			);
+			const bodyEndColumn = Math.max(bodyStartColumn + 1, Math.min(span.bodyEndColumn, endColumn));
 			clampedSpans.push({ ...span, startColumn, endColumn, bodyStartColumn, bodyEndColumn });
 		}
 	}

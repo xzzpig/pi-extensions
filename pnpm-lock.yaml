@@ -32,6 +32,8 @@ overrides:
   '@xzzpig/pi-sentinel>@earendil-works/pi-tui': 1.5.0
   '@xzzpig/pi-openspec-x>@earendil-works/pi-ai': 1.5.0
   '@xzzpig/pi-openspec-x>@earendil-works/pi-coding-agent': 1.5.0
+  '@xzzpig/pi-tidy>@earendil-works/pi-coding-agent': 1.5.0
+  '@xzzpig/pi-tidy>@earendil-works/pi-tui': 1.5.0
   '@earendil-works/pi-coding-agent@1.5.0>@earendil-works/pi-agent-core': 1.5.0
   '@earendil-works/pi-coding-agent@1.5.0>@earendil-works/pi-ai': 1.5.0
   '@earendil-works/pi-coding-agent@1.5.0>@earendil-works/pi-codemode': 1.5.0
@@ -530,6 +532,24 @@ importers:
       vitest:
         specifier: 'catalog:'
         version: 4.1.8(@opentelemetry/api@1.9.0)(@types/node@24.12.4)(vite@8.2.1(@types/node@24.12.4)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
+
+  packages/pi-tidy:
+    devDependencies:
+      '@earendil-works/pi-coding-agent':
+        specifier: 1.5.0
+        version: 1.5.0(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(ws@8.21.2)(zod@4.6.7)
+      '@earendil-works/pi-tui':
+        specifier: 1.5.0
+        version: 1.5.0
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.5
+      tsx:
+        specifier: ^4.22.4
+        version: 4.23.12
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
 
   packages/pi-tool-display:
     devDependencies:
@@ -1995,6 +2015,9 @@ packages:
 
   '@types/node@18.0.0':
     resolution: {integrity: sha512-cHlGmko4gWLVI27cGJntjs/Sj8th9aYwplmZFwmmgYQQvL5NUsgVJG7OddLvNfLqYS31KFN0s3qlaD9qCaxACA==}
+
+  '@types/node@22.20.5':
+    resolution: {integrity: sha512-U2+DNr+wSjpsTS/wZGYHq7GcwfuSmKiKvoPvK22zwTlRhU91yOniN4qRR5KhIjvif7ysw/dz/hKmfDH0Ris4aA==}
 
   '@types/node@24.12.4':
     resolution: {integrity: sha512-GUUEShf+PBCGW2KaXwcIt3Yk+e3pkKwWKb9GSyM9WQVE+ep2jzmHdGsHzu4wgcZy5fN9FBdVzjpBQsYlpfpgLA==}
@@ -3873,6 +3896,9 @@ packages:
     resolution: {integrity: sha512-nWJ91DjeOkej/TA8pXQ3myruKpKEYgqvpw9lz4OPHj/NWFNluYrjbz9j01CJ8yKQd2g4jFoOkINCTW2I5LEEyw==}
     engines: {node: '>= 0.4'}
 
+  undici-types@6.21.0:
+    resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
+
   undici-types@7.16.0:
     resolution: {integrity: sha512-Zz+aZWSj8LE6zoxD+xrjh4VfkIG8Ya6LvYkZqtUQGJPZjYl53ypCaUwWqo7eI0x66KBGeRo+mlBEkMSeSZ38Nw==}
 
@@ -5455,6 +5481,10 @@ snapshots:
       '@types/node': 24.13.3
 
   '@types/node@18.0.0': {}
+
+  '@types/node@22.20.5':
+    dependencies:
+      undici-types: 6.21.0
 
   '@types/node@24.12.4':
     dependencies:
@@ -7783,6 +7813,8 @@ snapshots:
       has-bigints: 1.1.0
       has-symbols: 1.1.0
       which-boxed-primitive: 1.1.1
+
+  undici-types@6.21.0: {}
 
   undici-types@7.16.0: {}
 

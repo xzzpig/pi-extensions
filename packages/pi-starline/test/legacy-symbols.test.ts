@@ -73,7 +73,7 @@ describe("prototype patch registry", () => {
 		const cleanup = installPrototypePatch(
 			target,
 			"render",
-			"user-message-render",
+			"selector-border-render",
 			({ predecessor, receiver, args }) => Reflect.apply(predecessor, receiver, args),
 		);
 
@@ -91,7 +91,7 @@ describe("prototype patch registry", () => {
 		const cleanup = installPrototypePatch(
 			target as unknown as object,
 			"render",
-			"user-message-render",
+			"selector-border-render",
 			({ predecessor, receiver, args }) => Reflect.apply(predecessor, receiver, args),
 		);
 
@@ -107,7 +107,7 @@ describe("prototype patch registry", () => {
 		const cleanup = installPrototypePatch(
 			target,
 			"render",
-			"user-message-render",
+			"selector-border-render",
 			({ predecessor, receiver, args }) => Reflect.apply(predecessor, receiver, args),
 		);
 

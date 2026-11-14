@@ -295,11 +295,15 @@ export function detectGitState(paths: GitStatePaths): {
 
 async function resolveGitPath(cwd: string, pathSpec: string): Promise<string | undefined> {
 	try {
-		const { stdout } = await execFileAsync("git", ["--no-optional-locks", "rev-parse", "--git-path", pathSpec], {
-			cwd,
-			env: GIT_READ_ENV,
-			timeout: GIT_COMMAND_TIMEOUT_MS,
-		});
+		const { stdout } = await execFileAsync(
+			"git",
+			["--no-optional-locks", "rev-parse", "--git-path", pathSpec],
+			{
+				cwd,
+				env: GIT_READ_ENV,
+				timeout: GIT_COMMAND_TIMEOUT_MS,
+			},
+		);
 		const resolved = (typeof stdout === "string" ? stdout : String(stdout)).trim();
 		if (!resolved) return undefined;
 		return resolved.startsWith("/") ? resolved : join(cwd, resolved);
@@ -376,8 +380,19 @@ export async function readGitStatus(
 		// two halves of `git diff HEAD`, from commands that do not take the index
 		// lock. The counts are summed, which matches the combined diff except where
 		// the same line was staged and then edited again.
-		const stagedNumstatArgs = ["--no-optional-locks", "diff-index", "--numstat", "HEAD", ...numstatSuffix];
-		const unstagedNumstatArgs = ["--no-optional-locks", "diff-files", "--numstat", ...numstatSuffix];
+		const stagedNumstatArgs = [
+			"--no-optional-locks",
+			"diff-index",
+			"--numstat",
+			"HEAD",
+			...numstatSuffix,
+		];
+		const unstagedNumstatArgs = [
+			"--no-optional-locks",
+			"diff-files",
+			"--numstat",
+			...numstatSuffix,
+		];
 		const readNumstat = (args: string[]) =>
 			execFileAsync("git", args, {
 				cwd,
@@ -402,11 +417,15 @@ export async function readGitStatus(
 				timeout: GIT_COMMAND_TIMEOUT_MS,
 			}).catch(() => ({ stdout: "" })),
 			readExactTag
-				? execFileAsync("git", ["--no-optional-locks", "describe", "--tags", "--exact-match", "HEAD"], {
-						cwd,
-						env: GIT_READ_ENV,
-						timeout: GIT_COMMAND_TIMEOUT_MS,
-					}).then(
+				? execFileAsync(
+						"git",
+						["--no-optional-locks", "describe", "--tags", "--exact-match", "HEAD"],
+						{
+							cwd,
+							env: GIT_READ_ENV,
+							timeout: GIT_COMMAND_TIMEOUT_MS,
+						},
+					).then(
 						(r) => ({ stdout: typeof r.stdout === "string" ? r.stdout : String(r.stdout) }),
 						() => ({ stdout: "" }),
 					)
@@ -455,11 +474,15 @@ export async function readGitStatus(
 
 		// Distinguish not-a-repo vs transient with a cheap rev-parse on the error path.
 		try {
-			const { stdout } = await execFileAsync("git", ["--no-optional-locks", "rev-parse", "--is-inside-work-tree"], {
-				cwd,
-				env: GIT_READ_ENV,
-				timeout: GIT_COMMAND_TIMEOUT_MS,
-			});
+			const { stdout } = await execFileAsync(
+				"git",
+				["--no-optional-locks", "rev-parse", "--is-inside-work-tree"],
+				{
+					cwd,
+					env: GIT_READ_ENV,
+					timeout: GIT_COMMAND_TIMEOUT_MS,
+				},
+			);
 			const inside = (typeof stdout === "string" ? stdout : String(stdout)).trim();
 			if (inside !== "true") return { kind: "not_a_repo" };
 			return { kind: "error" };
@@ -585,11 +608,15 @@ export async function readGitRemote(cwd: string): Promise<GitRemote | undefined>
 
 	let remote: GitRemote | undefined;
 	try {
-		const { stdout } = await execFileAsync("git", ["--no-optional-locks", "remote", "get-url", "origin"], {
-			cwd,
-			env: GIT_READ_ENV,
-			timeout: GIT_COMMAND_TIMEOUT_MS,
-		});
+		const { stdout } = await execFileAsync(
+			"git",
+			["--no-optional-locks", "remote", "get-url", "origin"],
+			{
+				cwd,
+				env: GIT_READ_ENV,
+				timeout: GIT_COMMAND_TIMEOUT_MS,
+			},
+		);
 		remote = parseGitRemote(typeof stdout === "string" ? stdout : String(stdout));
 	} catch {
 		remote = undefined;
@@ -613,11 +640,15 @@ export async function readGitHost(cwd: string): Promise<GitHost | undefined> {
  */
 export async function readLatestTag(cwd: string): Promise<string | undefined> {
 	try {
-		const { stdout } = await execFileAsync("git", ["--no-optional-locks", "describe", "--tags", "--abbrev=0"], {
-			cwd,
-			env: GIT_READ_ENV,
-			timeout: GIT_COMMAND_TIMEOUT_MS,
-		});
+		const { stdout } = await execFileAsync(
+			"git",
+			["--no-optional-locks", "describe", "--tags", "--abbrev=0"],
+			{
+				cwd,
+				env: GIT_READ_ENV,
+				timeout: GIT_COMMAND_TIMEOUT_MS,
+			},
+		);
 		const tag = (typeof stdout === "string" ? stdout : String(stdout)).trim();
 		return tag || undefined;
 	} catch {

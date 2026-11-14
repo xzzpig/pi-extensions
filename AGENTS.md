@@ -66,6 +66,9 @@ direnv allow
 pnpm install --frozen-lockfile
 pnpm --filter pi-permission-system run typecheck
 pnpm --filter pi-permission-system test
+pnpm --filter @xzzpig/pi-tidy run typecheck
+pnpm --filter @xzzpig/pi-tidy test
+pnpm --filter @xzzpig/pi-tidy run test:e2e
 pnpm exec prettier --check .
 
 # Fork-divergence gate: every NOISE/DELETED finding in an upstream-derived
