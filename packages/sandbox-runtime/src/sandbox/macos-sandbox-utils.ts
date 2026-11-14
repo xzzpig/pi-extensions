@@ -11,6 +11,7 @@ import {
   containsGlobChars,
   globToRegex,
 } from './sandbox-utils.js'
+import { isAtOrUnder } from './fork-path-containment.js'
 
 import type {
   FsReadRestrictionConfig,
@@ -275,7 +276,7 @@ function generateReadRules(
   for (const denyPath of config.denyOnly || []) {
     if (containsGlobChars(denyPath)) continue
     const normalized = normalizePathForSandbox(denyPath)
-    if (allowedSubpaths.some(a => normalized.startsWith(a + '/'))) {
+    if (allowedSubpaths.some(a => isAtOrUnder(normalized, a))) {
       rules.push(
         `(deny file-read*`,
         `  (subpath ${escapePath(normalized)})`,

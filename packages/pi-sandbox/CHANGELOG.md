@@ -5,6 +5,26 @@ This fork tracks [`carderne/pi-sandbox`](https://github.com/carderne/pi-sandbox)
 via git subtree; entries below describe only fork-specific deviations from
 upstream.
 
+## 0.9.1
+
+### Fixed
+
+- **A `denyWrite` path was silently unenforced when `allowWrite` contained
+  `/`.** The bundled `sandbox-runtime` spelled path containment as
+  `target.startsWith(allowed + '/')`, which builds `'//'` for a root write
+  path, so no absolute path ever matched: the deny was judged "already
+  read-only from `--ro-bind / /`", its `--ro-bind` mask was skipped, and the
+  writable root bind stayed. The same hole dropped the read-rule re-emit on
+  macOS when `allowWithinDeny` named `/`.
+
+  Continuation now goes through a root-aware `isAtOrUnder` helper at the four
+  deny/allow seams (Linux symlink allowance, the missing-deny-path ancestor
+  check, the existing-deny-path check, and the macOS read-rule re-emit),
+  aligned with Anthropic's upstream fix (`@anthropic-ai/sandbox-runtime`
+  0.0.77 on Linux, 0.0.80 on macOS) rather than the `path.relative` variant
+  proposed in the fork-side pull request. The bundled runtime is now 0.1.1;
+  `subtrees/sandbox-runtime.json` records the seam and its drop condition.
+
 ## 0.9.0
 
 ### Changed

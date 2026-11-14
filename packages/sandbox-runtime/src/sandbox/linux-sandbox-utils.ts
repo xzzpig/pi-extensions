@@ -13,6 +13,7 @@ import {
   isSymlinkOutsideBoundary,
   encodeSandboxedCommand,
 } from './sandbox-utils.js'
+import { isAtOrUnder } from './fork-path-containment.js'
 import type {
   FsReadRestrictionConfig,
   FsWriteRestrictionConfig,
@@ -94,9 +95,8 @@ function findSymlinkInPath(
       const stats = fs.lstatSync(nextPath)
       if (stats.isSymbolicLink()) {
         // Check if this symlink is within an allowed write path
-        const isWithinAllowedPath = allowedWritePaths.some(
-          allowedPath =>
-            nextPath.startsWith(allowedPath + '/') || nextPath === allowedPath,
+        const isWithinAllowedPath = allowedWritePaths.some(allowedPath =>
+          isAtOrUnder(nextPath, allowedPath),
         )
         if (isWithinAllowedPath) {
           return nextPath
@@ -1010,9 +1010,8 @@ async function generateFilesystemArgs(
         // If not, the path is already read-only from --ro-bind / /.
         const ancestorIsWithinAllowedPath = allowedWritePaths.some(
           allowedPath =>
-            ancestorPath.startsWith(allowedPath + '/') ||
-            ancestorPath === allowedPath ||
-            normalizedPath.startsWith(allowedPath + '/'),
+            isAtOrUnder(ancestorPath, allowedPath) ||
+            isAtOrUnder(normalizedPath, allowedPath),
         )
 
         if (ancestorIsWithinAllowedPath) {
@@ -1052,10 +1051,8 @@ async function generateFilesystemArgs(
 
       // Only add deny binding if this path is within an allowed write path
       // Otherwise it's already read-only from the initial --ro-bind / /
-      const isWithinAllowedPath = allowedWritePaths.some(
-        allowedPath =>
-          normalizedPath.startsWith(allowedPath + '/') ||
-          normalizedPath === allowedPath,
+      const isWithinAllowedPath = allowedWritePaths.some(allowedPath =>
+        isAtOrUnder(normalizedPath, allowedPath),
       )
 
       if (isWithinAllowedPath) {
