@@ -184,8 +184,8 @@ test("all five real extensions compose with pi-tidy as the sole active user rend
     assert.match(combined, /The final answer is ready\./);
     assert.match(
       combined,
-      /private reasoning that should collapse/,
-      "the earlier tool-use message keeps pi-tidy's group thought preview",
+      /Thinking… \(click to expand\)/,
+      "the earlier tool-use message keeps the native collapsed thinking affordance",
     );
     assert.doesNotMatch(
       combined,

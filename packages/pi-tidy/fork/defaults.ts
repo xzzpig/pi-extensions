@@ -7,6 +7,8 @@ import { loadConfig, type TidyConfig } from "../src/config.ts";
 export interface ForkTidyConfig extends TidyConfig {
   /** Draw pi-tidy's own tool frames. The fork leaves them to pi-tool-display by default. */
   frameTools: boolean;
+  /** Leave thinking rendering to Pi and pi-thinking-collapse instead of tidy's own row. */
+  nativeThinking: boolean;
 }
 
 export type ForkSettingsFile = {
@@ -18,6 +20,11 @@ type RecordLike = Record<string, unknown>;
 
 function asRecord(value: unknown): RecordLike | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as RecordLike) : undefined;
+}
+
+/** Settings values are decoded once at this I/O boundary. */
+function readBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function readSettings(): ForkSettingsFile | undefined {
@@ -51,7 +58,8 @@ export function applyForkDefaults(
 
   return {
     ...config,
-    frameTools: typeof userOptions.frameTools === "boolean" ? userOptions.frameTools : false,
+    frameTools: readBoolean(userOptions.frameTools) ?? false,
+    nativeThinking: readBoolean(userOptions.nativeThinking) ?? true,
     highlightBash: configuredOr("highlightBash", false),
     frameMessages: configuredOr("frameMessages", true),
     userMessageStyle: configuredOr("userMessageStyle", "frame"),

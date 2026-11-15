@@ -820,6 +820,13 @@ type RenderFn = ((this: any, ...args: any[]) => string[]) & { [BOUNDARY_WRAPPER]
 /** Whether grouping is on right now (the tool patch keeps this current). */
 let groupingActive: () => boolean = () => true;
 
+/** Leave Pi's own thinking rows untouched (fork native-thinking mode). */
+let nativeThinking: () => boolean = () => false;
+
+export function setNativeThinking(active: () => boolean): void {
+  nativeThinking = active;
+}
+
 /** Whether Nerd Font icons are on (`icons: false` on a terminal without one). */
 let iconsEnabled: () => boolean = () => true;
 /** `tidy.thinkingColor`: the brain, the count and an expanded box border. */
@@ -940,6 +947,7 @@ function restyleThinking(component: any, lines: string[] | undefined, width: num
     for (let i = 0; i < runs.length; i++) if (!overrides?.has?.(i)) overrides?.set?.(i, true);
   }
 
+  if (!hideThinking && nativeThinking()) return lines ?? [];
   const icons = iconsEnabled();
   const color = thinkingColorFor();
   // Keep the existing live preview/spinner; only its layout ownership changes.

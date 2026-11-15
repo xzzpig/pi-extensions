@@ -32,6 +32,7 @@ test("fork omission defaults do not mutate upstream loadConfig defaults", () => 
 
     assert.deepEqual(upstream, before);
     assert.equal(fork.frameTools, false);
+    assert.equal(fork.nativeThinking, true);
     assert.equal(fork.frameMessages, true);
     assert.equal(fork.highlightBash, false);
     assert.equal(fork.collapseTurns, "off");
@@ -58,6 +59,7 @@ test("explicit tidy settings override fork defaults, including the new frameTool
     {
       tidy: {
         frameTools: true,
+        nativeThinking: false,
         frameMessages: true,
         highlightBash: true,
         collapseTurns: "live",
@@ -76,6 +78,7 @@ test("explicit tidy settings override fork defaults, including the new frameTool
     () => {
       const fork = loadForkConfig();
       assert.equal(fork.frameTools, true);
+      assert.equal(fork.nativeThinking, false);
       assert.equal(fork.frameMessages, true);
       assert.equal(fork.highlightBash, true);
       assert.equal(fork.collapseTurns, "live");
@@ -107,14 +110,39 @@ test("frameTools=false skips patchToolBoxFrames and installs hover tracking alon
     const upstream = loadConfig();
     const config = applyForkDefaults(upstream, { tidy: {} });
     const calls: string[] = [];
+    let grouping: (() => boolean) | undefined;
+    let icons: (() => boolean) | undefined;
+    let thinkingColor: (() => string) | undefined;
     const installers: ForkToolFrameInstallers = {
       patchToolBoxFrames: () => calls.push("patchToolBoxFrames"),
       installHoverTracking: () => calls.push("installHoverTracking"),
+      setGroupingActive: (active) => {
+        grouping = active;
+        calls.push("setGroupingActive");
+      },
+      setIconsEnabled: (value) => {
+        icons = value;
+        calls.push("setIconsEnabled");
+      },
+      setThinkingColor: (value) => {
+        thinkingColor = value;
+        calls.push("setThinkingColor");
+      },
     };
 
     installForkToolFrames(config, fakePi, installers);
 
-    assert.deepEqual(calls, ["installHoverTracking"]);
+    assert.deepEqual(calls, [
+      "setGroupingActive",
+      "setIconsEnabled",
+      "setThinkingColor",
+      "installHoverTracking",
+    ]);
+    // Without patchToolBoxFrames the boundary renderer still needs the real
+    // switch values; the old default (true) dropped a thinking+tool row.
+    assert.equal(grouping?.(), false);
+    assert.equal(icons?.(), true);
+    assert.equal(thinkingColor?.(), "warning");
   });
 });
 

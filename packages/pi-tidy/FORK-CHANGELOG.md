@@ -3,6 +3,21 @@
 Changes specific to `@xzzpig/pi-tidy` in this repository. Upstream history remains in
 [`CHANGELOG.md`](./CHANGELOG.md).
 
+## 0.1.1 — Native thinking and renderer switch fixes
+
+- Add fork-only `nativeThinking` (default `true`): leave thinking to Pi and `pi-thinking-collapse`
+  instead of drawing pi-tidy's own row; set `false` to restore the upstream thinking row. The
+  framed final reply still keeps completed thinking outside its border.
+- Initialize the renderer switches even when tool framing is off. `groupTools: false` reached the
+  boundary renderer only through the disabled tool-frame patch, so it kept the default `true` and
+  treated a thinking + tool-use assistant as a group carrier: the thinking row vanished when the
+  first tool call arrived. The fork now publishes `groupTools`, `icons`, `thinkingColor` and the
+  native-thinking switch itself when `frameTools` is off.
+- Guard the group-boundary renderer against nested installs: only the outermost wrapper restyles a
+  component and inner wrappers pass through. `pi-group-collapse` installs its render projection
+  between pi-tidy's load-time and `before_agent_start` boundary installs; without the guard both
+  wrappers remap the same rows and a retry error draws its `error ×2` frame twice.
+
 ## 0.1.0 — Initial fork
 
 Forked from Andy8647/pi-tidy v0.9.6.
@@ -24,7 +39,3 @@ Forked from Andy8647/pi-tidy v0.9.6.
   `~/.pi/extensions/pi-tool-display/config.json`.
 - Do not restore the tool-frame path-copy chip; it lives on a frame that this fork disables by
   default.
-- Guard the group-boundary renderer against nested installs: only the outermost wrapper restyles a
-  component and inner wrappers pass through. `pi-group-collapse` installs its render projection
-  between pi-tidy's load-time and `before_agent_start` boundary installs; without the guard both
-  wrappers remap the same rows and a retry error draws its `error ×2` frame twice.

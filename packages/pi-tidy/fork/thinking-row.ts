@@ -110,21 +110,16 @@ function thinkingRegions(component: AssistantMessageComponent): MouseRegion[] {
   return childComponents(component).filter(isMouseRegion);
 }
 
-function hasHiddenThinking(component: AssistantMessageComponent): boolean {
-  return assistantInternals(component).hideThinkingBlock === true;
-}
 
 function buildThinkingRows(
   component: AssistantMessageComponent,
   width: number,
 ): ThinkingRows | undefined {
-  // pi-tidy's framed-final-reply path intentionally omits thinking children.
-  // Restore only the settled, hidden Pi MouseRegions: streaming output remains
-  // owned by Pi and the row keeps Pi's own click-to-expand behavior.
-  if (
-    !isFramedFinalReply(component) ||
-    !hasHiddenThinking(component)
-  ) {
+  // pi-tidy's framed-final-reply path omits thinking children. Restore the
+  // settled Pi MouseRegions outside the frame whether or not Pi hides them:
+  // pi-thinking-collapse decides the collapsed affordance, and this fork never
+  // restyles thinking itself.
+  if (!isFramedFinalReply(component)) {
     return undefined;
   }
 
