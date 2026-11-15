@@ -943,7 +943,9 @@ function restyleThinking(component: any, lines: string[] | undefined, width: num
   const theme = rethink ? getTheme() : undefined;
   const runs = thinkingRuns(component.lastMessage);
   const overrides = component.thinkingVisibilityOverrides as Map<number, boolean> | undefined;
-  if (theme) {
+  // Native thinking owns both its rows and per-run visibility. Seeding tidy's
+  // collapsed overrides here would defeat streaming expansion on the next redraw.
+  if (theme && !nativeThinking()) {
     for (let i = 0; i < runs.length; i++) if (!overrides?.has?.(i)) overrides?.set?.(i, true);
   }
 

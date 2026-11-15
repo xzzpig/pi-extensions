@@ -3,6 +3,14 @@
 Changes specific to `@xzzpig/pi-tidy` in this repository. Upstream history remains in
 [`CHANGELOG.md`](./CHANGELOG.md).
 
+## 0.1.2 — Preserve native streaming thinking visibility
+
+- Keep native thinking visibility untouched during rendering. Previously `nativeThinking: true`
+  still seeded per-run collapsed overrides before returning native rows, so the first redraw
+  collapsed streaming reasoning and defeated `pi-thinking-collapse`'s expand-while-streaming rule.
+  Regression coverage now renders, invalidates, and updates the streaming component repeatedly
+  before checking automatic collapse on completion.
+
 ## 0.1.1 — Native thinking and renderer switch fixes
 
 - Add fork-only `nativeThinking` (default `true`): leave thinking to Pi and `pi-thinking-collapse`

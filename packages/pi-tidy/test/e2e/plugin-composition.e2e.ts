@@ -92,7 +92,17 @@ test("all five real extensions compose with pi-tidy as the sole active user rend
     };
     const thinking = new sdk.AssistantMessageComponent(undefined, false, sdk.getMarkdownTheme());
     thinking.updateContent(thinkingMessage as any, true);
+    for (let redraw = 0; redraw < 3; redraw++) {
+      const streamingRows = stripTerminalSequences(thinking.render(80).join("\n"));
+      assert.match(streamingRows, /private reasoning that should collapse/, "streaming thinking stays expanded across redraws");
+      assert.doesNotMatch(streamingRows, /Thinking… \(click to expand\)|Thinking\.\.\./);
+      thinking.invalidate();
+      thinking.updateContent(thinkingMessage as any, true);
+    }
     thinking.updateContent(thinkingMessage as any, false);
+    const settledThinking = stripTerminalSequences(thinking.render(80).join("\n"));
+    assert.match(settledThinking, /Thinking… \(click to expand\)/, "message completion auto-collapses thinking");
+    assert.doesNotMatch(settledThinking, /private reasoning that should collapse/);
     const turnState = await import("../../src/turns/turn-state.ts");
     const finalMessage = {
       role: "assistant",
