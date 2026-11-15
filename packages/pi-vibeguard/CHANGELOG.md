@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.3
+
+### Fixed
+
+- Include the fork-only runtime modules `fork-commands.ts` and `suspension-state.ts` in the npm package files allowlist. Version 0.2.2 omitted them, so the published `index.ts` imported files absent from the tarball and Pi failed to load the extension. The package archive is now checked for both transitive modules and the installed package entry is smoke-tested.
+
 ## 0.2.2
 
 ### Changed

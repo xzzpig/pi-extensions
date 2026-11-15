@@ -16,6 +16,7 @@ import {
   integrity,
   publishArtifacts,
 } from "./release-core.mjs";
+import { runPackageStartupE2E } from "./package-startup-e2e.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export function run(command, args, cwd = root, options = {}) {
@@ -206,6 +207,7 @@ async function main() {
     const destination = fs.mkdtempSync(path.join(output, `${p.dir}-`));
     return pack(p, destination);
   });
+  runPackageStartupE2E(artifacts);
   fs.writeFileSync(
     path.join(output, "artifacts.json"),
     JSON.stringify(artifacts, null, 2) + "\n",

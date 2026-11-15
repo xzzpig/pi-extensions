@@ -33,8 +33,11 @@ fork-divergence audit and archive checks. Until changes have machine-readable
 package scope, any unarchived OpenSpec change blocks release conservatively;
 CI never archives a change itself. Exact upstream commits needed by the fork
 audit must be available or fetched from the recorded sources, never silently
-skipped. Package-specific runtime tests requiring models/interactive TUI remain
-separate from unattended unit checks.
+skipped. After packing, the release gate installs the exact candidate tarballs
+and starts each Pi extension entry in an isolated, offline RPC process; a
+successful `get_state` response with no extension-load error verifies startup
+without a model call. Behavior tests requiring models or interactive TUI remain
+separate from this unattended package-startup smoke.
 
 Multi-package npm publishing is not atomic. A failed upload or an observed
 registry integrity mismatch stops the release. A successful npm publish counts
