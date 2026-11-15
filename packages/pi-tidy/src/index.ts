@@ -222,7 +222,7 @@ export default function (pi: ExtensionAPI): void {
   if (!hasRendererApi(pi)) {
     if (config.highlightBash) unavailable.push("bash highlighting and the `bashResultLines` budget");
     else if (config.bashResultLines !== DEFAULT_BASH_RESULT_LINES) unavailable.push("the `bashResultLines` budget");
-    if (config.writeLines !== PI_WRITE_PREVIEW_LINES) unavailable.push("the custom write preview (`writeLines`)");
+    if (config.writePreview && config.writeLines !== PI_WRITE_PREVIEW_LINES) unavailable.push("the custom write preview (`writeLines`)");
   }
   warnUnavailableRenderers(pi, unavailable);
 
@@ -298,7 +298,7 @@ export default function (pi: ExtensionAPI): void {
   }
 
   try {
-    registerWritePreview(pi, config.writeLines);
+    if (config.writePreview) registerWritePreview(pi, config.writeLines);
   } catch (error) {
     console.debug("[pi-tidy] write preview renderer failed:", error);
   }

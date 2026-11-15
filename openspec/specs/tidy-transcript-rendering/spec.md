@@ -20,6 +20,20 @@
 - **WHEN** 用户未配置 `tidy` 对象即启动会话
 - **THEN** 工具框不出现，用户消息显示 frame，一般消息框、错误行去重与 hex 色块生效
 
+### Requirement: write 调用预览显式启用
+
+fork MUST 提供 `tidy.writePreview` 布尔开关，默认 `false`。关闭时 MUST NOT 注册 write 调用预览渲染器；原有 call、result 和 shell 渲染器保持不变。`writeLines` 仅在 `writePreview: true` 时生效，不得隐式启用预览。旧 `toolbox` 配置键仍可提供该开关。
+
+#### Scenario: 默认与 Tool Display 共存
+
+- **WHEN** 用户未启用 `writePreview`，且 pi-tool-display 提供 write 的调用标题与结果 diff
+- **THEN** pi-tidy 不追加内容预览，折叠、展开、执行中及完成后的 write 渲染均由原有渲染器负责
+
+#### Scenario: 显式恢复预览
+
+- **WHEN** 用户设置 `tidy.writePreview: true`
+- **THEN** pi-tidy 按 `writeLines` 绘制调用预览，保留原有执行逻辑、结果及 shell 渲染器；关闭后重新加载恢复原有调用渲染器
+
 ### Requirement: 工具框开关与悬停跟踪解耦
 
 fork MUST 提供 `frameTools` 配置键，默认 `false`。为 `false` 时 MUST NOT 安装工具框补丁，MUST NOT patch `ToolExecutionComponent`；同时 MUST 单独安装悬停跟踪，保证代码块复制控件的悬停高亮与手型光标仍可用。

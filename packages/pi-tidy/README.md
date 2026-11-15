@@ -107,6 +107,7 @@ when the corresponding key is omitted:
 | Setting | Fork default | Notes |
 |---------|--------------|-------|
 | `frameTools` | `false` | Fork-only switch. `pi-tool-display` owns tool frames; set `true` only when you want pi-tidy's frames instead. |
+| `writePreview` | `false` | Fork-only switch. Leaves write call/result rendering to Pi or the owning extension; set `true` to restore tidy’s call preview and apply `writeLines`. See [tool compatibility](./fork/tool-compatibility.md). |
 | `nativeThinking` | `true` | Fork-only switch. Leaves thinking to Pi and `pi-thinking-collapse` (which owns the collapsed affordance); set `false` to let pi-tidy draw its own thinking row instead. |
 | `frameMessages` | `true` | Enabled with user-message `frame` because the upstream uses this switch for both; compaction, branch, skill and custom message boxes are therefore framed too. |
 | `collapseTurns` | `"off"` | Group/turn folding remains owned by the other installed extensions. |

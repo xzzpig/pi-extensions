@@ -12,7 +12,7 @@
   "notes": "Fork of Andy8647/pi-tidy. Rendering ownership, fork defaults and coexistence behavior are specified in openspec/changes/import-pi-tidy-fork; fork-only logic belongs under fork/.",
   "reapplyOnSync": [
     "Keep FORK-CHANGELOG.md in the published files list while retaining the upstream homepage/bugs/source identity.",
-    "In src/index.ts, load through fork/loadForkConfig and replace patchToolBoxFrames(options) with installForkToolFrames(config).",
+    "In src/index.ts, load through fork/loadForkConfig and replace patchToolBoxFrames(options) with installForkToolFrames(config). Gate registerWritePreview and its unavailable-API warning with config.writePreview; keep the upstream test harness opted into writePreview.",
     "Retain the xzzpig fork section and local-install commands in README.md, including runtime defaults and the pi-tool-display enableNativeUserMessageBox prerequisite.",
     "Keep test/renderer-harness.ts explicit about upstream integration defaults (including frameTools: true) so upstream behavior tests remain baseline-focused; fork defaults are asserted in fork-only tests.",
     "Allow wrapped terminal output in test/third-party-edit.test.ts when asserting the edit summary and long path.",
@@ -22,6 +22,7 @@
     "packaging identity (repository.url, files allowlist, per-package lockfile policy) is enforced by scripts/check-fork-identity.mjs — run `node scripts/check-fork-identity.mjs` after every subtree pull/sync"
   ],
   "doNotReintroduce": [
+    "Do not unconditionally install the write call preview: tidy.writePreview defaults to false so Pi or pi-tool-display keeps both write renderers; writeLines alone must not enable it.",
     "Do not reintroduce suppression of Pi’s completed thinking MouseRegion by the final-reply frame; keep the collapsed row outside the frame and preserve native expand/collapse behavior.",
     "Do not make pi-tidy draw its own thinking row by default. The fork ships nativeThinking=true so Pi and pi-thinking-collapse own the thinking affordance; tidy's row is the opt-in `tidy.nativeThinking=false` path.",
     "Do not restore the package-local pnpm-lock.yaml or pnpm-workspace.yaml: this fork consumes only the root pnpm workspace lock, and a local workspace root makes CI resolve pi-tidy as a standalone project."

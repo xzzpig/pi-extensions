@@ -19,6 +19,7 @@ import type { ExtensionAPI, ToolDefinition, ToolRendererResolver, ToolRenderers 
 // defaults are asserted separately in test/fork/fork-runtime.test.ts.
 const UPSTREAM_INTEGRATION_DEFAULTS = {
   frameTools: true,
+  writePreview: true,
   highlightBash: true,
   frameMessages: true,
   userMessageStyle: "frame",

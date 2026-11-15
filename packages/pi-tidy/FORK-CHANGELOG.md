@@ -3,6 +3,12 @@
 Changes specific to `@xzzpig/pi-tidy` in this repository. Upstream history remains in
 [`CHANGELOG.md`](./CHANGELOG.md).
 
+## 0.1.3 — Leave write rendering to the owner by default
+
+- Add `tidy.writePreview` (default `false`). Leave write rendering to Pi or the owning extension
+  unless explicitly enabled, avoiding duplicate content with pi-tool-display's result diff.
+  `writeLines` only applies when this opt-in is enabled.
+
 ## 0.1.2 — Preserve native streaming thinking visibility
 
 - Keep native thinking visibility untouched during rendering. Previously `nativeThinking: true`

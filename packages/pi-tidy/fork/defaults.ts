@@ -7,6 +7,8 @@ import { loadConfig, type TidyConfig } from "../src/config.ts";
 export interface ForkTidyConfig extends TidyConfig {
   /** Draw pi-tidy's own tool frames. The fork leaves them to pi-tool-display by default. */
   frameTools: boolean;
+  /** Opt into tidy's write call preview; otherwise preserve the owner's renderers. */
+  writePreview: boolean;
   /** Leave thinking rendering to Pi and pi-thinking-collapse instead of tidy's own row. */
   nativeThinking: boolean;
 }
@@ -19,7 +21,9 @@ export type ForkSettingsFile = {
 type RecordLike = Record<string, unknown>;
 
 function asRecord(value: unknown): RecordLike | undefined {
-  return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as RecordLike) : undefined;
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as RecordLike)
+    : undefined;
 }
 
 /** Settings values are decoded once at this I/O boundary. */
@@ -29,10 +33,15 @@ function readBoolean(value: unknown): boolean | undefined {
 
 function readSettings(): ForkSettingsFile | undefined {
   try {
-    const agentDir = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
-    const parsed: unknown = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf-8"));
+    const agentDir =
+      process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+    const parsed: unknown = JSON.parse(
+      readFileSync(join(agentDir, "settings.json"), "utf-8"),
+    );
     const root = asRecord(parsed);
-    return root ? { tidy: asRecord(root.tidy), toolbox: asRecord(root.toolbox) } : undefined;
+    return root
+      ? { tidy: asRecord(root.tidy), toolbox: asRecord(root.toolbox) }
+      : undefined;
   } catch {
     return undefined;
   }
@@ -53,19 +62,24 @@ export function applyForkDefaults(
   settings: ForkSettingsFile | undefined = readSettings(),
 ): ForkTidyConfig {
   const userOptions = tidyOptions(settings);
-  const configuredOr = <K extends keyof TidyConfig>(key: K, fallback: TidyConfig[K]): TidyConfig[K] =>
+  const configuredOr = <K extends keyof TidyConfig>(
+    key: K,
+    fallback: TidyConfig[K],
+  ): TidyConfig[K] =>
     Object.hasOwn(userOptions, key) ? config[key] : fallback;
 
   return {
     ...config,
     frameTools: readBoolean(userOptions.frameTools) ?? false,
+    writePreview: readBoolean(userOptions.writePreview) ?? false,
     nativeThinking: readBoolean(userOptions.nativeThinking) ?? true,
     highlightBash: configuredOr("highlightBash", false),
     frameMessages: configuredOr("frameMessages", true),
     userMessageStyle: configuredOr("userMessageStyle", "frame"),
     collapseTurns: configuredOr("collapseTurns", "off"),
     finalReplyStyle:
-      Object.hasOwn(userOptions, "finalReplyStyle") || Object.hasOwn(userOptions, "frameFinalReply")
+      Object.hasOwn(userOptions, "finalReplyStyle") ||
+      Object.hasOwn(userOptions, "frameFinalReply")
         ? config.finalReplyStyle
         : "frame",
     groupTools: configuredOr("groupTools", false),
