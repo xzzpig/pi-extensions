@@ -31,8 +31,6 @@ export interface FsReadRestrictionConfig {
  * Note: Empty `allowOnly` means NO paths are writable (unlike read's empty denyOnly).
  */
 export interface FsWriteRestrictionConfig {
-  /** Per-command working directory for mandatory filename/subtree protection. */
-  cwd?: string
   allowOnly: string[]
   denyWithinAllow: string[]
 }

@@ -14,157 +14,155 @@
     {
       "kind": "other",
       "path": "packages/pi-goal-x/package.json",
-      "reason": "Fork npm publication must identify xzzpig/pi-extensions as repository.url for OIDC provenance; upstream identity remains in this subtree record and package homepage. This minimal metadata divergence remains while publishing the fork.",
+      "reason": "[policy] Fork npm publication must identify xzzpig/pi-extensions as repository.url for OIDC provenance; upstream identity remains in this subtree record and package homepage. This minimal metadata divergence remains while publishing the fork.",
       "recordedAt": "2026-10-31T00:00:00Z"
     },
     {
       "kind": "lint",
       "path": "packages/pi-goal-x/experiments/context/run-gate.mjs",
-      "reason": "pi-lens finding on upstream-original code (JSON.parse without try/catch); left unchanged per the policy of keeping upstream bytes rather than adding inline suppressions.",
+      "reason": "[baseline] pi-lens finding on upstream-original code (JSON.parse without try/catch); left unchanged per the policy of keeping upstream bytes rather than adding inline suppressions.",
       "recordedAt": "2026-09-28T02:09:09+08:00"
     },
     {
       "kind": "lint",
       "path": "packages/pi-goal-x/extensions/goal-prompt-cache.ts",
-      "reason": "pi-lens finding (no-unknown-returns) on upstream-original code; left unchanged per the policy of keeping upstream bytes.",
+      "reason": "[baseline] pi-lens finding (no-unknown-returns) on upstream-original code; left unchanged per the policy of keeping upstream bytes.",
       "recordedAt": "2026-09-28T02:09:09+08:00"
     },
     {
       "kind": "lint",
       "path": "packages/pi-goal-x/tests/e2e/goal-prompt-cache-sdk.test.ts",
-      "reason": "pi-lens finding on an upstream-original test file; left unchanged per the policy of keeping upstream bytes.",
+      "reason": "[baseline] pi-lens finding on an upstream-original test file; left unchanged per the policy of keeping upstream bytes.",
       "recordedAt": "2026-09-28T02:09:09+08:00"
     },
     {
       "kind": "lint",
       "path": "packages/pi-goal-x/tests/goal-prompt-cache.test.ts",
-      "reason": "pi-lens finding on an upstream-original test file; left unchanged per the policy of keeping upstream bytes.",
+      "reason": "[baseline] pi-lens finding on an upstream-original test file; left unchanged per the policy of keeping upstream bytes.",
       "recordedAt": "2026-09-28T02:09:09+08:00"
     },
     {
       "kind": "lint",
       "path": "packages/pi-goal-x/tests/goal-tool-visibility.test.ts",
-      "reason": "Three empty catch blocks around rmSync cleanup on upstream-original lines (upstream 64/162/219). Kept byte-identical per the debt policy: no per-site suppressions inside upstream files.",
+      "reason": "[baseline] Three empty catch blocks around rmSync cleanup on upstream-original lines (upstream 64/162/219). Kept byte-identical per the debt policy: no per-site suppressions inside upstream files.",
       "recordedAt": "2026-09-28T02:09:09+08:00"
     },
     {
       "kind": "lint",
       "path": "packages/pi-goal-x/tests/integration/extension.test.ts",
-      "reason": "Empty catch blocks around rmSync/chmodSync cleanup on upstream-original lines (upstream 140/194/918); kept byte-identical rather than annotating upstream code.",
+      "reason": "[baseline] Empty catch blocks around rmSync/chmodSync cleanup on upstream-original lines (upstream 140/194/918); kept byte-identical rather than annotating upstream code.",
       "recordedAt": "2026-09-28T02:09:09+08:00"
     },
     {
       "kind": "noise",
-      "path": "packages/pi-goal-x/extensions/goal-completion.ts",
-      "reason": "Diff-alignment artifact: the fork's code move and try-block wrapping indent these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
-      "recordedAt": "2026-09-28T05:40:00+08:00"
-    },
-    {
-      "kind": "noise",
       "path": "packages/pi-goal-x/extensions/goal-questionnaire.ts",
-      "reason": "Diff-alignment artifact: the fork's code move and try-block wrapping indent these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
+      "reason": "[artifact] Diff-alignment artifact: the fork's code move and try-block wrapping indent these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
     },
     {
       "kind": "noise",
       "path": "packages/pi-goal-x/tests/goal-auditor.test.ts",
-      "reason": "Diff-alignment artifact: the fork's code move and try-block wrapping indent these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
+      "reason": "[artifact] Diff-alignment artifact: the fork's code move and try-block wrapping indent these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
     },
     {
       "kind": "noise",
       "path": "packages/pi-goal-x/tests/goal-drafting.test.ts",
-      "reason": "Diff-alignment artifact: the fork's code move and try-block wrapping indent these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
+      "reason": "[artifact] Diff-alignment artifact: the fork's code move and try-block wrapping indent these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
     },
     {
       "kind": "noise",
       "path": "packages/pi-goal-x/tests/goal-prompts.test.ts",
-      "reason": "Diff-alignment artifact: the fork's code move and try-block wrapping indent these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
+      "reason": "[artifact] Diff-alignment artifact: the fork's code move and try-block wrapping indent these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
     },
     {
       "kind": "noise",
       "path": "packages/pi-goal-x/tests/goal-tool-visibility.test.ts",
-      "reason": "Diff-alignment artifact: the fork's code move and try-block wrapping indent these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
+      "reason": "[artifact] Diff-alignment artifact: the fork's code move and try-block wrapping indent these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
     },
     {
       "kind": "noise",
       "path": "packages/pi-goal-x/tests/integration/extension.test.ts",
-      "reason": "Diff-alignment artifact: the fork's code move and try-block wrapping indent these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
+      "reason": "[artifact] Diff-alignment artifact: the fork's code move and try-block wrapping indent these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
     },
     {
       "kind": "test",
       "path": "packages/pi-goal-x/tests/integration/extension.test.ts",
-      "reason": "User-approved verification exception for minimize-goal-model-telemetry: test:all reports the nine settings/profile failures listed in that change's validation.md. Gate re-triage ran this file with the same adapter on both the working tree and a detached HEAD baseline; both produced the same nine failures, so this gate does not introduce them. The gate does not alter the settings handler or profile-install path; removing this debt requires a separately authorized integration-test reconciliation."
+      "reason": "[policy] User-approved verification exception for minimize-goal-model-telemetry: test:all reports the nine settings/profile failures listed in that change's validation.md. Gate re-triage ran this file with the same adapter on both the working tree and a detached HEAD baseline; both produced the same nine failures, so this gate does not introduce them. The gate does not alter the settings handler or profile-install path; removing this debt requires a separately authorized integration-test reconciliation."
     },
     {
       "kind": "lint",
       "path": "packages/pi-goal-x/tests/integration/extension.test.ts",
-      "reason": "Two error-swallowing findings in best-effort temporary-directory cleanup are byte-identical in the merge base, pre-sync fork and upstream v0.34.1. Preserve upstream bytes under the current-change-only lint policy; revisit if the upstream fixture cleanup changes."
+      "reason": "[baseline] Two error-swallowing findings in best-effort temporary-directory cleanup are byte-identical in the merge base, pre-sync fork and upstream v0.34.1. Preserve upstream bytes under the current-change-only lint policy; revisit if the upstream fixture cleanup changes."
     },
     {
       "kind": "test",
       "path": "packages/pi-goal-x/experiments/context/run-gate.mjs",
-      "reason": "User-approved verification exception for minimize-goal-model-telemetry: context:gate retains the currently observed 24-fixture baseline/semantic drift, legacy Goal snapshot/tail checks, and existing capture/profile mismatches documented in validation.md. Do not rewrite the baseline or weaken the gate to remove the failure; separately authorized harness/baseline maintenance is required."
+      "reason": "[policy] User-approved verification exception for minimize-goal-model-telemetry: context:gate retains the currently observed 24-fixture baseline/semantic drift, legacy Goal snapshot/tail checks, and existing capture/profile mismatches documented in validation.md. Do not rewrite the baseline or weaken the gate to remove the failure; separately authorized harness/baseline maintenance is required."
     },
     {
       "kind": "test",
       "path": "packages/pi-goal-x/experiments/context/provider-crosscheck.mjs",
-      "reason": "User-approved verification exception for minimize-goal-model-telemetry: provider-check's current active-regular-no-tasks SDK system prompt comparison differs only in get_goal/create_goal tool-line order; adapter capture succeeds without network dispatch. Remove only after separately authorized order-aware harness maintenance."
+      "reason": "[policy] User-approved verification exception for minimize-goal-model-telemetry: provider-check's current active-regular-no-tasks SDK system prompt comparison differs only in get_goal/create_goal tool-line order; adapter capture succeeds without network dispatch. Remove only after separately authorized order-aware harness maintenance."
     },
     {
       "kind": "deleted",
       "path": "packages/pi-goal-x/package-lock.json",
-      "reason": "User selected the root pnpm lock as the sole dependency contract; the upstream npm lock cannot represent the workspace pi-subagents dependency."
+      "reason": "[policy] User selected the root pnpm lock as the sole dependency contract; the upstream npm lock cannot represent the workspace pi-subagents dependency."
     },
     {
       "kind": "lint",
       "path": "packages/pi-goal-x/tests/goal-drafting.test.ts",
-      "reason": "The reported empty cleanup catch is byte-identical in the pre-sync fork and upstream v0.34.1; retain existing source under the current-change-only policy."
+      "reason": "[baseline] The reported empty cleanup catch is byte-identical in the pre-sync fork and upstream v0.34.1; retain existing source under the current-change-only policy."
     },
     {
       "kind": "lint",
       "path": "packages/pi-goal-x/.github/workflows/ci.yml",
-      "reason": "The remaining yamllint line-length finding is unchanged from upstream v0.34.1; keep the inherited bytes under the current-change-only policy."
+      "reason": "[baseline] The remaining yamllint line-length finding is unchanged from upstream v0.34.1; keep the inherited bytes under the current-change-only policy."
     },
     {
       "kind": "lint",
       "path": "packages/pi-goal-x/.github/workflows/publish.yml",
-      "reason": "The remaining yamllint line-length findings are unchanged upstream v0.34.1 lines; keep inherited bytes under the current-change-only policy."
+      "reason": "[baseline] The remaining yamllint line-length findings are unchanged upstream v0.34.1 lines; keep inherited bytes under the current-change-only policy."
     },
     {
       "kind": "lint",
       "path": "packages/pi-goal-x/tests/e2e/goal-audit-supervisor-live.mjs",
-      "reason": "ESLint reports four unused symbols (execFileSync, appendFileSync, otherAlpha, rowTokens). The entire file is byte-identical to pre-sync HEAD 8eb1bb7f1f2d9ec4fddb90a0f129c2d2f843d552; retained under the current-change-only policy. The package-wide lint command therefore remains nonzero until the separately owned fixture is reconciled."
+      "reason": "[baseline] ESLint reports four unused symbols (execFileSync, appendFileSync, otherAlpha, rowTokens). The entire file is byte-identical to pre-sync HEAD 8eb1bb7f1f2d9ec4fddb90a0f129c2d2f843d552; retained under the current-change-only policy. The package-wide lint command therefore remains nonzero until the separately owned fixture is reconciled."
     },
     {
       "kind": "lint",
       "path": "packages/pi-goal-x/experiments/context/cache-compare.mjs",
-      "reason": "git diff --check flags a blank EOF line in this new upstream file; its blob 2ee0bba391e23d556d1cef50e2751c210f09f06c is byte-identical to upstream v0.34.1."
+      "reason": "[baseline] git diff --check flags a blank EOF line in this new upstream file; its blob 2ee0bba391e23d556d1cef50e2751c210f09f06c is byte-identical to upstream v0.34.1."
     },
     {
       "kind": "lint",
       "path": "packages/pi-goal-x/specs/2026-10-23-continuation-defaults-validation/evidence/prototype.patch",
-      "reason": "git diff --check flags whitespace inside this upstream evidence patch, whose exact blob 572c899793f6a447155194ab330e5efd72812525 is retained as historical patch evidence."
+      "reason": "[policy] git diff --check flags whitespace inside this upstream evidence patch, whose exact blob 572c899793f6a447155194ab330e5efd72812525 is retained as historical patch evidence."
     },
     {
       "kind": "other",
       "path": "packages/pi-goal-x/extensions/goal-{core-tools,drafting,oracle,task-tools}.ts",
-      "reason": "Minimal import-only compatibility divergence: Pi 1.5 npm pi-ai no longer exports Type. Keep TypeBox schema builders and import Type from the existing typebox peer until upstream carries the equivalent fix."
+      "reason": "[policy] Minimal import-only compatibility divergence: Pi 1.5 npm pi-ai no longer exports Type. Keep TypeBox schema builders and import Type from the existing typebox peer until upstream carries the equivalent fix."
+    },
+    {
+      "kind": "noise",
+      "path": "packages/pi-goal-x/extensions/goal-completion.ts",
+      "reason": "[artifact] Structural re-export seam: this upstream file keeps the authoritative commitGoalCompletion transaction (unchanged code) while the fork-only orchestration around it moved to fork-completion-flow.ts, so the raw diff pairs the retained transaction with the removed upstream flow functions. The residual raw-vs-w delta is diff alignment, not fork logic in the upstream file. Exit: upstream restructuring the flow so the transaction and orchestration are separate modules."
     }
   ],
   "reapplyOnSync": [
-    "Keep package.json repository.url at git+https://github.com/xzzpig/pi-extensions.git for fork OIDC publishing; retain upstream source identity in subtree metadata.",
-    "Use the root pnpm lockfile, remove the upstream package-lock.json, and reapply the pnpm workspace CI, packing, and fork publication-documentation adaptations. After an ignore-scripts install, build pi-subagents via its prepack script because pnpm links the dependency to its generated dist-pkg.",
+    "Use the root pnpm lockfile; reapply the pnpm workspace CI, packing, and fork publication-documentation adaptations. After an ignore-scripts install, build pi-subagents via its prepack script because pnpm links the dependency to its generated dist-pkg.",
     "keep goal-prompts.ts upstream space-indent inside cachedPrompt/retainedTaskChars, and keep goal-policy.ts byte-identical",
-    "re-apply the settings nested auditor group (legacy flat aliases fold into auditor.* leaves, nested wins per file, no deprecated_key diagnostics); map any new upstream flat auditor setting through the nested group",
+    "re-apply the settings nested auditor group (legacy flat aliases fold into auditor.* leaves, nested wins per file, no deprecated_key diagnostics); map any new upstream flat auditor setting through the nested group; every auditor leaf lives once in the fork-only extensions/goal-auditor-settings.ts table (kind/tier/default/persistence/status label/invalid message), which drives parse, resolution, persistence and the /goal-status rows — add a leaf there, and keep only the thin drivers in goal-settings.ts.",
     "re-apply the auditor prompt design: baseChecklist/auditor.checklist override plus the structured_output protocol, the buildGoalAuditorPrompt injection order, the always-preserved protocol tail, byte-identical output when unset, and feedbackNotes appending to rejectionText in goal-completion.ts",
     "extend goal-drafting's strip regex to strip the 'Budget: …' prefix line",
     "re-apply the agents/goal-auditor.md deletion if upstream re-adds it",
-    "re-apply the goal-completion S1 seam: the completion-audit settings read point calls loadGoalSettingsWithAuditorOverride(ctx.cwd, auditTarget.id) from the fork-only extensions/goal-auditor-override.ts (per-goal auditor override merged over the global settings; no override returns the global settings unchanged). goal-auditor-override.ts's THINKING_LEVELS literal mirrors goal-settings.ts's ThinkingLevel union for read-time validation — re-align it whenever upstream adds a thinking level Retain owner-bound ActiveGoalAudit cancellation, same-child Escape resume, and mandatory audit_started/audit_skipped/audit_result persistence; request and usage accounting remain best effort.",
+    "re-apply the completion-flow S1 seam (implementation now in fork-only extensions/fork-completion-flow.ts; goal-completion.ts is a re-export seam): the completion-audit settings read point calls loadGoalSettingsWithAuditorOverride(ctx.cwd, auditTarget.id) from the fork-only extensions/goal-auditor-override.ts (per-goal auditor override merged over the global settings; no override returns the global settings unchanged). goal-auditor-override.ts's THINKING_LEVELS literal mirrors goal-settings.ts's ThinkingLevel union for read-time validation — re-align it whenever upstream adds a thinking level Retain owner-bound ActiveGoalAudit cancellation, same-child Escape resume, and mandatory audit_started/audit_skipped/audit_result persistence; request and usage accounting remain best effort.",
     "regenerate tests/.test-manifest.json with `node scripts/run-unit-tests.mjs --write-manifest` so fork-only test files stay pinned (test:selfcheck fails otherwise)",
     "keep the fork section on top of the upstream history in CHANGELOG.md and README.md and re-apply the fork wording (every sync conflicts on both)",
     "在 goal-events.ts active 生成边界调用 goalModelPromptParts；仅在上游 showContextUsage 显式启用时读取宿主上下文用量，默认关闭；将生成计数经 fork-context-retention.ts 协调，保留上下文开关变化时的请求前缀而不保留已移除的预算/运行约束；context handler 保留既有 display-only 过滤/checkpoint 规范化，不新增旧消息遥测投影",
@@ -172,19 +170,20 @@
     "re-apply the goal-core-tools.ts model-view call sites for create_goal, get_goal summary/history and projected detail pages; keep UI notification and independent auditor detailedSummary inputs authoritative",
     "保留 goal-detail.ts 接受新历史查询的执行字段视图（unknown rows/asRecord）的最小接缝；新返回先选字段再分页，使用原内容 hash/cursor，不重引入投影版本或 revision-token 缓存",
     "re-apply goal-compaction.ts filtering of audit_usage and model-view budget boundaries for compaction helpers and the live post-compaction delta",
-    "re-apply goal-completion.ts model-view summaries and rejection-only generated audit-cost stripping while preserving raw display cards, auditor input and internal usage",
+    "re-apply the completion-flow model-view summaries (fork-only extensions/fork-completion-flow.ts + extensions/fork-audit-usage.ts; goal-completion.ts only re-exports) and rejection-only generated audit-cost stripping while preserving raw display cards, auditor input and internal usage",
     "保留 goal-format.ts 的 UI-only import/调用：restoreDisplayUsage 位于 fork-only goal-model-display.ts，以该 goal 的精确生成摘要文本 goalModelDetailedSummary(goal) 作为唯一锚点定位真实生成块，并用由记录重建的 header（objective 可多行，禁止按物理行计数）计算插入位置，恢复权威 usageLines；objective、任务标题或 auditor 引用即使内嵌同样 header/摘要文本也不会误选或拆开原文，无匹配则原样返回，模型 content 不变；另需保留协调记录渲染接缝：goal-format.ts 只允许一行 import（goalCardCoordination，来自 fork-only goal-audit-supervisor-handoff.ts）与三行调用（first/card/firstText/out(text + card.suffix)），上游文件内不得再出现协调记录的数据提取或剥离逻辑（这些全部在 fork-only 模块中，含按精确附录文本剥离而非按标题匹配）；该接缝的 fork-only 测试为 tests/goal-audit-supervisor-card.test.ts，不得回填到上游 goal-enhancements.test.ts",
-    "在 prompts/goal-prompts.ts 的新 context/state/budget gate/reminder 使用 modelBudgetLine 明确 lifetime spending cap；schedulerSummary 透传 showAutonomousRuns，保持真实执行 gate",
+    "在 fork-only prompts/fork-model-view-prompts.ts 的 context/state/budget gate/reminder（goal-prompts.ts 只 re-export） 使用 modelBudgetLine 明确 lifetime spending cap；schedulerSummary 透传 showAutonomousRuns，保持真实执行 gate",
     "重放上游 goal-compaction、goal-context-usage、goal-core-tools、goal-golden、goal-scheduler 中既有用例的必要断言调整（新查询字段选择、预算/运行约束文案、UI 统计与 details 不变）；fork 新生成行为的独立用例放在 fork-only tests/goal-new-generation.test.ts，不塞进上游用例集",
     "Keep experiments/context/fork-sdk-paths.mjs as the installation-depth-independent SDK resolution seam for capture-context.mjs and provider-crosscheck.mjs; retain structural, pre-dispatch provider capture.",
     "重放 docs/advanced-usage.md 与 CHANGELOG Unreleased 的新内容边界：新生成主模型内容精简，旧 session/工具返回不处理；保持 dashboard/ledger/auditor 统计，不改版本",
-    "审计监督只读旁路(2026-10-19):同步时保留 fork 在 goal-completion.ts 的单外层完成 wrapper(捕获初次与 resume 的 supervisorHandoff 后一次性回流)、goal-auditor-delegation.ts 的协调错误先锁定再精确取消、终态冻结与 appendAuditSupervisorUsageEntry、goal-ledger.ts 的 audit_supervisor_usage 事件与校验分支、goal-model-view.ts 两处谓词对该事件的排除,以及 goal-events.ts/goal-state.ts 的旁路生命周期失效挂点。goal-audit-sidechannel.ts、goal-audit-context-snapshot.ts、goal-audit-supervisor-handoff.ts 为 fork-only 新模块,不写入任何上游文件。测试入口侧同样需要重放:run-unit-tests.mjs 的分组执行(unit/integration 用 stub adapter、tests/integration/goal-audit-sidechannel-sdk.test.ts 单独一组且清空 NODE_OPTIONS、所有非空组都执行并传播首个失败)、scripts/test-groups.mjs 的分组计划、scripts/fork-test-runner.mjs 的 fork suite 清单(必须排除 live E2E)、以及 scripts/test-adapter-hooks.mjs 中为快照转发的 buildSessionContext 捕获;--selfcheck 必须检查清单后退出。",
+    "审计监督只读旁路(2026-10-19):同步时保留 fork 在 extensions/fork-completion-flow.ts 的单外层完成 wrapper（goal-completion.ts 仅为 re-export seam）(捕获初次与 resume 的 supervisorHandoff 后一次性回流)、goal-auditor-delegation.ts 的协调错误先锁定再精确取消、终态冻结与 appendAuditSupervisorUsageEntry、goal-ledger.ts 的 audit_supervisor_usage 事件与校验分支、goal-model-view.ts 两处谓词对该事件的排除,以及 goal-events.ts/goal-state.ts 的旁路生命周期失效挂点。goal-audit-sidechannel.ts、goal-audit-context-snapshot.ts、goal-audit-supervisor-handoff.ts 为 fork-only 新模块,不写入任何上游文件。测试入口侧同样需要重放:run-unit-tests.mjs 的分组执行(unit/integration 用 stub adapter、tests/integration/goal-audit-sidechannel-sdk.test.ts 单独一组且清空 NODE_OPTIONS、所有非空组都执行并传播首个失败)、scripts/test-groups.mjs 的分组计划、scripts/fork-test-runner.mjs 的 fork suite 清单(必须排除 live E2E)、以及 scripts/test-adapter-hooks.mjs 中为快照转发的 buildSessionContext 捕获;--selfcheck 必须检查清单后退出。",
     "For the Pi 1.4 Responses and continuation SDK workers, adapt upstream fixtures to the fork constant tool surface and structured pi-subagents delegation. Use the real pi-subagents owner for lifecycle scenarios, a bounded event-owner fixture for the installed-Responses regression, and allow sufficient child-process startup time without weakening assertions.",
     "在 goal-runtime.ts 最终发送路径保留同步 veto 调用点：位于原有 idle/pending readiness 检查后、authorize/claim 前；veto 不分配额度、checkpoint 序号或消息，放行后复核目标身份与宿主 readiness，busy 时仍按原 50ms 间隔重试。goal-state.ts 将该 hook 接到 fork-only goal-auto-continue-gate.ts，以当前 sessionId/goalId 发出事件；协议实现与行为测试留在 fork-only 文件。",
     "Keep the fork-only docs/auto-continuation-gate.md and docs/unfocused-sessions.md in the published package by retaining their explicit entries in package.json's files list.",
     "在 goal-events.ts 的 currentGoalContextParts 与 goal-state.ts 的 focus 变更/会话载入路径上删除上游重新引入的未聚焦模型提醒：请求侧 [PI GOAL UNFOCUSED] 分支与 pi-goal-steering-event 发送都不得恢复；保留其 stale-checkpoint 分支、focus entry 写入与 UI 更新。旧键 hideUnfocusedPrompt 继续解析/分层/保存但不进入设置菜单与设置摘要。",
     "目标调整差异审核：保留 goal-drafting.ts 的 withTweakReview 执行包装、TweakReview 候选/确认/summary/mutate 接缝、初步待校验展示及 renderTweakReview 结果接缝；tweak 业务字段构造已抽到 fork-only goal-tweak-projection.ts，后续上游修改恢复/预算/任务合并规则时需同步对齐。goal-drafting 与 goal-tweak-status-persistence 测试保留 fork-tweak-draft-fixture 的旧问卷夹具到新调整决策映射及初步展示断言调整；package.json files 保留 docs/goal-tweak-diff.md。新测试按清单重新生成 tests/.test-manifest.json。",
-    "Keep Type imported directly from host-provided typebox in goal-core-tools.ts, goal-drafting.ts, goal-oracle.ts and goal-task-tools.ts for Pi 1.5 npm SDK type compatibility; retain the fork-only goal-auditor-progress.ts direct typebox import. Do not migrate goal-x schemas to pi-schema."
+    "Keep Type imported directly from host-provided typebox in goal-core-tools.ts, goal-drafting.ts, goal-oracle.ts and goal-task-tools.ts for Pi 1.5 npm SDK type compatibility; retain the fork-only goal-auditor-progress.ts direct typebox import. Do not migrate goal-x schemas to pi-schema.",
+    "packaging identity (repository.url, files allowlist, per-package lockfile policy) is enforced by scripts/check-fork-identity.mjs — run `node scripts/check-fork-identity.mjs` after every subtree pull/sync"
   ],
   "doNotReintroduce": [
     "Do not restore upstream repository.url as the fork publishing source; npm provenance must identify the actual build repository.",

@@ -14,32 +14,26 @@
   "knownDebt": [
     {
       "kind": "noise",
-      "path": "packages/pi-permission-system/schemas/permissions.schema.json",
-      "reason": "Generated artifact: `pnpm run gen:schema` (scripts/generate-permissions-schema.ts) rewrites this file and then runs `biome format --write`, whose default indentation is tabs, while upstream ships 2-space. The tab indentation is produced by the generator, not by hand-reformatting; re-running gen:schema re-applies it.",
-      "recordedAt": "2026-09-28T02:09:09+08:00"
-    },
-    {
-      "kind": "noise",
       "path": "packages/pi-permission-system/src/authority/forwarded-request-server.ts",
-      "reason": "Diff-alignment artifact: the fork's guard or try wrapping indents these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
+      "reason": "[artifact] Diff-alignment artifact: the fork's guard or try wrapping indents these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
     },
     {
       "kind": "noise",
       "path": "packages/pi-permission-system/test/authority/approval-escalator.test.ts",
-      "reason": "Diff-alignment artifact: the fork's guard or try wrapping indents these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
+      "reason": "[artifact] Diff-alignment artifact: the fork's guard or try wrapping indents these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
     },
     {
       "kind": "noise",
       "path": "packages/pi-permission-system/test/composition-root.test.ts",
-      "reason": "Diff-alignment artifact: the fork's guard or try wrapping indents these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
+      "reason": "[artifact] Diff-alignment artifact: the fork's guard or try wrapping indents these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
     },
     {
       "kind": "noise",
       "path": "packages/pi-permission-system/test/access-intent/bash/program.test.ts",
-      "reason": "Diff-alignment artifact: the fork's inner-unit expectations on upstream v37's heredoc/redirect test cases and the #875 salvaged case indent the expectation entries against upstream's rewritten blocks, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without losing the fork expectations.",
+      "reason": "[artifact] Diff-alignment artifact: the fork's inner-unit expectations on upstream v37's heredoc/redirect test cases and the #875 salvaged case indent the expectation entries against upstream's rewritten blocks, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without losing the fork expectations.",
       "recordedAt": "2026-10-03T02:00:00+08:00"
     }
   ],
@@ -48,7 +42,7 @@
     "RuleOrigin union members",
     "probe import + refreshConfig warning",
     "loadProjectConfig profiles spread",
-    "makeCommandUnit keeps fork classifyWrapperCommand emission (wrapper + inner units), upstream home/argument spellings and floorExemptionOf against redirectedScope(node, scope); classification receives the upstream WordReader to recognize literal quoted sudo names, ArgumentSpeller to retain source-aligned inner/executed spellings, and the timed-subshell flag so separately descended subshells are not treated as uncertain wrapper arguments; BashCommand/UnitFacts carry executedSpellings; collectTimedSubshell emits its already-descended subshell once without an extra fork wrapper inner unit",
+    "makeCommandUnit keeps fork classifyWrapperCommand emission (wrapper + inner units), upstream home/argument spellings and floorExemptionOf against redirectedScope(node, scope); classification receives the upstream WordReader to recognize literal quoted sudo names, ArgumentSpeller to retain source-aligned inner/executed spellings, and the timed-subshell flag so separately descended subshells are not treated as uncertain wrapper arguments; BashCommand/UnitFacts carry executedSpellings; collectTimedSubshell emits its already-descended subshell once without an extra fork wrapper inner unit. collectCommands must save and restore the module-level activeParseProgram around each walk: an opaque payload is re-parsed by re-entering collectCommands, and clearing the parser in finally strips it from the outer walk so later wrappers degrade to payloadUnresolved/ask (nested-parse-program.fork.test.ts).",
     "wrapper-floors readWrapperCommand skips REDIRECT_NODE_TYPES children",
     "collectCommands retains upstream (node, words, speller) arguments and accepts a fourth options.parseProgram argument for the fork payload parser; BashProgram.build and wrapper-parse carry it through both asynchronous and synchronous parsing",
     "wrapper-floors innerCommandText slices the inner unit from word-joined, heredoc-body-free unit text by mapping the inner token offset through wrapper args rather than node.text.slice(start)",

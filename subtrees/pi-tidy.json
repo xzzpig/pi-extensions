@@ -11,14 +11,15 @@
   "lastSyncedAt": "2026-11-14T02:19:23+08:00",
   "notes": "Fork of Andy8647/pi-tidy. Rendering ownership, fork defaults and coexistence behavior are specified in openspec/changes/import-pi-tidy-fork; fork-only logic belongs under fork/.",
   "reapplyOnSync": [
-    "Keep package.json name @xzzpig/pi-tidy, fork version, repository.url pointing at xzzpig/pi-extensions, and FORK-CHANGELOG.md in files while retaining upstream homepage/bugs/source identity.",
+    "Keep FORK-CHANGELOG.md in the published files list while retaining the upstream homepage/bugs/source identity.",
     "In src/index.ts, load through fork/loadForkConfig and replace patchToolBoxFrames(options) with installForkToolFrames(config).",
     "Retain the xzzpig fork section and local-install commands in README.md, including runtime defaults and the pi-tool-display enableNativeUserMessageBox prerequisite.",
     "Keep test/renderer-harness.ts explicit about upstream integration defaults (including frameTools: true) so upstream behavior tests remain baseline-focused; fork defaults are asserted in fork-only tests.",
     "Allow wrapped terminal output in test/third-party-edit.test.ts when asserting the edit summary and long path.",
     "Keep package.json npm identity, repository, fork changelog files, `tsx` dev dependency, `test:e2e` script, and explicit unit-test paths (including test/renderer-harness.ts) that keep E2E files out of Node's default discovery when syncing upstream.",
     "When syncing the final-reply renderer or Pi component compatibility, re-verify fork/thinking-row.ts: retain the collapsed Pi MouseRegion outside a framed final reply and preserve click routing, unless upstream adds an equivalent coexistence path.",
-    "Keep the fork hooks in src/tools/tool-group-view.ts: (a) the component-level re-entry guard (BOUNDARY_ACTIVE) so only the outermost group-boundary wrapper restyles (a nested install passes through; otherwise pi-group-collapse's projection between installs duplicates the first retry-error line), and (b) the native-thinking switch (setNativeThinking) that makes restyleThinking return Pi's own rows when enabled. The fork-default native mode leaves thinking to Pi and pi-thinking-collapse; fork/thinking-row.ts restores settled rows outside the final frame regardless of Pi's hideThinkingBlock. Remove a hook only if upstream provides an equivalent seam."
+    "Keep the fork hooks in src/tools/tool-group-view.ts: (a) the component-level re-entry guard (BOUNDARY_ACTIVE) so only the outermost group-boundary wrapper restyles (a nested install passes through; otherwise pi-group-collapse's projection between installs duplicates the first retry-error line), and (b) the native-thinking switch (setNativeThinking) that makes restyleThinking return Pi's own rows when enabled. The fork-default native mode leaves thinking to Pi and pi-thinking-collapse; fork/thinking-row.ts restores settled rows outside the final frame regardless of Pi's hideThinkingBlock. Remove a hook only if upstream provides an equivalent seam.",
+    "packaging identity (repository.url, files allowlist, per-package lockfile policy) is enforced by scripts/check-fork-identity.mjs — run `node scripts/check-fork-identity.mjs` after every subtree pull/sync"
   ],
   "doNotReintroduce": [
     "Do not reintroduce suppression of Pi’s completed thinking MouseRegion by the final-reply frame; keep the collapsed row outside the frame and preserve native expand/collapse behavior.",
@@ -29,24 +30,24 @@
     {
       "kind": "noise",
       "path": "packages/pi-tidy/src/tools/tool-group-view.ts",
-      "reason": "Fork-only component-level re-entry guard (BOUNDARY_ACTIVE) for the group-boundary renderer: only the outermost install may restyle. pi-group-collapse's render projection installs between pi-tidy's two boundary installs; without the guard both wrappers remap the same rows and a retry error draws its error ×2 frame twice. Remove when upstream makes boundary installs position-independent.",
+      "reason": "[artifact] Fork-only component-level re-entry guard (BOUNDARY_ACTIVE) for the group-boundary renderer: only the outermost install may restyle. pi-group-collapse's render projection installs between pi-tidy's two boundary installs; without the guard both wrappers remap the same rows and a retry error draws its error ×2 frame twice. Remove when upstream makes boundary installs position-independent.",
       "recordedAt": "2026-11-14T00:00:00Z"
     },
     {
       "kind": "lint",
       "path": "packages/pi-tidy/src/tools/tool-group-view.ts",
-      "reason": "pi-lens findings on upstream-original lines (12 object-parameter, 3 function-parameter-count, 1 function-too-long, 1 unnecessary-await). The fork only adds the boundary re-entry guard and native-thinking hook in this file; keeping upstream bytes intact means declaring these verified findings instead of rewriting them."
+      "reason": "[baseline] pi-lens findings on upstream-original lines (12 object-parameter, 3 function-parameter-count, 1 function-too-long, 1 unnecessary-await). The fork only adds the boundary re-entry guard and native-thinking hook in this file; keeping upstream bytes intact means declaring these verified findings instead of rewriting them."
     },
     {
       "kind": "deleted",
       "path": "packages/pi-tidy/pnpm-lock.yaml",
-      "reason": "Upstream package-local pnpm lock is unconsumed by this monorepo and breaks CI: running pnpm in the package directory treats it as a standalone project and its stale lock misses the tsx devDependency. Delete it again on every sync and use the root pnpm workspace lock.",
+      "reason": "[policy] Upstream package-local pnpm lock is unconsumed by this monorepo and breaks CI: running pnpm in the package directory treats it as a standalone project and its stale lock misses the tsx devDependency. Delete it again on every sync and use the root pnpm workspace lock.",
       "recordedAt": "2026-11-15T11:40:00+08:00"
     },
     {
       "kind": "deleted",
       "path": "packages/pi-tidy/pnpm-workspace.yaml",
-      "reason": "Upstream package-local pnpm workspace file makes pnpm treat the package as a separate project root, bypassing the monorepo lock/build policy. Delete it again on every sync; the package is a member of the root workspace.",
+      "reason": "[policy] Upstream package-local pnpm workspace file makes pnpm treat the package as a separate project root, bypassing the monorepo lock/build policy. Delete it again on every sync; the package is a member of the root workspace.",
       "recordedAt": "2026-11-15T11:40:00+08:00"
     }
   ]

@@ -1,5 +1,12 @@
 # Fork release notes
 
+## 0.11.1 — Upstream bytes restored, lint policy moved to config
+
+- The fork's `pi-mouse-events` consumer implementation moved to fork-only `extensions/starline/mouse/fork-consumer.ts`; `mouse/index.ts` is now a ten-line re-export seam, so an upstream change to the installer lands on the signature instead of a 500-line rewrite. No behavior change: click, wheel and drag-selection were re-verified in a live TUI.
+
+- Restored upstream bytes on `extensions/starline/pill-actions.ts` and `format.ts` (the fork-only `SAFETY:` comment pairs and the `biome-ignore` note are gone), restored upstream's empty `} catch {}` in `config.ts`, and removed the fork's `pi-lens-ignore` notes from `ui.ts`; no behavior change.
+- The corresponding pi-lens gates are waived per file in the new `packages/pi-starline/.pi-lens.json` (`require-safety-comment-for-as-unknown-as`, `no-unknown-returns`, `noUnusedVariables`, `error-swallowing`), recorded as a `knownDebt: lint` entry in the subtree metadata. Annotating upstream-original lines is not an option: it breaks the byte-stability rule the fork relies on for syncs.
+
 ## 0.11.0 — pi-tidy ownership convergence
 
 - Converge with upstream's pi-tidy ownership of user-message styling and transcript clean-copy: remove Starline's fork renderer and transcript-selection cleaner. Starline now leaves transcript selections to Pi's native copy path; configure optional clean-copy through pi-tidy's `tidy.cleanCopy`.

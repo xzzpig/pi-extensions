@@ -153,8 +153,10 @@ test("S1: setGoalAuditorOverride validates atomically and rejects definition-tie
 	});
 });
 
-test("S1: the completion seam still reads the override through goal-completion.ts", () => {
-	const seamSource = fs.readFileSync(fileURLToPath(new URL("../extensions/goal-completion.ts", import.meta.url)), "utf8");
+test("S1: the completion seam still reads the override through the flow module", () => {
+	// The upstream `goal-completion.ts` is a re-export seam; the fork flow lives in
+	// `fork-completion-flow.ts`, so the S1 read point is asserted there.
+	const seamSource = fs.readFileSync(fileURLToPath(new URL("../extensions/fork-completion-flow.ts", import.meta.url)), "utf8");
 	assert.equal(
 		(seamSource.match(/loadGoalSettingsWithAuditorOverride\(ctx\.cwd, auditTarget\.id\)/g) ?? []).length,
 		1,

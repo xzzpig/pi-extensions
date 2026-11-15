@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-11-15
+
+### 文档
+
+- 工具展示提供者契约（`docs/tool-presentation-provider.md`）成为单一来源：补齐类型签名、生命周期、七个上游接缝、能力门禁与降级矩阵；README 只保留摘要与链接。
+- 修正 API 取用示例为真实的 `Symbol.for("pi-tool-display.api.v1")` 全局符号（旧示例引用的 consumer 模块不存在）。
+- 如实记录 pi 1.5.2 的实测行为：`getToolPresentation("bash")` 返回 `undefined`（native bash 为 `source=builtin` 且无 `renderResult`），其余六个内置工具返回快照；消费者必须按 `undefined` 降级。
+
 ## [0.3.1] - 2026-11-01
 
 ### 修复与改进

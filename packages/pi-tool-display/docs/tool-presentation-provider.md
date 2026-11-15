@@ -12,9 +12,12 @@
 探测；能力缺失时回退到 Pi 原生渲染：
 
 ```ts
-import { getToolDisplayApi } from "@xzzpig/pi-tool-display/tool-display-api-consumer";
+// 消费者按全局符号取 API，不 import 本包（缺失时就是普通降级）。
+const TOOL_DISPLAY_API_KEY = Symbol.for("pi-tool-display.api.v1");
+const api = (globalThis as Record<PropertyKey, unknown>)[TOOL_DISPLAY_API_KEY] as
+  | { getToolPresentation?(name: string): unknown; presentationRevision?: number }
+  | undefined;
 
-const api = getToolDisplayApi();
 const presentation =
   typeof api?.getToolPresentation === "function"
     ? api.getToolPresentation("read")
@@ -23,16 +26,111 @@ const presentation =
 // presentation === undefined 表示：用消费者自己的定义或 Pi 原生工具渲染。
 ```
 
-`pi-tool-display` 未加载时 `getToolDisplayApi()` 自身返回 `undefined`；安装的是旧
-版本插件时，它继续返回旧版 API 对象。两种情况都降级为原生渲染。
+`pi-tool-display` 未加载时该全局符号不存在（`api === undefined`）；安装的是旧版本
+插件时，它可能只带 `decorateTool`/`registerAdapter`，两个展示成员仍为 `undefined`。
+两种情况都降级为原生渲染。pi-btw 的 `btw-transcript-display.ts` 就是按这个符号读取
+的消费者。
+
+## 类型签名
+
+`src/tool-presentation.ts` 是这些类型的来源（fork-only 模块）：
+
+```ts
+interface ToolPresentationDisplayCapabilities {
+  localWorkspace?: boolean;    // 默认 true：允许读 cwd 下的本地文件
+  executionMetadata?: boolean; // 默认 true：允许读父会话执行元数据
+}
+
+interface ToolPresentationRenderContext {
+  args?: Record<string, unknown>;
+  toolCallId?: string;
+  state?: unknown;
+  cwd?: string;
+  argsComplete?: boolean;
+  isPartial?: boolean;
+  expanded?: boolean;
+  isError?: boolean;
+  capabilities?: ToolPresentationDisplayCapabilities;
+  [key: string]: unknown;
+}
+
+type ToolPresentationRenderCall = (
+  args: Record<string, unknown>,
+  theme: Theme,
+  context: ToolPresentationRenderContext,
+) => Component;
+
+interface ToolPresentationResult {
+  content?: Array<{ type: string; text?: string }>;
+  details?: unknown;
+}
+
+type ToolPresentationRenderResult = (
+  result: ToolPresentationResult,
+  options: ToolRenderResultOptions,
+  theme: Theme,
+  context: ToolPresentationRenderContext,
+) => Component;
+
+interface ToolPresentationSnapshot {
+  readonly name: string;
+  readonly label?: string;
+  readonly renderCall?: ToolPresentationRenderCall;
+  readonly renderResult?: ToolPresentationRenderResult;
+  readonly renderShell?: "default" | "self";
+}
+
+interface ToolPresentationApi {
+  getToolPresentation(name: string): ToolPresentationSnapshot | undefined;
+  readonly presentationRevision: number;
+}
+```
+
+`ToolPresentationApi` 以两个可选成员挂到既有 `pi-tool-display.api.v1` 对象上，因此
+`version` 仍为 `1`；`ToolPresentationProvider`（含 `record`/`dispose`）不导出给消费
+者，只在本扩展内部使用。
+
+## 生命周期
+
+1. **安装**：扩展启动时创建 API 对象并 `attachToolPresentationApi(api, getConfig)`，
+   provider 实例绑定到该 `ExtensionAPI`（`bindToolPresentationOwner`）。
+2. **登记**：每注册一个内置工具，`recordToolPresentation(pi, tool)` 截取白名单字段；
+   被禁用的内置工具、非内置名称不登记。
+3. **修订**：登记表变化（注册/处置）或生效展示配置变化时 `presentationRevision`
+   递增；配置签名是规范化生效配置的 JSON 序列化。
+4. **处置**：扩展 dispose/cleanup 调 `disposeToolPresentationApi`，只清空本实例的
+   快照表，其他安装实例不受影响。
+5. **渲染**：每次 render 读取当时的生效配置，无需重新注册工具。
+6. **能力解析**：`resolveToolPresentationCapabilities(context)` 在 `renderCall`
+   （本地待处理预览）与 `renderResult`（父执行元数据）两个入口各解析一次。
+
+## 与上游文件的接缝
+
+provider 本体是 fork-only 模块；上游 `src/tool-overrides.ts` 只保留七个调用点：
+
+| # | 接缝 | 作用 |
+| --- | --- | --- |
+| 1 | `installToolDisplayApi` 内 `attachToolPresentationApi(api, getConfig)` | 把可选成员挂到 v1 API |
+| 2 | 安装后 `bindToolPresentationOwner(pi, api)` | 绑定到本次安装 |
+| 3 | 注册包装内 `recordToolPresentation(pi, tool)` | 截取白名单快照 |
+| 4 | cleanup `disposeToolPresentationApi(api)` | 处置本实例快照 |
+| 5 | `renderCall` 路径 `resolveToolPresentationCapabilities` | `localWorkspace` 门禁 |
+| 6 | `renderResult` 路径 `resolveToolPresentationCapabilities` | `executionMetadata` 门禁 |
+| 7 | provider 内的 `getConfig` 闭包 | 生效配置来源 |
+
+新增字段时只改 fork-only 模块与这两处能力解析，不要把这些逻辑写进上游 renderer。
 
 ## 支持的工具
 
-`read`、`bash`、`edit`、`write`、`grep`、`find`、`ls`。
+白名单是 `read`、`bash`、`edit`、`write`、`grep`、`find`、`ls`，但**快照只在扩展
+真正接管了该工具渲染时存在**。实测（pi 1.5.2）：`read`/`edit`/`write`/`grep`/
+`find`/`ls` 返回快照；`bash` 返回 `undefined`。同一时刻 `pi.getAllTools()` 里
+`bash` 的 `sourceInfo.source` 是 `builtin`、`renderResult` 不存在，即 provider 没有收到
+bash 的登记（具体原因未在本轮定位；这是既有行为，与本次文档整理无关）。
 
-其他名称返回 `undefined`。内置工具被插件配置禁用（`enabled: false`，或
-`registerToolOverrides[name]: false`），或该工具已由另一个扩展接管时，同样返回
-`undefined`。
+因此消费者必须把 `undefined` 当常态处理（回退到原生渲染），不要假设七种工具都可用。
+其他情况也返回 `undefined`：插件配置禁用（`enabled: false` 或
+`registerToolOverrides[name]: false`），或该工具已由另一个扩展接管。
 
 ## 快照是只读的
 
@@ -106,7 +204,7 @@ spinner 状态就不会与同 id 的父调用共享。
 
 | 情况                                           | 行为                                                                                                |
 | ---------------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| provider 缺失或旧版插件没有该能力              | `getToolDisplayApi()` 为 `undefined` 或没有 `getToolPresentation`；按原生渲染。                     |
+| provider 缺失或旧版插件没有该能力              | 全局符号不存在，或 API 对象没有 `getToolPresentation`；按原生渲染。                                |
 | 不支持的工具名、被禁用的内置工具、外部扩展接管 | `getToolPresentation(name)` 返回 `undefined`；按原生渲染。                                          |
 | `localWorkspace: false`                        | 没有本地待处理预览；只有调用摘要。                                                                  |
 | `executionMetadata: false`                     | 没有父 previous-content map，也没有推断的 create diff；使用真实结果文本或中性 `↳ write completed`。 |
@@ -129,5 +227,5 @@ spinner 状态就不会与同 id 的父调用共享。
 可选的，需要能力探测。主会话自身的渲染不受影响：它调用 renderer 时不传
 `capabilities`，因此两个标志保持 `true` 默认值。
 
-本能力的发布准备版本为 `@xzzpig/pi-tool-display` 0.3.1，**尚未实际发布**。
-旧版 0.3.0 不包含这些可选成员；正式发布后仍应先做能力探测。
+这些可选成员自 `@xzzpig/pi-tool-display` 0.3.1 起提供（见 `CHANGELOG.md`），
+旧版 0.3.0 不包含它们。无论安装版本如何，消费前都先做能力探测。

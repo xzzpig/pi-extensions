@@ -1,0 +1,21 @@
+{
+	"$schema": "https://raw.githubusercontent.com/apmantza/pi-lens/master/docs/schema/pi-lens-config-v1.json",
+	"rules": {
+		"require-safety-comment-for-as-unknown-as": {
+			"ignorePaths": [
+				"extensions/starline/pill-actions.ts",
+				"extensions/starline/ui.ts",
+				"extensions/starline/format.ts"
+			]
+		},
+		"no-unknown-returns": {
+			"ignorePaths": ["extensions/starline/ui.ts"]
+		},
+		"noUnusedVariables": {
+			"ignorePaths": ["extensions/starline/format.ts"]
+		},
+		"error-swallowing": {
+			"ignorePaths": ["extensions/starline/config.ts"]
+		}
+	}
+}

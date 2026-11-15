@@ -182,6 +182,16 @@ Rules for `knownDebt`:
   audit reports a `noise`/`deleted` entry that matches nothing as `STALE`.
 - After every sync and before the follow-up commit, re-run the whitespace
   audit below and fix noise while the diff is fresh.
+- Prefix every `reason` with one grouping tag so a reader can triage the list
+  without re-reading it: `[policy]` (a deliberate fork decision that must
+  stay), `[artifact]` (diff alignment, whitespace, formatter reflow),
+  `[baseline]` (a finding already present in the imported upstream tree or its
+  toolchain, kept by the no-change policy), `[host]` (a verification exception
+  that exists only because of this machine/OS). Pick the tag from the real
+  cause: `host` is never a stand-in for "we chose this", and an adaptation such
+  as a fork-only process/transport helper is `[policy]`, not `[host]`. The tag
+  groups the list only — each entry still needs its own exit condition, and
+  every tag is re-validated on sync.
 
 ## Whitespace audit (run before every fork commit)
 

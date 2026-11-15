@@ -14,37 +14,36 @@
     {
       "kind": "other",
       "path": "packages/pi-btw/package.json",
-      "reason": "Fork npm publication must identify xzzpig/pi-extensions as repository.url for OIDC provenance; upstream identity remains in this subtree record and package homepage. This minimal metadata divergence remains while publishing the fork.",
+      "reason": "[policy] Fork npm publication must identify xzzpig/pi-extensions as repository.url for OIDC provenance; upstream identity remains in this subtree record and package homepage. This minimal metadata divergence remains while publishing the fork.",
       "recordedAt": "2026-10-31T00:00:00Z"
     },
     {
       "kind": "deleted",
       "path": "packages/pi-btw/package-lock.json",
-      "reason": "Upstream package-lock.json is deleted on every sync (it resurrects on each pull) and is never consumed by this pnpm monorepo; delete it again with git rm packages/pi-btw/package-lock.json after each subtree pull.",
+      "reason": "[policy] Upstream package-lock.json is deleted on every sync (it resurrects on each pull) and is never consumed by this pnpm monorepo; delete it again with git rm packages/pi-btw/package-lock.json after each subtree pull.",
       "recordedAt": "2026-09-28T02:09:09+08:00"
     },
     {
       "kind": "lint",
       "path": "packages/pi-btw/extensions/btw.ts",
-      "reason": "Five pi-lens require-safety-comment-for-as-unknown-as findings are unchanged upstream casts that also predate the v0.8.0 sync. Keep upstream bytes rather than add fork-only suppressions; revisit if upstream removes or documents the casts.",
+      "reason": "[baseline] Five pi-lens require-safety-comment-for-as-unknown-as findings are unchanged upstream casts that also predate the v0.8.0 sync. Keep upstream bytes rather than add fork-only suppressions; revisit if upstream removes or documents the casts.",
       "recordedAt": "2026-10-27T14:00:59+08:00"
     }
   ],
   "reapplyOnSync": [
-    "Keep package.json repository.url at git+https://github.com/xzzpig/pi-extensions.git for fork OIDC publishing; retain upstream source identity in subtree metadata.",
     "重新应用 extensions/btw.ts 的 pi-components 迁移、共享实时事件摄入和 outcome 传递，保留 [BTW SESSION BOUNDARY] 标记：applyTranscriptEvent 委派给 btw-transcript-ingestion，transcript state 使用 btw-transcript-display resolver，overlay 通过 BtwTranscriptDisplay 渲染。工具显示适配器取得子会话 getToolDefinition(name) 的 childDefinition，并将同一对象作为公开 extensionRunner.resolveToolRenderers(name, () => childDefinition) 的基线；合法 next() 包装必须能访问子会话自己的定义。子会话自定义 renderer 逐字段优先于同名 tool-display provider，普通内置定义没有 renderer 时仍由 provider 补样式。",
     "re-apply the fork-only overlay interaction seam: BtwOverlayComponent implements Component rather than Container, handleMouse maps overlay-local coordinates through btw-overlay-interaction into TranscriptPresenter rows, and the local thinking toggle uses the resolved PI_BTW_THINKING_KEYS shortcut (default Ctrl+T) advertised in the footer",
     "re-apply the thread-owned transcript display and revision-cache seam: BtwTranscriptDisplay keeps the presenter/theme proxy across overlay close/reopen, BtwToolComponents rebuilds supported built-in tool components when the display-provider identity or presentationRevision changes, and the overlay caches lines by transcript version, width, and display revision",
     "adapt upstream tests asserting the upstream renderer's 'You  <text>' user-row badge format to plain-text assertions (the fork renderer has no You label)",
     "adapt the upstream transcript-entry tests to the shared segmenting ingestion: a tool call ends the assistant segment, so a post-tool message_end is a separate thinking/assistant-text entry and pre-tool thinking is no longer streaming",
     "bump upstream tests asserting SessionManager.appendMessage call counts by +1 because the fork's boundary message is also seeded",
-    "delete package-lock.json again if a future subtree pull resurrects it",
     "keep the Pi 1.x peer ranges and workspace catalog devDependencies instead of upstream SDK pins",
     "the upstream completion test fixture supplies the fork overlay's transcript-version and tool-component lookup callbacks before the status callback",
     "'applies distinct theme treatment' must keep its user-row assertion color-mode agnostic (\\\\x1b[48;2; truecolor or \\\\x1b[49m default background): pi 1.1 themes leave headless runs on the default background, so a truecolor-only assertion fails without proving anything about the renderer",
     "re-apply the BTW display workspace seam: isLocalWorkspace reads a retained thread workspace mode that is set false when a remote child session is created (and never upgraded by a later local child while remote tool slots remain), reset to local only on thread reset/restore, not derived from live activeBtwSession presence",
     "re-apply the README transcript-display compatibility section/link that points at docs/transcript-display.md so the fork-only matrix remains discoverable",
-    "保留 fork 独立发布版本、CHANGELOG 发布条目与仓库 versions.json 的一致性；不要用 upstream 版本替换 fork 版本。"
+    "保留 fork 独立发布版本、CHANGELOG 发布条目与仓库 versions.json 的一致性；不要用 upstream 版本替换 fork 版本。",
+    "packaging identity (repository.url, files allowlist, per-package lockfile policy) is enforced by scripts/check-fork-identity.mjs — run `node scripts/check-fork-identity.mjs` after every subtree pull/sync"
   ],
   "doNotReintroduce": [
     "Do not restore upstream repository.url as the fork publishing source; npm provenance must identify the actual build repository.",

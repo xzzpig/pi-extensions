@@ -2,8 +2,21 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import {
+  activeState as policyActiveState,
+  compactAt as policyCompactAt,
+  compactedSinceFire as policyCompactedSinceFire,
+  countCompactions,
+  DEFAULT_BUDGET,
+  disabledReason as policyDisabledReason,
+  effectiveBudget as policyEffectiveBudget,
+  type GuardState,
+  isActiveForModel as policyIsActiveForModel,
+  type Override,
+  windowTokens,
+} from "./budget-policy.js";
 import { loadConfig, parseTokens as parseTokensStrict } from "./config.js";
-import { invalidPatterns, isModelAllowed } from "./whitelist.js";
+import { invalidPatterns } from "./whitelist.js";
 
 /**
  * pi-context-cap (fork of @lukeramsden/pi-context-cap)
@@ -53,13 +66,8 @@ import { invalidPatterns, isModelAllowed } from "./whitelist.js";
  * agent-loop check can remove it.
  */
 
-const DEFAULT_BUDGET = 200_000;
 // Headroom below the budget, mirroring pi's default compaction reserveTokens.
 const DEFAULT_RESERVE = 16_384;
-// Safety margin kept between the compaction point and the model's real
-// contextWindow, mirroring pi-ai's CONTEXT_SAFETY_TOKENS so max_tokens is
-// never starved right at the threshold.
-const WINDOW_SAFETY_TOKENS = 4_096;
 // After a triggered compaction fails, require this much token growth before
 // firing again. Bounds summarization churn if compaction cannot get under
 // budget.
@@ -67,8 +75,6 @@ const REFIRE_GROWTH_TOKENS = 20_000;
 
 const CONTINUE_PROMPT =
 	"Context was auto-compacted mid-task to stay within the configured context budget. Continue the task from the compaction summary and remaining context.";
-
-type Override = "default" | "on" | "off";
 
 function parseTokens(raw: unknown): number | null {
 	if (raw === undefined || raw === null) return null;
@@ -107,81 +113,29 @@ export default function (pi: ExtensionAPI) {
   // the whitelist reason alongside "model not whitelisted".
   let patternWarnings: string[] = [];
 
-  // The configured context length of the active model, or null when pi did
-  // not expose it (guard then falls back to the fixed default budget).
-  const windowTokens = (ctx: ExtensionContext): number | null => {
-    const w = ctx.model?.contextWindow;
-    return typeof w === "number" && Number.isFinite(w) && w > 0 ? w : null;
-  };
-
-  // Effective budget for the active model. Explicit settings win; otherwise
-  // the budget IS the model's configured contextWindow — the guard then acts
-  // as pi's native compaction threshold (contextWindow - reserveTokens),
-  // enforced mid-loop. The 200000 default only applies when the model does
-  // not expose a window. Returns null when the model window is too small to
-  // leave the safety margin (guard must stay off).
-  const effectiveBudget = (ctx: ExtensionContext): number | null => {
-    if (sessionBudget != null) return sessionBudget;
-    if (explicitBudget != null) return explicitBudget;
-    const w = windowTokens(ctx);
-    if (w === null) return DEFAULT_BUDGET;
-    if (w <= WINDOW_SAFETY_TOKENS) return null;
-    return w;
-  };
-
-  // Compaction point: never beyond budget - reserve, and never beyond the
-  // model's configured contextWindow minus the safety margin.
-  const compactAt = (ctx: ExtensionContext): number | null => {
-    const budget = effectiveBudget(ctx);
-    if (budget === null) return null;
-    const raw = budget - reserve;
-    const w = windowTokens(ctx);
-    if (w === null) return raw;
-    return Math.min(raw, w - WINDOW_SAFETY_TOKENS);
-  };
-
-  // Whether pi compacted the session since we triggered our own compaction.
-  // ctx.compact() aborts the run before compacting, and that run-end moment
-  // lets pi's native auto-compaction check fire: when the budget is
-  // window-derived our threshold equals pi's native one, so the native pass
-  // can compact first and leave our manual pass nothing to do. Comparing
-  // branch compaction entries classifies this by outcome, without matching
-  // on error message text.
-  const countCompactions = (ctx: ExtensionContext): number =>
-    ctx.sessionManager
-      ?.getBranch()
-      .filter((entry) => entry.type === "compaction").length ?? 0;
-  const compactedSinceFire = (ctx: ExtensionContext): boolean =>
-    compactionsAtFire !== null && countCompactions(ctx) > compactionsAtFire;
-
-  // Why the guard is off for the active model, or null when it can run.
-  const disabledReason = (ctx: ExtensionContext): string | null => {
-    if (explicitBudget !== null && reserve >= explicitBudget) {
-      return `config error: reserve (${reserve.toLocaleString()}) must be smaller than budget (${explicitBudget.toLocaleString()})`;
-    }
-    const w = windowTokens(ctx);
-    // A window too small to leave the safety margin cannot host a compaction
-    // point, regardless of any explicit budget.
-    if (w !== null && w <= WINDOW_SAFETY_TOKENS) {
-      return `model window too small to leave the safety margin (contextWindow ≤ ${WINDOW_SAFETY_TOKENS})`;
-    }
-    const budget = effectiveBudget(ctx);
-    if (budget === null) {
-      return `model window too small to leave the safety margin (contextWindow ≤ ${WINDOW_SAFETY_TOKENS})`;
-    }
-    if (reserve >= budget) {
-      return `model window too small for the configured reserve (window ≈ ${budget.toLocaleString()})`;
-    }
-    return null;
-  };
-
-  const isActiveForModel = (ctx: ExtensionContext): boolean => {
-    if (disabledReason(ctx) !== null) return false;
-    if (override === "on") return true;
-    if (override === "off") return false;
-    const model = ctx.model;
-    return isModelAllowed(model?.provider, model?.id, loadedConfig);
-  };
+  // Budget policy lives in the fork-only `budget-policy.ts`; these wrappers read
+  // the current factory state so call sites stay unchanged.
+  const budgetState = (): GuardState => ({
+    sessionBudget,
+    explicitBudget,
+    reserve,
+    override,
+    failureDisabled,
+    loadedConfig,
+    patternWarnings,
+  });
+  const effectiveBudget = (ctx: ExtensionContext) =>
+    policyEffectiveBudget(budgetState(), ctx);
+  const compactAt = (ctx: ExtensionContext) =>
+    policyCompactAt(budgetState(), ctx);
+  const compactedSinceFire = (ctx: ExtensionContext) =>
+    policyCompactedSinceFire(ctx, compactionsAtFire);
+  const disabledReason = (ctx: ExtensionContext) =>
+    policyDisabledReason(budgetState(), ctx);
+  const isActiveForModel = (ctx: ExtensionContext) =>
+    policyIsActiveForModel(budgetState(), ctx);
+  const activeState = (ctx: ExtensionContext) =>
+    policyActiveState(budgetState(), ctx);
 
   // Loaded whitelist config (kept separate from budget/reserve which are
   // merged with flags below).
@@ -216,19 +170,6 @@ export default function (pi: ExtensionAPI) {
       "context-cap",
       `cap ${fmtK(tokens)}/${fmtK(budget)} (${pct}%)`,
     );
-  };
-
-  const activeState = (ctx: ExtensionContext): string => {
-    const reason = disabledReason(ctx);
-    if (reason !== null) return `disabled (${reason})`;
-    if (failureDisabled) return "disabled (repeated failures)";
-    if (override === "on") return "active (session override)";
-    if (override === "off") return "off (session override)";
-    const model = ctx.model;
-    const allowed = isModelAllowed(model?.provider, model?.id, loadedConfig);
-    return allowed
-      ? "active (whitelisted model)"
-      : `off (model not whitelisted${patternWarnings.length ? "; " + patternWarnings.join("; ") : ""})`;
 	};
 
 	// Returns true when it started a compaction.
@@ -415,7 +356,7 @@ export default function (pi: ExtensionAPI) {
         override = "on";
 				failureDisabled = false;
 				consecutiveFailures = 0;
-        updateStatus(ctx);
+				updateStatus(ctx);
         const budget = effectiveBudget(ctx);
         ctx.ui.notify(
           `context-cap: on (forced), budget ${budget?.toLocaleString() ?? "n/a"}`,

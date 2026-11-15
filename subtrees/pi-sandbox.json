@@ -9,46 +9,46 @@
   "upstreamCommit": "f22dcd672ee3ce16dc56999d0868ef6f76f49565",
   "squash": true,
   "lastSyncedAt": "2026-11-13T17:01:56+08:00",
-  "notes": "Forked from carderne/pi-sandbox. The fork adds optional pi-tool-display bash rendering decoration (falling back to built-in rendering when pi-tool-display is absent), named sandbox profiles for subagents, the per-session SandboxService profile layer, a runtime in-memory profile registry (registerSandboxProfiles; user sandbox.json definitions of the same name keep priority), network.disabled, and protectNonexistentFiles passthrough. The project-scoped profile contract lives in openspec (change add-project-scoped-profiles, spec project-sandbox-profiles); the runtime registration contract lives in openspec change add-pi-openspec-x (design D4).",
+  "notes": "Forked from carderne/pi-sandbox. The fork adds optional pi-tool-display bash rendering decoration (falling back to built-in rendering when pi-tool-display is absent), named sandbox profiles for subagents, the per-session SandboxService profile layer, a runtime in-memory profile registry (registerSandboxProfiles; user sandbox.json definitions of the same name keep priority), and network.disabled passthrough. filesystem.protectNonexistentFiles / denyMandatoryCwdFiles were removed upstream in sandbox-runtime v0.0.78 and are not reintroduced here (see doNotReintroduce). The project-scoped profile contract lives in openspec (change add-project-scoped-profiles, spec project-sandbox-profiles); the runtime registration contract lives in openspec change add-pi-openspec-x (design D4).",
   "knownDebt": [
     {
       "kind": "deleted",
       "path": "packages/pi-sandbox/pnpm-lock.yaml",
-      "reason": "Upstream lockfile deleted on every pull (git rm packages/pi-sandbox/pnpm-lock.yaml packages/pi-sandbox/pnpm-workspace.yaml); unconsumed by this pnpm monorepo.",
+      "reason": "[policy] Upstream lockfile deleted on every pull (git rm packages/pi-sandbox/pnpm-lock.yaml packages/pi-sandbox/pnpm-workspace.yaml); unconsumed by this pnpm monorepo.",
       "recordedAt": "2026-09-28T02:09:09+08:00"
     },
     {
       "kind": "deleted",
       "path": "packages/pi-sandbox/pnpm-workspace.yaml",
-      "reason": "Upstream workspace file deleted on every pull; the package is a member of the root pnpm workspace instead.",
+      "reason": "[policy] Upstream workspace file deleted on every pull; the package is a member of the root pnpm workspace instead.",
       "recordedAt": "2026-09-28T02:09:09+08:00"
     },
     {
       "kind": "noise",
       "path": "packages/pi-sandbox/src/extension.ts",
-      "reason": "The fork wraps these upstream-origin calls in its own try/catch seam, so the deeper indentation is required by the fork structure; restoring upstream bytes fails `oxfmt --check`, the package's own formatter gate.",
+      "reason": "[artifact] The fork wraps these upstream-origin calls in its own try/catch seam, so the deeper indentation is required by the fork structure; restoring upstream bytes fails `oxfmt --check`, the package's own formatter gate.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
     },
     {
       "kind": "noise",
       "path": "packages/pi-sandbox/src/ui.ts",
-      "reason": "The fork wraps these upstream-origin calls in its own try/catch seam, so the deeper indentation is required by the fork structure; restoring upstream bytes fails `oxfmt --check`, the package's own formatter gate.",
+      "reason": "[artifact] The fork wraps these upstream-origin calls in its own try/catch seam, so the deeper indentation is required by the fork structure; restoring upstream bytes fails `oxfmt --check`, the package's own formatter gate.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
     },
     {
       "kind": "lint",
       "path": "packages/pi-sandbox/src/config.ts",
-      "reason": "The JSON.parse boundary and subsequent typeof guard are unchanged from the pre-sync fork and upstream v0.7.3. Both parseConfig callers catch failures; the write path intentionally rethrows a descriptive error to avoid overwriting invalid config."
+      "reason": "[baseline] The JSON.parse boundary and subsequent typeof guard are unchanged from the pre-sync fork and upstream v0.7.3. Both parseConfig callers catch failures; the write path intentionally rethrows a descriptive error to avoid overwriting invalid config."
     },
     {
       "kind": "lint",
       "path": "packages/pi-sandbox/src/extension.ts",
-      "reason": "The profile-startup error helper's unknown parameter is unchanged from the pre-sync fork and is narrowed before use; retain the existing error boundary under the current-change-only policy."
+      "reason": "[baseline] The profile-startup error helper's unknown parameter is unchanged from the pre-sync fork and is narrowed before use; retain the existing error boundary under the current-change-only policy."
     },
     {
       "kind": "lint",
       "path": "packages/pi-sandbox/src/ui.ts",
-      "reason": "The upstream v0.7.3 focus probe returns unknown and uses Reflect.get for the guarded Pi 0.80 focusedComponent fallback; callers narrow the result with instanceof CustomEditor. Preserve the upstream compatibility boundary."
+      "reason": "[baseline] The upstream v0.7.3 focus probe returns unknown and uses Reflect.get for the guarded Pi 0.80 focusedComponent fallback; callers narrow the result with instanceof CustomEditor. Preserve the upstream compatibility boundary."
     }
   ],
   "reapplyOnSync": [
@@ -58,12 +58,11 @@
     "the profile-config module split",
     "resolveProfile/mergeProfileObjects/validProfileNames",
     "the loadConfig onWarning option and its warning emission",
-    "the extension.ts reportProfileWarning plus listProfiles wiring",
+    "the fork-only src/fork-profile-startup.ts helpers (startup acknowledgement/diagnostics, one-shot profile warnings, trust resolution) plus the extension.ts listProfiles wiring",
     "the refreshSandbox seam delegating to the fork-only src/fork-profile-network.ts applySandboxConfigChange, which re-initializes the manager when a profile newly turns network restriction on (a profile may declare network.disabled: false or inherit a baseline where it is false, while the upstream updateSandboxConfig path cannot start the proxy); its failure path goes through recordProfileStartupFailure, which sets sandboxEnabled/sandboxInitialized to false even when no profile is selected (applySandboxConfigChange may already have reset the manager, so the disabled status is the honest one — keep that no-profile branch when re-applying)",
     "the fork mergeConfigLayers thin wrapper delegating to the now-exported upstream mergeConfigLayers",
     "the loadConfig delegation that keeps the no-profile path byte-identical to upstream (silent peek reads decide delegation, the profile path re-reads with warnings)",
     "the fork-only packages/pi-sandbox/.prettierignore list, because oxfmt reads .prettierignore as its default ignore list and would otherwise reformat the upstream lines again whenever a seam changes nesting",
-    "after each subtree pull run git rm packages/pi-sandbox/pnpm-lock.yaml packages/pi-sandbox/pnpm-workspace.yaml (recurring modify/delete conflict; the package-local workspace files break pnpm pack in the monorepo)",
     "the prepack/postpack scripts in package.json running the fork-only scripts/pack-bundle.mjs: it copies sandbox-runtime's hoisted runtime deps (commander, node-forge, @pondwader/socks5-server — hoisted to the root node_modules by the workspace's nodeLinker: hoisted) into packages/sandbox-runtime/node_modules before pack and removes them after, because pnpm pack otherwise emits those bundled files at package/../../node_modules paths the npm registry rejects with E415 invalid path; re-add the two script lines whenever a pull overwrites package.json",
     "forward native network.disabled together with allowedDomains to the fork runtime; preserve the domain-prompt and NODE_USE_ENV_PROXY guards, and suppress SSH proxy injection for both bash and user_bash when network.disabled is true, including hot-switches with a retained SOCKS listener",
     "thread session cwd through profile refresh/reinitialization and the live SandboxService, and apply resolved project trust to both profile and no-profile config loading and shell settings; profile-config.ts mirrors the upstream JSONC reader via stripJsonComments",
@@ -71,9 +70,10 @@
     "keep the extension warning call through fork-ui-warnings.ts so the upstream Linux unenforced-glob notice retains the fork headless/cosmetic-failure guarantee",
     "keep the sandbox-runtime.ts pattern seam delegating glob syntax to fork-filesystem-paths.ts so all globs are anchored to baseCwd, while upstream retains literal and canonical paths for non-globs; preserve the runtime call forwarding the execution cwd and abort signal",
     "the upstream sandbox-runtime test expects globs anchored to the session cwd rather than raw relative text",
-    "preserve the fork's Bash write-denial monitor, output fallback, permission prompts and guarded retry in extension.ts and sandbox-runtime.ts even though upstream v0.7.2 removed its Bash write-failure inference; the removed upstream shell-error recognizer now lives in the fork-only write-denial.ts",
+    "preserve the fork's Bash write-denial monitor, output fallback, permission prompts and guarded retry through the fork-only src/fork-bash-denial.ts (attribution/prompt/single-shot retry) plus sandbox-runtime.ts even though upstream v0.7.2 removed its Bash write-failure inference; the removed upstream shell-error recognizer now lives in the fork-only write-denial.ts",
     "the upstream blocked-execution session test is headless because the fork's interactive write-denial path intentionally retains guarded retries",
-    "resolve the opt-in access tools against the selected profile's effective config, enforce named-profile denyRead, and pass individual tool cancellation to permission prompts through fork-prompt-signal.ts; adapt the upstream access-tool fixture to Pi's ExtensionToolContext"
+    "resolve the opt-in access tools against the selected profile's effective config, enforce named-profile denyRead, and pass individual tool cancellation to permission prompts through fork-prompt-signal.ts; adapt the upstream access-tool fixture to Pi's ExtensionToolContext",
+    "packaging identity (repository.url, files allowlist, per-package lockfile policy) is enforced by scripts/check-fork-identity.mjs — run `node scripts/check-fork-identity.mjs` after every subtree pull/sync"
   ],
   "doNotReintroduce": [
     "do not introduce gratuitous upstream-file formatting drift; keep fork behavior tests in fork-only files, with only necessary upstream assertion adaptations for the native network.disabled contract and @xzzpig package identity",

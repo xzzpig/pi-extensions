@@ -53,6 +53,7 @@ import {
 } from "../../shared/utils.ts";
 import { resolveSkillsWithFallback } from "../../agents/skills.ts";
 import { createPartialOutputTracker, formatPartialOutput, type PartialOutputCause } from "../shared/partial-output.ts";
+import { createToolResultHandler, type PendingToolResult } from "./fork-tool-result-handler.ts";
 import { effectiveToolTimeoutMs, formatToolTimeoutMessage, resolveToolTimeoutMs, toolTimeoutCallKey, toolTimeoutFromEnv } from "../shared/tool-timeout.ts";
 import { preflightLaunchCwd } from "../shared/launch-cwd.ts";
 import { createJsonlWriter } from "../../shared/jsonl-writer.ts";
@@ -79,19 +80,14 @@ import {
 } from "../shared/model-resolution.ts";
 import {
 	createMutatingFailureState,
-	didMutatingToolFail,
 	isMutatingTool,
 	nextLongRunningTrigger,
-	recordMutatingFailure,
-	resetMutatingFailureState,
 	resolveCurrentPath,
-	shouldEscalateMutatingFailures,
-	summarizeRecentMutatingFailures,
 } from "../shared/long-running-guard.ts";
 import { acceptanceFailureMessage, buildSkippedAcceptanceLedger, captureStagedIndexBaseline, evaluateAcceptance, formatAcceptancePrompt, resolveEffectiveAcceptance, stripAcceptanceReport, validateAcceptanceInput, typedVerifyOutput } from "../shared/acceptance.ts";
 import { PROMPT_REDACTED } from "../../shared/utils.ts";
 import { attachContractProjections, isAgentContract } from "../shared/agent-contract.ts";
-import { initialToolBudgetState, isToolBudgetBlockedMessage, toolBudgetState } from "../shared/tool-budget.ts";
+import { initialToolBudgetState, toolBudgetState } from "../shared/tool-budget.ts";
 import { resolveWatchdogConfig } from "../../watchdog/settings.ts";
 import { resolveLaunchBinding } from "../../shared/launch-contract.ts";
 import { consumeWorkflowChildPermit } from "../../shared/workflow-child-permit.ts";
@@ -845,16 +841,14 @@ async function runSingleAttempt(
 		};
 
 		let activeLongRunningNotified = false;
-		type PendingToolResult = { tool: string; path?: string; mutates: boolean; startedAt?: number; progressText?: string };
 		// Pi's parallel tool execution emits every tool_execution_start before the first result message,
 		// so results are matched to their call by toolCallId; the last-started slot covers events without one.
 		const pendingToolResultsByCallId = new Map<string, PendingToolResult>();
-		let pendingToolResult: PendingToolResult | undefined;
+		const pendingToolState: { current: PendingToolResult | undefined } = { current: undefined };
 		// Pi host versions may represent one tool result as either a dedicated
 		// tool_result_end event or a message_end whose message role is toolResult.
 		// Remember correlated ids so normalizing both forms cannot duplicate output.
 		const handledToolResultIds = new Set<string>();
-		const MAX_HANDLED_TOOL_RESULT_IDS = 1024;
 		type ActiveToolCall = { attentionEmitted?: boolean; key: string; tool: string; args: string; startedAt: number; path?: string };
 		let activeToolSequence = 0;
 		const activeToolCalls = new Map<string, ActiveToolCall>();
@@ -1051,68 +1045,21 @@ async function runSingleAttempt(
 		// deliver the same result either as a tool_result_end event or as a
 		// message_end whose message role is toolResult; both funnel through here
 		// so one result updates budget, output, and mutating-failure state once.
-		const handleToolResult = (message: Message, completion: { toolCallId?: unknown; toolName?: unknown }, now: number): void => {
-			const rawCallId = completion.toolCallId ?? (message as { toolCallId?: unknown }).toolCallId;
-			const callId = typeof rawCallId === "string" && rawCallId.length > 0 ? rawCallId : undefined;
-			if (callId) {
-				if (handledToolResultIds.has(callId)) return;
-				if (handledToolResultIds.size >= MAX_HANDLED_TOOL_RESULT_IDS) {
-					const oldest = handledToolResultIds.values().next().value;
-					if (typeof oldest === "string") handledToolResultIds.delete(oldest);
-				}
-				handledToolResultIds.add(callId);
-			}
-			result.messages!.push(message);
-			const resultText = extractTextFromContent(message.content);
-			const keyedSnapshot = callId ? pendingToolResultsByCallId.get(callId) : undefined;
-			if (callId && keyedSnapshot) pendingToolResultsByCallId.delete(callId);
-			const toolSnapshot = keyedSnapshot ?? pendingToolResult;
-			if (!keyedSnapshot || pendingToolResult === keyedSnapshot) pendingToolResult = undefined;
-			// The result event's own tool name is authoritative; the snapshot is a fallback.
-			const resultToolName = completion.toolName ?? (message as { toolName?: unknown }).toolName;
-			const blockedTool = (typeof resultToolName === "string" && resultToolName.length > 0
-				? resultToolName
-				: undefined) ?? toolSnapshot?.tool;
-			const budgetBlocked = Boolean(options.toolBudget && isToolBudgetBlockedMessage(options.toolBudget, resultText, blockedTool));
-			if (options.toolBudget && budgetBlocked) {
-				result.toolBudgetBlocked = true;
-				result.toolBudget = toolBudgetState(
-					options.toolBudget,
-					Math.max(progress.toolCount, options.toolBudget.hard + 1),
-					blockedTool,
-				);
-			}
-			appendRecentOutput(progress, resultText.split("\n").slice(-10));
-			// Pi 1.2+: a successful contact_supervisor progress_update call carries
-			// its text back through the result message. Publish the matching
-			// snapshot's text so the widget shows the latest successful update.
-			const messageToolName = (message as { toolName?: unknown }).toolName;
-			if ((message as { isError?: unknown }).isError !== true && messageToolName === toolSnapshot?.tool && toolSnapshot?.progressText) {
-				progress.progressText = toolSnapshot.progressText;
-				progress.progressUpdatedAt = now;
-			}
-			if (toolSnapshot?.mutates && !budgetBlocked && message.role === "toolResult" && didMutatingToolFail(message)) {
-				recordMutatingFailure(mutatingFailures, {
-					tool: toolSnapshot.tool,
-					path: toolSnapshot.path,
-					error: resultText.split("\n").find((line) => line.trim())?.trim().slice(0, 180) ?? "mutating tool failed",
-					ts: now,
-				}, mutatingFailureWindowMs);
-				if (shouldEscalateMutatingFailures(mutatingFailures, controlConfig.failedToolAttemptsBeforeAttention)) {
-					emitNeedsAttention(now, {
-						message: `${agent.name} needs attention after repeated mutating tool failures`,
-						reason: "tool_failures",
-						currentTool: toolSnapshot.tool,
-						currentPath: toolSnapshot.path,
-						currentToolDurationMs: toolSnapshot.startedAt ? Math.max(0, now - toolSnapshot.startedAt) : undefined,
-						recentFailureSummary: summarizeRecentMutatingFailures(mutatingFailures),
-					});
-				}
-			} else if (toolSnapshot?.mutates) {
-				resetMutatingFailureState(mutatingFailures);
-			}
-			fireUpdate();
-		};
+		const handleToolResult = createToolResultHandler({
+			result,
+			progress,
+			options,
+			agentName: agent.name,
+			handledToolResultIds,
+			pendingToolResultsByCallId,
+			pendingToolState,
+			mutatingFailures,
+			mutatingFailureWindowMs,
+			controlConfig,
+			appendRecentOutput,
+			fireUpdate,
+			emitNeedsAttention,
+		});
 
 		const processEvent = (evt: ChildSessionEvent & { message?: Message; toolName?: string; toolCallId?: string; args?: unknown; willRetry?: unknown }) => {
 			if (lifecycleFinished) return;
@@ -1215,8 +1162,8 @@ async function runSingleAttempt(
 					result.toolBudget = toolBudgetState(options.toolBudget, progress.toolCount, result.toolBudget?.blockedTool);
 				}
 				const mutates = isMutatingTool(evt.toolName, toolArgs, agent.mutationTools);
-				pendingToolResult = { tool: evt.toolName ?? "tool", path: activeTool?.path, mutates, startedAt: now, progressText: extractReportedProgress(evt.toolName ?? "", evt.args) };
-				if (typeof evt.toolCallId === "string" && evt.toolCallId) pendingToolResultsByCallId.set(evt.toolCallId, pendingToolResult);
+				pendingToolState.current = { tool: evt.toolName ?? "tool", path: activeTool?.path, mutates, startedAt: now, progressText: extractReportedProgress(evt.toolName ?? "", evt.args) };
+				if (typeof evt.toolCallId === "string" && evt.toolCallId) pendingToolResultsByCallId.set(evt.toolCallId, pendingToolState.current);
 				fireUpdate();
 			}
 

@@ -1,5 +1,12 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { CategoryPickerModal } from "./category-picker.ts";
+import { registerVibeguardCommands } from "./fork-commands.ts";
+import {
+  SuspensionState,
+  sanitizeCategory,
+  suspensionSummary,
+} from "./suspension-state.ts";
+// Public surface kept for the fork test suite (tests/suspension.test.ts).
+export { SuspensionState } from "./suspension-state.ts";
 import {
   buildMappingSnapshot,
   MappingViewModal,
@@ -148,15 +155,6 @@ async function loadConfig(
 // Patterns
 // ============================================================================
 
-function sanitizeCategory(input: string): string {
-  const raw = String(input ?? "").trim();
-  if (!raw) return "TEXT";
-  const upper = raw.toUpperCase();
-  const safe = upper.replace(/[^A-Z0-9_]/g, "_").replace(/_+/g, "_");
-  if (!safe) return "TEXT";
-  return safe;
-}
-
 interface BuiltinRule {
   pattern: string;
   flags: string;
@@ -249,80 +247,6 @@ function buildPatternSet(patterns: VibeguardConfig["patterns"]): PatternSet {
   const excludeSet = new Set(exclude.map((x) => String(x ?? "")));
 
   return { keywords: keywordRules, regex: regexRules, exclude: excludeSet };
-}
-
-// ============================================================================
-// Suspension State (runtime, session-scoped)
-//
-// Temporary runtime suspension: stops NEW content from being redacted (either
-// globally or per category) without touching the on-disk config. Restore paths
-// (tool_call / message_end) are NOT part of this state — historical
-// placeholders already in the session keep being restored regardless of
-// suspension.
-// ============================================================================
-
-export class SuspensionState {
-  private all = false;
-  private categories = new Set<string>();
-
-  /** True when redaction is globally suspended (no new placeholder generation). */
-  get globallySuspended(): boolean {
-    return this.all;
-  }
-
-  /** Sanitized category names whose redaction is currently suspended. */
-  get suspendedCategories(): ReadonlySet<string> {
-    return this.categories;
-  }
-
-  /** True when any form of suspension is active (global or per-category). */
-  get anySuspended(): boolean {
-    return this.all || this.categories.size > 0;
-  }
-
-  setGlobal(value: boolean): void {
-    this.all = value;
-  }
-
-  /** Suspend/resume one category (input is normalized like config categories). */
-  setCategory(category: string, suspended: boolean): void {
-    const normalized = sanitizeCategory(category);
-    if (suspended) this.categories.add(normalized);
-    else this.categories.delete(normalized);
-  }
-
-  /** Toggle one category; returns the new suspended state of that category. */
-  toggleCategory(category: string): boolean {
-    const normalized = sanitizeCategory(category);
-    if (this.categories.has(normalized)) {
-      this.categories.delete(normalized);
-      return false;
-    }
-    this.categories.add(normalized);
-    return true;
-  }
-
-  isCategorySuspended(category: string): boolean {
-    return this.categories.has(sanitizeCategory(category));
-  }
-
-  /** Global suspension overrides everything; otherwise checks one category. */
-  isSuspended(category?: string): boolean {
-    if (this.all) return true;
-    if (category) return this.categories.has(sanitizeCategory(category));
-    return false;
-  }
-
-  /** Sorted snapshot of suspended categories (for status/list display). */
-  suspendedCategoryList(): string[] {
-    return [...this.categories].sort((a, b) => a.localeCompare(b));
-  }
-
-  /** Fresh session state: nothing suspended, back to config.enabled semantics. */
-  reset(): void {
-    this.all = false;
-    this.categories.clear();
-  }
 }
 
 // ============================================================================
@@ -888,7 +812,7 @@ export default function (pi: ExtensionAPI) {
       ctx.ui.notify("VibeGuard: 当前会话暂无存活映射", "info");
       return;
     }
-    const suspensionNote = suspension.anySuspended ? suspensionSummary() : "";
+    const suspensionNote = suspension.anySuspended ? suspensionSummary(suspension) : "";
     await ctx.ui.custom<void>(
       (tui, theme, _keybindings, done) =>
         new MappingViewModal({
@@ -904,156 +828,26 @@ export default function (pi: ExtensionAPI) {
     );
   };
 
-  pi.registerCommand("vibeguard:list", {
-    description: "VibeGuard: 查看当前会话存活的脱敏映射（category / placeholder / 原文 / 剩余 TTL）",
-    handler: (_args, ctx) => openMappingView("list", ctx),
-  });
-
-  pi.registerCommand("vibeguard:stats", {
-    description: "VibeGuard: 按 category 汇总当前会话的存活映射",
-    handler: (_args, ctx) => openMappingView("stats", ctx),
-  });
-
   // ==========================================================================
-  // Temporary suspension commands (session-scoped; reset on session_start)
+  // Commands (fork-only): `:list` / `:stats` and the suspension family all
+  // register inside registerVibeguardCommands — keep a single owner per name.
   // ==========================================================================
 
-  const extensionActiveReason = (): string | null => {
-    if (config.enabled && session) return null;
-    return config.loadedFrom
-      ? `插件未启用（配置：${config.loadedFrom}）`
-      : "插件未启用（未找到 vibeguard.config.json）";
-  };
-
-  const knownCategories = (): string[] => {
-    const set = new Set<string>();
-    for (const r of patterns.keywords) set.add(r.category);
-    for (const r of patterns.regex) set.add(r.category);
-    return [...set].sort((a, b) => a.localeCompare(b));
-  };
-
-  /** Human-readable suspension summary ("" when fully active). */
-  const suspensionSummary = (): string => {
-    if (suspension.globallySuspended) return "整体挂起：新内容不再脱敏，历史占位符仍照常恢复";
-    const cats = suspension.suspendedCategoryList();
-    if (cats.length === 0) return "";
-    return `挂起类别：${cats.join(", ")}（该类新内容不再脱敏，历史占位符仍照常恢复）`;
-  };
-
-  /** Reflect the current suspension state in the status bar. */
-  const setSuspensionStatus = (ui: ExtensionCommandContext["ui"]): void => {
-    if (suspension.globallySuspended) {
-      ui.setStatus("vibeguard", "\x1b[33mVibeGuard[OFF]\x1b[0m");
-      return;
-    }
-    const cats = suspension.suspendedCategoryList();
-    ui.setStatus(
-      "vibeguard",
-      cats.length > 0
-        ? `\x1b[33mVibeGuard[OFF:${cats.join(",")}]\x1b[0m`
-        : "\x1b[33mVibeGuard[ON]\x1b[0m",
-    );
-  };
-
-  const requireActive = (ctx: ExtensionCommandContext): boolean => {
-    const reason = extensionActiveReason();
-    if (reason) {
-      ctx.ui.notify(`VibeGuard: ${reason}`, "warning");
-      return false;
-    }
-    return true;
-  };
-
-  /** Shared body of /vibeguard:disable and /vibeguard:enable. */
-  const handleSuspendChange = async (
-    args: string,
-    suspend: boolean,
-    ctx: ExtensionCommandContext,
-  ): Promise<void> => {
-    if (!requireActive(ctx)) return;
-
-    const category = String(args ?? "").trim().split(/\s+/)[0] ?? "";
-
-    // No category: toggle the whole extension (global suspend / full resume).
-    if (!category) {
-      if (suspend) {
-        suspension.setGlobal(true);
-        ctx.ui.notify(
-          "VibeGuard: 已整体挂起 —— 新内容不再脱敏；会话历史中的占位符仍会照常恢复（/vibeguard:enable 恢复）",
-          "warning",
-        );
-      } else {
-        suspension.setGlobal(false);
-        for (const c of suspension.suspendedCategoryList()) suspension.setCategory(c, false);
-        ctx.ui.notify("VibeGuard: 已整体恢复 —— 新内容将重新脱敏", "info");
-      }
-      setSuspensionStatus(ctx.ui);
-      return;
-    }
-
-    const normalized = sanitizeCategory(category);
-    const known = knownCategories();
-    if (!known.includes(normalized)) {
-      ctx.ui.notify(
-        `VibeGuard: 未知类别 ${normalized}（可用类别：${known.length ? known.join(", ") : "（无）"}）`,
-        "warning",
-      );
-      return;
-    }
-
-    suspension.setCategory(normalized, suspend);
-    ctx.ui.notify(
-      suspend
-        ? `VibeGuard: 已挂起类别 ${normalized} —— 该类新内容不再脱敏，历史占位符仍会恢复`
-        : `VibeGuard: 已恢复类别 ${normalized}`,
-      suspend ? "warning" : "info",
-    );
-    setSuspensionStatus(ctx.ui);
-  };
-
-  pi.registerCommand("vibeguard:disable", {
-    description: "VibeGuard: 临时挂起脱敏。无参数=整体挂起（新内容不再脱敏，历史映射仍恢复）；带类别=只挂起该类别",
-    handler: (args, ctx) => handleSuspendChange(args, true, ctx),
-  });
-
-  pi.registerCommand("vibeguard:enable", {
-    description: "VibeGuard: 恢复脱敏。无参数=整体恢复；带类别=恢复该类别",
-    handler: (args, ctx) => handleSuspendChange(args, false, ctx),
-  });
-
-  pi.registerCommand("vibeguard:status", {
-    description: "VibeGuard: 显示当前脱敏状态（启用/挂起类别）",
-    handler: async (_args, ctx) => {
-      if (!requireActive(ctx)) return;
-      const summary = suspensionSummary();
-      const msg = summary
-        ? `VibeGuard: 已启用 · ${summary}（/vibeguard:enable 恢复）`
-        : "VibeGuard: 已启用 · 全部规则生效中（/vibeguard:disable 临时挂起）";
-      ctx.ui.notify(msg, summary ? "warning" : "info");
-      setSuspensionStatus(ctx.ui);
+  registerVibeguardCommands(pi, {
+    suspension,
+    extensionActiveReason: () => {
+      if (config.enabled && session) return null;
+      return config.loadedFrom
+        ? `插件未启用（配置：${config.loadedFrom}）`
+        : "插件未启用（未找到 vibeguard.config.json）";
     },
-  });
-
-  pi.registerCommand("vibeguard:categories", {
-    description: "VibeGuard: 打开类别挂起管理弹窗（整体/按类别切换临时挂起）",
-    handler: async (_args, ctx) => {
-      if (!requireActive(ctx)) return;
-      await ctx.ui.custom<void>(
-        (tui, theme, _keybindings, done) =>
-          new CategoryPickerModal({
-            tui,
-            theme,
-            done,
-            categories: knownCategories(),
-            getGlobal: () => suspension.globallySuspended,
-            isSuspended: (c) => suspension.isCategorySuspended(c),
-            setGlobal: (v) => suspension.setGlobal(v),
-            setCategory: (c, v) => suspension.setCategory(c, v),
-            onStatusSync: () => setSuspensionStatus(ctx.ui),
-          }),
-        { overlay: true, overlayOptions: resolveMappingOverlayOptions() },
-      );
+    knownCategories: () => {
+      const set = new Set<string>();
+      for (const r of patterns.keywords) set.add(r.category);
+      for (const r of patterns.regex) set.add(r.category);
+      return [...set].sort((a, b) => a.localeCompare(b));
     },
+    openMappingView,
   });
 
   debug("Extension loaded");

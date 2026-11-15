@@ -13,9 +13,10 @@
   "knownDebt": [],
   "reapplyOnSync": [
     "keep the packaging divergence: npm name @xzzpig/pi-context-cap, the README fork notice and the CHANGELOG 0.1.0 fork entry",
-    "keep the fork-only config.ts/whitelist.ts modules additive, with the upstream core logic staying in extensions/context-cap.ts and only wiring into them",
+    "keep the fork-only config.ts/whitelist.ts modules additive, with the upstream core logic staying in extensions/context-cap.ts and only wiring into them. Budget derivation (window-derived budget, compact point, disabled reason, whitelist gating, status text) stays in the fork-only extensions/budget-policy.ts, with extensions/context-cap.ts keeping the one-line state wrappers and the stateful executor.",
     "keep the config-file support (global context-cap.json plus project .pi/context-cap.json, key-level merge, project-trusted guard) with the models whitelist and budget/reserve, plus the session tri-state override /context-cap on|off|default",
-    "keep the CLI flags on the same strict parser as the config file (an out-of-range value such as 200k is rejected with a warning, not truncated), while /context-cap <tokens> keeps upstream's original parsing"
+    "keep the CLI flags on the same strict parser as the config file (an out-of-range value such as 200k is rejected with a warning, not truncated), while /context-cap <tokens> keeps upstream's original parsing",
+    "keep scripts/verify.mjs on the fork mock shape (200k-window model so the window-derived budget reproduces upstream numbers, project-dir/trust/session-branch hooks, \"budget N (model window)\" wording) while the fork-only cases stay in scripts/verify-fork.mjs, whose harness mirrors verify.mjs: re-align both when the mock ExtensionAPI/ExtensionContext shape changes, and keep `verify` running both files"
   ],
   "doNotReintroduce": [
     "package files keep upstream's own tab formatting (the package is listed in root .prettierignore)",

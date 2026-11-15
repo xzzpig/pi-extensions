@@ -2,6 +2,11 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.12.2] — 2026-11-15 (fork release)
+
+- **Conflict-surface refactor, no behavior change.** The fork-only completion orchestration (audit lifecycle, `runGoalCompletionAuditor` delegation, supervisor handoff projection, result assembly) moved to `extensions/fork-completion-flow.ts` (513 lines); `extensions/goal-completion.ts` keeps the authoritative `commitGoalCompletion` transaction — the single write path every completion branch uses — and otherwise only re-exports `runGoalCompletionFlow`. Auditor usage projection lives in `extensions/fork-audit-usage.ts`, and the fork-only model-view prompt blocks (paused/budget gates, budget reminder, per-turn state snapshot) in `extensions/prompts/fork-model-view-prompts.ts`; `extensions/prompts/goal-prompts.ts` re-exports them (487 → 364 lines, upstream 321). Rendered reports, audit cards and snapshots are unchanged.
+- **Conflict-surface refactor, no behavior change.** The nested `auditor` settings group is now defined once, in fork-only `extensions/goal-auditor-settings.ts`: its leaf table drives parsing, resolution, persistence and the `/goal-status` provenance rows instead of six parallel enumerations in `extensions/goal-settings.ts` (2046 → 1768 lines). Parsing diagnostics, defaulted leaves and persistence rules are unchanged; `goal-settings` and race tests stay green.
+
 ## [0.12.1] — 2026-11-05 (fork release)
 
 - Import `Type` directly from the existing host-provided `typebox` peer for Pi 1.5 npm SDK compatibility; keep TypeBox schemas and the Pi 1.4 minimum unchanged.

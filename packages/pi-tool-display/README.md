@@ -151,6 +151,17 @@ While a command is still running, the live preview shows the **last** `bashColla
 
 Expanding the tool row with `ctrl+o` always reveals the original multi-line command, in every mode, and the `$` prefix, spinner, elapsed time, `[shell: …]`, and `(timeout …)` hints are preserved. Collapsing is presentation only: the executed command is never modified. The line is clamped to the width the tool row is actually rendered at (narrower than the terminal because of the message-box frame); if that width is unusable it falls back to `process.stdout.columns`, and finally to 120 columns.
 
+## Tool presentation provider (fork-only)
+
+Other extensions (e.g. the BTW overlay) can ask this package what the main
+session would draw for a built-in tool, without borrowing any execution
+capability (`getToolPresentation` + `presentationRevision` on the existing
+`pi-tool-display.api.v1` object). The contract — type signatures, lifecycle,
+the seven upstream seams, the `localWorkspace` / `executionMetadata` capability
+gates and the fallback matrix — has a single source:
+[`docs/tool-presentation-provider.md`](./docs/tool-presentation-provider.md).
+This README intentionally does not repeat it.
+
 ## Configuration
 
 Runtime configuration is stored at:

@@ -5,6 +5,13 @@ This fork tracks [`carderne/pi-sandbox`](https://github.com/carderne/pi-sandbox)
 via git subtree; entries below describe only fork-specific deviations from
 upstream.
 
+## 0.9.2
+
+### Changed
+
+- **Conflict-surface refactor, no behavior change.** The profile launch path (startup acknowledgement file, startup diagnostics, one-shot profile warnings, trust resolution, failure recording) now lives in fork-only `src/fork-profile-startup.ts`, and the sandboxed-bash write-denial orchestration (violation-monitor attribution, `denyWrite` filtering, permission prompt, single retry per path) in fork-only `src/fork-bash-denial.ts`; `src/extension.ts` keeps the state accessors and one call each (1151 → 995 lines).
+- Refreshed the bundled `@xzzpig/sandbox-runtime` (`0.1.2`): the unread `FsWriteRestrictionConfig.cwd?` field is gone and the subtree notes no longer describe the retired `protectNonexistentFiles` capability. No behavior change; the sandbox write-denial path is unchanged.
+
 ## 0.9.1
 
 ### Fixed

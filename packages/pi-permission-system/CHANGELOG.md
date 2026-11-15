@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.1] — 2026-11-15
+
+### Fixed
+
+- Fixed a fork-introduced parser-state loss in the bash command enumerator: an opaque payload (`bash -c`/`eval`/`flock -c`/`env -S`) is re-parsed by re-entering `collectCommands`, and the nested walk cleared the module-level parse program in `finally`, so every later wrapper in the same command was marked `payloadUnresolved` and floored to `ask`. The walk now saves and restores the previous parser; covered by `test/access-intent/bash/nested-parse-program.fork.test.ts` (the second sibling wrapper now resolves).
+
+### Changed
+
+- `pnpm run gen:schema` formats the generated JSON schema with `--indent-style=space --indent-width=2`, matching the upstream file's formatting; the schema's whitespace-only diff and its `knownDebt` entry are gone.
+
 ## [Unreleased]
 
 ## [1.8.0] — 2026-10-28

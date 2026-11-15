@@ -14,122 +14,119 @@
     {
       "kind": "other",
       "path": "packages/pi-starline/test/package-identity.test.ts",
-      "reason": "The upstream identity assertion must distinguish the fork OIDC repository URL from upstream homepage/bugs/image references. Keep this assertion adaptation while fork publishing uses xzzpig/pi-extensions."
+      "reason": "[policy] The upstream identity assertion must distinguish the fork OIDC repository URL from upstream homepage/bugs/image references. Keep this assertion adaptation while fork publishing uses xzzpig/pi-extensions."
     },
     {
       "kind": "other",
       "path": "packages/pi-starline/package.json",
-      "reason": "Fork npm publication must identify xzzpig/pi-extensions as repository.url for OIDC provenance; upstream identity remains in this subtree record and package homepage. This minimal metadata divergence remains while publishing the fork.",
+      "reason": "[policy] Fork npm publication must identify xzzpig/pi-extensions as repository.url for OIDC provenance; upstream identity remains in this subtree record and package homepage. This minimal metadata divergence remains while publishing the fork.",
       "recordedAt": "2026-10-31T00:00:00Z"
     },
     {
       "kind": "other",
       "path": "packages/pi-starline/extensions/starline/editor-cursor.ts",
-      "reason": "The minimal fork-only cursor adapter call is needed for underline and terminal cursor styles on Pi 1.2+ while preserving Pi 1.1 behavior. Remove it when upstream supports both cursor encodings."
+      "reason": "[policy] The minimal fork-only cursor adapter call is needed for underline and terminal cursor styles on Pi 1.2+ while preserving Pi 1.1 behavior. Remove it when upstream supports both cursor encodings."
     },
     {
       "kind": "other",
       "path": "packages/pi-starline/package.json",
-      "reason": "Fork release packaging adds declaration build/prepack scripts and dist plus fork release notes to upstream's extensions/types allowlist. Required by the repository publish contract; removable if upstream adopts the same declaration distribution."
+      "reason": "[policy] Fork release packaging adds declaration build/prepack scripts and dist plus fork release notes to upstream's extensions/types allowlist. Required by the repository publish contract; removable if upstream adopts the same declaration distribution."
     },
     {
       "kind": "other",
       "path": "packages/pi-starline/package-lock.json",
-      "reason": "The lockfile root identity and version track the independently published fork and are updated mechanically with npm. Remove this divergence if the upstream lockfile is no longer retained."
+      "reason": "[policy] The lockfile root identity and version track the independently published fork and are updated mechanically with npm. Remove this divergence if the upstream lockfile is no longer retained."
     },
     {
       "kind": "other",
       "path": "packages/pi-starline/test/package-identity.test.ts",
-      "reason": "The exact published-files assertion follows the intentional fork allowlist including declarations and fork release notes, without relaxing runtime assertions. Reconcile when upstream changes its packaging contract."
+      "reason": "[policy] The exact published-files assertion follows the intentional fork allowlist including declarations and fork release notes, without relaxing runtime assertions. Reconcile when upstream changes its packaging contract."
     },
     {
       "kind": "other",
-      "reason": "The mouse consumer, pointer delegation and adapted upstream integration tests intentionally use pi-mouse-events rather than upstream's separate renderer patches. Keep until upstream adopts a compatible shared mouse API."
+      "reason": "[policy] The mouse consumer, pointer delegation and adapted upstream integration tests intentionally use pi-mouse-events rather than upstream's separate renderer patches. Keep until upstream adopts a compatible shared mouse API."
     },
     {
       "kind": "other",
-      "reason": "The editor factory, frame splitter and prototype registry retain pi-zentui legacy aliases removed upstream so the two packages can coexist in either load order. Remove only when legacy coexistence is no longer supported."
+      "reason": "[policy] The editor factory, frame splitter and prototype registry retain pi-zentui legacy aliases removed upstream so the two packages can coexist in either load order. Remove only when legacy coexistence is no longer supported."
     },
     {
       "kind": "other",
       "path": "packages/pi-starline/extensions/starline/queue-rows.ts",
-      "reason": "Use Function.prototype.apply.call to preserve predecessor dispatch while satisfying the local no-Reflect.apply rule; remove if upstream adopts equivalent forwarding or the rule changes."
+      "reason": "[policy] Use Function.prototype.apply.call to preserve predecessor dispatch while satisfying the local no-Reflect.apply rule; remove if upstream adopts equivalent forwarding or the rule changes."
     },
     {
       "kind": "lint",
       "path": "packages/pi-starline/extensions/starline/prototype-patch-registry.ts",
-      "reason": "The generic prototype-patch boundary accepts object targets, forwards predecessor calls and returns unknown because it handles multiple unrelated Pi methods. Its reported lint findings are unchanged from the pre-sync fork; preserve the existing behavior under the current-change-only policy."
+      "reason": "[baseline] The generic prototype-patch boundary accepts object targets, forwards predecessor calls and returns unknown because it handles multiple unrelated Pi methods. Its reported lint findings are unchanged from the pre-sync fork; preserve the existing behavior under the current-change-only policy."
     },
     {
       "kind": "lint",
       "path": "packages/pi-starline/extensions/starline/format.ts",
-      "reason": "The usage-entry double cast is unchanged in both the pre-sync fork and upstream v0.9.0; keep inherited source bytes under the current-change-only policy."
+      "reason": "[baseline] The usage-entry double cast is unchanged in both the pre-sync fork and upstream v0.9.0; keep inherited source bytes under the current-change-only policy."
     },
     {
       "kind": "lint",
       "path": "packages/pi-starline/extensions/starline/mouse/api-consumer.ts",
-      "reason": "The existing fork mouse API version guard triggers one biome useOptionalChain warning; retain its current behavior for this cursor-compatibility release."
+      "reason": "[policy] The existing fork mouse API version guard triggers one biome useOptionalChain warning; retain its current behavior for this cursor-compatibility release."
     },
     {
       "kind": "lint",
       "path": "packages/pi-starline/test/pill-click.test.ts",
-      "reason": "The upstream-identical pill click test triggers one biome noConfusingVoidType warning; keep its upstream bytes to avoid an unrelated fork edit."
+      "reason": "[policy] The upstream-identical pill click test triggers one biome noConfusingVoidType warning; keep its upstream bytes to avoid an unrelated fork edit."
     },
     {
       "kind": "lint",
       "path": "packages/pi-starline/test/mouse/editor-wheel.test.ts",
-      "reason": "9 lint/style/noNonNullAssertion warnings on an upstream test file, kept by deliberate non-change: warnings do not fail biome check and fixing them would add fork edits inside an upstream file.",
+      "reason": "[policy] 9 lint/style/noNonNullAssertion warnings on an upstream test file, kept by deliberate non-change: warnings do not fail biome check and fixing them would add fork edits inside an upstream file.",
       "recordedAt": "2026-09-28T02:09:09+08:00"
     },
     {
       "kind": "lint",
       "path": "packages/pi-starline/test/mouse/shim.ts",
-      "reason": "2 lint/suspicious/noConfusingVoidType warnings on an upstream test file, kept by deliberate non-change for the same reason.",
+      "reason": "[policy] 2 lint/suspicious/noConfusingVoidType warnings on an upstream test file, kept by deliberate non-change for the same reason.",
       "recordedAt": "2026-09-28T02:09:09+08:00"
     },
     {
       "kind": "noise",
       "path": "packages/pi-starline/test/mouse/capabilities.test.ts",
-      "reason": "Residual raw-vs-w delta is a diff-alignment artifact: 19 of the fork's 91 added lines are whitespace-twins of upstream lines (repeated }); closers), so git aligns them differently in raw vs -w. Upstream-original lines are byte-identical to upstream.",
-      "recordedAt": "2026-09-28T02:09:09+08:00"
-    },
-    {
-      "kind": "noise",
-      "path": "packages/pi-starline/extensions/starline/mouse/index.ts",
-      "reason": "Residual raw-vs-w delta is a diff-alignment artifact: 104 of the fork's 481 added lines are whitespace-twins of upstream lines (this file is the fork's consumer-API rewrite, so added and upstream lines interleave heavily). Upstream-original lines are byte-identical to upstream.",
+      "reason": "[artifact] Residual raw-vs-w delta is a diff-alignment artifact: 19 of the fork's 91 added lines are whitespace-twins of upstream lines (repeated }); closers), so git aligns them differently in raw vs -w. Upstream-original lines are byte-identical to upstream.",
       "recordedAt": "2026-09-28T02:09:09+08:00"
     },
     {
       "kind": "noise",
       "path": "packages/pi-starline/test/contract/mouse-install.test.ts",
-      "reason": "Diff-alignment artifact: the fork's multiline call and restructuring indent these upstream-origin lines one level deeper than upstream; restoring upstream bytes fails `biome check .`, which runs inside `prepublishOnly`.",
+      "reason": "[artifact] Diff-alignment artifact: the fork's multiline call and restructuring indent these upstream-origin lines one level deeper than upstream; restoring upstream bytes fails `biome check .`, which runs inside `prepublishOnly`.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
     },
     {
       "kind": "noise",
       "path": "packages/pi-starline/test/mouse/install-wiring.test.ts",
-      "reason": "Diff-alignment artifact: the fork's multiline call and restructuring indent these upstream-origin lines one level deeper than upstream; restoring upstream bytes fails `biome check .`, which runs inside `prepublishOnly`.",
+      "reason": "[artifact] Diff-alignment artifact: the fork's multiline call and restructuring indent these upstream-origin lines one level deeper than upstream; restoring upstream bytes fails `biome check .`, which runs inside `prepublishOnly`.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
     },
     {
       "kind": "noise",
       "path": "packages/pi-starline/extensions/starline/git.ts",
-      "reason": "Biome formatting (line wrapping) is required by the package's prepack lint gate; the reflow touches upstream-original lines and is a diff-alignment artifact only, with no behavior change.",
+      "reason": "[artifact] Biome formatting (line wrapping) is required by the package's prepack lint gate; the reflow touches upstream-original lines and is a diff-alignment artifact only, with no behavior change.",
       "recordedAt": "2026-11-15T00:00:00Z"
+    },
+    {
+      "kind": "lint",
+      "reason": "[baseline] Upstream-original lines in extensions/starline/{pill-actions,format,ui}.ts keep their upstream bytes (no SAFETY/pi-lens-ignore annotations), so the fork's pi-lens gates for require-safety-comment-for-as-unknown-as, no-unknown-returns and noUnusedVariables are waived per file in packages/pi-starline/.pi-lens.json; config.ts keeps upstream's empty `catch {}` and is waived for error-swallowing. Restoring the annotations is the only way to remove this debt, and it is not wanted because it breaks byte-stability.",
+      "recordedAt": "2026-11-15"
     }
   ],
   "reapplyOnSync": [
     "Adapt test/package-identity.test.ts to assert repository.url identifies xzzpig/pi-extensions while upstream homepage/bugs/image references remain Andy8647/pi-starline.",
-    "Keep package.json repository.url at git+https://github.com/xzzpig/pi-extensions.git for fork OIDC publishing; retain upstream source identity in subtree metadata.",
     "editor-cursor.ts calls fork-editor-cursor.ts to restyle Pi 1.2+ marked software cursors while retaining the upstream Pi 1.1 SGR path; retain fork-editor-cursor-compat.test.ts",
     "mouse features register with the local @xzzpig/pi-mouse-events extension instead of patching TuiAltScreen.prototype (optional peer >=0.2.0 <3, devDep workspace:*); without it fork mouse features are off, with one console note per process; click-away observes shared mouse events and the optional shared pointer API handles hover without a Starline patch",
     "mouse/api-consumer.ts reads Symbol.for('pi-mouse-events.api.v2') and rejects any candidate whose version !== 2, so an older v1 publisher is rejected rather than misread",
     "keep test/contract/mouse-api.test.ts pinning that key plus the version:1 rejection fixture",
     "every git probe in extensions/starline/git.ts passes --no-optional-locks (test/git-no-optional-locks.test.ts)",
     "test/runtime.test.ts passes an explicit empty env to detectRuntime so ambient Nix markers cannot shadow file-marker fixtures",
-    "keep the comment-only additions: ui.ts SAFETY/pi-lens-ignore notes and config.ts's empty-catch note",
     "Keep package.json TAB-indented with the fork name/version/dependencies, declaration build:types/prepack scripts, and files allowlist (extensions, dist, types, FORK-CHANGELOG.md). Keep the upstream package-identity test aligned; regenerate the package-lock root identity mechanically with npm, never by hand.",
-    "mouse/index.ts stays the fork's pi-mouse-events consumer rewrite; editor selections retain the fork's draft-copy behavior, while transcript selections fall through to Pi's native verbatim copy. Preserve the optional asynchronous copy slot and older-v2 OSC 52 fallback for editor selections, and prefer the shared post-component wheel slot/Pi-computed delta with the older pre-dispatch fallback.",
+    "the fork's pi-mouse-events consumer implementation lives in the fork-only mouse/fork-consumer.ts, with mouse/index.ts kept as a re-export seam (upstream installer signature only); editor selections retain the fork's draft-copy behavior, while transcript selections fall through to Pi's native verbatim copy. Preserve the optional asynchronous copy slot and older-v2 OSC 52 fallback for editor selections, and prefer the shared post-component wheel slot/Pi-computed delta with the older pre-dispatch fallback.",
     "preserve pi-zentui legacy symbol interoperability in editor-factory-marker.ts, ui.ts and prototype-patch-registry.ts and retain test/legacy-symbols.test.ts when upstream removes the aliases",
     "delegate mouse/pointer-shape.ts requests to the shared pointer coordinator; keep the fork pill-mouse observer and adapt upstream external-layer and clipboard tests to the shared consumer architecture",
     "keep typed pointer-shape prototype and safe Function.prototype.apply.call forwarding in pointer-shape.ts and queue-rows.ts when upstream changes these methods",
@@ -144,19 +141,18 @@
     "settings-command.ts keeps only call-sized seams for the settings surface: the Layout tab splices ...overflowLayoutItems(config), the extension-segments tab splices ...overflowStatusItems({config, key, statusSettingPrefix}) per published status, the change handler hands every id to applyOverflowSetting(...) once, and the `/starline statuses` route is one handleStatusPanelCommand(args, ctx) call before the unknown-argument warning. The rows, value lists, presets, id parsing for priority/pinned and the close-then-mount ordering all live in extensions/starline/fork-overflow-settings.ts — re-apply the seams, not the logic, and keep every surrounding upstream line byte-stable.",
     "index.ts wires the fork sources with two calls: configureStatusView({ getConfig: getCurrentConfig, getStatuses: () => getActiveExtensionStatuses() }) in installUi and configureStatusView(undefined) in cleanupUi, plus a setPillOverflow dep that assigns savePillOverflowPatch(patch) to currentConfig. Keep those seams minimal.",
     "README.md and docs/configuration.md document pi-tidy ownership of user-message styling, the once-per-process warning for retired user-message keys, and the pi-tool-display native-box-off precondition. docs/configuration.md also keeps the added pointer subsection (\"Overflow, when the bar runs out of room\") before \"Segment display options\"; preserve upstream bytes elsewhere and do not run a formatter over that file.",
-    "pill-actions.ts carries three SAFETY comments on the upstream-original ctx.ui.theme as unknown as ThemeLike casts (showContext/showPackage/showTps); upstream v0.13.0 ships them without one and pi-lens blocks on require-safety-comment-for-as-unknown-as. Re-apply the comments, never the casts.",
-    "format.ts carries one SAFETY comment on the upstream-original entry as unknown as UsageEntryShape cast plus one biome-ignore on tagMatchesVersion, which upstream v0.13.0 ships unused; both are needed for the pi-lens/biome gates. Re-apply the two comments.",
     "footer.ts resolves the context pill through the upstream v0.13.0 tilde estimate (nothingRanYet/estimatedTokens/estimatedPercent via collectContextBreakdown(probeFor(ctx)), passed as estimated to buildContextDisplayLabel), keeps the git_pr renderVariable and pillSpecFor cases, and passes tailColumnsFor (git.labelTailColumns) to collectPillInputs. Re-apply those additions around the entry-22 renderStatusBar seam.",
     "config.ts carries upstream v0.13.0 extensionStatuses.commands parsing and warning, git.issues, gitPr* defaults, and warnMovedUserMessageKeys wired into loadConfig; preserve these upstream features alongside the remaining fork config seams.",
     "test/config.test.ts keeps upstream commands expectations and verifies retired user-message and transcript-clean-copy settings are ignored; test/extension-compliance.test.ts pins editor color-source settings independently. Reconcile these assertions with upstream config behavior.",
-    "fork-status-bar.ts legacyRender renders at unbounded width and clamps spans itself, because upstream v0.13.0\"s renderPillBar drops whole pills and stands a +N counter in their place when given a real width; governance off must keep the pre-overflow single truncation. Re-apply that call and the span clamp."
+    "fork-status-bar.ts legacyRender renders at unbounded width and clamps spans itself, because upstream v0.13.0\"s renderPillBar drops whole pills and stands a +N counter in their place when given a real width; governance off must keep the pre-overflow single truncation. Re-apply that call and the span clamp.",
+    "packaging identity (repository.url, files allowlist, per-package lockfile policy) is enforced by scripts/check-fork-identity.mjs — run `node scripts/check-fork-identity.mjs` after every subtree pull/sync"
   ],
   "doNotReintroduce": [
     "Do not restore upstream repository.url as the fork publishing source; npm provenance must identify the actual build repository.",
-    "expect recurring modify/delete conflicts on every pull: upstream deleted these files and the fork keeps them — extensions/starline/mouse/tool-box.ts, mouse/component-tree.ts, test/contract/tool-box-hint.test.ts, test/mouse/tool-box.test.ts, test/mouse/component-tree.test.ts, test/contract/transcript-layout.test.ts",
     "keep editor-wheel.test.ts's 9 lint/style warnings and shim.ts's 2 noConfusingVoidType warnings by deliberate non-change",
     "Do not restore the removed editor metadata row or its settings; use the upstream compact editor and map legacy editor status placement to the footer right.",
     "Do not restore the pre-overflow single-row cut as the default when the segments do not fit: the governed bar (content caps, retention prefix, +N) is the default and `pill.overflow.enabled: false` is only an explicit opt-out. Unbounded wrapping stays out; a two-line mode is a separate change with its own anchor and hit-test work.",
-    "Do not restore Starline-owned user-message styling or transcript-selection cleaning; pi-tidy owns those behaviors, and pi-tool-display’s upstream enableNativeUserMessageBox default stays unchanged (disable it in user configuration when pi-tidy must own the render hook)."
+    "Do not restore Starline-owned user-message styling or transcript-selection cleaning; pi-tidy owns those behaviors, and pi-tool-display’s upstream enableNativeUserMessageBox default stays unchanged (disable it in user configuration when pi-tidy must own the render hook).",
+    "keep the fork-only files extensions/starline/mouse/tool-box.ts, mouse/component-tree.ts, test/contract/tool-box-hint.test.ts, test/mouse/tool-box.test.ts, test/mouse/component-tree.test.ts and test/contract/transcript-layout.test.ts under their current paths: they are absent from the recorded upstream tip (b51588a, which is still upstream main), so a pull treats them as ours-only additions and there is no recurring delete/modify conflict to avoid (2026-11-15 dry-run). Renaming them to fork-* buys nothing today; revisit only if upstream re-adds one of these paths (that would be an add/add conflict)"
   ]
 }

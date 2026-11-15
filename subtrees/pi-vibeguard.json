@@ -14,13 +14,13 @@
     {
       "kind": "noise",
       "path": "packages/pi-vibeguard/tsconfig.json",
-      "reason": "Diff-alignment artifact on a repeated closing brace: the raw diff pairs `-}` with `+}` while `git diff -w` renders `}` as unchanged context; the file is otherwise at upstream bytes.",
+      "reason": "[artifact] Diff-alignment artifact on a repeated closing brace: the raw diff pairs `-}` with `+}` while `git diff -w` renders `}` as unchanged context; the file is otherwise at upstream bytes.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
     }
   ],
   "reapplyOnSync": [
     "keep the packaging divergence: npm name @xzzpig/pi-vibeguard, the repository field repointed to xzzpig/pi-extensions, and the @earendil-works/pi-tui peerDependency (range aligned with pi-tool-display) plus the vitest devDep",
-    "keep the fork-only modules mapping-view.ts, category-picker.ts and suspension-filter.ts, with index.ts holding the imports, construction sites, the SuspensionState class and the /vibeguard:* commands",
+    "keep the fork-only modules mapping-view.ts, category-picker.ts, suspension-filter.ts, suspension-state.ts (SuspensionState + sanitizeCategory + status sync) and fork-commands.ts (the six /vibeguard:* registrations); index.ts keeps the imports, the extension factory state and one registerVibeguardCommands(pi, deps) call",
     "keep the tsconfig include widening (tests, allowImportingTsExtensions) with test-engine.ts excluded from typecheck, and keep eslint ignoring test-engine.ts since typed linting requires tsconfig membership",
     "keep the README fork notice and the CHANGELOG 0.1.0 fork entry"
   ],

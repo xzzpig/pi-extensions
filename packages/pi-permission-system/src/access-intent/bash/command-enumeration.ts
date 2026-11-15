@@ -329,11 +329,15 @@ export function collectCommands(
   options?: { parseProgram?: ParseProgram },
 ): BashCommand[] {
   const out: BashCommand[] = [];
+  // A payload re-parse (`wrapper-parse.ts`) re-enters this walk, so the active
+  // parser is saved/restored rather than cleared: clearing it would leave the
+  // outer walk unable to resolve the next opaque wrapper's payload.
+  const previousParseProgram = activeParseProgram;
   activeParseProgram = options?.parseProgram;
   try {
   collectCommandsInto(node, topLevelScope(words, speller), out);
   } finally {
-    activeParseProgram = undefined;
+    activeParseProgram = previousParseProgram;
   }
   return out;
 }

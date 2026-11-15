@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.4
+
+- **Conflict-surface refactor, no behavior change.** The fork's verification cases moved out of the upstream `scripts/verify.mjs` (917 → 351 lines) into fork-only `scripts/verify-fork.mjs`; `verify` now runs both suites. The pure budget policy (window-derived budget, compaction point, disabled reason, whitelist gating, status text) moved to fork-only `extensions/budget-policy.ts`, leaving `extensions/context-cap.ts` with one-line state wrappers and the stateful executor.
+
 ## 0.1.3
 
 - The `--context-cap` / `--context-cap-reserve` CLI flags now use the same strict token parser as the config file: suffix strings like `"200k"` are rejected with a warning (`--context-cap "200k" must be a positive token count; ignoring it`) instead of being silently truncated to 200. The `/context-cap <tokens>` command path keeps its original (upstream) parsing.

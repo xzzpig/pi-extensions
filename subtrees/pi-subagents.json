@@ -14,160 +14,159 @@
     {
       "kind": "other",
       "path": "packages/pi-subagents/package.json",
-      "reason": "Fork npm publication must identify xzzpig/pi-extensions as repository.url for OIDC provenance; upstream identity remains in this subtree record and package homepage. This minimal metadata divergence remains while publishing the fork.",
+      "reason": "[policy] Fork npm publication must identify xzzpig/pi-extensions as repository.url for OIDC provenance; upstream identity remains in this subtree record and package homepage. This minimal metadata divergence remains while publishing the fork.",
       "recordedAt": "2026-10-31T00:00:00Z"
     },
     {
       "kind": "lint",
-      "reason": "~72 pi-lens blocking findings across ~40 upstream-original files (no-unknown-returns, require-safety-comment-for-as-unknown-as, unchecked-throwing-call, error-swallowing) plus known false positives. By the 2026-09-17 decision the fork keeps upstream code byte-identical instead of adding per-site suppressions; re-checked on each sync.",
+      "reason": "[baseline] ~72 pi-lens blocking findings across ~40 upstream-original files (no-unknown-returns, require-safety-comment-for-as-unknown-as, unchecked-throwing-call, error-swallowing) plus known false positives. By the 2026-09-17 decision the fork keeps upstream code byte-identical instead of adding per-site suppressions; re-checked on each sync.",
       "recordedAt": "2026-09-28T02:09:09+08:00"
     },
     {
       "kind": "lint",
       "path": "packages/pi-subagents/.oxlintrc.json",
-      "reason": "Overrides intentionally stay broad: narrowing them re-enables ~11k anti-slop errors across ~436 upstream files that upstream never satisfied. Accepted debt.",
+      "reason": "[policy] Overrides intentionally stay broad: narrowing them re-enables ~11k anti-slop errors across ~436 upstream files that upstream never satisfied. Accepted debt.",
       "recordedAt": "2026-09-28T02:09:09+08:00"
     },
     {
       "kind": "noise",
       "path": "packages/pi-subagents/.oxlintrc.json",
-      "reason": "The intentional broad overrides block adds a comma to the upstream closing brace; the single raw-vs-w line is that comma.",
+      "reason": "[artifact] The intentional broad overrides block adds a comma to the upstream closing brace; the single raw-vs-w line is that comma.",
       "recordedAt": "2026-09-28T02:09:09+08:00"
     },
     {
       "kind": "lint",
       "path": "packages/pi-subagents/src/runs/background/async-execution.ts",
-      "reason": "The upstream-original spawnRunner(cfg: object, ...) signature and the best-effort empty catch removing the startup file are unchanged from the pre-sync fork and upstream. They remain under the current-change-only policy; revisit if upstream changes those sites.",
+      "reason": "[baseline] The upstream-original spawnRunner(cfg: object, ...) signature and the best-effort empty catch removing the startup file are unchanged from the pre-sync fork and upstream. They remain under the current-change-only policy; revisit if upstream changes those sites.",
       "recordedAt": "2026-09-28T02:09:09+08:00"
     },
     {
       "kind": "noise",
       "path": "packages/pi-subagents/src/api/preflight.ts",
-      "reason": "Diff-alignment artifact: the fork's added guard, try block or parameter threading indents these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
+      "reason": "[artifact] Diff-alignment artifact: the fork's added guard, try block or parameter threading indents these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
     },
     {
       "kind": "noise",
       "path": "packages/pi-subagents/src/runs/foreground/execution.ts",
-      "reason": "Diff-alignment artifact: the fork's added guard, try block or parameter threading indents these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
+      "reason": "[artifact] Diff-alignment artifact: the fork's added guard, try block or parameter threading indents these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
     },
     {
       "kind": "noise",
       "path": "packages/pi-subagents/src/runs/foreground/subagent-executor.ts",
-      "reason": "Diff-alignment artifact: the fork's added guard, try block or parameter threading indents these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
+      "reason": "[artifact] Diff-alignment artifact: the fork's added guard, try block or parameter threading indents these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
     },
     {
       "kind": "noise",
       "path": "packages/pi-subagents/src/runs/shared/nested-events.ts",
-      "reason": "Diff-alignment artifact: the fork's added guard, try block or parameter threading indents these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
+      "reason": "[artifact] Diff-alignment artifact: the fork's added guard, try block or parameter threading indents these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
     },
     {
       "kind": "noise",
       "path": "packages/pi-subagents/src/slash/subagents-admin.ts",
-      "reason": "Diff-alignment artifact: the fork's added guard, try block or parameter threading indents these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
+      "reason": "[artifact] Diff-alignment artifact: the fork's added guard, try block or parameter threading indents these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
     },
     {
       "kind": "noise",
       "path": "packages/pi-subagents/test/integration/async-status.test.ts",
-      "reason": "Diff-alignment artifact: the fork's added guard, try block or parameter threading indents these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
+      "reason": "[artifact] Diff-alignment artifact: the fork's added guard, try block or parameter threading indents these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
     },
     {
       "kind": "noise",
       "path": "packages/pi-subagents/src/runs/background/async-execution.ts",
-      "reason": "Diff-alignment artifact: the fork's added guard, try block or parameter threading indents these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
+      "reason": "[artifact] Diff-alignment artifact: the fork's added guard, try block or parameter threading indents these upstream-origin lines one level deeper than upstream, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without breaking the fork structure.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
     },
     {
       "kind": "test",
       "path": "packages/pi-subagents/test/unit/global-npm-root.test.ts",
-      "reason": "resolveGlobalNpmRoot and 'terminates the owned npm process on timeout' flap under parallel full test:unit load (npm spawn + owned-kill timing); both pass solo and in single-file runs. Same family as the 2026-09-27 SIGTERM-on-spawnSync flakes, not tied to a fork change.",
+      "reason": "[host] resolveGlobalNpmRoot and 'terminates the owned npm process on timeout' flap under parallel full test:unit load (npm spawn + owned-kill timing); both pass solo and in single-file runs. Same family as the 2026-09-27 SIGTERM-on-spawnSync flakes, not tied to a fork change.",
       "recordedAt": "2026-10-02T22:30:00+08:00"
     },
     {
       "kind": "test",
-      "reason": "The spawn-family unit tests (nested-control.test.ts external-job follow-ups, background child-spawn timeouts, native fleet, subagent extension child mode) exceed their 10-40s waits under the default parallel `node --test` load on this WSL host — child processes start much slower than upstream CI and the suite grew with v0.74.0; every affected file passed solo and the whole unit suite passed with --test-concurrency=1 on that WSL baseline. Verify releases with the serial run, not the parallel one, on this machine.",
+      "reason": "[host] The spawn-family unit tests (nested-control.test.ts external-job follow-ups, background child-spawn timeouts, native fleet, subagent extension child mode) exceed their 10-40s waits under the default parallel `node --test` load on this WSL host — child processes start much slower than upstream CI and the suite grew with v0.74.0; every affected file passed solo and the whole unit suite passed with --test-concurrency=1 on that WSL baseline. Verify releases with the serial run, not the parallel one, on this machine.",
       "recordedAt": "2026-10-02T23:30:00+08:00"
     },
     {
       "kind": "lint",
       "path": "packages/pi-subagents/runner-peer-preload.mjs",
-      "reason": "The inherited no-runtime-typeof finding is an input guard, retained without upstream-only lint rewrites.",
+      "reason": "[baseline] The inherited no-runtime-typeof finding is an input guard, retained without upstream-only lint rewrites.",
       "recordedAt": "2026-10-10T06:47:00Z"
     },
     {
       "kind": "lint",
       "path": "packages/pi-subagents/workflow-script-worker.cjs",
-      "reason": "The v0.84.0 security-hardened upstream worker has two unchecked JSON.parse and two Reflect.apply findings. The worker is retained byte-identical to upstream under the current-change-only policy; revisit when upstream changes or documents these sites."
+      "reason": "[baseline] The v0.84.0 security-hardened upstream worker has two unchecked JSON.parse and two Reflect.apply findings. The worker is retained byte-identical to upstream under the current-change-only policy; revisit when upstream changes or documents these sites."
     },
     {
       "kind": "lint",
       "path": "packages/pi-subagents/scripts/build-package.mjs",
-      "reason": "The no-runtime-typeof finding checks untrusted manifest export targets before string operations. The guard is identical to both upstream v0.83.1 and pre-sync HEAD and is retained under the current-change-only policy.",
+      "reason": "[baseline] The no-runtime-typeof finding checks untrusted manifest export targets before string operations. The guard is identical to both upstream v0.83.1 and pre-sync HEAD and is retained under the current-change-only policy.",
       "recordedAt": "2026-10-29T04:27:00+08:00"
     },
     {
       "kind": "test",
       "path": "packages/pi-subagents/test/unit/herdr-*.test.ts",
-      "reason": "The 2026-10-10 execution host rejects Unix-domain server.listen with EPERM: eight existing Herdr unit assertions cannot reach their socket protocol. Keep production and assertions unchanged; rerun on a host allowing local Unix sockets. No test skips were added.",
+      "reason": "[host] The 2026-10-10 execution host rejects Unix-domain server.listen with EPERM: eight existing Herdr unit assertions cannot reach their socket protocol. Keep production and assertions unchanged; rerun on a host allowing local Unix sockets. No test skips were added.",
       "recordedAt": "2026-10-10T06:57:00Z"
     },
     {
       "kind": "test",
       "path": "packages/pi-subagents/test/**/orca-progress-tabs.test.ts",
-      "reason": "Three unit cases and one integration case assume each temporary cwd has no ancestor .git. The 2026-10-10 host mounts /tmp/.git, so unchanged resolveSequenceScope writes manifests under /tmp/.pi and shares sequence counters; direct createOrcaProgressTab confirmed that path and the second integration fixture receives title index 2 instead of 1. Both test files and production module are unchanged from pre-sync ffdfabd. Keep assertions/production unchanged and rerun on a clean temporary hierarchy.",
+      "reason": "[host] Three unit cases and one integration case assume each temporary cwd has no ancestor .git. The 2026-10-10 host mounts /tmp/.git, so unchanged resolveSequenceScope writes manifests under /tmp/.pi and shares sequence counters; direct createOrcaProgressTab confirmed that path and the second integration fixture receives title index 2 instead of 1. Both test files and production module are unchanged from pre-sync ffdfabd. Keep assertions/production unchanged and rerun on a clean temporary hierarchy.",
       "recordedAt": "2026-10-10T06:57:00Z"
     },
     {
       "kind": "deleted",
       "path": "packages/pi-subagents/package-lock.json",
-      "reason": "The user selected the root pnpm workspace lock as the sole source dependency contract. Upstream recreates this package-local npm lock on sync; remove it again and keep the fork's pnpm CI and standalone documentation adaptations.",
+      "reason": "[policy] The user selected the root pnpm workspace lock as the sole source dependency contract. Upstream recreates this package-local npm lock on sync; remove it again and keep the fork's pnpm CI and standalone documentation adaptations.",
       "recordedAt": "2026-10-29T04:27:00+08:00"
     },
     {
       "kind": "lint",
       "path": "packages/pi-subagents/test/integration/async-execution.part-2.test.ts",
-      "reason": "Unused imports SUBAGENT_LIFECYCLE_ARTIFACT_VERSION, RESULTS_DIR and waitForAsyncEvent are identical in upstream v0.83.1 and pre-sync HEAD. Under the user-approved current-change-only policy they are recorded rather than removed from upstream-origin lines.",
+      "reason": "[baseline] Unused imports SUBAGENT_LIFECYCLE_ARTIFACT_VERSION, RESULTS_DIR and waitForAsyncEvent are identical in upstream v0.83.1 and pre-sync HEAD. Under the user-approved current-change-only policy they are recorded rather than removed from upstream-origin lines.",
       "recordedAt": "2026-10-29T04:27:00+08:00"
     },
     {
       "kind": "lint",
       "path": "packages/pi-subagents/src/runs/shared/herdr-placed-run.ts",
-      "reason": "The upstream-identical promise resolution/rejection ternary is reported by no-unused-expressions despite calling resolve or reject for its side effect. Retain the original bytes under the current-change-only policy.",
+      "reason": "[policy] The upstream-identical promise resolution/rejection ternary is reported by no-unused-expressions despite calling resolve or reject for its side effect. Retain the original bytes under the current-change-only policy.",
       "recordedAt": "2026-10-29T04:27:00+08:00"
     },
     {
       "kind": "noise",
       "path": "packages/pi-subagents/src/slash/prompt-template-bridge.ts",
-      "reason": "Diff-alignment artifact: the fork's additive sixth executeStructured parameter and the shared onExecutionUpdate closure re-indent upstream-original callback lines (2026-10-19 audit: raw=[21 20] vs ws=[11 10]). The whitespace-insensitive remainder is the intended seam described in reapplyOnSync; nothing else in the file differs.",
+      "reason": "[artifact] Diff-alignment artifact: the fork's additive sixth executeStructured parameter and the shared onExecutionUpdate closure re-indent upstream-original callback lines (2026-10-19 audit: raw=[21 20] vs ws=[11 10]). The whitespace-insensitive remainder is the intended seam described in reapplyOnSync; nothing else in the file differs.",
       "recordedAt": "2026-10-19T03:30:00+08:00"
     },
     {
       "kind": "lint",
       "path": "packages/pi-subagents/src/extension/index.ts",
-      "reason": "The unused discoverAgentsWithRuntime import predates the auto-continuation gate. The user chose to preserve unrelated upstream-origin code rather than expand this feature; remove it when the surrounding upstream area is next intentionally cleaned up."
+      "reason": "[policy] The unused discoverAgentsWithRuntime import predates the auto-continuation gate. The user chose to preserve unrelated upstream-origin code rather than expand this feature; remove it when the surrounding upstream area is next intentionally cleaned up."
     },
     {
       "kind": "lint",
       "path": "packages/pi-subagents/src/runs/foreground/subagent-executor.ts",
-      "reason": "The unused resolveModelSelection, getHostBuiltinToolNames, WorkflowChildSettledNotification imports and destructured count bindings at the task-expansion loops predate the auto-continuation gate. The user chose to preserve unrelated upstream-origin code rather than expand this feature; remove them when the surrounding upstream area is next intentionally cleaned up."
+      "reason": "[policy] The unused resolveModelSelection, getHostBuiltinToolNames, WorkflowChildSettledNotification imports and destructured count bindings at the task-expansion loops predate the auto-continuation gate. The user chose to preserve unrelated upstream-origin code rather than expand this feature; remove them when the surrounding upstream area is next intentionally cleaned up."
     },
     {
       "kind": "test",
       "path": "packages/pi-subagents/test/unit/herdr-machine.test.ts",
-      "reason": "New upstream v0.88.0 test 'keeps a forwarding session command alive while forwarding and ends it when the forwarder closes' fails deterministically on this host: its fake ssh spawns `/bin/sh -c 'exec cat >/dev/null'` as the remote session command, but that child exits immediately even with a stdin pipe held open (reproduced standalone with process.kill(pid,0) -> ESRCH). Production herdr-connection.ts is byte-identical to upstream v0.88.0 and the test is byte-identical to upstream, so this is a host/environment difference, not a fork divergence. Rerun on a host where the fake ssh session command stays alive; remove this entry then.",
+      "reason": "[host] New upstream v0.88.0 test 'keeps a forwarding session command alive while forwarding and ends it when the forwarder closes' fails deterministically on this host: its fake ssh spawns `/bin/sh -c 'exec cat >/dev/null'` as the remote session command, but that child exits immediately even with a stdin pipe held open (reproduced standalone with process.kill(pid,0) -> ESRCH). Production herdr-connection.ts is byte-identical to upstream v0.88.0 and the test is byte-identical to upstream, so this is a host/environment difference, not a fork divergence. Rerun on a host where the fake ssh session command stays alive; remove this entry then.",
       "recordedAt": "2026-11-13T00:00:00Z"
     }
   ],
   "reapplyOnSync": [
-    "Keep package.json repository.url at git+https://github.com/xzzpig/pi-extensions.git for fork OIDC publishing; retain upstream source identity in subtree metadata.",
     "v0.74.0 sync (2026-10-02): keep the fork's projectTrusted threading — upstream v0.74.0 added its own sessionProjectTrust(ctx)/projectTrusted fields and call sites for the same untrusted-project feature the fork already implements; on conflict keep the fork's currentProjectTrusted(input.ctx)/currentProjectTrusted(ctx) calls and trustedProjectCwd spreads, drop upstream's duplicate projectTrusted field declarations (async-execution.ts AsyncExecutionContext, child-launch.ts BuildInProcessChildLaunchInput, shared/types.ts) and duplicate object-literal properties (execution.ts, subagent-executor.ts at the executeAsyncSingle/runSync ctx sites). Preserve the upstream parentProviderRegistry field and its diagnostic helper alongside the fork trust field.",
     "v0.74.0 sync (2026-10-02): the shim fixture's dist/core/system-prompt.d.ts declares NormalizedBuildSystemPromptOptions (selectedTools + sections required) and the fixture's BeforeAgentStartEvent.systemPromptOptions uses it, mirroring real Pi 1.0.0 — upstream's 0.99-era fixture only had optional selectedTools and no sections, which fails the fork's strict typecheck on the 0.74.0 before_agent_start advertise handler",
-    "v0.74.0 sync (2026-10-02): merge upstream's new fields/functions alongside the fork's: preflight runtimeSnapshotHost next to sandbox/permissionProfile/hostAvailableBuiltins, child-session selectedBuiltinMcpExtension/missingBuiltinMcpTools next to captureProcessEnv/restoreProcessEnv, child-tool-plan builtinMcpTools next to hostAvailableBuiltins, fleet.ts keeps the native-transcript imports plus upstream's runningTone/childThinkingLevel, index.ts imports buildAdvertisedAgentCatalog + the fork's mergeAgentsForScope (appendAdvertisedAgentPrompt is gone upstream)",
+    "v0.74.0 sync (2026-10-02): merge upstream's new fields/functions alongside the fork's: preflight runtimeSnapshotHost next to sandbox/permissionProfile/hostAvailableBuiltins, child-session selectedBuiltinMcpExtension/missingBuiltinMcpTools next to captureProcessEnv/restoreProcessEnv, child-tool-plan builtinMcpTools next to hostAvailableBuiltins, fleet.ts keeps the native-transcript imports plus upstream's runningTone/childThinkingLevel, and fleet-native-transcript reads raw records through readTranscriptRecords in the fork-only shared/fleet-transcript-reader.ts (src/tui/fleet-transcript.ts is a renderer only — do not re-add a second reader copy), index.ts imports buildAdvertisedAgentCatalog + the fork's mergeAgentsForScope (appendAdvertisedAgentPrompt is gone upstream)",
     "Pi 1.0.0 baseline (2026-10-02): child-session.ts ChildSession wrappers call .then(() => undefined) on session.steer/followUp (Pi 1.0.0 returns Promise<QueuedInputDisposition>; the fork API stays Promise<void>). The shim fixture version is 1.0.0, so TypeScript's package-id dedup unifies it with the real 1.0.0 host inside consumer programs (pi-goal-x, pi-openspec-x) and those programs typecheck the fork sources against real 1.0.0 types — keep the .then wrappers when re-applying",
     "Pi 1.0.0 baseline (2026-10-02): runner-aliases.ts best-effort subpath aliases — in resolveHostPeerAliases, when the peer package resolves but the subpath is no longer declared by its exports (pi-agent-core 1.0.0 dropped ./node), skip the alias instead of failing the launch; a declared-but-missing target stays a fatal missing",
     "Pi 1.0.0 baseline (2026-10-02): host-peer-runtime-imports.test.ts final loop iterates resolved.aliases entries and asserts the root (subpath \".\") HOST_PEER_ALIASES specifiers instead of every table entry, because dropped subpaths are best-effort",
@@ -183,7 +182,7 @@
     "preserve the context-injection handler in async before_agent_start + waitForAdvertisement",
     "retain PI_BUILTIN_TOOL_NAMES for hostAvailableBuiltins",
     "re-apply the 'as StreamFn' casts at prompt-audit.ts:72, review.ts:280 and permission-arbiter.ts",
-    "Remove the upstream package-lock.json on each sync; preserve the fork-only CHANGELOG sections and use the root pnpm workspace lock for dependency installation.",
+    "Preserve the fork-only CHANGELOG sections and use the root pnpm workspace lock for dependency installation.",
     "After pnpm install, check for a package-local shim node_modules/@earendil-works/chord stub and remove it if present so host-peer resolution reaches the hoisted chord. Refresh a copied file: fixture when necessary; pnpm 11 may hardlink the fixture and need no copy.",
     "v0.75.0 sync (2026-10-03): agents.ts validateExternalRunnerProfile keeps the fork sandbox/permission-profile entries inside upstream Claude Code adapter-accepts overrides list (adapterAcceptsOverrides + isClaudeCodeAdapterId)",
     "v0.75.0 sync (2026-10-03): async-execution.ts keeps fork hostAvailableBuiltins = getHostBuiltinToolNames(ctx.pi) beside upstream requiredExtensions params/registeredExtensions expression in both chain and single paths, and keeps the fork sandbox const beside upstream claudeCodeAdapter in the single path",
@@ -205,7 +204,8 @@
     "v0.88.0: the lightweight pi-coding-agent-shim declares ExtensionToolContext (extends ExtensionContext with readonly tools + executeTool), ToolExposure and ToolDefinition.exposure, and re-exports AgentTool/AgentToolCallOutcome — upstream's new subagent-launch-tool.ts uses them and the fork's typecheck resolves SDK types through the shim. Keep the shim at Pi 1.2.0 declarations and re-apply if upstream adds more SDK surface.",
     "v0.88.0: test/support/fork-test-environment.mjs realSdkSuites includes workflow-launch-approval.test.ts (new upstream real-SDK test needs SettingsManager.inMemory/createAgentSession from the pinned 1.2.0 test SDK, not the throwing shim stub).",
     "v0.88.0: foreground execution.ts handleToolResult publishes toolSnapshot.progressText/progressUpdatedAt for successful contact_supervisor progress_update results (Pi 1.2 toolResult messages). Upstream inlines this in message_end; the fork keeps it in the shared id-deduplicated handleToolResult so message_end and tool_result_end both funnel through one path.",
-    "v0.88.0: execution.ts message_end keeps the fork's `if (toolResult) handleToolResult(...) else { ... }` wrapper; upstream's inline 47-line toolResult block is NOT adopted (it would double-process with handleToolResult). Upstream's progressText type/pendingToolResultByCallId changes are adopted."
+    "v0.88.0: execution.ts message_end keeps the fork's `if (toolResult) handleToolResult(...) else { ... }` wrapper; upstream's inline 47-line toolResult block is NOT adopted (it would double-process with handleToolResult). Upstream's progressText type/pendingToolResultByCallId changes are adopted.",
+    "packaging identity (repository.url, files allowlist, per-package lockfile policy) is enforced by scripts/check-fork-identity.mjs — run `node scripts/check-fork-identity.mjs` after every subtree pull/sync"
   ],
   "doNotReintroduce": [
     "Do not restore upstream repository.url as the fork publishing source; npm provenance must identify the actual build repository.",

@@ -5,6 +5,15 @@ This fork tracks [`carderne/sandbox-runtime`](https://github.com/carderne/sandbo
 (itself derived from Anthropic's sandbox-runtime) via git subtree; entries below
 describe only fork-specific deviations from upstream.
 
+## 0.1.2
+
+### Changed
+
+- Documented the retained upstream `tsconfig.test.json` as a manual diagnostic only (`FORK-NOTES.md`): no script or gate invokes it, its 67 test-only type errors are pre-existing upstream, and the package source typecheck stays green. The file itself is unchanged.
+
+- Removed the unread `FsWriteRestrictionConfig.cwd?` field from the public write-restriction type. It had no producer or reader (its comment pointed at the mandatory-deny subsystem upstream deleted in v0.0.78); embedders that set it were not observed anywhere in the repo.
+- Subtree notes now describe the actual fork surface (`network.disabled`, containment fixes, `pathEntryLstatExists`) instead of the retired `protectNonexistentFiles` capability.
+
 ## 0.1.0
 
 ### Changed

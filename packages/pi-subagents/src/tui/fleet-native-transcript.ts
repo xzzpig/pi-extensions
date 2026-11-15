@@ -2,7 +2,7 @@ import type {
 	TranscriptEntry,
 	TranscriptState,
 } from "@xzzpig/pi-components/transcript";
-import { readTranscriptRecords, type FleetTranscriptReadOptions } from "./fleet-transcript.ts";
+import { readTranscriptRecords, type FleetTranscriptReadOptions } from "../shared/fleet-transcript-reader.ts";
 
 /** Runtime shape of `@xzzpig/pi-components/transcript` as consumed here.
  *  Expressed as a static typeof-import so the dependency stays lazy at

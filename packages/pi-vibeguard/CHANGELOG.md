@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.2
+
+### Changed
+
+- **Conflict-surface refactor, no behavior change.** The session-scoped suspension state moved to fork-only `suspension-state.ts` and the six `/vibeguard:*` commands to fork-only `fork-commands.ts`; `index.ts` now registers them with one `registerVibeguardCommands(pi, deps)` call.
+
+### Fixed
+
+- Each `/vibeguard:*` command is registered exactly once. A leftover `vibeguard:list`/`vibeguard:stats` registration in `index.ts` duplicated the fork-commands registration; tests that stored commands in a `Map` could not see it, so `tests/command-registration.test.ts` now counts registrations.
+
 ## 0.2.1
 
 ### Changed

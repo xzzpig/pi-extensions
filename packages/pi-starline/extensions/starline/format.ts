@@ -197,8 +197,6 @@ function computeUsageTotals(entries: readonly SessionEntry[]): UsageTotals {
 	};
 
 	for (const entry of entries) {
-		// SAFETY: transcript entries are a discriminated union whose `type` is
-		// checked by the switch below, so the narrowing happens at runtime.
 		const record = entry as unknown as UsageEntryShape;
 		switch (record.type) {
 			case "usage":
@@ -535,7 +533,6 @@ export function formatPackagePillLabel(
 }
 
 /** `v1.2.3`, `release-1.2.3` and `@scope/pkg@1.2.3` all end in the version. */
-// biome-ignore lint/correctness/noUnusedVariables: upstream v0.13.0 ships this helper unused; kept byte-stable.
 function tagMatchesVersion(tag: string, version: string): boolean {
 	const text = tag.trim();
 	if (text === version) return true;

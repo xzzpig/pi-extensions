@@ -41,113 +41,58 @@ import { GOAL_COMMANDS, GOAL_KEY_ACTIONS, PAUSE_ORDERS, parseCommandPaths, parse
 export const GOAL_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type ThinkingLevel = typeof GOAL_THINKING_LEVELS[number];
 
-export const DEFAULT_AUDITOR_AGENT = "goal-auditor";
-/**
- * Built-in completion-audit wall-clock cap: 30 minutes. Single source of
- * truth shared by the settings introspection display and the auditor's
- * TERMINAL_TIMEOUT_MS fallback so the displayed default can never drift
- * from the enforced one.
- */
-export const DEFAULT_AUDITOR_TIMEOUT_MS = 30 * 60_000;
-/**
- * Node.js setTimeout ceiling (2^31 - 1): values above it overflow the timer
- * and fire almost immediately, so auditorTimeoutMs rejects them outright.
- */
-export const MAX_AUDITOR_TIMEOUT_MS = 2_147_483_647;
-export const AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE = "auditorProjectResources is deprecated and ignored. Configure the selected auditor agent's extensions, subagentOnlyExtensions, skills, and tools instead.";
+// Completion-auditor settings live in a fork-only module (single leaf table).
+import {
+  ALLOWED_AUDITOR_KEYS,
+  AUDITOR_FIELD_BY_KEY,
+  AUDITOR_FIELD_BY_SPELLING,
+  AUDITOR_FIELDS,
+  AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE,
+  AUDITOR_THINKING_LEVELS,
+  type AuditorFieldDescriptor,
+  type AuditorFieldKind,
+  type AuditorPersistence,
+  type AuditorThinkingLevel,
+  type AuditorTier,
+  AUDITOR_STRICTNESS_LEVELS,
+  type AuditorStrictness,
+  DEFAULT_AUDITOR_AGENT,
+  DEFAULT_AUDITOR_TIMEOUT_MS,
+  DEFAULT_CHANGE_MANIFEST_DEPTH,
+  type GoalAuditorSettings,
+  MAX_AUDITOR_LIST_ITEM_LENGTH,
+  MAX_AUDITOR_LIST_ITEMS,
+  MAX_AUDITOR_PROFILE_NAME_LENGTH,
+  MAX_AUDITOR_SHORT_TEXT_LENGTH,
+  MAX_AUDITOR_TEXT_LENGTH,
+  MAX_AUDITOR_TIMEOUT_MS,
+} from "./goal-auditor-settings.ts";
 
-// ── nested completion-auditor settings ──────────────────────────────────────
-
-/** Upper bound for free-text auditor prompt injections (characters). */
-export const MAX_AUDITOR_TEXT_LENGTH = 16_384;
-/** Upper bound for reportFormat / feedbackNotes (characters). */
-export const MAX_AUDITOR_SHORT_TEXT_LENGTH = 4_096;
-/** Upper bound for auditor string-list fields (items per list). */
-export const MAX_AUDITOR_LIST_ITEMS = 32;
-/** Upper bound for each item in an auditor string-list field (characters). */
-export const MAX_AUDITOR_LIST_ITEM_LENGTH = 2_048;
-/** Upper bound for auditor profile-selector names (mirrors pi-subagents' grammar). */
-export const MAX_AUDITOR_PROFILE_NAME_LENGTH = 128;
-
-export const AUDITOR_STRICTNESS_LEVELS = ["balanced", "strict", "lenient"] as const;
-export type AuditorStrictness = (typeof AUDITOR_STRICTNESS_LEVELS)[number];
-
-/**
- * Nested completion-auditor settings. Sparse everywhere: every field optional,
- * absent = default behavior. Three effect tiers:
- *
- *   - request tier (read per audit, effective immediately): agent, provider,
- *     model, thinkingLevel, timeoutMs, disabled, changeManifest,
- *     changeManifestDepth, warmContext;
- *   - prompt-injection tier (read per audit, effective immediately):
- *     checklist, checklistExtra, evidenceRequests, strictness, instructions,
- *     reportFormat, feedbackNotes;
- *   - definition tier (read at default-auditor registration; needs a new
- *     session or /reload): systemPromptExtra, extensions,
- *     subagentOnlyExtensions, skills, skillPath, tools, excludeTools,
- *     mcpDirectTools, defaultReads, inheritProjectContext, inheritSkills,
- *     sandbox, permissionProfile.
- */
-export interface GoalAuditorSettings {
-	// ── request tier ──
-	/** Turn the independent completion review off (default false). */
-	disabled?: boolean;
-	/** pi-subagents agent used for the review; defaults to goal-auditor. */
-	agent?: string;
-	provider?: string;
-	model?: string;
-	thinkingLevel?: ThinkingLevel;
-	/** Completion-audit wall-clock cap in milliseconds (1..2_147_483_647). */
-	timeoutMs?: number;
-	changeManifest?: "auto" | "off";
-	changeManifestDepth?: number;
-	/** Inject parent-rendered ledger/turn warm context into the audit (default true). */
-	warmContext?: boolean;
-	// ── prompt-injection tier ──
-	/** Free-text operator instructions, injected as an <operator_instructions> block. */
-	instructions?: string;
-	/** Replaces the built-in audit checklist when set (protocol tail is always kept). */
-	checklist?: string[];
-	/** Appends items after the (default or replaced) checklist. */
-	checklistExtra?: string[];
-	/** Evidence the operator asks the auditor to collect proactively. */
-	evidenceRequests?: string[];
-	/** Posture preset mapped to injected text; "balanced" injects nothing. */
-	strictness?: AuditorStrictness;
-	/** Report structure/language/length requirements. */
-	reportFormat?: string;
-	/** Fixed operator note appended to the rejection feedback shown to the executor. */
-	feedbackNotes?: string;
-	// ── definition tier ──
-	/** Appended to the default auditor's system prompt at registration time. */
-	systemPromptExtra?: string;
-	extensions?: string[];
-	/** Unioned with the required child-only progress provider. */
-	subagentOnlyExtensions?: string[];
-	skills?: string[];
-	skillPath?: string[];
-	/** Replaces the ordinary tool allowlist (report_auditor_progress is retained). */
-	tools?: string[];
-	/** Removed from the effective allowlist after tools replacement. */
-	excludeTools?: string[];
-	mcpDirectTools?: string[];
-	defaultReads?: string[];
-	inheritProjectContext?: boolean;
-	inheritSkills?: boolean;
-	/**
-	 * Named pi-sandbox profile selector for the default auditor's native child
-	 * (pi-subagents fork). Validated scalar selector only — the actual
-	 * network/filesystem rules live in the global pi-sandbox config.
-	 */
-	sandbox?: string;
-	/**
-	 * Named pi-permission-system permission profile selector for the default
-	 * auditor's native child (pi-subagents fork). Validated scalar selector
-	 * only — the actual rules live in pi-permission-system's global profiles
-	 * registry.
-	 */
-	permissionProfile?: string;
-}
+// Public surface kept stable for the other extensions: the auditor schema now
+// lives in the fork-only module, and this file re-exports it unchanged.
+export {
+  AUDITOR_FIELD_BY_KEY,
+  AUDITOR_FIELDS,
+  AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE,
+  AUDITOR_STRICTNESS_LEVELS,
+  AUDITOR_THINKING_LEVELS,
+  type AuditorFieldDescriptor,
+  type AuditorFieldKind,
+  type AuditorPersistence,
+  type AuditorStrictness,
+  type AuditorThinkingLevel,
+  type AuditorTier,
+  DEFAULT_AUDITOR_AGENT,
+  DEFAULT_AUDITOR_TIMEOUT_MS,
+  DEFAULT_CHANGE_MANIFEST_DEPTH,
+  type GoalAuditorSettings,
+  MAX_AUDITOR_LIST_ITEM_LENGTH,
+  MAX_AUDITOR_LIST_ITEMS,
+  MAX_AUDITOR_PROFILE_NAME_LENGTH,
+  MAX_AUDITOR_SHORT_TEXT_LENGTH,
+  MAX_AUDITOR_TEXT_LENGTH,
+  MAX_AUDITOR_TIMEOUT_MS,
+};
 
 // ── sparse keybinding layers ────────────────────────────────────────────────
 
@@ -193,9 +138,6 @@ export const DEFAULT_GOAL_KEYBINDINGS: GoalKeybindings = {
  * plateaus here. Configurable via networkRecovery.maxDelayMs.
  */
 export const DEFAULT_NETWORK_RECOVERY_MAX_DELAY_MS = 80_000;
-
-/** Default downward scan depth for unregistered nested repositories. */
-export const DEFAULT_CHANGE_MANIFEST_DEPTH = 1;
 
 export function formatGoalKeybinding(key: GoalKeybinding | undefined): string {
 	if (Array.isArray(key)) return key.length ? key.map(k => formatGoalKeybinding(k)).join(" / ") : "Unbound";
@@ -826,42 +768,6 @@ export function parseSettingsLayer(
 	return { layer, diagnostics };
 }
 
-const ALLOWED_AUDITOR_KEYS = new Set([
-	// request tier
-	"disabled",
-	"agent",
-	"provider",
-	"model",
-	"thinkingLevel",
-	"thinking_level",
-	"timeoutMs",
-	"changeManifest",
-	"changeManifestDepth",
-	"warmContext",
-	// prompt-injection tier
-	"instructions",
-	"checklist",
-	"checklistExtra",
-	"evidenceRequests",
-	"reportFormat",
-	"strictness",
-	"feedbackNotes",
-	// definition tier
-	"systemPromptExtra",
-	"extensions",
-	"subagentOnlyExtensions",
-	"skills",
-	"skillPath",
-	"tools",
-	"excludeTools",
-	"mcpDirectTools",
-	"defaultReads",
-	"inheritProjectContext",
-	"inheritSkills",
-	"sandbox",
-	"permissionProfile",
-]);
-
 /**
  * Parse the nested "auditor" settings group. Diagnostics never erase valid
  * sibling leaves, and this never throws for content problems.
@@ -881,94 +787,80 @@ function parseAuditorSettingsLayer(
 	const path = (leaf: string): string => `auditor.${leaf}`;
 
 	for (const [key, value] of Object.entries(record)) {
-		if (!ALLOWED_AUDITOR_KEYS.has(key)) {
+		const field = AUDITOR_FIELD_BY_SPELLING.get(key);
+		if (!field) {
 			diagnostics.push(diagnostic("unknown_key", `unknown auditor key: ${key}`, path(key)));
 			continue;
 		}
-		switch (key) {
-			case "disabled":
-			case "warmContext":
-			case "inheritProjectContext":
-			case "inheritSkills": {
+		const reject = (detail?: string): void => {
+			diagnostics.push(
+				diagnostic(
+					"invalid_value",
+					detail === undefined ? field.invalidMessage : `${field.invalidMessage} ${detail}`,
+					path(key),
+				),
+			);
+		};
+		const assign = (value_: unknown): void => {
+			(fields as Record<string, unknown>)[field.key] = value_;
+		};
+		switch (field.kind) {
+			case "bool": {
 				const parsed = asBool(value);
-				if (parsed === undefined) diagnostics.push(diagnostic("invalid_value", `auditor.${key} must be true or false`, path(key)));
-				else fields[key] = parsed;
+				if (parsed === undefined) reject();
+				else assign(parsed);
 				break;
 			}
 			case "strictness": {
 				const parsed = asStrictness(value);
-				if (parsed === undefined) diagnostics.push(diagnostic("invalid_value", `auditor.${key} must be one of: ${AUDITOR_STRICTNESS_LEVELS.join(", ")}`, path(key)));
-				else fields.strictness = parsed;
+				if (parsed === undefined) reject();
+				else assign(parsed);
 				break;
 			}
-			case "changeManifest": {
+			case "manifest": {
 				const parsed = asChangeManifestMode(value);
-				if (parsed === undefined) diagnostics.push(diagnostic("invalid_value", `auditor.${key} must be one of: auto, off`, path(key)));
-				else fields.changeManifest = parsed;
+				if (parsed === undefined) reject();
+				else assign(parsed);
 				break;
 			}
-			case "changeManifestDepth": {
+			case "int": {
 				const parsed = asNonNegativeInt(value);
-				if (parsed === undefined) diagnostics.push(diagnostic("invalid_value", `auditor.${key} must be an integer >= 0 (0 = no downward scan)`, path(key)));
-				else fields.changeManifestDepth = parsed;
+				if (parsed === undefined) reject();
+				else assign(parsed);
 				break;
 			}
-			case "timeoutMs": {
+			case "timerInt": {
 				const parsed = asTimerSafePositiveInt(value);
-				if (parsed === undefined) diagnostics.push(diagnostic("invalid_value", `auditor.${key} must be an integer between 1 and ${MAX_AUDITOR_TIMEOUT_MS} (milliseconds)`, path(key)));
-				else fields.timeoutMs = parsed;
+				if (parsed === undefined) reject();
+				else assign(parsed);
 				break;
 			}
-			case "thinkingLevel":
-			case "thinking_level": {
+			case "thinkingLevel": {
 				const parsed = asThinkingLevel(value);
-				if (parsed === undefined) diagnostics.push(diagnostic("invalid_value", `auditor.${key} must be one of: ${[...THINKING_LEVELS].join(", ")}`, path(key)));
-				else fields.thinkingLevel = parsed;
+				if (parsed === undefined) reject();
+				else assign(parsed);
 				break;
 			}
-			case "agent":
-			case "provider":
-			case "model": {
-				const parsed = asBoundedText(value, MAX_AUDITOR_SHORT_TEXT_LENGTH);
-				if (parsed.error) diagnostics.push(diagnostic("invalid_value", `auditor.${key} ${parsed.error}`, path(key)));
-				else fields[key] = parsed.text;
+			case "shortText":
+			case "text": {
+				const parsed = asBoundedText(
+					value,
+					field.kind === "text" ? MAX_AUDITOR_TEXT_LENGTH : MAX_AUDITOR_SHORT_TEXT_LENGTH,
+				);
+				if (parsed.error) reject(parsed.error);
+				else assign(parsed.text);
 				break;
 			}
-			case "instructions":
-			case "systemPromptExtra": {
-				const parsed = asBoundedText(value, MAX_AUDITOR_TEXT_LENGTH);
-				if (parsed.error) diagnostics.push(diagnostic("invalid_value", `auditor.${key} ${parsed.error}`, path(key)));
-				else fields[key] = parsed.text;
-				break;
-			}
-			case "reportFormat":
-			case "feedbackNotes": {
-				const parsed = asBoundedText(value, MAX_AUDITOR_SHORT_TEXT_LENGTH);
-				if (parsed.error) diagnostics.push(diagnostic("invalid_value", `auditor.${key} ${parsed.error}`, path(key)));
-				else fields[key] = parsed.text;
-				break;
-			}
-			case "sandbox":
-			case "permissionProfile": {
+			case "profile": {
 				const parsed = asProfileName(value);
-				if (parsed.error) diagnostics.push(diagnostic("invalid_value", `auditor.${key} ${parsed.error}`, path(key)));
-				else fields[key] = parsed.name;
+				if (parsed.error) reject(parsed.error);
+				else assign(parsed.name);
 				break;
 			}
-			case "checklist":
-			case "checklistExtra":
-			case "evidenceRequests":
-			case "extensions":
-			case "subagentOnlyExtensions":
-			case "skills":
-			case "skillPath":
-			case "tools":
-			case "excludeTools":
-			case "mcpDirectTools":
-			case "defaultReads": {
+			case "list": {
 				const parsed = asBoundedStringList(value, MAX_AUDITOR_LIST_ITEM_LENGTH);
-				if (parsed.error) diagnostics.push(diagnostic("invalid_value", `auditor.${key} ${parsed.error}`, path(key)));
-				else fields[key] = parsed.items;
+				if (parsed.error) reject(parsed.error);
+				else assign(parsed.items);
 				break;
 			}
 		}
@@ -1184,156 +1076,26 @@ function resolvedSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv): Settings
 		globalValue: global.layer.auditor?.thinkingLevel,
 		defaultValue: undefined as unknown as ThinkingLevel,
 	}));
-	const auditorAgent = track("auditor.agent", resolveLeaf<string>({
-		projectValue: project.layer.auditor?.agent,
-		globalValue: global.layer.auditor?.agent,
-		defaultValue: DEFAULT_AUDITOR_AGENT,
-	}));
-	// SAFETY: phantom default — resolveLeaf only checks === undefined (see its doc).
-	const auditorTimeoutMs = track("auditor.timeoutMs", resolveLeaf<number>({
-		projectValue: project.layer.auditor?.timeoutMs,
-		globalValue: global.layer.auditor?.timeoutMs,
-		defaultValue: undefined as unknown as number,
-	}));
-	const auditorDisabled = track("auditor.disabled", resolveLeaf<boolean>({
-		projectValue: project.layer.auditor?.disabled,
-		globalValue: global.layer.auditor?.disabled,
-		defaultValue: false,
-	}));
-	const auditorWarmContext = track("auditor.warmContext", resolveLeaf<boolean>({
-		projectValue: project.layer.auditor?.warmContext,
-		globalValue: global.layer.auditor?.warmContext,
-		defaultValue: true,
-	}));
-	const auditorStrictness = track("auditor.strictness", resolveLeaf<AuditorStrictness>({
-		projectValue: project.layer.auditor?.strictness,
-		globalValue: global.layer.auditor?.strictness,
-		defaultValue: "balanced",
-	}));
-	// SAFETY: phantom default — resolveLeaf only checks === undefined (see its doc).
-	const auditorInstructions = track("auditor.instructions", resolveLeaf<string>({
-		projectValue: project.layer.auditor?.instructions,
-		globalValue: global.layer.auditor?.instructions,
-		defaultValue: undefined as unknown as string,
-	}));
-	// SAFETY: phantom default — resolveLeaf only checks === undefined (see its doc).
-	const auditorReportFormat = track("auditor.reportFormat", resolveLeaf<string>({
-		projectValue: project.layer.auditor?.reportFormat,
-		globalValue: global.layer.auditor?.reportFormat,
-		defaultValue: undefined as unknown as string,
-	}));
-	// SAFETY: phantom default — resolveLeaf only checks === undefined (see its doc).
-	const auditorFeedbackNotes = track("auditor.feedbackNotes", resolveLeaf<string>({
-		projectValue: project.layer.auditor?.feedbackNotes,
-		globalValue: global.layer.auditor?.feedbackNotes,
-		defaultValue: undefined as unknown as string,
-	}));
-	// SAFETY: phantom default — resolveLeaf only checks === undefined (see its doc).
-	const auditorSystemPromptExtra = track("auditor.systemPromptExtra", resolveLeaf<string>({
-		projectValue: project.layer.auditor?.systemPromptExtra,
-		globalValue: global.layer.auditor?.systemPromptExtra,
-		defaultValue: undefined as unknown as string,
-	}));
-	// SAFETY: phantom default — resolveLeaf only checks === undefined (see its doc).
-	const auditorChecklist = track("auditor.checklist", resolveLeaf<string[]>({
-		projectValue: project.layer.auditor?.checklist,
-		globalValue: global.layer.auditor?.checklist,
-		defaultValue: undefined as unknown as string[],
-	}));
-	// SAFETY: phantom default — resolveLeaf only checks === undefined (see its doc).
-	const auditorChecklistExtra = track("auditor.checklistExtra", resolveLeaf<string[]>({
-		projectValue: project.layer.auditor?.checklistExtra,
-		globalValue: global.layer.auditor?.checklistExtra,
-		defaultValue: undefined as unknown as string[],
-	}));
-	// SAFETY: phantom default — resolveLeaf only checks === undefined (see its doc).
-	const auditorEvidenceRequests = track("auditor.evidenceRequests", resolveLeaf<string[]>({
-		projectValue: project.layer.auditor?.evidenceRequests,
-		globalValue: global.layer.auditor?.evidenceRequests,
-		defaultValue: undefined as unknown as string[],
-	}));
-	// SAFETY: phantom default — resolveLeaf only checks === undefined (see its doc).
-	const auditorExtensions = track("auditor.extensions", resolveLeaf<string[]>({
-		projectValue: project.layer.auditor?.extensions,
-		globalValue: global.layer.auditor?.extensions,
-		defaultValue: undefined as unknown as string[],
-	}));
-	// SAFETY: phantom default — resolveLeaf only checks === undefined (see its doc).
-	const auditorSubagentOnlyExtensions = track("auditor.subagentOnlyExtensions", resolveLeaf<string[]>({
-		projectValue: project.layer.auditor?.subagentOnlyExtensions,
-		globalValue: global.layer.auditor?.subagentOnlyExtensions,
-		defaultValue: undefined as unknown as string[],
-	}));
-	// SAFETY: phantom default — resolveLeaf only checks === undefined (see its doc).
-	const auditorSkills = track("auditor.skills", resolveLeaf<string[]>({
-		projectValue: project.layer.auditor?.skills,
-		globalValue: global.layer.auditor?.skills,
-		defaultValue: undefined as unknown as string[],
-	}));
-	// SAFETY: phantom default — resolveLeaf only checks === undefined (see its doc).
-	const auditorSkillPath = track("auditor.skillPath", resolveLeaf<string[]>({
-		projectValue: project.layer.auditor?.skillPath,
-		globalValue: global.layer.auditor?.skillPath,
-		defaultValue: undefined as unknown as string[],
-	}));
-	// SAFETY: phantom default — resolveLeaf only checks === undefined (see its doc).
-	const auditorTools = track("auditor.tools", resolveLeaf<string[]>({
-		projectValue: project.layer.auditor?.tools,
-		globalValue: global.layer.auditor?.tools,
-		defaultValue: undefined as unknown as string[],
-	}));
-	// SAFETY: phantom default — resolveLeaf only checks === undefined (see its doc).
-	const auditorExcludeTools = track("auditor.excludeTools", resolveLeaf<string[]>({
-		projectValue: project.layer.auditor?.excludeTools,
-		globalValue: global.layer.auditor?.excludeTools,
-		defaultValue: undefined as unknown as string[],
-	}));
-	// SAFETY: phantom default — resolveLeaf only checks === undefined (see its doc).
-	const auditorMcpDirectTools = track("auditor.mcpDirectTools", resolveLeaf<string[]>({
-		projectValue: project.layer.auditor?.mcpDirectTools,
-		globalValue: global.layer.auditor?.mcpDirectTools,
-		defaultValue: undefined as unknown as string[],
-	}));
-	// SAFETY: phantom default — resolveLeaf only checks === undefined (see its doc).
-	const auditorDefaultReads = track("auditor.defaultReads", resolveLeaf<string[]>({
-		projectValue: project.layer.auditor?.defaultReads,
-		globalValue: global.layer.auditor?.defaultReads,
-		defaultValue: undefined as unknown as string[],
-	}));
-	// SAFETY: phantom default — resolveLeaf only checks === undefined (see its doc).
-	const auditorInheritProjectContext = track("auditor.inheritProjectContext", resolveLeaf<boolean>({
-		projectValue: project.layer.auditor?.inheritProjectContext,
-		globalValue: global.layer.auditor?.inheritProjectContext,
-		defaultValue: undefined as unknown as boolean,
-	}));
-	// SAFETY: phantom default — resolveLeaf only checks === undefined (see its doc).
-	const auditorInheritSkills = track("auditor.inheritSkills", resolveLeaf<boolean>({
-		projectValue: project.layer.auditor?.inheritSkills,
-		globalValue: global.layer.auditor?.inheritSkills,
-		defaultValue: undefined as unknown as boolean,
-	}));
-	// SAFETY: phantom default — resolveLeaf only checks === undefined (see its doc).
-	const auditorSandbox = track("auditor.sandbox", resolveLeaf<string>({
-		projectValue: project.layer.auditor?.sandbox,
-		globalValue: global.layer.auditor?.sandbox,
-		defaultValue: undefined as unknown as string,
-	}));
-	// SAFETY: phantom default — resolveLeaf only checks === undefined (see its doc).
-	const auditorPermissionProfile = track("auditor.permissionProfile", resolveLeaf<string>({
-		projectValue: project.layer.auditor?.permissionProfile,
-		globalValue: global.layer.auditor?.permissionProfile,
-		defaultValue: undefined as unknown as string,
-	}));
-	const auditorChangeManifest = track("auditor.changeManifest", resolveLeaf<"auto" | "off">({
-		projectValue: project.layer.auditor?.changeManifest,
-		globalValue: global.layer.auditor?.changeManifest,
-		defaultValue: "auto",
-	}));
-	const auditorChangeManifestDepth = track("auditor.changeManifestDepth", resolveLeaf<number>({
-		projectValue: project.layer.auditor?.changeManifestDepth,
-		globalValue: global.layer.auditor?.changeManifestDepth,
-		defaultValue: DEFAULT_CHANGE_MANIFEST_DEPTH,
-	}));
+	// One leaf table (fork-only goal-auditor-settings.ts) drives resolution,
+	// persistence and the status report; add a leaf there, not here.
+	const auditorLeaves: Partial<Record<keyof GoalAuditorSettings, unknown>> = {};
+	for (const field of AUDITOR_FIELDS) {
+		const resolved = track(
+			`auditor.${field.key as string}`,
+			resolveLeaf<unknown>({
+				projectValue: project.layer.auditor?.[field.key],
+				globalValue: global.layer.auditor?.[field.key],
+				defaultValue: field.defaultValue,
+			}),
+		);
+		// Presence rules match the previous per-leaf spreads: a defaulted leaf is
+		// always present; a text leaf is omitted when empty; everything else is
+		// omitted only when unconfigured.
+		const isText = field.kind === "shortText" || field.kind === "text";
+		if (isText ? Boolean(resolved) : resolved !== undefined) {
+			auditorLeaves[field.key] = resolved;
+		}
+	}
 	const autoSelectSingleGoal = track("autoSelectSingleGoal", resolveLeaf<boolean>({
 		projectValue: project.layer.autoSelectSingleGoal,
 		globalValue: global.layer.autoSelectSingleGoal,
@@ -1463,37 +1225,7 @@ function resolvedSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv): Settings
 		disableTasks,
 		disableContracts,
 		subtaskDepth,
-		auditor: {
-			agent: auditorAgent,
-			disabled: auditorDisabled,
-			...(auditorProvider ? { provider: auditorProvider } : {}),
-			...(auditorModel ? { model: auditorModel } : {}),
-			...(auditorThinkingLevel ? { thinkingLevel: auditorThinkingLevel } : {}),
-			...(auditorTimeoutMs !== undefined ? { timeoutMs: auditorTimeoutMs } : {}),
-			changeManifest: auditorChangeManifest,
-			changeManifestDepth: auditorChangeManifestDepth,
-			warmContext: auditorWarmContext,
-			strictness: auditorStrictness,
-			...(auditorInstructions ? { instructions: auditorInstructions } : {}),
-			...(auditorChecklist !== undefined ? { checklist: auditorChecklist } : {}),
-			...(auditorChecklistExtra !== undefined ? { checklistExtra: auditorChecklistExtra } : {}),
-			...(auditorEvidenceRequests !== undefined ? { evidenceRequests: auditorEvidenceRequests } : {}),
-			...(auditorReportFormat ? { reportFormat: auditorReportFormat } : {}),
-			...(auditorFeedbackNotes ? { feedbackNotes: auditorFeedbackNotes } : {}),
-			...(auditorSystemPromptExtra ? { systemPromptExtra: auditorSystemPromptExtra } : {}),
-			...(auditorExtensions !== undefined ? { extensions: auditorExtensions } : {}),
-			...(auditorSubagentOnlyExtensions !== undefined ? { subagentOnlyExtensions: auditorSubagentOnlyExtensions } : {}),
-			...(auditorSkills !== undefined ? { skills: auditorSkills } : {}),
-			...(auditorSkillPath !== undefined ? { skillPath: auditorSkillPath } : {}),
-			...(auditorTools !== undefined ? { tools: auditorTools } : {}),
-			...(auditorExcludeTools !== undefined ? { excludeTools: auditorExcludeTools } : {}),
-			...(auditorMcpDirectTools !== undefined ? { mcpDirectTools: auditorMcpDirectTools } : {}),
-			...(auditorDefaultReads !== undefined ? { defaultReads: auditorDefaultReads } : {}),
-			...(auditorInheritProjectContext !== undefined ? { inheritProjectContext: auditorInheritProjectContext } : {}),
-			...(auditorInheritSkills !== undefined ? { inheritSkills: auditorInheritSkills } : {}),
-			...(auditorSandbox ? { sandbox: auditorSandbox } : {}),
-			...(auditorPermissionProfile ? { permissionProfile: auditorPermissionProfile } : {}),
-		},
+		auditor: auditorLeaves as GoalAuditorSettings,
 		autoSelectSingleGoal,
 		auditorProjectResources,
 		hideUnfocusedBanner,
@@ -1865,34 +1597,27 @@ function buildPersistedLayer(settings: GoalSettings): Record<string, unknown> {
 	const auditor = settings.auditor;
 	if (auditor) {
 		const a: Record<string, unknown> = {};
-		// Migrated leaves keep their pre-0.8.0 persistence parity: agent only
-		// when non-default, disabled always, timeout only when set.
-		if (auditor.agent && auditor.agent !== DEFAULT_AUDITOR_AGENT) a.agent = auditor.agent;
-		if (auditor.disabled !== undefined) a.disabled = auditor.disabled;
-		if (auditor.provider) a.provider = auditor.provider;
-		if (auditor.model) a.model = auditor.model;
-		if (auditor.thinkingLevel) a.thinkingLevel = auditor.thinkingLevel;
-		if (auditor.timeoutMs !== undefined) a.timeoutMs = auditor.timeoutMs;
-		if (auditor.changeManifest !== undefined) a.changeManifest = auditor.changeManifest;
-		if (auditor.changeManifestDepth !== undefined) a.changeManifestDepth = auditor.changeManifestDepth;
-		// New leaves persist only when they differ from their defaults so
-		// routine saves do not grow files with default noise.
-		if (auditor.warmContext === false) a.warmContext = false;
-		if (auditor.strictness !== undefined && auditor.strictness !== "balanced") a.strictness = auditor.strictness;
-		if (auditor.instructions) a.instructions = auditor.instructions;
-		if (auditor.checklist !== undefined) a.checklist = [...auditor.checklist];
-		if (auditor.checklistExtra !== undefined) a.checklistExtra = [...auditor.checklistExtra];
-		if (auditor.evidenceRequests !== undefined) a.evidenceRequests = [...auditor.evidenceRequests];
-		if (auditor.reportFormat) a.reportFormat = auditor.reportFormat;
-		if (auditor.feedbackNotes) a.feedbackNotes = auditor.feedbackNotes;
-		if (auditor.systemPromptExtra) a.systemPromptExtra = auditor.systemPromptExtra;
-		for (const key of ["extensions", "subagentOnlyExtensions", "skills", "skillPath", "tools", "excludeTools", "mcpDirectTools", "defaultReads"] as const) {
-			if (auditor[key] !== undefined) a[key] = [...auditor[key]];
+		// Persistence rules come from the fork-only leaf table: a defaulted leaf is
+		// written only when it differs from its default, a text leaf only when
+		// truthy, and lists are copied so callers cannot mutate the settings object.
+		for (const field of AUDITOR_FIELDS) {
+			const value = auditor[field.key];
+			if (value === undefined) continue;
+			switch (field.persistence) {
+				case "defined":
+					a[field.key] = Array.isArray(value) ? [...value] : value;
+					break;
+				case "nonDefault":
+					if (value !== field.defaultValue) a[field.key] = value;
+					break;
+				case "truthy":
+					if (value) a[field.key] = value;
+					break;
+				case "list":
+					a[field.key] = [...(value as string[])];
+					break;
+			}
 		}
-		if (auditor.inheritProjectContext !== undefined) a.inheritProjectContext = auditor.inheritProjectContext;
-		if (auditor.inheritSkills !== undefined) a.inheritSkills = auditor.inheritSkills;
-		if (auditor.sandbox !== undefined) a.sandbox = auditor.sandbox;
-		if (auditor.permissionProfile !== undefined) a.permissionProfile = auditor.permissionProfile;
 		if (Object.keys(a).length > 0) persisted.auditor = a;
 	}
 	if (settings.disableTasks !== undefined) persisted.disableTasks = settings.disableTasks;
@@ -1972,35 +1697,32 @@ export function effectiveSettingsReport(cwd: string, env: NodeJS.ProcessEnv = pr
 		{ key: "disableContracts", label: "disableContracts", format: () => String(snapshot.value.disableContracts) },
 		{ key: "disableTasks", label: "disableTasks", format: () => String(snapshot.value.disableTasks) },
 		{ key: "subtaskDepth", label: "subtaskDepth", format: () => String(snapshot.value.subtaskDepth) },
-		{ key: "auditor.disabled", label: "auditor disabled", format: () => String(snapshot.value.auditor?.disabled) },
-		{ key: "auditor.agent", label: "auditor agent", format: () => snapshot.value.auditor?.agent ?? DEFAULT_AUDITOR_AGENT },
-		{ key: "auditor.timeoutMs", label: "auditor timeout (ms)", format: () => String(snapshot.value.auditor?.timeoutMs ?? DEFAULT_AUDITOR_TIMEOUT_MS) },
-		{ key: "auditor.provider", label: "auditor provider", format: () => snapshot.value.auditor?.provider ?? "(default)" },
-		{ key: "auditor.model", label: "auditor model", format: () => snapshot.value.auditor?.model ?? "(default)" },
-		{ key: "auditor.thinkingLevel", label: "auditor thinking_level", format: () => snapshot.value.auditor?.thinkingLevel ?? "(default)" },
-		{ key: "auditor.changeManifest", label: "auditor change manifest", format: () => snapshot.value.auditor?.changeManifest ?? "auto" },
-		{ key: "auditor.changeManifestDepth", label: "auditor change manifest scan depth", format: () => String(snapshot.value.auditor?.changeManifestDepth ?? DEFAULT_CHANGE_MANIFEST_DEPTH) },
-		{ key: "auditor.warmContext", label: "auditor warm context", format: () => String(snapshot.value.auditor?.warmContext ?? true) },
-		{ key: "auditor.strictness", label: "auditor strictness", format: () => snapshot.value.auditor?.strictness ?? "balanced" },
-		{ key: "auditor.instructions", label: "auditor instructions", format: () => textPresence(snapshot.value.auditor?.instructions) },
-		{ key: "auditor.checklist", label: "auditor checklist (replaces default)", format: () => listPresence(snapshot.value.auditor?.checklist) },
-		{ key: "auditor.checklistExtra", label: "auditor extra checklist items", format: () => listPresence(snapshot.value.auditor?.checklistExtra) },
-		{ key: "auditor.evidenceRequests", label: "auditor evidence requests", format: () => listPresence(snapshot.value.auditor?.evidenceRequests) },
-		{ key: "auditor.reportFormat", label: "auditor report format", format: () => textPresence(snapshot.value.auditor?.reportFormat) },
-		{ key: "auditor.feedbackNotes", label: "auditor feedback notes", format: () => textPresence(snapshot.value.auditor?.feedbackNotes) },
-		{ key: "auditor.systemPromptExtra", label: "auditor system prompt extra (next session)", format: () => textPresence(snapshot.value.auditor?.systemPromptExtra) },
-		{ key: "auditor.extensions", label: "auditor extensions (next session)", format: () => listPresence(snapshot.value.auditor?.extensions) },
-		{ key: "auditor.subagentOnlyExtensions", label: "auditor subagent-only extensions (next session)", format: () => listPresence(snapshot.value.auditor?.subagentOnlyExtensions) },
-		{ key: "auditor.skills", label: "auditor skills (next session)", format: () => listPresence(snapshot.value.auditor?.skills) },
-		{ key: "auditor.skillPath", label: "auditor skill paths (next session)", format: () => listPresence(snapshot.value.auditor?.skillPath) },
-		{ key: "auditor.tools", label: "auditor tools (next session)", format: () => listPresence(snapshot.value.auditor?.tools) },
-		{ key: "auditor.excludeTools", label: "auditor excluded tools (next session)", format: () => listPresence(snapshot.value.auditor?.excludeTools) },
-		{ key: "auditor.mcpDirectTools", label: "auditor MCP direct tools (next session)", format: () => listPresence(snapshot.value.auditor?.mcpDirectTools) },
-		{ key: "auditor.defaultReads", label: "auditor default reads (next session)", format: () => listPresence(snapshot.value.auditor?.defaultReads) },
-		{ key: "auditor.inheritProjectContext", label: "auditor inherits project context (next session)", format: () => String(snapshot.value.auditor?.inheritProjectContext ?? false) },
-		{ key: "auditor.inheritSkills", label: "auditor inherits skills (next session)", format: () => String(snapshot.value.auditor?.inheritSkills ?? false) },
-		{ key: "auditor.sandbox", label: "auditor sandbox profile (next session)", format: () => snapshot.value.auditor?.sandbox ?? "(unset)" },
-		{ key: "auditor.permissionProfile", label: "auditor permission profile (next session)", format: () => snapshot.value.auditor?.permissionProfile ?? "(unset)" },
+		// Auditor rows come from the fork-only leaf table: one row per leaf, in the
+		// order the table declares (labels and fallbacks live there).
+		...AUDITOR_FIELDS.map((field) => {
+			const value = snapshot.value.auditor?.[field.key];
+			const render = (): string => {
+				switch (field.statusFormat) {
+					case "boolean":
+						return String(value ?? false);
+					case "defaultText":
+						return value === undefined
+							? (field.statusFallback ?? "(unset)")
+							: String(value);
+					case "textPresence":
+						return textPresence(value as string | undefined);
+					case "listPresence":
+						return listPresence(value as string[] | undefined);
+					case "string":
+						return String(value);
+				}
+			};
+			return {
+				key: `auditor.${field.key as string}`,
+				label: field.statusLabel,
+				format: render,
+			};
+		}),
 		{ key: "hideUnfocusedBanner", label: "hide unfocused banner", format: () => String(snapshot.value.hideUnfocusedBanner) },
 		{ key: "showAutonomousRuns", label: "show autonomous runs line", format: () => String(snapshot.value.showAutonomousRuns) },
 		{ key: "showContextUsage", label: "show context usage line", format: () => String(snapshot.value.showContextUsage) },

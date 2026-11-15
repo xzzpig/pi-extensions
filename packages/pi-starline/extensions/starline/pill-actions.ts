@@ -442,8 +442,6 @@ async function showSubagents({ ctx, pill }: PillActionContext): Promise<void> {
 function showContext({ ctx, pill }: PillActionContext): void {
 	// The theme and the reads are taken on every render, so the bubble follows a
 	// theme change and a model switch while it is open.
-	// SAFETY: ThemeLike names the same colour accessors Pi's Theme exposes, and
-	// the renderer only reads them, so the widening cannot observe a gap.
 	const theme = ctx.ui.theme as unknown as ThemeLike;
 	const read = () => collectContextBreakdown(probeFor(ctx));
 	if (read().total <= 0 && !activeContextSnapshot()) {
@@ -466,8 +464,6 @@ function showContext({ ctx, pill }: PillActionContext): void {
 let cachedSummary: { cwd: string; summary: PackageSummary } | undefined;
 
 function showPackage({ ctx, pill }: PillActionContext): void {
-	// SAFETY: ThemeLike names the same colour accessors Pi's Theme exposes, and
-	// the bubble only reads them.
 	const theme = ctx.ui.theme as unknown as ThemeLike;
 	let summary = cachedSummary?.cwd === ctx.cwd ? cachedSummary.summary : undefined;
 	const handle = showPillBubble(
@@ -491,8 +487,6 @@ function showTps({ ctx, pill }: PillActionContext): void {
 		return;
 	}
 	// Live: the last reply's rate lands while the bubble is open.
-	// SAFETY: ThemeLike names the same colour accessors Pi's Theme exposes, and
-	// the bubble only reads them.
 	const theme = ctx.ui.theme as unknown as ThemeLike;
 	const handle = showPillBubble(ctx, () => tpsBubbleContent(theme), pill);
 	whileOpen(handle, () => handle.refresh());

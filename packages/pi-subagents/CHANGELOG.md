@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.25.1] - 2026-11-15 (fork)
+
+### Changed
+
+- **Conflict-surface refactor, no behavior change.** Fleet transcript reading now
+  lives in one shared reader (`shared/fleet-transcript-reader.ts`); the TUI fleet
+  pane only keeps its renderer, so both the run-status and transcript views parse
+  child sessions through the same code.
+- The fork's tool-result handler moved out of the upstream run closure into
+  fork-only `src/runs/foreground/fork-tool-result-handler.ts` (budget blocking,
+  mutating-failure escalation, supervisor progress publication, bounded
+  call-id de-duplication unchanged); `execution.ts` keeps one factory call.
+- Packaging identity (repository URL, files allowlist, lockfile policy) is
+  enforced by `scripts/check-fork-identity.mjs` instead of per-package replay prose.
+
 ## [0.25.0] - 2026-11-13 (fork)
 
 ### Changed

@@ -586,8 +586,6 @@ export class PolishedEditor extends CustomEditor {
 		const result = renderPolishedFrame({
 			width,
 			baseRendered: rendered,
-			// SAFETY: this PolishedEditor is constructed with the internals the
-			// renderer needs; the widening crosses an interface boundary only.
 			autocompleteSource: this as unknown as AutocompleteEditorInternals,
 			uiTheme: this.uiTheme,
 			config,
@@ -818,17 +816,10 @@ export class WrappedPolishedEditor implements EditorComponent {
 		return this.base.getLines?.() ?? this.base.getText().split("\n");
 	}
 
-	// Deliberate pass-through of the base editor's duck-typed contract: Pi
-	// returns a {line, col} cursor object, so narrowing here would assert a
-	// type this wrapper cannot guarantee.
-	// pi-lens-ignore: no-unknown-returns
 	getCursor(): unknown {
 		return this.base.getCursor?.();
 	}
 
-	// Deliberate pass-through of the base editor's duck-typed contract; callers
-	// narrow the value with their own runtime checks.
-	// pi-lens-ignore: no-unknown-returns
 	getMode(): unknown {
 		return this.base.getMode?.();
 	}

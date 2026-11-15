@@ -1,6 +1,3 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
-
 import {
   type AgentToolResult,
   type ExtensionAPI,
@@ -50,19 +47,17 @@ import {
 } from "./service.ts";
 import { maybeDecorateBashForToolDisplay } from "./tool-display-decoration.ts";
 import {
-  extractBlockedWritePath,
-  extractDeniedWritePathFromOutput,
   hasSandboxWriteDenialText,
   sandboxWriteDenialNotice,
   type BlockedWrite,
   type SandboxWriteDenialNoticeOptions,
 } from "./write-denial.ts";
+import { handleSandboxWriteDenial } from "./fork-bash-denial.ts";
 
-const SANDBOX_STARTUP_ACK_PATH_ENV = "PI_SUBAGENT_SANDBOX_STARTUP_ACK_PATH";
-const SANDBOX_STARTUP_ACK_TOKEN_ENV = "PI_SUBAGENT_SANDBOX_STARTUP_ACK_TOKEN";
-const PROJECT_TRUST_ENV = "PI_SUBAGENT_SANDBOX_PROJECT_TRUSTED";
-const IN_PROCESS_CHILD_ENV = "PI_SUBAGENT_SANDBOX_IN_PROCESS_CHILD";
-const SANDBOX_DIAGNOSTICS_PATH_ENV = "PI_SUBAGENT_SANDBOX_DIAGNOSTICS_PATH";
+import {
+  createProfileStartupHelpers,
+  IN_PROCESS_CHILD_ENV,
+} from "./fork-profile-startup.ts";
 
 import {
   cancelPermissionPrompts,
@@ -100,47 +95,12 @@ export default function (pi: ExtensionAPI) {
   // The launcher applies the sandbox launch keys for the child-session creation
   // window only and restores them right after, so every launch value must be
   // captured here at registration instead of being read later from session_start.
-  const startupAcknowledgementPath = process.env[SANDBOX_STARTUP_ACK_PATH_ENV];
-  const startupAcknowledgementToken = process.env[SANDBOX_STARTUP_ACK_TOKEN_ENV];
-  const inheritedProjectTrust = process.env[PROJECT_TRUST_ENV];
-  const startupDiagnosticsPath = process.env[SANDBOX_DIAGNOSTICS_PATH_ENV];
   // An in-process child shares the host process, so it must never mutate host
   // state that only a standalone child process may own.
   const inProcessChild = process.env[IN_PROCESS_CHILD_ENV] === "1";
   let profileProjectTrusted = false;
   let profileStartupError: string | undefined;
   const allowances: SessionAllowances = { domains: [], readPaths: [], writePaths: [] };
-
-  const profileLabel = () =>
-    selectedSandboxProfile ? `Sandbox profile '${selectedSandboxProfile}'` : "Sandbox";
-
-  const writeProfileStartupAcknowledgement = (): void => {
-    if (!selectedSandboxProfile) return;
-    const acknowledgementPath = startupAcknowledgementPath;
-    const token = startupAcknowledgementToken;
-    if (acknowledgementPath === undefined && token === undefined) return;
-    if (!acknowledgementPath || !token) {
-      throw new Error("sandbox profile startup acknowledgement channel is incomplete.");
-    }
-    writeFileSync(
-      acknowledgementPath,
-      JSON.stringify({ version: 1, profile: selectedSandboxProfile, token }),
-      { mode: 0o600 },
-    );
-  };
-
-  const profileBlockReason = () =>
-    profileStartupError ??
-    (selectedSandboxProfile && !sandboxInitialized
-      ? `${profileLabel()} is required but was not initialized.`
-      : undefined);
-
-  const profileScopedReason = (reason: string) =>
-    selectedSandboxProfile ? `${profileLabel()}: ${reason}` : reason;
-
-  const writeSandboxDiagnostic = (message: string): void => {
-    process.stderr.write(`pi-sandbox: ${message}\n`);
-  };
 
   // Notifications are cosmetic. A headless child session (print/json mode) has no
   // UI, and a failing notification must never change sandbox behavior.
@@ -157,6 +117,34 @@ export default function (pi: ExtensionAPI) {
     }
   };
 
+  // Fork: the profile launch path lives in fork-profile-startup.ts; this file
+  // only supplies the live state accessors.
+  const profileStartup = createProfileStartupHelpers({
+    selectedProfile: () => selectedSandboxProfile,
+    startupError: () => profileStartupError,
+    setStartupError: (error) => {
+      profileStartupError = error;
+    },
+    sandboxInitialized: () => sandboxInitialized,
+    setSandboxUnavailable: () => {
+      sandboxEnabled = false;
+      sandboxInitialized = false;
+    },
+    profileTrusted: () => profileProjectTrusted,
+    lastStatusContext: () => lastStatusContext,
+    notifySafely,
+  });
+  const {
+    profileBlockReason,
+    profileLabel,
+    profileScopedReason,
+    recordProfileStartupFailure,
+    reportProfileWarning,
+    resolvedProfileTrust,
+    writeProfileStartupAcknowledgement,
+    writeSandboxDiagnostic,
+  } = profileStartup;
+
   const blockedSandboxResult = (reason: string): AgentToolResult<Record<string, never>> => ({
     content: [{ type: "text", text: `Error: ${reason}` }],
     details: {},
@@ -172,92 +160,12 @@ export default function (pi: ExtensionAPI) {
     content: [...result.content, { type: "text", text: sandboxWriteDenialNotice(options) }],
   });
 
-  const resolvedProfileTrust = (ctx?: ExtensionContext): boolean => {
-    // Trust is resolved once at session_start from the launch env window (or
-    // the host context) and then fixed for the session; the launcher restores
-    // the transient trust env after the child session is created.
-    const inherited = inheritedProjectTrust;
-    if (inherited !== undefined) return inherited === "1";
-    return ctx ? ctx.isProjectTrusted() : profileProjectTrusted;
-  };
-
-  // Non-fatal profile notices (#project-profiles) are reported once per
-  // message: an untrusted project's registry is skipped on every config
-  // resolution, but the notice describes the session's policy, not each call.
-  const reportedProfileWarnings = new Set<string>();
-  let profileWarningContext: ExtensionContext | undefined;
-
-  /**
-   * Surface a non-fatal profile notice.
-   *
-   * A warning never blocks or fails a session. It goes to stderr, to the UI
-   * when a session has one, and — for a headless child — into the startup
-   * diagnostics file the launcher hands it, so the skipped project profiles are
-   * visible instead of a silent change of effective policy. The record carries
-   * `warnings` but no `reason`: the launcher's startup-diagnostic reader
-   * requires a reason, so a skipped profile can never be attributed as a
-   * startup refusal, and a recorded failure keeps the file (it is the
-   * authoritative record).
-   */
-  const reportProfileWarning = (warning: string): void => {
-    if (reportedProfileWarnings.has(warning)) return;
-    reportedProfileWarnings.add(warning);
-    writeSandboxDiagnostic(warning);
-    const target = profileWarningContext ?? lastStatusContext;
-    if (target) notifySafely(target, warning, "warning");
-    if (!startupDiagnosticsPath || !selectedSandboxProfile || profileStartupError) return;
-    try {
-      mkdirSync(dirname(startupDiagnosticsPath), { recursive: true, mode: 0o700 });
-      writeFileSync(
-        startupDiagnosticsPath,
-        JSON.stringify({ version: 1, profile: selectedSandboxProfile, warnings: [warning] }),
-        { mode: 0o600 },
-      );
-    } catch {
-      // The stderr diagnostic above remains the fallback channel.
-    }
-  };
-
   const resolveSandboxConfig = (cwd: string): SandboxConfig => {
     return loadConfig(cwd, {
       profileName: selectedSandboxProfile,
       projectTrusted: profileProjectTrusted,
       onWarning: reportProfileWarning,
     });
-  };
-
-  /**
-   * Publish the failure for the launcher: a blocked child ends before its first
-   * model turn, so the parent otherwise only sees an empty session and cannot
-   * report why the profile was refused.
-   */
-  const writeStartupFailureDiagnostic = (reason: string): void => {
-    if (!startupDiagnosticsPath || !selectedSandboxProfile) return;
-    try {
-      mkdirSync(dirname(startupDiagnosticsPath), { recursive: true, mode: 0o700 });
-      writeFileSync(
-        startupDiagnosticsPath,
-        JSON.stringify({ version: 1, profile: selectedSandboxProfile, reason }),
-        { mode: 0o600 },
-      );
-    } catch {
-      // The stderr diagnostic above remains the fallback channel.
-    }
-  };
-
-  const recordProfileStartupFailure = (error: unknown, ctx?: ExtensionContext): void => {
-    const detail = error instanceof Error ? error.message : String(error);
-    // applySandboxConfigChange may already have reset the manager before the
-    // failure, so the sandbox is unusable whether or not a profile is
-    // selected. Marking it unavailable in both cases keeps the status line
-    // honest instead of reporting an enabled sandbox with a reset manager.
-    sandboxEnabled = false;
-    sandboxInitialized = false;
-    if (!selectedSandboxProfile) return;
-    profileStartupError = `${profileLabel()} could not initialize: ${detail}`;
-    writeSandboxDiagnostic(profileStartupError);
-    writeStartupFailureDiagnostic(profileStartupError);
-    if (ctx) notifySafely(ctx, profileStartupError, "error");
   };
 
   const effectiveAllowances = (cwd: string) =>
@@ -669,6 +577,28 @@ export default function (pi: ExtensionAPI) {
       // Canonical paths already granted and retried within this tool call; a
       // second failure on the same path must not trigger another retry.
       const retriedPaths = new Set<string>();
+      // Fork seam: write-denial attribution/prompting lives in
+      // fork-bash-denial.ts; only these accessors are needed here.
+      const writeDenialDeps = {
+        pi,
+        resolveConfig: (cwd: string) => resolveSandboxConfig(cwd),
+        recordStartupFailure: (error: unknown, failureCtx?: ExtensionContext) =>
+          recordProfileStartupFailure(error, failureCtx),
+        blockReason: () => profileBlockReason(),
+        scopeReason: (reason: string) => profileScopedReason(reason),
+        effectiveWritePaths: (cwd: string) => effectiveWritePaths(cwd),
+        saveWriteChoice: (
+          choice: Exclude<PermissionPromptResult["action"], "abort">,
+          value: string,
+          cwd: string,
+        ) => applyChoice(choice, "write", value, cwd),
+        refresh: (cwd: string) => refreshSandbox(cwd),
+        decorate: (
+          res: Awaited<ReturnType<typeof localBash.execute>>,
+          options: SandboxWriteDenialNoticeOptions,
+        ) => withSandboxWriteDenialNotice(res, options),
+        blockedResult: (reason: string) => blockedSandboxResult(reason),
+      };
 
       const runBash = async (): Promise<Awaited<ReturnType<typeof localBash.execute>>> => {
         lastBlockedWrites = [];
@@ -732,106 +662,20 @@ export default function (pi: ExtensionAPI) {
           .filter((content) => content.type === "text")
           .map((content) => content.text)
           .join("\n");
-        const blockedWrites = lastBlockedWrites;
-        // The violation monitor is primary; when it is unavailable (kernels
-        // without seccomp user notification, e.g. WSL2) recover the path from
-        // the output's own denial text, upstream's macOS shape first.
-        const outputExtractedPath =
-          blockedWrites.length === 0
-            ? (extractBlockedWritePath(output) ?? extractDeniedWritePathFromOutput(output))
-            : null;
-        if (blockedWrites.length === 0 && outputExtractedPath === null) {
-          // Degraded mode with an unrecognized denial format: attribute it to
-          // the sandbox without a path, so the agent never misreads EROFS.
-          if (hasSandboxWriteDenialText(output)) {
-            return withSandboxWriteDenialNotice(result, {});
-          }
-          return result;
-        }
+        return handleSandboxWriteDenial(
+          {
+            result,
+            output,
+            blockedWrites: lastBlockedWrites,
+            ctx,
+            signal,
+            onUpdate,
+            retriedPaths,
+            retry: runBashWithDenialHandling,
+          },
+          writeDenialDeps,
+        );
 
-        let config: SandboxConfig;
-        try {
-          config = resolveSandboxConfig(ctx.cwd);
-        } catch (error) {
-          recordProfileStartupFailure(error, ctx);
-          return blockedSandboxResult(
-            profileBlockReason() ??
-              profileScopedReason("sandbox configuration could not be loaded."),
-          );
-        }
-        const denyWrite = config.filesystem?.denyWrite ?? [];
-        const pathIsDeniedByConfig = (path: string) => matchesPattern(path, denyWrite, ctx.cwd);
-        // denyWrite paths are never prompted; pick the first promptable one
-        // and let the notice name the explicitly denied ones.
-        const promptablePath =
-          blockedWrites.length > 0
-            ? blockedWrites.find((write) => !pathIsDeniedByConfig(write.path))?.path
-            : (outputExtractedPath ?? undefined);
-
-        const denialNoticeOptions: SandboxWriteDenialNoticeOptions = {
-          blockedWrites: blockedWrites.length > 0 ? blockedWrites : undefined,
-          outputExtractedPath: outputExtractedPath ?? undefined,
-        };
-
-        if (promptablePath !== undefined && ctx?.hasUI) {
-          const path = canonicalizePath(promptablePath, ctx.cwd);
-          const writePermission = await resolveWritePermission({
-            path,
-            allowWrite: effectiveWritePaths(ctx.cwd),
-            denyWrite,
-            baseCwd: ctx.cwd,
-            prompt: (path) =>
-              promptWriteBlock(
-                pi,
-                withToolAbortSignal(ctx, signal),
-                path,
-                config.permissionPromptTimeoutSeconds,
-              ),
-            saveWritePermission: (choice, value) => applyChoice(choice, "write", value, ctx.cwd),
-          });
-          if (writePermission.action === "allow" || writePermission.action === "granted") {
-            // A path can only be retried once per tool call: on Linux, bwrap
-            // cannot mount write access for paths that do not exist yet, so a
-            // retry after granting a new file's path fails identically and
-            // would loop forever. Explain that instead of recursing again.
-            if (retriedPaths.has(path)) {
-              return withSandboxWriteDenialNotice(result, {
-                ...denialNoticeOptions,
-                allowedStillFailingPath: path,
-              });
-            }
-            retriedPaths.add(path);
-            await refreshSandbox(ctx.cwd);
-            if (writePermission.action === "granted") {
-              onUpdate?.({
-                content: [
-                  {
-                    type: "text",
-                    text: `\n--- Write access granted for "${writePermission.value}", retrying ---\n`,
-                  },
-                ],
-                details: {},
-              });
-            }
-            return runBashWithDenialHandling();
-          }
-          if (writePermission.action === "deny") {
-            return withSandboxWriteDenialNotice(result, {
-              ...denialNoticeOptions,
-              allDeniedByConfig: true,
-            });
-          }
-          return withSandboxWriteDenialNotice(result, {
-            ...denialNoticeOptions,
-            promptDeclinedPath: path,
-          });
-        }
-
-        return withSandboxWriteDenialNotice(result, {
-          ...denialNoticeOptions,
-          allDeniedByConfig:
-            blockedWrites.length > 0 && promptablePath === undefined ? true : undefined,
-        });
       };
 
       return runBashWithDenialHandling();
@@ -1021,7 +865,7 @@ export default function (pi: ExtensionAPI) {
     disposeSandboxService?.();
     // Non-fatal profile notices surface through this session's UI (dedup means
     // the first config resolution wins).
-    profileWarningContext = ctx;
+    profileStartup.setProfileWarningContext(ctx);
     // Publishing the service is optional: a host that exposes no session
     // identity must not lose sandbox enforcement because of it.
     try {
