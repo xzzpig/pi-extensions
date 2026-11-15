@@ -22,7 +22,8 @@
   ],
   "doNotReintroduce": [
     "Do not reintroduce suppression of Pi’s completed thinking MouseRegion by the final-reply frame; keep the collapsed row outside the frame and preserve native expand/collapse behavior.",
-    "Do not make pi-tidy draw its own thinking row by default. The fork ships nativeThinking=true so Pi and pi-thinking-collapse own the thinking affordance; tidy's row is the opt-in `tidy.nativeThinking=false` path."
+    "Do not make pi-tidy draw its own thinking row by default. The fork ships nativeThinking=true so Pi and pi-thinking-collapse own the thinking affordance; tidy's row is the opt-in `tidy.nativeThinking=false` path.",
+    "Do not restore the package-local pnpm-lock.yaml or pnpm-workspace.yaml: this fork consumes only the root pnpm workspace lock, and a local workspace root makes CI resolve pi-tidy as a standalone project."
   ],
   "knownDebt": [
     {
@@ -35,6 +36,18 @@
       "kind": "lint",
       "path": "packages/pi-tidy/src/tools/tool-group-view.ts",
       "reason": "pi-lens findings on upstream-original lines (12 object-parameter, 3 function-parameter-count, 1 function-too-long, 1 unnecessary-await). The fork only adds the boundary re-entry guard and native-thinking hook in this file; keeping upstream bytes intact means declaring these verified findings instead of rewriting them."
+    },
+    {
+      "kind": "deleted",
+      "path": "packages/pi-tidy/pnpm-lock.yaml",
+      "reason": "Upstream package-local pnpm lock is unconsumed by this monorepo and breaks CI: running pnpm in the package directory treats it as a standalone project and its stale lock misses the tsx devDependency. Delete it again on every sync and use the root pnpm workspace lock.",
+      "recordedAt": "2026-11-15T11:40:00+08:00"
+    },
+    {
+      "kind": "deleted",
+      "path": "packages/pi-tidy/pnpm-workspace.yaml",
+      "reason": "Upstream package-local pnpm workspace file makes pnpm treat the package as a separate project root, bypassing the monorepo lock/build policy. Delete it again on every sync; the package is a member of the root workspace.",
+      "recordedAt": "2026-11-15T11:40:00+08:00"
     }
   ]
 }
