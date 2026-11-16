@@ -17,7 +17,7 @@ import {
   ANIMATE_MS, closeJobDetails, jobDetails, jobForTool, jobNotes, jobsForTool, noteJobMessage,
   spinnerFrame, toggleJobDetails, type JobDetails, type JobState,
 } from "./background-jobs.ts";
-import { agentRunning, tidyEnabled } from "../live.ts";
+import { tidyEnabled } from "../live.ts";
 import {
   hoverBand,
   hoverIsTracked,
@@ -127,10 +127,10 @@ export function renderGroupedTool(
   const headerLine = plan.header
     ? groupHeaderLine(tool, plan.header, theme, width, icons, hovered === "header", now)
     : undefined;
-  // Only a settled transcript is cached: a run in flight, a partial tool or a
-  // background job puts a clock, a spinner or a growing body on these rows.
+  // Only this tool's volatile state disables the cache. The global agent flag
+  // spans every turn, so using it here needlessly rebuilds all settled history.
   const live =
-    agentRunning.get() || tool.isPartial === true || job !== undefined || jobs.length > 0 || plan.revealIn !== undefined;
+    tool.isPartial === true || job !== undefined || jobs.length > 0 || plan.revealIn !== undefined;
   // The body is drawn through the tool's own frame cache, so an unchanged box
   // hands back the same array: its identity says "nothing under this row moved".
   const body = plan.full ? frameBox(Math.max(4, width - BODY_INDENT), true) : undefined;

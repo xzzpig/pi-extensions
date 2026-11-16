@@ -27,7 +27,7 @@ export const SWATCH_GLYPH = "●";
 
 /** Longest first, so `#7f849cff` does not match as `#7f84` plus a broken tail. */
 const HEX_RE = /#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})(?![0-9a-zA-Z])/;
-const HEX_AT = new RegExp(HEX_RE.source, "g");
+const HEX_AT = new RegExp(HEX_RE.source, "y");
 
 /**
  * `rgb()` / `rgba()` / `hsl()` / `hsla()`, spaces or commas between the parts.
@@ -35,7 +35,7 @@ const HEX_AT = new RegExp(HEX_RE.source, "g");
  * and a runaway match cannot swallow a paragraph.
  */
 const FUNC_RE = /\b(?:rgba?|hsla?)\([^()\n]{1,48}?\)/gi;
-const FUNC_AT = new RegExp(FUNC_RE.source, "gi");
+const FUNC_AT = new RegExp(FUNC_RE.source, "iy");
 
 /** Up to three spaces of indent, then a run of three or more of one char. */
 const FENCE_RE = /^ {0,3}(`{3,}|~{3,})/;
@@ -151,6 +151,7 @@ function closingTicks(line: string, from: number, length: number): number {
 
 function swatchesInLine(line: string, restore: string, theme: ThemeLike): string {
   let out = "";
+  let copiedThrough = 0;
   let i = 0;
   while (i < line.length) {
     const char = line[i]!;
@@ -158,21 +159,20 @@ function swatchesInLine(line: string, restore: string, theme: ThemeLike): string
       let run = 1;
       while (line[i + run] === "`") run++;
       const end = closingTicks(line, i + run, run);
-      if (end === -1) return out + line.slice(i);
-      out += line.slice(i, end);
+      if (end === -1) return out + line.slice(copiedThrough);
       i = end;
       continue;
     }
     const match = colorAt(line, i);
     if (match) {
-      out += swatch(match, restore, theme);
+      out += line.slice(copiedThrough, i) + swatch(match, restore, theme);
       i += match.length;
+      copiedThrough = i;
       continue;
     }
-    out += char;
     i++;
   }
-  return out;
+  return out + line.slice(copiedThrough);
 }
 
 /** The color value that starts exactly at `index`, or undefined. */

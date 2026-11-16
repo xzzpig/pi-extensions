@@ -3,6 +3,14 @@
 Changes specific to `@xzzpig/pi-tidy` in this repository. Upstream history remains in
 [`CHANGELOG.md`](./CHANGELOG.md).
 
+## 0.1.4 — 降低长会话渲染开销
+
+- 稳定回复复用代码块规则线与复制按钮布局，避免每帧扫描全部历史代码行；内容、宽度和相关选项变化时重新计算。
+- 流式代码块仅保留当前有效 token 的派生缓存，释放已被替换的正文版本，保留各块最新复制原文。
+- 色块识别使用当前位置匹配与分段输出，避免密集无效颜色候选触发平方级回扫；颜色格式与代码区域排除行为不变。
+- agent 工作期间继续复用未变化的历史工具分组行，活动工具与后台任务仍正常刷新。
+- 增加代码块缓存/复制/悬停、混合活动与历史分组交互回归，以及长代码、色块和折叠/展开历史组基准。
+
 ## 0.1.3 — Leave write rendering to the owner by default
 
 - Add `tidy.writePreview` (default `false`). Leave write rendering to Pi or the owning extension

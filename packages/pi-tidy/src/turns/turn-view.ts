@@ -268,10 +268,30 @@ export function messageOnRail(component: any): boolean {
  * False means replies keep pi's own code blocks, and nothing else changes.
  */
 export function codeBlocksAvailable(): boolean {
-  return typeof (Markdown.prototype as unknown as { renderToken?: unknown }).renderToken === "function";
+  // SAFETY: Pi's private Markdown hook is probed only for the existing capability fallback.
+  const prototype = Markdown.prototype as unknown as { renderToken?: unknown };
+  return typeof prototype.renderToken === "function";
 }
 
 const CODE = Symbol.for("pi-tidy:code-blocks");
+
+interface RuleRowsMemoKey {
+  message: unknown;
+  contentChildren: readonly unknown[] | undefined;
+  turnVersion: number | undefined;
+  width: number;
+  drawWidth: number;
+  revision: number;
+  framed: boolean;
+  railed: boolean;
+  closed: boolean;
+}
+
+interface RuleRowsMemo {
+  key: RuleRowsMemoKey;
+  blocks: readonly CodeBlock[];
+  layout: ReturnType<typeof ruleRows>;
+}
 
 interface CodeHook extends CodeBlocks {
   markdown: any;
@@ -282,6 +302,8 @@ interface CodeHook extends CodeBlocks {
   rows?: readonly string[];
   /** The blocks this pass drew, in row order: the fallback when the tokens cannot be read. */
   drawn: CodeBlock[];
+  /** Rule rows are a function of content/layout identity, not the new array Container.render allocates per frame. */
+  ruleRowsMemo?: RuleRowsMemo;
 }
 
 const tokenKey = (token: { lang?: string; text: string }): string => `${token.lang ?? ""}\0${token.text}`;
@@ -336,6 +358,8 @@ function codeBlocksFor(component: any, options: CodeBlockOptions): CodeBlocks | 
     // a token that is on the rows. The tokens say what is there and in which order;
     // `built` says how each one was drawn.
     const tokens = codeTokens(markdown.cachedTokens?.deref()?.tokens);
+    const currentKeys = new Set(tokens.map(({ token }) => tokenKey(token)));
+    for (const key of hook.built.keys()) if (!currentKeys.has(key)) hook.built.delete(key);
     const walked: CodeBlock[] = [];
     for (const { token, nested } of tokens) {
       const block = hook.built.get(tokenKey(token));
@@ -352,6 +376,26 @@ function codeBlocksFor(component: any, options: CodeBlockOptions): CodeBlocks | 
  * A rule in a railed reply joins the rail on its left and runs on to the row's end:
  * `├─ fish ─── copy ──────`. The rows come back in place, so indexes still match.
  */
+function sameRuleRowsKey(a: RuleRowsMemoKey, b: RuleRowsMemoKey): boolean {
+  return a.message === b.message && a.contentChildren === b.contentChildren && a.turnVersion === b.turnVersion &&
+    a.width === b.width && a.drawWidth === b.drawWidth && a.revision === b.revision &&
+    a.framed === b.framed && a.railed === b.railed && a.closed === b.closed;
+}
+
+function memoizedRuleRows(
+  hook: CodeHook,
+  key: RuleRowsMemoKey,
+  body: readonly string[],
+  blocks: readonly CodeBlock[],
+): ReturnType<typeof ruleRows> {
+  const cached = hook.ruleRowsMemo;
+  if (cached && cached.blocks === blocks && sameRuleRowsKey(cached.key, key)) return cached.layout;
+
+  const layout = ruleRows(body, blocks);
+  hook.ruleRowsMemo = { key, blocks, layout };
+  return layout;
+}
+
 function railRules(body: readonly string[], rules: ReadonlySet<number>, theme: ThemeLike, color: string): string[] {
   const out = [...body];
   const glyph = theme.fg("muted", RULE_GLYPH);
@@ -395,13 +439,32 @@ export function presentTurn(component: any, width: number, draw: (width: number,
     splitDiffMinWidth: options.splitDiffMinWidth,
     canCopy: canCopyText(),
   });
-  const drawn = closed && key !== visible
-    ? []
-    : railed
-      ? draw(Math.max(1, width - TURN_RAIL_CELLS))
-      : draw(framed && options.replyStyle !== "rules" ? width - 2 : width, framed);
+  let drawWidth = width;
+  if (railed) drawWidth = Math.max(1, width - TURN_RAIL_CELLS);
+  else if (framed && options.replyStyle !== "rules") drawWidth = width - 2;
+  let drawn: string[];
+  if (closed && key !== visible) drawn = [];
+  else if (railed) drawn = draw(drawWidth);
+  else drawn = draw(drawWidth, framed);
   // Measured before a rail goes on: once it is there, its `│` and a quote's border read alike.
-  const ruled = code ? ruleRows(drawn, code.blocks) : { rules: [], spans: [], opens: new Map<number, number>() };
+  // Container.render allocates a new outer array every pass even when all Markdown
+  // children return cached rows. Key the scan by those content/layout identities,
+  // before doing the expensive full-row rule and chip search.
+  const revision = optionsRevision();
+  const ruleKey: RuleRowsMemoKey = {
+    message: component.lastMessage,
+    contentChildren: component.contentContainer?.children,
+    turnVersion: turn.version,
+    width,
+    drawWidth,
+    revision,
+    framed,
+    railed,
+    closed: closed && key !== visible,
+  };
+  const ruled = code
+    ? memoizedRuleRows(code as CodeHook, ruleKey, drawn, code.blocks)
+    : { rules: [], spans: [], opens: new Map<number, number>() };
   const rules = new Set(ruled.rules);
   const spans = railed ? ruled.spans.map((span) => ({ ...span, x: span.x + TURN_RAIL_CELLS, end: span.end + TURN_RAIL_CELLS })) : ruled.spans;
   let body = railed ? railRows(drawn, theme) : drawn;
@@ -437,7 +500,6 @@ export function presentTurn(component: any, width: number, draw: (width: number,
   const label = replyHeader ? clipToWidth(replyHeader.label, Math.max(1, width - 6), "…") : "";
   const lead = replyHeader?.lead ?? 1;
   const cache = component[CACHE];
-  const revision = optionsRevision();
   if (cache && cache.turn === turn && cache.width === width && cache.line === line && cache.label === label && cache.lead === lead && cache.color === color && cache.revision === revision && cache.framed === framed && cache.railOpen === railOpen && sameLines(cache.body, body)) {
     component[LAYOUT] = cache.layout;
     installMouse(component);

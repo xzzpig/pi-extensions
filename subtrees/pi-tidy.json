@@ -9,7 +9,7 @@
   "upstreamCommit": "ea4ca7c36d2501e630a7e84b41b9f6dd75c50827",
   "squash": true,
   "lastSyncedAt": "2026-11-14T02:19:23+08:00",
-  "notes": "Fork of Andy8647/pi-tidy. Rendering ownership, fork defaults and coexistence behavior are specified in openspec/changes/import-pi-tidy-fork; fork-only logic belongs under fork/.",
+  "notes": "Fork of Andy8647/pi-tidy. Rendering ownership and coexistence behavior are specified in openspec/changes/import-pi-tidy-fork; performance adaptations are specified in openspec/specs/tidy-transcript-rendering; fork-only logic belongs under fork/.",
   "reapplyOnSync": [
     "Keep FORK-CHANGELOG.md in the published files list while retaining the upstream homepage/bugs/source identity.",
     "In src/index.ts, load through fork/loadForkConfig and replace patchToolBoxFrames(options) with installForkToolFrames(config). Gate registerWritePreview and its unavailable-API warning with config.writePreview; keep the upstream test harness opted into writePreview.",
@@ -19,13 +19,18 @@
     "Keep package.json npm identity, repository, fork changelog files, `tsx` dev dependency, `test:e2e` script, and explicit unit-test paths (including test/renderer-harness.ts) that keep E2E files out of Node's default discovery when syncing upstream.",
     "When syncing the final-reply renderer or Pi component compatibility, re-verify fork/thinking-row.ts: retain the collapsed Pi MouseRegion outside a framed final reply and preserve click routing, unless upstream adds an equivalent coexistence path.",
     "Keep the fork hooks in src/tools/tool-group-view.ts: (a) the component-level re-entry guard (BOUNDARY_ACTIVE) so only the outermost group-boundary wrapper restyles (a nested install passes through; otherwise pi-group-collapse's projection between installs duplicates the first retry-error line), and (b) the native-thinking switch (setNativeThinking) that makes restyleThinking return Pi's own rows when enabled and never seed thinkingVisibilityOverrides with collapsed entries (even during final-frame suppression); those entries override pi-thinking-collapse streaming expansion after a redraw. The fork-default native mode leaves thinking to Pi and pi-thinking-collapse; fork/thinking-row.ts restores settled rows outside the final frame regardless of Pi's hideThinkingBlock. Remove a hook only if upstream provides an equivalent seam.",
+    "Keep ruleRows memoization in src/turns/turn-view.ts keyed by message/content identity, turn version, width, layout mode, options revision, and current code-block list; reapply its invalidation contract after sync.",
+    "After each successful Markdown render in src/turns/turn-view.ts, prune CodeHook.built to token keys in the current Markdown tree so streaming prefixes do not accumulate.",
+    "Keep sticky candidate matching and chunked output assembly in src/messages/hex-swatches.ts; candidate regexes must match only at their current index.",
+    "Keep groupedRows cache admission in src/tools/tool-group-view.ts based on the tool's own volatility; global agentRunning state must not bypass cache for settled history.",
     "packaging identity (repository.url, files allowlist, per-package lockfile policy) is enforced by scripts/check-fork-identity.mjs — run `node scripts/check-fork-identity.mjs` after every subtree pull/sync"
   ],
   "doNotReintroduce": [
     "Do not unconditionally install the write call preview: tidy.writePreview defaults to false so Pi or pi-tool-display keeps both write renderers; writeLines alone must not enable it.",
     "Do not reintroduce suppression of Pi’s completed thinking MouseRegion by the final-reply frame; keep the collapsed row outside the frame and preserve native expand/collapse behavior.",
     "Do not make pi-tidy draw its own thinking row by default. The fork ships nativeThinking=true so Pi and pi-thinking-collapse own the thinking affordance; tidy's row is the opt-in `tidy.nativeThinking=false` path.",
-    "Do not restore the package-local pnpm-lock.yaml or pnpm-workspace.yaml: this fork consumes only the root pnpm workspace lock, and a local workspace root makes CI resolve pi-tidy as a standalone project."
+    "Do not restore the package-local pnpm-lock.yaml or pnpm-workspace.yaml: this fork consumes only the root pnpm workspace lock, and a local workspace root makes CI resolve pi-tidy as a standalone project.",
+    "Do not restore the global agentRunning cache bypass for grouped tool rows: settled history remains cacheable while only its own partial output, jobs, reveal timer or other volatile state requires recomputation."
   ],
   "knownDebt": [
     {
@@ -37,7 +42,7 @@
     {
       "kind": "lint",
       "path": "packages/pi-tidy/src/tools/tool-group-view.ts",
-      "reason": "[baseline] pi-lens findings on upstream-original lines (12 object-parameter, 3 function-parameter-count, 1 function-too-long, 1 unnecessary-await). The fork only adds the boundary re-entry guard and native-thinking hook in this file; keeping upstream bytes intact means declaring these verified findings instead of rewriting them."
+      "reason": "[baseline] Existing pi-lens findings (12 object-parameter, 3 function-parameter-count, 1 function-too-long, 1 unnecessary-await) are on upstream-original lines outside the re-entry/native-thinking hooks and the targeted grouped-row cache predicate. Do not reformat those baseline sites as part of this performance adaptation."
     },
     {
       "kind": "deleted",
@@ -50,6 +55,26 @@
       "path": "packages/pi-tidy/pnpm-workspace.yaml",
       "reason": "[policy] Upstream package-local pnpm workspace file makes pnpm treat the package as a separate project root, bypassing the monorepo lock/build policy. Delete it again on every sync; the package is a member of the root workspace.",
       "recordedAt": "2026-11-15T11:40:00+08:00"
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-tidy/src/turns/turn-view.ts",
+      "reason": "[policy] The final-reply code-block rule/chip scan is memoized against content and layout identity to avoid rebuilding its full-row index on stable frames. Keep this until upstream provides equivalent correct invalidation and stable-row reuse."
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-tidy/src/turns/turn-view.ts",
+      "reason": "[policy] The derived code-block map is pruned to the current Markdown token tree so streaming prefixes do not remain retained. Keep this until upstream bounds or replaces the token cache equivalently."
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-tidy/src/messages/hex-swatches.ts",
+      "reason": "[policy] Color candidates are matched at their current index and output is assembled in chunks to keep dense invalid inputs linear. Keep this until upstream implements an equivalent bounded scan."
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-tidy/src/tools/tool-group-view.ts",
+      "reason": "[policy] Grouped-row cache admission depends on tool-local volatility rather than the process-wide agentRunning flag, preserving settled transcript rows during later runs. Keep this until upstream uses equivalent per-group cache invalidation."
     }
   ]
 }
