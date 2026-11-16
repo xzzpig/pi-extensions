@@ -1,6 +1,6 @@
 {
   "name": "@xzzpig/pi-sandbox",
-  "version": "0.9.2",
+  "version": "0.9.3",
   "description": "OS-level sandboxing for pi with interactive permission prompts",
   "keywords": [
     "pi-package",
@@ -21,7 +21,11 @@
   },
   "publishConfig": {
     "access": "public",
-    "provenance": true
+    "provenance": true,
+    "executableFiles": [
+      "node_modules/@xzzpig/sandbox-runtime/vendor/seccomp/x64/apply-seccomp",
+      "node_modules/@xzzpig/sandbox-runtime/vendor/seccomp/arm64/apply-seccomp"
+    ]
   },
   "repository": {
     "type": "git",

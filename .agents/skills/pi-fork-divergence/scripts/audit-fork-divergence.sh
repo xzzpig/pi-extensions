@@ -126,7 +126,6 @@ for name in "${names[@]}"; do
   }
 
   noise=0 deleted=0 submodule=0 checked=0 declared=0 undeclared=0 stale=0
-  reapply_count=0 do_not_count=0
   up_paths=()
   up_shas=()
   local_paths=()

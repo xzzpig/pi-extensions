@@ -2,6 +2,7 @@ import { createHttpProxyServer } from './http-proxy.js'
 import { createSocksProxyServer } from './socks-proxy.js'
 import type { SocksProxyWrapper } from './socks-proxy.js'
 import { isNetworkDisabled } from './fork-network.js'
+import { resolveConfiguredDevices, validateDevices } from './fork-devices.js'
 import { createMuxProxyServer, type MuxProxyServer } from './mux-proxy.js'
 import { listenInRange } from './listen-in-range.js'
 import { SentinelRegistry } from './credential-sentinel.js'
@@ -1266,6 +1267,12 @@ function createManager(legacySingleton: boolean): ISandboxManager {
       customConfig?.filesystem !== undefined
         ? (customConfig.filesystem.disabled ?? false)
         : (config?.filesystem.disabled ?? false)
+    const allowDevices = resolveConfiguredDevices(
+      customConfig?.filesystem,
+      config?.filesystem,
+      platform,
+      fsDisabled,
+    )
 
     if (!fsDisabled && (platform === 'macos' || platform === 'linux')) {
       ensureSandboxTempDirectory(DEFAULT_SANDBOX_TMPDIR)
@@ -1436,6 +1443,8 @@ function createManager(legacySingleton: boolean): ISandboxManager {
 
       case 'linux':
         return wrapCommandWithSandboxLinux({
+          isolateDevices: true,
+          allowDevices,
           command,
           needsNetworkRestriction,
           // Only pass socket paths if proxy is running (when there are domains to filter)
@@ -1518,6 +1527,11 @@ function createManager(legacySingleton: boolean): ISandboxManager {
     const platform = getPlatform()
 
     if (platform === 'windows') {
+      validateDevices(
+        customConfig?.filesystem?.allowDevices ??
+          config?.filesystem.allowDevices,
+        platform,
+      )
       const hasNetworkConfig =
         customConfig?.network?.allowedDomains !== undefined ||
         config?.network?.allowedDomains !== undefined

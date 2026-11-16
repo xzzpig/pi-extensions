@@ -52,6 +52,7 @@
     }
   ],
   "reapplyOnSync": [
+    "forward filesystem.allowDevices in sandbox-runtime.ts, retain extension.ts device-access state wiring and the single recordSandboxInitializationFailure call into the fork-only startup helper (failure classification and error construction stay outside upstream), plus its devicePlatformError guard BEFORE the unsupported-platform fallback (nonempty requests must fail closed on every non-Linux platform), and preserve publishConfig.executableFiles for both bundled apply-seccomp binaries (pnpm otherwise packs them as 0644)",
     "the session-isolation test's ExtensionToolContext mock cast and sessionManager getSessionId/getSessionFile methods required by Pi 1.0.0's bash spawn context",
     "the sandboxManagerFactory seam, the tool-display decoration, the profile layer, the inherit-not-force rule for network.disabled/filesystem.disabled (an unprovided switch follows the baseline; validateProfileConfig still rejects a profile that sets disabled: true) and the filesystem.allowRead union rule (a profile's allowRead extends the inherited list in both merge paths — single profile and same-name project profile — because replacing it made every path outside the project unreadable)",
     "the root index.ts export block's re-export of registerSandboxProfiles/type SandboxProfileDefinition from the fork-only src/fork-profile-registry.ts (upstream index.ts only exports the default)",
@@ -76,6 +77,7 @@
     "packaging identity (repository.url, files allowlist, per-package lockfile policy) is enforced by scripts/check-fork-identity.mjs — run `node scripts/check-fork-identity.mjs` after every subtree pull/sync"
   ],
   "doNotReintroduce": [
+    "do not turn ordinary file permissions or write retries into device grants; allowDevices requires explicit global or affirmatively trusted project configuration, and device initialization failures must not fall back to unsandboxed execution (openspec change add-sandbox-device-passthrough)",
     "do not introduce gratuitous upstream-file formatting drift; keep fork behavior tests in fork-only files, with only necessary upstream assertion adaptations for the native network.disabled contract and @xzzpig package identity",
     "do not force network or filesystem isolation on inside a profile: a switch the profile does not declare inherits the baseline, so a global network.disabled/filesystem.disabled opt-out stays in force (forcing network isolation broke the common opt-out case by requiring a proxy the runtime never started)",
     "do not go back to replacing the baseline filesystem.allowRead with the profile's own list: a profile's allowRead unions onto the inherited list in both merge paths, because replacing it (the opsx profiles declared only '.') made every path outside the project unreadable — agent cache and generated skills, subagent result archives, /nix/store, /tmp — so the opsx planner could not even read its own generated skills; narrowing reads is what denyRead is for, and denyRead still unions",

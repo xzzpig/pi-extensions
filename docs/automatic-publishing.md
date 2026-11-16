@@ -36,8 +36,11 @@ audit must be available or fetched from the recorded sources, never silently
 skipped. After packing, the release gate installs the exact candidate tarballs
 and starts each Pi extension entry in an isolated, offline RPC process; a
 successful `get_state` response with no extension-load error verifies startup
-without a model call. Behavior tests requiring models or interactive TUI remain
-separate from this unattended package-startup smoke.
+without a model call. The temporary harness explicitly installs a supported Pi 1.x CLI,
+even when every candidate marks its core peer optional; it does not change the
+plugins' peer contracts or disable npm peer compatibility checks. Behavior tests
+requiring models or interactive TUI remain separate from this unattended
+package-startup smoke.
 
 Multi-package npm publishing is not atomic. A failed upload or an observed
 registry integrity mismatch stops the release. A successful npm publish counts

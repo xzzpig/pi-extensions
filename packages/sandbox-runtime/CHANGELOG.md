@@ -5,6 +5,14 @@ This fork tracks [`carderne/sandbox-runtime`](https://github.com/carderne/sandbo
 (itself derived from Anthropic's sandbox-runtime) via git subtree; entries below
 describe only fork-specific deviations from upstream.
 
+## 0.1.3
+
+### 修复
+
+- 新增显式 `filesystem.allowDevices` 白名单：校验规范设备节点、符号链接组件、节点类型及有效 deny 冲突，在最小 `/dev` 之后逐项 `--dev-bind`；拒绝整个目录、通配符、缺失节点及非 Linux 非空请求。
+- 普通文件/网络规则关闭时仍保留设备隔离；设备规则独立生效并在执行时复验。配置优先级与 deny 组装保留在 fork-only helper，manager 仅转交参数。
+- 增加设备校验、配置解析与 bubblewrap 回归测试；真实 KVM/TUN、Pi 同会话和安装包验收由 pi-sandbox 的 fork-only 测试脚本覆盖。详见 `FORK-DEVICES.md`。
+
 ## 0.1.2
 
 ### Changed

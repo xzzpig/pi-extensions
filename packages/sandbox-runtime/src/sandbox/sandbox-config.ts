@@ -8,6 +8,7 @@ import type { FilterRequestCallback } from './request-filter.js'
 import { isAbsolute } from 'node:path'
 import { z } from 'zod'
 import { isInjectHostCoveredByAllowedDomains } from './domain-pattern.js'
+import { isDevicePath } from './fork-devices.js'
 
 /**
  * Schema for domain patterns (e.g., "example.com", "*.npmjs.org")
@@ -706,6 +707,16 @@ export const NetworkConfigSchema = z.object({
  * Filesystem configuration schema for validation
  */
 export const FilesystemConfigSchema = z.object({
+  allowDevices: z
+    .array(
+      z
+        .string()
+        .refine(
+          isDevicePath,
+          'Must be an explicit canonical /dev/ device path',
+        ),
+    )
+    .optional(),
   disabled: z
     .boolean()
     .optional()

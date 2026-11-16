@@ -13,10 +13,14 @@
  * right after, so every launch value is captured once at construction.
  */
 
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { SandboxConfig } from "./config.ts";
+
+import { isDeviceConfigError } from "./fork-devices.ts";
 
 export const SANDBOX_STARTUP_ACK_PATH_ENV = "PI_SUBAGENT_SANDBOX_STARTUP_ACK_PATH";
 export const SANDBOX_STARTUP_ACK_TOKEN_ENV = "PI_SUBAGENT_SANDBOX_STARTUP_ACK_TOKEN";
@@ -27,6 +31,7 @@ export const SANDBOX_DIAGNOSTICS_PATH_ENV = "PI_SUBAGENT_SANDBOX_DIAGNOSTICS_PAT
 export interface ProfileStartupDeps {
   /** Profile selected for this session (env or in-process service). */
   selectedProfile(): string | undefined;
+  deviceAccessRequested?(): boolean;
   /** Current startup error, if the profile failed to initialize. */
   startupError(): string | undefined;
   setStartupError(error: string | undefined): void;
@@ -53,6 +58,11 @@ export interface ProfileStartupHelpers {
   setProfileWarningContext(ctx: ExtensionContext | undefined): void;
   writeStartupFailureDiagnostic(reason: string): void;
   recordProfileStartupFailure(error: unknown, ctx?: ExtensionContext): void;
+  recordSandboxInitializationFailure(
+    error: unknown,
+    config: SandboxConfig,
+    ctx: ExtensionContext,
+  ): void;
 }
 
 export function createProfileStartupHelpers(deps: ProfileStartupDeps): ProfileStartupHelpers {
@@ -146,7 +156,8 @@ export function createProfileStartupHelpers(deps: ProfileStartupDeps): ProfileSt
     // selected. Marking it unavailable in both cases keeps the status line
     // honest instead of reporting an enabled sandbox with a reset manager.
     deps.setSandboxUnavailable();
-    if (!deps.selectedProfile()) return;
+    if (!deps.selectedProfile() && !deps.deviceAccessRequested?.() && !isDeviceConfigError(error))
+      return;
     const message = `${profileLabel()} could not initialize: ${detail}`;
     deps.setStartupError(message);
     writeSandboxDiagnostic(message);
@@ -172,5 +183,21 @@ export function createProfileStartupHelpers(deps: ProfileStartupDeps): ProfileSt
     },
     writeStartupFailureDiagnostic,
     recordProfileStartupFailure,
+    recordSandboxInitializationFailure: (error, config, ctx): void => {
+      if (deps.selectedProfile() || config.filesystem?.allowDevices !== undefined) {
+        recordProfileStartupFailure(
+          config.filesystem?.allowDevices !== undefined
+            ? new Error(
+                `filesystem.allowDevices: ${error instanceof Error ? error.message : error}`,
+              )
+            : error,
+          ctx,
+        );
+      } else {
+        const message = `Sandbox initialization failed: ${error instanceof Error ? error.message : error}`;
+        writeSandboxDiagnostic(message);
+        deps.notifySafely(ctx, message, "error");
+      }
+    },
   };
 }

@@ -14,6 +14,7 @@ import {
   encodeSandboxedCommand,
 } from './sandbox-utils.js'
 import { isAtOrUnder } from './fork-path-containment.js'
+import { validateDevices, deviceBindArgs } from './fork-devices.js'
 import type {
   FsReadRestrictionConfig,
   FsWriteRestrictionConfig,
@@ -31,6 +32,8 @@ export interface LinuxNetworkBridgeContext {
 }
 
 export interface LinuxSandboxParams {
+  allowDevices?: string[]
+  isolateDevices?: boolean
   command: string
   needsNetworkRestriction: boolean
   httpSocketPath?: string
@@ -1356,10 +1359,17 @@ export async function wrapCommandWithSandboxLinux(
     !needsNetworkRestriction &&
     !hasReadRestrictions &&
     !hasWriteRestrictions &&
-    !hasEnvRestrictions
+    !hasEnvRestrictions &&
+    !params.isolateDevices &&
+    params.allowDevices === undefined
   ) {
     return command
   }
+
+  const devices = validateDevices(params.allowDevices, 'linux', {
+    denyRead: readConfig?.denyOnly,
+    denyWrite: writeConfig?.denyWithinAllow,
+  })
 
   // Mark this sandbox invocation as active. cleanupBwrapMountPoints() will
   // defer file deletion until this (and every other concurrent) invocation
@@ -1520,6 +1530,7 @@ export async function wrapCommandWithSandboxLinux(
 
     // Always bind /dev
     bwrapArgs.push('--dev', '/dev')
+    bwrapArgs.push(...deviceBindArgs(validateDevices(devices, 'linux')))
 
     // ========== PID NAMESPACE ISOLATION ==========
     // IMPORTANT: These must come AFTER filesystem binds for nested bwrap to work

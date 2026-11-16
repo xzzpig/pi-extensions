@@ -188,9 +188,10 @@ function readInstalledPackageManifest(packageDir, name) {
   return JSON.parse(readFileSync(manifestPath, "utf8"));
 }
 
-function npmInstallArchives(artifacts, npmPrefix, env) {
-  mkdirSync(npmPrefix, { recursive: true });
-  const args = [
+export function buildStartupInstallArgs(artifacts, npmPrefix) {
+  // The test harness needs its own supported Pi 1.x CLI, even when every
+  // candidate marks the core peer optional. Keep npm's peer checks enabled.
+  return [
     "install",
     "--prefix",
     npmPrefix,
@@ -200,8 +201,14 @@ function npmInstallArchives(artifacts, npmPrefix, env) {
     "--no-save",
     "--package-lock=false",
     "--progress=false",
+    "@earendil-works/pi-coding-agent@1",
     ...artifacts.map((artifact) => artifact.file),
   ];
+}
+
+function npmInstallArchives(artifacts, npmPrefix, env) {
+  mkdirSync(npmPrefix, { recursive: true });
+  const args = buildStartupInstallArgs(artifacts, npmPrefix);
   const result = spawnSync("npm", args, {
     cwd: npmPrefix,
     env,

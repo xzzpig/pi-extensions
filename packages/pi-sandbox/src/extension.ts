@@ -28,6 +28,7 @@ import {
 } from "./policy.ts";
 import { listGlobalSandboxProfiles, loadConfig, SANDBOX_PROFILE_ENV } from "./profile-config.ts";
 import { applySandboxConfigChange } from "./fork-profile-network.ts";
+import { devicePlatformError } from "./fork-devices.ts";
 import { withToolAbortSignal } from "./fork-prompt-signal.ts";
 import { warnIfLinuxUnenforcedGlobsSafely } from "./fork-ui-warnings.ts";
 import {
@@ -119,8 +120,10 @@ export default function (pi: ExtensionAPI) {
 
   // Fork: the profile launch path lives in fork-profile-startup.ts; this file
   // only supplies the live state accessors.
+  let deviceAccessConfigured = false;
   const profileStartup = createProfileStartupHelpers({
     selectedProfile: () => selectedSandboxProfile,
+    deviceAccessRequested: () => deviceAccessConfigured,
     startupError: () => profileStartupError,
     setStartupError: (error) => {
       profileStartupError = error;
@@ -139,6 +142,7 @@ export default function (pi: ExtensionAPI) {
     profileLabel,
     profileScopedReason,
     recordProfileStartupFailure,
+    recordSandboxInitializationFailure,
     reportProfileWarning,
     resolvedProfileTrust,
     writeProfileStartupAcknowledgement,
@@ -161,11 +165,13 @@ export default function (pi: ExtensionAPI) {
   });
 
   const resolveSandboxConfig = (cwd: string): SandboxConfig => {
-    return loadConfig(cwd, {
+    const config = loadConfig(cwd, {
       profileName: selectedSandboxProfile,
       projectTrusted: profileProjectTrusted,
       onWarning: reportProfileWarning,
     });
+    deviceAccessConfigured = config.filesystem?.allowDevices !== undefined;
+    return config;
   };
 
   const effectiveAllowances = (cwd: string) =>
@@ -182,7 +188,7 @@ export default function (pi: ExtensionAPI) {
       await applySandboxConfigChange(sandboxManager, resolveSandboxConfig(cwd), allowances, cwd);
     } catch (error) {
       recordProfileStartupFailure(error);
-      if (selectedSandboxProfile) {
+      if (profileBlockReason()) {
         throw new Error(
           profileBlockReason() ?? profileScopedReason("sandbox reinitialization failed."),
         );
@@ -331,6 +337,11 @@ export default function (pi: ExtensionAPI) {
       return false;
     }
     const platform = process.platform;
+    const deviceError = devicePlatformError(config, platform);
+    if (deviceError) {
+      recordProfileStartupFailure(deviceError, ctx);
+      return false;
+    }
     if (!supportsSandboxPlatform(platform)) {
       const message = `Sandbox not supported on ${platform}`;
       if (selectedSandboxProfile) recordProfileStartupFailure(message, ctx);
@@ -353,13 +364,7 @@ export default function (pi: ExtensionAPI) {
       sandboxInitialized = true;
     } catch (error) {
       sandboxEnabled = false;
-      if (selectedSandboxProfile) {
-        recordProfileStartupFailure(error, ctx);
-      } else {
-        const message = `Sandbox initialization failed: ${error instanceof Error ? error.message : error}`;
-        writeSandboxDiagnostic(message);
-        notifySafely(ctx, message, "error");
-      }
+      recordSandboxInitializationFailure(error, config, ctx);
       return false;
     }
     // Cosmetic UI runs only after the sandbox state is committed, so a missing

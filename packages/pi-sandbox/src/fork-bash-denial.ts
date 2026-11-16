@@ -17,6 +17,7 @@
 import type { AgentToolResult, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 import type { SandboxConfig } from "./config.ts";
+
 import { withToolAbortSignal } from "./fork-prompt-signal.ts";
 import { canonicalizePath, matchesPattern, resolveWritePermission } from "./policy.ts";
 import { promptWriteBlock, type PermissionPromptResult } from "./ui.ts";
@@ -126,7 +127,12 @@ export async function handleSandboxWriteDenial<T>(
       denyWrite,
       baseCwd: ctx.cwd,
       prompt: (path) =>
-        promptWriteBlock(deps.pi, withToolAbortSignal(ctx, signal), path, config.permissionPromptTimeoutSeconds),
+        promptWriteBlock(
+          deps.pi,
+          withToolAbortSignal(ctx, signal),
+          path,
+          config.permissionPromptTimeoutSeconds,
+        ),
       saveWritePermission: (choice, value) => deps.saveWriteChoice(choice, value, ctx.cwd),
     });
     if (writePermission.action === "allow" || writePermission.action === "granted") {
@@ -159,7 +165,6 @@ export async function handleSandboxWriteDenial<T>(
 
   return deps.decorate(result, {
     ...denialNoticeOptions,
-    allDeniedByConfig:
-      blockedWrites.length > 0 && promptablePath === undefined ? true : undefined,
+    allDeniedByConfig: blockedWrites.length > 0 && promptablePath === undefined ? true : undefined,
   });
 }

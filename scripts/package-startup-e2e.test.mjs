@@ -7,8 +7,48 @@ import {
   assertPiStartupResult,
   buildPiStartupArgs,
   buildStartupEnvironments,
+  buildStartupInstallArgs,
   getPackageLoadPath,
 } from "./package-startup-e2e.mjs";
+
+test("startup harness explicitly installs Pi when the only candidate has an optional core peer", () => {
+  const candidate = {
+    name: "@xzzpig/pi-sandbox",
+    file: "/tmp/fixture/pi-sandbox.tgz",
+    peerDependencies: { "@earendil-works/pi-coding-agent": ">=1.0.0 <2" },
+    peerDependenciesMeta: {
+      "@earendil-works/pi-coding-agent": { optional: true },
+    },
+  };
+  const before = structuredClone(candidate);
+  const args = buildStartupInstallArgs([candidate], "/tmp/fixture/npm");
+  assert.ok(args.includes("@earendil-works/pi-coding-agent@1"));
+  assert.ok(args.includes(candidate.file));
+  assert.equal(args[args.indexOf("--prefix") + 1], "/tmp/fixture/npm");
+  for (const flag of [
+    "--ignore-scripts",
+    "--no-save",
+    "--package-lock=false",
+  ]) {
+    assert.ok(args.includes(flag));
+  }
+  assert.equal(args.includes("--legacy-peer-deps"), false);
+  assert.equal(args.includes("--force"), false);
+  assert.deepEqual(candidate, before);
+});
+
+test("startup harness installs one CLI for multiple exact archives", () => {
+  const files = ["/tmp/a.tgz", "/tmp/b.tgz"];
+  const args = buildStartupInstallArgs(
+    files.map((file) => ({ file })),
+    "/tmp/npm",
+  );
+  assert.equal(
+    args.filter((arg) => arg === "@earendil-works/pi-coding-agent@1").length,
+    1,
+  );
+  assert.deepEqual(args.slice(-2), files);
+});
 
 test("package startup smoke resolves the packed Pi extension entries", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "package-startup-test-"));

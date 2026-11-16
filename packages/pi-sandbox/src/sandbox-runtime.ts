@@ -105,10 +105,7 @@ export function buildRuntimeConfig(
 ): SandboxRuntimeConfig {
   const effective = resolveAllowances(config, allowances);
 
-  const denyWrite = canonicalizeFilesystemPatterns(
-    config.filesystem?.denyWrite ?? [],
-    baseCwd,
-  );
+  const denyWrite = canonicalizeFilesystemPatterns(config.filesystem?.denyWrite ?? [], baseCwd);
 
   const { allowSSHAgentSocket: _allowSSHAgentSocket, ...networkConfig } = config.network ?? {};
 
@@ -120,6 +117,7 @@ export function buildRuntimeConfig(
       allowUnixSockets: resolveUnixSockets(config),
     } as SandboxRuntimeConfig["network"],
     filesystem: {
+      allowDevices: config.filesystem?.allowDevices,
       disabled: config.filesystem?.disabled,
       denyRead: canonicalizeFilesystemPatterns(config.filesystem?.denyRead ?? [], baseCwd),
       allowRead: canonicalizeFilesystemPatterns(

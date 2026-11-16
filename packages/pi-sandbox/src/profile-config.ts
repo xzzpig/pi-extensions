@@ -19,6 +19,7 @@ import {
   type SandboxConfigOverride,
   type SandboxProfileConfig,
 } from "./config.ts";
+import { deviceList, mergeDeviceLists, trustedDeviceConfig } from "./fork-devices.ts";
 import {
   lookupRegisteredSandboxProfile,
   registeredSandboxProfilesSnapshot,
@@ -84,6 +85,7 @@ const PROFILE_NETWORK_FIELDS = new Set([
   "sshProxy",
 ]);
 const PROFILE_FILESYSTEM_FIELDS = new Set([
+  "allowDevices",
   "disabled",
   "denyRead",
   "allowRead",
@@ -91,6 +93,7 @@ const PROFILE_FILESYSTEM_FIELDS = new Set([
   "denyWrite",
 ]);
 const PROFILE_ARRAY_FIELDS = new Set([
+  "allowDevices",
   "allowedDomains",
   "deniedDomains",
   "allowUnixSockets",
@@ -724,10 +727,14 @@ export function mergeConfigLayers(
   // The fork's SandboxConfigFile adds the profiles registry to the upstream
   // shape; strip it before handing the layers to the upstream merge so the
   // registry never leaks into a runtime config.
-  return mergeUpstreamConfigLayers(
-    defaults,
-    configWithoutProfiles(globalConfig),
-    configWithoutProfiles(projectConfig),
+  return mergeDeviceLists(
+    mergeUpstreamConfigLayers(
+      defaults,
+      configWithoutProfiles(globalConfig),
+      configWithoutProfiles(projectConfig),
+    ),
+    globalConfig,
+    projectConfig,
   );
 }
 
@@ -806,7 +813,12 @@ export function loadConfig(cwd: string, options: SandboxConfigLoadOptions = {}):
   if (profileName === undefined) {
     const globalPeek = readJsonConfigResult(globalPath, false);
     const projectPeek = readJsonConfigResult(projectPath, false);
-    if (globalPeek.config.profiles === undefined && projectPeek.config.profiles === undefined) {
+    if (
+      globalPeek.config.profiles === undefined &&
+      projectPeek.config.profiles === undefined &&
+      globalPeek.config.filesystem?.allowDevices === undefined &&
+      projectPeek.config.filesystem?.allowDevices === undefined
+    ) {
       return loadUpstreamConfig(cwd, options.projectTrusted ?? true);
     }
   }
@@ -814,6 +826,9 @@ export function loadConfig(cwd: string, options: SandboxConfigLoadOptions = {}):
   const globalRead = readJsonConfigResult(globalPath, true);
   const projectRead = readJsonConfigResult(projectPath, true);
   const projectTrusted = options.projectTrusted;
+  deviceList(globalRead.config, globalPath);
+  projectRead.config = trustedDeviceConfig(projectRead.config, projectTrusted, options.onWarning);
+  if (projectTrusted === true) deviceList(projectRead.config, projectPath);
   // A project may define a profiles registry; it is ignored while the project
   // is untrusted (profiles stay operator-owned) and participates once the
   // project is affirmatively trusted. The skip is reported, never thrown: an

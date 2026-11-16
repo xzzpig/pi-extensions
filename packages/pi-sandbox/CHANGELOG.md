@@ -5,6 +5,15 @@ This fork tracks [`carderne/pi-sandbox`](https://github.com/carderne/pi-sandbox)
 via git subtree; entries below describe only fork-specific deviations from
 upstream.
 
+## 0.9.3
+
+### 修复
+
+- 修复 Linux 沙箱无法显式透传 KVM 等额外设备的问题（#1）：新增可选 `filesystem.allowDevices`，仅接受明确设备节点，默认不开放额外设备；全局与明确受信项目配置可授权，未知/未受信项目不能授权。
+- 设备列表贯通 profile 继承、替换、清空及会话服务；保留其他隔离，拒绝有效 deny 冲突、非法路径、链接及缺失节点。非 Linux 非空请求和初始化失败保持失败关闭，不退回普通 bash。
+- 内嵌 `@xzzpig/sandbox-runtime@0.1.3`；声明内嵌 apply-seccomp 的可执行文件权限，避免安装包内权限丢失导致执行失败。
+- 设备策略与初始化失败处理放在 fork-only helper，上游仅保留最小接入；补充真实 Pi/KVM、同会话撤销恢复、KVM/TUN 并发及安装包验证。配置示例与安全边界见 `FORK-DEVICE-E2E.md`。
+
 ## 0.9.2
 
 ### Changed
