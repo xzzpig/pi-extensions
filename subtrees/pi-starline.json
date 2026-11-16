@@ -9,8 +9,18 @@
   "upstreamCommit": "b51588a932a4434d5dcc8689beed4ef1007481e0",
   "squash": true,
   "lastSyncedAt": "2026-11-14T01:00:00+08:00",
-  "notes": "Forked from Andy8647/pi-starline. The shared mouse API contract lives in openspec/specs/mouse-api; fork behavior and releases are documented in the package README and FORK-CHANGELOG.",
+  "notes": "Forked from Andy8647/pi-starline. The shared mouse API contract lives in openspec/specs/mouse-api; the native model-selector contracts live in openspec/specs/mouse-api and openspec/specs/pill-rendering. Fork behavior and releases are documented in the package README and FORK-CHANGELOG.",
   "knownDebt": [
+    {
+      "kind": "other",
+      "path": "packages/pi-starline/extensions/starline/{index,pill-actions}.ts",
+      "reason": "[policy] Minimal native-model entry, component-mouse lifecycle and current-theme hover-background seams delegate to fork-only modules. Remove when upstream supplies equivalent native picker entry and mouse support."
+    },
+    {
+      "kind": "test",
+      "path": "packages/pi-starline/test/model-picker.test.ts",
+      "reason": "[policy] The old click assertion expected the removed simplified bubble. It now asserts no fallback bubble without a native editor action; fork-only entry tests verify real action routing. Reconcile when upstream adopts the native picker entry."
+    },
     {
       "kind": "other",
       "path": "packages/pi-starline/test/package-identity.test.ts",
@@ -118,9 +128,11 @@
     }
   ],
   "reapplyOnSync": [
+    "pill-actions.ts imports openNativeModelSelector and calls it only in showModels's click branch; index.ts configures/clears the native entry at session install/cleanup and installs/disposes the component-only native-model mouse adapter independently of shared mouse features and passes the current UI selectedBg ANSI callback for hover decoration; cleanup must uninstall the outer selector-border render patch before disposing the inner native-model adapter (reverse installation order). Keep upstream test/model-picker.test.ts's unavailable-entry click expectation aligned with no fallback bubble.",
+    "fork-model-selector-geometry.ts mirrors the native selector updateList visible-window start (selected - 5 clamped against count - 10, ten items). Recheck against the host on sync; the real-class geometry/mouse contract tests can run with STARLINE_PI_ENTRY pointing at the host public entry.",
     "Adapt test/package-identity.test.ts to assert repository.url identifies xzzpig/pi-extensions while upstream homepage/bugs/image references remain Andy8647/pi-starline.",
     "editor-cursor.ts calls fork-editor-cursor.ts to restyle Pi 1.2+ marked software cursors while retaining the upstream Pi 1.1 SGR path; retain fork-editor-cursor-compat.test.ts",
-    "mouse features register with the local @xzzpig/pi-mouse-events extension instead of patching TuiAltScreen.prototype (optional peer >=0.2.0 <3, devDep workspace:*); without it fork mouse features are off, with one console note per process; click-away observes shared mouse events and the optional shared pointer API handles hover without a Starline patch",
+    "mouse features register with the local @xzzpig/pi-mouse-events extension instead of patching TuiAltScreen.prototype (optional peer >=0.2.0 <3, devDep workspace:*); without it shared-layer global mouse features are off, with one console note per process (native model-selector component clicks/wheel remain independent); click-away observes shared mouse events and the optional shared pointer API handles hover without a Starline patch",
     "mouse/api-consumer.ts reads Symbol.for('pi-mouse-events.api.v2') and rejects any candidate whose version !== 2, so an older v1 publisher is rejected rather than misread",
     "keep test/contract/mouse-api.test.ts pinning that key plus the version:1 rejection fixture",
     "every git probe in extensions/starline/git.ts passes --no-optional-locks (test/git-no-optional-locks.test.ts)",
@@ -148,6 +160,8 @@
     "packaging identity (repository.url, files allowlist, per-package lockfile policy) is enforced by scripts/check-fork-identity.mjs — run `node scripts/check-fork-identity.mjs` after every subtree pull/sync"
   ],
   "doNotReintroduce": [
+    "Do not couple native model-row hover decoration to selectedIndex, Enter/default-save targets or native viewport recentering. Keep hover component-only, permit the last hint outside the component without events, and do not add terminal input observers or force all-motion mouse mode; the behavior contract is add-native-model-selector-hover-preview.",
+    "Do not restore the model pill's limited candidate bubble or gate native model-selector component clicks/wheel on pi-mouse-events. Shared requestPointerShape is optional only; do not send /model as user text or patch full-screen routing to open or operate the native selector.",
     "Do not restore upstream repository.url as the fork publishing source; npm provenance must identify the actual build repository.",
     "keep editor-wheel.test.ts's 9 lint/style warnings and shim.ts's 2 noConfusingVoidType warnings by deliberate non-change",
     "Do not restore the removed editor metadata row or its settings; use the upstream compact editor and map legacy editor status placement to the footer right.",

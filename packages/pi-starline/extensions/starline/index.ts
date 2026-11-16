@@ -38,6 +38,8 @@ import {
 } from "./editor-factory-marker";
 import { installFooter } from "./footer";
 import { installMcpPillAdapter } from "./fork-mcp-pill";
+import { configureNativeModelEntry } from "./fork-model-selector-entry";
+import { installNativeModelMouse } from "./fork-model-selector-mouse";
 import { configureStatusView } from "./fork-status-view";
 import {
 	buildSessionDurationLabel,
@@ -135,6 +137,7 @@ export default function (pi: ExtensionAPI) {
 	let lastProjectCwd: string | undefined;
 	let disposePasteCollapse: (() => void) | undefined;
 	let disposeMouse: (() => void) | undefined;
+	let disposeModelMouse: (() => void) | undefined;
 	let lastTuiCtx: ExtensionContext | undefined;
 	let cleanupSessionCapture: (() => void) | undefined;
 	let cleanupQueueRows: (() => void) | undefined;
@@ -553,6 +556,13 @@ export default function (pi: ExtensionAPI) {
 		installQueueRowHiding();
 		installSubagentFleet();
 		installModelSwitcher();
+		configureNativeModelEntry(ctx);
+		disposeModelMouse?.();
+		disposeModelMouse = installNativeModelMouse(
+			(message) => ctx.ui.notify(message, "warning"),
+			undefined,
+			() => ctx.ui.theme.getBgAnsi("selectedBg"),
+		);
 		setPillBubbleAnimation(currentConfig.pill.bubbleAnimation ? BUBBLE_ANIMATION_MS : 0);
 		// `/starline statuses` must work with the status line off, where no footer
 		// has published a model to read.
@@ -587,7 +597,10 @@ export default function (pi: ExtensionAPI) {
 			setActiveGitStatus(undefined);
 			setActiveContextSnapshot(undefined);
 			setModelSwitcher(undefined);
+			configureNativeModelEntry(undefined);
 			uninstallPrototypePatches();
+			disposeModelMouse?.();
+			disposeModelMouse = undefined;
 			setWorkingIndicator(undefined);
 			stopSessionTimer();
 			stopProjectRefresh();

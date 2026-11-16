@@ -17,6 +17,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import { statusCommandName } from "./config";
 import { collectContextBreakdown, contextBubbleContent, probeFor } from "./context-breakdown";
 import { activeContextSnapshot } from "./context-live";
+import { openNativeModelSelector } from "./fork-model-selector-entry";
 import { activeGitStatus } from "./git-live";
 import {
 	cycleThinkingLevel,
@@ -350,7 +351,7 @@ export function modelPickerContent(ctx: ExtensionContext): PillBubbleContent {
  */
 async function showModels({ ctx, pill, via }: PillActionContext): Promise<void> {
 	if (via === "click") {
-		showPillBubble(ctx, modelPickerContent(ctx), pill);
+		openNativeModelSelector(ctx);
 		return;
 	}
 	const { choices } = modelChoices(ctx);

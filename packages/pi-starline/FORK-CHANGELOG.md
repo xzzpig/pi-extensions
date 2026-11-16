@@ -1,5 +1,13 @@
 # Fork release notes
 
+## 0.11.2 — 原生模型选择器与悬停提示
+
+- 模型行收到无按键移动事件时显示独立背景提示，包含换行续行；不改变原生箭头对应的 Enter／默认模型保存目标，也不触发列表居中。点击仍确认实际鼠标目标，组件外未收到事件时可保留最后提示；内容或布局变化后清理，不增加输入监听或共享依赖。tmux 默认可能不提供悬停事件，验证与运行限制见 `docs/fork-model-selector.md`。
+
+- 模型药丸点击改为调用当前编辑器的原生模型选择动作，保留搜索、范围切换和草稿，不再打开有限候选气泡；`/starline model` 的原有循环行为不变。
+- 新入口不提交命令或用户消息，不重复覆盖已打开界面；不支持该动作的自定义编辑器会收到一次说明，可继续直接使用 `/model`。实现与验证边界见 `docs/fork-model-selector.md`。
+- 药丸、`/model` 和快捷键打开的原生模型选择器均支持点击及滚轮，换行命中使用真实渲染高度；滚轮首尾停止、不穿透到会话。点击与滚轮不依赖 `pi-mouse-events`，其共享指针能力仅提供可选手形增强。
+
 ## 0.11.1 — Upstream bytes restored, lint policy moved to config
 
 - The fork's `pi-mouse-events` consumer implementation moved to fork-only `extensions/starline/mouse/fork-consumer.ts`; `mouse/index.ts` is now a ten-line re-export seam, so an upstream change to the installer lands on the signature instead of a 500-line rewrite. No behavior change: click, wheel and drag-selection were re-verified in a live TUI.

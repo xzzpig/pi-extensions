@@ -94,12 +94,12 @@ describe("model picker", () => {
 		]);
 	});
 
-	it("opens on a click without switching", () => {
+	it("does not open a fallback bubble when the native entry is unavailable", () => {
 		const switcher = vi.fn(async () => true);
 		setModelSwitcher(switcher);
 		const { ctx, custom } = context();
 		runPillAction(pillActionFor("model") as never, ctx);
-		expect(custom).toHaveBeenCalledTimes(1);
+		expect(custom).not.toHaveBeenCalled();
 		expect(switcher).not.toHaveBeenCalled();
 	});
 
