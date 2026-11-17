@@ -41,6 +41,7 @@
     "bench": "node scripts/bench-compare.ts"
   },
   "pi": {
+    "changelogPath": "./FORK-CHANGELOG.md",
     "extensions": [
       "./src/index.ts"
     ],

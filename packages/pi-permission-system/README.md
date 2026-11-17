@@ -297,3 +297,8 @@ Thank you to the [OpenCode](https://opencode.ai) team for the permission model d
 ## License
 
 [MIT](LICENSE)
+
+## Fork and upstream release history
+
+- Fork releases: [FORK-CHANGELOG.md](./FORK-CHANGELOG.md). Pi startup updates use this version sequence.
+- Upstream releases: [CHANGELOG.md](./CHANGELOG.md), retained from upstream without fork entries.

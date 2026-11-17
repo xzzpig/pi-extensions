@@ -1,4 +1,10 @@
-# Fork release notes
+# Fork Changelog
+
+Release history for `@xzzpig/pi-starline`; version headings refer only to this fork.
+Upstream history: [CHANGELOG.md](./CHANGELOG.md).
+Current upstream baseline (not a claim about older releases): [0.13.0 / b51588a932a4](https://github.com/Andy8647/pi-starline/tree/b51588a932a4434d5dcc8689beed4ef1007481e0).
+
+Historical entries below were migrated from the repository's existing changelogs; missing dates and historical baselines have not been invented.
 
 ## 0.11.2 — 原生模型选择器与悬停提示
 
@@ -22,7 +28,7 @@
 
 ## 0.10.0 — Upstream v0.13.0 sync
 
-- **Synced upstream v0.9.0 → v0.13.0** (upstream minor releases → fork minor bump). Upstream rewrote the mouse subsystem, split the pill bar into a governed overflow path, and moved user-message styling toward pi-tidy. At the time of this sync the fork still retained its user-message renderer, so this was an API integration rather than a straight merge; the Unreleased entry above records the later convergence.
+- **Synced upstream v0.9.0 → v0.13.0** (upstream minor releases → fork minor bump). Upstream rewrote the mouse subsystem, split the pill bar into a governed overflow path, and moved user-message styling toward pi-tidy. At the time of this sync the fork still retained its user-message renderer, so this was an API integration rather than a straight merge; the [0.11.0 convergence entry](#0110--pi-tidy-ownership-convergence) records the later convergence.
 - Adopted upstream's pull-request pill (`gitPr`, coloured per state via `gitPrOpen`/`gitPrDraft`/`gitPrMerged`/`gitPrClosed`/`gitPrCount`) and the `git.issues` switch that adds the repository's open-issue count to the pull bubble.
 - Adopted `extensionStatuses.commands`: a third-party status can point its pill at an existing slash command (`procs` → `/ps`) without writing a bridge. Entries that are not `/name` or `/name args`, that carry the `extensionStatus:` prefix, that shadow a built-in segment, or that point at `/starline` are dropped and reported once per process. A bridge registration still wins over a declared command.
 - Adopted the external editor-hint API (`docs/editor-hints.md`, `editor-hint-api.ts`): other extensions can publish a hint that rides the editor's top rule, ahead of Starline's own hints so the rule's truncation cannot eat it.
@@ -30,9 +36,14 @@
 - Adopted the context-pill estimate: before the first turn the pill reads `~N%/window` from the static prompt-and-schemas floor instead of `0%`, and drops the `~` once a turn lands. The bubble reports the same number.
 - Adopted upstream's governed overflow row (`onOverflow`/`PillOverflow`) alongside the fork's existing `pill.overflow` governance. With `pill.overflow.enabled: false` the legacy path still renders one unbounded row and hard-truncates it, because upstream's `renderPillBar` now drops whole pills and stands a `+N` counter in their place when given a real width — that is the governance path, not the legacy one.
 - Adopted the upstream additions to the settings surface (`previousPrompt`/`latest` pill rows), the `gitPr` colour keys, and the `statusCommandName` helper.
-- This v0.10.0 sync kept every fork seam then present: the `pi-mouse-events` consumer mouse subsystem, `clickToToggleExpandable`, the user-message renderer/settings and `transcriptCleanCopy`, `--no-optional-locks` on every git probe, the reverse-video pill legibility pair, the `pill.overflow` governance and status panel, the MCP pill adapter, and the pi-zentui legacy symbol aliases. The Unreleased entry above records the later removal of the user-message and transcript-copy divergences.
-- At v0.10.0, upstream v0.13.0 had deleted `mouse/transcript-copy.ts` and `test/mouse/toolbox-frame.ts`; the fork restored both because its then-current transcript cleaner and component-tree code imported them. The transcript cleaner was later removed by the Unreleased convergence above; the component-tree fixture remains.
+- This v0.10.0 sync kept every fork seam then present: the `pi-mouse-events` consumer mouse subsystem, `clickToToggleExpandable`, the user-message renderer/settings and `transcriptCleanCopy`, `--no-optional-locks` on every git probe, the reverse-video pill legibility pair, the `pill.overflow` governance and status panel, the MCP pill adapter, and the pi-zentui legacy symbol aliases. The [0.11.0 convergence entry](#0110--pi-tidy-ownership-convergence) records the later removal of the user-message and transcript-copy divergences.
+- At v0.10.0, upstream v0.13.0 had deleted `mouse/transcript-copy.ts` and `test/mouse/toolbox-frame.ts`; the fork restored both because its then-current transcript cleaner and component-tree code imported them. The transcript cleaner was later removed by the [0.11.0 convergence](#0110--pi-tidy-ownership-convergence); the component-tree fixture remains.
 - Validation: package typecheck clean and 1623/1623 tests passing. `pnpm run audit:fork-divergence` reports undeclared=0, stale=0 for this package.
+
+### Upstream provenance
+
+- Upstream v0.13.0: [source b51588a932a4](https://github.com/Andy8647/pi-starline/tree/b51588a932a4434d5dcc8689beed4ef1007481e0); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/a36612882c502ad4e448408eecadc7c21599bb0c/subtrees/pi-starline.json).
+- Upstream v0.9.0: [source 84e7106dd0ed](https://github.com/Andy8647/pi-starline/tree/84e7106dd0ed3797f187691fd76d269de737b6ed); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/9900cc02c04649a61ae3d43f2a464cafe248513f/subtrees/pi-starline.json).
 
 ## 0.9.1 — panel interaction fixes
 
@@ -74,13 +85,17 @@
 ## 0.7.1 — Pi cursor compatibility
 
 - Restore `underline` and `terminal` editor cursor styles on Pi 1.2 and later while preserving the existing Pi 1.1 cursor path.
-- The previous published fork version was 0.5.1. This release also includes the upstream syncs and fork changes recorded in 0.6.0 and 0.7.0 below.
+- The previous published fork version was 0.5.1. This release also includes the upstream syncs and fork changes recorded in [0.6.0](#060--upstream-v061-sync) and [0.7.0](#070--upstream-v090-sync) below.
 
 ## 0.7.0 — Upstream v0.9.0 sync
 
 - Adopt the compact editor layout, `editorMinRows`, configurable pill row, live throughput, and turn timing. The old editor metadata row is removed and its status placement maps to the right-hand footer.
-- At v0.7.0, the fork retained its then-current user-message renderer, padding/colour settings and shared editor/message colour controls. When pi-tidy was installed alongside it, patch order could determine the visible renderer; this old ownership arrangement was later removed by the Unreleased convergence above.
-- This release also preserved the fork's shared mouse, clipboard and wheel integrations, pi-zentui markers, and group-expand compatibility. Its then-current clean-copy supported the configured Starline rail alongside upstream pi-tidy frames; transcript cleaning was later removed by the Unreleased convergence above.
+- At v0.7.0, the fork retained its then-current user-message renderer, padding/colour settings and shared editor/message colour controls. When pi-tidy was installed alongside it, patch order could determine the visible renderer; this old ownership arrangement was later removed by the [0.11.0 convergence](#0110--pi-tidy-ownership-convergence).
+- This release also preserved the fork's shared mouse, clipboard and wheel integrations, pi-zentui markers, and group-expand compatibility. Its then-current clean-copy supported the configured Starline rail alongside upstream pi-tidy frames; transcript cleaning was later removed by the [0.11.0 convergence](#0110--pi-tidy-ownership-convergence).
+
+### Upstream provenance
+
+- Upstream v0.9.0: [source 84e7106dd0ed](https://github.com/Andy8647/pi-starline/tree/84e7106dd0ed3797f187691fd76d269de737b6ed); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/9900cc02c04649a61ae3d43f2a464cafe248513f/subtrees/pi-starline.json).
 
 ## 0.6.0 — Upstream v0.6.1 sync
 
@@ -90,6 +105,10 @@
 - Route editor-wheel input through the shared post-component slot using Pi's calculated delta, including acceleration and Alt-wheel, while retaining the earlier fallback for older v2 publishers.
 - Ship upstream's public `types/pill-api.d.ts` along with the fork's built declarations and release notes.
 
+### Upstream provenance
+
+- Upstream v0.6.1: [source 523c0f2cdc93](https://github.com/Andy8647/pi-starline/tree/523c0f2cdc938af3cef0595cd28e2e1c02e9c730); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/7884792c4d790abde7ed0a11b9258ef6ed76626f/subtrees/pi-starline.json).
+
 ## 0.5.1 — Release candidate
 
 - Recognize the optional `@xzzpig/transcript-expand-target.v1` contract for group summary clicks. Invalid or absent providers fall back to the existing component resolver; no new mandatory package dependency or default-setting change.
@@ -97,3 +116,130 @@
 - Keep historical upstream/fork release notes in `CHANGELOG.md`; this fork-only file records the new compatibility release without expanding upstream documentation edits.
 
 Validated host: Pi 1.1.0. Native drag-selection acceptance and OpenSpec archival are release gates, not implied by a successful package build.
+
+## [0.5.0] — 2026-09-25 (fork release)
+
+### Changed
+
+- **Synced upstream v0.3.5 → v0.3.7** (upstream minor releases → fork minor bump). Upstream v0.3.6 fixes the user-message render patch to run `markdownTransformers`; upstream v0.3.7 removes `clickToExpandTools` because Pi 0.86.0+ toggles tool boxes natively. The fork keeps the feature, renamed to **`mouse.clickToToggleExpandable`** (default `on`), covering any collapsible box (tool boxes, bash boxes, skill/summary blocks, custom entries/messages). Old configs are migrated: a `fixedEditor`-era or `mouse`-era `clickToExpandTools` value carries over to the new key, and the new key wins when both are present.
+- **Deleted the `handlesMouse()` bow-out predicate** (D1). It duck-typed `onMouse`, which never appears on real rows — the component-tree walk cannot descend into pi-tui's `MouseRegion` (singular `child`, not `children`), so the predicate never fired and the fork always resolved tool rows anyway. Resolution now decides by `setExpanded` capability alone: a row whose path reaches a set-expanded component toggles it, and a row with none (thinking blocks, plain messages) is left to Pi's native click handling.
+- **Raised the Pi runtime floor to `@earendil-works/pi-tui`/`pi-coding-agent`/`pi-ai` `>=0.86.0 <0.88`** and consumes the `@xzzpig/pi-mouse-events` v2 contract (`pi-mouse-events.api.v2` key, `version: 2`). BREAKING: pi 0.84.x/0.85.x are no longer supported.
+- `/starline` settings now shows the renamed **Click to toggle expandable** toggle and persists it under the new key.
+
+### Added
+
+- `mouse/index.ts` reads the new `clickToToggleExpandable` key in the feature gate and press guard; `config.ts` carries the rename through `MouseConfig`, `FIXED_EDITOR_KEY_MAP`, `defaultConfig`, `normalizeMouseConfig` (with old-key fallback) and `saveMousePatch`.
+
+### Upstream provenance
+
+- Upstream v0.3.5: [source e54af55b6104](https://github.com/Andy8647/pi-starline/tree/e54af55b61044656fe5eff874e520a4ea40fb2f0); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/809763b6c4d3c4bbe095fe5837f5751159abf8b6/subtrees/pi-starline.json).
+- Upstream v0.3.7: [source caa1acd3a6e8](https://github.com/Andy8647/pi-starline/tree/caa1acd3a6e873f753a4cc737aaf50a7f4e16828); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/7ecf2299f09844d1730e6b86af8d791a6453e899/subtrees/pi-starline.json).
+- Upstream v0.3.6: [upstream release history at recorded source](https://github.com/Andy8647/pi-starline/blob/b51588a932a4434d5dcc8689beed4ef1007481e0/CHANGELOG.md). This links release-history evidence, not a separately verified historical checkout.
+
+## [0.4.1] — 2026-09-19 (fork release)
+
+### Changed
+
+- **Conflict-surface refactor, no behavior change.** `package-lock.json` was restored to npm's native tab indentation and now carries the missing `@xzzpig/pi-mouse-events` devDependency entry, instead of a 5,069-line whole-file reindentation.
+
+### Added
+
+- `mouse/api-consumer.ts` rejects an API object whose contract `version` is not `1`, so a future contract major cannot surface a shape-mismatched API. The contract test now pins the slot-dispatch semantics (priority order, consume-on-first-handled, skip-throwing, fall-through) against the real implementation via the new `@xzzpig/pi-mouse-events/test-support` export.
+
+## [0.4.0] — 2026-09-13 (fork release)
+
+### Changed
+
+- **Synced upstream v0.3.4 → v0.3.5** (upstream minor release → fork minor
+  bump). Upstream v0.3.5 adds `extensionStatuses.placements[key]: "editor"`,
+  which puts a third-party status on the editor's bottom-right metadata row
+  (the slot the copy and paste hints already use) instead of the footer,
+  plus the tests covering it rank 12 total. The local fork's mouse features
+  remain on `@xzzpig/pi-mouse-events` as before; upstream's copy-handler
+  refactor there does not apply to the fork's `pi-mouse-events` architecture.
+
+### Upstream provenance
+
+- Upstream v0.3.4: [source 30074113c55b](https://github.com/Andy8647/pi-starline/tree/30074113c55b06bb80ba4fa48a72b2881ef36ba4); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/ced0f66fa6238938e19c8fbac9791b901897e72f/subtrees/pi-starline.json).
+- Upstream v0.3.5: [source e54af55b6104](https://github.com/Andy8647/pi-starline/tree/e54af55b61044656fe5eff874e520a4ea40fb2f0); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/809763b6c4d3c4bbe095fe5837f5751159abf8b6/subtrees/pi-starline.json).
+
+## [0.3.0] — 2026-09-06 (fork release)
+
+### Changed
+
+- **Click-to-expand toggles from any row, both directions.** A plain click
+  anywhere on an expandable component — tool/bash box, skill block, branch or
+  compaction summary, custom entry or message — toggles just that one; the
+  click no longer has to land on the `… ctrl+o to expand` hint row. The
+  direction comes from the hint row when one is rendered and from the
+  component's own expansion state otherwise, so boxes that drop their hint
+  once expanded (read/grep/ls/write/find results, the summaries) can finally
+  be closed by clicking them. The toggle happens on the release of a click
+  (press and release on the same cell, no drag): the press itself is never
+  consumed, so dragging across a box still selects and copies its text, a
+  double-click still word-selects, and a click on an OSC 8 link still opens
+  the link. A component whose path declares `onMouse` keeps its clicks.
+- **The mouse feature set no longer patches `TuiAltScreen.prototype`.** All
+  mouse handling moved on top of the new
+  [`@xzzpig/pi-mouse-events`](https://www.npmjs.com/package/@xzzpig/pi-mouse-events)
+  extension (optional peer dependency): it owns the prototype patches, dispatches
+  `onMouse` events to components before the built-in scrollbar/selection
+  handling, and exposes handler slots that Starline's wheel routing,
+  click-to-expand, click-to-caret, range delete and clean copies register
+  with. If that extension is not installed, the mouse features are all off —
+  there is no patch-based fallback. The keyboard half of click-to-caret (range
+  delete) now rides `ctx.ui.onTerminalInput`, and the selection and
+  external-editor hints are derived at render time instead of being refreshed
+  from a viewport-input patch.
+
+## [0.2.0] — 2026-09-05 (fork release)
+
+### Changed
+
+- **Synced upstream v0.3.2 → v0.3.4** (breaking upstream changes → fork minor
+  bump per the 0.x fork convention). Upstream v0.3.3 adopts Pi 0.84.4's
+  native select-without-copy: the selection stays highlighted and the copy
+  key is now `app.message.copy` (default `ctrl+x`) instead of `ctrl+c`,
+  which always interrupts again; peer ranges for `@earendil-works/pi-ai`,
+  `pi-coding-agent`, and `pi-tui` rise to `>= 0.84.4`. Upstream v0.3.4
+  drops Starline's own path-aware word selection (`mouse.pathAwareWords`
+  removed and ignored in old configs) because Pi 0.84.4 natively keeps `/`
+  and `-` inside double-clicked words. The mouse-install contract fake now
+  implements `copyActiveSelectionToClipboard` per the new TUI interface.
+  Fork divergence preserved: git probes in the statusline refresh still
+  pass `--no-optional-locks` to avoid `.git/index.lock` churn.
+
+### Upstream provenance
+
+- Upstream v0.3.2: [source 7d30ec6062c3](https://github.com/Andy8647/pi-starline/tree/7d30ec6062c351868e280f3707b88b9d269f6c68); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/9ac9a7c9cf5b8041b31e5b57554fc0ecf8806f3d/subtrees/pi-starline.json).
+- Upstream v0.3.4: [source 30074113c55b](https://github.com/Andy8647/pi-starline/tree/30074113c55b06bb80ba4fa48a72b2881ef36ba4); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/ced0f66fa6238938e19c8fbac9791b901897e72f/subtrees/pi-starline.json).
+- Upstream v0.3.3: [upstream release history at recorded source](https://github.com/Andy8647/pi-starline/blob/b51588a932a4434d5dcc8689beed4ef1007481e0/CHANGELOG.md). This links release-history evidence, not a separately verified historical checkout.
+
+## [0.1.1] — 2026-08-24 (fork release)
+
+### Changed
+
+- **Synced upstream v0.3.1 → v0.3.2.** Upstream raised peer ranges for
+  `@earendil-works/pi-ai`, `pi-coding-agent`, and `pi-tui` to `>= 0.84.0`
+  and added a `TuiAltScreen` missing-guard (readable warning instead of a
+  startup crash on older Pi bundles). Adopted as-is on top of the fork.
+
+- **Git status no longer churns `.git/index.lock`.** Every git probe in the
+  statusline refresh (`git status --porcelain=2`, `git diff --numstat`, and the
+  `stash list` / `describe` / `rev-parse` / `remote get-url` companions) now
+  passes `--no-optional-locks`, so git never takes the index lock for optional
+  stat refresh. The statusline refreshes on a 30s interval plus nearly every Pi
+  event (message/tool completion, compaction, session tree, agent start/end),
+  and a stale index used to make each `git status` rewrite the index — constant
+  `index.lock` create/delete cycles and occasional "Unable to create
+  index.lock: File exists" collisions with concurrent git processes.
+
+### Changed
+
+- Initial fork of `Andy8647/pi-starline` v0.3.1, published as
+  `@xzzpig/pi-starline`.
+
+### Upstream provenance
+
+- Upstream v0.3.1: [source 401101a06dbb](https://github.com/Andy8647/pi-starline/tree/401101a06dbbf00bc03976c8c978684ec49e8f67); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/a54ce3ad1651a7a3ce6cb62bd572eb30962e2f42/subtrees/pi-starline.json).
+- Upstream v0.3.2: [source 7d30ec6062c3](https://github.com/Andy8647/pi-starline/tree/7d30ec6062c351868e280f3707b88b9d269f6c68); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/9ac9a7c9cf5b8041b31e5b57554fc0ecf8806f3d/subtrees/pi-starline.json).

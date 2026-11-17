@@ -35,6 +35,16 @@
       "path": "packages/pi-permission-system/test/access-intent/bash/program.test.ts",
       "reason": "[artifact] Diff-alignment artifact: the fork's inner-unit expectations on upstream v37's heredoc/redirect test cases and the #875 salvaged case indent the expectation entries against upstream's rewritten blocks, so the raw-vs-`-w` numstat delta is whitespace that cannot be restored without losing the fork expectations.",
       "recordedAt": "2026-10-03T02:00:00+08:00"
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-permission-system/package.json",
+      "reason": "[policy] Explicit fork changelog routing/packaging and dual-history navigation distinguish independent release sequences. Retain until upstream offers an equivalent fork-aware packaging contract."
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-permission-system/README.md",
+      "reason": "[policy] Explicit fork changelog routing/packaging and dual-history navigation distinguish independent release sequences. Retain until upstream offers an equivalent fork-aware packaging contract."
     }
   ],
   "reapplyOnSync": [
@@ -58,15 +68,17 @@
     "permission-events.ts extends the fork-only forwarded-decision resolution union with upstream prompt_unanswered, preserving both timeout reporting and the serving-session scope",
     "measure-core-coverage.mjs reports malformed or unreadable declaration files with a caused error instead of leaving JSON.parse unguarded; failures remain nonzero",
     "bash-command.test.ts expects explicit inner rm denies to outrank the outer floor for correctly parsed sudo --user/-nu cases; program.test.ts keeps refused sudo compound syntax unresolved",
-    "test/helpers/handler-fixtures.ts makePromptOptions provides hiddenTools: [] so the fixture stays collection-complete against pi-coding-agent >= 1.1 NormalizedBuildSystemPromptOptions where the field is required; drop the line when upstream's own fixture catches up"
+    "test/helpers/handler-fixtures.ts makePromptOptions provides hiddenTools: [] so the fixture stays collection-complete against pi-coding-agent >= 1.1 NormalizedBuildSystemPromptOptions where the field is required; drop the line when upstream's own fixture catches up",
+    "Keep pi.changelogPath pointing to ./FORK-CHANGELOG.md, ship the fork log and any upstream changelog, and retain README release-history navigation. Never append fork releases to the upstream log; follow docs/fork-changelogs.md."
   ],
   "doNotReintroduce": [
     "do not re-inline the wrapper-classification block into command-enumeration.ts on sync",
     "do not let biome/prettier reformat upstream files in this package: upstream-owned regions are 2-space, fork-authored regions stay tab-indented",
-    "do not adopt upstream release-number CHANGELOG sections; keep the independent fork release sections",
+    "Do not use upstream version headings in FORK-CHANGELOG.md; retain upstream CHANGELOG.md unchanged.",
     "do not restore the old sync-commands parser: upstream BashProgram.parseSync and its shared builder retain the fork payload parser",
     "do not restore blanket always-mode flooring for proven execution modifiers; both modes retain upstream core-reader and execution-modifier exemptions",
     "do not restore the fork sudo value-options table or allow refused/unknown sudo modes through fallback; classifySudo reuses upstream grammar and floors unresolved forms",
-    "do not drop source-aligned inner/exempt command spellings at wrapper seams or fabricate aliases for computed paths and opaque payloads from outer scope"
+    "do not drop source-aligned inner/exempt command spellings at wrapper seams or fabricate aliases for computed paths and opaque payloads from outer scope",
+    "Do not mix fork release headings into the upstream changelog or use upstream history as the Pi startup changelog."
   ]
 }

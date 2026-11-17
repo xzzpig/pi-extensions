@@ -143,3 +143,8 @@ optional, versioned **explicit expand-target protocol** before its own
 - Drag selection, double-click word selection, hyperlinks, wheel, and
   overlay behavior are unaffected; the explicit target only answers for
   the specific local rows it owns.
+
+## Fork and upstream release history
+
+- Fork releases: [FORK-CHANGELOG.md](./FORK-CHANGELOG.md). Pi startup updates use this version sequence.
+- Upstream releases: [CHANGELOG.md](./CHANGELOG.md), retained from upstream without fork entries.

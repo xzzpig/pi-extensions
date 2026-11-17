@@ -417,3 +417,8 @@ For the best transparent experience, set tool background colors to `""` in your 
 ## License
 
 MIT
+
+## Fork and upstream release history
+
+- Fork releases: [FORK-CHANGELOG.md](./FORK-CHANGELOG.md). Pi startup updates use this version sequence.
+- Upstream releases: [CHANGELOG.md](./CHANGELOG.md), retained from upstream without fork entries.

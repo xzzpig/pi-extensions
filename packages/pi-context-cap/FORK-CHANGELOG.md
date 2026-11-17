@@ -1,4 +1,10 @@
-# Changelog
+# Fork Changelog
+
+Release history for `@xzzpig/pi-context-cap`; version headings refer only to this fork.
+Upstream does not provide CHANGELOG.md at the recorded baseline.
+Current upstream baseline (not a claim about older releases): [v1.0.1 / 6771c6704087](https://github.com/lukeramsden/pi-context-cap/tree/6771c67040874b6708f0139c735b654675c011c3).
+
+Historical entries below were migrated from the repository's existing changelogs; missing dates and historical baselines have not been invented.
 
 ## 0.1.4
 
@@ -31,3 +37,7 @@
 - Budget aligns with the model's configured context window: when no explicit budget is set it derives as `min(200000, contextWindow - 4096)`, and the compaction point is always clamped to `contextWindow - 4096` (pi-ai `CONTEXT_SAFETY_TOKENS`). Models with windows too small to host the safety margin or the reserve disable the guard with a reason in `status`. `model.contextWindow` is read, never modified; model switches take effect immediately.
 - Reworked session control to a tri-state override: `/context-cap on|off|default` forces the guard independently of the whitelist for the current session; `status` reports the effective state and its reason. Reset at `session_start`, never persisted.
 - Added `extensions/index.ts` entry point; extended `scripts/verify.mjs` with fork coverage (whitelist, tri-state toggle, config files, merge precedence, window-derived budget, window clamping, model switching).
+
+### Upstream provenance
+
+- pi-context-cap upstream v1.0.1: [source 6771c6704087](https://github.com/lukeramsden/pi-context-cap/tree/6771c67040874b6708f0139c735b654675c011c3); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/0d42c7f516b6b773c900c79ec964761bbe0accb2/subtrees/pi-context-cap.json).

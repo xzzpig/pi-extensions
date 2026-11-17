@@ -271,3 +271,9 @@ Run this audit before publishing (see the pre-publish gate in the `pi-publish`
 skill) and before any commit that touches an upstream file. A red audit means
 fix the divergence or declare it in `knownDebt` — never leave an `UNDECLARED`
 finding unreviewed.
+
+## Fork changelog contract
+
+Treat upstream changelogs as byte-stable upstream files. Put fork releases in FORK-CHANGELOG.md; keep only necessary manifest/navigation seams and their sync maintenance records.
+
+Read and follow [the authoritative fork changelog contract](../../../docs/fork-changelogs.md) for format, migration evidence, sync rules and release gates. Run `pnpm run audit:fork-changelogs` and `pnpm run test:release`; the existing release CLI also validates source logs before registry planning and exact tarball log contents after packing. Do not bypass a failed check or edit local Pi last-seen versions.

@@ -113,3 +113,9 @@ It uses the same gates and verified tarballs and needs local npm authentication;
 it is not a dry-run and requires separate authorization. Arbitrary passthrough
 publish arguments and --include sandbox-runtime are intentionally unsupported.
 Support-library publication is a separate, explicitly reviewed operation.
+
+## Fork changelog contract
+
+Before planning or uploading a release, validate source fork histories and actual packed changelog files. Update FORK-CHANGELOG.md for fork versions, not the upstream log; preserve independent versioning.
+
+Read and follow [the authoritative fork changelog contract](../../../docs/fork-changelogs.md) for format, migration evidence, sync rules and release gates. Run `pnpm run audit:fork-changelogs` and `pnpm run test:release`; the existing release CLI also validates source logs before registry planning and exact tarball log contents after packing. Do not bypass a failed check or edit local Pi last-seen versions.

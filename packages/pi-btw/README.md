@@ -311,3 +311,8 @@ pi -e /path/to/pi-btw
 ## License
 
 MIT
+
+## Fork and upstream release history
+
+- Fork releases: [FORK-CHANGELOG.md](./FORK-CHANGELOG.md). Pi startup updates use this version sequence.
+- Upstream releases: [CHANGELOG.md](./CHANGELOG.md), retained from upstream without fork entries.

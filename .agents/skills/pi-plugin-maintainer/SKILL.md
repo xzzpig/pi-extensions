@@ -164,3 +164,9 @@ divergence cluster is recorded in the subtree record's `reapplyOnSync` and
 `doNotReintroduce` arrays, with every accepted divergence in its `knownDebt`.
 Do not add
 credentials to package manifests, metadata, or packed artifacts.
+
+## Fork changelog contract
+
+Before editing or releasing an upstream-derived plugin, apply the dual-history contract: retain upstream logs, route Pi to FORK-CHANGELOG.md, and include both histories in packed output.
+
+Read and follow [the authoritative fork changelog contract](../../../docs/fork-changelogs.md) for format, migration evidence, sync rules and release gates. Run `pnpm run audit:fork-changelogs` and `pnpm run test:release`; the existing release CLI also validates source logs before registry planning and exact tarball log contents after packing. Do not bypass a failed check or edit local Pi last-seen versions.

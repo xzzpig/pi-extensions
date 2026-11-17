@@ -188,3 +188,7 @@ Never commit generated archives or authentication state.
 
 References: [npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers/)
 and the repository's `.agents/skills/pi-publish/SKILL.md`.
+
+## Fork changelog gate
+
+Follow [the fork changelog contract](./fork-changelogs.md): fork releases belong in `FORK-CHANGELOG.md`, selected by `pi.changelogPath`; upstream logs remain unchanged. Run `pnpm run audit:fork-changelogs`. Release planning checks all fork sources (including existing versions), and the pack/upload path validates exact changelog contents in the actual archive. New release versions still require explicit preparation; a source-only repair does not change an installed npm package.

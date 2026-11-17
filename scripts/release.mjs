@@ -17,6 +17,11 @@ import {
   publishArtifacts,
 } from "./release-core.mjs";
 import { runPackageStartupE2E } from "./package-startup-e2e.mjs";
+import {
+  checkForkChangelogs,
+  checkForkPackage,
+  checkPackedForkLog,
+} from "./fork-changelogs.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export function run(command, args, cwd = root, options = {}) {
@@ -79,6 +84,7 @@ export function gates(all, candidates) {
   }
 }
 export function pack(p, destination) {
+  const forkLog = checkForkPackage(root, p.dir);
   fs.mkdirSync(destination, { recursive: true });
   run(
     "pnpm",
@@ -112,6 +118,12 @@ export function pack(p, destination) {
     throw new Error(`Invalid packed manifest: ${p.dir}`, { cause: error });
   }
   checkPackedManifest(p, manifest, entries);
+  checkPackedForkLog(forkLog, manifest, entries, (entry) =>
+    run("tar", ["-xOzf", file, entry], root, {
+      stdio: "pipe",
+      maxBuffer: 16 * 1024 * 1024,
+    }).toString(),
+  );
   return {
     dir: p.dir,
     name: p.name,
@@ -164,6 +176,9 @@ async function main() {
       process.env.GITHUB_EVENT_NAME === "pull_request")
   )
     throw new Error("CI publishing only allowed from main");
+  // Fresh CI checkouts may not contain the immutable subtree Git objects yet.
+  run("bash", ["scripts/release-upstreams.sh"]);
+  checkForkChangelogs(root);
   const all = discover(root),
     versions = readJson(path.join(root, "versions.json"));
   const lookup = (name, version) =>

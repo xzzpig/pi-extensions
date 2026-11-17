@@ -160,6 +160,21 @@
       "kind": "other",
       "path": "packages/pi-subagents/test/unit/herdr-machine.test.ts",
       "reason": "[host] The forwarding lifecycle fixture supplies cat in its simulated remote HOME so it exercises the production hardened PATH on NixOS too. Remove when upstream provides a portable remote-shell fixture."
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-subagents/package.json",
+      "reason": "[policy] Explicit fork changelog routing/packaging and dual-history navigation distinguish independent release sequences. Retain until upstream offers an equivalent fork-aware packaging contract."
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-subagents/README.md",
+      "reason": "[policy] Explicit fork changelog routing/packaging and dual-history navigation distinguish independent release sequences. Retain until upstream offers an equivalent fork-aware packaging contract."
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-subagents/scripts/build-package.mjs",
+      "reason": "[policy] Stage the independent fork changelog beside upstream history in dist-pkg. Remove this seam only when upstream staging accepts fork-owned extra documents without it."
     }
   ],
   "reapplyOnSync": [
@@ -181,7 +196,7 @@
     "preserve the context-injection handler in async before_agent_start + waitForAdvertisement",
     "retain PI_BUILTIN_TOOL_NAMES for hostAvailableBuiltins",
     "re-apply the 'as StreamFn' casts at prompt-audit.ts:72, review.ts:280 and permission-arbiter.ts",
-    "Preserve the fork-only CHANGELOG sections and use the root pnpm workspace lock for dependency installation.",
+    "Preserve the fork-only FORK-CHANGELOG sections and use the root pnpm workspace lock for dependency installation.",
     "After pnpm install, check for a package-local shim node_modules/@earendil-works/chord stub and remove it if present so host-peer resolution reaches the hoisted chord. Refresh a copied file: fixture when necessary; pnpm 11 may hardlink the fixture and need no copy.",
     "v0.75.0 sync (2026-10-03): agents.ts validateExternalRunnerProfile keeps the fork sandbox/permission-profile entries inside upstream Claude Code adapter-accepts overrides list (adapterAcceptsOverrides + isClaudeCodeAdapterId)",
     "v0.75.0 sync (2026-10-03): async-execution.ts keeps fork hostAvailableBuiltins = getHostBuiltinToolNames(ctx.pi) beside upstream requiredExtensions params/registeredExtensions expression in both chain and single paths, and keeps the fork sandbox const beside upstream claudeCodeAdapter in the single path",
@@ -205,7 +220,9 @@
     "v0.88.0: foreground execution.ts handleToolResult publishes toolSnapshot.progressText/progressUpdatedAt for successful contact_supervisor progress_update results (Pi 1.2 toolResult messages). Upstream inlines this in message_end; the fork keeps it in the shared id-deduplicated handleToolResult so message_end and tool_result_end both funnel through one path.",
     "v0.88.0: execution.ts message_end keeps the fork's `if (toolResult) handleToolResult(...) else { ... }` wrapper; upstream's inline 47-line toolResult block is NOT adopted (it would double-process with handleToolResult). Upstream's progressText type/pendingToolResultByCallId changes are adopted.",
     "packaging identity (repository.url, files allowlist, per-package lockfile policy) is enforced by scripts/check-fork-identity.mjs — run `node scripts/check-fork-identity.mjs` after every subtree pull/sync",
-    "Keep the Herdr forwarding lifecycle fixture using fork-remote-shell-env.ts to supply cat in the simulated remote HOME/.local/bin; do not relax the production hardened remote PATH for a NixOS fixture."
+    "Keep the Herdr forwarding lifecycle fixture using fork-remote-shell-env.ts to supply cat in the simulated remote HOME/.local/bin; do not relax the production hardened remote PATH for a NixOS fixture.",
+    "Keep pi.changelogPath pointing to ./FORK-CHANGELOG.md, ship the fork log and any upstream changelog, and retain README release-history navigation. Never append fork releases to the upstream log; follow docs/fork-changelogs.md.",
+    "Keep FORK-CHANGELOG.md in scripts/build-package.mjs staticFiles so compiled dist-pkg retains the explicit Pi changelog route."
   ],
   "doNotReintroduce": [
     "Do not restore upstream repository.url as the fork publishing source; npm provenance must identify the actual build repository.",
@@ -216,6 +233,7 @@
     "Do not turn fulfilled child command results with isError into exceptions: return the result, record failed status, preserve cancellation priority and allow subsequent commands.",
     "do not wrap agent-management.jsonDetails in try/catch (it is at upstream bytes)",
     "keep the .oxlintrc.json overrides broad and the pi-lens findings on upstream-original code unfixed (declared in knownDebt)",
-    "Do not retain a trusted-project context-injection snapshot across a change to untrusted session state; untrusted discovery must preserve user agents instead of letting same-name project agents shadow them."
+    "Do not retain a trusted-project context-injection snapshot across a change to untrusted session state; untrusted discovery must preserve user agents instead of letting same-name project agents shadow them.",
+    "Do not mix fork release headings into the upstream changelog or use upstream history as the Pi startup changelog."
   ]
 }

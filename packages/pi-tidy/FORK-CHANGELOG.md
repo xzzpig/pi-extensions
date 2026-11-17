@@ -1,7 +1,10 @@
 # Fork Changelog
 
-Changes specific to `@xzzpig/pi-tidy` in this repository. Upstream history remains in
-[`CHANGELOG.md`](./CHANGELOG.md).
+Release history for `@xzzpig/pi-tidy`; version headings refer only to this fork.
+Upstream history: [CHANGELOG.md](./CHANGELOG.md).
+Current upstream baseline (not a claim about older releases): [0.9.6 / ea4ca7c36d25](https://github.com/Andy8647/pi-tidy/tree/ea4ca7c36d2501e630a7e84b41b9f6dd75c50827).
+
+Historical entries below were migrated from the repository's existing changelogs; missing dates and historical baselines have not been invented.
 
 ## 0.1.4 — 降低长会话渲染开销
 
@@ -61,3 +64,7 @@ Forked from Andy8647/pi-tidy v0.9.6.
   `~/.pi/extensions/pi-tool-display/config.json`.
 - Do not restore the tool-frame path-copy chip; it lives on a frame that this fork disables by
   default.
+
+### Upstream provenance
+
+- Upstream v0.9.6: [source ea4ca7c36d25](https://github.com/Andy8647/pi-tidy/tree/ea4ca7c36d2501e630a7e84b41b9f6dd75c50827); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/49ccf05e5135153bb7c3cb4e47e408b84cd38374/subtrees/pi-tidy.json).

@@ -427,3 +427,9 @@ git show -s --format=%B HEAD^2 | grep -Fx "git-subtree-split: ${commit}"
 Use an isolated local upstream repository to test new workflow behavior. Cover
 first add, repeated direnv initialization, upstream updates, conflict
 resolution, ref change tracking, trailer preservation, and schema enforcement.
+
+## Fork changelog contract
+
+After each import/sync, retain upstream log bytes and put the adopted upstream summary under the independent fork release in FORK-CHANGELOG.md. Never prepend fork headings to upstream CHANGELOG.md.
+
+Read and follow [the authoritative fork changelog contract](../../../docs/fork-changelogs.md) for format, migration evidence, sync rules and release gates. Run `pnpm run audit:fork-changelogs` and `pnpm run test:release`; the existing release CLI also validates source logs before registry planning and exact tarball log contents after packing. Do not bypass a failed check or edit local Pi last-seen versions.

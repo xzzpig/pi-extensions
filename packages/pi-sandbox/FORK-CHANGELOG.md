@@ -1,9 +1,10 @@
-# Changelog
+# Fork Changelog
 
-All notable changes to the `@xzzpig/pi-sandbox` fork are documented here.
-This fork tracks [`carderne/pi-sandbox`](https://github.com/carderne/pi-sandbox)
-via git subtree; entries below describe only fork-specific deviations from
-upstream.
+Release history for `@xzzpig/pi-sandbox`; version headings refer only to this fork.
+Upstream does not provide CHANGELOG.md at the recorded baseline.
+Current upstream baseline (not a claim about older releases): [0.8.1 / f22dcd672ee3](https://github.com/carderne/pi-sandbox/tree/f22dcd672ee3ce16dc56999d0868ef6f76f49565).
+
+Historical entries below were migrated from the repository's existing changelogs; missing dates and historical baselines have not been invented.
 
 ## 0.9.3
 
@@ -59,6 +60,12 @@ upstream.
   decoration, write-denial diagnostics and per-command cwd normalization —
   remain.
 
+### Upstream provenance
+
+- Upstream v0.7.3: [source 6a0681e8dba4](https://github.com/carderne/pi-sandbox/tree/6a0681e8dba42e259607e146ff585178348931da); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/b04ba8d370c850531221fd5aca968a0e8a8410c8/subtrees/pi-sandbox.json).
+- Upstream v0.8.1: [source f22dcd672ee3](https://github.com/carderne/pi-sandbox/tree/f22dcd672ee3ce16dc56999d0868ef6f76f49565); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/a7b9800188ef709e12217342336cf01ed585a08b/subtrees/pi-sandbox.json).
+- sandbox-runtime upstream v0.0.79: [source b280dd6f47c6](https://github.com/carderne/sandbox-runtime/tree/b280dd6f47c65e906369d3e39b08e64bcc9eaaf8); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/a7b9800188ef709e12217342336cf01ed585a08b/subtrees/sandbox-runtime.json).
+
 ## 0.8.2
 
 ### Changed
@@ -70,6 +77,11 @@ upstream.
   new access tools, along with the fork's write-denial diagnostics and guarded
   retries. Individual tool cancellation also dismisses pending permission
   prompts without granting access.
+
+### Upstream provenance
+
+- Upstream v0.7.2: [source 1391cdfac55f](https://github.com/carderne/pi-sandbox/tree/1391cdfac55f989116d8a26b8924906e017974f1); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/09189ff6d7ed78cc7080b01770baea8643a34ce9/subtrees/pi-sandbox.json).
+- Upstream v0.7.3: [source 6a0681e8dba4](https://github.com/carderne/pi-sandbox/tree/6a0681e8dba42e259607e146ff585178348931da); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/b04ba8d370c850531221fd5aca968a0e8a8410c8/subtrees/pi-sandbox.json).
 
 ## 0.8.1
 
@@ -83,6 +95,11 @@ upstream.
   Bash write-failure handling. Recognized errors may have other causes and an
   allowed retry may repeat earlier side effects; these trade-offs are documented.
 
+### Upstream provenance
+
+- Upstream v0.7.1: [source ad8c63c18eec](https://github.com/carderne/pi-sandbox/tree/ad8c63c18eec7c70e3a91653758bd19eb1ae484c); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/9c7a6bcbb6aafc7225c0d67bce7328e256806e24/subtrees/pi-sandbox.json).
+- Upstream v0.7.2: [source 1391cdfac55f](https://github.com/carderne/pi-sandbox/tree/1391cdfac55f989116d8a26b8924906e017974f1); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/09189ff6d7ed78cc7080b01770baea8643a34ce9/subtrees/pi-sandbox.json).
+
 ## 0.8.0
 
 ### Changed
@@ -92,6 +109,11 @@ upstream.
 - Kept the fork runtime's native `network.disabled` switch and domain-prompt guard. Profile changes still recreate a missing proxy when network restrictions become active; disabled profiles now suppress macOS SSH proxy injection even when a previous profile left a live SOCKS proxy.
 - Profile configuration reads reuse upstream JSONC parsing and apply project trust even when no profile is selected. Live profile selection follows the session working directory.
 - Kept `protectNonexistentFiles`, profile hard denials, tool-display integration, and fork packaging behavior.
+
+### Upstream provenance
+
+- Upstream v0.6.8: [source 31fa50606896](https://github.com/carderne/pi-sandbox/tree/31fa5060689624467c1aeace2664ce91784522ff); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/3744ed09b2ba78e93c627e1cce8a04ec00d4222d/subtrees/pi-sandbox.json).
+- Upstream v0.7.1: [source ad8c63c18eec](https://github.com/carderne/pi-sandbox/tree/ad8c63c18eec7c70e3a91653758bd19eb1ae484c); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/9c7a6bcbb6aafc7225c0d67bce7328e256806e24/subtrees/pi-sandbox.json).
 
 ## 0.7.0
 
@@ -190,6 +212,11 @@ upstream.
   its current allowlist. The fork's interactive `/sandbox-allow` prompt flow
   and profile fail-closed reporting are unchanged.
 
+### Upstream provenance
+
+- pi-sandbox upstream v0.6.6: [source d76ad64a4253](https://github.com/carderne/pi-sandbox/tree/d76ad64a42532f83639f934019aabdeb8c20f4fa); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/693b75456ea62b3d1edbbbba37fb78ba8aaeec72/subtrees/pi-sandbox.json).
+- pi-sandbox upstream v0.6.8: [source 31fa50606896](https://github.com/carderne/pi-sandbox/tree/31fa5060689624467c1aeace2664ce91784522ff); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/3744ed09b2ba78e93c627e1cce8a04ec00d4222d/subtrees/pi-sandbox.json).
+
 ## 0.6.0
 
 ### Added
@@ -280,6 +307,11 @@ upstream.
   tests are taken with the fork's denyWrite / protectNonexistentFiles /
   network.disabled tests re-appended.
 
+### Upstream provenance
+
+- pi-sandbox upstream v0.6.5: [source 07ccbe9542c8](https://github.com/carderne/pi-sandbox/tree/07ccbe9542c82f3cddd150aefefea19761d09933); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/76e8a08b7238d3df2ca72f0fbf64d28017ef0329/subtrees/pi-sandbox.json).
+- pi-sandbox upstream v0.6.6: [source d76ad64a4253](https://github.com/carderne/pi-sandbox/tree/d76ad64a42532f83639f934019aabdeb8c20f4fa); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/693b75456ea62b3d1edbbbba37fb78ba8aaeec72/subtrees/pi-sandbox.json).
+
 ## 0.4.0
 
 ### Added
@@ -318,3 +350,7 @@ upstream.
 
 - Initial fork of `carderne/pi-sandbox` v0.6.5, published as
   `@xzzpig/pi-sandbox`.
+
+### Upstream provenance
+
+- Upstream v0.6.5: [source 07ccbe9542c8](https://github.com/carderne/pi-sandbox/tree/07ccbe9542c82f3cddd150aefefea19761d09933); [recorded sync metadata](https://github.com/xzzpig/pi-extensions/blob/76e8a08b7238d3df2ca72f0fbf64d28017ef0329/subtrees/pi-sandbox.json).

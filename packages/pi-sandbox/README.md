@@ -390,3 +390,8 @@ Based on code from
 [badlogic/pi-mono](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/examples/extensions/sandbox/index.ts)
 by Mario Zechner, used under the
 [MIT License](https://github.com/badlogic/pi-mono/blob/main/LICENSE).
+
+## Fork and upstream release history
+
+- Fork releases: [FORK-CHANGELOG.md](./FORK-CHANGELOG.md). Pi startup updates use this version sequence.
+- Upstream source: [0.8.1](https://github.com/carderne/pi-sandbox/tree/f22dcd672ee3ce16dc56999d0868ef6f76f49565); no upstream CHANGELOG.md exists at this baseline.

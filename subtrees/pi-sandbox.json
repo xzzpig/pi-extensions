@@ -49,6 +49,16 @@
       "kind": "lint",
       "path": "packages/pi-sandbox/src/ui.ts",
       "reason": "[baseline] The upstream v0.7.3 focus probe returns unknown and uses Reflect.get for the guarded Pi 0.80 focusedComponent fallback; callers narrow the result with instanceof CustomEditor. Preserve the upstream compatibility boundary."
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-sandbox/package.json",
+      "reason": "[policy] Explicit fork changelog routing/packaging and dual-history navigation distinguish independent release sequences. Retain until upstream offers an equivalent fork-aware packaging contract."
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-sandbox/README.md",
+      "reason": "[policy] Explicit fork changelog routing/packaging and dual-history navigation distinguish independent release sequences. Retain until upstream offers an equivalent fork-aware packaging contract."
     }
   ],
   "reapplyOnSync": [
@@ -74,7 +84,8 @@
     "preserve the fork's Bash write-denial monitor, output fallback, permission prompts and guarded retry through the fork-only src/fork-bash-denial.ts (attribution/prompt/single-shot retry) plus sandbox-runtime.ts even though upstream v0.7.2 removed its Bash write-failure inference; the removed upstream shell-error recognizer now lives in the fork-only write-denial.ts",
     "the upstream blocked-execution session test is headless because the fork's interactive write-denial path intentionally retains guarded retries",
     "resolve the opt-in access tools against the selected profile's effective config, enforce named-profile denyRead, and pass individual tool cancellation to permission prompts through fork-prompt-signal.ts; adapt the upstream access-tool fixture to Pi's ExtensionToolContext",
-    "packaging identity (repository.url, files allowlist, per-package lockfile policy) is enforced by scripts/check-fork-identity.mjs — run `node scripts/check-fork-identity.mjs` after every subtree pull/sync"
+    "packaging identity (repository.url, files allowlist, per-package lockfile policy) is enforced by scripts/check-fork-identity.mjs — run `node scripts/check-fork-identity.mjs` after every subtree pull/sync",
+    "Keep pi.changelogPath pointing to ./FORK-CHANGELOG.md, ship the fork log and any upstream changelog, and retain README release-history navigation. Never append fork releases to the upstream log; follow docs/fork-changelogs.md."
   ],
   "doNotReintroduce": [
     "do not turn ordinary file permissions or write retries into device grants; allowDevices requires explicit global or affirmatively trusted project configuration, and device initialization failures must not fall back to unsandboxed execution (openspec change add-sandbox-device-passthrough)",
@@ -84,6 +95,7 @@
     "do not adopt upstream's network.disabled implementation that omits allowedDomains; the fork runtime uses the native disabled flag and must keep the allowlist for later restricted profiles",
     "do not widen the existing profile field whitelist during an upstream sync: allowSSHAgentSocket is inherited from the global/trusted-project baseline but are not directly configurable by named profiles",
     "do not remove the fork's sandbox-write-denial-diagnostics capability when adopting upstream's Bash error handling changes",
-    "Do not reintroduce filesystem.protectNonexistentFiles or filesystem.denyMandatoryCwdFiles in config types, profile merging, validation, README or tests: upstream sandbox-runtime v0.0.78 removed built-in mandatory file write denies and the fork accepted that removal in the v0.0.79 sync. Old config keys are silently ignored (no warning)."
+    "Do not reintroduce filesystem.protectNonexistentFiles or filesystem.denyMandatoryCwdFiles in config types, profile merging, validation, README or tests: upstream sandbox-runtime v0.0.78 removed built-in mandatory file write denies and the fork accepted that removal in the v0.0.79 sync. Old config keys are silently ignored (no warning).",
+    "Do not mix fork release headings into the upstream changelog or use upstream history as the Pi startup changelog."
   ]
 }

@@ -27,6 +27,8 @@
     "tui"
   ],
   "files": [
+    "CHANGELOG.md",
+    "FORK-CHANGELOG.md",
     "extensions",
     "docs",
     "README.md",
@@ -41,6 +43,7 @@
     "test": "vitest --run"
   },
   "pi": {
+    "changelogPath": "./FORK-CHANGELOG.md",
     "extensions": [
       "./extensions/btw.ts"
     ],

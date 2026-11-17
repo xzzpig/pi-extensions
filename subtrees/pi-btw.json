@@ -28,6 +28,16 @@
       "path": "packages/pi-btw/extensions/btw.ts",
       "reason": "[baseline] Five pi-lens require-safety-comment-for-as-unknown-as findings are unchanged upstream casts that also predate the v0.8.0 sync. Keep upstream bytes rather than add fork-only suppressions; revisit if upstream removes or documents the casts.",
       "recordedAt": "2026-10-27T14:00:59+08:00"
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-btw/package.json",
+      "reason": "[policy] Explicit fork changelog routing/packaging and dual-history navigation distinguish independent release sequences. Retain until upstream offers an equivalent fork-aware packaging contract."
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-btw/README.md",
+      "reason": "[policy] Explicit fork changelog routing/packaging and dual-history navigation distinguish independent release sequences. Retain until upstream offers an equivalent fork-aware packaging contract."
     }
   ],
   "reapplyOnSync": [
@@ -42,8 +52,9 @@
     "'applies distinct theme treatment' must keep its user-row assertion color-mode agnostic (\\\\x1b[48;2; truecolor or \\\\x1b[49m default background): pi 1.1 themes leave headless runs on the default background, so a truecolor-only assertion fails without proving anything about the renderer",
     "re-apply the BTW display workspace seam: isLocalWorkspace reads a retained thread workspace mode that is set false when a remote child session is created (and never upgraded by a later local child while remote tool slots remain), reset to local only on thread reset/restore, not derived from live activeBtwSession presence",
     "re-apply the README transcript-display compatibility section/link that points at docs/transcript-display.md so the fork-only matrix remains discoverable",
-    "保留 fork 独立发布版本、CHANGELOG 发布条目与仓库 versions.json 的一致性；不要用 upstream 版本替换 fork 版本。",
-    "packaging identity (repository.url, files allowlist, per-package lockfile policy) is enforced by scripts/check-fork-identity.mjs — run `node scripts/check-fork-identity.mjs` after every subtree pull/sync"
+    "保留 fork 独立发布版本、FORK-CHANGELOG 发布条目与仓库 versions.json 的一致性；不要用 upstream 版本替换 fork 版本。",
+    "packaging identity (repository.url, files allowlist, per-package lockfile policy) is enforced by scripts/check-fork-identity.mjs — run `node scripts/check-fork-identity.mjs` after every subtree pull/sync",
+    "Keep pi.changelogPath pointing to ./FORK-CHANGELOG.md, ship the fork log and any upstream changelog, and retain README release-history navigation. Never append fork releases to the upstream log; follow docs/fork-changelogs.md."
   ],
   "doNotReintroduce": [
     "Do not restore upstream repository.url as the fork publishing source; npm provenance must identify the actual build repository.",
@@ -55,6 +66,7 @@
     "do not recreate the transcript display per overlay or cache lines by transcript version/width alone; keep the thread-owned display, provider-revision tool rebuild, and detach/attach lifecycle",
     "keep the dead removeTranscriptTurn import removed, and keep 'skills' dropped from package.json files (the directory stays to avoid subtree delete conflicts)",
     "do not derive display localWorkspace from activeBtwSession presence or upgrade it on a local child while remote tool slots remain; keep remote permission conservative until reset/restore",
-    "不要把子会话公开 renderer 解析链的基线改为空值、父 provider 或父工具定义；保留 () => childDefinition，使 next() 取得同一子会话注册定义，避免重新引入同名 renderer 被覆盖或包装失效。"
+    "不要把子会话公开 renderer 解析链的基线改为空值、父 provider 或父工具定义；保留 () => childDefinition，使 next() 取得同一子会话注册定义，避免重新引入同名 renderer 被覆盖或包装失效。",
+    "Do not mix fork release headings into the upstream changelog or use upstream history as the Pi startup changelog."
   ]
 }

@@ -15,6 +15,7 @@
   },
   "packageManager": "pnpm@11.13.1",
   "pi": {
+    "changelogPath": "./FORK-CHANGELOG.md",
     "extensions": [
       "./index.ts"
     ]

@@ -22,14 +22,15 @@
     "access": "public"
   },
   "pi": {
+    "changelogPath": "./FORK-CHANGELOG.md",
     "extensions": [
       "./extensions"
     ]
   },
   "files": [
+    "FORK-CHANGELOG.md",
     "extensions",
     "README.md",
-    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {

@@ -19,6 +19,7 @@
     "vibeguard"
   ],
   "files": [
+    "FORK-CHANGELOG.md",
     "index.ts",
     "mapping-view.ts",
     "category-picker.ts",
@@ -44,6 +45,7 @@
     "test": "vitest run"
   },
   "pi": {
+    "changelogPath": "./FORK-CHANGELOG.md",
     "extensions": [
       "./index.ts"
     ]

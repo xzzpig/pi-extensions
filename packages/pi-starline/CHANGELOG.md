@@ -1,111 +1,1219 @@
 # Changelog
 
-All notable changes to the `@xzzpig/pi-starline` fork are documented here.
-This fork tracks [`Andy8647/pi-starline`](https://github.com/Andy8647/pi-starline)
-via git subtree; entries below describe only fork-specific deviations from
-upstream.
+What changed in each released version of Starline, and what you need to do about
+it. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.5.0] — 2026-09-25 (fork release)
+The `## [x.y.z]` section for a version is what the publish workflow posts as that
+version's [GitHub release](https://github.com/Andy8647/pi-starline/releases)
+notes, so write it for someone reading the releases page, not for someone reading
+the diff. A tag with no section here fails the release before anything reaches
+npm.
 
-### Changed
+## [0.13.0] - 2026-11-12
 
-- **Synced upstream v0.3.5 → v0.3.7** (upstream minor releases → fork minor bump). Upstream v0.3.6 fixes the user-message render patch to run `markdownTransformers`; upstream v0.3.7 removes `clickToExpandTools` because Pi 0.86.0+ toggles tool boxes natively. The fork keeps the feature, renamed to **`mouse.clickToToggleExpandable`** (default `on`), covering any collapsible box (tool boxes, bash boxes, skill/summary blocks, custom entries/messages). Old configs are migrated: a `fixedEditor`-era or `mouse`-era `clickToExpandTools` value carries over to the new key, and the new key wins when both are present.
-- **Deleted the `handlesMouse()` bow-out predicate** (D1). It duck-typed `onMouse`, which never appears on real rows — the component-tree walk cannot descend into pi-tui's `MouseRegion` (singular `child`, not `children`), so the predicate never fired and the fork always resolved tool rows anyway. Resolution now decides by `setExpanded` capability alone: a row whose path reaches a set-expanded component toggles it, and a row with none (thinking blocks, plain messages) is left to Pi's native click handling.
-- **Raised the Pi runtime floor to `@earendil-works/pi-tui`/`pi-coding-agent`/`pi-ai` `>=0.86.0 <0.88`** and consumes the `@xzzpig/pi-mouse-events` v2 contract (`pi-mouse-events.api.v2` key, `version: 2`). BREAKING: pi 0.84.x/0.85.x are no longer supported.
-- `/starline` settings now shows the renamed **Click to toggle expandable** toggle and persists it under the new key.
+One addition: the right end of the editor's top rule is now a published slot, so an
+extension can say one thing next to what it is about instead of in the footer.
 
-### Added
+**Added**
 
-- `mouse/index.ts` reads the new `clickToToggleExpandable` key in the feature gate and press guard; `config.ts` carries the rename through `MouseConfig`, `FIXED_EDITOR_KEY_MAP`, `defaultConfig`, `normalizeMouseConfig` (with old-key fallback) and `saveMousePatch`.
+- **Editor hint API: one line of your extension's state on the editor's border.**
+  The right end of the top rule already carries Starline's own hints (vim mode,
+  `paste again to expand`, `N characters selected, ctrl+x to copy`). An extension can
+  now publish there too, through `Symbol.for("pi-starline.editor-hint-api.v1")` on
+  `globalThis` — the same handshake as the pill API, so nothing imports Starline and
+  nothing breaks when it is not installed. Your hint joins the slot to the left of
+  Starline's, which is the end that survives truncation on a narrow terminal, and a
+  hint that has not changed costs no repaint. Text is flattened onto one line and cut
+  at 60 columns. `pi-ide-context` 0.6.4 is the first user: while a selection is fresh
+  it reads `6 lines selected in main.ts`. See
+  [Hints on the editor's top rule](https://github.com/Andy8647/pi-starline/blob/main/docs/editor-hints.md).
 
-## [0.4.1] — 2026-09-19 (fork release)
+## [0.12.0] - 2026-11-08
 
-### Changed
+Four changes: a wide pill gives up width instead of taking the segments behind it
+with it, a third-party pill can open the panel its extension already has, the pull
+bubble can list the repository's issues, and copying the transcript without frames
+is pi-tidy's job now. **Update pi-tidy to 0.8.1 or newer along with this release**,
+or transcript copies bring their frames along.
 
-- **Conflict-surface refactor, no behavior change.** `package-lock.json` was restored to npm's native tab indentation and now carries the missing `@xzzpig/pi-mouse-events` devDependency entry, instead of a 5,069-line whole-file reindentation.
+**Added**
 
-### Added
+- **`extensionStatuses.commands`: a third-party pill that opens its extension's
+  panel.** Map a status key to a slash command (`{"procs": "/ps"}`) and a click runs
+  it, with no bridge to write. Only an extension command runs: a mistyped name, a
+  prompt template or a skill is refused with a notification, because Pi would
+  otherwise send it as a prompt and start a model turn. Built-in segments answer for
+  themselves, and an action registered through the pill API for the same key wins
+  over the configured command, so an existing bridge keeps working.
+- **`git.issues`: the repository's open issues in the pull bubble.** Off by default.
+  `Assigned to you` and `You opened` are always listed; the rest of the backlog only
+  while the repository has 20 or fewer open issues, above which one row
+  (`↗ All 8412 open issues`) opens the list instead. A fork with issues turned off
+  hides the section rather than claiming there are none, and on GitHub the issue
+  searches ride along with the pull searches, so turning this on costs no extra
+  request there. The `gitPr` pill itself does not change: a repository-wide issue
+  count says nothing about the current branch.
+- **The `Extension segments` tab in `/starline` says what a click does**, naming the
+  command or the bridge that overrides it, so a shadowed setting is visible instead
+  of silently ignored.
 
-- `mouse/api-consumer.ts` rejects an API object whose contract `version` is not `1`, so a future contract major cannot surface a shape-mismatched API. The contract test now pins the slot-dispatch semantics (priority order, consume-on-first-handled, skip-throwing, fall-through) against the real implementation via the new `@xzzpig/pi-mouse-events/test-support` export.
+**Changed**
 
-## [0.4.0] — 2026-09-13 (fork release)
+- **A bar that does not fit compresses the wide pills first.** A pill wider than its
+  share is shortened in the middle and the pills behind it stay on the bar; whole
+  pills are dropped, and counted, only once every pill is down to its minimum (24
+  columns, or its own width). `git.branch.maxLength: "full"` still means no configured
+  cap, but a bar that runs out of room now compresses even then.
+- **A shortened branch keeps both ends.** `formatGitBranchText` cuts in the middle, so
+  `feature/…` no longer hides the part that tells two branches apart, and the branch
+  pill keeps its dirty counts and in-progress operation whatever the name loses. A
+  numeric `maxLength` now means a middle cut rather than an end cut.
 
-### Changed
+**Fixed**
 
-- **Synced upstream v0.3.4 → v0.3.5** (upstream minor release → fork minor
-  bump). Upstream v0.3.5 adds `extensionStatuses.placements[key]: "editor"`,
-  which puts a third-party status on the editor's bottom-right metadata row
-  (the slot the copy and paste hints already use) instead of the footer,
-  plus the tests covering it rank 12 total. The local fork's mouse features
-  remain on `@xzzpig/pi-mouse-events` as before; upstream's copy-handler
-  refactor there does not apply to the fork's `pi-mouse-events` architecture.
+- **A wide pill used to cost everything after it.** The layout dropped whole pills
+  from the right, so on a long `feature/…` branch `context`, `cost` and every
+  extension status went with it; with the branch first, one pill was sometimes
+  stretched across the whole bar instead.
+- **The pull bubble no longer reads forever.** A first read that failed left
+  `Reading from the forge…` on screen; it now says it could not read, and keeps the
+  row that opens the repository.
+- **A pull bubble from another directory no longer answers.** Opened after a `/cd`,
+  it showed the previous repository's lists.
+- **A long bubble no longer runs off the screen.** Its rows are fitted to the terminal
+  and a shortened group says how much of it is showing (`Yours · 5 of 40`), while the
+  rows that lead out of the bubble are never among the ones dropped.
+- **Select-to-copy leaves the frames behind too.** Starline only cleaned the copy
+  key, so with Pi's default `fullscreenCopyOnSelect: true` nothing was cleaned.
+  pi-tidy covers both.
+- **The selection hint counts what the copy key delivers,** from Pi's own selection
+  text, so it matches pi-tidy's result.
 
-## [0.3.0] — 2026-09-06 (fork release)
+**Removed**
 
-### Changed
+- **`mouse.transcriptCleanCopy`.** A copy with its frames now takes
+  `tidy.cleanCopy: false` in Pi's `settings.json`. The old key is ignored, so a
+  config that still has it keeps working.
 
-- **Click-to-expand toggles from any row, both directions.** A plain click
-  anywhere on an expandable component — tool/bash box, skill block, branch or
-  compaction summary, custom entry or message — toggles just that one; the
-  click no longer has to land on the `… ctrl+o to expand` hint row. The
-  direction comes from the hint row when one is rendered and from the
-  component's own expansion state otherwise, so boxes that drop their hint
-  once expanded (read/grep/ls/write/find results, the summaries) can finally
-  be closed by clicking them. The toggle happens on the release of a click
-  (press and release on the same cell, no drag): the press itself is never
-  consumed, so dragging across a box still selects and copies its text, a
-  double-click still word-selects, and a click on an OSC 8 link still opens
-  the link. A component whose path declares `onMouse` keeps its clicks.
-- **The mouse feature set no longer patches `TuiAltScreen.prototype`.** All
-  mouse handling moved on top of the new
+## [0.11.0] - 2026-11-05
+
+Pi's `↓ Jump to latest message` block is gone from the transcript, and the two
+moves it stood for are pills on the bar instead. One of them is new: there was
+no way back to the previous prompt except the keyboard.
+
+**Added**
+
+- **`previousPrompt` and `latest`, two pills that move the transcript.** They sit
+  on the bar like any other pill and draw one arrow each (`⇡` and `⇣`, not `↑`
+  and `↓`, which the git pill already uses for ahead and behind).
+  `previousPrompt` jumps to the previous prompt's first row, aligned to the top
+  of the viewport; `latest` returns to the end and resumes following new output.
+  Both stay on the bar all the time, so scrolling never reflows the bar, and a
+  press with nowhere to go does nothing instead of disappearing: `latest` at the
+  end of the transcript, `previousPrompt` when no prompt starts above the
+  viewport. `⇡` and `⇣` take the bar's neutral background — they are controls,
+  not readings, so `colors.*` is untouched. Both are placed after `thinking` by
+  default, and `/starline previousPrompt` and `/starline latest` do the same two
+  jumps from the keyboard.
+
+**Changed**
+
+- **The bar drops whole pills instead of cutting one in half.** It rendered
+  everything and truncated the line at the terminal's width, which left a pill
+  with no right cap and a label ending mid-word — and the pills it ate were the
+  ones on the right, which is where `context` and `tps` usually sit. The bar now
+  keeps the pills that fit, drops the rest whole, and stands a `+N` counter in
+  their place; clicking it lists what is not on screen with the text each of those
+  pills would have shown. `pill.segments` is therefore also the priority list: the
+  leftmost pill is the last one to go.
+
+- **Pi's scroll-to-end label is not drawn.** That block was painted over the last
+  row of the transcript, hiding the line it landed on, and it only ever offered
+  one direction. With the two pills carrying both moves, the label and its click
+  rectangle are suppressed: the row it covered is yours again, and nothing
+  invisible answers a click there. Pi's own keys (`tui.altScreen.previousPrompt`,
+  `tui.altScreen.bottom`) keep working as before.
+- **The `tps` pill's colour follows the session.** A fixed threshold would not
+  travel: 30 t/s is a fast local model and a slow frontier one, so the same
+  cut-off paints both the same colour and says nothing. The rate is now read
+  against the median of the session's finished messages — `colors.tpsFast` from
+  30% above it, `colors.tpsSlow` from 30% below, `colors.tps` in between — so the
+  colour answers "faster or slower than this session usually replies". The band
+  is entered at 30% and left at 15%, which keeps a number sitting on a threshold
+  from blinking between two colours mid-message, and fewer than four measured
+  messages stays on `colors.tps`, because that is not a median yet.
+
+**Notes**
+
+- The two segments are new, so a `pill.segments` list written by hand does not
+  have them. Add `previousPrompt` and `latest` where you want them, in
+  `starline.json` or from the **Pills** tab in `/starline`; without them the bar
+  looks exactly as it did and the label is still suppressed.
+
+## [0.10.4] - 2026-11-02
+
+A repository whose root holds more than one manifest now says so, the version
+pill says what npm actually has rather than what the manifest is about to
+release, Maven's version shows up on Windows, and the bubbles stop explaining how
+to close them.
+
+**Added**
+
+- **The packages a workspace does not declare.** `apps/web` being a pnpm member
+  said nothing about `apps/api`, `apps/ingest` and `packages/domain` sitting
+  beside it. A section after the workspace lists them: two levels deep, never
+  entering a directory that has a manifest of its own, skipping whatever the
+  workspace already listed, capped like the workspace list itself. The heading
+  names the ecosystem when they all share one (`python · not in a workspace`).
+
+**Fixed**
+
+- **A version that had not shipped read as published.** The bubble's first row
+  said `0.10.4 public` because `package.json` declared 0.10.4 and was not
+  private, which reads as if npm already had it. The registry is now asked for
+  `latest`: its version gets a `published` row of its own, the manifest's version
+  is called `unreleased` when the two differ, and with no answer from the
+  registry the row claims nothing at all. The title names the published version
+  instead of the manifest's, and with the two equal one row carries both. The pill
+  follows the same rule and shows the registry's version; the `*` that compared it
+  against a git tag is gone, because a tag is a local marker and the registry is
+  what says something shipped. The manifest's own row says `unreleased` only when
+  it is ahead of npm; a checkout that is behind says so (`older than npm`)
+  instead of being called a pending release.
+- **A mixed repository was described as one ecosystem.** The bubble showed the
+  single manifest the version happened to come from, so a pnpm workspace root
+  whose `package.json` declares no version read as a Python project and never
+  mentioned npm at all. Every manifest in the directory now gets a line, with its
+  own version (`--` when it declares none) and its file. The pill still shows one
+  number — the first manifest that has a version — and the bubble now says which
+  file that was.
+- **A row that ended in padding.** The version column is width-matched across a
+  section for the rows that carry a mark after it; the rows without one no longer
+  end in spaces.
+- **Maven's version on Windows.** The runtime probe ran `execFile("mvn",
+  ["--version"])`, and on Windows `mvn` is `mvn.cmd`, which Node refuses to start
+  without a command interpreter — the lookup died with `spawn mvn ENOENT`, the
+  error was swallowed, and the pill showed the icon with no version beside it.
+  A lookup that cannot find its command on Windows is now retried through
+  `cmd.exe /d /s /c` (or `%ComSpec%`), so `.cmd` and `.bat` shims resolve. Every
+  other platform and every command that already resolved is untouched.
+  Thanks to [@suzumiy](https://github.com/suzumiy) for the report and for
+  tracing it to the shim ([#45](https://github.com/Andy8647/pi-starline/issues/45)).
+
+**Changed**
+
+- **A manifest's platform has its own mark, and links to the package.** npm,
+  cargo, composer, pub, mix, cabal, pip, gems, maven and the rest each draw their
+  ecosystem's glyph instead of the generic package box — for npm the mark spells
+  `npm` already, so the word beside it is gone — and the row that names the
+  published version opens that package on npm. The manifest's own row is not a
+  link: it is a fact about this checkout, not about what shipped.
+- **The bubbles no longer say how to close them.** ESC closes every bubble, so
+  the line only cost a row. The hints that teach something else stay —
+  `enter opens`, `↑↓ enter · click`, `/subagents-fleet for details` — minus the
+  ESC mentioned beside it.
+
+## [0.10.3] - 2026-11-02
+
+The pull list lists each pull once and can take you to the repository, there is
+a package pill for the version and what was released, and the context pill stops
+reading `0%` on a fresh session.
+
+**Added**
+
+- **A package pill that answers "what version is this, and what was released?"**
+  The `packageVersion` segment now carries the package glyph and, when the
+  newest git tag names a different release, a `*`. Clicking it opens the
+  summary: the ecosystem, whether the manifest publishes anything, the version,
+  the tag HEAD is measured against and how far ahead it is. A workspace
+  (`pnpm-workspace.yaml`, `package.json#workspaces`, Cargo members, `go.work`,
+  `deno.json`, `[tool.uv.workspace]`) is listed package by package, each row
+  marked `changed` when the diff since the tag touched it. Nothing on that list
+  is inferred: a version comes from a manifest, "released" from a tag, and
+  "changed" from the two compared.
+- **A way into the repository from the pull bubble.** The bubble now ends with
+  `↗ Open repository`, which opens the remote's own page. The URL is built from
+  the remote the way GitHub and GitLab resolve it, so a self-hosted forge keeps
+  its own hostname and port rather than being sent to github.com.
+
+**Fixed**
+
+- **The same pull, listed twice.** The three searches are not disjoint: GitLab's
+  reviewer and assignee lists overlap, and GitHub can ignore the second half of
+  an `-author:@me -review-requested:@me` query. A pull that answered more than
+  one search was printed under both headings and counted twice. Each one now
+  appears once, under the strongest claim on it (authored, then review
+  requested, then involved).
+- **The context pill read `0%` on a fresh session** while the system prompt and
+  the tool schemas were already committed. The bubble had the number all along —
+  it estimates those tokens from the rendered prompt and the tool schemas. The
+  footer now uses the same estimate and marks it `~` (`~1%/1.0M`) until a turn
+  reports usage, then drops the mark. An unknown figure keeps the bare `?`, and
+  so does a session that has already run and is only waiting on pi to report
+  again (a compaction), where the estimate would read as the whole window.
+
+## [0.10.2] - 2026-11-01
+
+`!` colours the input box again.
+
+**Fixed**
+
+- **Bash mode had no border cue.** Pi colours the editor border from the mode it
+  is in (`bashMode` while the draft starts with `!`, a `thinking*` colour
+  otherwise), and Starline replaces those rows with its own in
+  `colors.editorBorder`. The frame now paints through Pi's painter while bash
+  mode is on, so `!` turns both rules the theme's `bashMode` colour. An explicit
+  `colors.editorBorder` still wins, and the thinking level keeps Starline's
+  border rather than recolouring the box.
+
+## [0.10.1] - 2026-11-01
+
+Copying a right-aligned user message leaves its frame behind.
+
+**Fixed**
+
+- **Copied text from an indented box.** With `tidy.userMessageAlign: "right"`,
+  pi-tidy indents the whole user message and sets the icon and clock into the
+  top border's right edge. The copier only recognised a left-aligned label on a
+  box at column 0, so it found no frame at all and fell back to Pi's verbatim
+  copy: the indentation, both `│` columns and the labelled border row all
+  reached the clipboard. Frame edges now have to sit in the same column as well
+  as be the same width, and a frame's content is trimmed at the column its own
+  left edge sits in, so an indented box copies as its text.
+- **Equal-width edges at different indents are not one box.** An indented
+  rounded edge no longer pairs with a flush one, so a box nested inside a
+  selection cannot take the rows of the box around it with it.
+
+## [0.10.0] - 2026-10-31
+
+A pull request pill, and one blank row less above the input box.
+
+**Added**
+
+- **A `gitPr` pill.** It shows the current branch's pull or merge request: the
+  forge's marker in front of the number (`#123` on GitHub, `!123` on GitLab), the
+  state in the pill's colour (open, draft, merged, closed) and a mark for the
+  checks (`✓` passing, `✗` failing, `⋯` running). With no pull on the branch it
+  shows how many the repository has open (`12`, in the branch pill's purple,
+  `0` included). Clicking it, or running `/starline gitpr`, lists your open pulls
+  in three groups (yours, waiting on your review, the rest you are involved in),
+  and a row opens in the browser.
+- **No token to configure.** The pill reads through `gh` and `glab`, in the
+  repository directory, so it uses the login and host configuration those CLIs
+  already have. A pull is kept for a minute; a failed read keeps the last answer
+  and backs off (two minutes, doubling to ten), so a forge that is down or a
+  laptop off the network costs one process occasionally instead of two a minute.
+  Without the CLI, or on a forge they do not cover, there is no pill.
+- **`colors.gitPrOpen` / `gitPrDraft` / `gitPrMerged` / `gitPrClosed` /
+  `gitPrCount`** and **`icons.gitPrOpen` / `gitPrDraft` / `gitPrMerged` /
+  `gitPrClosed` / `gitPrList`** for the pill. `icons.gitPr*` stay empty in
+  `icons.mode: "ascii"`, where the `#`/`!` marker carries the meaning.
+
+**Changed**
+
+- **One blank row less above the input box.** Pi keeps a row in its above-editor
+  widget slot even when no extension fills it; the box draws its own edges, so
+  Starline clears it. A real widget in that slot (pi-subagents' fleet status,
+  pi-processes' dock) still gets Pi's separating row, and `features.editor: false`
+  gives the row back.
+- **The git bubble no longer ends on `read-only`.** The bubble is still read-only;
+  the footer row said so once per click.
+- **The pull list is open pulls only**, on both forges.
+
+**Fixed**
+
+- **The line-metrics probe no longer rewrites `.git/index`.** `git diff HEAD
+  --numstat` takes the index lock as a side effect, and `GIT_OPTIONAL_LOCKS=0`
+  does not stop that one, so a repo with a `gitMetrics` pill was having its index
+  rewritten on every refresh. The staged and unstaged halves are now read with
+  `diff-index` and `diff-files`, which do not touch it.
+- **`/starline gitpr` reaches the pull pill.** `/starline <name>` lowercases its
+  argument, so a camelCase segment key only answered to the mouse.
+
+## [0.9.1] - 2026-10-30
+
+The context bubble shows what the window is made of, and the tps bubble plots
+speed against it.
+
+**Added**
+
+- **Context breakdown.** Clicking the context pill opens a grid of what fills the
+  window — system prompt, tool schemas, MCP tools, memory, skills and the
+  conversation — each row with its token count and share, plus free space and the
+  autocompact reserve. The split is read from Pi's own prompt sections, so it
+  follows whatever the session actually sends; memory extensions that declare
+  `memory`, `pi_memory`, `memory-context` or `local_memory`, or append a
+  `<memory>` block, are counted as memory rather than system prompt.
+- **A number before the first reply.** The bubble estimates the window from the
+  prompt and the tool schemas and says so, instead of reporting zero. Pi's own
+  count leaves both out and does not exist until a turn has reported usage.
+- **Throughput history.** Clicking the tps pill opens a scatter of every measured
+  reply: tokens per second on the y axis, the context percentage it finished at
+  on the x. Replies are coloured against the session's own top speed, the newest
+  one is a dot, and several in one cell show their count. Both axes follow the
+  data instead of a fixed 0-100%.
+- **Points survive `--continue`.** They are kept as custom entries in the session
+  file — persisted, never sent to the model — and the pill starts from the last
+  one instead of an empty segment.
+
+**Changed**
+
+- Bubbles no longer print `esc to close`: a click anywhere else already closes
+  them, and the line cost a row on every bubble. The git bubble keeps
+  `read-only`, the subagents bubble keeps its command.
+
+## [0.9.0] - 2026-10-30
+
+The input box is as tall as its text, and user messages in the transcript are
+pi-tidy's to draw. **Breaking:** several settings are gone; see below.
+
+**Changed**
+
+- **No more row under the text.** The editor drew a metadata row below the
+  draft — model, provider, thinking level, and the paste/selection hints on its
+  right. With the model already on the pill footer most setups blanked it, and
+  the box stayed a row taller than its text anyway. The row is gone: the box is
+  its two rules, the padding and the text, like Pi's own.
+- **Hints ride the top rule.** `paste again to expand`, the selection hint and
+  the `ctrl+g` hint now sit at the right end of the editor's top rule, after a
+  wrapped modal editor's `INSERT`/`NORMAL` when there is one. Pi's own status
+  text (a retry, compaction) keeps the left end and wins when both do not fit.
+- **The pill bar starts in the first column.** It was drawn one column in from
+  each side, so its round cap sat a column to the right of the editor's rail.
+  It is flush left now, under the rail.
+- **User messages are styled by pi-tidy.** Starline restyled user messages too,
+  and only while its editor was on, so turning the editor off sent the
+  transcript's prompts back to Pi's filled block. pi-tidy 0.5 draws them
+  independently of Starline: in its rounded frame by default, or with
+  `userMessageStyle: "rail"` in the look Starline drew. The
+  `features.editor` switch now covers the editor and selector borders only.
+  Install or update pi-tidy before updating Starline, or user messages fall back
+  to Pi's style. A clean copy of a user message still comes out as its text:
+  tidy's frame or rail, its user icon and the indent under it are left out.
+
+**Added**
+
+- **`editorMinRows`** keeps the editor's text area at least that many rows tall
+  (default `1`, at most `10`): a short draft is followed by blank rows, so the
+  box does not grow when a second line arrives. A click on one of them puts the
+  caret at the end of the draft.
+
+**Removed**
+
+- `editorMetadataFormat` and the `editorModel`, `editorProvider` and
+  `editorThinking*` colours: there is no metadata row to format. They are
+  ignored if still set. `editorModelLabel` stays; it chooses what the model pill
+  shows.
+- `userMessagePaddingY`, `colors.userMessageBorder`, `colors.userMessageText`
+  and `colorSources.userMessages`: pi-tidy's `userMessagePaddingY` and
+  `userMessageColors` replace them. Starline ignores them and says so once.
+- The `editor` placement for third-party statuses, which put them on the
+  metadata row. A stored `editor` placement now reads as `right`.
+
+## [0.8.1] - 2026-10-28
+
+Typing no longer takes the session down when another package wraps the editor,
+and a reload leaves one paste-collapse layer instead of two.
+
+**Fixed**
+
+- **A session that died on the first keystroke.** With a package that hands Pi a
+  Proxy over the editor (`pi-better-background-tasks` does, to take over the
+  arrow keys), Starline captured that Proxy's wrapper instead of the handler
+  underneath, then shadowed the property the wrapper dispatches through. The
+  two called each other with nothing beneath, and the first character typed
+  overflowed the stack and exited Pi. The handlers are now captured where they
+  live, so the other package's wrapper still sees every keystroke first and only
+  the capture moved. Nothing changes when no Proxy is involved.
+- **Reloading stacked the same wrapper every time.** The cleanup that removes
+  Starline's wrapper asked for it through the Proxy too, never recognised it,
+  and left it installed; each `/reload` added another layer for the rest of the
+  session. It now looks where it put it, so the handler the editor had before is
+  the one it has afterwards.
+
+No configuration change.
+
+## [0.8.0] - 2026-10-28
+
+The model pill counts the turn, and keeps the number when the turn is over.
+
+**Added**
+
+- **How long the current turn has been running.** The spinner that already takes
+  the pill's icon slot now has the run's elapsed time beside the model name:
+  `⣾ claude 12s`, `2m 13s`, `1h 5m`. Seconds under a minute, then two units at
+  most, so the bar does not grow a column every second. The clock starts on
+  `agent_start`, which means tool calls count too — a tool that has been silent
+  for two minutes is exactly when the number is worth having. Nothing is
+  polled: the working spinner already redraws the footer while a run is going.
+
+**Changed**
+
+- **The number stays after the run ends.** It used to have no reason to; now the
+  slot goes back to the model's own icon and the elapsed time freezes at the
+  total the turn reached (` claude 12s`). A spinning glyph means the value is
+  live, the model icon means it is history. The next turn clears it and counts
+  from zero, and a new or resumed session starts with nothing to show.
+
+No configuration is needed: it rides in the `model` pill and follows
+`features.statusLine`. Retry, compaction and branch summary are unchanged —
+those are not plain spinners and still use Pi's own row above the editor.
+
+## [0.7.0] - 2026-10-27
+
+Decode speed on the bar, and a segment that could not be turned back off.
+
+**Added**
+
+- **A `tps` segment.** Decode throughput of the latest assistant message, as
+  `42 t/s`, `context`'s right-hand neighbour by default. The window opens on that
+  message's first streamed delta and closes when it ends, so queueing,
+  time-to-first-token and every tool call in the turn stay outside it: the number
+  says how fast the model writes, not how long the turn took. Providers report
+  usage only in their final streamed chunk, so while a message streams the value
+  is an estimate from the text that has arrived (CJK about a token a glyph, Latin
+  about four characters); `message_end` replaces it with the real count. Rates
+  under 10 keep one decimal so slow models do not all read `1 t/s`. Messages that
+  arrive in one chunk are skipped rather than turned into a fabricated rate.
+  Configure with `colors.tps` (default `bright-black`), `icons.tps` (default
+  empty), and `pill.segments`.
+
+**Fixed**
+
+- **A segment at the end of the bar can be turned off again.** Every row in the
+  `/starline` Pills tab offered one position past the end of the bar, which is
+  what a hidden segment needs to be appended. A segment already sitting at the
+  end got that value too, so choosing it put the segment back where it was: the
+  row cycled between the last position and a number that rendered as that same
+  position, and `off` could never be reached. The extra position is now offered
+  only to segments that are not on the bar.
+
+## [0.6.1] - 2026-10-26
+
+A second press on the same pill puts its bubble away and leaves it away.
+
+**Fixed**
+
+- **The same pill closes its own bubble again.** Pi sends a synthesized click
+  after every press that did not move. Pressing an open pill's own pill closed the
+  bubble, but that click was no longer taken for part of the press that closed it,
+  so it ran the action again and the bubble came straight back. The press now claims
+  its click whichever way it went, opening or closing, which is what the design note
+  already said it did.
+
+No API change: the pill and bubble shapes are untouched, so extensions that bridge
+a pill keep working as they are.
+
+## [0.6.0] - 2026-10-26
+
+A pill opens on the press, so a bubble no longer waits for the button to come
+back up.
+
+**Added**
+
+- **Pills act on mouse-down.** A click is press + release + a synthesized click,
+  and Pi only delivers that click after the button is released — which put the
+  whole button-hold in front of every bubble. The press now runs the action.
+- **A drag still cancels.** Because the press acts, a press that turns into a
+  gesture has already opened something; the drag branch closes it once the pointer
+  has moved more than two columns, which is past any jitter and short of any
+  selection a user meant to start. A gesture that slides _onto_ the footer and
+  releases there still never fires, since no press landed on the pill.
+
+**Changed**
+
+- Pi synthesizes a click after every press that did not move, so the handler now
+  remembers which pill it acted on and swallows exactly that click. Without it a
+  single press would open a bubble and immediately toggle it shut.
+- `docs/clickable-pills.md` says what the code does now: press acts, click is
+  swallowed, drag undoes.
+
+No API change: `register` and the bubble shapes are untouched, so extensions that
+bridge a pill keep working as they are.
+
+## [0.5.1] - 2026-10-25
+
+A click outside a bubble now puts it away, the _Pills_ tab can place a single
+extension status, and a bar with no git pill stops reading the repository.
+
+**Added**
+
+- **Clicking away closes a bubble.** Escape, the same pill and another pill
+  already closed it; every other click left it on screen. A press anywhere outside
+  the bubble now closes it, and the press is still delivered, so the caret moves or
+  the line gets selected exactly as it would with no bubble open. The footer row
+  follows the same rule cell by cell: a clickable pill keeps its own meaning (the
+  same pill closes, another replaces), while the bar's padding, a gap or a
+  read-out pill closes the bubble like anywhere else. Nothing new is patched for
+  this: the press is read where the pointer-shape patch already sees every pointer
+  report.
+
+- **Per-status rows in the _Pills_ tab.** Every status an extension published
+  this session gets a row of its own (`extensionStatus:<key>`), so a single status
+  can be placed on the bar from the menu instead of by editing `starline.json`. The
+  _Other extensions_ row still carries every status not placed by name, and a
+  status listed both ways is drawn once, where the named row put it.
+
+**Changed**
+
+- **No git pill means no git read.** The refresh on its interval used to run
+  `git status` and `git stash list` whatever the bar showed. It now reads the
+  repository only when `git`, `gitCommit`, `gitTag` or `gitMetrics` is in
+  `pill.segments`, and clears the branch the previous refresh drew when the last
+  git pill goes away.
+
+## [0.5.0] - 2026-10-25
+
+Two things happened at once. The footer has one style now: pills. The text
+footer is gone, and with it the three settings that only existed to describe it
+(`footerStyle`, `footerFormat`, `separator`) and the per-segment toggle table
+(`footerSegments`); `pill.segments` is the only list that decides what appears
+and in what order. And the bar got shorter: the three git pills are one and the
+three token pills are one, each with its numbers behind a click.
+
+**Added**
+
+- **Compact pill text.** `extensionStatuses.formats` keeps a status to its number
+  (`Tavily: 41.1%` becomes `41.1%`, a status with no number keeps its words), and
+  `segmentOptions.subagents.format: "count"` drops the noun from the subagents
+  pill. Both default to what shipped.
+
+- **One clickable `context` pill.** The percentage is all the bar shows; clicking
+  it opens the window size, the tokens used this turn, the session's `↑in ↓out`
+  totals and the cache hit rate, refreshed while it streams. `tokens` and
+  `cacheHit` in `pill.segments` are rewritten to `context`, so an existing bar
+  keeps the numbers.
+
+- **A clickable `git` pill.** Branch, dirty markers and any operation in progress
+  share one pill (`main [!?] REBASING`) instead of three. Clicking it lists what
+  changed — up to a dozen paths, ahead/behind and stashes above them — refreshed
+  while the bubble is open. It is read-only on purpose: no staging, no branch
+  switch, because an agent may be running in the same tree. `gitBranch`,
+  `gitStatus` and `gitState` in `pill.segments` are rewritten to `git`, so an
+  existing bar keeps its git pill.
+
+- **A _Pills_ tab in `/starline`.** One row per segment; the value is its position
+  in the bar, `off` hides it, and Space cycles through them. Picking a number
+  inserts the segment there and shifts the rest along. The same list is still
+  `pill.segments` in `starline.json`, so editing the file and the tab are the
+  same thing.
+
+**Removed**
+
+- **`footerStyle`.** The pill bar is the footer. A config file that still says
+  `"footerStyle": "text"` loads fine and shows the bar; the key is ignored.
+
+- **`footerFormat` and `/starline format`.** The Starship-style template only
+  ever drove the text footer. `pill.segments` replaces it: list the segments you
+  want, in your order. `editorMetadataFormat` keeps its own `$name` template, and
+  the parser is the same one.
+
+- **`separator` and `colors.separator`.** The text footer's separator glyph.
+  Pills are joined by the powerline arrows `pill.separator` picks.
+
+- **`footerSegments`.** All nineteen toggles, and the _Built-in segments_ tab.
+  `pill.segments` is the list; drop a name to hide it. `gitCounts` moved to
+  `git.counts`. A pill that was listed but toggled off here now shows, which is
+  the behaviour the docs claimed all along.
+
+- **Side-by-side compatibility with pi-zentui.** The editor-factory marker, the
+  prototype patch registry and the polished-frame splitter no longer answer to
+  the pre-rename keys. Running both packages in one session now wraps the editor
+  twice, so remove one of them.
+
+- **Four colour keys that no longer reach the screen.** `colors.tokens`,
+  `colors.cacheHit`, `colors.gitStatus` and `colors.gitMetricsDeleted` only ever
+  coloured text inside a pill that was its own segment. Those pills are gone, and
+  a pill paints its whole label in one contrast colour, so the entries did
+  nothing. Nothing else moves: a pill's colour comes from `colors.*` as before,
+  it is just used as the background.
+
+- **`gitBranch`, `gitHostIcon`, `gitCommit`, `gitMetrics`.** The four flat keys
+  are now one `git` block: `git.branch.maxLength`, `git.hostIcon`,
+  `git.commit.{hashLength,onlyDetached,showTag}`, `git.metrics.{onlyNonzero,ignoreSubmodules}`,
+  plus `git.counts`. Existing values need to move into that block.
+
+**Fixed**
+
+- The optional git probes follow `pill.segments` instead of the removed toggles,
+  so a `gitTag` or `gitMetrics` pill reads its data without an unrelated segment
+  having to be switched on first.
+
+## [0.4.0] - 2026-10-25
+
+Pills in the pill footer can now be clicked. The model, thinking, queue and
+subagents pills open a small bubble on the pill where you can read more or pick
+something, and other extensions can put their own content in the same bubble.
+Clicking needs **Pi 0.85.0 or newer**; on 0.84.x the footer looks the same and the
+pills stay labels.
+
+**Added**
+
+- **Clickable pills.** Click a pill to open its bubble; click it again, or press
+  Escape, to close it. Clicking another pill swaps the bubble. Lines you can act on
+  are underlined and highlight under the pointer; ↑/↓ move the same highlight and
+  Enter picks it. Every action also runs from the keyboard as `/starline <name>`, so
+  nothing is mouse-only. Pills without an action stay labels and let the click
+  through. In Ghostty and kitty the pointer turns into a hand over anything
+  clickable (not under tmux, zellij or screen, where Pi only reports the mouse while
+  a button is held).
+
+- **Model pill: switch models.** Lists the session's scoped models (the ones ctrl+p
+  cycles) and opens on the current one; pick another to switch, bringing along any
+  thinking level the scope pins. With no scope it lists up to eight available models
+  and points at `/model` for the rest. `/starline model` steps to the next one.
+
+- **Thinking pill: pick a level.** Lists the levels the model supports and opens on
+  the current one, so ↑ from `high` lands on `medium`. Opening the list changes
+  nothing. `off` is not offered, so a choice never removes the pill.
+  `/starline thinking` steps to the next level.
+
+- **Queue pill.** A new `queue` segment appears while messages wait for the current
+  turn to end: an inbox icon and the count, gone once the queue drains. Its bubble
+  lists the messages and stays current while open. While the pill is in the bar,
+  Pi's own `Steering: …` rows above the editor are hidden, so the queue shows once.
+  If Pi does not let the count be read the pill says `queued`; with icons off it
+  reads `3 queued`. Configure with `colors.queue`, `icons.queue` and `$queue`.
+
+- **Subagents pill.** With [pi-subagents](https://github.com/nicobailon/pi-subagents)
+  installed, a new `subagents` segment counts running subagents (`2 agents`) behind
+  the users icon pi-tidy uses for subagent rows. Its bubble lists each run with
+  agent, model, time running and tokens, updating every second while open. It reads
+  pi-subagents' public in-process RPC and refreshes when a run starts or ends, not
+  on a timer; without pi-subagents it never appears. To let the pill replace
+  pi-subagents' own FleetView and async widget, set `"fleetView": false` and
+  `"asyncWidget": false` in its config. Configure with `colors.subagents`,
+  `icons.subagents` and `$subagents`.
+
+- **The bubble.** A rounded outline in the pill's colour that sits on the pill,
+  its bottom edge open over the pill like a folder tab and its title in the top
+  edge. Nothing inside is filled, so a translucent terminal shows through; the
+  highlighted line is filled with the pill's colour. It unfolds upward from the pill
+  in 60 ms; `pill.bubbleAnimation: false` turns that off.
+
+- **For extension authors: put your content in a pill.** An extension that
+  publishes a status with `ctx.ui.setStatus()` can register a click action for it
+  through a small API on `globalThis` (`Symbol.for("pi-starline.pill-api.v1")`) and
+  open the same bubble with its own lines and actions, without rendering or
+  positioning anything. Bubbles can be live (pass a function and call `refresh()`
+  on the returned handle), a line can be marked `current` so the bubble opens on
+  it, and the action is told whether it came from a click or `/starline <key>`.
+  Types ship in the package as `pi-starline/types/pill-api`; nothing is imported at
+  runtime, so the extension still loads without Starline. A bridge extension can
+  do the same for someone else's extension. Guide and templates:
+  [docs/pill-api.md](https://github.com/Andy8647/pi-starline/blob/main/docs/pill-api.md);
+  [pi-balance](https://github.com/Andy8647/pi-balance) is a working example.
+
+**Changed**
+
+- `queue` and `subagents` are part of the default pill bar. If you keep your own
+  `pill.segments`, add them where you want them; neither takes space while empty.
+
+- The README is shorter. The git status indicators and the 57 detected runtimes
+  moved to [docs/segments.md](https://github.com/Andy8647/pi-starline/blob/main/docs/segments.md).
+
+**Notes**
+
+- Pi's extension API does not expose the queued messages, the live session, a way
+  to hide its queue rows, or a mouse "leave" event, so four guarded wrappers fill
+  the gaps: `AgentSession.prompt` and `getContextUsage` (to reach the session),
+  `InteractiveMode.updatePendingMessagesDisplay` (to hide the rows) and
+  `TuiAltScreen.handleMouseEvent` (to reset the pointer when it leaves a pill). If a
+  future Pi changes any of them, that feature falls back or switches off and the
+  rest keeps working. Each goes away once Pi offers the matching API.
+
+## [0.3.9] - 2026-10-25
+
+Two things about repositories being written to and events being handled twice —
+both of them noticed by someone else first.
+
+**Fixed**
+
+- **The git probes no longer write to your repository.** `status` and `diff`
+  refresh the index's stat information as a side effect: they take
+  `.git/index.lock` and rewrite `.git/index`. From a footer that polls every
+  thirty seconds that is churn on every repository you open, and a lock that can
+  collide with your own `git commit` — read-only probes now run with
+  `GIT_OPTIONAL_LOCKS=0`. (An env var rather than `--no-optional-locks`: an older
+  git ignores a variable it does not know and fails on a flag it does not know.)
+
+  Thanks to [@xzzpig](https://github.com/xzzpig): this came from their fork
+  [`@xzzpig/pi-starline`](https://www.npmjs.com/package/@xzzpig/pi-starline),
+  which runs the same probes with `--no-optional-locks`.
+
+- **Starline stands down when another extension owns Pi's mouse layer.**
   [`@xzzpig/pi-mouse-events`](https://www.npmjs.com/package/@xzzpig/pi-mouse-events)
-  extension (optional peer dependency): it owns the prototype patches, dispatches
-  `onMouse` events to components before the built-in scrollbar/selection
-  handling, and exposes handler slots that Starline's wheel routing,
-  click-to-expand, click-to-caret, range delete and clean copies register
-  with. If that extension is not installed, the mouse features are all off —
-  there is no patch-based fallback. The keyboard half of click-to-caret (range
-  delete) now rides `ctx.ui.onTerminalInput`, and the selection and
-  external-editor hints are derived at render time instead of being refreshed
-  from a viewport-input patch.
+  patches the same `TuiAltScreen` methods Starline does, so with both installed
+  every wheel notch scrolled twice, every click moved the caret twice and every
+  copy wrote the clipboard twice. Starline detects the API object that extension
+  publishes under `Symbol.for("pi-mouse-events.api.v2")` and leaves the mouse
+  layer alone, with one console note saying where the features went. The
+  selection-marker cleanup is a render pass rather than mouse input, so it stays.
+  Same thanks: the coexistence problem only exists because their split showed what
+  a shared mouse layer would look like.
 
-## [0.2.0] — 2026-09-05 (fork release)
+## [0.3.8] - 2026-10-25
+
+The working spinner moved out of its own row above the editor and into the model
+pill. Pi 0.87 added the hook that makes this possible: a custom editor that
+advertises `embedWorkingStatus` takes over status rendering, and Pi stops drawing
+its own line. Starline now does that, so there is one less row of chrome under the
+transcript and the animation lands where you are already looking.
+
+**Changed**
+
+- **The model pill's icon becomes the spinner while the agent works.** It takes the
+  icon's slot at the icon's own display width, so the pill keeps its size and the
+  pill bar never reflows. An icon-less model pill gains the two cells the spinner
+  needs; a wider icon is padded to match. The pill uses a filled braille set rather
+  than Pi's sparse one, whose top-left dot reads as sitting high above the model
+  name; frames a session customized with `ctx.ui.setWorkingIndicator({ frames })`
+  pass through untouched.
+- **Retry, compaction and branch-summary statuses keep Pi's layout, now on
+  Starline's top border** — `── Retrying (1/3) in 4s... ────` — because they spell
+  a sentence and carry an interrupt hint a pill cannot hold. The same fallback
+  catches the spinner when the status line is off or the model segment is hidden,
+  so the indicator never disappears.
+- Needs Pi 0.87.0 or newer for the spinner to move; older builds never hand the
+  indicator to the editor and keep Pi's own row, exactly as before.
+
+**Fixed**
+
+- **The draft's scroll cue is back on the frame.** Pi caps the input box at a third
+  of the terminal and paints `↑ 3 more` / `↓ 2 more` into the borders it draws;
+  Starline redraws both borders, so those counts are now read back out of Pi's
+  frame and re-emitted, sharing the top rule with a status when both are present.
+- **The wheel step follows `fullscreenWheelScrollLines` again.** Pi 1.4 hands the
+  finished line count to `routeWheel` as its second argument (it moved the setting
+  into a private accelerator), and the editor's own notch scroll was reading a
+  field that no longer exists — so every notch moved exactly one line.
+- **`/starline` can toggle the model, thinking and cache-hit segments.** Both
+  hand-written key whitelists had drifted from `FooterSegmentsConfig`, so those
+  three rows did nothing and their patches were dropped on save. Both are now
+  derived from the defaults.
+- **A config file that cannot be parsed says so** instead of silently reverting
+  every setting to its default for the session.
+- **`icons.mode: "ascii"` covers the pill spinner**, which was braille regardless
+  and grew the pill by two cells in terminals without a Nerd Font.
+
+- **Drag-selecting the row the caret is on no longer garbles the display.** Pi's
+  `applySelection` reassembles a selected row from three column slices, and
+  `sliceWithWidth` carries the escape sequences before each slice into it — the
+  editor's zero-width caret marker included, so one marker became two or three.
+  Pi strips only the first per line, and the rest reach the terminal; a terminal
+  that ends APC only on `ESC ` (Ghostty) swallows the text after them. Starline
+  keeps the first marker per line and drops the copies. Upstream issue
+  [#9332](https://github.com/earendil-works/pi/issues/9332); once the fix in
+  [#9441](https://github.com/earendil-works/pi/pull/9441) ships this goes away.
+- **Copies go through Pi's own clipboard implementation when the host injects
+  one.** Both clean-copy paths wrote OSC 52 themselves, which reports success and
+  leaves the clipboard empty on macOS Terminal.app, in tmux without OSC 52
+  passthrough and on WSL — the places Pi's native implementation exists for. The
+  terminal write is still the fallback when nothing is injected.
+- **Cost and token totals count every paid call.** They summed assistant messages
+  only, which quietly skipped `usage` entries, a tool result's own usage, and the
+  summary calls that compaction and branching make — so a session that compacted
+  read cheaper than it was, and compaction is the call you least want hidden. The
+  accumulation now follows Pi's own footer entry for entry; the cache hit rate
+  still comes from assistant turns, which are the only ones with a prompt to
+  measure.
+- **A failed compaction says so.** Pi emits `session_compact_failed` and draws
+  nothing for it, so a failure late in a long session read as the agent quietly
+  forgetting the conversation. Starline raises an error notification naming the
+  reason (threshold, overflow, manual) and Pi's message; an abort, which is the
+  user's own doing, stays silent.
+
+## [0.3.7] - 2026-09-22
+
+Dropped Starline's own click-to-expand for tool boxes. Pi 0.86.0 ships the
+same behaviour natively — a click anywhere in a tool box's result region
+toggles just that box, with drag-selection preserved — so the hint-row patch
+and the component-tree resolution engine behind it are gone.
+
+**Removed**
+
+- `mouse.clickToExpandTools` is removed. The behaviour it switched is now
+  Pi's own on Pi ≥ 0.86.0, on by default and not toggleable from Starline. A
+  `mouse.clickToExpandTools` key in an old config is ignored at runtime; the
+  `/starline` settings menu no longer lists the toggle. On Pi 0.84.4–0.85.x
+  the feature simply does not exist — upgrade Pi to get it back.
+- The feature took `tool-box.ts` and `component-tree.ts` with it; what remains
+  of the mouse suite is the selection hint, clean copies, click-to-caret,
+  range delete and editor wheel scroll, all unchanged.
+
+## [0.3.6] - 2026-09-22
+
+### Fixed
+
+- **User messages go through Pi's markdown transformer pipeline again.** The
+  user-message style patch re-implements `UserMessageComponent.render` and was
+  building its own `Markdown` renderer without the `transform` option, which
+  silently dropped every extension's `registerMarkdownTransformer` output on
+  user messages — for example the selection quote that pi-ide-context 0.5.0
+  appends to your sent messages. Transformers now run per render with the
+  current width (same as upstream), and the render cache keys on the
+  transformer list.
+
+## [0.3.5] - 2026-09-09
+
+### Added
+
+- **`extensionStatuses.placements[key]: "editor"`** puts a third-party status on
+  the editor's bottom-right metadata row — the slot the copy and paste hints
+  already use — instead of the footer. Pick it per status key from the
+  `Extension segments` tab in `/starline`, or in JSON:
+
+  ```json
+  { "extensionStatuses": { "placements": { "pi-ide": "editor" } } }
+  ```
+
+  The row renders one muted line, so per-status `colors`, `icons`, and
+  `colorMode` apply to footer placements only. It needs `features.editor` and
+  `features.statusLine` both on: the status map reaches Starline through its
+  own footer factory, so there is nothing to read when the footer is Pi's.
+
+  Paired with pi-ide-context, whose `in main.ts` / `N lines selected in
+  main.ts` moved from a widget below the editor to `ctx.ui.setStatus()`. With
+  this placement that text sits in the editor frame where it belongs.
+
+## [0.3.4] - 2026-09-04
+
+Dropped Starline's own path-aware word selection. Pi 0.84.4 ships the same
+behaviour natively — its `getWordSelection` keeps `/` and `-` inside a word
+(the fix for Pi #7746, merged upstream as #8676) — so the duplicate patch is
+gone and double-click word selection is Pi's own again.
+
+**Removed**
+
+- `mouse.pathAwareWords` is removed. The behaviour it switched — a
+  double-click keeping paths and kebab-case whole — is now Pi 0.84.4's own
+  word selection, on by default and not toggleable from Starline. A
+  `mouse.pathAwareWords` key in an old config is ignored at runtime.
+
+**Changed**
+
+- Double-click word selection now answers Pi's own `getWordSelection` rather
+  than Starline's `wordRangeAt`. The two agree on the common cases; the edges
+  differ slightly — `http://` double-clicking `//` selects `//a.com/b` where
+  Starline selected `a.com/b`, and a trailing `/` in `foo/` stays in the
+  selection where Starline dropped it.
+- The Install section of the README now states Pi ≥ 0.84.4, matching the peer
+  ranges 0.3.3 raised.
+
+## [0.3.3] - 2026-09-01
+
+Adopted Pi 0.84.4's native select-without-copy. Pi now owns "don't copy on
+release" (`fullscreenCopyOnSelect`) and the copy key (`app.message.copy`,
+default `ctrl+x`), so Starline's own pending-copy machinery — the release
+interception, the `ctrl+c` copy, the `mouse.copyOnSelect` config — is gone.
+
+**Breaking**
+
+- `mouse.copyOnSelect` is removed. Set Pi's `fullscreenCopyOnSelect: false` in
+  your Pi settings instead: the selection stays highlighted and `ctrl+x` copies
+  it. A `fixedEditor.copyOnSelect` from an old config is dropped by the
+  migration, not carried over.
+- The selection hint's copy key is now `ctrl+x` (whatever `app.message.copy` is
+  bound to), not `ctrl+c`. `ctrl+c` always interrupts again.
+- Peer ranges for `@earendil-works/pi-ai`, `pi-coding-agent`, and `pi-tui`
+  raised to `>= 0.84.4` — the release that ships
+  `TuiAltScreen.copyActiveSelectionToClipboard`, `getCopyOnSelect` and
+  `hasActiveSelection`, which the hint and the clean copy now run on.
+
+**Changed**
+
+- The selection hint is derived from Pi's own state instead of an armed pending
+  copy: it shows while a selection is highlighted and Pi is not auto-copying,
+  and quotes the live `app.message.copy` key, so a rebind shows up in the hint.
+- Clean copies (editor buffer text, transcript chrome stripped) now answer
+  `copyActiveSelectionToClipboard` — the exact method the `ctrl+x` handler
+  reaches — instead of intercepting Pi's release-time copy.
+- `copyNotice` now also gates the flash of a clean copy; Pi's own copy flash
+  remains outside Starline's reach, as it has been since 0.84.2.
+
+## [0.3.2] - 2026-08-24
+
+Fixed a startup crash for environments running an older Pi. Starline needs
+`@earendil-works/pi-tui >= 0.84.0` — that is where its alternate-screen
+renderer (`TuiAltScreen`) and the width helpers ship — but the peer range
+claimed `>= 0.80.3`. Distributions that bundle an older `pi-coding-agent`
+(e.g. outfitter, locked to `^0.80.3`) resolved an old pi-tui, so the
+named import came back `undefined` and the extension died on
+`TuiAltScreen.prototype`.
+
+- Peer ranges for `@earendil-works/pi-ai`, `pi-coding-agent`, and `pi-tui`
+  raised to `>= 0.84.0`, so npm flags incompatible environments at install
+  time instead of failing at runtime.
+- Added a guard: if `TuiAltScreen` is missing, mouse features print a readable
+  warning instead of throwing.
+- The Install section of the README now states the Pi ≥ 0.84.0 requirement.
+
+Upgrade Pi to 0.84+ (or wait for your distribution to bundle it) and update
+Starline to pick up the fix.
+
+## [0.3.1] - 2026-08-11
+
+Click-to-expand now works on MCP tool boxes. pi-mcp-adapter renders its
+collapsed-result hint as `(Ctrl+O to expand)` — capitalized, unlike the
+lowercase `ctrl+o` Pi's own keybinding text yields — and Starline's hint
+match was case-sensitive, so a click on an MCP box's hint row silently fell
+through to selection. The match is now case-insensitive; core tool boxes are
+unaffected.
+
+## [0.3.0] - 2026-08-10
+
+The mouse work: Starline now reads and drives Pi 0.84's own renderer instead of
+running its own editor. The fixed editor is deleted.
+
+### Removed
+
+**The fixed editor is gone.** Pi 0.84's fullscreen mode (`tuiMode:
+"fullscreen"` in `/settings`) provides the sticky editor and footer,
+independent transcript scrolling, mouse selection and draggable scrollbars, so
+Starline's own compositor is deleted: the `fixed-editor/` modules, the
+`/starline fixed-editor enable/disable/toggle` commands, and the Fixed editor
+guide. The editor and user-message styling, the statusline and the pill footer
+all keep working exactly as before.
 
 ### Changed
 
-- **Synced upstream v0.3.2 → v0.3.4** (breaking upstream changes → fork minor
-  bump per the 0.x fork convention). Upstream v0.3.3 adopts Pi 0.84.4's
-  native select-without-copy: the selection stays highlighted and the copy
-  key is now `app.message.copy` (default `ctrl+x`) instead of `ctrl+c`,
-  which always interrupts again; peer ranges for `@earendil-works/pi-ai`,
-  `pi-coding-agent`, and `pi-tui` rise to `>= 0.84.4`. Upstream v0.3.4
-  drops Starline's own path-aware word selection (`mouse.pathAwareWords`
-  removed and ignored in old configs) because Pi 0.84.4 natively keeps `/`
-  and `-` inside double-clicked words. The mouse-install contract fake now
-  implements `copyActiveSelectionToClipboard` per the new TUI interface.
-  Fork divergence preserved: git probes in the statusline refresh still
-  pass `--no-optional-locks` to avoid `.git/index.lock` churn.
+**`fixedEditor` settings move to `mouse`.** The old `fixedEditor` config block
+named a compositor that no longer exists. It is migrated automatically the
+first time Starline loads — you do not need to edit anything by hand. The old
+keys and where they land:
 
-## [0.1.1] — 2026-08-24 (fork release)
+| Old (`fixedEditor`)  | New (`mouse`)        |
+| -------------------- | -------------------- |
+| `enabled`            | `enabled`            |
+| `mouseScroll`        | `wheelRouting`       |
+| `copyNotice`         | `copyNotice`         |
+| `copyOnSelect`       | `copyOnSelect`       |
+| `clickToExpandTools` | `clickToExpandTools` |
+
+An explicit `mouse` key already in your config wins over the migration. The
+old block is removed and the new one written back once, with a notice saying
+so.
+
+### Added
+
+- **Mouse selection and copy.** Drag to select anywhere — the transcript and
+  the input box — with double-click word selection and triple-click line
+  selection. Releasing copies; or hold the selection for `ctrl+c` with
+  `mouse.copyOnSelect: false` — the same behaviour [Pi #7720][7720] asks for
+  upstream (a setting to disable select-to-copy in fullscreen mode). If Pi
+  ships its own `fullscreenCopyOnSelect`, Starline should prefer it and let
+  both settings agree rather than fight.
+- **Clean copies.** Transcript selections drop Starline's message rails, rule
+  rows, and pi-toolbox frame borders before they reach the clipboard; editor
+  selections copy the draft's text, not the painted rows. Anything unrecognised
+  passes through byte-identical.
+- **Click to move the caret** in the input box; **backspace/delete remove a
+selected range**.
+- **Wheel scrolling over the input box** scrolls the draft instead of the
+  transcript.
+- **Click a tool box's hint row to expand just that box**, and collapse it
+  again through the `(ctrl+o to collapse)` anchor row (pi-toolbox 0.2.2+).
+- **Paths and kebab-case stay whole** on double-click selection.
+- **A pending selection's hint counts the exact characters `ctrl+c` will
+copy**, and an editor selection's hint names the external editor —
+  `ctrl+g to edit in nvim`, with `$EDITOR`/`$VISUAL` resolved (unset, the
+  literal `$EDITOR` stays, itself the hint that nothing is configured).
+- **A draft taller than the box keeps the `ctrl+g` hint on screen** — no
+  selection needed. There is no drag-scroll, so part of a long draft is
+  unreachable by mouse; the hint points at the external editor as the way to
+  act on the whole draft.
+
+### Fixed
+
+- **`ctrl+c` copies a pending selection on Pi 0.84 again.** Pi negotiates the
+  Kitty keyboard protocol (falling back to xterm modifyOtherKeys) on capable
+  terminals, which encodes the chord as an escape sequence rather than the raw
+  `\x03`. The pending copy now recognises every encoding, so `ctrl+c` no longer
+  falls through to clearing the editor.
+- **Selections that end on a box's border rows no longer fail to select** —
+  the range is clamped instead of rejected.
+- **Range delete installs even when click-to-caret is the only editor
+feature.**
+
+[7720]: https://github.com/earendil-works/pi/issues/7720
+
+## [0.2.2] - 2026-08-07
+
+Two things the 0.2.1 fallback took with it, put back.
+
+### Fixed
+
+**`paste again to expand` is visible again.** Collapsing a long paste and
+expanding it by pasting the same text a second time never stopped working, but
+the label saying so was drawn on the editor's bottom border by the fixed editor,
+so it went away with it on Pi 0.84. It now sits on the right of the editor's
+metadata row, beside the vim mode indicator. That row is rendered whether or not
+`editorMetadataFormat` has anything in it, so blanking the template does not
+hide the hint.
+
+**The fallback message says what to do about it.** Starting Pi 0.84 with
+`fixedEditor.enabled` still set printed `unsupported Pi TUI layout — falling
+back to normal rendering`, which reads like a failure and tells you nothing. It
+now names Pi's own fullscreen mode as the replacement and gives the command that
+turns the message off.
 
 ### Changed
 
-- **Synced upstream v0.3.1 → v0.3.2.** Upstream raised peer ranges for
-  `@earendil-works/pi-ai`, `pi-coding-agent`, and `pi-tui` to `>= 0.84.0`
-  and added a `TuiAltScreen` missing-guard (readable warning instead of a
-  startup crash on older Pi bundles). Adopted as-is on top of the fork.
+Releases are described in this file, and the publish workflow posts the matching
+section as the GitHub release notes rather than an auto-generated commit list.
 
-- **Git status no longer churns `.git/index.lock`.** Every git probe in the
-  statusline refresh (`git status --porcelain=2`, `git diff --numstat`, and the
-  `stash list` / `describe` / `rev-parse` / `remote get-url` companions) now
-  passes `--no-optional-locks`, so git never takes the index lock for optional
-  stat refresh. The statusline refreshes on a 30s interval plus nearly every Pi
-  event (message/tool completion, compaction, session tree, agent start/end),
-  and a stale index used to make each `git status` rewrite the index — constant
-  `index.lock` create/delete cycles and occasional "Unable to create
-  index.lock: File exists" collisions with concurrent git processes.
+## [0.2.1] - 2026-08-07
 
-### Changed
+Pi 0.84 broke Starline's fixed editor badly enough that the screen stopped
+repainting. This release makes it notice and stay out of the way.
 
-- Initial fork of `Andy8647/pi-starline` v0.3.1, published as
-  `@xzzpig/pi-starline`.
+**On Pi 0.84 and later, use Pi's own fullscreen mode instead of the fixed
+editor.** Pi now ships a sticky editor and footer, an independently scrolling
+transcript, mouse selection and draggable scrollbars of its own — set `tuiMode`
+to `"fullscreen"` in `/settings`. Starline's fixed editor cannot reach Pi's
+renderer on those releases and will not turn itself on there, whatever
+`fixedEditor.enabled` says. Nothing else has to change: the statusline, the
+editor styling and the user-message styling all work in both TUI modes.
+
+### Fixed
+
+**The fixed editor no longer blanks the screen on Pi 0.84.** Pi 0.84 hands
+extensions a Proxy over its renderer rather than the renderer itself, so it can
+swap TUI modes mid-session. Every check the fixed editor made passed against
+that Proxy while its render patches landed on an empty object behind it, so it
+went ahead and hid the editor and footer that only those patches would have
+drawn again — and Pi's own output was by then being swallowed by a compositor
+nothing was driving. It now installs a sentinel patch and reads it back instead
+of trusting a property descriptor, and hides the editor cluster only once the
+patches are in place, so an unsupported layout falls back to Pi's own rendering
+with a console warning rather than to a dead terminal.
+
+## [0.2.0] - 2026-07-31
+
+Everything in this release is the fixed editor's mouse handling, which now
+covers the three things that made it feel unfinished: the wheel went to the
+transcript wherever the pointer was, a selection could not leave the screen, and
+a tool box could only be expanded along with every other one.
+
+All of it needs `fixedEditor.enabled` and `fixedEditor.mouseScroll`. See
+[the fixed editor guide](https://github.com/Andy8647/pi-starline/blob/main/docs/fixed-editor.md).
+
+### Added
+
+**Click a tool box to expand just that one** (`fixedEditor.clickToExpandTools`,
+default on). `ctrl+o` expands every box in the transcript at once, which is a lot
+of screen for one line of output you wanted to see. Click a box's border — the
+rules or either vertical — or its `… ctrl+o to expand` hint, and only that box
+opens; click again to close it. Body rows keep double click for a word and
+triple click for the line. Works for every box Pi builds, restyled ones
+included.
+
+**The input box scrolls under the pointer.** A wheel notch over a draft taller
+than the box scrolls the box instead of the conversation. Pi re-derives the
+editor's scroll position from the caret on every frame, so the caret comes
+along, exactly as holding the arrow keys would.
+
+**A selection can cover a draft taller than the box.** Hold a drag past the text
+— on the frame, the metadata row, or up over the transcript — and the box
+scrolls, selecting the rows it brings in. What gets copied comes from the
+editor's buffer, so rows that have scrolled out of view come with it, and
+backspace or delete removes the whole range.
+
+### Fixed
+
+**The wheel now goes to whatever the pointer is over** rather than always to the
+transcript.
+
+**A selection can run past the edge of the screen.** Dragging to the top or
+bottom row scrolls the transcript and keeps selecting, and keeps going while you
+hold the pointer there — a trackpad reports nothing while your finger is still,
+so the scrolling is on a timer. Dragging down into the pinned editor counts as
+the bottom edge instead of handing the pointer to the input box mid-selection.
+
+**The wheel no longer kills the drag it arrives during.** The selection's anchor
+is an absolute transcript line, so scrolling under a drag extends it instead of
+dropping it.
+
+**Mouse reports that share an input chunk are no longer dropped.** A terminal
+coalesces a burst of motion, wheel and release reports into one read, and only
+the first was being parsed — which is how a wheel notch arriving mid-drag used
+to vanish, and why fast dragging stuttered.
+
+**Box frames stay out of a selection.** Dragging across a tool box copied the
+box: every `│` down both sides and both rules came along, and the frame lit up
+under the highlight. A markdown table keeps every one of its pipes — a frame is
+only recognised as one when the run of rows is capped by a rule, which a table's
+`┌─┬─┐` borders are not.
+
+**`saveFixedEditorPatch` no longer drops `copyOnSelect`** when saving a partial
+config patch.
+
+## [0.1.1] - 2026-07-30
+
+No behaviour changes. 0.1.0 went to npm just before the readme was split into a
+[configuration reference](https://github.com/Andy8647/pi-starline/blob/main/docs/configuration.md)
+and a
+[fixed editor guide](https://github.com/Andy8647/pi-starline/blob/main/docs/fixed-editor.md),
+and npm only refreshes a package's readme when a new version is published. This
+release carries the current docs to the registry.
+
+## [0.1.0] - 2026-07-29
+
+First release under the Starline name. Starline is a fork of
+[pi-zentui](https://github.com/lmilojevicc/pi-zentui) by Luka, renamed and
+released on its own. It has diverged well past upstream, mostly in the editor
+and selection internals.
+
+```bash
+pi install npm:pi-starline
+```
+
+### Coming from pi-zentui
+
+The config file moved and is not read automatically:
+
+```bash
+mv ~/.pi/agent/zentui.json ~/.pi/agent/starline.json
+```
+
+Inside it, rename any `colorMode: "zentui"` value to `colorMode: "themed"`. The
+slash command is now `/starline`.
+
+Both packages can be installed at once without fighting over the same TUI
+internals — Starline still reads the interop keys the old package writes, and
+writes the keys it looks for.
+
+### Added
+
+What this fork adds over upstream:
+
+- A powerline **pill footer** style, alongside the original text footer
+- A colour **palette with `$ref` expansion**, and `model` / `thinking` footer
+  segments
+- A **git host icon** for the branch segment, and per-segment display options
+- Configurable **editor cursor styles** and box padding
+- **Mouse selection in the fixed editor** — drag, double-click a word,
+  triple-click a line, click to move the caret, backspace/delete over a
+  selection
+- Paste collapsing, with paste-again-to-expand
+
+[Unreleased]: https://github.com/Andy8647/pi-starline/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/Andy8647/pi-starline/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/Andy8647/pi-starline/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/Andy8647/pi-starline/compare/v0.3.9...v0.4.0
+[0.3.9]: https://github.com/Andy8647/pi-starline/compare/v0.3.8...v0.3.9
+[0.3.8]: https://github.com/Andy8647/pi-starline/compare/v0.3.7...v0.3.8
+[0.3.7]: https://github.com/Andy8647/pi-starline/compare/v0.3.6...v0.3.7
+[0.3.6]: https://github.com/Andy8647/pi-starline/compare/v0.3.5...v0.3.6
+[0.3.5]: https://github.com/Andy8647/pi-starline/compare/v0.3.4...v0.3.5
+[0.3.4]: https://github.com/Andy8647/pi-starline/compare/v0.3.3...v0.3.4
+[0.3.3]: https://github.com/Andy8647/pi-starline/compare/v0.3.2...v0.3.3
+[0.3.2]: https://github.com/Andy8647/pi-starline/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/Andy8647/pi-starline/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/Andy8647/pi-starline/compare/v0.2.2...v0.3.0
+[0.2.2]: https://github.com/Andy8647/pi-starline/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/Andy8647/pi-starline/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/Andy8647/pi-starline/compare/v0.1.1...v0.2.0
+[0.1.1]: https://github.com/Andy8647/pi-starline/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/Andy8647/pi-starline/releases/tag/v0.1.0

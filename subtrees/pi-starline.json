@@ -125,6 +125,16 @@
       "kind": "lint",
       "reason": "[baseline] Upstream-original lines in extensions/starline/{pill-actions,format,ui}.ts keep their upstream bytes (no SAFETY/pi-lens-ignore annotations), so the fork's pi-lens gates for require-safety-comment-for-as-unknown-as, no-unknown-returns and noUnusedVariables are waived per file in packages/pi-starline/.pi-lens.json; config.ts keeps upstream's empty `catch {}` and is waived for error-swallowing. Restoring the annotations is the only way to remove this debt, and it is not wanted because it breaks byte-stability.",
       "recordedAt": "2026-11-15"
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-starline/package.json",
+      "reason": "[policy] Explicit fork changelog routing/packaging and dual-history navigation distinguish independent release sequences. Retain until upstream offers an equivalent fork-aware packaging contract."
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-starline/README.md",
+      "reason": "[policy] Explicit fork changelog routing/packaging and dual-history navigation distinguish independent release sequences. Retain until upstream offers an equivalent fork-aware packaging contract."
     }
   ],
   "reapplyOnSync": [
@@ -157,7 +167,8 @@
     "config.ts carries upstream v0.13.0 extensionStatuses.commands parsing and warning, git.issues, gitPr* defaults, and warnMovedUserMessageKeys wired into loadConfig; preserve these upstream features alongside the remaining fork config seams.",
     "test/config.test.ts keeps upstream commands expectations and verifies retired user-message and transcript-clean-copy settings are ignored; test/extension-compliance.test.ts pins editor color-source settings independently. Reconcile these assertions with upstream config behavior.",
     "fork-status-bar.ts legacyRender renders at unbounded width and clamps spans itself, because upstream v0.13.0\"s renderPillBar drops whole pills and stands a +N counter in their place when given a real width; governance off must keep the pre-overflow single truncation. Re-apply that call and the span clamp.",
-    "packaging identity (repository.url, files allowlist, per-package lockfile policy) is enforced by scripts/check-fork-identity.mjs — run `node scripts/check-fork-identity.mjs` after every subtree pull/sync"
+    "packaging identity (repository.url, files allowlist, per-package lockfile policy) is enforced by scripts/check-fork-identity.mjs — run `node scripts/check-fork-identity.mjs` after every subtree pull/sync",
+    "Keep pi.changelogPath pointing to ./FORK-CHANGELOG.md, ship the fork log and any upstream changelog, and retain README release-history navigation. Never append fork releases to the upstream log; follow docs/fork-changelogs.md."
   ],
   "doNotReintroduce": [
     "Do not couple native model-row hover decoration to selectedIndex, Enter/default-save targets or native viewport recentering. Keep hover component-only, permit the last hint outside the component without events, and do not add terminal input observers or force all-motion mouse mode; the behavior contract is add-native-model-selector-hover-preview.",
@@ -167,6 +178,7 @@
     "Do not restore the removed editor metadata row or its settings; use the upstream compact editor and map legacy editor status placement to the footer right.",
     "Do not restore the pre-overflow single-row cut as the default when the segments do not fit: the governed bar (content caps, retention prefix, +N) is the default and `pill.overflow.enabled: false` is only an explicit opt-out. Unbounded wrapping stays out; a two-line mode is a separate change with its own anchor and hit-test work.",
     "Do not restore Starline-owned user-message styling or transcript-selection cleaning; pi-tidy owns those behaviors, and pi-tool-display’s upstream enableNativeUserMessageBox default stays unchanged (disable it in user configuration when pi-tidy must own the render hook).",
-    "keep the fork-only files extensions/starline/mouse/tool-box.ts, mouse/component-tree.ts, test/contract/tool-box-hint.test.ts, test/mouse/tool-box.test.ts, test/mouse/component-tree.test.ts and test/contract/transcript-layout.test.ts under their current paths: they are absent from the recorded upstream tip (b51588a, which is still upstream main), so a pull treats them as ours-only additions and there is no recurring delete/modify conflict to avoid (2026-11-15 dry-run). Renaming them to fork-* buys nothing today; revisit only if upstream re-adds one of these paths (that would be an add/add conflict)"
+    "keep the fork-only files extensions/starline/mouse/tool-box.ts, mouse/component-tree.ts, test/contract/tool-box-hint.test.ts, test/mouse/tool-box.test.ts, test/mouse/component-tree.test.ts and test/contract/transcript-layout.test.ts under their current paths: they are absent from the recorded upstream tip (b51588a, which is still upstream main), so a pull treats them as ours-only additions and there is no recurring delete/modify conflict to avoid (2026-11-15 dry-run). Renaming them to fork-* buys nothing today; revisit only if upstream re-adds one of these paths (that would be an add/add conflict)",
+    "Do not mix fork release headings into the upstream changelog or use upstream history as the Pi startup changelog."
   ]
 }

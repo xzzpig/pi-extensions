@@ -137,3 +137,8 @@ Type-checks the extension and runs a headless functional test with a mocked pi A
 ## License
 
 MIT
+
+## Fork and upstream release history
+
+- Fork releases: [FORK-CHANGELOG.md](./FORK-CHANGELOG.md). Pi startup updates use this version sequence.
+- Upstream source: [v1.0.1](https://github.com/lukeramsden/pi-context-cap/tree/6771c67040874b6708f0139c735b654675c011c3); no upstream CHANGELOG.md exists at this baseline.

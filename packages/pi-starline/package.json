@@ -20,6 +20,7 @@
 		"tui"
 	],
 	"files": [
+		"CHANGELOG.md",
 		"extensions",
 		"dist",
 		"types",
@@ -46,6 +47,7 @@
 		"@xzzpig/pi-mouse-events": ">=0.2.0 <3"
 	},
 	"pi": {
+		"changelogPath": "./FORK-CHANGELOG.md",
 		"extensions": [
 			"./extensions"
 		],

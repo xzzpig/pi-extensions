@@ -30,6 +30,7 @@
     "url": "https://github.com/tmonk/pi-goal-x/issues"
   },
   "files": [
+    "FORK-CHANGELOG.md",
     "extensions",
     "scripts/recover-session-checkpoints.mjs",
     "README.md",
@@ -55,6 +56,7 @@
     "docs/controls.md"
   ],
   "pi": {
+    "changelogPath": "./FORK-CHANGELOG.md",
     "extensions": [
       "extensions/goal.ts"
     ],

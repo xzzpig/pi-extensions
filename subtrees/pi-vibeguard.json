@@ -16,15 +16,27 @@
       "path": "packages/pi-vibeguard/tsconfig.json",
       "reason": "[artifact] Diff-alignment artifact on a repeated closing brace: the raw diff pairs `-}` with `+}` while `git diff -w` renders `}` as unchanged context; the file is otherwise at upstream bytes.",
       "recordedAt": "2026-09-28T05:40:00+08:00"
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-vibeguard/package.json",
+      "reason": "[policy] Explicit fork changelog routing/packaging and dual-history navigation distinguish independent release sequences. Retain until upstream offers an equivalent fork-aware packaging contract."
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-vibeguard/README.md",
+      "reason": "[policy] Explicit fork changelog routing/packaging and dual-history navigation distinguish independent release sequences. Retain until upstream offers an equivalent fork-aware packaging contract."
     }
   ],
   "reapplyOnSync": [
     "keep the packaging divergence: npm name @xzzpig/pi-vibeguard, the repository field repointed to xzzpig/pi-extensions, and the @earendil-works/pi-tui peerDependency (range aligned with pi-tool-display) plus the vitest devDep",
     "keep the fork-only modules mapping-view.ts, category-picker.ts, suspension-filter.ts, suspension-state.ts (SuspensionState + sanitizeCategory + status sync) and fork-commands.ts (the six /vibeguard:* registrations); index.ts keeps the imports, the extension factory state and one registerVibeguardCommands(pi, deps) call",
     "keep the tsconfig include widening (tests, allowImportingTsExtensions) with test-engine.ts excluded from typecheck, and keep eslint ignoring test-engine.ts since typed linting requires tsconfig membership",
-    "keep the README fork notice and the CHANGELOG 0.1.0 fork entry"
+    "keep the README fork notice and the FORK-CHANGELOG 0.1.0 fork entry",
+    "Keep pi.changelogPath pointing to ./FORK-CHANGELOG.md, ship the fork log and any upstream changelog, and retain README release-history navigation. Never append fork releases to the upstream log; follow docs/fork-changelogs.md."
   ],
   "doNotReintroduce": [
-    "do not thread the suspension skip-params through redactText/redactDeep/redactMessageContent: those three engine functions stay byte-identical to upstream, and the call-site PatternSet filter (suspension-filter.ts) replaces that threading"
+    "do not thread the suspension skip-params through redactText/redactDeep/redactMessageContent: those three engine functions stay byte-identical to upstream, and the call-site PatternSet filter (suspension-filter.ts) replaces that threading",
+    "Do not mix fork release headings into the upstream changelog or use upstream history as the Pi startup changelog."
   ]
 }

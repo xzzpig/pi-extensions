@@ -11,7 +11,6 @@
   "lastSyncedAt": "2026-11-14T02:19:23+08:00",
   "notes": "Fork of Andy8647/pi-tidy. Rendering ownership and coexistence behavior are specified in openspec/changes/import-pi-tidy-fork; performance adaptations are specified in openspec/specs/tidy-transcript-rendering; fork-only logic belongs under fork/.",
   "reapplyOnSync": [
-    "Keep FORK-CHANGELOG.md in the published files list while retaining the upstream homepage/bugs/source identity.",
     "In src/index.ts, load through fork/loadForkConfig and replace patchToolBoxFrames(options) with installForkToolFrames(config). Gate registerWritePreview and its unavailable-API warning with config.writePreview; keep the upstream test harness opted into writePreview.",
     "Retain the xzzpig fork section and local-install commands in README.md, including runtime defaults and the pi-tool-display enableNativeUserMessageBox prerequisite.",
     "Keep test/renderer-harness.ts explicit about upstream integration defaults (including frameTools: true) so upstream behavior tests remain baseline-focused; fork defaults are asserted in fork-only tests.",
@@ -24,14 +23,16 @@
     "Keep sticky candidate matching and chunked output assembly in src/messages/hex-swatches.ts; candidate regexes must match only at their current index.",
     "Keep groupedRows cache admission in src/tools/tool-group-view.ts based on the tool's own volatility; global agentRunning state must not bypass cache for settled history.",
     "packaging identity (repository.url, files allowlist, per-package lockfile policy) is enforced by scripts/check-fork-identity.mjs — run `node scripts/check-fork-identity.mjs` after every subtree pull/sync",
-    "Keep hover-dispatch.test.ts waiting for the first rendered layout through fork/wait-for-frame.ts before sending mouse input; fixed sleeps race the TUI render timer under parallel load."
+    "Keep hover-dispatch.test.ts waiting for the first rendered layout through fork/wait-for-frame.ts before sending mouse input; fixed sleeps race the TUI render timer under parallel load.",
+    "Keep pi.changelogPath pointing to ./FORK-CHANGELOG.md, ship the fork log and any upstream changelog, and retain README release-history navigation. Never append fork releases to the upstream log; follow docs/fork-changelogs.md."
   ],
   "doNotReintroduce": [
     "Do not unconditionally install the write call preview: tidy.writePreview defaults to false so Pi or pi-tool-display keeps both write renderers; writeLines alone must not enable it.",
     "Do not reintroduce suppression of Pi’s completed thinking MouseRegion by the final-reply frame; keep the collapsed row outside the frame and preserve native expand/collapse behavior.",
     "Do not make pi-tidy draw its own thinking row by default. The fork ships nativeThinking=true so Pi and pi-thinking-collapse own the thinking affordance; tidy's row is the opt-in `tidy.nativeThinking=false` path.",
     "Do not restore the package-local pnpm-lock.yaml or pnpm-workspace.yaml: this fork consumes only the root pnpm workspace lock, and a local workspace root makes CI resolve pi-tidy as a standalone project.",
-    "Do not restore the global agentRunning cache bypass for grouped tool rows: settled history remains cacheable while only its own partial output, jobs, reveal timer or other volatile state requires recomputation."
+    "Do not restore the global agentRunning cache bypass for grouped tool rows: settled history remains cacheable while only its own partial output, jobs, reveal timer or other volatile state requires recomputation.",
+    "Do not mix fork release headings into the upstream changelog or use upstream history as the Pi startup changelog."
   ],
   "knownDebt": [
     {
@@ -81,6 +82,16 @@
       "kind": "other",
       "path": "packages/pi-tidy/test/hover-dispatch.test.ts",
       "reason": "[policy] Wait for the initial TUI layout instead of sleeping 20ms before mouse input, retaining all hover/pointer assertions under parallel test load. Remove when upstream synchronizes its initial layout in this test."
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-tidy/package.json",
+      "reason": "[policy] Explicit fork changelog routing/packaging and dual-history navigation distinguish independent release sequences. Retain until upstream offers an equivalent fork-aware packaging contract."
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-tidy/README.md",
+      "reason": "[policy] Explicit fork changelog routing/packaging and dual-history navigation distinguish independent release sequences. Retain until upstream offers an equivalent fork-aware packaging contract."
     }
   ]
 }
