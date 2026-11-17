@@ -114,14 +114,6 @@ function installedProfileContains(history: string[][], names: string[]): boolean
 	return false;
 }
 
-/** The installed profile (from captured setActiveTools calls) excludes these names. */
-function installedProfileExcludes(history: string[][], names: string[]): boolean {
-	for (const snapshot of history) {
-		if (names.some((name) => snapshot.includes(name))) return false;
-	}
-	return true;
-}
-
 function fixture(opts: { objective?: string; skipAuditor?: boolean; tasksEnabled?: boolean } = {}) {
 	const cwd = mkdtempSync(path.join(tmpdir(), "goal-int-"));
 	mkdirSync(path.join(cwd, ".pi", "goals", "archived"), { recursive: true });
@@ -377,7 +369,7 @@ describe("five-tool handler integration", () => {
 		}
 	});
 
-	it("tasks-disabled settings install the three-core profile", async () => {
+	it("tasks-disabled settings keep the fixed tool profile and reject task mutations", async () => {
 		const f = fixture({ tasksEnabled: false });
 		try {
 			const h = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries });
@@ -385,12 +377,9 @@ describe("five-tool handler integration", () => {
 			for (const present of ["create_goal", "get_goal", "update_goal"]) {
 				assert.ok(h.tools.has(present), `${present} registered`);
 			}
-			// Captured setActiveTools calls (not just registered names): the
-			// three-core profile is installed and task tools are never active.
-			assert.ok(installedProfileContains(h.activeToolsHistory, [...HOST_TOOLS, ...THREE]),
-				"captured profile includes host + three core tools");
-			assert.ok(installedProfileExcludes(h.activeToolsHistory, ["set_goal_tasks", "update_goal_task"]),
-				"task tools are never installed when tasks are disabled");
+			// The fixed tool surface stays installed; settings enforce behavior at execution.
+			assert.ok(installedProfileContains(h.activeToolsHistory, [...HOST_TOOLS, ...THREE, "set_goal_tasks", "update_goal_task"]),
+				"captured profile retains core and task tools");
 			// The executors reject task calls when disabled.
 			const setTasks = h.tools.get("set_goal_tasks")!;
 			const result = await (setTasks.execute as any)("s-2", { tasks: [{ id: "t1", title: "X" }] },
@@ -419,7 +408,7 @@ describe("five-tool handler integration", () => {
 			await settingsCmd.handler("", h.ctx); // must not throw (regression: recursive saveSettings)
 			const settingsPath = path.join(f.cwd, ".pi", "pi-goal-x-settings.json");
 			const saved = JSON.parse(readFileSync(settingsPath, "utf8"));
-			assert.equal(saved.disabled, true, "menu toggle must persist disabled: true");
+			assert.equal(saved.auditor.disabled, true, "menu toggle must persist auditor.disabled: true");
 		} finally {
 			f.cleanup();
 		}
@@ -442,8 +431,8 @@ describe("five-tool handler integration", () => {
 			const settingsCmd = h.commands.get("goal-settings");
 			await settingsCmd.handler("", h.ctx);
 			const saved = JSON.parse(readFileSync(path.join(f.cwd, ".pi", "pi-goal-x-settings.json"), "utf8"));
-			assert.equal(saved.disabled, true, "existing setting preserved");
-			assert.equal(saved.thinking_level, "off", "thinking_level edited through the menu");
+			assert.equal(saved.auditor.disabled, true, "existing setting preserved");
+			assert.equal(saved.auditor.thinkingLevel, "off", "thinking level edited through the menu");
 		} finally {
 			f.cleanup();
 		}
@@ -473,24 +462,29 @@ describe("five-tool handler integration", () => {
 				await start(h);
 				await h.commands.get("goal-settings").handler("", h.ctx);
 				const lines = firstOptions.filter((o) => o.startsWith("  ") && !o.startsWith("  ───"));
-				assert.equal(lines.length, 22, `all settings rows rendered, got: ${lines.join(" | ")}`);
-				assert.ok(lines.includes("  slow repeated idle replies (opt-in): false (default)"));
-				assert.ok(lines.includes("  show context usage line: false (default)"));
-				assert.ok(lines.some((l) => l === "  show autonomous runs line: true (default)"), "the runs-line setting is listed and defaults to on");
-				assert.ok(lines.some((l) => l === "  auditor disabled: true (project override)"));
-				assert.ok(lines.some((l) => l === "  auditor agent: goal-auditor (default)"));
-				assert.ok(lines.some((l) => l === "  provider: anthropic (project override)"));
-				assert.ok(lines.some((l) => l === "  model: (default) (default)"));
-				assert.ok(lines.some((l) => l === "  thinking_level: high (project override)"));
-				assert.ok(lines.some((l) => l === "  disableTasks: true (project override)"));
-				assert.ok(lines.some((l) => l === "  disableContracts: false (default)"));
-				assert.ok(lines.includes("  explicit execution contracts (opt-in): false (default)"));
-				assert.ok(lines.some((l) => l === "  subtaskDepth: 3 (project override)"));
-				assert.ok(lines.some((l) => l === "  autoSelectSingleGoal: false (default)"));
-				assert.ok(lines.some((l) => l === "  hideUnfocusedBanner: false (default)"));
+				assert.equal(lines.length, 28, `all settings rows rendered, got: ${lines.join(" | ")}`);
+				const expected = [
+					"slow repeated idle replies (opt-in): false (source: default; project: unset)",
+					"show context usage line: false (source: default; project: unset)",
+					"show autonomous runs line: true (source: default; project: unset)",
+					"auditor disabled: true (source: project; project: true)",
+					"auditor agent: goal-auditor (source: default; project: unset)",
+					"provider: anthropic (source: project; project: anthropic)",
+					"model: (default) (source: default; project: unset)",
+					"oracle provider: (default) (source: default; project: unset)",
+					"oracle model: (default) (source: default; project: unset)",
+					"thinking_level: high (source: project; project: high)",
+					"disableTasks: true (source: project; project: true)",
+					"disableContracts: false (source: default; project: unset)",
+					"explicit execution contracts (opt-in): false (source: default; project: unset)",
+					"subtaskDepth: 3 (source: project; project: 3)",
+					"autoSelectSingleGoal: false (source: default; project: unset)",
+					"hideUnfocusedBanner: false (source: default; project: unset)",
+					"stall timeout (minutes): 0 (source: default; project: unset)",
+					"max objective length (0 = none): 0 (source: default; project: unset)",
+				];
+				for (const row of expected) assert.ok(lines.includes(`  ${row}`), `missing ${row}`);
 				assert.ok(!lines.some((l) => l.startsWith("  hideUnfocusedPrompt:")), "the retired reminder setting is no longer a settings row");
-				assert.ok(lines.some((l) => l === "  stall timeout (minutes): 0 (default)"));
-				assert.ok(lines.some((l) => l === "  max objective length (0 = none): 0 (default)"), "objective length row defaults to 0");
 			} finally {
 				f.cleanup();
 			}
@@ -515,7 +509,7 @@ describe("five-tool handler integration", () => {
 				const saved = readSettings(f.cwd);
 				assert.equal(saved.disableTasks, true);
 				assert.equal(saved.disableContracts, true);
-				assert.equal(saved.disabled, true);
+				assert.equal(saved.auditor.disabled, true);
 				assert.equal(saved.autoSelectSingleGoal, true);
 				// Second pass removes the local overrides via the action menu's
 				// inherit choice; the file then omits both keys.
@@ -530,7 +524,7 @@ describe("five-tool handler integration", () => {
 				assert.equal(saved2.disableTasks, undefined, "disableTasks toggled back off clears the key");
 				assert.equal(saved2.autoSelectSingleGoal, undefined, "autoSelectSingleGoal toggled back off clears the key");
 				assert.equal(saved2.disableContracts, true, "untouched boolean preserved");
-				assert.equal(saved2.disabled, true, "untouched boolean preserved");
+				assert.equal(saved2.auditor.disabled, true, "untouched boolean preserved");
 			} finally {
 				f.cleanup();
 			}
@@ -555,8 +549,8 @@ describe("five-tool handler integration", () => {
 				await start(h);
 				await h.commands.get("goal-settings").handler("", h.ctx);
 				const saved = readSettings(f.cwd);
-				assert.equal(saved.provider, "anthropic");
-				assert.equal(saved.model, "claude-sonnet-4");
+				assert.equal(saved.auditor.provider, "anthropic");
+				assert.equal(saved.auditor.model, "claude-sonnet-4");
 				// Clear both by returning to the current-session/default choice from
 				// either row: the default choice deletes provider and model together.
 				const selects2 = ["  provider: anthropic (project override)", "  Current session / default (system default)", "Done"];
@@ -569,8 +563,8 @@ describe("five-tool handler integration", () => {
 				await start(h2);
 				await h2.commands.get("goal-settings").handler("", h2.ctx);
 				const saved2 = readSettings(f.cwd);
-				assert.equal(saved2.provider, undefined, "default choice clears provider");
-				assert.equal(saved2.model, undefined, "default choice clears model");
+				assert.equal(saved2.auditor?.provider, undefined, "default choice clears provider");
+				assert.equal(saved2.auditor?.model, undefined, "default choice clears model");
 			} finally {
 				f.cleanup();
 			}
@@ -598,7 +592,7 @@ describe("five-tool handler integration", () => {
 				await start(h);
 				await h.commands.get("goal-settings").handler("", h.ctx);
 				const saved = readSettings(f.cwd);
-				assert.equal(saved.thinking_level, "max", "all seven levels accepted in sequence");
+				assert.equal(saved.auditor.thinkingLevel, "max", "all seven levels accepted in sequence");
 				// Unknown value is rejected with a warning and nothing is persisted.
 				const selects2 = ["  thinking_level: max (project override)", "bogus", "Done"];
 				const inputs2 = ["bogus"];
@@ -611,7 +605,7 @@ describe("five-tool handler integration", () => {
 				await h2.commands.get("goal-settings").handler("", h2.ctx);
 				assert.ok(h2.notifies.some((n) => n.level === "warning" && n.msg.includes("thinking_level must be one of")),
 					"unknown thinking level warns");
-				assert.equal(readSettings(f.cwd).thinking_level, "max", "rejected value is not persisted");
+				assert.equal(readSettings(f.cwd).auditor.thinkingLevel, "max", "rejected value is not persisted");
 			} finally {
 				f.cleanup();
 			}
@@ -642,7 +636,7 @@ describe("five-tool handler integration", () => {
 			}
 		});
 
-		it("toggling tasks off, on, and off in one menu session reinstalls the correct fixed profile each time", async () => {
+		it("toggling tasks off, on, and off preserves the fixed tool profile", async () => {
 			const f = fixture();
 			try {
 				const selects = [
@@ -651,18 +645,18 @@ describe("five-tool handler integration", () => {
 					"  disableTasks: false (default)", "Set project override to true",
 					"Done",
 				];
+				const enabledStates: boolean[] = [];
 				const h = createHarness({
 					cwd: f.cwd, sessionEntries: f.sessionEntries, hasUI: true,
-					select: async () => selects.shift(),
+					select: async (title) => { if (title === "Goal settings") enabledStates.push(h.core.tasksEnabled); return selects.shift(); },
 				});
 				await start(h);
-				// session_start installed the five-tool profile: history[0].
 				assert.equal(h.activeToolsHistory.length, 1, "one install at session_start");
 				await h.commands.get("goal-settings").handler("", h.ctx);
-				// Each real change reinstalls exactly once: three, five, three.
-				assert.equal(h.activeToolsHistory.length, 4, "three reinstalls after session_start");
-				const installed = h.activeToolsHistory.slice(1).map((tools) => (tools.includes("set_goal_tasks") ? "five" : "three"));
-				assert.deepEqual(installed, ["three", "five", "three"], "profile alternates three/five/three, never skipping a toggle");
+				// Settings guards change behavior without rebuilding the host tool profile.
+				assert.equal(h.activeToolsHistory.length, 1, "settings toggles do not reinstall tools");
+				assert.ok(h.activeToolsHistory[0]!.includes("set_goal_tasks"), "fixed profile retains task tools");
+				assert.deepEqual(enabledStates, [true, false, true, false], "each setting change takes effect immediately");
 				const saved = readSettings(f.cwd);
 				assert.equal(saved.disableTasks, true, "final file state has tasks disabled");
 			} finally {
@@ -691,7 +685,7 @@ describe("five-tool handler integration", () => {
 
 				// Turn the setting on through the menu; the hide must be visible in
 				// captured UI state before the handler resolves.
-				let queue = ["  hideUnfocusedBanner: false (default)", "Set project override to true", "Done"];
+				let queue = ["  hideUnfocusedBanner: false (source: default; project: unset)", "Set project override to true", "Done"];
 				const h2 = createHarness({
 					cwd: f.cwd, sessionEntries: entries, hasUI: true,
 					select: async (_prompt: string, options: string[]) => {
@@ -711,7 +705,7 @@ describe("five-tool handler integration", () => {
 				assert.equal(saved.hideUnfocusedBanner, true);
 
 				// Restore via the action menu's inherit choice.
-				queue = ["  hideUnfocusedBanner: true (project override)", "Use inherited value", "Done"];
+				queue = ["  hideUnfocusedBanner: true (source: project; project: true)", "Use inherited value", "Done"];
 				const h3 = createHarness({
 					cwd: f.cwd, sessionEntries: entries, hasUI: true,
 					select: async (_prompt: string, options: string[]) => {
@@ -753,15 +747,14 @@ describe("five-tool handler integration", () => {
 			const prevTasks = process.env.PI_GOAL_DISABLE_TASKS;
 			process.env.PI_GOAL_DISABLE_TASKS = "true";
 			try {
-				// session_start installs the three-tool profile because the env
-				// override forces disableTasks even though the file is absent.
+				// The environment override forces disableTasks while the fixed tool surface remains installed.
 				const h = createHarness({ cwd: f.cwd, sessionEntries: f.sessionEntries, hasUI: true });
 				await start(h);
-				assert.equal(h.activeToolsHistory.length, 1, "three-tool install at session_start");
-				assert.ok(!h.activeToolsHistory[0]!.includes("set_goal_tasks"), "env override installs the core profile");
+				assert.equal(h.activeToolsHistory.length, 1, "fixed tool install at session_start");
+				assert.ok(h.activeToolsHistory[0]!.includes("set_goal_tasks"), "env override retains the fixed task-tool surface");
 				// The env override makes the disableTasks row read-only: selecting it
 				// warns and never mutates, so no reinstall may happen.
-				const selects = ["  disableTasks: false (environment; read-only)", "Done"];
+				const selects = ["  disableTasks: true (environment; read-only)", "Done"];
 				const h2 = createHarness({
 					cwd: f.cwd, sessionEntries: f.sessionEntries, hasUI: true,
 					select: async () => selects.shift(),

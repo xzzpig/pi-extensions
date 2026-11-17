@@ -498,7 +498,7 @@ the timestamped `.backup-*` file created next to the session.
 Settings resolve per setting in this order (highest wins):
 
 ```text
-environment > project layer > global layer > defaults
+environment (where supported) > project-local layer > project layer > global layer > defaults
 ```
 
 | Setting | What it controls |
@@ -514,17 +514,18 @@ environment > project layer > global layer > defaults
 | Auditor provider, model, and thinking level | Choose which model reviews completed work and its reasoning effort. |
 
 ```text
-global:  ~/.pi/pi-goal-x-settings.json   (or $PI_CODING_AGENT_DIR, or $PI_GOAL_GLOBAL_SETTINGS_FILE)
+global:  ~/.pi/agent/pi-goal-x-settings.json   (or $PI_CODING_AGENT_DIR, or $PI_GOAL_GLOBAL_SETTINGS_FILE)
 project: <cwd>/.pi/pi-goal-x-settings.json   (or $PI_GOAL_SETTINGS_FILE)
+local:   <cwd>/.pi/pi-goal-x-settings.local.json
 ```
 
-Define shared configuration once in the global file and override per project. Explicit `false`/`0` values in a lower layer override inherited values; nested `keybindings` inherit per key. `/goal-settings` shows each row's effective value and source, can switch the edited scope, and can remove a local override to return to inheritance.
+Define personal global settings, shared project settings, and project-local personal overrides separately. Explicit `false`/`0` values override inherited values; nested `keybindings` inherit per key. `/goal-settings` shows the effective value and source, switches the edited scope, and removes overrides to restore inheritance. Ignore the local file in Git if it should remain personal.
 
 Use `/goal-settings` to configure task lists, verification contracts, subtask depth, automatic goal selection, and the completion auditor. Goal objectives have no hard length limit by default; set `objectiveMaxChars` (or `PI_GOAL_OBJECTIVE_MAX_CHARS`, `0` = no limit) to cap objective length across `create_goal`, `propose_goal_draft`, and `/goal-tweak`.
 
 ### Completion-auditor settings (`auditor` group)
 
-All auditor settings live in the nested `auditor` group of the same settings files. They resolve per leaf across the same layers (environment where available > project > global), and unset leaves never change behavior. The fields fall into three tiers by when they take effect:
+All auditor settings live in the nested `auditor` group of the same settings files. They resolve per leaf across the same layers (environment where available > local > project > global), and unset leaves never change behavior. The fields fall into three tiers by when they take effect:
 
 ```jsonc
 {
@@ -575,7 +576,7 @@ Injection rules: prompt-injection blocks render after the audit checklist in a f
 
 The completion audit runs under the wall-clock cap configured by
 `auditor.timeoutMs`: a positive integer of milliseconds, at most `2147483647`
-(the Node.js timer ceiling). Project settings override global; unset or
+(the Node.js timer ceiling). Local settings override project and global; unset or
 invalid values fall back to the built-in 30-minute default, so existing
 configurations keep their behavior. The resolved value feeds both the
 delegation deadline and the local terminal timer, so the two never drift.

@@ -2,6 +2,10 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.12.3] — 2026-11-17 (fork release)
+
+- 新增项目本地配置层 `.pi/pi-goal-x-settings.local.json`：按字段覆盖项目共享与个人全局配置；`/goal-settings` 与 Controls 支持三个编辑范围并展示来源，默认仍编辑项目共享层。
+
 ## [0.12.2] — 2026-11-15 (fork release)
 
 - **Conflict-surface refactor, no behavior change.** The fork-only completion orchestration (audit lifecycle, `runGoalCompletionAuditor` delegation, supervisor handoff projection, result assembly) moved to `extensions/fork-completion-flow.ts` (513 lines); `extensions/goal-completion.ts` keeps the authoritative `commitGoalCompletion` transaction — the single write path every completion branch uses — and otherwise only re-exports `runGoalCompletionFlow`. Auditor usage projection lives in `extensions/fork-audit-usage.ts`, and the fork-only model-view prompt blocks (paused/budget gates, budget reminder, per-turn state snapshot) in `extensions/prompts/fork-model-view-prompts.ts`; `extensions/prompts/goal-prompts.ts` re-exports them (487 → 364 lines, upstream 321). Rendered reports, audit cards and snapshots are unchanged.

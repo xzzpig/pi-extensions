@@ -104,7 +104,7 @@ test("the registered settings menu edits and resets context display in both scop
  const reports: string[] = [], saved: any[] = [];
  try {
   h.ctx.hasUI = true;
-  const choices = ["row", "Set project override to true", "scope", "row", "Set global override to true", "scope", "row", "Set project override to false", "row", "Use inherited value", "scope", "row", "Use default (delete global override)", "Done"];
+  const choices = ["row", "Set project override to true", "scope", "scope", "row", "Set global override to true", "scope", "row", "Set project override to false", "row", "Use inherited value", "scope", "scope", "row", "Use default (delete global override)", "Done"];
   h.ctx.ui.select = async (title: string, options: string[]) => {
    if (title === "Goal settings") {
     reports.push(effectiveSettingsReport(h.cwd).join("\n"));

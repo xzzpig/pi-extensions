@@ -90,11 +90,6 @@
       "recordedAt": "2026-09-28T05:40:00+08:00"
     },
     {
-      "kind": "test",
-      "path": "packages/pi-goal-x/tests/integration/extension.test.ts",
-      "reason": "[policy] User-approved verification exception for minimize-goal-model-telemetry: test:all reports the nine settings/profile failures listed in that change's validation.md. Gate re-triage ran this file with the same adapter on both the working tree and a detached HEAD baseline; both produced the same nine failures, so this gate does not introduce them. The gate does not alter the settings handler or profile-install path; removing this debt requires a separately authorized integration-test reconciliation."
-    },
-    {
       "kind": "lint",
       "path": "packages/pi-goal-x/tests/integration/extension.test.ts",
       "reason": "[baseline] Two error-swallowing findings in best-effort temporary-directory cleanup are byte-identical in the merge base, pre-sync fork and upstream v0.34.1. Preserve upstream bytes under the current-change-only lint policy; revisit if the upstream fixture cleanup changes."
@@ -164,6 +159,8 @@
     "re-apply the agents/goal-auditor.md deletion if upstream re-adds it",
     "re-apply the completion-flow S1 seam (implementation now in fork-only extensions/fork-completion-flow.ts; goal-completion.ts is a re-export seam): the completion-audit settings read point calls loadGoalSettingsWithAuditorOverride(ctx.cwd, auditTarget.id) from the fork-only extensions/goal-auditor-override.ts (per-goal auditor override merged over the global settings; no override returns the global settings unchanged). goal-auditor-override.ts's THINKING_LEVELS literal mirrors goal-settings.ts's ThinkingLevel union for read-time validation — re-align it whenever upstream adds a thinking level Retain owner-bound ActiveGoalAudit cancellation, same-child Escape resume, and mandatory audit_started/audit_skipped/audit_result persistence; request and usage accounting remain best effort.",
     "regenerate tests/.test-manifest.json with `node scripts/run-unit-tests.mjs --write-manifest` so fork-only test files stay pinned (test:selfcheck fails otherwise)",
+    "Reapply the project-local settings layer seams in goal-settings.ts, goal-commands.ts and widgets/goal-controls-dialog.ts: local resolves above project, provenance and scope-specific locked writes remain accurate, and Controls validates all three effective views. Preserve the required scope-switch and settings-display assertions in tests/goal-controls.test.ts, tests/goal-context-usage.test.ts and tests/goal-command-palette.test.ts, and the project-local documentation allowlist entry in package.json; see openspec change add-goal-project-local-settings.",
+    "Reconcile tests/integration/extension.test.ts settings assertions with canonical auditor.* persistence and the fixed tool surface guarded by disableTasks; retain behavioral checks after upstream sync rather than reintroducing the stale nine-failure baseline.",
     "keep the fork section on top of the upstream history in CHANGELOG.md and README.md and re-apply the fork wording (every sync conflicts on both)",
     "在 goal-events.ts active 生成边界调用 goalModelPromptParts；仅在上游 showContextUsage 显式启用时读取宿主上下文用量，默认关闭；将生成计数经 fork-context-retention.ts 协调，保留上下文开关变化时的请求前缀而不保留已移除的预算/运行约束；context handler 保留既有 display-only 过滤/checkpoint 规范化，不新增旧消息遥测投影",
     "Use the Pi 1.4 typed session_compact_failed handler and scheduler.rejectCheckpoint while retaining the fork session-scoped auditor registration and sidechannel teardown.",

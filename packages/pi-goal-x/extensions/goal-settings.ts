@@ -35,6 +35,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { hasSettingsPath, mergeSettingsLayers } from "./fork-settings-layers.ts";
 import { renameAtomicSync } from "./storage/atomic-rename.ts";
 import { GOAL_COMMANDS, GOAL_KEY_ACTIONS, PAUSE_ORDERS, parseCommandPaths, parseGoalKeybinding, type GoalCommands, type GoalKeybinding, type PauseOrder } from "./goal-controls.ts";
 
@@ -324,9 +325,13 @@ export function goalSettingsPath(cwd: string, env: NodeJS.ProcessEnv = process.e
 	return path.join(cwd, ".pi", "pi-goal-x-settings.json");
 }
 
+export function goalLocalSettingsPath(cwd: string): string {
+	return path.join(cwd, ".pi", "pi-goal-x-settings.local.json");
+}
+
 // ── diagnostics ─────────────────────────────────────────────────────────────
 
-export type SettingsScope = "global" | "project";
+export type SettingsScope = "global" | "project" | "local";
 
 export type SettingsDiagnosticCode =
 	| "invalid_json"
@@ -372,7 +377,7 @@ export function invalidateGoalSettingsCache(): void {
 }
 
 function invalidateSettingsCachePath(target: string): void {
-	settingsFileCache.delete(target);
+	for (const scope of ["global", "project", "local"] as const) settingsFileCache.delete(`${scope}:${target}`);
 	resolvedSettingsCache.length = 0;
 }
 
@@ -914,7 +919,7 @@ function readSettingsLayerFresh(target: string, scope: SettingsScope): SettingsL
 			diagnostics: [],
 			fingerprint: "missing",
 		};
-		settingsFileCache.set(target, { read });
+		settingsFileCache.set(`${scope}:${target}`, { read });
 		return read;
 	}
 	let parsed: unknown;
@@ -931,7 +936,7 @@ function readSettingsLayerFresh(target: string, scope: SettingsScope): SettingsL
 			diagnostics: [{ scope, path: target, code: "invalid_json", message: "settings file is not valid JSON" }],
 			fingerprint: fingerprintOf(rawText),
 		};
-		settingsFileCache.set(target, { read });
+		settingsFileCache.set(`${scope}:${target}`, { read });
 		return read;
 	}
 	const result = parseSettingsLayer(parsed, scope, target);
@@ -945,13 +950,13 @@ function readSettingsLayerFresh(target: string, scope: SettingsScope): SettingsL
 		diagnostics,
 		fingerprint: fingerprintOf(rawText),
 	};
-	settingsFileCache.set(target, { read });
+	settingsFileCache.set(`${scope}:${target}`, { read });
 	return read;
 }
 
 /** Cache-served layer read (zero-op in steady state). */
 export function readSettingsLayer(target: string, scope: SettingsScope): SettingsLayerRead {
-	const cached = settingsFileCache.get(target);
+	const cached = settingsFileCache.get(`${scope}:${target}`);
 	if (cached?.read) return cached.read;
 	if (cached?.missing) {
 		return { scope, path: target, status: "missing", layer: {}, diagnostics: [], fingerprint: "missing" };
@@ -966,7 +971,7 @@ export function loadGoalSettingsFileConfig(cwd: string, env: NodeJS.ProcessEnv =
 
 // ── resolution with provenance ──────────────────────────────────────────────
 
-export type SettingsSource = "environment" | "project" | "global" | "default";
+export type SettingsSource = "environment" | "local" | "project" | "global" | "default";
 
 export interface ResolvedSetting<T> {
 	value: T;
@@ -977,6 +982,7 @@ export interface ResolvedSetting<T> {
 export interface SettingsSnapshot {
 	global: SettingsLayerRead;
 	project: SettingsLayerRead;
+	local: SettingsLayerRead;
 	value: ResolvedGoalSettings;
 	provenance: Map<string, ResolvedSetting<unknown>>;
 	diagnostics: SettingsDiagnostic[];
@@ -1013,19 +1019,22 @@ function pathKey(...parts: Array<string | undefined>): string {
  * Nested keybindings resolve leaf-by-leaf from the SPARSE layers.
  */
 const resolutionEnvKeys = ["PI_GOAL_ROOT", "PI_GOAL_DISABLE_TASKS", "PI_GOAL_DISABLE_CONTRACTS", "PI_GOAL_OBJECTIVE_MAX_CHARS", "PI_GOAL_NETWORK_RECOVERY_MAX_ATTEMPTS", "PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS"] as const;
-const resolvedSettingsCache: Array<{global: SettingsLayerRead; project: SettingsLayerRead; environment: Array<string | undefined>; snapshot: SettingsSnapshot}> = [];
+const resolvedSettingsCache: Array<{global: SettingsLayerRead; project: SettingsLayerRead; local: SettingsLayerRead; environment: Array<string | undefined>; snapshot: SettingsSnapshot}> = [];
 
 function resolvedSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv): SettingsSnapshot {
 	const globalPath = goalGlobalSettingsPath(env);
 	const projectPath = goalSettingsPath(cwd, env);
 	const global = readSettingsLayer(globalPath, "global");
-	const project = readSettingsLayer(projectPath, "project");
+	const projectFile = readSettingsLayer(projectPath, "project");
+	const local = readSettingsLayer(goalLocalSettingsPath(cwd), "local");
 	for (const cached of resolvedSettingsCache) {
-		if (cached.global === global && cached.project === project && resolutionEnvKeys.every((key, i) => env[key] === cached.environment[i])) return cached.snapshot;
+		if (cached.global === global && cached.project === projectFile && cached.local === local && resolutionEnvKeys.every((key, i) => env[key] === cached.environment[i])) return cached.snapshot;
 	}
+	const project = { ...projectFile, layer: mergeSettingsLayers(projectFile.layer, local.layer) };
 
 	const provenance = new Map<string, ResolvedSetting<unknown>>();
 	const track = <T>(key: string, resolved: ResolvedSetting<T>): T => {
+		if (resolved.source === "project" && hasSettingsPath(local.layer, key)) resolved = { ...resolved, source: "local" };
 		provenance.set(key, resolved as ResolvedSetting<unknown>);
 		return resolved.value;
 	};
@@ -1202,7 +1211,7 @@ function resolvedSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv): Settings
 		envVar: "PI_GOAL_NETWORK_RECOVERY_MAX_DELAY_MS",
 	}));
 
-	const keybindings = { dashboard: {} } as unknown as GoalKeybindings;
+	const keybindings = { dashboard: {} } as GoalKeybindings;
 	for (const action of GOAL_KEY_ACTIONS) {
 		const get = (layer: GoalSettingsLayer): GoalKeybinding | undefined => {
 			let cursor: unknown = layer;
@@ -1210,7 +1219,7 @@ function resolvedSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv): Settings
 			return cursor as GoalKeybinding | undefined;
 		};
 		const resolved = track(action.path.join("."), resolveLeaf<GoalKeybinding>({ projectValue: get(project.layer), globalValue: get(global.layer), defaultValue: action.defaults }));
-		let target = keybindings as unknown as Record<string, unknown>;
+		let target: Record<string, unknown> = keybindings as GoalKeybindings & Record<string, unknown>;
 		const configured = get(project.layer) !== undefined || get(global.layer) !== undefined;
 		// Keep the ordinary, uncustomized settings fast path as small as before.
 		if (!configured && !(action.path[1] === "dashboard" && ["toggleExpand", "scrollUp", "scrollDown"].includes(action.path[2]!))) continue;
@@ -1257,13 +1266,14 @@ function resolvedSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv): Settings
 
 	const snapshot = {
 		global,
-		project,
+		project: projectFile,
+		local,
 		value,
 		provenance,
-		diagnostics: [...global.diagnostics, ...project.diagnostics],
+		diagnostics: [...global.diagnostics, ...projectFile.diagnostics, ...local.diagnostics],
 	};
 	if (resolvedSettingsCache.length >= 16) resolvedSettingsCache.shift();
-	resolvedSettingsCache.push({global, project, environment: resolutionEnvKeys.map(key => env[key]), snapshot});
+	resolvedSettingsCache.push({global, project: projectFile, local, environment: resolutionEnvKeys.map(key => env[key]), snapshot});
 	return snapshot;
 }
 
@@ -1289,7 +1299,7 @@ function copyResolvedSettings(value: ResolvedGoalSettings): ResolvedGoalSettings
 /** Return caller-owned resolved values and provenance; cached layer reads keep their existing contract. */
 export function loadSettingsSnapshot(cwd: string, env: NodeJS.ProcessEnv = process.env): SettingsSnapshot {
 	const snapshot = resolvedSettingsSnapshot(cwd, env);
-	return {...snapshot, value: copyResolvedSettings(snapshot.value), provenance: new Map(Array.from(snapshot.provenance, ([key, value]) => [key, {...value, value: Array.isArray(value.value) ? [...value.value] : value.value}])), diagnostics: [...snapshot.diagnostics]};
+	return {...snapshot, global: structuredClone(snapshot.global), project: structuredClone(snapshot.project), local: structuredClone(snapshot.local), value: copyResolvedSettings(snapshot.value), provenance: new Map(Array.from(snapshot.provenance, ([key, value]) => [key, {...value, value: Array.isArray(value.value) ? [...value.value] : value.value}])), diagnostics: structuredClone(snapshot.diagnostics)};
 }
 
 /**
@@ -1530,7 +1540,7 @@ export function mutateSettingsLayer(input: MutateSettingsInput): SettingsSnapsho
 	const env = input.env ?? process.env;
 	const target = input.scope === "global"
 		? goalGlobalSettingsPath(env)
-		: goalSettingsPath(input.cwd, env);
+		: input.scope === "local" ? goalLocalSettingsPath(input.cwd) : goalSettingsPath(input.cwd, env);
 	const lock = acquirePathLock(`${target}.lock`);
 
 	try {
@@ -1732,8 +1742,8 @@ export function effectiveSettingsReport(cwd: string, env: NodeJS.ProcessEnv = pr
 		{ key: "maxAutonomousRuns", label: "autonomous run allowance", format: () => snapshot.value.maxAutonomousRuns === 0 ? "0 (disabled)" : String(snapshot.value.maxAutonomousRuns ?? "unlimited (default)") },
 		{ key: "stallTimeoutMinutes", label: "stall timeout (minutes)", format: () => String(snapshot.value.stallTimeoutMinutes) },
 		{ key: "objectiveMaxChars", label: "max objective length (0 = none)", format: () => String(snapshot.value.objectiveMaxChars) },
-		{ key: "networkRecovery", label: "network recovery attempts (0 = unbounded)", format: () => String(snapshot.value.networkRecovery?.maxAttempts ?? 0) },
-		{ key: "networkRecovery", label: "network recovery max delay (ms)", format: () => String(snapshot.value.networkRecovery?.maxDelayMs ?? DEFAULT_NETWORK_RECOVERY_MAX_DELAY_MS) },
+		{ key: "networkRecovery.maxAttempts", label: "network recovery attempts (0 = unbounded)", format: () => String(snapshot.value.networkRecovery?.maxAttempts ?? 0) },
+		{ key: "networkRecovery.maxDelayMs", label: "network recovery max delay (ms)", format: () => String(snapshot.value.networkRecovery?.maxDelayMs ?? DEFAULT_NETWORK_RECOVERY_MAX_DELAY_MS) },
 		{ key: "pauseOrder", label: "pause order", format: () => snapshot.value.pauseOrder ?? "together" },
 		{ key: "keybindings", label: "dashboard keybindings", format: () => `${snapshot.value.keybindings!.dashboard.toggleExpand}, ${snapshot.value.keybindings!.dashboard.scrollUp}, ${snapshot.value.keybindings!.dashboard.scrollDown}` },
 	];
@@ -1755,6 +1765,7 @@ export function effectiveSettingsReport(cwd: string, env: NodeJS.ProcessEnv = pr
 		const source = snapshot.provenance.get(action.path.join("."));
 		lines.push(`  ${action.label}: ${formatGoalKeybinding(source?.value as GoalKeybinding)} (${source?.source ?? "default"})`);
 	}
+	lines.push(`  local settings file: ${snapshot.local.path}`);
 	lines.push(`  project settings file: ${snapshot.project.path}`);
 	lines.push(`  global settings file: ${snapshot.global.path}`);
 	const fileOverride = envOverrideFor("settingsFile", env);

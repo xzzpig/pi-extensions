@@ -253,7 +253,7 @@ test("goal-settings: autonomous allowance accepts an explicit zero override", as
 				return row;
 			}
 			if (selectCalls === 2) return options.find(o => o === "Set project override...");
-			assert.ok(options.some(o => o.includes("autonomous run allowance: 0 (disabled) (project override)")));
+			assert.ok(options.some(o => o.includes("autonomous run allowance: 0 (disabled) (source: project; project: 0)")));
 			return "Done";
 		};
 		h.ctx.ui.input = async () => "0";

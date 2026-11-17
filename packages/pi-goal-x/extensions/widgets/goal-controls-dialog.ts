@@ -1,4 +1,5 @@
 import { Input, isKittyProtocolActive, matchesKey, parseKey, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { mergeSettingsLayers } from "../fork-settings-layers.ts";
 import type { Component, TUI, KeyId } from "@earendil-works/pi-tui";
 import type { ExtensionContext, Theme, KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import {
@@ -14,6 +15,7 @@ import type { GoalCore } from "../goal-state.ts";
 import { truncateToWidth } from "./text-cache.ts";
 
 type Tab = "Commands" | "Keys" | "Pausing";
+type GoalControlValue = string | string[] | undefined;
 type Row = { label: string; path: string[]; help: string; kind: "commands" | "keys" | "order" | "reset"; defaults: unknown; action?: GoalKeyAction };
 const TABS: Tab[] = ["Commands", "Keys", "Pausing"];
 const rowsFor = (tab: Tab): Row[] => tab === "Commands"
@@ -70,13 +72,14 @@ export class GoalControlsDialog implements Component {
 		if (!query) rows.push({ label: `Reset ${this.tab.toLowerCase()} overrides…`, path: [this.tab === "Commands" ? "commands" : this.tab === "Keys" ? "keybindings" : "pauseOrder"], kind: "reset", defaults: undefined, help: `Remove only ${this.scope} overrides in this section.`, });
 		return rows;
 	}
-	private inherited(row: Row): unknown { return (this.scope === "project" ? valueAtPath(this.snapshot.global.layer, row.path) : undefined) ?? row.defaults; }
-	private setting(row: Row): unknown { return valueAtPath(this.snapshot[this.scope].layer, row.path) ?? this.inherited(row); }
+	private inherited(row: Row): GoalControlValue {
+		return ((this.scope === "local" ? valueAtPath(this.snapshot.project.layer, row.path) : undefined)
+			?? (this.scope !== "global" ? valueAtPath(this.snapshot.global.layer, row.path) : undefined) ?? row.defaults) as GoalControlValue;
+	}
+	private setting(row: Row): GoalControlValue { return (valueAtPath(this.snapshot.value, row.path) ?? row.defaults) as GoalControlValue; }
 	private source(row: Row): string {
 		if (row.kind === "reset") return "";
-		if (valueAtPath(this.snapshot[this.scope].layer, row.path) !== undefined) return this.scope;
-		if (this.scope === "project" && valueAtPath(this.snapshot.global.layer, row.path) !== undefined) return "global";
-		return "default";
+		return this.snapshot.provenance.get(row.path.join("."))?.source ?? "default";
 	}
 	private display(row: Row, value: unknown): string {
 		if (row.kind === "commands") return (value as string[]).map(route => `/${route}`).join(", ") || (row.path[1] === "goal-settings" ? "/goal-settings (recovery only)" : "Disabled");
@@ -92,7 +95,7 @@ export class GoalControlsDialog implements Component {
 			this.row?.path[1] === "goal-settings" ? "Recovery entry only" : "Disable", "Use default", this.inheritLabel(), "Back",
 		];
 	}
-	private inheritLabel(): string { return this.scope === "project" ? "Use inherited value" : "Remove global override"; }
+	private inheritLabel(): string { return this.scope === "global" ? "Remove global override" : "Use inherited value"; }
 	private optionHelp(): string {
 		const row = this.row!;
 		const option = this.options()[this.actionIndex];
@@ -114,10 +117,12 @@ export class GoalControlsDialog implements Component {
 				const snapshot = loadSettingsSnapshot(this.ctx.cwd);
 				const global = this.scope === "global" ? current : snapshot.global.layer;
 				const project = this.scope === "project" ? current : snapshot.project.layer;
+				const local = this.scope === "local" ? current : snapshot.local.layer;
 				const nextGlobal = this.scope === "global" ? next : global;
 				const nextProject = this.scope === "project" ? next : project;
-				const before = [resolveGoalControls(global), resolveGoalControls(global, project)];
-				const after = [resolveGoalControls(nextGlobal), resolveGoalControls(nextGlobal, nextProject)];
+				const nextLocal = this.scope === "local" ? next : local;
+				const before = [resolveGoalControls(global), resolveGoalControls(global, project), resolveGoalControls(global, mergeSettingsLayers(project, local))];
+				const after = [resolveGoalControls(nextGlobal), resolveGoalControls(nextGlobal, nextProject), resolveGoalControls(nextGlobal, mergeSettingsLayers(nextProject, nextLocal))];
 				const edited = GOAL_KEY_ACTIONS.find(action => action.path.join(".") === mutation.path.join("."));
 				const problems = (values: typeof before) => values.flatMap(value => mutation.path[0] === "commands" ? commandProblems(value.commands) : keybindingProblems(value, edited, isKittyProtocolActive()));
 				const existing = new Set(problems(before));
@@ -126,8 +131,9 @@ export class GoalControlsDialog implements Component {
 			} });
 			this.core.updateUI(this.ctx);
 			this.error = "";
-			const masked = this.scope === "global" && valueAtPath(this.snapshot.project.layer, mutation.path) !== undefined;
-			this.notice = masked ? "Saved for all projects. Project overrides still apply."
+			const source = this.snapshot.provenance.get(mutation.path.join("."))?.source;
+			const masked = source === "local" && this.scope !== "local" || source === "project" && this.scope === "global";
+			this.notice = masked ? (source === "project" ? "Saved for all projects. Project overrides still apply." : `Saved for ${this.scope}; local override still applies.`)
 				: mutation.path[0] === "commands" && this.pending() ? ("reload" in this.ctx ? "Saved. Ctrl+R applies commands when Pi is idle." : "Saved. Close controls and run /reload to apply commands.")
 					: "Saved. Changes are active now.";
 			this.view = "list";
@@ -228,7 +234,7 @@ export class GoalControlsDialog implements Component {
 		} else if (matchesKey(data, "tab") || matchesKey(data, "right") || matchesKey(data, "shift+tab") || matchesKey(data, "left")) {
 			this.tabIndex = (this.tabIndex + (matchesKey(data, "left") || matchesKey(data, "shift+tab") ? 2 : 1)) % 3;
 			this.query.setValue(""); this.notice = ""; this.error = "";
-		} else if (matchesKey(data, "ctrl+s")) { this.scope = this.scope === "project" ? "global" : "project"; this.notice = ""; this.error = ""; this.snapshot = loadSettingsSnapshot(this.ctx.cwd); }
+		} else if (matchesKey(data, "ctrl+s")) { this.scope = this.scope === "project" ? "local" : this.scope === "local" ? "global" : "project"; this.notice = ""; this.error = ""; this.snapshot = loadSettingsSnapshot(this.ctx.cwd); }
 		else if (matchesKey(data, "ctrl+r") && this.pending()) {
 			if (!this.ctx.isIdle()) this.error = "Commands are saved. Stop the current turn before applying them with /reload.";
 			else if (!("reload" in this.ctx)) this.error = "Commands are saved. Close controls and run /reload to apply them.";
@@ -250,7 +256,7 @@ export class GoalControlsDialog implements Component {
 		const dim = (text: string) => this.theme.fg("dim", text);
 		const accent = (text: string) => this.theme.fg("accent", text);
 		const fit = (text: string) => truncateToWidth(text, inner - 2, "…");
-		const lines: string[] = [this.theme.bold("Goal controls") + dim(`  · ${this.scope === "project" ? "This project" : "All projects"}`),
+		const lines: string[] = [this.theme.bold("Goal controls") + dim(`  · ${this.scope === "global" ? "All projects" : this.scope === "local" ? "Local" : "This project"} (${this.scope}) · ${this.snapshot[this.scope].path}`),
 			TABS.map((tab, i) => i === this.tabIndex ? accent(this.theme.bold(`[${tab}]`)) : dim(` ${tab} `)).join("  ")];
 		const help: string[] = [];
 		let source = "";
@@ -279,8 +285,11 @@ export class GoalControlsDialog implements Component {
 			}
 			if (!rows.length) lines.push(dim("No matching controls."));
 			while (lines.length < 3 + capacity) lines.push("");
-			const origin = row ? ({ project: "This project", global: "All projects", default: "Default" }[this.source(row)] ?? "") : "";
-			source = rows.length ? `${selected + 1}/${rows.length}${origin ? ` · Source: ${origin}` : ""}${this.scope === "global" && row && valueAtPath(this.snapshot.project.layer, row.path) !== undefined ? " · overridden here" : ""}` : "";
+			const origin = row ? this.source(row) : "";
+			const originLabel = ({ global: "All projects", project: "This project", local: "Local", default: "Default", environment: "Environment" } as Record<string, string>)[origin] ?? origin;
+			const own = row ? valueAtPath(this.snapshot[this.scope].layer, row.path) : undefined;
+			const masked = origin === "local" && this.scope !== "local" || origin === "project" && this.scope === "global";
+			source = rows.length ? `${selected + 1}/${rows.length} · Source: ${originLabel} · ${this.scope}: ${own === undefined ? "unset" : this.display(row!, own)}${masked ? ` · overridden by ${origin}` : ""}` : "";
 		} else {
 			lines.push(accent(this.theme.bold(this.row!.label)));
 			help.push(this.row!.help);

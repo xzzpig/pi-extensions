@@ -2,13 +2,13 @@ import { GOAL_COMMANDS, commandHint, commandPaths, commandProblems, commandRoute
 import { showGoalControls } from "./widgets/goal-controls-dialog.ts";
 import { goalStoragePath, goalStorageRoot } from "./storage/goal-root.ts";
 import { existsSync } from "node:fs";
-import path from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { extractVerificationContract, sisyphusObjectiveSufficient } from "./goal-contract.ts";
 import { detailedSummary, oneLineSummary } from "./goal-format.ts";
 import {
 	goalSettingsPath,
 	goalGlobalSettingsPath,
+	goalLocalSettingsPath,
 	loadGoalSettings,
 	loadSettingsSnapshot,
 	mutateSettingsLayer,
@@ -23,7 +23,7 @@ import {
 	goalSelectorLabel,
 	otherOpenGoalCount,
 } from "./goal-pool.ts";
-import { clearGoalCommandMessage, validateResumeGoal } from "./goal-policy.ts";
+import { clearGoalCommandMessage } from "./goal-policy.ts";
 import { invalidateGoalLedgerCache, readGoalLedger } from "./goal-ledger.ts";
 import { buildGoalStatusText } from "./goal-status.ts";
 import {
@@ -36,7 +36,7 @@ import {
 	invalidateGoalSettingsCache,
 	loadGoalSettingsFileConfig,
 } from "./goal-settings.ts";
-import { invalidateGoalPoolCache, mergeGoalPromptFromDisk, readActiveGoalPool } from "./storage/goal-files.ts";
+import { invalidateGoalPoolCache, readActiveGoalPool } from "./storage/goal-files.ts";
 import { nowIso, type GoalMode, type GoalRecord } from "./goal-record.ts";
 import { clearGoalDrafting, hasActiveDraft, startGoalDrafting } from "./goal-drafting.ts";
 import { deleteChangeBaseline, readChangeBaseline } from "./goal-change-baseline.ts";
@@ -437,7 +437,8 @@ export function registerGoalCommands(core: GoalCore): void {
 		// Issue #26: opt-in blocker Oracle. Disabled by default; provider/model
 		// must BOTH be set explicitly — the executor model is never used silently.
 		{ key: "oracleEnabled", label: "oracle enabled", section: "Blocker Oracle", kind: "boolean", path: ["oracle", "enabled"] },
-		{ key: "oracleProviderModel", label: "oracle provider/model", section: "Blocker Oracle", kind: "modelSelector", path: ["oracle"] },
+		{ key: "oracleProvider", label: "oracle provider", section: "Blocker Oracle", kind: "modelSelector", path: ["oracle"] },
+		{ key: "oracleModel", label: "oracle model", section: "Blocker Oracle", kind: "modelSelector", path: ["oracle"] },
 		{ key: "oracleThinkingLevel", label: "oracle thinking_level", section: "Blocker Oracle", kind: "thinking", path: ["oracle", "thinkingLevel"] },
 		{ key: "oracleProjectResources", label: "oracle project resources", section: "Blocker Oracle", kind: "boolean", path: ["oracle", "projectResources"] },
 		{ key: "oracleMaxFailedAttemptsPerBlocker", label: "max failed attempts per blocker", section: "Blocker Oracle", kind: "positiveInteger", path: ["oracle", "maxFailedAttemptsPerBlocker"] },
@@ -468,7 +469,7 @@ export function registerGoalCommands(core: GoalCore): void {
 		if (!ctx.hasUI) {
 			// Headless: read-only report of both layer paths.
 			ctx.ui.notify(
-				`Settings — project file: ${goalSettingsPath(ctx.cwd)}\nGlobal file: ${goalGlobalSettingsPath()}`,
+				`Settings — project file: ${goalSettingsPath(ctx.cwd)}\nGlobal file: ${goalGlobalSettingsPath()}\nLocal file: ${goalLocalSettingsPath(ctx.cwd)}`,
 				"info",
 			);
 			return;
@@ -500,7 +501,7 @@ export function registerGoalCommands(core: GoalCore): void {
 		};
 
 		const scopePath = (scope: SettingsScope): string =>
-			scope === "global" ? goalGlobalSettingsPath() : goalSettingsPath(ctx.cwd);
+			scope === "global" ? goalGlobalSettingsPath() : scope === "local" ? goalLocalSettingsPath(ctx.cwd) : goalSettingsPath(ctx.cwd);
 
 		core.enterGoalModal();
 		try {
@@ -513,7 +514,9 @@ export function registerGoalCommands(core: GoalCore): void {
 				options.push(`Scope: ${scope} (select to switch)`);
 				options.push("Controls: commands, keys and pause order…");
 				let lastSection: string | null = null;
-				const pathOf = (row: SettingRow): string[] => row.path ?? [String(row.key)];
+				const pathOf = (row: SettingRow): string[] => row.kind === "modelSelector" && row.path
+					? [...row.path, row.key === "auditorProvider" || row.key === "oracleProvider" ? "provider" : "model"]
+					: row.path ?? [String(row.key)];
 				/** Traverse a settings layer/snapshot; returns the raw node or leaf at `path`. */
 				const valueAtPath = (obj: unknown, path: readonly string[]): SettingsPathValue | undefined => {
 					let cursor: unknown = obj;
@@ -528,24 +531,20 @@ export function registerGoalCommands(core: GoalCore): void {
 						options.push(`─── ${row.section} ───`);
 						lastSection = row.section;
 					}
+					const rowPath = pathOf(row);
+					const ownValue = valueAtPath(localLayer, rowPath);
 					const envVar = typeof row.key === "string" ? envOverrideFor(row.key as keyof GoalSettings) : null;
 					if (envVar) {
-						options.push(`  ${row.label}: ${settingsValue(snapshot.value, row.key)} (environment; read-only)`);
+						options.push(`  ${row.label}: ${settingsValue(snapshot.value, row.key)} (source: environment ${envVar}; ${scope}: ${ownValue === undefined ? "unset" : String(ownValue)}; overridden by environment; read-only)`);
 						continue;
 					}
-					const rowPath = pathOf(row);
 					const provenance = snapshot.provenance.get(rowPath.join("."));
-					let source: string;
-					if (provenance?.source === "global") source = scope === "project" ? "(inherited from global)" : "(global override)";
-					else if (provenance?.source === "project") source = scope === "project" ? "(project override)" : "(project; edit via project scope)";
-					else source = "(default)";
-					const hasLocalOverride = valueAtPath(localLayer, rowPath) !== undefined;
-					if (hasLocalOverride && provenance?.source === scope) source = `(${scope} override)`;
-					// Nested rows render their leaf value directly.
 					const displayValue = row.path
 						? String(valueAtPath(snapshot.value, rowPath) ?? "(default)")
 						: settingsValue(snapshot.value, row.key);
-					options.push(`  ${row.label}: ${displayValue} ${source}`);
+					const source = provenance?.source ?? "default";
+					const masked = source === "local" && scope !== "local" || source === "project" && scope === "global";
+					options.push(`  ${row.label}: ${displayValue} (source: ${source}; ${scope}: ${ownValue === undefined ? "unset" : String(ownValue)}${masked ? `; overridden by ${source}` : ""})`);
 				}
 				if (snapshot.value.auditorProjectResources === true) {
 					options.push(`  Note: ${AUDITOR_PROJECT_RESOURCES_MIGRATION_NOTICE}`);
@@ -557,7 +556,7 @@ export function registerGoalCommands(core: GoalCore): void {
 				if (selected.startsWith("───")) continue; // headers are not rows
 				const trimmed = selected.trim();
 				if (trimmed.startsWith("Scope:")) {
-					scope = scope === "project" ? "global" : "project";
+					scope = scope === "project" ? "local" : scope === "local" ? "global" : "project";
 					continue;
 				}
 				const colon = trimmed.indexOf(":");
@@ -583,11 +582,10 @@ export function registerGoalCommands(core: GoalCore): void {
 					return cursor;
 				})();
 
-				const inheritLabel = scope === "project" ? "Use inherited value" : "Use default (delete global override)";
+				const inheritLabel = scope === "global" ? "Use default (delete global override)" : "Use inherited value";
 				const hasLocalOverride = localValueAtPath !== undefined;
 
 				if (row.kind === "boolean") {
-					const effective = snapshot.provenance.get(pathKeyStr)?.value === true;
 					const actions = [
 						`Set ${scope} override to true`,
 						`Set ${scope} override to false`,
@@ -601,7 +599,7 @@ export function registerGoalCommands(core: GoalCore): void {
 						continue;
 					}
 					const value = action.endsWith("true");
-					if (value !== effective || !hasLocalOverride) {
+					if (value !== localValueAtPath || !hasLocalOverride) {
 						applyMutation(scope, { op: "set", path: rowPath, value });
 					}
 					continue;
@@ -696,7 +694,7 @@ export function registerGoalCommands(core: GoalCore): void {
 
 				// modelSelector rows (provider, model): searchable model picker with
 				// explicit inherit/default handling. Auditor rows write
-				// auditor.provider/auditor.model; the Oracle row writes
+				// auditor.provider/auditor.model; Oracle rows write
 				// oracle.provider/oracle.model.
 				const pairRoot = row.path?.[0] === "oracle" ? "oracle" : row.path?.[0] === "auditor" ? "auditor" : undefined;
 				const pairPrefix = pairRoot ? [pairRoot] : [];

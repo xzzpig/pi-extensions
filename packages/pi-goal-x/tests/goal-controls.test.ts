@@ -400,7 +400,7 @@ test("controls UI records keys, blocks conflicts and supports scoped inheritance
 		d.press(ENTER, ENTER, "\x1b[65;6u", ENTER);
 		assert.match(d.text(), /also assigned/);
 		assert.deepEqual(loadSettingsSnapshot(h.cwd).value.keybindings?.pause, ["f6"]);
-		d.press(ESC, ESC, "\x13");
+		d.press(ESC, ESC, "\x13", "\x13");
 		assert.match(d.text(), /All projects/);
 		d.press(ENTER, ENTER, "\x1b[18~", ENTER);
 		assert.match(d.text(), /Project overrides still apply/);

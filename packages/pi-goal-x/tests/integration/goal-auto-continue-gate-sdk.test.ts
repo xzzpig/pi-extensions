@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -555,7 +555,7 @@ test("real Pi EventBus joins goal vetoes to native subagent results and supervis
   }
 });
 
-test("actual goal and subagents lifecycles gate workflow and detached foreground results without spending scheduler budgets", async () => {
+test("actual goal and subagents lifecycles gate workflow and detached foreground results without spending scheduler budgets", async (t) => {
   type Handler = (event: unknown, ctx: unknown) => unknown;
   type Sent = {
     message: {
@@ -732,7 +732,9 @@ test("actual goal and subagents lifecycles gate workflow and detached foreground
       ctx,
       false,
     );
-    const deadline = new Date(Date.now() + 60_000).toISOString();
+    // Child processes can start slowly under a nested auditor or a loaded host.
+    // Keep the scheduler wait valid throughout the bounded launch/notice waits.
+    const deadline = new Date(Date.now() + 120_000).toISOString();
     core.scheduler.declare(ctx, {
       kind: "wait",
       reason: "Test the real scheduler accounting around a gated check.",
@@ -787,7 +789,7 @@ test("actual goal and subagents lifecycles gate workflow and detached foreground
     const workflowDetails = workflowLaunch as {
       isError?: boolean;
       content?: Array<{ text?: string }>;
-      details?: { asyncId?: string; runId?: string };
+      details?: { asyncId?: string; runId?: string; asyncDir?: string };
     };
     assert.notEqual(
       workflowDetails.isError,
@@ -800,14 +802,23 @@ test("actual goal and subagents lifecycles gate workflow and detached foreground
       workflowRunId,
       "the real async workflow launch returns its root run id",
     );
-    const workflowChildrenDeadline = Date.now() + 5_000;
+    // Two real runner processes must initialize before reaching the fake child
+    // session boundary. A five-second wall-clock limit was too short under load;
+    // this is only a startup bound, not a relaxation of the two-child assertion.
+    const workflowChildrenStartedAt = performance.now();
+    const workflowChildrenDeadline = Date.now() + 30_000;
     while (mockPi.callCount() < 2 && Date.now() < workflowChildrenDeadline) {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
+    t.diagnostic(`workflow child startup barrier: ${Math.round(performance.now() - workflowChildrenStartedAt)}ms; calls=${mockPi.callCount()}`);
+    const runnerDiagnostics = mockPi.callCount() === 2 ? "" : ["status.json", "runner.stderr.log", "runner.stdout.log"].map((name) => {
+      try { return `${name}: ${readFileSync(join(workflowDetails.details?.asyncDir ?? root, name), "utf8").slice(-6000)}`; }
+      catch { return `${name}: unavailable`; }
+    }).join("\n");
     assert.equal(
       mockPi.callCount(),
       2,
-      "the real workflow script launched both parallel children through the isolated child-session boundary",
+      `the real workflow script launched both parallel children through the isolated child-session boundary\n${runnerDiagnostics}`,
     );
     releaseForeground = join(root, "release-foreground-child");
     mockPi.onCall({
@@ -857,7 +868,7 @@ test("actual goal and subagents lifecycles gate workflow and detached foreground
         throw error;
       });
     void foregroundExecution.catch(() => {});
-    const foregroundStartDeadline = Date.now() + 3_000;
+    const foregroundStartDeadline = Date.now() + 20_000;
     while (
       (!foregroundRunId || mockPi.sessions.length === 0) &&
       Date.now() < foregroundStartDeadline
@@ -942,7 +953,7 @@ test("actual goal and subagents lifecycles gate workflow and detached foreground
       );
 
       writeFileSync(releaseWorkflowChildren!, "release");
-      const workflowNoticeDeadline = Date.now() + 5_000;
+      const workflowNoticeDeadline = Date.now() + 20_000;
       let nativeNotice = sent.find(({ message }) => {
         const runs = (
           message.details as { runs?: Array<{ runId?: string }> } | undefined
@@ -1000,7 +1011,7 @@ test("actual goal and subagents lifecycles gate workflow and detached foreground
 
       writeFileSync(releaseForeground!, "release");
       await foregroundExecution;
-      const foregroundNoticeDeadline = Date.now() + 2_000;
+      const foregroundNoticeDeadline = Date.now() + 20_000;
       let foregroundNotice = sent.find(({ message }) => {
         const runs = (
           message.details as { runs?: Array<{ runId?: string }> } | undefined
