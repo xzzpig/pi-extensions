@@ -157,10 +157,9 @@
       "reason": "[policy] The unused resolveModelSelection, getHostBuiltinToolNames, WorkflowChildSettledNotification imports and destructured count bindings at the task-expansion loops predate the auto-continuation gate. The user chose to preserve unrelated upstream-origin code rather than expand this feature; remove them when the surrounding upstream area is next intentionally cleaned up."
     },
     {
-      "kind": "test",
+      "kind": "other",
       "path": "packages/pi-subagents/test/unit/herdr-machine.test.ts",
-      "reason": "[host] New upstream v0.88.0 test 'keeps a forwarding session command alive while forwarding and ends it when the forwarder closes' fails deterministically on this host: its fake ssh spawns `/bin/sh -c 'exec cat >/dev/null'` as the remote session command, but that child exits immediately even with a stdin pipe held open (reproduced standalone with process.kill(pid,0) -> ESRCH). Production herdr-connection.ts is byte-identical to upstream v0.88.0 and the test is byte-identical to upstream, so this is a host/environment difference, not a fork divergence. Rerun on a host where the fake ssh session command stays alive; remove this entry then.",
-      "recordedAt": "2026-11-13T00:00:00Z"
+      "reason": "[host] The forwarding lifecycle fixture supplies cat in its simulated remote HOME so it exercises the production hardened PATH on NixOS too. Remove when upstream provides a portable remote-shell fixture."
     }
   ],
   "reapplyOnSync": [
@@ -205,7 +204,8 @@
     "v0.88.0: test/support/fork-test-environment.mjs realSdkSuites includes workflow-launch-approval.test.ts (new upstream real-SDK test needs SettingsManager.inMemory/createAgentSession from the pinned 1.2.0 test SDK, not the throwing shim stub).",
     "v0.88.0: foreground execution.ts handleToolResult publishes toolSnapshot.progressText/progressUpdatedAt for successful contact_supervisor progress_update results (Pi 1.2 toolResult messages). Upstream inlines this in message_end; the fork keeps it in the shared id-deduplicated handleToolResult so message_end and tool_result_end both funnel through one path.",
     "v0.88.0: execution.ts message_end keeps the fork's `if (toolResult) handleToolResult(...) else { ... }` wrapper; upstream's inline 47-line toolResult block is NOT adopted (it would double-process with handleToolResult). Upstream's progressText type/pendingToolResultByCallId changes are adopted.",
-    "packaging identity (repository.url, files allowlist, per-package lockfile policy) is enforced by scripts/check-fork-identity.mjs — run `node scripts/check-fork-identity.mjs` after every subtree pull/sync"
+    "packaging identity (repository.url, files allowlist, per-package lockfile policy) is enforced by scripts/check-fork-identity.mjs — run `node scripts/check-fork-identity.mjs` after every subtree pull/sync",
+    "Keep the Herdr forwarding lifecycle fixture using fork-remote-shell-env.ts to supply cat in the simulated remote HOME/.local/bin; do not relax the production hardened remote PATH for a NixOS fixture."
   ],
   "doNotReintroduce": [
     "Do not restore upstream repository.url as the fork publishing source; npm provenance must identify the actual build repository.",

@@ -23,7 +23,8 @@
     "After each successful Markdown render in src/turns/turn-view.ts, prune CodeHook.built to token keys in the current Markdown tree so streaming prefixes do not accumulate.",
     "Keep sticky candidate matching and chunked output assembly in src/messages/hex-swatches.ts; candidate regexes must match only at their current index.",
     "Keep groupedRows cache admission in src/tools/tool-group-view.ts based on the tool's own volatility; global agentRunning state must not bypass cache for settled history.",
-    "packaging identity (repository.url, files allowlist, per-package lockfile policy) is enforced by scripts/check-fork-identity.mjs — run `node scripts/check-fork-identity.mjs` after every subtree pull/sync"
+    "packaging identity (repository.url, files allowlist, per-package lockfile policy) is enforced by scripts/check-fork-identity.mjs — run `node scripts/check-fork-identity.mjs` after every subtree pull/sync",
+    "Keep hover-dispatch.test.ts waiting for the first rendered layout through fork/wait-for-frame.ts before sending mouse input; fixed sleeps race the TUI render timer under parallel load."
   ],
   "doNotReintroduce": [
     "Do not unconditionally install the write call preview: tidy.writePreview defaults to false so Pi or pi-tool-display keeps both write renderers; writeLines alone must not enable it.",
@@ -75,6 +76,11 @@
       "kind": "other",
       "path": "packages/pi-tidy/src/tools/tool-group-view.ts",
       "reason": "[policy] Grouped-row cache admission depends on tool-local volatility rather than the process-wide agentRunning flag, preserving settled transcript rows during later runs. Keep this until upstream uses equivalent per-group cache invalidation."
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-tidy/test/hover-dispatch.test.ts",
+      "reason": "[policy] Wait for the initial TUI layout instead of sleeping 20ms before mouse input, retaining all hover/pointer assertions under parallel test load. Remove when upstream synchronizes its initial layout in this test."
     }
   ]
 }

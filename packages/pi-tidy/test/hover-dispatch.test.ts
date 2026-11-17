@@ -13,6 +13,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ScrollView, TuiAltScreen } from "@earendil-works/pi-tui";
+import { pointerShapes, waitForFrame } from "./fork/wait-for-frame.ts";
 
 const THEME_KEY = Symbol.for("@earendil-works/pi-coding-agent:theme");
 (globalThis as any)[THEME_KEY] = {
@@ -117,7 +118,7 @@ test("a motion packet lights the row under it, and leaving drops the band", asyn
     ) as any,
   );
   tui.start();
-  await tick();
+  await waitForFrame(() => grouped.renders > 0);
 
   const send = (seq: string) => terminal.state.input?.(seq);
   send("\x1b[<35;3;1M"); // motion, no button, row 1 → the tool's summary line
@@ -169,11 +170,11 @@ test("the pointer is a hand over a lit row and the arrow again off it", async ()
     ) as any,
   );
   tui.start();
-  await tick();
+  await waitForFrame(() => grouped.renders > 0);
 
   /** Every OSC 22 the terminal received, as its shape name. */
   const shapes = () =>
-    terminal.state.writes.flatMap((data) => [...data.matchAll(/\x1b\]22;([^\x1b]*)\x1b\\/g)].map((match) => match[1]));
+    pointerShapes(terminal.state.writes);
   const send = (seq: string) => terminal.state.input?.(seq);
 
   send("\x1b[<35;3;1M"); // onto the summary line

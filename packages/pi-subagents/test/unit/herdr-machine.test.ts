@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
+import { remoteShellEnv } from "../support/fork-remote-shell-env.ts";
 import {
 	formatHerdrMachineHint,
 	formatHerdrMachineRunnerUnsupported,
@@ -42,7 +43,8 @@ describe("Herdr machine placement", () => {
 	it("keeps a forwarding session command alive while forwarding and ends it when the forwarder closes", { skip: process.platform === "win32" }, async () => {
 		// The fake ssh models sshd: the session command reads the client's stdin, which closes when the client exits.
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), "herdr-forward-ssh-")), bin = path.join(dir, "ssh"), pidFile = path.join(dir, "remote-pid");
-		fs.writeFileSync(bin, `#!${process.execPath}\nconst { spawn } = require("node:child_process"), fs = require("node:fs"), net = require("node:net");\nconst args = process.argv.slice(2), forward = args[args.indexOf("-L") + 1], command = args.slice(args.indexOf(forward) + 2);\nif (command.length) { const remote = spawn("/bin/sh", ["-c", command.join(" ")], { stdio: ["pipe", "ignore", "ignore"] }); fs.writeFileSync(${JSON.stringify(pidFile)}, String(remote.pid)); process.stdin.pipe(remote.stdin); }\nnet.createServer().listen(forward.slice(0, forward.indexOf(":")));\n`);
+		const remoteEnv = remoteShellEnv(dir);
+		fs.writeFileSync(bin, `#!${process.execPath}\nconst { spawn } = require("node:child_process"), fs = require("node:fs"), net = require("node:net");\nconst args = process.argv.slice(2), forward = args[args.indexOf("-L") + 1], command = args.slice(args.indexOf(forward) + 2);\nif (command.length) { const remote = spawn("/bin/sh", ["-c", command.join(" ")], { stdio: ["pipe", "ignore", "ignore"], env: { ...process.env, ...${JSON.stringify(remoteEnv)} } }); fs.writeFileSync(${JSON.stringify(pidFile)}, String(remote.pid)); process.stdin.pipe(remote.stdin); }\nnet.createServer().listen(forward.slice(0, forward.indexOf(":")));\n`);
 		fs.chmodSync(bin, 0o700);
 		const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 		const sockets = sshMachineAccess(machine, { sshBin: bin }).openSockets();
