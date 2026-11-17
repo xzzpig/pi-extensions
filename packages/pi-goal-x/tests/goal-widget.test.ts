@@ -114,12 +114,11 @@ test("renderAuditorWidgetLines shows the structured audit dashboard (§15.3)", (
 	const progress = auditorProgress({ auditorLabel: "anthropic/claude" });
 	const lines = renderAuditorWidgetLines(progress, theme, 100);
 	assert.match(lines[0]!, /Independent completion audit ─ anthropic\/claude/);
-	// Five check stages in order.
+	// Legacy progress without a checklist does not invent fixed stages.
 	const text = lines.join("\n");
-	assert.ok(text.indexOf("Objective and success criteria") < text.indexOf("Verification contracts"));
-	assert.ok(text.indexOf("Verification contracts") < text.indexOf("Tasks and recorded evidence"));
-	assert.ok(text.indexOf("Tasks and recorded evidence") < text.indexOf("Workspace inspection"));
-	assert.ok(text.indexOf("Workspace inspection") < text.indexOf("Final decision"));
+	assert.match(text, /已检查 0\/0/);
+	assert.match(text, /没有配置检查项/);
+	assert.doesNotMatch(text, /Objective and success criteria/);
 	// Active audit footer.
 	assert.match(lines.at(-1) ?? "", /Esc: stop audit/);
 	// Tool + output details are hidden by default (shown only in expanded/debug).
@@ -136,16 +135,15 @@ test("renderAuditorWidgetLines shows tool and output details in expanded/debug m
 	assert.match(text, /checking file exists/);
 });
 
-test("renderAuditorWidgetLines drives check states from percentage bands (§15.2)", () => {
-	const progress = auditorProgress({ phase: "running", percentage: 72, recentOutput: [] });
-	const lines = renderAuditorWidgetLines(progress, theme, 100);
-	const text = lines.join("\n");
-	assert.match(text, /✓ Objective and success criteria/);
-	assert.match(text, /✓ Verification contracts/);
-	assert.match(text, /✓ Tasks and recorded evidence/);
+test("renderAuditorWidgetLines displays reported checks independently of percentage", () => {
+	const progress = auditorProgress({ phase: "running", percentage: 72, recentOutput: [], checks: [
+		{ id: "custom-1", label: "API inspection", source: "checklist", state: "passed" },
+		{ id: "extra-1", label: "Workspace inspection", source: "extra", state: "running" },
+	] });
+	const text = renderAuditorWidgetLines(progress, theme, 100).join("\n");
+	assert.match(text, /已检查 1\/2/);
 	assert.match(text, /◌ Workspace inspection/);
-	assert.match(text, /· Final decision/);
-	assert.match(text, /72%/);
+	assert.match(text, /审计员估计 72%/);
 });
 
 test("renderAuditorWidgetLines shows the progress bar at 0% and 100%", () => {
@@ -179,9 +177,8 @@ test("finished audit shows the result card view (§15.4)", () => {
 	const approved = renderAuditResultCardView({ verdict: "approved", report: "ok" }, theme, 100);
 	assert.match(approved[0]!, /Audit result ─ APPROVED/);
 	const approvedText = approved.join("\n");
-	assert.match(approvedText, /✓ Objective satisfied\./);
-	assert.match(approvedText, /✓ Verification requirements satisfied\./);
-	assert.match(approvedText, /✓ Required tasks and evidence accepted\./);
+	assert.match(approvedText, /✓ ok/);
+	assert.doesNotMatch(approvedText, /Required tasks and evidence accepted/);
 
 	const rejected = renderAuditResultCardView({ verdict: "disapproved", report: "- Tests were not run after the final change.\n- Task \"docs\" has no evidence." }, theme, 100);
 	const rejectedText = rejected.join("\n");
@@ -401,7 +398,7 @@ test("GoalWidgetComponent renders the audit dashboard when audit progress is pre
 	const lines = component.render(100);
 	const text = lines.join("\n");
 	assert.match(text, /Independent completion audit/);
-	assert.match(text, /Objective and success criteria/);
+	assert.match(text, /已检查 0\/0/);
 	// Tool details are hidden unless the dashboard is expanded (debug/audit mode).
 	assert.doesNotMatch(text, /tool read/);
 });

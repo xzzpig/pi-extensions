@@ -1,4 +1,6 @@
 import type { GoalKeybinding, GoalCommands } from "../goal-controls.ts";
+import type { AuditorProgress } from "../goal-auditor.ts";
+import { AuditDashboardViewport } from "./fork-audit-viewport.ts";
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { visibleWidth } from "@earendil-works/pi-tui";
@@ -108,7 +110,7 @@ export function makeGoalWidgetFactory(opts: {
 	};
 }
 
-export interface AuditorWidgetProgress {
+export interface AuditorWidgetProgress extends AuditorProgress {
 	currentTool?: string;
 	currentToolArgs?: string;
 	currentToolStartedAt?: number;
@@ -301,10 +303,10 @@ export function renderAuditorWidgetLines(
 	progress: AuditorWidgetProgress,
 	theme: Theme,
 	width: number,
-	opts: { showToolDetails?: boolean; verdict?: "approved" | "disapproved" | "error" | null; interruptKey?: GoalKeybinding } = {},
+	opts: { showToolDetails?: boolean; verdict?: "approved" | "disapproved" | "error" | null; interruptKey?: GoalKeybinding; scrollOffset?: number; viewportRows?: number } = {},
 ): string[] {
 	const model = deriveAuditorDashboardModel(progress, { auditorLabel: progress.auditorLabel, verdict: opts.verdict });
-	return renderAuditorDashboard(model, theme, width, { showToolDetails: opts.showToolDetails, interruptKey: opts.interruptKey });
+	return renderAuditorDashboard(model, theme, width, { showToolDetails: opts.showToolDetails, interruptKey: opts.interruptKey, scrollOffset: opts.scrollOffset, viewportRows: opts.viewportRows });
 }
 
 /** §15.4: approval / rejection result card for a finished audit. */
@@ -323,6 +325,8 @@ export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Them
 		return boundWidgetRenderLines(renderAuditorWidgetLines(options.auditorProgress, theme, width, {
 			showToolDetails: options.expanded === true || options.debug === true,
 			interruptKey: options.interruptAuditKey,
+			scrollOffset: options.expandedScrollOffset,
+			viewportRows: options.expandedTaskRows,
 		}), options.terminalRows);
 	}
 	const openGoalCount = options.openGoalCount ?? 0;
@@ -365,6 +369,7 @@ export class GoalWidgetComponent implements Component {
 	private compactScrollOffset = 0;
 	private expandedScrollOffset = 0;
 	private lastRenderWidth = 100;
+	private readonly auditViewport = new AuditDashboardViewport();
 	private lastSeenGoalId: string | undefined;
 	private lastSeenLatestCompletedAt: string | undefined;
 
@@ -484,13 +489,14 @@ export class GoalWidgetComponent implements Component {
 		// the first render of each regime and stays constant (fits and capped),
 		// so the dock height / buffer line count stop changing and the
 		// terminal stops jumping to the bottom.
+		const reserve = this.measureDockReserve(width) ?? WIDGET_HEIGHT_RESERVE;
+		this.auditViewport.maxRows = Math.max(4, (terminalRows ?? 24) - reserve);
 		const natural = this.renderNatural(width);
 		const regime = this.stableHeightRegime();
 		// Reserve adapted to the actual dock chrome (status + editor + footer +
 		// pending): the widget's block plus the chrome must never exceed the
 		// terminal, or the chat's appended lines and the status line land above
 		// pi-tui's viewport top and every agent write wipes the scrollback.
-		const reserve = this.measureDockReserve(width) ?? WIDGET_HEIGHT_RESERVE;
 		return applyStableHeightBound(natural, terminalRows, this.stableHeightState, regime, reserve);
 	}
 
@@ -568,6 +574,8 @@ export class GoalWidgetComponent implements Component {
 		if (auditResult) {
 			return clampLinesToWidth(renderAuditResultCardView(auditResult, this.theme, width), width);
 		}
+		const audit = this.getAuditorProgress();
+		if (audit) return this.auditViewport.render(audit, this.theme, safeWidth, { expanded: this.getExpanded() || this.getDebugMode(), interruptKey: settings.keybindings?.interruptAudit });
 		const goal = this.getGoal();
 		const otherCount = Math.max(0, this.getOpenGoalCount() - 1);
 		const model = goal ? deriveGoalDashboardModel(goal as GoalRecord | null, {
@@ -655,7 +663,7 @@ export class GoalWidgetComponent implements Component {
 	 * list. Returns true when the key was consumed.
 	 */
 	handleCompactScrollKey(key: "up" | "down" | "pageUp" | "pageDown" | "home" | "end"): boolean {
-		if (this.getExpanded()) return false;
+		if (this.getExpanded() || this.getAuditorProgress()) return false;
 		const settings = this.getSettings();
 		const goal = this.getGoal();
 		const model = goal ? deriveGoalDashboardModel(goal as GoalRecord | null, {
@@ -694,6 +702,7 @@ export class GoalWidgetComponent implements Component {
 	 */
 	handleNavigationKey(key: "up" | "down" | "pageUp" | "pageDown" | "home" | "end"): boolean {
 		if (!this.getExpanded()) return false;
+		if (this.getAuditorProgress()) return this.auditViewport.navigate(key, () => this.tui.requestRender());
 		const settings = this.getSettings();
 		const goal = this.getGoal();
 		const model = goal ? deriveGoalDashboardModel(goal as GoalRecord | null, {

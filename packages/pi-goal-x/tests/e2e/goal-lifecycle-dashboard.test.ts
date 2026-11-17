@@ -264,13 +264,13 @@ test("full guided lifecycle: create → focus → tasks → audit → archive (�
 		assert.equal(staged.length, 5, "all five audit stages reported");
 		const lastStage = staged[staged.length - 1]!;
 		assert.equal(lastStage.label, "Producing report...");
-		// The structured dashboard at 72% would show workspace running (the
-		// stage derivation used by the audit widget).
+		// Legacy percentage reports do not create or advance checklist items.
 		const auditModel = deriveAuditorDashboardModel(
 			{ recentOutput: [], phase: "running", elapsedMs: 1000, label: "Evaluating evidence...", percentage: 72 },
 			{ auditorLabel: "mock/auditor" },
 		);
-		assert.deepEqual(auditModel.checks.map((c) => c.state), ["passed", "passed", "passed", "running", "pending"]);
+		assert.deepEqual(auditModel.checks, [], "legacy estimates do not invent checklist states");
+		assert.equal(auditModel.percentage, 72);
 		assert.equal(h.core.auditResult?.verdict, "approved", "approval sets the result card");
 
 		// ── Step 14: deferred completion ────────────────────────────────────

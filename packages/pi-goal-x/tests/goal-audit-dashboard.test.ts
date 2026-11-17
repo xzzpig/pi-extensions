@@ -28,6 +28,7 @@ const theme = {
 function progress(overrides: Partial<AuditorProgress> = {}): AuditorProgress {
 	return {
 		recentOutput: [],
+		checks: [{ id: "custom-1", label: "Custom audit criterion", source: "checklist", state: "pending" }],
 		phase: "running",
 		elapsedMs: 138000,
 		...overrides,
@@ -38,49 +39,30 @@ function checkState(model: ReturnType<typeof deriveAuditorDashboardModel>, id: s
 	return model.checks.find((c) => c.id === id)?.state ?? "pending";
 }
 
-test("objective: pending → running → passed as the audit advances", () => {
-	// No percentage yet: objective runs, everything else pending.
+test("legacy phase progress does not infer item states", () => {
 	const start = deriveAuditorDashboardModel(progress({ percentage: undefined, label: "Starting audit..." }));
-	assert.equal(checkState(start, "objective"), "running");
-	assert.equal(checkState(start, "verification"), "pending");
-	assert.equal(checkState(start, "decision"), "pending");
-
-	// At 10% objective still runs.
+	assert.equal(checkState(start, "custom-1"), "pending");
 	const early = deriveAuditorDashboardModel(progress({ percentage: 10 }));
-	assert.equal(checkState(early, "objective"), "running");
-
-	// At 20% objective passes, verification starts.
+	assert.equal(checkState(early, "custom-1"), "pending");
 	const mid = deriveAuditorDashboardModel(progress({ percentage: 20 }));
-	assert.equal(checkState(mid, "objective"), "passed");
-	assert.equal(checkState(mid, "verification"), "running");
+	assert.equal(checkState(mid, "custom-1"), "pending");
 });
 
-test("all five stages advance in order through percentage bands (§15.2)", () => {
-	const cases: Array<[number, string[]]> = [
-		[0, ["running", "pending", "pending", "pending", "pending"]],
-		[30, ["passed", "running", "pending", "pending", "pending"]],
-		[50, ["passed", "passed", "running", "pending", "pending"]],
-		[72, ["passed", "passed", "passed", "running", "pending"]],
-		[90, ["passed", "passed", "passed", "passed", "running"]],
-	];
-	for (const [pct, expected] of cases) {
+test("legacy percentage bands keep the actual checklist unchanged", () => {
+	for (const pct of [0, 30, 50, 72, 90]) {
 		const model = deriveAuditorDashboardModel(progress({ percentage: pct }));
-		const states = model.checks.map((c) => c.state);
-		assert.deepEqual(states, expected, `states at ${pct}%`);
+		assert.deepEqual(model.checks.map((c) => c.state), ["pending"], `states at ${pct}%`);
+		assert.deepEqual(model.checks.map((c) => c.id), ["custom-1"]);
 	}
 });
 
-test("decision passes on approval and fails on disapproval/error", () => {
-	const approved = deriveAuditorDashboardModel(progress({ phase: "done", percentage: 100 }), { verdict: "approved" });
-	assert.deepEqual(approved.checks.map((c) => c.state), ["passed", "passed", "passed", "passed", "passed"]);
-	assert.equal(approved.active, false);
-
-	const rejected = deriveAuditorDashboardModel(progress({ phase: "done", percentage: 100 }), { verdict: "disapproved" });
-	assert.equal(checkState(rejected, "decision"), "failed");
-	assert.deepEqual(rejected.checks.slice(0, 4).map((c) => c.state), ["passed", "passed", "passed", "passed"], "rejection keeps prior stages passed");
-
-	const errored = deriveAuditorDashboardModel(progress({ phase: "done", percentage: 100 }), { verdict: "error" });
-	assert.equal(checkState(errored, "decision"), "failed");
+test("final verdict is independent and never fills in unreported item states", () => {
+	for (const verdict of ["approved", "disapproved", "error"] as const) {
+		const model = deriveAuditorDashboardModel(progress({ phase: "done", percentage: 100 }), { verdict });
+		assert.deepEqual(model.checks.map((c) => c.state), ["pending"]);
+		assert.equal(model.active, false);
+		assert.equal(model.verdict, verdict);
+	}
 });
 
 test("auditor identity is shown in the model and the rendered header", () => {
@@ -135,7 +117,7 @@ test("no rendered line exceeds the terminal width at 40..140 cols", () => {
 test("result cards: approval, changes-required, error (§15.4)", () => {
 	const approved = deriveAuditResultCard("approved", "ok");
 	assert.equal(approved.label, "APPROVED");
-	assert.deepEqual(approved.lines, ["Objective satisfied.", "Verification requirements satisfied.", "Required tasks and evidence accepted."]);
+	assert.deepEqual(approved.lines, ["ok"]);
 	const approvedText = renderAuditResultCard(approved, theme, 100).join("\n");
 	assert.match(approvedText, /Audit result ─ APPROVED/);
 

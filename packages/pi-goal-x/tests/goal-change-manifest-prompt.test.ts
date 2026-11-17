@@ -117,7 +117,7 @@ describe("buildGoalAuditorPrompt — change manifest block", () => {
 		// The only other addition is the manifest-conditional checklist item, so
 		// dropping exactly those lines must leave the base prompt's content.
 		const conditionalItem =
-			"5. Cross-check the workspace change manifest entries against the actual repository content: machine-collected evidence is not proof and never substitutes for verification.";
+			"5. Cross-check the workspace change manifest entries against the actual repository content: machine-collected evidence is not proof and never substitutes for verification. [checkId=default-5]";
 		const compact = (text: string): string[] => text.split("\n").filter((line) => line.trim() !== "");
 		const blockLines = compact(block);
 		assert.deepEqual(

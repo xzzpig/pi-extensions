@@ -26,6 +26,10 @@ export const LIVE_E2E_ENTRY = "tests/e2e/goal-audit-supervisor-live.mjs";
 
 /** The fork suites this change owns, relative to the package root. */
 export const FORK_TEST_FILES = [
+	"tests/fork-audit-checklist.test.ts",
+	"tests/fork-audit-progress.test.ts",
+	"tests/fork-audit-dashboard.test.ts",
+	"tests/fork-audit-completion-gate.test.ts",
 	"tests/goal-tweak-projection.test.ts",
 	"tests/goal-tweak-diff.test.ts",
 	"tests/goal-tweak-confirmation.test.ts",

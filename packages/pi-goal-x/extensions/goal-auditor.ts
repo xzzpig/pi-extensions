@@ -1,3 +1,5 @@
+import { buildAuditChecklist, auditChecklistPromptLines, auditChecklistExtraPromptLines, type AuditChecklist, type AuditItemProgress } from "./fork-audit-checklist.ts";
+import { auditorSessionRuntimeOptions } from "./fork-auditor-runtime-options.ts";
 import { createExtensionRuntime, type ExtensionContext, type ModelRuntime, type ResourceLoader } from "@earendil-works/pi-coding-agent";
 import type { GoalRecord, GoalTask, GoalTaskList } from "./goal-record.ts";
 import { countTaskSubtree } from "./goal-task-count.ts";
@@ -20,6 +22,10 @@ export {
 } from "./goal-auditor-delegation.ts";
 
 export interface AuditorProgress {
+	attemptId?: string;
+	/** Attempt-local checklist snapshot; observers receive copies of reported states. */
+	checks?: AuditItemProgress[];
+	progressDiagnostic?: string;
 	/** Current tool being executed by the auditor, if any */
 	currentTool?: string;
 	/** Arguments passed to the current tool (truncated for display) */
@@ -134,13 +140,9 @@ function minimalGoalMetadata(goal: GoalRecord): string {
  * byte-for-byte identical prompt. All operator payloads are escaped before
  * interpolation.
  */
-function operatorAuditPromptBlocks(auditor: GoalAuditorSettings | undefined): string[] {
+function operatorAuditPromptBlocks(auditor: GoalAuditorSettings | undefined, checklist: AuditChecklist): string[] {
 	return [
-		...(auditor?.checklistExtra?.length ? [
-			"",
-			"Additional audit checks required by operator configuration:",
-			...auditor.checklistExtra.map((item, index) => `${index + 1}. ${escapePromptPayload(item)}`),
-		] : []),
+		...auditChecklistExtraPromptLines(checklist),
 		...(auditor?.evidenceRequests?.length ? [
 			"",
 			"Evidence the operator asks you to collect (use your read-only tools; the results are evidence to cross-check, not proof by themselves):",
@@ -170,6 +172,7 @@ function operatorAuditPromptBlocks(auditor: GoalAuditorSettings | undefined): st
 }
 
 export function buildGoalAuditorPrompt(args: {
+	checklist?: AuditChecklist;
 	goal: GoalRecord;
 	detailedSummary: string;
 	completionSummary?: string | null;
@@ -186,27 +189,8 @@ export function buildGoalAuditorPrompt(args: {
 	changeManifest?: string | null;
 }): string {
 	const auditor = args.settings?.auditor;
-	// The default checklist stays byte-for-byte identical to the pre-0.8.0
-	// prompt; `auditor.checklist` replaces it wholesale (the protocol tail
-	// below is never part of it and always remains). Upstream 0.31.9 reworded
-	// its checklist and moved the verdict protocol to <approved/> markers; the
-	// fork keeps its own wording and structured_output protocol.
-	const baseChecklist = [
-		"1. Extract the real success criteria from the objective, including quality and reader outcomes.",
-		"2. Inspect artifacts or command output that can prove or disprove those criteria. Treat the executor claim as an untrusted assertion and cross-check it with actual file/shell evidence — a claim alone is never proof.",
-		...(!args.settings?.disableContracts && args.goal.verificationContract?.trim()
-			? ["3. Verify every item in the verification contract. If any item is missing or weakly addressed, disapprove."]
-			: []),
-		"4. Explain missing or weak evidence, especially scaffold-versus-final quality gaps.",
-		// Conditional on purpose: with no manifest this prompt must stay
-		// byte-for-byte identical to the pre-manifest behavior.
-		...(args.changeManifest?.trim()
-			? ["5. Cross-check the workspace change manifest entries against the actual repository content: machine-collected evidence is not proof and never substitutes for verification."]
-			: []),
-	];
-	const checklistLines = auditor?.checklist !== undefined
-		? auditor.checklist.map((item, index) => `${index + 1}. ${escapePromptPayload(item)}`)
-		: baseChecklist;
+	const checklist = args.checklist ?? buildAuditChecklist(args);
+	const checklistLines = auditChecklistPromptLines(checklist);
 	return [
 		"You are the independent completion auditor for pi-goal-x.",
 		"The executor claims the goal is complete. Decide whether the user's objective is actually satisfied.",
@@ -265,10 +249,10 @@ export function buildGoalAuditorPrompt(args: {
 		"",
 		"Audit checklist:",
 		...checklistLines,
-		...operatorAuditPromptBlocks(auditor),
+		...operatorAuditPromptBlocks(auditor, checklist),
 		"",
 		"Progress reporting:",
-		"Use report_auditor_progress at natural phase boundaries so the parent dashboard can show progress.",
+		"Use report_auditor_progress for each supplied checkId: report state='running' before inspecting it, then 'passed' or 'failed' with a brief detail describing evidence or the gap. Rechecking may revise a state. Do not add or rename checklist items. These states are display-only and do not replace the final verdict.",
 		"Finish by calling structured_output exactly once with { verdict: 'approved' | 'disapproved', report: string, findings: string[] }.",
 	].join("\n");
 }
@@ -303,6 +287,5 @@ export function makeAuditorResourceLoader(systemPrompt = [
  * even when `~/.pi/agent/auth.json` has a Cursor key.
  */
 export function resolveAuditorSessionModelOptions(ctx: ExtensionContext): { modelRuntime?: ModelRuntime } {
-	const registry = ctx.modelRegistry as unknown as { runtime?: ModelRuntime } | undefined;
-	return { modelRuntime: registry?.runtime };
+	return auditorSessionRuntimeOptions(ctx);
 }

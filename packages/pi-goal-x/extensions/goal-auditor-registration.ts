@@ -17,13 +17,13 @@ import {
 
 const GOAL_X_EXTENSIONS_DIR = fileURLToPath(new URL("./", import.meta.url));
 const DEFAULT_AUDITOR_PROGRESS_EXTENSION_PATH = `${GOAL_X_EXTENSIONS_DIR}goal-auditor-progress.ts`;
-/** Protocol tool required by the delegation preflight and the five-stage dashboard. */
+/** Protocol tool required by delegation preflight and the dynamic checklist dashboard. */
 const REQUIRED_AUDITOR_PROGRESS_TOOL = "report_auditor_progress";
 
 /**
  * Canonical default goal-auditor definition. The system prompt is the
- * verbatim body of the pre-0.8.0 `agents/goal-auditor.md`; the frontmatter
- * fields map one-to-one onto RuntimeAgentDefinition.
+ * original audit principles plus the item-progress protocol; the former
+ * frontmatter fields map one-to-one onto RuntimeAgentDefinition.
  */
 export const DEFAULT_AUDITOR_DEFINITION: RuntimeAgentDefinition = {
 	description: "Independent read-only completion auditor for pi-goal-x",
@@ -41,12 +41,12 @@ You are a read-only reviewer. Do not modify files, manage goals or tasks,
 create agents, or delegate work. The available bash tool is not a sandbox;
 use it only for non-mutating inspection and verification commands.
 
-Use report_auditor_progress at natural phase boundaries:
-- Starting audit: label="Starting audit...", percentage=0
-- Inspecting workspace: label="Inspecting workspace...", percentage=20
-- Verifying contracts: label="Verifying contracts...", percentage=40
-- Evaluating evidence: label="Evaluating evidence...", percentage=60
-- Final decision: label="Making final decision...", percentage=80
+Use report_auditor_progress for the checklist IDs supplied in the audit task:
+- Before inspecting an item: checkId=<supplied ID>, state="running".
+- After inspecting it: state="passed" or "failed", with a brief detail naming evidence or the gap.
+- Rechecking may revise an item's state. Do not add or rename checklist items.
+- Progress is presentation-only; it never substitutes for your final verdict.
+Legacy label/percentage calls are estimates, not proof that any checklist item passed.
 
 Finish by calling the package-provided structured_output tool exactly once with
 an object of this form:

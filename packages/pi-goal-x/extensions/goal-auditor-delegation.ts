@@ -1,3 +1,5 @@
+import { buildAuditChecklist, initialAuditChecks } from "./fork-audit-checklist.ts";
+import { createAuditProgressReducer, AUDIT_PROGRESS_V2_PREFIX } from "./fork-audit-progress.ts";
 // Fork-only module. The upstream completion auditor runs in an in-process
 // agent session; this fork instead delegates the audit to a pi-subagents child
 // agent. Everything here is that delegation machinery, moved verbatim out of
@@ -368,7 +370,7 @@ function outputLines(update: SubagentDelegationUpdate): string[] {
 }
 
 function isProgressProtocolLine(line: string): boolean {
-	return line.trim().startsWith(REPORT_AUDITOR_PROGRESS_PROTOCOL_PREFIX);
+	return line.trim().startsWith(REPORT_AUDITOR_PROGRESS_PROTOCOL_PREFIX) || line.trim().startsWith(AUDIT_PROGRESS_V2_PREFIX);
 }
 
 function progressDetailsFromOutput(update: SubagentDelegationUpdate): { label?: string; percentage?: number } {
@@ -407,7 +409,7 @@ function recentLines(update: SubagentDelegationUpdate): string[] | undefined {
 
 function safeProgress(callback: AuditorProgressCallback | undefined, progress: AuditorProgress): void {
 	try {
-		callback?.({ ...progress, recentOutput: [...progress.recentOutput] });
+		callback?.({ ...progress, checks: progress.checks?.map((item) => ({ ...item })), recentOutput: [...progress.recentOutput] });
 	} catch {
 		// Progress reporting is presentation-only and cannot affect the verdict.
 	}
@@ -570,7 +572,11 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 	const nodeId = args.nodeId ?? `goal-completion:${args.goal.id}:${args.goal.revision ?? 0}`;
 	const identity = { requestId, ownerRunId, nodeId };
 	const startedAt = Date.now();
+	const checklist = buildAuditChecklist({ goal: args.goal, settings, changeManifest: args.changeManifest });
+	const applyItemProgress = createAuditProgressReducer();
 	const progress: AuditorProgress = {
+		attemptId: requestId,
+		checks: initialAuditChecks(checklist),
 		recentOutput: [],
 		phase: "running",
 		elapsedMs: 0,
@@ -579,6 +585,7 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 		...identity,
 		agent: resolveAuditorAgent(settings),
 		task: buildGoalAuditorPrompt({
+			checklist,
 			goal: args.goal,
 			detailedSummary: args.detailedSummary,
 			completionSummary: args.completionSummary,
@@ -789,6 +796,7 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 					// The flow re-arms the audit display before resuming; from here on
 					// progress updates flow again until the attempt settles.
 					parked = false;
+					reportProgress(progress);
 					return parkPromise!;
 				},
 				cancel: () => {
@@ -849,7 +857,6 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 			void sidechannel.dispose();
 			progress.phase = "done";
 			progress.label = "Audit complete.";
-			progress.percentage = 100;
 			progress.elapsedMs = Date.now() - startedAt;
 			if (result.output.trim()) progress.recentOutput = result.output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-8);
 			reportProgress(progress);
@@ -876,7 +883,7 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 		};
 
 		subscribe(SUBAGENT_DELEGATION_STARTED_EVENT, (value) => {
-			if (!matchingIdentity(value, identity)) return;
+			if (settleStarted || settled || !matchingIdentity(value, identity)) return;
 			if (started) return;
 			started = true;
 			if (startedTimer) clearTimeout(startedTimer);
@@ -885,7 +892,7 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 			armTerminalTimeout();
 		});
 		subscribe(SUBAGENT_DELEGATION_UPDATE_EVENT, (value) => {
-			if (!matchingIdentity(value, identity)) return;
+			if (settleStarted || settled || !matchingIdentity(value, identity)) return;
 			const update = value as SubagentDelegationUpdate;
 			if (!started) {
 				started = true;
@@ -911,6 +918,7 @@ export async function runGoalCompletionAuditor(args: GoalCompletionAuditorArgs):
 			}
 			if (reported.label) progress.label = reported.label;
 			if (reported.percentage !== undefined) progress.percentage = reported.percentage;
+			applyItemProgress(progress, outputLines(update));
 			if (typeof update.durationMs === "number" && update.durationMs >= 0) progress.elapsedMs = update.durationMs;
 			else progress.elapsedMs = Date.now() - startedAt;
 			reportProgress(progress);

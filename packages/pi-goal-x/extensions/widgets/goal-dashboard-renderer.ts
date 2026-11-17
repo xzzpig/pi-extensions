@@ -1,4 +1,5 @@
 import type { GoalKeybinding } from "../goal-controls.ts";
+import { renderDynamicAuditorDashboard, type AuditDashboardRenderOptions } from "./fork-auditor-dashboard-renderer.ts";
 import { bindingKeys, commandHint, type GoalCommands } from "../goal-controls.ts";
 /**
  * Unified dashboard renderer (plan §5, §4).
@@ -20,7 +21,6 @@ import {
 	anchoredScrollOffset,
 	compactTaskViewportRows,
 	deriveTaskListViewport,
-	formatAuditElapsed,
 	formatBudget,
 	type DashboardStatusCode,
 	type DashboardTaskNode,
@@ -28,7 +28,6 @@ import {
 	type TaskListViewport,
 } from "./goal-dashboard-model.ts";
 import type { GoalActivityItem } from "../goal-activity.ts";
-import { truncateText } from "../goal-core.ts";
 import { DEFAULT_GOAL_KEYBINDINGS, formatGoalKeybinding, type GoalDashboardKeybindings } from "../goal-settings.ts";
 
 // mdLink is deliberately excluded: the chrome must stay neutral gray, not
@@ -52,7 +51,7 @@ function fit(value: string, width: number): string {
 	return visibleWidth(value) > width ? truncateToWidth(value, width, "…") : value;
 }
 
-function boxHeader(theme: Theme, width: number, left: string, right = ""): string {
+export function boxHeader(theme: Theme, width: number, left: string, right = ""): string {
 	const inner = Math.max(4, width - 2);
 	// One-tone frame line: corners, leading/trailing dashes and fill all carry
 	// the frame color; only the brand inside stays accent.
@@ -70,7 +69,7 @@ function boxHeader(theme: Theme, width: number, left: string, right = ""): strin
 	return `${frame(theme, "╭")}${l}${frame(theme, H.repeat(fill))}${r}${frame(theme, "╮")}`;
 }
 
-function boxLine(theme: Theme, width: number, content: string): string {
+export function boxLine(theme: Theme, width: number, content: string): string {
 	const inner = Math.max(2, width - 2);
 	const contentFit = fit(content, inner - 1);
 	const pad = Math.max(0, inner - 1 - visibleWidth(contentFit));
@@ -100,7 +99,7 @@ function boxSectionRule(theme: Theme, width: number, label: string, right = ""):
 	return `${frame(theme, "├")}${l}${frame(theme, H.repeat(fill))}${r}${frame(theme, "┤")}`;
 }
 
-function boxFooter(theme: Theme, width: number, content: string, right = ""): string {
+export function boxFooter(theme: Theme, width: number, content: string, right = ""): string {
 	const inner = Math.max(4, width - 2);
 	// Optional right slot mirrors boxHeader's right-meta treatment (` ● ─`
 	// before the corner), so the auditor dot sits at the bottom-right of the
@@ -606,9 +605,6 @@ export function clampLinesToWidth(lines: string[], width: number): string[] {
 
 import type { AuditorDashboardModel, AuditResultCard } from "./auditor-dashboard-model.ts";
 
-const CHECK_SYMBOL = { passed: "✓", running: "◌", pending: "·", failed: "✗" } as const;
-const CHECK_COLOR = { passed: "success", running: "accent", pending: "muted", failed: "error" } as const;
-
 /**
  * Structured audit dashboard (§15.3): five check stages, a progress bar, and
  * the elapsed duration, using the same visual system as the goal dashboard.
@@ -619,42 +615,9 @@ export function renderAuditorDashboard(
 	model: AuditorDashboardModel,
 	theme: Theme,
 	width: number,
-	opts: { showToolDetails?: boolean; interruptKey?: GoalKeybinding } = {},
+	opts: AuditDashboardRenderOptions = {},
 ): string[] {
-	const safeWidth = Math.max(10, width);
-	const inner = safeWidth - 2;
-	const lines: string[] = [];
-	const duration = formatAuditElapsed(model.elapsedMs);
-	lines.push(boxHeader(theme, safeWidth, frame(theme, `Independent completion audit ─ ${model.auditorLabel}`), frame(theme, duration)));
-
-	for (const check of model.checks) {
-		const symbol = CHECK_SYMBOL[check.state];
-		const color = CHECK_COLOR[check.state];
-		lines.push(boxLine(theme, safeWidth, `${theme.fg(color as RenderColor, symbol)} ${check.label}`));
-	}
-
-	if (model.percentage !== undefined) {
-		const barWidth = Math.max(8, Math.min(inner - 12, 30));
-		const bar = progressBar(theme, model.percentage, barWidth);
-		lines.push(boxLine(theme, safeWidth, `${bar} ${theme.fg("muted", `${model.percentage}%`)}`));
-	}
-
-	const showDiagnostics = opts.showToolDetails === true || model.verdict === "disapproved" || model.verdict === "error";
-	if (showDiagnostics) {
-		if (model.currentTool) {
-			const args = model.currentToolArgs ? ` ${dim(theme, truncateText(model.currentToolArgs, Math.max(10, inner - 20)))}` : "";
-			lines.push(boxLine(theme, safeWidth, `${accent(theme, "tool")} ${model.currentTool}${args}`));
-		}
-		if (model.recentOutput.length > 0) {
-			lines.push(boxLine(theme, safeWidth, dim(theme, "─".repeat(Math.max(4, inner - 8)))));
-			for (const output of model.recentOutput.slice(0, 3)) {
-				lines.push(boxLine(theme, safeWidth, dim(theme, truncateText(output, Math.max(8, inner - 4)))));
-			}
-		}
-	}
-
-	lines.push(boxFooter(theme, safeWidth, model.active && bindingKeys(opts.interruptKey ?? "escape").length ? `${formatGoalKeybinding(opts.interruptKey ?? "escape")}: stop audit` : ""));
-	return lines;
+	return renderDynamicAuditorDashboard(model, theme, width, opts);
 }
 
 /** Audit result card (§15.4): APPROVED or CHANGES REQUIRED / ERROR. */

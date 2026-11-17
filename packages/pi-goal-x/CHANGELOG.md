@@ -2,6 +2,11 @@
 
 All notable changes to pi-goal-x are documented here.
 
+## [0.12.4] — 2026-11-17 (fork release)
+
+- 完成审计 dashboard 改为显示本次实际生效的审计清单（默认或替换的 `auditor.checklist`，再追加 `checklistExtra`），由审计员按项目 ID 上报状态与依据；不再按百分比推算检查项，也不在终态自动补勾。
+- 紧凑视图显示检查覆盖度和当前项，展开视图可滚动浏览完整清单、依据及工具诊断；保留旧进度估计兼容和同一审计挂起/继续。逐项状态只作展示，不增加完成门槛，最终仍由原结构化 verdict 决定。
+
 ## [0.12.3] — 2026-11-17 (fork release)
 
 - 新增项目本地配置层 `.pi/pi-goal-x-settings.local.json`：按字段覆盖项目共享与个人全局配置；`/goal-settings` 与 Controls 支持三个编辑范围并展示来源，默认仍编辑项目共享层。

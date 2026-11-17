@@ -9,8 +9,22 @@
   "upstreamCommit": "27d9facf49e66ee677770a74e26198a8bdcada8a",
   "squash": true,
   "lastSyncedAt": "2026-10-29T16:24:28Z",
-  "notes": "Forked from the pi-goal-x upstream. Capability contracts live in openspec (spec goal-completion-auditing; the goal-persisted-event-channels spec for the persisted message channels; the S1/S2 auditor seams for pi-openspec-x live in openspec change add-pi-openspec-x, design D10; openspec change minimize-goal-model-telemetry / goal-lifecycle for the main-model view boundary; and openspec change silence-unfocused-goal-prompts for the retired unfocused model reminder) and in the package-local spec specs/2026-09-12-escape-foreign-ui-prompt-guard for the Escape/ui-prompt guard.",
+  "notes": "Forked from the pi-goal-x upstream. Capability contracts live in openspec (spec goal-completion-auditing; the goal-persisted-event-channels spec for the persisted message channels; the S1/S2 auditor seams for pi-openspec-x live in openspec change add-pi-openspec-x, design D10; openspec change minimize-goal-model-telemetry / goal-lifecycle for the main-model view boundary; and openspec change silence-unfocused-goal-prompts for the retired unfocused model reminder) and openspec change show-dynamic-audit-checklist for attempt-local checklist presentation, and in the package-local spec specs/2026-09-12-escape-foreign-ui-prompt-guard for the Escape/ui-prompt guard.",
   "knownDebt": [
+    {
+      "kind": "other",
+      "reason": "[policy] The existing upstream tests goal-audit-dashboard.test.ts, goal-widget.test.ts and e2e/goal-lifecycle-dashboard.test.ts retain their lifecycle/diagnostic coverage but replace only the five-stage, percentage-derived and generic all-accepted assertions superseded by D-17. Remove these assertion divergences when upstream adopts the dynamic checklist presentation."
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-goal-x/extensions/widgets/*.ts",
+      "reason": "[policy] Accept only the dynamic-audit model/renderer/viewport seams in the upstream auditor-dashboard-model, goal-dashboard-renderer and goal-widget modules. Fork logic remains in fork-only modules; remove these seams when upstream provides an actual-checklist progress model and an audit viewport hook."
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-goal-x/extensions/goal-auditor.ts",
+      "reason": "[policy] Keep the shared attempt-checklist/progress type seams and the one-call runtime-options seam. The upstream optional registry lookup is mirrored in fork-auditor-runtime-options.ts so its SDK invariant can be documented without annotating upstream-original lines. Remove these seams when upstream supports the fork checklist protocol and a typed registry-runtime lookup."
+    },
     {
       "kind": "other",
       "path": "packages/pi-goal-x/package.json",
@@ -151,10 +165,12 @@
     }
   ],
   "reapplyOnSync": [
+    "Dynamic audit dashboard: reapply the widgets/auditor-dashboard-model.ts delegation to fork-auditor-dashboard-model.ts (dynamic IDs, retained states and actual approval report), widgets/goal-dashboard-renderer.ts delegation plus boxHeader/boxLine/boxFooter exports, and widgets/goal-widget.ts attempt-aware viewport/render/navigation seams. Keep docs/dynamic-audit-checklist.md in package.json files. Re-align only the superseded five-stage/result-card assertions in upstream tests; new coverage stays in fork-only suites.",
+    "Keep resolveAuditorSessionModelOptions as a one-call seam to fork-auditor-runtime-options.ts; that helper mirrors upstream's optional registry.runtime lookup and must be realigned if upstream changes the SDK/runtime contract.",
     "Use the root pnpm lockfile; reapply the pnpm workspace CI, packing, and fork publication-documentation adaptations. After an ignore-scripts install, build pi-subagents via its prepack script because pnpm links the dependency to its generated dist-pkg.",
     "keep goal-prompts.ts upstream space-indent inside cachedPrompt/retainedTaskChars, and keep goal-policy.ts byte-identical",
     "re-apply the settings nested auditor group (legacy flat aliases fold into auditor.* leaves, nested wins per file, no deprecated_key diagnostics); map any new upstream flat auditor setting through the nested group; every auditor leaf lives once in the fork-only extensions/goal-auditor-settings.ts table (kind/tier/default/persistence/status label/invalid message), which drives parse, resolution, persistence and the /goal-status rows — add a leaf there, and keep only the thin drivers in goal-settings.ts.",
-    "re-apply the auditor prompt design: baseChecklist/auditor.checklist override plus the structured_output protocol, the buildGoalAuditorPrompt injection order, the always-preserved protocol tail, byte-identical output when unset, and feedbackNotes appending to rejectionText in goal-completion.ts",
+    "re-apply the auditor prompt seam to fork-audit-checklist.ts: buildGoalAuditorPrompt accepts the attempt snapshot, renders source-aware checklist IDs and shares it with delegation progress; preserve auditor.checklist replacement, checklistExtra order, structured_output, injection order and protocol tail. Omitted versus resolved-but-unset settings stay byte-identical; the dynamic protocol may uniformly change the historical prompt. Preserve feedbackNotes appending to rejectionText in the fork completion flow.",
     "extend goal-drafting's strip regex to strip the 'Budget: …' prefix line",
     "re-apply the agents/goal-auditor.md deletion if upstream re-adds it",
     "re-apply the completion-flow S1 seam (implementation now in fork-only extensions/fork-completion-flow.ts; goal-completion.ts is a re-export seam): the completion-audit settings read point calls loadGoalSettingsWithAuditorOverride(ctx.cwd, auditTarget.id) from the fork-only extensions/goal-auditor-override.ts (per-goal auditor override merged over the global settings; no override returns the global settings unchanged). goal-auditor-override.ts's THINKING_LEVELS literal mirrors goal-settings.ts's ThinkingLevel union for read-time validation — re-align it whenever upstream adds a thinking level Retain owner-bound ActiveGoalAudit cancellation, same-child Escape resume, and mandatory audit_started/audit_skipped/audit_result persistence; request and usage accounting remain best effort.",
@@ -176,16 +192,17 @@
     "审计监督只读旁路(2026-10-19):同步时保留 fork 在 extensions/fork-completion-flow.ts 的单外层完成 wrapper（goal-completion.ts 仅为 re-export seam）(捕获初次与 resume 的 supervisorHandoff 后一次性回流)、goal-auditor-delegation.ts 的协调错误先锁定再精确取消、终态冻结与 appendAuditSupervisorUsageEntry、goal-ledger.ts 的 audit_supervisor_usage 事件与校验分支、goal-model-view.ts 两处谓词对该事件的排除,以及 goal-events.ts/goal-state.ts 的旁路生命周期失效挂点。goal-audit-sidechannel.ts、goal-audit-context-snapshot.ts、goal-audit-supervisor-handoff.ts 为 fork-only 新模块,不写入任何上游文件。测试入口侧同样需要重放:run-unit-tests.mjs 的分组执行(unit/integration 用 stub adapter、tests/integration/goal-audit-sidechannel-sdk.test.ts 单独一组且清空 NODE_OPTIONS、所有非空组都执行并传播首个失败)、scripts/test-groups.mjs 的分组计划、scripts/fork-test-runner.mjs 的 fork suite 清单(必须排除 live E2E)、以及 scripts/test-adapter-hooks.mjs 中为快照转发的 buildSessionContext 捕获;--selfcheck 必须检查清单后退出。",
     "For the Pi 1.4 Responses and continuation SDK workers, adapt upstream fixtures to the fork constant tool surface and structured pi-subagents delegation. Use the real pi-subagents owner for lifecycle scenarios, a bounded event-owner fixture for the installed-Responses regression, and allow sufficient child-process startup time without weakening assertions.",
     "在 goal-runtime.ts 最终发送路径保留同步 veto 调用点：位于原有 idle/pending readiness 检查后、authorize/claim 前；veto 不分配额度、checkpoint 序号或消息，放行后复核目标身份与宿主 readiness，busy 时仍按原 50ms 间隔重试。goal-state.ts 将该 hook 接到 fork-only goal-auto-continue-gate.ts，以当前 sessionId/goalId 发出事件；协议实现与行为测试留在 fork-only 文件。",
-    "Keep the fork-only docs/auto-continuation-gate.md and docs/unfocused-sessions.md in the published package by retaining their explicit entries in package.json's files list.",
+    "Keep the fork-only docs/auto-continuation-gate.md, docs/unfocused-sessions.md and docs/dynamic-audit-checklist.md in the published package by retaining their explicit entries in package.json's files list.",
     "在 goal-events.ts 的 currentGoalContextParts 与 goal-state.ts 的 focus 变更/会话载入路径上删除上游重新引入的未聚焦模型提醒：请求侧 [PI GOAL UNFOCUSED] 分支与 pi-goal-steering-event 发送都不得恢复；保留其 stale-checkpoint 分支、focus entry 写入与 UI 更新。旧键 hideUnfocusedPrompt 继续解析/分层/保存但不进入设置菜单与设置摘要。",
     "目标调整差异审核：保留 goal-drafting.ts 的 withTweakReview 执行包装、TweakReview 候选/确认/summary/mutate 接缝、初步待校验展示及 renderTweakReview 结果接缝；tweak 业务字段构造已抽到 fork-only goal-tweak-projection.ts，后续上游修改恢复/预算/任务合并规则时需同步对齐。goal-drafting 与 goal-tweak-status-persistence 测试保留 fork-tweak-draft-fixture 的旧问卷夹具到新调整决策映射及初步展示断言调整；package.json files 保留 docs/goal-tweak-diff.md。新测试按清单重新生成 tests/.test-manifest.json。",
     "Keep Type imported directly from host-provided typebox in goal-core-tools.ts, goal-drafting.ts, goal-oracle.ts and goal-task-tools.ts for Pi 1.5 npm SDK type compatibility; retain the fork-only goal-auditor-progress.ts direct typebox import. Do not migrate goal-x schemas to pi-schema.",
     "packaging identity (repository.url, files allowlist, per-package lockfile policy) is enforced by scripts/check-fork-identity.mjs — run `node scripts/check-fork-identity.mjs` after every subtree pull/sync"
   ],
   "doNotReintroduce": [
+    "Do not restore fixed audit stages, percentage-derived item success or terminal auto-checkmarks; item progress is display-only and must not become a completion gate or replace the structured verdict (show-dynamic-audit-checklist).",
     "Do not restore upstream repository.url as the fork publishing source; npm provenance must identify the actual build repository.",
     "do not restore the temp-dir PI_SUBAGENT_EXTRA_AGENT_DIRS materialization",
-    "do not adopt upstream's auditor checklist rewording, its <approved/> verdict protocol, or its runGoalQuestionnaire flow (the fork keeps baseChecklist/auditor.checklist, structured_output and the fork questionnaire UI)",
+    "do not adopt upstream's auditor checklist rewording, its <approved/> verdict protocol, or its runGoalQuestionnaire flow (the fork keeps default texts in fork-audit-checklist.ts, auditor.checklist replacement, structured_output and the fork questionnaire UI)",
     "do not revert the tsconfig target from ES2023 (ES2022 breaks typecheck)",
     "do not introduce context occupancy/window/percentage into new main-model output unless the upstream showContextUsage setting is explicitly enabled; do not reintroduce cumulative elapsed time, unbudgeted lifetime token totals, or plugin-added audit cost/token/turn telemetry; keep real budgets, finite run constraints, execution state and recovery guidance",
     "不重引入已持久化旧 Goal-X 消息/旧工具结果的请求时遥测清洗、JSON 碎片解析或 cursor 链重组；新输出精简不改变 delegated auditor/Oracle 的既有隔离",

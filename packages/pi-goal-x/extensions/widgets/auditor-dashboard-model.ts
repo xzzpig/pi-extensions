@@ -1,24 +1,25 @@
 /**
  * Structured audit dashboard model (plan §15).
  *
- * Pure derivation from the low-level auditor progress stream: five check
- * stages (objective, verification, tasks, workspace, decision) with explicit
- * pending/running/passed/failed states, plus the approval/rejection result
+ * Derivation from the actual checklist and reported pending/running/passed/
+ * failed states, plus the approval/rejection result
  * card model. No TUI imports; the renderer and /goal-status share this model.
  */
 
 import type { AuditorProgress } from "../goal-auditor.ts";
+import { deriveDynamicAuditorDashboardModel } from "./fork-auditor-dashboard-model.ts";
 import { formatDashboardDuration } from "./goal-dashboard-model.ts";
 
 export type AuditCheckState = "pending" | "running" | "passed" | "failed";
 
-export type AuditCheckId = "objective" | "verification" | "tasks" | "workspace" | "decision";
+export type AuditCheckId = string;
 
 export interface AuditCheck {
 	id: AuditCheckId;
 	label: string;
 	state: AuditCheckState;
 	detail?: string;
+	sequence?: number;
 }
 
 export type AuditVerdict = "approved" | "disapproved" | "error";
@@ -28,6 +29,7 @@ export interface AuditorDashboardModel {
 	elapsedMs: number;
 	percentage?: number;
 	checks: AuditCheck[];
+	progressDiagnostic?: string;
 	currentTool?: string;
 	currentToolArgs?: string;
 	recentOutput: string[];
@@ -43,14 +45,6 @@ export interface AuditResultCard {
 	lines: string[];
 }
 
-const CHECK_LABELS: Array<{ id: AuditCheckId; label: string }> = [
-	{ id: "objective", label: "Objective and success criteria" },
-	{ id: "verification", label: "Verification contracts" },
-	{ id: "tasks", label: "Tasks and recorded evidence" },
-	{ id: "workspace", label: "Workspace inspection" },
-	{ id: "decision", label: "Final decision" },
-];
-
 export interface DeriveAuditorDashboardOptions {
 	auditorLabel?: string;
 	/** Result verdict when known (set after the audit session finishes). */
@@ -60,62 +54,14 @@ export interface DeriveAuditorDashboardOptions {
 /**
  * Derive the structured audit dashboard from the raw progress stream (§15.2).
  *
- * Active audit: checks advance through percentage bands (objective ≥20%,
- * verification ≥40%, tasks ≥60%, workspace ≥80%, decision ≥80%) so the five
- * stages light up in order. Finished audit: all checks pass except decision,
- * which follows the verdict (approved → passed; disapproved/error → failed).
+ * Checks retain the last reported item states. Percentage estimates and the
+ * final verdict never infer or overwrite those states.
  */
 export function deriveAuditorDashboardModel(
 	progress: AuditorProgress,
 	options: DeriveAuditorDashboardOptions = {},
 ): AuditorDashboardModel {
-	const pct = clampPercentage(progress.percentage);
-	const done = progress.phase === "done";
-	const verdict = options.verdict !== undefined ? options.verdict : null;
-
-	const checks: AuditCheck[] = CHECK_LABELS.map(({ id, label }) => {
-		if (!done) {
-			const state = checkStateActive(id, pct);
-			return { id, label, state };
-		}
-		if (id === "decision") {
-			const state: AuditCheckState = verdict === "approved" ? "passed" : verdict === "disapproved" || verdict === "error" ? "failed" : "passed";
-			return { id, label, state };
-		}
-		return { id, label, state: "passed" };
-	});
-
-	return {
-		auditorLabel: options.auditorLabel ?? progress.label ?? "Independent completion audit",
-		elapsedMs: progress.elapsedMs,
-		...(progress.percentage !== undefined ? { percentage: pct } : {}),
-		checks,
-		currentTool: progress.currentTool,
-		currentToolArgs: progress.currentToolArgs,
-		recentOutput: progress.recentOutput,
-		...(verdict ? { verdict } : {}),
-		active: !done,
-	};
-}
-
-function checkStateActive(id: AuditCheckId, pct: number): AuditCheckState {
-	switch (id) {
-		case "objective":
-			return pct >= 20 ? "passed" : "running";
-		case "verification":
-			return pct >= 40 ? "passed" : pct >= 20 ? "running" : "pending";
-		case "tasks":
-			return pct >= 60 ? "passed" : pct >= 40 ? "running" : "pending";
-		case "workspace":
-			return pct >= 80 ? "passed" : pct >= 60 ? "running" : "pending";
-		case "decision":
-			return pct >= 80 ? "running" : "pending";
-	}
-}
-
-function clampPercentage(value: number | undefined): number {
-	if (value === undefined) return 0;
-	return Math.min(100, Math.max(0, Math.round(value)));
+	return deriveDynamicAuditorDashboardModel(progress, options);
 }
 
 /** Human duration label for the audit header (reused formatter). */
@@ -133,7 +79,7 @@ export function deriveAuditResultCard(verdict: AuditVerdict, report: string): Au
 		return {
 			verdict,
 			label: "APPROVED",
-			lines: ["Objective satisfied.", "Verification requirements satisfied.", "Required tasks and evidence accepted."],
+			lines: [oneLine(report) || "Auditor approved the goal."],
 		};
 	}
 	if (verdict === "error") {

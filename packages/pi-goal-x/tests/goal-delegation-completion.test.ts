@@ -4,106 +4,17 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
 	SUBAGENT_DELEGATION_REQUEST_EVENT,
 	SUBAGENT_DELEGATION_RESPONSE_EVENT,
 	SUBAGENT_DELEGATION_STARTED_EVENT,
 	SUBAGENT_DELEGATION_UPDATE_EVENT,
 } from "@xzzpig/pi-subagents/delegation";
-import goalExtension from "../extensions/goal.ts";
 import { runGoalCompletionAuditor, type GoalCompletionAuditorArgs } from "../extensions/goal-auditor.ts";
 import { REPORT_AUDITOR_PROGRESS_PROTOCOL_PREFIX } from "../extensions/goal-auditor-progress.ts";
-import { createGoal, goalFocusDetails } from "../extensions/goal-record.ts";
-import { writeActiveGoalFile } from "../extensions/storage/goal-files.ts";
 import { goalLedgerPath } from "../extensions/goal-ledger.ts";
-import { installSupervisorResponderAck } from "./fixtures/goal-audit-supervisor-owner.ts";
 
-class FakeEvents {
-	private readonly handlers = new Map<string, Array<(value: unknown) => void>>();
-
-	on(event: string, handler: (value: unknown) => void): () => void {
-		const entries = this.handlers.get(event) ?? [];
-		entries.push(handler);
-		this.handlers.set(event, entries);
-		return () => this.handlers.set(event, (this.handlers.get(event) ?? []).filter((entry) => entry !== handler));
-	}
-
-	emit(event: string, value: unknown): void {
-		for (const handler of [...(this.handlers.get(event) ?? [])]) handler(value);
-	}
-}
-
-function createHarness(cwd: string) {
-	const handlers = new Map<string, Function>();
-	const tools = new Map<string, ToolDefinition>();
-	const events = new FakeEvents();
-	// The responder must be registered BEFORE the delegation request; this
-	// fixture answers registration with an inert handle (no model work) so the
-	// existing lifecycle assertions keep running unchanged.
-	installSupervisorResponderAck(events);
-	const messages: unknown[] = [];
-	let activeTools = ["read", "bash", "edit", "write"];
-	const goal = createGoal({ objective: "Ship a complete delegated audit integration.", autoContinue: true, sisyphus: false });
-	writeActiveGoalFile({ cwd }, goal);
-	mkdirSync(path.join(cwd, ".pi", "agents"), { recursive: true });
-	writeFileSync(path.join(cwd, ".pi", "agents", "goal-auditor.md"), `---
-name: goal-auditor
-description: Test completion auditor
-tools: read, grep, find, ls, bash, report_auditor_progress
-extensions:
-inheritProjectContext: false
-inheritSkills: false
-systemPromptMode: replace
----
-
-Test auditor.
-`, "utf8");
-	const entries = [{ type: "custom", customType: "pi-goal-focus", data: goalFocusDetails(goal.id, "created") }];
-	const pi = {
-		registerTool: (definition: ToolDefinition) => { tools.set(definition.name, definition); },
-		registerCommand: () => {},
-		on: (event: string, handler: Function) => { handlers.set(event, handler); },
-		appendEntry: () => {},
-		registerMessageRenderer: () => {},
-		sendMessage: (message: unknown) => { messages.push(message); },
-		getActiveTools: () => [...activeTools],
-		setActiveTools: (names: string[]) => { activeTools = [...names]; },
-		events,
-		hasUI: false,
-	};
-	const ctx = {
-		cwd,
-		hasUI: false,
-		isProjectTrusted: () => true,
-		sessionManager: {
-			getBranch: () => entries,
-			getCwd: () => cwd,
-			getSessionId: () => "delegated-completion-session",
-			getRoot: () => cwd,
-		},
-		ui: {
-			notify: () => {},
-			setStatus: () => {},
-			setWidget: () => {},
-			onTerminalInput: () => () => {},
-			select: async () => undefined,
-			confirm: async () => false,
-			custom: async () => undefined,
-		},
-		getSystemPrompt: () => "base",
-		isIdle: () => true,
-		hasPendingMessages: () => false,
-		abort: () => {},
-	} as unknown as ExtensionContext;
-	goalExtension(pi as any);
-	return { handlers, tools, events, ctx, goal, messages, core: (pi as any)._goalCore };
-}
-
-async function start(harness: ReturnType<typeof createHarness>): Promise<void> {
-	await harness.handlers.get("session_start")?.({ reason: "start" }, harness.ctx);
-	await harness.handlers.get("before_agent_start")?.({ systemPrompt: "base", prompt: "test", systemPromptOptions: {} }, harness.ctx);
-}
+import { createHarness, start } from "./fixtures/fork-audit-completion-harness.ts";
 
 function ledgerEvents(cwd: string): Array<{ type?: string; verdict?: string; report?: string }> {
 	try {
