@@ -39,6 +39,16 @@ The previous mixed log placed the following fork baseline-capture notes under up
 - The auditor's tool whitelist, its `structured_output` verdict contract, the
   completion transaction, and the dashboard phase semantics are unchanged.
 
+## [0.12.5] - 2026-11-19
+
+### Fork changes
+
+- 创建及调整最终确认支持正文滚动、固定决策区与安全鼠标操作；宽屏调整差异使用独立随包交付的共享并排排版，保留键盘和既有事务。
+
+- 审计面板支持原生鼠标展开、收起与清单滚轮浏览；保留键盘、选字、浮层和挂起继续行为，不改变审计事务。
+
+- 目标任务树自动跟随当前任务，展开当前分支并保留手动浏览；支持全屏模式鼠标滚轮、点击父任务展开/收起及返回当前任务。鼠标交互不改变任务进度，键盘导航仍然可用。
+
 ## [0.12.4] — 2026-11-17 (fork release)
 
 - 完成审计 dashboard 改为显示本次实际生效的审计清单（默认或替换的 `auditor.checklist`，再追加 `checklistExtra`），由审计员按项目 ID 上报状态与依据；不再按百分比推算检查项，也不在终态自动补勾。

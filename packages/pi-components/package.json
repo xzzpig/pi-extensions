@@ -19,6 +19,10 @@
     "LICENSE"
   ],
   "exports": {
+    "./diff": {
+      "types": "./dist/src/diff.d.ts",
+      "default": "./src/diff.ts"
+    },
     "./transcript": {
       "types": "./dist/src/transcript.d.ts",
       "default": "./src/transcript.ts"

@@ -1,6 +1,6 @@
 {
   "name": "@xzzpig/pi-tool-display",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Compact tool call rendering, diff visualization, and output truncation extension for Pi coding agent. Fork of MasuRii/pi-tool-display adding a tail-style live preview for running bash commands.",
   "type": "module",
   "main": "./index.ts",
@@ -34,7 +34,7 @@
     "check": "npm run lint && npm run test",
     "typecheck": "tsc -p tsconfig.json",
     "build:types": "rollup -c rollup.dts.config.mjs",
-    "prepack": "pnpm run build:types",
+    "prepack": "pnpm --filter @xzzpig/pi-components run build && pnpm run build:types && node ../../scripts/fork-stage-diff-consumer.mjs",
     "postinstall": "node -e \"const fs=require('fs'),cp=require('child_process'),p=require('path');const cwd=process.cwd();const normalized=cwd.split(p.sep).join('/');if(!normalized.includes('/.pi/agent/extensions/'))process.exit(0);const s=p.resolve(cwd,'../../scripts/patch-vulnerable-deps.mjs');if(!fs.existsSync(s))process.exit(0);const r=cp.spawnSync(process.execPath,[s,'--target',cwd,'--quiet'],{stdio:'inherit'});process.exit(r.status||0)\""
   },
   "keywords": [
@@ -68,7 +68,9 @@
     "node": ">=20"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "directory": "dist-pkg",
+    "linkDirectory": false
   },
   "pi": {
     "changelogPath": "./FORK-CHANGELOG.md",
@@ -93,5 +95,11 @@
     "rollup-plugin-dts": "^6.4.1",
     "tsx": "4.22.4",
     "typescript": "catalog:"
-  }
+  },
+  "dependencies": {
+    "@xzzpig/pi-components": "workspace:*"
+  },
+  "bundledDependencies": [
+    "@xzzpig/pi-components"
+  ]
 }

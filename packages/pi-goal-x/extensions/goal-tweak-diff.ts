@@ -1,3 +1,4 @@
+import type { DiffTextEntry } from "@xzzpig/pi-components/diff";
 import type { GoalRecord, GoalTask, GoalTaskList } from "./goal-record.ts";
 
 /**
@@ -46,6 +47,27 @@ interface LineOp {
 	text: string;
 }
 
+/** UI-only structure is deliberately separate from the persisted presentation. */
+export interface TweakComparison {
+	presentation: TweakPresentation;
+	entries: DiffTextEntry[];
+	/** Explicit UI escaping is never persisted in the legacy presentation. */
+	fullUiText: string;
+}
+
+interface DiffProjection {
+	lines: string[];
+	entries: DiffTextEntry[];
+}
+
+function diffMeta(content: string): DiffTextEntry {
+	return { kind: "meta", content, hunkIndex: 1 };
+}
+
+function diffLine(lineKind: "add" | "remove" | "context", content: string): DiffTextEntry {
+	return { kind: "line", lineKind, content, hunkIndex: 1 };
+}
+
 interface FlatTaskNode {
 	task: GoalTask;
 	parentId?: string;
@@ -57,6 +79,8 @@ interface SettingChange {
 	label: string;
 	before: string;
 	after: string;
+	uiBefore?: string;
+	uiAfter?: string;
 }
 
 /**
@@ -71,14 +95,17 @@ export function diffBodyLines(
 	after: string,
 	options: TweakPresentationOptions = {},
 ): BodyLineDiff {
+	return projectBodyDiff(before, after, options).body;
+}
+
+function projectBodyDiff(before: string, after: string, options: TweakPresentationOptions): { body: BodyLineDiff; entries: DiffTextEntry[] } {
 	const contextLines = boundedInteger(options.contextLines, DEFAULT_CONTEXT_LINES, 0);
 	const maxDiffCells = boundedInteger(options.maxDiffCells, DEFAULT_MAX_DIFF_CELLS, 1);
-	const oldLines = splitLogicalLines(before);
-	const newLines = splitLogicalLines(after);
-	const { ops, coarse } = buildLineOps(oldLines, newLines, maxDiffCells);
+	const { ops, coarse } = buildLineOps(splitLogicalLines(before), splitLogicalLines(after), maxDiffCells);
 	const hasChanges = ops.some((op) => op.kind !== "equal");
-	if (!hasChanges) return { lines: [], hasChanges: false, coarse };
-	return { lines: renderLineOps(ops, contextLines, coarse), hasChanges: true, coarse };
+	if (!hasChanges) return { body: { lines: [], hasChanges: false, coarse }, entries: [] };
+	const projection = renderLineOps(ops, contextLines, coarse);
+	return { body: { lines: projection.lines, hasChanges: true, coarse }, entries: projection.entries };
 }
 
 /**
@@ -92,30 +119,46 @@ export function buildTweakPresentation(
 	candidate: GoalRecord,
 	options: TweakPresentationOptions = {},
 ): TweakPresentation {
+	return buildTweakComparison(before, candidate, options).presentation;
+}
+
+/** Compare once, projecting the saved text and ephemeral UI rows from the same changes. */
+export function buildTweakComparison(
+	before: GoalRecord,
+	candidate: GoalRecord,
+	options: TweakPresentationOptions = {},
+): TweakComparison {
 	const changedSections: string[] = [];
 	const diffLines: string[] = [];
-	const body = diffBodyLines(before.objective, candidate.objective, options);
-	if (body.hasChanges) {
+	const entries: DiffTextEntry[] = [];
+	const body = projectBodyDiff(before.objective, candidate.objective, options);
+	if (body.body.hasChanges) {
 		changedSections.push("Objective");
 		diffLines.push("Objective:");
-		for (const line of body.lines) diffLines.push(line);
+		entries.push(diffMeta("Objective:"));
+		for (const line of body.body.lines) diffLines.push(line);
+		for (const entry of body.entries) entries.push(entry);
 	}
 
 	const beforeContract = normalizedContract(before.verificationContract);
 	const afterContract = normalizedContract(candidate.verificationContract);
 	if (beforeContract !== afterContract) {
 		changedSections.push("Verification contract");
-		diffLines.push(
-			"Verification contract:",
-			`  - ${displayContract(beforeContract)}`,
-			`  + ${displayContract(afterContract)}`,
-		);
+		const oldLegacy = displayContract(beforeContract), newLegacy = displayContract(afterContract);
+		const oldUi = displayUiContract(beforeContract), newUi = displayUiContract(afterContract);
+		diffLines.push("Verification contract:", `  - ${oldLegacy}`, `  + ${newLegacy}`);
+		entries.push(diffMeta("Verification contract:"), diffLine("remove", oldUi), diffLine("add", newUi));
 	}
 
-	const taskLines = diffTaskStructure(before.taskList, candidate.taskList);
-	if (taskLines.length > 0) {
+	const tasks = diffTaskStructure(before.taskList, candidate.taskList);
+	if (tasks.lines.length > 0) {
 		changedSections.push("Tasks");
-		diffLines.push("Tasks:", ...taskLines);
+		diffLines.push("Tasks:");
+		for (const line of tasks.lines) diffLines.push(line);
+	}
+	if (tasks.entries.length > 0) {
+		entries.push(diffMeta("Tasks:"));
+		for (const entry of tasks.entries) entries.push(entry);
 	}
 
 	const beforeBlocks = before.taskList?.blockCompletion === true;
@@ -123,21 +166,31 @@ export function buildTweakPresentation(
 	if (beforeBlocks !== afterBlocks) {
 		changedSections.push("Task completion");
 		diffLines.push(`Task completion: ${blockLabel(beforeBlocks)} -> ${blockLabel(afterBlocks)}`);
+		entries.push(diffMeta("Task completion:"), diffLine("remove", blockLabel(beforeBlocks)), diffLine("add", blockLabel(afterBlocks)));
 	}
 
-	const settingLines = diffSettings(before, candidate);
-	if (settingLines.length > 0) {
+	const settings = diffSettings(before, candidate);
+	const legacySettings = settings.filter((change) => change.before !== change.after);
+	if (legacySettings.length > 0) {
 		changedSections.push("Settings");
-		diffLines.push("Settings:", ...settingLines);
+		diffLines.push("Settings:", ...legacySettings.map((change) => `  ~ ${change.label}: ${change.before} -> ${change.after}`));
+	}
+	if (settings.length > 0) {
+		entries.push(diffMeta("Settings:"));
+		for (const change of settings) entries.push(diffMeta(change.label + ":"), diffLine("remove", change.uiBefore ?? change.before), diffLine("add", change.uiAfter ?? change.after));
 	}
 
 	const hasChanges = changedSections.length > 0;
 	return {
-		hasChanges,
-		summary: hasChanges ? `Modified: ${changedSections.join(", ")}.` : NO_CHANGES_TEXT,
-		changedSections,
-		diffText: hasChanges ? diffLines.join("\n") : NO_CHANGES_TEXT,
-		fullText: renderFullText(candidate),
+		presentation: {
+			hasChanges,
+			summary: hasChanges ? `Modified: ${changedSections.join(", ")}.` : NO_CHANGES_TEXT,
+			changedSections,
+			diffText: hasChanges ? diffLines.join("\n") : NO_CHANGES_TEXT,
+			fullText: renderFullText(candidate),
+		},
+		entries: entries.length > 0 ? entries : [diffMeta(NO_CHANGES_TEXT)],
+		fullUiText: renderFullText(candidate, true),
 	};
 }
 
@@ -238,7 +291,7 @@ function lcsOps(oldLines: string[], newLines: string[]): LineOp[] {
 	return ops;
 }
 
-function renderLineOps(ops: LineOp[], contextLines: number, coarse: boolean): string[] {
+function renderLineOps(ops: LineOp[], contextLines: number, coarse: boolean): DiffProjection {
 	const changedIndexes: number[] = [];
 	for (let index = 0; index < ops.length; index++) {
 		if (ops[index]!.kind !== "equal") changedIndexes.push(index);
@@ -252,17 +305,23 @@ function renderLineOps(ops: LineOp[], contextLines: number, coarse: boolean): st
 	}
 
 	const lines: string[] = [];
-	if (coarse) lines.push("  (large change: old and new lines are shown as removed and added instead of matched context)");
+	const entries: DiffTextEntry[] = [];
+	const addMeta = (value: string): void => { lines.push(value); entries.push(diffMeta(value)); };
+	if (coarse) addMeta("  (large change: old and new lines are shown as removed and added instead of matched context)");
 	let cursor = 0;
 	for (const group of groups) {
 		const start = Math.max(0, group.start - contextLines);
 		const end = Math.min(ops.length, group.end + contextLines + 1);
-		if (start > cursor) lines.push(omissionHint(start - cursor));
-		for (let index = start; index < end; index++) lines.push(formatOp(ops[index]!));
+		if (start > cursor) addMeta(omissionHint(start - cursor));
+		for (let index = start; index < end; index++) {
+			const op = ops[index]!;
+			lines.push(formatOp(op));
+			entries.push(diffLine(op.kind === "equal" ? "context" : op.kind, sanitizeBodyUi(op.text)));
+		}
 		cursor = end;
 	}
-	if (cursor < ops.length) lines.push(omissionHint(ops.length - cursor));
-	return lines;
+	if (cursor < ops.length) addMeta(omissionHint(ops.length - cursor));
+	return { lines, entries };
 }
 
 function formatOp(op: LineOp): string {
@@ -274,7 +333,7 @@ function omissionHint(count: number): string {
 	return `  ... ${count} unchanged line${count === 1 ? "" : "s"} omitted ...`;
 }
 
-function diffTaskStructure(before: GoalTaskList | undefined, after: GoalTaskList | undefined): string[] {
+function diffTaskStructure(before: GoalTaskList | undefined, after: GoalTaskList | undefined): DiffProjection {
 	const beforeNodes = flattenTaskTree(before);
 	const afterNodes = flattenTaskTree(after);
 	const beforeById = new Map<string, FlatTaskNode>();
@@ -283,24 +342,34 @@ function diffTaskStructure(before: GoalTaskList | undefined, after: GoalTaskList
 	for (const node of afterNodes) if (!afterById.has(node.task.id)) afterById.set(node.task.id, node);
 
 	const lines: string[] = [];
+	const entries: DiffTextEntry[] = [];
 	const emitted = new Set<string>();
+	const addTask = (node: FlatTaskNode, kind: "remove" | "add"): void => {
+		const marker = kind === "remove" ? "-" : "+";
+		// A different ID is an addition/deletion, never a paired rename.
+		entries.push(diffMeta(`${sanitizeForUi(node.task.id)} (${kind === "remove" ? "removed" : "added"}):`));
+		const values = [formatTask(node), ...taskAttributes(node)];
+		const uiValues = [formatTask(node, true), ...taskAttributes(node, true)];
+		for (const value of values) lines.push(`  ${marker} ${value}`);
+		for (const value of uiValues) entries.push(diffLine(kind, value));
+	};
 	for (const node of beforeNodes) {
 		if (afterById.has(node.task.id) || emitted.has(node.task.id)) continue;
 		emitted.add(node.task.id);
-		lines.push(formatRemovedTask(node), ...taskAttributes(node, "-"));
+		addTask(node, "remove");
 	}
 	for (const node of afterNodes) {
 		if (beforeById.has(node.task.id) || emitted.has(node.task.id)) continue;
 		emitted.add(node.task.id);
-		lines.push(formatAddedTask(node), ...taskAttributes(node, "+"));
+		addTask(node, "add");
 	}
 	for (const node of beforeNodes) {
 		const next = afterById.get(node.task.id);
 		if (!next || emitted.has(node.task.id)) continue;
 		emitted.add(node.task.id);
-		lines.push(...diffTaskFields(node, next));
+		lines.push(...diffTaskFields(node, next, entries));
 	}
-	return lines;
+	return { lines, entries };
 }
 
 function flattenTaskTree(taskList: GoalTaskList | undefined): FlatTaskNode[] {
@@ -315,36 +384,44 @@ function flattenTaskTree(taskList: GoalTaskList | undefined): FlatTaskNode[] {
 	return nodes;
 }
 
-function taskAttributes(node: FlatTaskNode, marker: string): string[] {
+function taskAttributes(node: FlatTaskNode, ui = false): string[] {
 	const lines: string[] = [];
-	if (node.task.verificationContract) lines.push(`  ${marker} ${sanitizeInline(node.task.id)} verification contract: ${displayContract(node.task.verificationContract)}`);
-	if (node.task.lightweightSubtasks) lines.push(`  ${marker} ${sanitizeInline(node.task.id)} lightweight subtasks: yes`);
-	if (node.task.evidence) lines.push(`  ${marker} ${sanitizeInline(node.task.id)} evidence: ${displayText(node.task.evidence)}`);
+	const id = (ui ? sanitizeForUi : sanitizeInline)(node.task.id);
+	if (node.task.verificationContract) lines.push(`${id} verification contract: ${(ui ? displayUiContract : displayContract)(node.task.verificationContract)}`);
+	if (node.task.lightweightSubtasks) lines.push(`${id} lightweight subtasks: yes`);
+	if (node.task.evidence) lines.push(`${id} evidence: ${(ui ? displayUiText : displayText)(node.task.evidence)}`);
+	if (ui && node.task.skipReason) lines.push(`${id} skip reason: ${displayUiText(node.task.skipReason)}`);
 	return lines;
 }
 
-function formatRemovedTask(node: FlatTaskNode): string {
+function formatTask(node: FlatTaskNode, ui = false): string {
 	const progress = node.task.status === "pending" ? "" : ` [${node.task.status}]`;
-	return `  - ${sanitizeInline(node.task.id)}: ${JSON.stringify(sanitizeInline(node.task.title))}${progress} (parent: ${sanitizeInline(node.parentId ?? "(none)")}, order: ${node.order})`;
+	const inline = ui ? sanitizeForUi : sanitizeInline;
+	const parent = ui && node.parentId !== undefined ? JSON.stringify(inline(node.parentId)) : inline(node.parentId ?? "(none)");
+	return `${inline(node.task.id)}: ${JSON.stringify(inline(node.task.title))}${progress} (parent: ${parent}, order: ${node.order})`;
 }
 
-function formatAddedTask(node: FlatTaskNode): string {
-	const progress = node.task.status === "pending" ? "" : ` [${node.task.status}]`;
-	return `  + ${sanitizeInline(node.task.id)}: ${JSON.stringify(sanitizeInline(node.task.title))}${progress} (parent: ${sanitizeInline(node.parentId ?? "(none)")}, order: ${node.order})`;
-}
-
-function diffTaskFields(before: FlatTaskNode, after: FlatTaskNode): string[] {
+function diffTaskFields(before: FlatTaskNode, after: FlatTaskNode, entries: DiffTextEntry[]): string[] {
 	const lines: string[] = [];
-	const changed = (label: string, oldValue: string, newValue: string): void => {
+	const changed = (label: string, oldValue: string, newValue: string, detail?: { changed: boolean; oldUi: string; newUi: string }): void => {
 		if (oldValue !== newValue) lines.push(`  ~ ${sanitizeInline(before.task.id)}: ${label}: ${oldValue} -> ${newValue}`);
+		if (detail?.changed ?? oldValue !== newValue) {
+			entries.push(diffMeta(`${sanitizeForUi(before.task.id)}: ${label}:`), diffLine("remove", detail?.oldUi ?? oldValue), diffLine("add", detail?.newUi ?? newValue));
+		}
 	};
-	changed("title", JSON.stringify(sanitizeInline(before.task.title)), JSON.stringify(sanitizeInline(after.task.title)));
-	changed("parent", sanitizeInline(before.parentId ?? "(none)"), sanitizeInline(after.parentId ?? "(none)"));
+	changed("title", JSON.stringify(sanitizeInline(before.task.title)), JSON.stringify(sanitizeInline(after.task.title)), {
+		changed: before.task.title !== after.task.title, oldUi: JSON.stringify(sanitizeForUi(before.task.title)), newUi: JSON.stringify(sanitizeForUi(after.task.title)),
+	});
+	changed("parent", sanitizeInline(before.parentId ?? "(none)"), sanitizeInline(after.parentId ?? "(none)"), {
+		changed: before.parentId !== after.parentId, oldUi: before.parentId === undefined ? "(none)" : JSON.stringify(sanitizeForUi(before.parentId)), newUi: after.parentId === undefined ? "(none)" : JSON.stringify(sanitizeForUi(after.parentId)),
+	});
 	changed("order", String(before.order), String(after.order));
 	changed(
 		"verification contract",
 		displayContract(normalizedContract(before.task.verificationContract)),
 		displayContract(normalizedContract(after.task.verificationContract)),
+		{ changed: normalizedContract(before.task.verificationContract) !== normalizedContract(after.task.verificationContract),
+			oldUi: displayUiContract(normalizedContract(before.task.verificationContract)), newUi: displayUiContract(normalizedContract(after.task.verificationContract)) },
 	);
 	changed(
 		"lightweight subtasks",
@@ -352,12 +429,15 @@ function diffTaskFields(before: FlatTaskNode, after: FlatTaskNode): string[] {
 		yesNoLabel(after.task.lightweightSubtasks === true),
 	);
 	changed("status", before.task.status, after.task.status);
-	changed("evidence", displayText(before.task.evidence), displayText(after.task.evidence));
-	changed("skip reason", displayText(before.task.skipReason), displayText(after.task.skipReason));
+	for (const [label, oldRaw, newRaw] of [["evidence", before.task.evidence, after.task.evidence], ["skip reason", before.task.skipReason, after.task.skipReason]] as const) {
+		const oldValue = normalizedContract(oldRaw), newValue = normalizedContract(newRaw);
+		changed(label, displayText(oldRaw), displayText(newRaw), { changed: oldValue !== newValue || (oldValue !== undefined && newValue !== undefined && oldRaw !== newRaw),
+			oldUi: displayUiText(oldRaw), newUi: displayUiText(newRaw) });
+	}
 	return lines;
 }
 
-function diffSettings(before: GoalRecord, after: GoalRecord): string[] {
+function diffSettings(before: GoalRecord, after: GoalRecord): SettingChange[] {
 	const changes: SettingChange[] = [];
 	if (before.tokenBudget !== after.tokenBudget) {
 		changes.push({ label: "Token budget (lifetime spending cap)", before: formatBudget(before.tokenBudget), after: formatBudget(after.tokenBudget) });
@@ -372,23 +452,33 @@ function diffSettings(before: GoalRecord, after: GoalRecord): string[] {
 	}
 	const beforeCurrent = sanitizeInline(before.currentTaskId ?? "(none)");
 	const afterCurrent = sanitizeInline(after.currentTaskId ?? "(none)");
-	if (beforeCurrent !== afterCurrent) {
-		changes.push({ label: "Current task", before: beforeCurrent, after: afterCurrent });
+	if (before.currentTaskId !== after.currentTaskId) {
+		const formatUi = (id: string | undefined) => id === undefined ? "(none)" : JSON.stringify(sanitizeForUi(id));
+		const uiBefore = formatUi(before.currentTaskId), uiAfter = formatUi(after.currentTaskId);
+		changes.push({ label: "Current task", before: beforeCurrent,
+			after: afterCurrent, uiBefore, uiAfter });
 	}
 	if (before.autoContinue !== after.autoContinue) {
 		changes.push({ label: "Automatic continuation", before: booleanLabel(before.autoContinue), after: booleanLabel(after.autoContinue) });
 	}
-	return changes.map((change) => `  ~ ${change.label}: ${change.before} -> ${change.after}`);
+	return changes;
 }
 
-function renderFullText(goal: GoalRecord): string {
+function renderFullText(goal: GoalRecord, ui = false): string {
+	const inline = ui ? sanitizeForUi : sanitizeInline;
 	const lines: string[] = ["Objective:"];
 	const objectiveLines = splitLogicalLines(goal.objective);
-	if (objectiveLines.length === 0) lines.push("  (empty)");
-	else for (const line of objectiveLines) lines.push("  " + sanitizeForDisplay(line));
+	if (objectiveLines.length === 0) lines.push(ui ? "  ⟦EMPTY OBJECTIVE⟧" : "  (empty)");
+	else for (let index = 0; index < objectiveLines.length; index++) {
+		const line = objectiveLines[index]!;
+		const content = ui ? sanitizeBodyUi(line).replace(/ +$/g, spaces => "⟦SPACE⟧".repeat(spaces.length)) : sanitizeForDisplay(line);
+		lines.push("  " + content + (ui && index < objectiveLines.length - 1 ? "⏎" : ""));
+	}
 
 	const fullContract = normalizedContract(goal.verificationContract);
-	lines.push("", `Verification contract: ${fullContract === undefined ? "(none)" : sanitizeInline(fullContract)}`);
+	// Keep the stored fullText format, but distinguish missing from literal values in the dialog.
+	const contractDisplay = ui ? displayUiContract(fullContract) : fullContract === undefined ? "(none)" : inline(fullContract);
+	lines.push("", `Verification contract: ${contractDisplay}`);
 	lines.push("", "Tasks:");
 	const nodes = flattenTaskTree(goal.taskList);
 	if (nodes.length === 0) {
@@ -397,11 +487,12 @@ function renderFullText(goal: GoalRecord): string {
 		for (const node of nodes) {
 			const indent = "  ".repeat(node.depth + 1);
 			const lightweight = node.task.lightweightSubtasks === true ? " (lightweight subtasks)" : "";
-			lines.push(`${indent}[${node.task.status}] ${sanitizeInline(node.task.id)}: ${sanitizeInline(node.task.title)}${lightweight}`);
+			const title = ui ? JSON.stringify(inline(node.task.title)) : inline(node.task.title);
+			lines.push(`${indent}[${node.task.status}] ${inline(node.task.id)}: ${title}${lightweight}`);
 			const contract = normalizedContract(node.task.verificationContract);
-			if (contract !== undefined) lines.push(`${indent}  verification contract: ${sanitizeInline(contract)}`);
-			if (node.task.evidence) lines.push(`${indent}  evidence: ${sanitizeInline(node.task.evidence)}`);
-			if (node.task.skipReason) lines.push(`${indent}  skip reason: ${sanitizeInline(node.task.skipReason)}`);
+			if (contract !== undefined) lines.push(`${indent}  verification contract: ${inline(contract)}`);
+			if (node.task.evidence) lines.push(`${indent}  evidence: ${inline(node.task.evidence)}`);
+			if (node.task.skipReason) lines.push(`${indent}  skip reason: ${inline(node.task.skipReason)}`);
 		}
 	}
 	lines.push("", `Task completion: ${blockLabel(goal.taskList?.blockCompletion === true)}`);
@@ -409,7 +500,8 @@ function renderFullText(goal: GoalRecord): string {
 	lines.push(`  Token budget (lifetime spending cap): ${formatBudget(goal.tokenBudget)}`);
 	lines.push(`  Independent auditor: ${booleanLabel(!(goal.skipAuditor === true))}`);
 	lines.push(`  Status: ${goal.status}`);
-	lines.push(`  Current task: ${sanitizeInline(goal.currentTaskId ?? "(none)")}`);
+	const current = ui && goal.currentTaskId !== undefined ? JSON.stringify(inline(goal.currentTaskId)) : inline(goal.currentTaskId ?? "(none)");
+	lines.push(`  Current task: ${current}`);
 	lines.push(`  Automatic continuation: ${booleanLabel(goal.autoContinue)}`);
 	return lines.join("\n");
 }
@@ -442,6 +534,14 @@ function displayText(value: string | undefined): string {
 	return typeof value === "string" && value.trim() ? JSON.stringify(sanitizeInline(value)) : "(none)";
 }
 
+function displayUiContract(value: string | undefined): string {
+	return value === undefined ? "(none)" : JSON.stringify(sanitizeForUi(value));
+}
+
+function displayUiText(value: string | undefined): string {
+	return typeof value === "string" && value.trim() ? JSON.stringify(sanitizeForUi(value)) : "(none)";
+}
+
 /** Keep helper-injected control sequences from acting as terminal instructions. */
 function sanitizeForDisplay(line: string): string {
 	let safe = "";
@@ -462,4 +562,18 @@ function sanitizeForDisplay(line: string): string {
 
 function sanitizeInline(value: string): string {
 	return sanitizeForDisplay(value).split("\n").join("\\n");
+}
+
+/** UI-only escaping makes raw tabs/newlines and their literal spellings distinct. */
+function sanitizeForUi(value: string): string {
+	const escaped = value.replaceAll("\\", "\\\\").replaceAll("\r", "\\r").replaceAll("\t", "\\t");
+	return sanitizeForDisplay(escaped).split("\n").join("\\n");
+}
+
+/** Body lines display ordinary backslashes literally. Controls use explicit
+ * labels so tabs/CR remain distinguishable without altering normal paths. */
+function sanitizeBodyUi(value: string): string {
+	const escaped = value.replaceAll("⟦", "⟦⟦").replaceAll("⏎", "⟦U+23CE⟧").replaceAll("\r", "⟦CR⟧").replaceAll("\t", "⟦TAB⟧")
+		.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]|\p{White_Space}/gu, char => char === " " || char === "\n" ? char : `⟦U+${char.codePointAt(0)!.toString(16).toUpperCase().padStart(4, "0")}⟧`);
+	return sanitizeForDisplay(escaped);
 }

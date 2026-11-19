@@ -46,12 +46,16 @@ afterEach(() => {
 	fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
-test("D-08: goal package removes its transcript runtime and shared transcript dependency", () => {
+test("D-08: goal package permits the bundled diff but never restores its transcript runtime", () => {
 	const packageRoot = path.resolve(path.dirname(new URL("../package.json", import.meta.url).pathname));
 	const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
-	assert.equal(manifest.dependencies?.["@xzzpig/pi-components"], undefined);
-	assert.equal(manifest.bundledDependencies?.includes("@xzzpig/pi-components") ?? false, false);
-	assert.equal(manifest.bundleDependencies?.includes("@xzzpig/pi-components") ?? false, false);
+	assert.equal(manifest.dependencies?.["@xzzpig/pi-components"], "workspace:*");
+	assert.equal(manifest.bundledDependencies?.includes("@xzzpig/pi-components"), true);
+	for (const entry of fs.readdirSync(path.join(packageRoot, "extensions"), { recursive: true, withFileTypes: true })) {
+		if (!entry.isFile() || !entry.name.endsWith(".ts")) continue;
+		const source = fs.readFileSync(path.join(entry.parentPath, entry.name), "utf8");
+		assert.doesNotMatch(source, /["']@xzzpig\/pi-components\/transcript(?:-presenter)?["']/);
+	}
 	assert.equal(manifest.files?.includes("CHANGELOG.md"), true);
 	assert.equal(fs.existsSync(path.join(packageRoot, "extensions", "widgets", "auditor-transcript-overlay.ts")), false);
 	assert.equal(fs.existsSync(path.join(packageRoot, "tests", "auditor-transcript-overlay.test.ts")), false);

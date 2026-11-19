@@ -170,6 +170,9 @@ importers:
 
   packages/pi-goal-x:
     dependencies:
+      '@xzzpig/pi-components':
+        specifier: workspace:*
+        version: link:../pi-components
       '@xzzpig/pi-subagents':
         specifier: workspace:*
         version: link:../pi-subagents/dist-pkg
@@ -204,6 +207,7 @@ importers:
       typescript-eslint:
         specifier: ^8.66.0
         version: 8.67.0(eslint@9.39.5(jiti@2.7.0)(supports-color@7.1.0))(supports-color@7.1.0)(typescript@5.9.3)
+    publishDirectory: dist-pkg
 
   packages/pi-group-collapse:
     devDependencies:
@@ -552,6 +556,10 @@ importers:
         version: 5.9.3
 
   packages/pi-tool-display:
+    dependencies:
+      '@xzzpig/pi-components':
+        specifier: workspace:*
+        version: link:../pi-components
     devDependencies:
       '@earendil-works/pi-coding-agent':
         specifier: 'catalog:'
@@ -574,6 +582,7 @@ importers:
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
+    publishDirectory: dist-pkg
 
   packages/pi-vibeguard:
     devDependencies:

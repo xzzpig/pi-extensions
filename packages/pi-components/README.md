@@ -6,6 +6,28 @@ release tarballs instead of publishing it independently. Bundled artifacts
 expose compiled runtime JavaScript and declarations from `dist/`; the
 TypeScript source remains in this repository for development.
 
+## 共享 diff 排版
+
+`@xzzpig/pi-components/diff` 接受调用方已经确定的旧值、新值、上下文及分组行，按可用列宽显示并排或上下差异。组件只排版，不解析业务数据、读取文件或执行工具：
+
+```ts
+import {
+  renderDiffEntries,
+  type DiffTextEntry,
+} from "@xzzpig/pi-components/diff";
+
+const entries: DiffTextEntry[] = [
+  { kind: "meta", content: "目标", hunkIndex: 1 },
+  { kind: "line", lineKind: "remove", content: "旧目标", hunkIndex: 1 },
+  { kind: "line", lineKind: "add", content: "新目标", hunkIndex: 1 },
+];
+const lines = renderDiffEntries(entries, { width: 120, mode: "auto" });
+```
+
+`auto` 默认在内容区至少 120 列时并排，`splitMinWidth` 可由宿主调整；强制并排遇到无法容纳两列的窄屏仍回退上下布局。`renderDiffEntries` 把输入当不可信文本，清除终端控制指令，然后才应用传入的主题。`pairDiffEntries`、`measureDiffColumns` 和 `renderPairedDiffRows` 提供底层组合接口以保留宿主的行号与背景；这些接口的单元格回调是可信渲染器，调用方须先处理不可信数据、保证返回的 cell 按请求宽度绘制。视口滚动和鼠标命中由宿主负责。
+
+`pi-components` 仍是 private 内部包：消费者必须在自己的安装产物中包含可运行的编译版本，不能依赖另一个插件或工作区软链接。原有 transcript 子路径不变。
+
 ## Transcript components
 
 `@xzzpig/pi-components/transcript` provides a bounded `SessionTranscript`

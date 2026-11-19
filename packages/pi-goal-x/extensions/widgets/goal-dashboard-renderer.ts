@@ -221,10 +221,11 @@ function taskMarker(node: DashboardTaskNode): { symbol: string; color: RenderCol
 	return { symbol: "·", color: "mdHeading" };
 }
 
-function renderTaskRow(theme: Theme, node: DashboardTaskNode, indent: number, available: number): string {
+function renderTaskRow(theme: Theme, node: DashboardTaskNode, indent: number, available: number, expanded?: ReadonlySet<string>): string {
 	const marker = taskMarker(node);
 	const indentText = "  ".repeat(indent);
-	const prefix = `${indentText}${marker.symbol} ${node.id}  `;
+	const disclosure = expanded && node.totalSubtasks > 0 ? (expanded.has(node.id) ? "▾ " : "▸ ") : expanded ? "  " : "";
+	const prefix = `${indentText}${disclosure}${marker.symbol} ${node.id}  `;
 	const contractMark = node.verificationContract ? dim(theme, " ☑") : "";
 	const titleBudget = Math.max(4, available - visibleWidth(prefix) - visibleWidth(contractMark));
 	const title = fit(node.title, titleBudget);
@@ -234,7 +235,7 @@ function renderTaskRow(theme: Theme, node: DashboardTaskNode, indent: number, av
 	// task is fully accent.
 	const idText = node.isCurrent ? accent(theme, node.id) : theme.fg(marker.color, node.id);
 	const titleText = node.isCurrent ? accent(theme, title) : amber(theme, title);
-	return `${indentText}${markerText} ${idText}  ${titleText}${contractMark}`;
+	return `${indentText}${disclosure}${markerText} ${idText}  ${titleText}${contractMark}`;
 }
 
 /**
@@ -294,7 +295,7 @@ export function renderCompactDashboard(
 	model: GoalDashboardModel,
 	theme: Theme,
 	width: number,
-	opts: { footerHint?: string; scrollOffset?: number; keybindings?: GoalDashboardKeybindings; auditorKey?: GoalKeybinding } = {},
+	opts: { footerHint?: string; scrollOffset?: number; keybindings?: GoalDashboardKeybindings; auditorKey?: GoalKeybinding; taskRows?: DashboardTaskNode[]; taskRowBudget?: number; expandedTasks?: ReadonlySet<string>; taskLine?: (node: DashboardTaskNode, line: number) => void; taskHeader?: (line: number) => void; controlsLine?: (line: number, hasCurrent: boolean) => void; taskArea?: (first: number, last: number) => void; hideTaskIndicators?: boolean } = {},
 ): string[] {
 	const safeWidth = Math.max(10, width);
 	const mode = layoutMode(safeWidth);
@@ -333,8 +334,8 @@ export function renderCompactDashboard(
 	// list overflows the window, the footer advertises Ctrl+Shift+↑↓ to scroll
 	// it. The current task's subtask progress lives in the header segment, and
 	// per-row subtask markers show which tasks have subtasks.
-	const topLevel = model.taskTree.filter((node) => node.depth === 0);
-	const compactRows = compactTaskViewportRows(safeWidth);
+	const topLevel = opts.taskRows ?? model.taskTree.filter((node) => node.depth === 0);
+	const compactRows = opts.taskRowBudget ?? compactTaskViewportRows(safeWidth);
 	const listOverflows = topLevel.length > compactRows;
 	if (topLevel.length > 0) {
 		const offset = opts.scrollOffset ?? anchoredScrollOffset(topLevel, compactRows);
@@ -357,9 +358,17 @@ export function renderCompactDashboard(
 			headerRight += `${muted(theme, ` · ${subWord}`)}${muted(theme, `${model.currentTask.completedSubtasks}/${model.currentTask.totalSubtasks}`)} ${subBar}`;
 		}
 		lines.push(boxSectionRule(theme, safeWidth, headerLabel, headerRight));
-		for (const row of renderCompactTaskRows(theme, topLevel, viewport, inner)) {
+		opts.taskHeader?.(lines.length - 1);
+		const taskAreaStart = lines.length;
+		if (opts.taskRows) {
+			if (viewport.rows === 0) lines.push(boxLine(theme, safeWidth, "任务区空间不足"));
+			if (viewport.rows > 0 && !opts.hideTaskIndicators && viewport.hiddenAbove > 0) lines.push(boxLine(theme, safeWidth, dim(theme, `↑ ${viewport.hiddenAbove} more task${viewport.hiddenAbove === 1 ? "" : "s"}`)));
+			for (const node of topLevel.slice(viewport.offset, viewport.offset + viewport.rows)) { opts.taskLine?.(node, lines.length); lines.push(boxLine(theme, safeWidth, renderTaskRow(theme, node, Math.min(node.depth, 6), inner, opts.expandedTasks))); }
+			if (viewport.rows > 0 && !opts.hideTaskIndicators && viewport.hiddenBelow > 0) lines.push(boxLine(theme, safeWidth, dim(theme, `… +${viewport.hiddenBelow} more task${viewport.hiddenBelow === 1 ? "" : "s"}`)));
+		} else for (const row of renderCompactTaskRows(theme, topLevel, viewport, inner)) {
 			lines.push(boxLine(theme, safeWidth, row));
 		}
+		opts.taskArea?.(taskAreaStart, lines.length - 1);
 	}
 
 	// §9.4: all top-level tasks done and no current task → "All tasks complete".
@@ -402,6 +411,7 @@ export function renderCompactDashboard(
 		lines.push(boxLine(theme, safeWidth, `${dim(theme, `File     ${model.filePath}`)}`));
 	}
 
+	if (opts.taskRows) { opts.controlsLine?.(lines.length, !!model.currentTask); lines.push(boxLine(theme, safeWidth, model.currentTask ? "[展开] [回到当前]" : "[展开]")); }
 	const keybindings = opts.keybindings ?? DEFAULT_GOAL_KEYBINDINGS.dashboard;
 	const toggleShortcut = formatGoalKeybinding(keybindings.toggleExpand);
 	const scrollShortcut = `${formatGoalKeybinding(keybindings.scrollUp)}/${formatGoalKeybinding(keybindings.scrollDown)}`;
@@ -448,7 +458,7 @@ export function renderExpandedDashboard(
 	model: GoalDashboardModel,
 	theme: Theme,
 	width: number,
-	opts: { scrollOffset?: number; rows?: number; keybindings?: GoalDashboardKeybindings } = {},
+	opts: { scrollOffset?: number; rows?: number; keybindings?: GoalDashboardKeybindings; taskRows?: DashboardTaskNode[]; expandedTasks?: ReadonlySet<string>; taskLine?: (node: DashboardTaskNode, line: number) => void; taskHeader?: (line: number) => void; controlsLine?: (line: number, hasCurrent: boolean) => void; taskArea?: (first: number, last: number) => void; hideTaskIndicators?: boolean } = {},
 ): string[] {
 	const safeWidth = Math.max(10, width);
 	const mode = layoutMode(safeWidth);
@@ -478,22 +488,28 @@ export function renderExpandedDashboard(
 	// Tasks section: a window over the recursive tree (§9.2, §9.6). With no
 	// explicit rows the whole tree is shown (backward compatible); with a row
 	// budget the panel stays bounded and ↑/↓ keys move the window.
-	if (model.taskTree.length > 0) {
+	const taskRows = opts.taskRows ?? model.taskTree;
+	if (taskRows.length > 0) {
 		lines.push(boxSectionRule(theme, safeWidth, "Tasks"));
-		const totalRows = model.taskTree.length;
+		opts.taskHeader?.(lines.length - 1);
+		const taskAreaStart = lines.length;
+		const totalRows = taskRows.length;
 		const rows = opts.rows ?? totalRows;
-		const offset = opts.scrollOffset ?? anchoredScrollOffset(model.taskTree, rows);
+		const offset = opts.scrollOffset ?? anchoredScrollOffset(taskRows, rows);
 		const viewport = deriveTaskListViewport(totalRows, rows, offset);
-		if (viewport.hiddenAbove > 0) {
+		if (opts.taskRows && viewport.rows === 0) lines.push(boxLine(theme, safeWidth, "任务区空间不足"));
+		if (viewport.rows > 0 && !opts.hideTaskIndicators && viewport.hiddenAbove > 0) {
 			lines.push(boxLine(theme, safeWidth, dim(theme, `↑ ${viewport.hiddenAbove} more task${viewport.hiddenAbove === 1 ? "" : "s"}`)));
 		}
-		for (const node of model.taskTree.slice(viewport.offset, viewport.offset + viewport.rows)) {
+		for (const node of taskRows.slice(viewport.offset, viewport.offset + viewport.rows)) {
 			const indent = Math.min(node.depth, 6);
-			lines.push(boxLine(theme, safeWidth, renderTaskRow(theme, node, indent, inner)));
+			opts.taskLine?.(node, lines.length);
+			lines.push(boxLine(theme, safeWidth, renderTaskRow(theme, node, indent, inner, opts.expandedTasks)));
 		}
-		if (viewport.hiddenBelow > 0) {
+		if (viewport.rows > 0 && !opts.hideTaskIndicators && viewport.hiddenBelow > 0) {
 			lines.push(boxLine(theme, safeWidth, dim(theme, `… +${viewport.hiddenBelow} more task${viewport.hiddenBelow === 1 ? "" : "s"}`)));
 		}
+		opts.taskArea?.(taskAreaStart, lines.length - 1);
 	}
 
 	// Current-task section (§4.2).
@@ -512,6 +528,7 @@ export function renderExpandedDashboard(
 		lines.push(...renderActivityBlock(model.recentActivity, theme, safeWidth));
 	}
 
+	if (opts.taskRows) { opts.controlsLine?.(lines.length, !!model.currentTask); lines.push(boxLine(theme, safeWidth, model.currentTask ? "[收起] [回到当前]" : "[收起]")); }
 		const closeKeys = [opts.keybindings?.collapse ?? "escape", opts.keybindings?.toggleExpand ?? DEFAULT_GOAL_KEYBINDINGS.dashboard.toggleExpand].flatMap(bindingKeys);
 	lines.push(boxFooter(theme, safeWidth, closeKeys.length ? `${closeKeys.map(formatGoalKeybinding).join("/")}: collapse` : ""));
 	return lines;

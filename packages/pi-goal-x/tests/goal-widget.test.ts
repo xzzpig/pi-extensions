@@ -601,14 +601,14 @@ test("one Kitty scroll key press advances one task; repeats keep scrolling; rele
 	const h = scrollHarness(false);
 	h.component.render(100);
 	h.fire("\x1b[1;6:1B");
-	assert.match(h.component.render(100).join("\n"), /↑ 16 more tasks/, "one press advances one task");
+	assert.match(h.component.render(100).join("\n"), /↑ 1 more task/, "one press advances one task");
 	// Fork: repeats act like presses for scrolling (hold ctrl+shift+↓ to keep
 	// scrolling), so a repeat event advances one more task instead of being
 	// swallowed by the single-press upstream guard.
 	h.fire("\x1b[1;6:2B");
-	assert.match(h.component.render(100).join("\n"), /↑ 17 more tasks/, "a repeat event keeps scrolling");
+	assert.match(h.component.render(100).join("\n"), /↑ 2 more tasks/, "a repeat event keeps scrolling");
 	h.fire("\x1b[1;6:3B");
-	assert.match(h.component.render(100).join("\n"), /↑ 17 more tasks/, "release must not scroll");
+	assert.match(h.component.render(100).join("\n"), /↑ 2 more tasks/, "release must not scroll");
 });
 
 test("escape collapses the expanded dashboard instead of pausing", () => {
@@ -869,12 +869,12 @@ test("plain arrows are never consumed in compact mode; the editor keeps them", (
 test("Ctrl+Shift+↑/↓ scroll the compact list one row; Esc is untouched", () => {
 	const h = scrollHarness(false);
 	h.component.render(100);
-	assert.match(h.component.render(100).join("\n"), /↑ 15 more tasks/, "anchored window hides the earliest tasks");
+	assert.doesNotMatch(h.component.render(100).join("\n"), /↑ \d+ more tasks?/, "current task starts visible");
 	h.fire(CS_UP);
 	assert.ok(h.consumed.includes("c:" + CS_UP), "Ctrl+Shift+↑ is consumed");
-	assert.match(h.component.render(100).join("\n"), /↑ 14 more tasks/, "up scrolls the compact window");
+	assert.doesNotMatch(h.component.render(100).join("\n"), /↑ \d+ more tasks?/, "up stays at top");
 	h.fire(CS_DOWN);
-	assert.match(h.component.render(100).join("\n"), /↑ 15 more tasks/, "down scrolls the compact window back");
+	assert.match(h.component.render(100).join("\n"), /↑ 1 more task/, "down scrolls one row");
 	// plain arrows and Esc still reach the editor afterwards — nothing to disengage
 	h.fire(UP);
 	h.fire("\u001b");
@@ -961,7 +961,7 @@ test("Ctrl+Shift+T toggles expansion; plain arrows scroll only while expanded", 
 test("scrolling before the first render keeps the requested viewport", () => {
 	const compact = scrollHarness(false);
 	assert.deepEqual(compact.fire(CS_DOWN), { consume: true });
-	assert.match(compact.component.render(100).join("\n"), /↑ 16 more tasks/);
+	assert.match(compact.component.render(100).join("\n"), /↑ 1 more task/);
 
 	const expanded = scrollHarness(true);
 	assert.deepEqual(expanded.fire(DOWN), { consume: true });
@@ -983,15 +983,15 @@ test("expanded short task lists keep plain arrows out of the editor", () => {
 
 test("compact scroll chords do not change the hidden list while expanded", () => {
 	const h = scrollHarness(false);
-	assert.match(h.component.render(100).join("\n"), /↑ 15 more tasks/);
+	assert.doesNotMatch(h.component.render(100).join("\n"), /↑ \d+ more tasks?/);
 	h.fire(CTRL_SHIFT_T);
 	assert.equal(h.expanded(), true);
 	assert.equal(h.fire(CS_HOME), undefined);
 	h.fire("\u001b");
-	assert.match(h.component.render(100).join("\n"), /↑ 15 more tasks/);
+	assert.doesNotMatch(h.component.render(100).join("\n"), /↑ \d+ more tasks?/);
 });
 
-test("a new completion re-anchors the viewport to the latest completed task", () => {
+test("an unrelated completion preserves the manually scrolled viewport", () => {
 	let current = manyTasksGoal();
 	const { tui } = createMockTUI();
 	const component = new GoalWidgetComponent({
@@ -1001,21 +1001,21 @@ test("a new completion re-anchors the viewport to the latest completed task", ()
 		getOpenGoalCount: () => 1,
 		getSettings: () => ({}),
 	});
-	// anchored to t20 → compact window t16..t20
-	assert.match(component.render(100).join("\n"), /↑ 15 more tasks/);
+	// Current pending task t1 is visible on initialization
+	assert.doesNotMatch(component.render(100).join("\n"), /↑ \d+ more tasks?/);
 	// scroll to the top with the compact chord
 	assert.equal(component.handleCompactScrollKey("home"), true, "compact list overflows → chord consumed");
 	assert.doesNotMatch(component.render(100).join("\n"), /↑ \d+ more tasks/);
 	assert.match(component.render(100).join("\n"), /[✓▸·~] t1\s/, "the earliest task row is visible after scrolling up");
 	// a short list: the chord is inert
 	assert.equal(component.handleCompactScrollKey("down"), true, "still overflows → consumed");
-	// a new completion (t9, later than t20) arrives → re-anchor to t9
+	// A new completion arrives without changing current focus.
 	const tasks = (current.taskList!.tasks as GoalTask[]).map((t) => ({ ...t }));
 	tasks[8] = { ...tasks[8]!, status: "complete", completedAt: "2026-01-01T12:00:00.000Z" };
 	current = { ...current, taskList: { tasks, blockCompletion: false, proposedAt: testProposedAt } };
 	const text = component.render(100).join("\n");
-	assert.match(text, /↑ 4 more tasks/, "re-anchored window shows the new completion (offset 4)");
-	assert.match(text, /Task number 9/, "the newest completion is visible at the bottom of the window");
+	assert.match(text, /↑ 1 more task/, "manual offset remains unchanged");
+	assert.match(text, /Task number 2/, "the manually browsed window remains visible");
 });
 
 // ── terminal-height bound (spec 2026-08-10-widget-height-bound-scrollback-fix) ──

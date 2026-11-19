@@ -3,6 +3,10 @@
 All notable changes to the internal `@xzzpig/pi-components` shared library are
 documented here.
 
+## Unreleased
+
+- 新增 `@xzzpig/pi-components/diff`，提供可复用的差异行配对、宽度自适应排版及安全文本展示；原 transcript 导出保持不变。
+
 ## 0.5.0
 
 ### Added

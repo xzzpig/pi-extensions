@@ -118,8 +118,10 @@ test("the full/diff view toggle is focusable and read-only, with independent scr
 	assert.match(joined(h.render(100)), /diff line 0/);
 	for (let i = 0; i < 3; i++) h.keys(DOWN);
 	assert.equal(h.settled(), false, "navigating to the read-only control does not resolve the dialog");
-	h.keys(PAGE_UP);
-	h.keys(PAGE_UP);
+	// The decision area is fixed now; browse the body downward rather than
+	// relying on selecting the view toggle to scroll the whole dialog to its tail.
+	h.keys(PAGE_DOWN);
+	h.keys(PAGE_DOWN);
 	const diffScrolled = joined(h.render(100));
 	assert.doesNotMatch(diffScrolled, /diff line 0/, "the diff view scrolled away from its top");
 	const diffOffset = Number(diffScrolled.match(/▲ (\d+) more/)?.[1]);

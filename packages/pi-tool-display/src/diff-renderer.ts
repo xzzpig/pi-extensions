@@ -1,6 +1,7 @@
 import { Text, truncateToWidth, visibleWidth, wrapTextWithAnsi, type Component } from "@earendil-works/pi-tui";
+import { measureDiffColumns, pairDiffEntries, renderPairedDiffRows } from "@xzzpig/pi-components/diff";
 import { getLanguageFromPath, highlightCode, type EditToolDetails } from "@earendil-works/pi-coding-agent";
-import { ANSI_SGR_PATTERN, STYLE_RESET_PARAMS, filterSgrSequences, toSgrParams, readSgrColorSequence, isFiniteSgrParam, expandSgrReset } from "./ansi-utils.js";
+import { ANSI_SGR_PATTERN, filterSgrSequences, toSgrParams, readSgrColorSequence, expandSgrReset } from "./ansi-utils.js";
 import {
 	buildCollapsedDiffHintText,
 	clampRenderedLineToWidth,
@@ -700,71 +701,8 @@ function formatMetaEntryRows(entry: DiffMetaEntry, width: number, theme: DiffThe
 	}));
 }
 
-function collectConsecutiveLineEntries(
-	entries: ParsedDiffEntry[],
-	startIndex: number,
-	lineKind: DiffLineKind,
-): { collected: DiffLineEntry[]; nextIndex: number } {
-	const collected: DiffLineEntry[] = [];
-	let index = startIndex;
-	while (index < entries.length) {
-		const candidate = entries[index];
-		if (!candidate || candidate.kind !== "line" || candidate.lineKind !== lineKind) {
-			break;
-		}
-		collected.push(candidate);
-		index++;
-	}
-	return { collected, nextIndex: index };
-}
-
 function buildSplitRows(entries: ParsedDiffEntry[]): SplitDiffRow[] {
-	const rows: SplitDiffRow[] = [];
-	let index = 0;
-
-	while (index < entries.length) {
-		const entry = entries[index];
-		if (!entry) {
-			break;
-		}
-
-		if (entry.kind !== "line") {
-			rows.push({ meta: entry, hunkIndex: entry.hunkIndex || null });
-			index++;
-			continue;
-		}
-
-		if (entry.lineKind === "remove") {
-			const removedResult = collectConsecutiveLineEntries(entries, index, "remove");
-			const removed = removedResult.collected;
-			const addedResult = collectConsecutiveLineEntries(entries, removedResult.nextIndex, "add");
-			const added = addedResult.collected;
-			index = addedResult.nextIndex;
-
-			const pairCount = Math.max(removed.length, added.length);
-			for (let pairIndex = 0; pairIndex < pairCount; pairIndex++) {
-				const left = removed[pairIndex];
-				const right = added[pairIndex];
-				rows.push({
-					left,
-					right,
-					hunkIndex: left?.hunkIndex ?? right?.hunkIndex ?? null,
-				});
-			}
-			continue;
-		}
-
-		if (entry.lineKind === "add") {
-			rows.push({ right: entry, hunkIndex: entry.hunkIndex || null });
-			index++;
-			continue;
-		}
-
-		rows.push({ left: entry, right: entry, hunkIndex: entry.hunkIndex || null });
-		index++;
-	}
-
-	return rows;
+	return pairDiffEntries<DiffLineEntry, DiffMetaEntry>(entries);
 }
 
 function getCellLineNumber(line: DiffLineEntry, side: "left" | "right"): number | null {
@@ -1770,9 +1708,7 @@ function renderSplitHeaderCell(
 }
 
 function canRenderSplitLayout(width: number): boolean {
-	const separatorWidth = visibleWidth(SPLIT_SEPARATOR);
-	const minimumSplitWidth = MIN_SPLIT_COLUMN_WIDTH * 2 + separatorWidth;
-	return width >= minimumSplitWidth;
+	return measureDiffColumns(width, SPLIT_SEPARATOR, MIN_SPLIT_COLUMN_WIDTH) !== undefined;
 }
 
 function renderSplit(
@@ -1781,13 +1717,12 @@ function renderSplit(
 	lineNumberWidth: number,
 ): RenderedRow[] {
 	const { width, theme, inlineHighlights, palette, highlightLine, containerBgAnsi, wordWrap, indicatorMode, showHashlineAnchors } = ctx;
-	if (!canRenderSplitLayout(width)) {
+	const columns = measureDiffColumns(width, SPLIT_SEPARATOR, MIN_SPLIT_COLUMN_WIDTH);
+	if (!columns) {
 		return toUnifiedFallbackRows(rows, ctx, lineNumberWidth);
 	}
 
-	const separatorWidth = visibleWidth(SPLIT_SEPARATOR);
-	const leftWidth = Math.max(MIN_SPLIT_COLUMN_WIDTH, Math.floor((width - separatorWidth) / 2));
-	const rightWidth = Math.max(MIN_SPLIT_COLUMN_WIDTH, width - separatorWidth - leftWidth);
+	const { leftWidth, rightWidth } = columns;
 	const splitLineNumberWidth = Math.max(3, lineNumberWidth);
 	const hashlineGutter = usesHashlineGutter(showHashlineAnchors);
 	const separator = renderSplitDivider(theme, containerBgAnsi);
@@ -1802,48 +1737,12 @@ function renderSplit(
 		hunkIndex: null,
 	});
 
-	for (const row of rows) {
-		if (row.meta) {
-			output.push(...formatMetaEntryRows(row.meta, width, theme, wordWrap));
-			continue;
-		}
-
-		const leftCells = renderSplitCell(
-			row.left,
-			"left",
-			leftWidth,
-			splitLineNumberWidth,
-			theme,
-			inlineHighlights,
-			palette,
-			highlightLine,
-			containerBgAnsi,
-			wordWrap,
-			indicatorMode,
-			showHashlineAnchors,
-		);
-		const rightCells = renderSplitCell(
-			row.right,
-			"right",
-			rightWidth,
-			splitLineNumberWidth,
-			theme,
-			inlineHighlights,
-			palette,
-			highlightLine,
-			containerBgAnsi,
-			wordWrap,
-			indicatorMode,
-			showHashlineAnchors,
-		);
-
-		const rowCount = Math.max(leftCells.length, rightCells.length);
-		for (let index = 0; index < rowCount; index++) {
-			const leftCell = leftCells[index] ?? renderSplitBlankCell(leftWidth, splitLineNumberWidth, theme, indicatorMode, hashlineGutter);
-			const rightCell = rightCells[index] ?? renderSplitBlankCell(rightWidth, splitLineNumberWidth, theme, indicatorMode, hashlineGutter);
-			output.push({ text: `${leftCell}${separator}${rightCell}`, hunkIndex: row.hunkIndex });
-		}
-	}
+	for (const row of renderPairedDiffRows(rows, {
+		leftWidth, rightWidth, separator,
+		renderCell: (line, side, cellWidth) => renderSplitCell(line, side, cellWidth, splitLineNumberWidth, theme, inlineHighlights, palette, highlightLine, containerBgAnsi, wordWrap, indicatorMode, showHashlineAnchors),
+		renderBlank: (_side, cellWidth) => renderSplitBlankCell(cellWidth, splitLineNumberWidth, theme, indicatorMode, hashlineGutter),
+		renderMeta: (meta) => formatMetaEntryRows(meta, width, theme, wordWrap),
+	})) output.push(row);
 
 	return output;
 }

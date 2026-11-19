@@ -1,4 +1,5 @@
 import { commandInstructions, type GoalCommands } from "./goal-controls.ts";
+import { formatConfirmationLines } from "./fork-goal-confirmation-format.ts";
 import type { GoalTask, GoalTaskList } from "./goal-record.ts";
 import { promptSafeObjective } from "./goal-contract.ts";
 import { renderConfirmationTasks } from "./goal-task-confirmation.ts";
@@ -33,17 +34,7 @@ function formatModeLabel(sisyphus: boolean): string {
 }
 
 function formatPrefixedLines(content: string): string[] {
-	const lines: string[] = [];
-	for (const rawLine of content.split("\n")) {
-		const trimmed = rawLine.trim();
-		if (!trimmed) continue;
-		if (trimmed.startsWith("│")) {
-			lines.push(rawLine);
-		} else {
-			lines.push(`│   ${rawLine}`);
-		}
-	}
-	return lines;
+	return formatConfirmationLines(content);
 }
 
 function formatSection(title: string, content: string): string[] {

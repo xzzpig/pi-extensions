@@ -1,0 +1,572 @@
+[
+  {
+    "name": "backslash-legacy",
+    "before": {
+      "id": "g",
+      "objective": "old",
+      "status": "active",
+      "autoContinue": true,
+      "usage": {
+        "tokensUsed": 0,
+        "activeSeconds": 0
+      },
+      "sisyphus": false,
+      "revision": 3,
+      "createdAt": "now",
+      "updatedAt": "now",
+      "taskList": {
+        "tasks": [],
+        "blockCompletion": false,
+        "proposedAt": "now"
+      },
+      "verificationContract": "Read docs\\new.txt"
+    },
+    "after": {
+      "id": "g",
+      "objective": "new",
+      "status": "active",
+      "autoContinue": true,
+      "usage": {
+        "tokensUsed": 0,
+        "activeSeconds": 0
+      },
+      "sisyphus": false,
+      "revision": 3,
+      "createdAt": "now",
+      "updatedAt": "now",
+      "taskList": {
+        "tasks": [],
+        "blockCompletion": false,
+        "proposedAt": "now"
+      },
+      "verificationContract": "Read docs\\other.txt"
+    },
+    "expected": {
+      "hasChanges": true,
+      "summary": "Modified: Objective, Verification contract.",
+      "changedSections": ["Objective", "Verification contract"],
+      "diffText": "Objective:\n- old\n+ new\nVerification contract:\n  - \"Read docs\\\\new.txt\"\n  + \"Read docs\\\\other.txt\"",
+      "fullText": "Objective:\n  new\n\nVerification contract: Read docs\\other.txt\n\nTasks:\n  none\n\nTask completion: does not block goal completion\n\nSettings:\n  Token budget (lifetime spending cap): none\n  Independent auditor: enabled\n  Status: active\n  Current task: (none)\n  Automatic continuation: enabled"
+    }
+  },
+  {
+    "name": "semantic-every-field",
+    "before": {
+      "id": "g",
+      "objective": "一\n\n重复\n重复\n旧",
+      "status": "active",
+      "autoContinue": true,
+      "usage": {
+        "tokensUsed": 0,
+        "activeSeconds": 0
+      },
+      "sisyphus": false,
+      "revision": 3,
+      "createdAt": "now",
+      "updatedAt": "now",
+      "taskList": {
+        "tasks": [
+          {
+            "id": "a",
+            "title": "旧 -> 标题",
+            "status": "pending",
+            "subtasks": [
+              {
+                "id": "b",
+                "title": "child",
+                "status": "completed",
+                "evidence": "测试结果"
+              }
+            ]
+          },
+          {
+            "id": "removed",
+            "title": "旧任务",
+            "status": "pending",
+            "verificationContract": "旧合同"
+          }
+        ],
+        "blockCompletion": false,
+        "proposedAt": "now"
+      },
+      "verificationContract": "old goal contract",
+      "tokenBudget": 10,
+      "skipAuditor": false,
+      "currentTaskId": "b"
+    },
+    "after": {
+      "id": "g",
+      "objective": "一\n\n重复\n新\n重复",
+      "status": "paused",
+      "autoContinue": false,
+      "usage": {
+        "tokensUsed": 0,
+        "activeSeconds": 0
+      },
+      "sisyphus": false,
+      "revision": 3,
+      "createdAt": "now",
+      "updatedAt": "now",
+      "taskList": {
+        "tasks": [
+          {
+            "id": "a",
+            "title": "新 -> 标题",
+            "status": "pending"
+          },
+          {
+            "id": "b",
+            "title": "child",
+            "status": "completed",
+            "evidence": "测试结果"
+          },
+          {
+            "id": "new",
+            "title": "新增",
+            "status": "pending",
+            "lightweightSubtasks": true
+          }
+        ],
+        "blockCompletion": true,
+        "proposedAt": "now"
+      },
+      "verificationContract": "new goal contract",
+      "tokenBudget": 20,
+      "skipAuditor": true,
+      "currentTaskId": "a"
+    },
+    "expected": {
+      "hasChanges": true,
+      "summary": "Modified: Objective, Verification contract, Tasks, Task completion, Settings.",
+      "changedSections": [
+        "Objective",
+        "Verification contract",
+        "Tasks",
+        "Task completion",
+        "Settings"
+      ],
+      "diffText": "Objective:\n  一\n  \n  重复\n+ 新\n  重复\n- 旧\nVerification contract:\n  - \"old goal contract\"\n  + \"new goal contract\"\nTasks:\n  - removed: \"旧任务\" (parent: (none), order: 2)\n  - removed verification contract: \"旧合同\"\n  + new: \"新增\" (parent: (none), order: 3)\n  + new lightweight subtasks: yes\n  ~ a: title: \"旧 -> 标题\" -> \"新 -> 标题\"\n  ~ b: parent: a -> (none)\n  ~ b: order: 1 -> 2\nTask completion: does not block goal completion -> blocks goal completion until all tasks are complete\nSettings:\n  ~ Token budget (lifetime spending cap): 10 tokens -> 20 tokens\n  ~ Independent auditor: enabled -> disabled\n  ~ Status: active -> paused\n  ~ Current task: b -> a\n  ~ Automatic continuation: enabled -> disabled",
+      "fullText": "Objective:\n  一\n  \n  重复\n  新\n  重复\n\nVerification contract: new goal contract\n\nTasks:\n  [pending] a: 新 -> 标题\n  [completed] b: child\n    evidence: 测试结果\n  [pending] new: 新增 (lightweight subtasks)\n\nTask completion: blocks goal completion until all tasks are complete\n\nSettings:\n  Token budget (lifetime spending cap): 20 tokens\n  Independent auditor: disabled\n  Status: paused\n  Current task: a\n  Automatic continuation: disabled"
+    }
+  },
+  {
+    "name": "unchanged",
+    "before": {
+      "id": "g",
+      "objective": "unchanged\n\n中文",
+      "status": "active",
+      "autoContinue": true,
+      "usage": {
+        "tokensUsed": 0,
+        "activeSeconds": 0
+      },
+      "sisyphus": false,
+      "revision": 3,
+      "createdAt": "now",
+      "updatedAt": "now",
+      "taskList": {
+        "tasks": [
+          {
+            "id": "x",
+            "title": "same",
+            "status": "pending"
+          }
+        ],
+        "blockCompletion": false,
+        "proposedAt": "now"
+      }
+    },
+    "after": {
+      "id": "g",
+      "objective": "unchanged\n\n中文",
+      "status": "active",
+      "autoContinue": true,
+      "usage": {
+        "tokensUsed": 0,
+        "activeSeconds": 0
+      },
+      "sisyphus": false,
+      "revision": 3,
+      "createdAt": "now",
+      "updatedAt": "now",
+      "taskList": {
+        "tasks": [
+          {
+            "id": "x",
+            "title": "same",
+            "status": "pending"
+          }
+        ],
+        "blockCompletion": false,
+        "proposedAt": "now"
+      }
+    },
+    "expected": {
+      "hasChanges": false,
+      "summary": "No actual changes: the candidate matches the current goal.",
+      "changedSections": [],
+      "diffText": "No actual changes: the candidate matches the current goal.",
+      "fullText": "Objective:\n  unchanged\n  \n  中文\n\nVerification contract: (none)\n\nTasks:\n  [pending] x: same\n\nTask completion: does not block goal completion\n\nSettings:\n  Token budget (lifetime spending cap): none\n  Independent auditor: enabled\n  Status: active\n  Current task: (none)\n  Automatic continuation: enabled"
+    }
+  },
+  {
+    "name": "coarse-fallback",
+    "before": {
+      "id": "g",
+      "objective": "旧甲\n旧乙\n旧丙",
+      "status": "active",
+      "autoContinue": true,
+      "usage": {
+        "tokensUsed": 0,
+        "activeSeconds": 0
+      },
+      "sisyphus": false,
+      "revision": 3,
+      "createdAt": "now",
+      "updatedAt": "now",
+      "taskList": {
+        "tasks": [],
+        "blockCompletion": false,
+        "proposedAt": "now"
+      }
+    },
+    "after": {
+      "id": "g",
+      "objective": "新甲\n新乙",
+      "status": "active",
+      "autoContinue": true,
+      "usage": {
+        "tokensUsed": 0,
+        "activeSeconds": 0
+      },
+      "sisyphus": false,
+      "revision": 3,
+      "createdAt": "now",
+      "updatedAt": "now",
+      "taskList": {
+        "tasks": [],
+        "blockCompletion": false,
+        "proposedAt": "now"
+      }
+    },
+    "options": {
+      "maxDiffCells": 1
+    },
+    "expected": {
+      "hasChanges": true,
+      "summary": "Modified: Objective.",
+      "changedSections": ["Objective"],
+      "diffText": "Objective:\n  (large change: old and new lines are shown as removed and added instead of matched context)\n- 旧甲\n- 旧乙\n- 旧丙\n+ 新甲\n+ 新乙",
+      "fullText": "Objective:\n  新甲\n  新乙\n\nVerification contract: (none)\n\nTasks:\n  none\n\nTask completion: does not block goal completion\n\nSettings:\n  Token budget (lifetime spending cap): none\n  Independent auditor: enabled\n  Status: active\n  Current task: (none)\n  Automatic continuation: enabled"
+    }
+  },
+  {
+    "name": "task-removal",
+    "before": {
+      "id": "g",
+      "objective": "目标",
+      "status": "active",
+      "autoContinue": true,
+      "usage": {
+        "tokensUsed": 0,
+        "activeSeconds": 0
+      },
+      "sisyphus": false,
+      "revision": 3,
+      "createdAt": "now",
+      "updatedAt": "now",
+      "taskList": {
+        "tasks": [
+          {
+            "id": "z",
+            "title": "多级",
+            "status": "pending",
+            "subtasks": [
+              {
+                "id": "z1",
+                "title": "子任务",
+                "status": "in_progress",
+                "evidence": "结果",
+                "verificationContract": "ok"
+              }
+            ]
+          }
+        ],
+        "blockCompletion": false,
+        "proposedAt": "now"
+      }
+    },
+    "after": {
+      "id": "g",
+      "objective": "目标",
+      "status": "active",
+      "autoContinue": true,
+      "usage": {
+        "tokensUsed": 0,
+        "activeSeconds": 0
+      },
+      "sisyphus": false,
+      "revision": 3,
+      "createdAt": "now",
+      "updatedAt": "now",
+      "taskList": {
+        "tasks": [],
+        "blockCompletion": false,
+        "proposedAt": "now"
+      }
+    },
+    "expected": {
+      "hasChanges": true,
+      "summary": "Modified: Tasks.",
+      "changedSections": ["Tasks"],
+      "diffText": "Tasks:\n  - z: \"多级\" (parent: (none), order: 1)\n  - z1: \"子任务\" [in_progress] (parent: z, order: 1)\n  - z1 verification contract: \"ok\"\n  - z1 evidence: \"结果\"",
+      "fullText": "Objective:\n  目标\n\nVerification contract: (none)\n\nTasks:\n  none\n\nTask completion: does not block goal completion\n\nSettings:\n  Token budget (lifetime spending cap): none\n  Independent auditor: enabled\n  Status: active\n  Current task: (none)\n  Automatic continuation: enabled"
+    }
+  },
+  {
+    "name": "deleted-skipped-task",
+    "before": {
+      "id": "g",
+      "objective": "same",
+      "status": "active",
+      "autoContinue": true,
+      "usage": {
+        "tokensUsed": 0,
+        "activeSeconds": 0
+      },
+      "sisyphus": false,
+      "revision": 1,
+      "createdAt": "now",
+      "updatedAt": "now",
+      "taskList": {
+        "tasks": [
+          {
+            "id": "drop",
+            "title": "old",
+            "status": "skipped",
+            "skipReason": "out of scope"
+          }
+        ],
+        "blockCompletion": false,
+        "proposedAt": "now"
+      }
+    },
+    "after": {
+      "id": "g",
+      "objective": "same",
+      "status": "active",
+      "autoContinue": true,
+      "usage": {
+        "tokensUsed": 0,
+        "activeSeconds": 0
+      },
+      "sisyphus": false,
+      "revision": 1,
+      "createdAt": "now",
+      "updatedAt": "now",
+      "taskList": {
+        "tasks": [],
+        "blockCompletion": false,
+        "proposedAt": "now"
+      }
+    },
+    "expected": {
+      "hasChanges": true,
+      "summary": "Modified: Tasks.",
+      "changedSections": ["Tasks"],
+      "diffText": "Tasks:\n  - drop: \"old\" [skipped] (parent: (none), order: 1)",
+      "fullText": "Objective:\n  same\n\nVerification contract: (none)\n\nTasks:\n  none\n\nTask completion: does not block goal completion\n\nSettings:\n  Token budget (lifetime spending cap): none\n  Independent auditor: enabled\n  Status: active\n  Current task: (none)\n  Automatic continuation: enabled"
+    }
+  },
+  {
+    "name": "parent-id-collision",
+    "before": {
+      "id": "g",
+      "objective": "same",
+      "status": "active",
+      "autoContinue": true,
+      "usage": {
+        "tokensUsed": 0,
+        "activeSeconds": 0
+      },
+      "sisyphus": false,
+      "revision": 1,
+      "createdAt": "now",
+      "updatedAt": "now",
+      "taskList": {
+        "tasks": [
+          {
+            "id": "(none)",
+            "title": "(none)",
+            "status": "pending"
+          },
+          {
+            "id": "child",
+            "title": "child",
+            "status": "pending"
+          }
+        ],
+        "blockCompletion": false,
+        "proposedAt": "now"
+      }
+    },
+    "after": {
+      "id": "g",
+      "objective": "same",
+      "status": "active",
+      "autoContinue": true,
+      "usage": {
+        "tokensUsed": 0,
+        "activeSeconds": 0
+      },
+      "sisyphus": false,
+      "revision": 1,
+      "createdAt": "now",
+      "updatedAt": "now",
+      "taskList": {
+        "tasks": [
+          {
+            "id": "(none)",
+            "title": "(none)",
+            "status": "pending",
+            "subtasks": [
+              {
+                "id": "child",
+                "title": "child",
+                "status": "pending"
+              }
+            ]
+          }
+        ],
+        "blockCompletion": false,
+        "proposedAt": "now"
+      },
+      "skipAuditor": false
+    },
+    "expected": {
+      "hasChanges": true,
+      "summary": "Modified: Tasks.",
+      "changedSections": ["Tasks"],
+      "diffText": "Tasks:\n  ~ child: order: 2 -> 1",
+      "fullText": "Objective:\n  same\n\nVerification contract: (none)\n\nTasks:\n  [pending] (none): (none)\n    [pending] child: child\n\nTask completion: does not block goal completion\n\nSettings:\n  Token budget (lifetime spending cap): none\n  Independent auditor: enabled\n  Status: active\n  Current task: (none)\n  Automatic continuation: enabled"
+    }
+  },
+  {
+    "name": "current-id-collision",
+    "before": {
+      "id": "g",
+      "objective": "same",
+      "status": "active",
+      "autoContinue": true,
+      "usage": {
+        "tokensUsed": 0,
+        "activeSeconds": 0
+      },
+      "sisyphus": false,
+      "revision": 1,
+      "createdAt": "now",
+      "updatedAt": "now",
+      "taskList": {
+        "tasks": [
+          {
+            "id": "(none)",
+            "title": "(none)",
+            "status": "pending"
+          },
+          {
+            "id": "keep",
+            "title": "keep",
+            "status": "pending"
+          }
+        ],
+        "blockCompletion": false,
+        "proposedAt": "now"
+      },
+      "currentTaskId": "(none)"
+    },
+    "after": {
+      "id": "g",
+      "objective": "same",
+      "status": "active",
+      "autoContinue": true,
+      "usage": {
+        "tokensUsed": 0,
+        "activeSeconds": 0
+      },
+      "sisyphus": false,
+      "revision": 1,
+      "createdAt": "now",
+      "updatedAt": "now",
+      "taskList": {
+        "tasks": [
+          {
+            "id": "keep",
+            "title": "keep",
+            "status": "pending"
+          }
+        ],
+        "blockCompletion": false,
+        "proposedAt": "now"
+      },
+      "skipAuditor": false
+    },
+    "expected": {
+      "hasChanges": true,
+      "summary": "Modified: Tasks.",
+      "changedSections": ["Tasks"],
+      "diffText": "Tasks:\n  - (none): \"(none)\" (parent: (none), order: 1)\n  ~ keep: order: 2 -> 1",
+      "fullText": "Objective:\n  same\n\nVerification contract: (none)\n\nTasks:\n  [pending] keep: keep\n\nTask completion: does not block goal completion\n\nSettings:\n  Token budget (lifetime spending cap): none\n  Independent auditor: enabled\n  Status: active\n  Current task: (none)\n  Automatic continuation: enabled"
+    }
+  },
+  {
+    "name": "contract-newline-collision",
+    "before": {
+      "id": "g",
+      "objective": "same",
+      "status": "active",
+      "autoContinue": true,
+      "usage": {
+        "tokensUsed": 0,
+        "activeSeconds": 0
+      },
+      "sisyphus": false,
+      "revision": 1,
+      "createdAt": "now",
+      "updatedAt": "now",
+      "taskList": {
+        "tasks": [],
+        "blockCompletion": false,
+        "proposedAt": "now"
+      },
+      "verificationContract": "alpha\nbeta"
+    },
+    "after": {
+      "id": "g",
+      "objective": "same",
+      "status": "active",
+      "autoContinue": true,
+      "usage": {
+        "tokensUsed": 0,
+        "activeSeconds": 0
+      },
+      "sisyphus": false,
+      "revision": 1,
+      "createdAt": "now",
+      "updatedAt": "now",
+      "taskList": {
+        "tasks": [],
+        "blockCompletion": false,
+        "proposedAt": "now"
+      },
+      "verificationContract": "alpha\\nbeta",
+      "skipAuditor": false
+    },
+    "expected": {
+      "hasChanges": true,
+      "summary": "Modified: Verification contract.",
+      "changedSections": ["Verification contract"],
+      "diffText": "Verification contract:\n  - \"alpha\\\\nbeta\"\n  + \"alpha\\\\nbeta\"",
+      "fullText": "Objective:\n  same\n\nVerification contract: alpha\\nbeta\n\nTasks:\n  none\n\nTask completion: does not block goal completion\n\nSettings:\n  Token budget (lifetime spending cap): none\n  Independent auditor: enabled\n  Status: active\n  Current task: (none)\n  Automatic continuation: enabled"
+    }
+  }
+]

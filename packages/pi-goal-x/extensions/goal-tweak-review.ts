@@ -5,7 +5,7 @@ import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { GoalRecord, GoalTaskList } from "./goal-record.ts";
 import { loadGoalSettings } from "./goal-settings.ts";
 import { projectTweakCandidate, type TweakProjectionContext } from "./goal-tweak-projection.ts";
-import { buildTweakPresentation, type TweakPresentation } from "./goal-tweak-diff.ts";
+import { buildTweakComparison, buildTweakPresentation, type TweakPresentation } from "./goal-tweak-diff.ts";
 import { convertFlatTasks, type FlatTaskInput } from "./goal-task-tools.ts";
 import { showTweakProposalDialog, type TweakProposalDialogResult } from "./goal-tweak-confirmation.ts";
 
@@ -66,7 +66,10 @@ export class TweakReview {
 		return buildTweakPresentation(this.before, this.project(this.before, auditorEnabled).candidate);
 	}
 	async confirm(): Promise<TweakProposalDialogResult> {
-		return showTweakProposalDialog(this.ctx, { defaultAuditorEnabled: this.choice.auditorEnabled, presentation: (enabled) => this.presentation(enabled) });
+		return showTweakProposalDialog(this.ctx, { defaultAuditorEnabled: this.choice.auditorEnabled, presentation: (enabled) => {
+			const { presentation, entries, fullUiText } = buildTweakComparison(this.before, this.project(this.before, enabled).candidate);
+			return { ...presentation, diffEntries: entries, fullUiText };
+		} });
 	}
 	record(choice: TweakProposalDialogResult): string {
 		this.choice = choice;

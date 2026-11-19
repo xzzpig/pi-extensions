@@ -11,6 +11,8 @@
   "lastSyncedAt": "2026-08-09T02:30:00.000Z",
   "notes": "Forked from MasuRii/pi-tool-display. The bashCommandDisplay contract lives in openspec (spec bash-command-display); bashLivePreviewMode and bashOutputMode:'auto' are documented in the package README. The read-only tool presentation provider (getToolPresentation/presentationRevision on pi-tool-display.api.v1) is specified in openspec (spec transcript-builder-api, change align-btw-transcript-presentation) and documented for consumers in docs/tool-presentation-provider.md with types in tool-display-api-consumer.d.ts.",
   "reapplyOnSync": [
+    "Preserve the package.json prepack/dist-pkg and bundled private diff dependency so independent installs resolve compiled JS without a registry copy.",
+    "Reapply src/diff-renderer.ts delegation for split row pairing, column measurement and row composition to @xzzpig/pi-components/diff; preserve upstream file parsing, cell/ANSI rendering and user config. Retain the shared diff dependency in package.json and its independent bundled delivery.",
     "the fork import block in src/bash-display.ts, where renderBashCall gains an optional config param, replaces upstream's new Text(\"\", 0, 0) reuse expression with new BashCommandLineText(\"\", 0, 0), and adds one resolveBashCommandDisplayArgs preprocessing line plus one text.setCollapse(shouldCollapseBashCommand(config, context)) line — buildBashCallText and its 3 call sites keep upstream bytes",
     "the bash-auto-mode import plus its normalization call at the top of the fork-owned renderBashDisplayResult, and the 2 renderBashCall call sites passing the existing getConfig()",
     "the types.ts / config-store.ts / config-modal.ts / presets.ts entries for bashOutputMode and bashCommandDisplay",
@@ -25,12 +27,23 @@
     "Keep pi.changelogPath pointing to ./FORK-CHANGELOG.md, ship the fork log and any upstream changelog, and retain README release-history navigation. Never append fork releases to the upstream log; follow docs/fork-changelogs.md."
   ],
   "doNotReintroduce": [
+    "Do not restore a second tool-display-local copy of the split pairing/row-composition algorithms; both edit/write and Goal-X must use the shared diff implementation without changing existing tool-display output.",
     "do not re-add the fork-only formatEarlierLinesHint/buildTailPreviewText copies or the unreachable empty-lines branch: upstream's optional label and take:'head'|'tail' params cover both",
     "package-lock.json keeps upstream bytes at the upstream version across fork releases — do not hand-edit it",
     "不要恢复 reload 测试对被忽略的包根 config.json 的依赖，也不要通过 CI 创建占位配置或跳过断言来掩盖干净 checkout 失败。",
     "Do not mix fork release headings into the upstream changelog or use upstream history as the Pi startup changelog."
   ],
   "knownDebt": [
+    {
+      "kind": "other",
+      "path": "packages/pi-tool-display/package.json",
+      "reason": "[policy] The fork consumes the private shared diff library so its renderer matches Goal-X and can be bundled independently; remove this dependency divergence when upstream supplies the same shared component and packaging."
+    },
+    {
+      "kind": "other",
+      "path": "packages/pi-tool-display/src/diff-renderer.ts",
+      "reason": "[policy] Split pairing and row composition delegate to the shared diff library so tool and Goal-X rendering cannot drift; keep the upstream parser and tool-specific styling. Remove the seam when upstream exposes an equivalent reusable implementation accepted by both consumers."
+    },
     {
       "kind": "other",
       "path": "packages/pi-tool-display/package.json",

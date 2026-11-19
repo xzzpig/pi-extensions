@@ -13,6 +13,7 @@ import {
   localDeps,
   checkTarEntries,
   checkPackedManifest,
+  checkPackedSharedDiff,
   integrity,
   publishArtifacts,
 } from "./release-core.mjs";
@@ -29,10 +30,13 @@ export function run(command, args, cwd = root, options = {}) {
 }
 export function gatePackages(all, candidates) {
   const needed = new Set(candidates.map((p) => p.name));
-  // These packages inline pi-components outside their dependency declarations.
+  // Each consumer requires the private compiled components before its own
+  // checks and package staging, including a tool-display-only release.
   if (
     candidates.some((p) =>
-      ["pi-btw", "pi-subagents", "pi-goal-x"].includes(p.dir),
+      ["pi-btw", "pi-subagents", "pi-goal-x", "pi-tool-display"].includes(
+        p.dir,
+      ),
     )
   )
     needed.add("@xzzpig/pi-components");
@@ -118,6 +122,12 @@ export function pack(p, destination) {
     throw new Error(`Invalid packed manifest: ${p.dir}`, { cause: error });
   }
   checkPackedManifest(p, manifest, entries);
+  checkPackedSharedDiff(p, manifest, entries, (entry) =>
+    run("tar", ["-xOzf", file, entry], root, {
+      stdio: "pipe",
+      maxBuffer: 16 * 1024 * 1024,
+    }).toString(),
+  );
   checkPackedForkLog(forkLog, manifest, entries, (entry) =>
     run("tar", ["-xOzf", file, entry], root, {
       stdio: "pipe",

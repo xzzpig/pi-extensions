@@ -236,6 +236,61 @@ export function checkPackedManifest(p, packed, entries) {
     if (!entries.includes(`package/node_modules/${name}/package.json`))
       throw new Error(`Missing bundled dependency: ${name}`);
 }
+/** Verify the private diff dependency inside each independently packed consumer. */
+export function checkPackedSharedDiff(p, packed, entries, readEntry) {
+  if (!["pi-goal-x", "pi-tool-display"].includes(p.dir)) return;
+  const name = "@xzzpig/pi-components";
+  const base = `package/node_modules/${name}`;
+  if (!packed.bundledDependencies?.includes(name))
+    throw new Error(`Missing bundled shared diff: ${p.dir}`);
+  for (const entry of [
+    `${base}/package.json`,
+    `${base}/dist/src/diff.js`,
+    `${base}/dist/src/diff.d.ts`,
+  ]) {
+    if (!entries.includes(entry))
+      throw new Error(`Missing compiled shared diff entry: ${entry}`);
+  }
+  if (
+    entries.some(
+      (entry) =>
+        entry.startsWith(`${base}/`) &&
+        /\.(?:ts|tsx)$/.test(entry) &&
+        !entry.endsWith(".d.ts"),
+    )
+  )
+    throw new Error(`Bundled shared diff contains TypeScript source: ${p.dir}`);
+  let component;
+  try {
+    component = JSON.parse(readEntry(`${base}/package.json`));
+  } catch (error) {
+    throw new Error(`Invalid bundled shared diff manifest: ${p.dir}`, {
+      cause: error,
+    });
+  }
+  if (
+    component.name !== name ||
+    component.version !== packed.dependencies?.[name] ||
+    component.private !== true
+  )
+    throw new Error(`Bundled shared diff identity mismatch: ${p.dir}`);
+  const diff = component.exports?.["./diff"];
+  if (
+    diff?.types !== "./dist/src/diff.d.ts" ||
+    diff?.default !== "./dist/src/diff.js"
+  )
+    throw new Error(
+      `Bundled shared diff must resolve to JS and declarations: ${p.dir}`,
+    );
+  if (
+    p.dir === "pi-goal-x" &&
+    Object.keys(component.exports ?? {}).some((key) =>
+      key.startsWith("./transcript"),
+    )
+  )
+    throw new Error("Goal-X must not bundle the removed transcript runtime");
+}
+
 export function integrity(file) {
   return `sha512-${createHash("sha512").update(fs.readFileSync(file)).digest("base64")}`;
 }

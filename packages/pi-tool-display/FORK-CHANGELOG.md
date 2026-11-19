@@ -6,6 +6,12 @@ Current upstream baseline (not a claim about older releases): [0.5.0 / 91cef7580
 
 Historical entries below were migrated from the repository's existing changelogs; missing dates and historical baselines have not been invented.
 
+## [0.3.3] - 2026-11-19
+
+### Fork changes
+
+- 编辑与写入差异共用私有 `pi-components/diff` 排版核心，并在独立安装包中携带其编译产物；保留原有视图配置与展示。
+
 ## [0.3.2] - 2026-11-15
 
 ### 文档

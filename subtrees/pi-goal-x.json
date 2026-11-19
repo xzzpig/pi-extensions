@@ -13,6 +13,18 @@
   "knownDebt": [
     {
       "kind": "other",
+      "reason": "[policy] Final goal confirmation needs minimal goal-draft and goal-questionnaire seams plus package manifest staging for the private shared diff; fork-only modules own layout, mouse and semantics. Remove seams when upstream supports equivalent confirmation behavior and independently bundled diff."
+    },
+    {
+      "kind": "other",
+      "reason": "[policy] Audit dashboard mouse interaction requires minimal goal-widget and goal-state seams for native component routing, final height and active-audit lifecycle identity, plus the package files entry for fork-only documentation. Keep behavior in fork-only audit viewport/renderer/mouse modules; remove the seams when upstream offers equivalent safe, display-only audit navigation."
+    },
+    {
+      "kind": "other",
+      "reason": "[policy] Task-tree navigation needs minimal upstream widget/renderer and goal-state registration seams, the package files allowlist and revised upstream goal-widget assertions; fork-only modules carry the projection, layout and mouse logic. Remove these recurring changes when upstream supplies equivalent current-task following and safe component mouse interactions."
+    },
+    {
+      "kind": "other",
       "reason": "[policy] The existing upstream tests goal-audit-dashboard.test.ts, goal-widget.test.ts and e2e/goal-lifecycle-dashboard.test.ts retain their lifecycle/diagnostic coverage but replace only the five-stage, percentage-derived and generic all-accepted assertions superseded by D-17. Remove these assertion divergences when upstream adopts the dynamic checklist presentation."
     },
     {
@@ -175,6 +187,9 @@
     }
   ],
   "reapplyOnSync": [
+    "保留 goal-draft.ts 显示空行格式接缝和 goal-questionnaire.ts 的最终创建确认接缝；package.json 声明共享 diff 及独立 dist-pkg/prepack，具体交互、比较与 staging 逻辑留在 fork-only 文件。",
+    "Audit dashboard mouse: retain goal-widget.ts native audit branch delegation, final height budget and active lifecycle identity hooks, plus goal-state.ts activeAudit getter wiring; keep scrolling, geometry and gesture behavior in fork-only widgets. Package docs/audit-dashboard-mouse.md and regenerate the fork test manifest; preserve same-attempt Escape resume and keep audit navigation display-only.",
+    "Task-tree navigation: reapply goal-state.ts widget toggle/regular-mode diagnostic seams, goal-widget.ts projection, viewport, layout and mouse delegation, and goal-dashboard-renderer.ts structured task row/control geometry hooks. Retain docs/task-tree-navigation.md in package.json files and update only assertions whose latest-completion anchoring was superseded; keep new behavior tests in fork-only suites and regenerate the test manifest.",
     "Dynamic audit dashboard: reapply the widgets/auditor-dashboard-model.ts delegation to fork-auditor-dashboard-model.ts (dynamic IDs, retained states and actual approval report), widgets/goal-dashboard-renderer.ts delegation plus boxHeader/boxLine/boxFooter exports, and widgets/goal-widget.ts attempt-aware viewport/render/navigation seams. Keep docs/dynamic-audit-checklist.md in package.json files. Re-align only the superseded five-stage/result-card assertions in upstream tests; new coverage stays in fork-only suites.",
     "Keep resolveAuditorSessionModelOptions as a one-call seam to fork-auditor-runtime-options.ts; that helper mirrors upstream's optional registry.runtime lookup and must be realigned if upstream changes the SDK/runtime contract.",
     "Use the root pnpm lockfile; reapply the pnpm workspace CI, packing, and fork publication-documentation adaptations. After an ignore-scripts install, build pi-subagents via its prepack script because pnpm links the dependency to its generated dist-pkg.",
@@ -210,6 +225,9 @@
     "Keep pi.changelogPath pointing to ./FORK-CHANGELOG.md, ship the fork log and any upstream changelog, and retain README release-history navigation. Never append fork releases to the upstream log; follow docs/fork-changelogs.md."
   ],
   "doNotReintroduce": [
+    "不得恢复 auditor transcript runtime 或让共享 diff 依赖指向 node_modules 内 TypeScript；确认框的旧手势不可复活、浏览不得修改目标事务。",
+    "Do not route audit wheel to transcript at list boundaries, collapse task and audit input targets, consume text-selection press, or treat mouse browsing as an audit transaction; preserve same-attempt Escape park/resume and host overlay/link priority.",
+    "Do not re-anchor the ordinary task viewport solely on latest completion or restrict compact tasks to roots; follow the effective current task while preserving manual browsing until focus changes, and never consume mouse press or change task execution state for display interactions.",
     "Do not restore fixed audit stages, percentage-derived item success or terminal auto-checkmarks; item progress is display-only and must not become a completion gate or replace the structured verdict (show-dynamic-audit-checklist).",
     "Do not restore upstream repository.url as the fork publishing source; npm provenance must identify the actual build repository.",
     "do not restore the temp-dir PI_SUBAGENT_EXTRA_AGENT_DIRS materialization",

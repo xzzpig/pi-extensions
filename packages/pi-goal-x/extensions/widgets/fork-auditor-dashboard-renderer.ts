@@ -17,6 +17,14 @@ export interface AuditDashboardRenderOptions {
   interruptKey?: GoalKeybinding;
   scrollOffset?: number;
   viewportRows?: number;
+  interactive?: boolean;
+  maxHeight?: number;
+  onGeometry?: (geometry: AuditDashboardGeometry) => void;
+}
+
+export interface AuditDashboardGeometry {
+  body?: { first: number; last: number };
+  control?: { line: number; start: number; end: number };
 }
 
 /** User/model text is data, not terminal control sequences. */
@@ -95,7 +103,17 @@ export function renderDynamicAuditorDashboard(
               ? "等待逐项上报 · 展开查看清单"
               : "审计已结束 · 未检查项不自动补勾",
       ];
-  const rows = expanded ? Math.max(1, Math.floor(opts.viewportRows ?? 12)) : 1;
+  const cap = opts.interactive
+    ? Math.max(1, Math.floor(opts.maxHeight ?? 18))
+    : Infinity;
+  const rows = opts.interactive
+    ? Math.min(
+        expanded ? Math.max(0, Math.floor(opts.viewportRows ?? 12)) : 1,
+        Math.max(0, cap - 4),
+      )
+    : expanded
+      ? Math.max(1, Math.floor(opts.viewportRows ?? 12))
+      : 1;
   const offset = expanded
     ? Math.max(
         0,
@@ -133,7 +151,19 @@ export function renderDynamicAuditorDashboard(
       `已检查 ${passed + failed}/${model.checks.length} · 通过 ${passed} · 不通过 ${failed}`,
     ),
     ...visible.map((line) => boxLine(theme, safeWidth, line)),
-    boxFooter(theme, safeWidth, hints, estimate),
   ];
+  const geometry: AuditDashboardGeometry = {};
+  if (opts.interactive && expanded && rows > 0)
+    geometry.body = { first: 2, last: 1 + rows };
+  if (opts.interactive && cap >= 4) {
+    const label = expanded ? "[收起]" : "[展开]";
+    const controlLine = lines.length;
+    lines.push(boxLine(theme, safeWidth, label));
+    if (width - 3 >= 6)
+      geometry.control = { line: controlLine, start: 2, end: 8 };
+  }
+  lines.push(boxFooter(theme, safeWidth, hints, estimate));
+  if (opts.interactive && lines.length > cap) lines.length = cap;
+  opts.onGeometry?.(geometry);
   return clampLinesToWidth(lines, width);
 }

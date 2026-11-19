@@ -1,6 +1,6 @@
 {
   "name": "@xzzpig/pi-goal-x",
-  "version": "0.12.4",
+  "version": "0.12.5",
   "description": "Goal mode extension for pi: durable long-running objectives, a constant six-tool surface, structured tasks, independent completion audit, Sisyphus mode, auto-continue, and a status overlay.",
   "license": "MIT",
   "author": "pi-goal-x contributors",
@@ -9,8 +9,12 @@
     "pi-goal-x-recover": "scripts/recover-session-checkpoints.mjs"
   },
   "dependencies": {
+    "@xzzpig/pi-components": "workspace:*",
     "@xzzpig/pi-subagents": "workspace:*"
   },
+  "bundledDependencies": [
+    "@xzzpig/pi-components"
+  ],
   "keywords": [
     "pi-package",
     "pi",
@@ -49,6 +53,8 @@
     "docs/unfocused-sessions.md",
     "docs/goal-tweak-diff.md",
     "docs/dynamic-audit-checklist.md",
+    "docs/task-tree-navigation.md",
+    "docs/audit-dashboard-mouse.md",
     "docs/pi-goal-x-unified-dashboard-plan.md",
     "docs/unified-dashboard.md",
     "assets/badge-light.svg",
@@ -63,6 +69,7 @@
     "image": "https://github.com/tmonk/pi-goal-x/raw/main/pi-goal-x.png"
   },
   "scripts": {
+    "prepack": "pnpm --filter @xzzpig/pi-components run build && node ../../scripts/fork-stage-diff-consumer.mjs",
     "check": "tsc --noEmit",
     "test": "node scripts/run-unit-tests.mjs",
     "test:serial": "node --experimental-strip-types --test --test-concurrency=1 tests/*.test.ts",
@@ -110,7 +117,9 @@
     "typescript-eslint": "^8.66.0"
   },
   "publishConfig": {
-    "access": "public"
+    "access": "public",
+    "directory": "dist-pkg",
+    "linkDirectory": false
   },
   "overrides": {
     "@earendil-works/pi-coding-agent": {

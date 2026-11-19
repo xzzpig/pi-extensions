@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createRequire } from "node:module";
 import { checkScripts, gatePackages } from "./release.mjs";
 import {
   planRelease,
@@ -10,6 +11,8 @@ import {
   compare,
   checkTarEntries,
   checkPackedManifest,
+  checkPackedSharedDiff,
+  discover,
   publishArtifacts,
   checkArchive,
   readJson,
@@ -66,6 +69,49 @@ test("clean-workspace checks build public artifacts before self/consumer checks"
   ]);
   assert.deepEqual(gatePackages([b, dependency], [b]), [dependency, b]);
 });
+test("each standalone diff consumer gates the private component build before its own prepack", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const all = discover(root);
+  for (const dir of ["pi-goal-x", "pi-tool-display"]) {
+    const consumer = all.find((item) => item.dir === dir);
+    assert.ok(consumer);
+    const gates = gatePackages(all, [consumer]);
+    const component = gates.findIndex((item) => item.dir === "pi-components");
+    const target = gates.findIndex((item) => item.dir === dir);
+    assert.ok(component >= 0 && component < target);
+    assert.ok(checkScripts(gates[component]).includes("build"));
+    assert.ok(checkScripts(consumer).includes("prepack"));
+  }
+});
+
+test("workspace dependents resolve source rather than an absent generated dist-pkg", () => {
+  const root = path.resolve(import.meta.dirname, "..");
+  const all = discover(root);
+  for (const [consumer, target, specifier] of [
+    [
+      "pi-openspec-x",
+      "pi-goal-x",
+      "@xzzpig/pi-goal-x/extensions/goal-record.ts",
+    ],
+    [
+      "pi-sandbox",
+      "pi-tool-display",
+      "@xzzpig/pi-tool-display/tool-display-api-consumer",
+    ],
+  ]) {
+    const manifest = all.find((item) => item.dir === target);
+    assert.equal(manifest.publishConfig.linkDirectory, false);
+    const req = createRequire(
+      path.join(root, "packages", consumer, "package.json"),
+    );
+    const resolved = fs.realpathSync(req.resolve(specifier));
+    assert.ok(
+      resolved.startsWith(path.join(root, "packages", target) + path.sep),
+    );
+    assert.ok(!resolved.includes(`${path.sep}dist-pkg${path.sep}`));
+  }
+});
+
 test("Linux sandbox-runtime builds the ignored seccomp helper before TypeScript and tests", () => {
   const runtime = {
     name: "@xzzpig/sandbox-runtime",
@@ -260,6 +306,75 @@ test("built-directory artifact entries, declarations, bundle and resolved deps",
     /bundled/,
   );
 });
+test("packed diff consumers require private compiled JS, declarations and no leaked goal transcript", () => {
+  const name = "@xzzpig/pi-components";
+  const p = pkg("pi-goal-x");
+  const packed = {
+    ...p,
+    dependencies: { [name]: "0.5.0" },
+    bundledDependencies: [name],
+  };
+  const base = `package/node_modules/${name}`;
+  const entries = [
+    `${base}/package.json`,
+    `${base}/dist/src/diff.js`,
+    `${base}/dist/src/diff.d.ts`,
+  ];
+  const component = {
+    name,
+    version: "0.5.0",
+    private: true,
+    exports: {
+      "./diff": {
+        types: "./dist/src/diff.d.ts",
+        default: "./dist/src/diff.js",
+      },
+    },
+  };
+  const read = () => JSON.stringify(component);
+  checkPackedSharedDiff(p, packed, entries, read);
+  checkPackedSharedDiff(pkg("pi-tool-display"), packed, entries, read);
+  assert.throws(
+    () => checkPackedSharedDiff(p, packed, entries.slice(0, 2), read),
+    /compiled/,
+  );
+  assert.throws(
+    () =>
+      checkPackedSharedDiff(
+        p,
+        packed,
+        [...entries, `${base}/src/diff.ts`],
+        read,
+      ),
+    /TypeScript/,
+  );
+  assert.throws(
+    () =>
+      checkPackedSharedDiff(p, packed, entries, () =>
+        JSON.stringify({
+          ...component,
+          exports: {
+            "./diff": {
+              default: "./src/diff.ts",
+              types: "./dist/src/diff.d.ts",
+            },
+          },
+        }),
+      ),
+    /resolve to JS/,
+  );
+  assert.throws(
+    () =>
+      checkPackedSharedDiff(p, packed, entries, () =>
+        JSON.stringify({
+          ...component,
+          exports: { ...component.exports, "./transcript": "./bad.js" },
+        }),
+      ),
+    /transcript/,
+  );
+});
+
 test("all-artifact publish order, partial failure and idempotent retry", async () => {
   const artifacts = [a, b].map((p) => ({ ...p, integrity: "sha512-example" }));
   const published = new Map(),

@@ -49,6 +49,7 @@ import {
 	resolveSessionFocus,
 } from "./goal-pool.ts";
 import { buildGoalRunningNotification } from "./widgets/goal-notifications.ts";
+import { MouseCapabilityNotice } from "./widgets/fork-mouse-capability.ts";
 import { GOAL_WIDGET_KEY, GoalWidgetComponent, liveDisplayGoal, makeGoalWidgetFactory, type AuditorWidgetProgress } from "./widgets/goal-widget.ts";
 import type { AuditVerdict } from "./widgets/auditor-dashboard-model.ts";
 import { runGoalCompletionAuditor } from "./goal-auditor.ts";
@@ -793,6 +794,7 @@ export function createGoalCore(
 	const goalWidgetComponentRef: { current: GoalWidgetComponent | null } = { current: null };
 	const goalTuiRef: { current: TUI | null } = { current: null };
 	let widgetRegistered = false;
+	const mouseCapabilityNotice = new MouseCapabilityNotice();
 
 	function clearGoalWidget(ctx: ExtensionContext): void {
   lastUiCtx = null;
@@ -904,13 +906,16 @@ export function createGoalCore(
 						getGoal: () => goalForDisplay() ?? state.goal,
 						getOpenGoalCount: () => otherOpenGoalCount(goalsById, null),
 						getAuditorProgress: () => auditProgress,
+						getAuditLifecycle: () => activeAudit?.phase === "settled" ? null : activeAudit,
 						getSettings: () => ({ ...loadGoalSettings(goalCwd), commands: core.loadedCommands }),
 						getDebugMode: () => debugMode,
 						getStalled: () => stallNotified,
 						getExpanded: () => dashboardExpanded,
+						onToggleExpanded: () => core.toggleDashboardExpanded(),
 						getLedgerEvents: () => state.goal ? goalActivityEvents(storage, state.goal.id) : [],
 						getAuditResult: () => auditResult,
 						onTui: (tui) => {
+							mouseCapabilityNotice.observe(tui.mode, core.sessionOwner, (message) => ctx.ui.notify(message, "warning"));
 							goalTuiRef.current = tui;
 						},
 						componentRef: goalWidgetComponentRef,
@@ -938,13 +943,16 @@ export function createGoalCore(
 					getGoal: () => goalForDisplay() ?? state.goal,
 					getOpenGoalCount: () => otherOpenGoalCount(goalsById, null),
 					getAuditorProgress: () => auditProgress,
+					getAuditLifecycle: () => activeAudit?.phase === "settled" ? null : activeAudit,
 					getSettings: () => ({ ...loadGoalSettings(goalCwd), commands: core.loadedCommands }),
 					getDebugMode: () => debugMode,
 					getStalled: () => stallNotified,
 					getExpanded: () => dashboardExpanded,
+					onToggleExpanded: () => core.toggleDashboardExpanded(),
 					getLedgerEvents: () => state.goal ? goalActivityEvents(storage, state.goal.id) : [],
 					getAuditResult: () => auditResult,
 					onTui: (tui) => {
+						mouseCapabilityNotice.observe(tui.mode, core.sessionOwner, (message) => ctx.ui.notify(message, "warning"));
 						goalTuiRef.current = tui;
 					},
 					componentRef: goalWidgetComponentRef,

@@ -1,4 +1,5 @@
 import { goalDialogControls } from "./goal-dialog-controls.ts";
+import { showCreateProposalDialog } from "./goal-tweak-confirmation.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Editor, type EditorTheme, visibleWidth } from "@earendil-works/pi-tui";
 import { truncateToWidth, wrapTextWithAnsi } from "./widgets/text-cache.ts";
@@ -1116,6 +1117,8 @@ export async function showProposalDialog(
 	defaultAuditorEnabled?: boolean,
 ): Promise<{ decision: ProposalDecision; auditorEnabled: boolean; unavailable: boolean; feedback?: string }> {
 	const headerTitle = focus === "sisyphus" ? "Confirm Sisyphus Goal Draft" : "Confirm Goal Draft";
+	const richResult = await showCreateProposalDialog(ctx, confirmationText, headerTitle, defaultAuditorEnabled);
+	if (richResult) return richResult;
 	const result = await runGoalQuestionnaire(ctx, [{
 		id: "confirm",
 		question: headerTitle,
