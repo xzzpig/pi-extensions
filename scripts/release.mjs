@@ -19,6 +19,10 @@ import {
 } from "./release-core.mjs";
 import { runPackageStartupE2E } from "./package-startup-e2e.mjs";
 import {
+  publicationSource,
+  reportPublications,
+} from "./release-publications.mjs";
+import {
   checkForkChangelogs,
   checkForkPackage,
   checkPackedForkLog,
@@ -143,6 +147,43 @@ export function pack(p, destination) {
     entries: entries.length,
   };
 }
+async function publishValidatedArtifacts(artifacts, { lookup, registry }) {
+  const source =
+    process.env.GITHUB_ACTIONS === "true" ? publicationSource() : null;
+  if (source && registry.replace(/\/+$/, "") !== "https://registry.npmjs.org")
+    throw new Error("GitHub Actions releases require the public npm registry");
+  if (
+    source &&
+    run("git", ["rev-parse", "HEAD"], root, { stdio: "pipe" })
+      .toString()
+      .trim() !== source.commit
+  )
+    throw new Error("Release checkout does not match the GitHub event SHA");
+  const publications = [];
+  try {
+    await publishArtifacts(artifacts, {
+      lookup,
+      onPublication: (publication) => publications.push(publication),
+      upload: async (a) => {
+        if (integrity(a.file) !== a.integrity)
+          throw new Error(`Artifact changed after verification: ${a.file}`);
+        run("npm", [
+          "publish",
+          a.file,
+          "--registry",
+          registry,
+          "--access",
+          "public",
+          "--tag",
+          "latest",
+          "--ignore-scripts",
+        ]);
+      },
+    });
+  } finally {
+    if (source) reportPublications(source, publications);
+  }
+}
 async function main() {
   const args = process.argv.slice(2);
   let mode = "plan",
@@ -225,8 +266,7 @@ async function main() {
   const candidates = checkAll
     ? all.filter((p) => !p.private && p.name.startsWith("@xzzpig/pi-"))
     : plan.todo;
-  if (mode === "plan") return;
-  if (!candidates.length) return;
+  if (mode === "plan" || !candidates.length) return;
   gates(all, candidates);
   const artifacts = candidates.map((p) => {
     const destination = fs.mkdtempSync(path.join(output, `${p.dir}-`));
@@ -239,24 +279,7 @@ async function main() {
   );
   if (mode !== "publish") return;
   if (checkAll) throw new Error("--check-all is not allowed for publishing");
-  await publishArtifacts(artifacts, {
-    lookup,
-    upload: async (a) => {
-      if (integrity(a.file) !== a.integrity)
-        throw new Error(`Artifact changed after verification: ${a.file}`);
-      run("npm", [
-        "publish",
-        a.file,
-        "--registry",
-        registry,
-        "--access",
-        "public",
-        "--tag",
-        "latest",
-        "--ignore-scripts",
-      ]);
-    },
-  });
+  await publishValidatedArtifacts(artifacts, { lookup, registry });
 }
 if (
   process.argv[1] &&

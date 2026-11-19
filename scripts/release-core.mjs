@@ -296,7 +296,13 @@ export function integrity(file) {
 }
 export async function publishArtifacts(
   artifacts,
-  { upload, lookup, report = console.log, warn = console.warn },
+  {
+    upload,
+    lookup,
+    onPublication = () => {},
+    report = console.log,
+    warn = console.warn,
+  },
 ) {
   for (const a of artifacts) {
     const existing = await lookup(a.name, a.version);
@@ -320,7 +326,19 @@ export async function publishArtifacts(
       );
     }
     // Keep integrity validation outside the lookup catch: real mismatches remain fatal.
-    if (remote && remote.dist?.integrity !== a.integrity)
+    let status = "pending";
+    if (remote)
+      status =
+        remote.dist?.integrity === a.integrity
+          ? "verified"
+          : "integrity-mismatch";
+    onPublication({
+      name: a.name,
+      version: a.version,
+      integrity: a.integrity,
+      status,
+    });
+    if (status === "integrity-mismatch")
       throw new Error(`Registry integrity mismatch: ${a.name}`);
     report(
       `published ${tag} (${remote ? "registry verified" : "registry confirmation pending"})`,

@@ -21,7 +21,7 @@
     "publish:all": "bash scripts/publish-all.sh",
     "publish:check": "bash scripts/publish-all.sh --dry-run",
     "publish:pack": "node scripts/release.mjs --pack",
-    "test:release": "node --test scripts/release-core.test.mjs scripts/ci-sandbox-setup.test.mjs scripts/package-startup-e2e.test.mjs scripts/fork-changelogs.test.mjs scripts/fork-stage-diff-consumer.test.mjs",
+    "test:release": "node --test scripts/release-core.test.mjs scripts/release-publications.test.mjs scripts/ci-sandbox-setup.test.mjs scripts/package-startup-e2e.test.mjs scripts/fork-changelogs.test.mjs scripts/fork-stage-diff-consumer.test.mjs",
     "audit:fork-identity": "node scripts/check-fork-identity.mjs",
     "audit:fork-changelogs": "node scripts/fork-changelogs.mjs"
   },

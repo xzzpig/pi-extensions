@@ -18,9 +18,10 @@ bundled runtime. Private support dependencies are built and tested but never
 published. Bundled workspace dependencies need not be separately on npm.
 
 PR jobs have no OIDC permission. Only the trusted main release job receives
-id-token: write. Runs are serialized and a running release is not cancelled.
-GitHub-hosted Ubuntu, pinned Node/pnpm/npm versions and SHA-pinned Actions are
-used. The workflow does not create tags, Releases or commits.
+`id-token: write`; only the downstream tag job receives `contents: write`. Runs
+are serialized and a running release is not cancelled. GitHub-hosted Ubuntu,
+pinned Node/pnpm/npm versions and SHA-pinned Actions are used. The workflow
+creates annotated version tags, not GitHub Releases or commits.
 
 The publish workflow defaults to dry-run until repository variable
 `NPM_AUTO_PUBLISH` is exactly `true`. Review a complete dry-run plan before
@@ -160,6 +161,23 @@ persistent downloads from GitHub: to inspect archive contents, reproduce the
 pack at the same commit. The workflow currently does not upload build artifacts.
 Never commit generated archives or authentication state.
 
+## Trace a published version
+
+- **From Actions:** the **Actual npm uploads** summary lists the packages accepted
+  by npm in that attempt, with links to the checked-out commit and exact attempt.
+  It distinguishes verified registry integrity from confirmation still pending.
+  A package packed in a dry-run or skipped because it already exists is not an
+  upload. If part of the batch fails, earlier accepted uploads are still listed.
+- **From Git:** look up `<plugin-name>@<version>` without the npm scope, for
+  example `pi-goal-x@0.12.5`. The annotated tag points at the exact source commit
+  and its message includes the originating Action attempt and tarball integrity.
+  The tag job runs for newly accepted uploads, even after a later upload in the
+  same batch fails. It never tags an observed integrity mismatch, creates
+  GitHub Releases, or backfills older versions. Local npm uploads do not create
+  these tags. Read a fetched tag with `git show pi-goal-x@0.12.5`.
+- **From npm:** versions with provenance already have the original commit and
+  workflow attempt in the npm attestation, even when no Git tag exists.
+
 ## Recovery and maintenance
 
 - Keep NPM_AUTO_PUBLISH unset/false to disable future uploads. It does not cancel
@@ -172,6 +190,12 @@ Never commit generated archives or authentication state.
   confirmation was pending, allow npm processing to finish and inspect npm before
   retrying. When post-upload metadata is visible, integrity must match the
   validated tarball; a mismatch still fails the release.
+- Tag creation can fail independently of npm. Check the **npm publication tags**
+  summary. Do not republish or move a conflicting tag. If the tag job can be
+  retried with the original publication records, an identical tag is a no-op.
+  Otherwise, restore only the missing tag after checking the npm provenance and
+  integrity against the original attempt. Use that attempt and commit in the
+  annotation, not the SHA of the later recovery run.
 - If an existing npm version has bad contents, prepare a **new** version. Do not
   delete/reuse the same version or silently move latest backward.
 - All active OpenSpec changes currently block packing/release conservatively.

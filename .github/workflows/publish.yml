@@ -24,6 +24,8 @@ jobs:
       github.repository == 'xzzpig/pi-extensions'
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    outputs:
+      publications: ${{ steps.publish.outputs.publications }}
     permissions:
       contents: read
       id-token: write
@@ -56,6 +58,7 @@ jobs:
       - run: pnpm run test:release
       - run: pnpm exec prettier --check .
       - name: Plan, validate, pack and optionally publish
+        id: publish
         env:
           ONLY: ${{ inputs.only }}
           # Require repository-variable opt-in, even for dispatch.
@@ -76,5 +79,30 @@ jobs:
         if: always()
         run: |
           if [[ -f artifacts/release/artifacts.json ]]; then
-            cat artifacts/release/artifacts.json >> "$GITHUB_STEP_SUMMARY"
+            {
+              printf '\n## Verified tarball checksums\n\n```json\n'
+              cat artifacts/release/artifacts.json
+              printf '```\n'
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
+  tag:
+    name: Tag npm publications
+    needs: release
+    # A later npm upload can fail after earlier packages were accepted.
+    if: ${{ !cancelled() && needs.release.outputs.publications != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.22.1
+      - name: Create annotated tags for actual uploads
+        run: node scripts/release-tags.mjs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NPM_PUBLICATIONS: ${{ needs.release.outputs.publications }}
