@@ -356,12 +356,8 @@ test("configured task shortcut toggles the unified dashboard expansion (overlay 
 	);
 
 	assert.ok(
-		goalSource.includes('matches("dashboard.toggleExpand")'),
-		"goal-widget.ts reads the configured dashboard keybinding",
-	);
-	assert.ok(
-		goalSource.includes("core.toggleDashboardExpanded()"),
-		"the configured shortcut toggles the unified dashboard (overlay registration removed)",
+		goalSource.includes("dispatchDashboardKey(data, settings, core, ctx)"),
+		"goal-widget.ts delegates the configured dashboard keybinding to the input router",
 	);
 	assert.ok(
 		!goalSource.includes("showTaskListOverlay("),

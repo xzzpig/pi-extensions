@@ -1,4 +1,6 @@
+import type { DashboardFooterKeys } from "../fork-dashboard-key-routes.ts";
 import type { GoalKeybinding } from "../goal-controls.ts";
+import { appendTaskDashboardFooter, taskFooterAuditorNote, taskFooterScrollHint, type TaskFooterControls } from "./fork-task-dashboard-footer.ts";
 import { renderDynamicAuditorDashboard, type AuditDashboardRenderOptions } from "./fork-auditor-dashboard-renderer.ts";
 import { bindingKeys, commandHint, type GoalCommands } from "../goal-controls.ts";
 /**
@@ -295,7 +297,7 @@ export function renderCompactDashboard(
 	model: GoalDashboardModel,
 	theme: Theme,
 	width: number,
-	opts: { footerHint?: string; scrollOffset?: number; keybindings?: GoalDashboardKeybindings; auditorKey?: GoalKeybinding; taskRows?: DashboardTaskNode[]; taskRowBudget?: number; expandedTasks?: ReadonlySet<string>; taskLine?: (node: DashboardTaskNode, line: number) => void; taskHeader?: (line: number) => void; controlsLine?: (line: number, hasCurrent: boolean) => void; taskArea?: (first: number, last: number) => void; hideTaskIndicators?: boolean } = {},
+	opts: { footerHint?: string; scrollOffset?: number; keybindings?: GoalDashboardKeybindings; auditorKey?: GoalKeybinding; taskRows?: DashboardTaskNode[]; taskRowBudget?: number; expandedTasks?: ReadonlySet<string>; taskLine?: (node: DashboardTaskNode, line: number) => void; taskHeader?: (line: number) => void; controlsLine?: (controls: TaskFooterControls) => void; footerKeys?: DashboardFooterKeys; taskArea?: (first: number, last: number) => void; hideTaskIndicators?: boolean } = {},
 ): string[] {
 	const safeWidth = Math.max(10, width);
 	const mode = layoutMode(safeWidth);
@@ -386,6 +388,7 @@ export function renderCompactDashboard(
 		}
 	}
 
+	const preserveThrough = lines.length - 1;
 	// Current-task subtask progress moved into the Tasks header row (§9.3);
 	// the standalone compact Subtasks progress line was removed. (The
 	// expanded dashboard's Current-task block still shows it.)
@@ -411,7 +414,6 @@ export function renderCompactDashboard(
 		lines.push(boxLine(theme, safeWidth, `${dim(theme, `File     ${model.filePath}`)}`));
 	}
 
-	if (opts.taskRows) { opts.controlsLine?.(lines.length, !!model.currentTask); lines.push(boxLine(theme, safeWidth, model.currentTask ? "[展开] [回到当前]" : "[展开]")); }
 	const keybindings = opts.keybindings ?? DEFAULT_GOAL_KEYBINDINGS.dashboard;
 	const toggleShortcut = formatGoalKeybinding(keybindings.toggleExpand);
 	const scrollShortcut = `${formatGoalKeybinding(keybindings.scrollUp)}/${formatGoalKeybinding(keybindings.scrollDown)}`;
@@ -440,7 +442,8 @@ export function renderCompactDashboard(
 		(mode === "wide" || mode === "medium") && bindingKeys(auditorKey).length
 			? `${frame(theme, `${formatGoalKeybinding(auditorKey)}: toggle auditor`)} ${auditorDot}`
 			: auditorDot;
-	lines.push(boxFooter(theme, safeWidth, footerHint, right));
+	if (opts.controlsLine) appendTaskDashboardFooter(lines, width, (text) => frame(theme, text), opts.controlsLine, { expanded: false, hasCurrent: !!model.currentTask, preserveThrough, keys: opts.footerKeys?.toggle ?? bindingKeys(keybindings.toggleExpand), scrollHint: listOverflows ? taskFooterScrollHint(opts.footerKeys?.scrollUp ?? bindingKeys(keybindings.scrollUp), opts.footerKeys?.scrollDown ?? bindingKeys(keybindings.scrollDown)) : undefined, auditor: { dot: auditorDot, note: opts.footerKeys ? taskFooterAuditorNote((text) => frame(theme, text), auditorDot, mode === "wide" || mode === "medium" ? opts.footerKeys.toggleAuditor : []) : right } });
+	else lines.push(boxFooter(theme, safeWidth, footerHint, right));
 	return lines;
 }
 
@@ -458,7 +461,7 @@ export function renderExpandedDashboard(
 	model: GoalDashboardModel,
 	theme: Theme,
 	width: number,
-	opts: { scrollOffset?: number; rows?: number; keybindings?: GoalDashboardKeybindings; taskRows?: DashboardTaskNode[]; expandedTasks?: ReadonlySet<string>; taskLine?: (node: DashboardTaskNode, line: number) => void; taskHeader?: (line: number) => void; controlsLine?: (line: number, hasCurrent: boolean) => void; taskArea?: (first: number, last: number) => void; hideTaskIndicators?: boolean } = {},
+	opts: { scrollOffset?: number; rows?: number; keybindings?: GoalDashboardKeybindings; taskRows?: DashboardTaskNode[]; expandedTasks?: ReadonlySet<string>; taskLine?: (node: DashboardTaskNode, line: number) => void; taskHeader?: (line: number) => void; controlsLine?: (controls: TaskFooterControls) => void; footerKeys?: DashboardFooterKeys; taskArea?: (first: number, last: number) => void; hideTaskIndicators?: boolean } = {},
 ): string[] {
 	const safeWidth = Math.max(10, width);
 	const mode = layoutMode(safeWidth);
@@ -517,6 +520,7 @@ export function renderExpandedDashboard(
 		lines.push(...renderCurrentTaskBlock(model, theme, safeWidth, spec.barWidth));
 	}
 
+	const preserveThrough = lines.length - 1;
 	// Goal-level verification section (§11.1).
 	if (model.goalVerificationContract) {
 		lines.push(boxSectionRule(theme, safeWidth, "Verification"));
@@ -528,9 +532,9 @@ export function renderExpandedDashboard(
 		lines.push(...renderActivityBlock(model.recentActivity, theme, safeWidth));
 	}
 
-	if (opts.taskRows) { opts.controlsLine?.(lines.length, !!model.currentTask); lines.push(boxLine(theme, safeWidth, model.currentTask ? "[收起] [回到当前]" : "[收起]")); }
 		const closeKeys = [opts.keybindings?.collapse ?? "escape", opts.keybindings?.toggleExpand ?? DEFAULT_GOAL_KEYBINDINGS.dashboard.toggleExpand].flatMap(bindingKeys);
-	lines.push(boxFooter(theme, safeWidth, closeKeys.length ? `${closeKeys.map(formatGoalKeybinding).join("/")}: collapse` : ""));
+	if (opts.controlsLine) appendTaskDashboardFooter(lines, width, (text) => frame(theme, text), opts.controlsLine, { expanded: true, hasCurrent: !!model.currentTask, preserveThrough, keys: opts.footerKeys?.toggle ?? closeKeys });
+	else lines.push(boxFooter(theme, safeWidth, closeKeys.length ? `${closeKeys.map(formatGoalKeybinding).join("/")}: collapse` : ""));
 	return lines;
 }
 

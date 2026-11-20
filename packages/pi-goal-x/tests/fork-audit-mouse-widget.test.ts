@@ -1,9 +1,30 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import type { TuiMouseEvent } from "@earendil-works/pi-tui";
+import { visibleWidth, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import {
+  isKittyProtocolActive,
+  setKittyProtocolActive,
+} from "@earendil-works/pi-tui/dist/keys.js";
+import {
+  getKeybindings,
+  KeybindingsManager,
+  setKeybindings,
+} from "@earendil-works/pi-tui/dist/keybindings.js";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  DEFAULT_GOAL_KEYBINDINGS,
+  loadGoalSettings,
+} from "../extensions/goal-settings.ts";
 import type { AuditorProgress } from "../extensions/goal-auditor.ts";
+import { syncTerminalInputPause } from "../extensions/goal-widget.ts";
+import { createGoalCore } from "../extensions/goal-state.ts";
 import { createGoal } from "../extensions/goal-record.ts";
-import { GoalWidgetComponent } from "../extensions/widgets/goal-widget.ts";
+import {
+  GoalWidgetComponent,
+  renderAuditorWidgetLines,
+} from "../extensions/widgets/goal-widget.ts";
 import { AuditDashboardViewport } from "../extensions/widgets/fork-audit-viewport.ts";
 import { createMockTheme, createMockTUI } from "./tui-test-utils.ts";
 
@@ -22,6 +43,12 @@ function progress(attemptId: string | undefined = "a"): AuditorProgress {
     })),
   };
 }
+function auditFooter(lines: string[]): number {
+  const line = lines.findIndex((text) => text.startsWith("╰"));
+  assert.ok(line >= 0, lines.join("\n"));
+  return line;
+}
+
 function event(
   type: TuiMouseEvent["type"],
   x: number,
@@ -106,9 +133,9 @@ test("真实组件点击审计控件、滚轮和键盘，保持 audit 数据不�
     },
   });
   let lines = widget.render(80);
-  let y = lines.findIndex((s) => s.includes("[展开]"));
+  let y = auditFooter(lines);
   assert.ok(y >= 0, lines.join("\n"));
-  assert.equal(widget.handleMouse(event("press", 2, y)), undefined);
+  assert.equal(widget.handleMouse(event("press", 4, y)), undefined);
   assert.deepEqual(
     widget.handleMouse(event("click", 7, y, { clickCount: 1 })),
     undefined,
@@ -149,34 +176,47 @@ test("控件首尾与空白按最终绘制命中，矮屏不泄漏隐藏区域",
   });
   const p = progress();
   const checks: Array<() => void> = [];
-  for (const width of [10, 19, 20, 80])
-    for (const expanded of [false, true])
-      for (const x of [0, 1, 2, 7, 8]) {
-        let toggles = 0;
-        const widget = new GoalWidgetComponent({
+  for (const width of [10, 11, 14, 15, 80])
+    for (const expanded of [false, true]) {
+      const create = (onToggleExpanded: () => void) =>
+        new GoalWidgetComponent({
           tui: createMockTUI().tui,
           theme: createMockTheme(),
           getGoal: () => goal,
           getAuditorProgress: () => p,
           getExpanded: () => expanded,
-          onToggleExpanded: () => toggles++,
+          onToggleExpanded,
         });
-        const lines = widget.render(width);
-        const y = lines.findIndex((s) =>
-          s.includes(expanded ? "[收起]" : "[展开]"),
-        );
-        assert.ok(y >= 0, lines.join("\n"));
+      const lines = create(() => {}).render(width);
+      const y = auditFooter(lines);
+      const footer = lines[y]!;
+      const match = footer.match(/\[(?:收起|展开)(?:清单)?\]/);
+      const start = match ? visibleWidth(footer.slice(0, match.index)) : -1;
+      const end = match ? start + visibleWidth(match[0]) : -1;
+      const action = expanded ? "收起" : "展开";
+      assert.equal(
+        match?.[0],
+        width >= 15
+          ? `[${action}清单]`
+          : width >= 11
+            ? `[${action}]`
+            : undefined,
+      );
+      for (const x of [0, 1, start - 1, start, end - 1, end, width - 1].filter(
+        (col) => col >= 0,
+      )) {
+        let toggles = 0;
+        const widget = create(() => toggles++);
+        widget.render(width);
         widget.handleMouse(event("press", x, y, { width }));
         const result = widget.handleMouse(
           event("click", x, y, { width, clickCount: 1 }),
         );
-        assert.equal(
-          result?.handled === true,
-          x >= 2 && x <= 7,
-          `width=${width}, x=${x}`,
-        );
-        checks.push(() => assert.equal(toggles, x >= 2 && x <= 7 ? 1 : 0));
+        const hits = x >= start && x < end;
+        assert.equal(result?.handled === true, hits, `width=${width}, x=${x}`);
+        checks.push(() => assert.equal(toggles, hits ? 1 : 0));
       }
+    }
   await new Promise((resolve) => setTimeout(resolve, 550));
   checks.forEach((check) => check());
   const tiny = new GoalWidgetComponent({
@@ -210,15 +250,10 @@ test("短窗口保留页眉、汇总、可见控件和停止提示，长中文�
     assert.equal(lines.length, 7);
     assert.match(lines[0]!, /^╭/);
     assert.match(lines[1]!, /已检查/);
-    assert.ok(
-      lines.some((s) => s.includes("[收起]")),
-      lines.join("\n"),
-    );
-    assert.ok(
-      lines.some((s) => s.includes("Esc")),
-      lines.join("\n"),
-    );
-    assert.deepEqual(view.geometry.body, { first: 2, last: 4 });
+    const footer = lines[auditFooter(lines)]!;
+    assert.match(footer, /\[收起清单\]/);
+    if (width >= 40) assert.match(footer, /Esc: stop audit/);
+    assert.deepEqual(view.geometry.body, { first: 2, last: 5 });
     view.scroll(10000, () => {});
     lines = draw();
     assert.match(lines.join("\n"), /尾部唯一标记/);
@@ -300,14 +335,14 @@ test("组件缩放后正文与控件命中仅覆盖最终行，旧手势失效",
     },
   });
   let lines = widget.render(80);
-  let control = lines.findIndex((s) => s.includes("[收起]"));
+  let control = auditFooter(lines);
   assert.ok(control >= 0);
-  widget.handleMouse(event("press", 2, control));
+  widget.handleMouse(event("press", 4, control));
   (tui as unknown as { terminal: { rows: number } }).terminal.rows = 14;
   lines = widget.render(40);
   assert.ok(lines.length <= 8);
   assert.equal(
-    widget.handleMouse(event("click", 2, control, { clickCount: 1 })),
+    widget.handleMouse(event("click", 4, control, { clickCount: 1 })),
     undefined,
   );
   assert.equal(expanded, true);
@@ -317,12 +352,12 @@ test("组件缩放后正文与控件命中仅覆盖最终行，旧手势失效",
     ),
     undefined,
   );
-  control = lines.findIndex((s) => s.includes("[收起]"));
+  control = auditFooter(lines);
   assert.ok(control >= 0, lines.join("\n"));
-  widget.handleMouse(event("press", 2, control, { width: 40, height: 14 }));
+  widget.handleMouse(event("press", 4, control, { width: 40, height: 14 }));
   assert.deepEqual(
     widget.handleMouse(
-      event("click", 2, control, { width: 40, height: 14, clickCount: 1 }),
+      event("click", 4, control, { width: 40, height: 14, clickCount: 1 }),
     ),
     { handled: true },
   );
@@ -354,7 +389,7 @@ test("空清单和滚动两端消费事件，标题、控件和边框不消费",
     );
     lines = widget.render(80);
   }
-  const control = lines.findIndex((s) => s.includes("[收起]"));
+  const control = auditFooter(lines);
   for (const [x, row] of [
     [4, 0],
     [4, 1],
@@ -414,21 +449,21 @@ test("审计变更和可见分支切换清除旧手势且不会执行隐藏任�
     onToggleExpanded: () => toggles++,
   });
   let lines = widget.render(80);
-  let y = lines.findIndex((s) => s.includes("[展开]"));
-  widget.handleMouse(event("press", 2, y));
+  let y = auditFooter(lines);
+  widget.handleMouse(event("press", 4, y));
   p = { ...p!, attemptId: "b" };
   widget.render(80);
   assert.equal(
-    widget.handleMouse(event("click", 2, y, { clickCount: 1 })),
+    widget.handleMouse(event("click", 4, y, { clickCount: 1 })),
     undefined,
   );
   assert.equal(toggles, 0);
-  widget.handleMouse(event("press", 2, y));
+  widget.handleMouse(event("press", 4, y));
   p = null;
   widget.update();
   lines = widget.render(80);
   assert.equal(
-    widget.handleMouse(event("click", 2, y, { clickCount: 1 })),
+    widget.handleMouse(event("click", 4, y, { clickCount: 1 })),
     undefined,
   );
   assert.equal(toggles, 0);
@@ -462,23 +497,23 @@ test("审计控件拖动、右键和双击不触发额外切换", () => {
     getAuditorProgress: () => p,
     onToggleExpanded: () => toggles++,
   });
-  const y = widget.render(80).findIndex((s) => s.includes("[展开]"));
-  widget.handleMouse(event("press", 2, y));
-  widget.handleMouse(event("drag", 3, y));
+  const y = auditFooter(widget.render(80));
+  widget.handleMouse(event("press", 4, y));
+  widget.handleMouse(event("drag", 5, y));
   assert.equal(
-    widget.handleMouse(event("click", 2, y, { clickCount: 1 })),
+    widget.handleMouse(event("click", 4, y, { clickCount: 1 })),
     undefined,
   );
-  widget.handleMouse(event("press", 2, y, { button: "right" }));
+  widget.handleMouse(event("press", 4, y, { button: "right" }));
   assert.equal(
     widget.handleMouse(
-      event("click", 2, y, { button: "right", clickCount: 1 }),
+      event("click", 4, y, { button: "right", clickCount: 1 }),
     ),
     undefined,
   );
-  widget.handleMouse(event("press", 2, y));
+  widget.handleMouse(event("press", 4, y));
   assert.equal(
-    widget.handleMouse(event("click", 2, y, { clickCount: 2 })),
+    widget.handleMouse(event("click", 4, y, { clickCount: 2 })),
     undefined,
   );
   assert.equal(toggles, 0);
@@ -541,7 +576,7 @@ test("双击首击不会提前切换，选择第二击取消待执行动作，�
     getAuditorProgress: () => p,
     onToggleExpanded: () => count++,
   });
-  const y = widget.render(80).findIndex((s) => s.includes("[展开]"));
+  const y = auditFooter(widget.render(80));
   widget.handleMouse(event("press", 4, y));
   widget.handleMouse(event("click", 4, y, { clickCount: 1 }));
   widget.handleMouse(event("press", 4, y));
@@ -573,7 +608,7 @@ test("单击待确认期间打开浮层不会触发底层切换", async () => {
     getAuditorProgress: () => p,
     onToggleExpanded: () => toggles++,
   });
-  const y = widget.render(80).findIndex((s) => s.includes("[展开]"));
+  const y = auditFooter(widget.render(80));
   widget.handleMouse(event("press", 4, y));
   widget.handleMouse(event("click", 4, y, { clickCount: 1 }));
   overlay = true;
@@ -595,7 +630,7 @@ test("宿主优先消费链接时不产生组件 click，无延迟切换", async
     getAuditorProgress: () => progress(),
     onToggleExpanded: () => count++,
   });
-  const y = widget.render(80).findIndex((s) => s.includes("[展开]"));
+  const y = auditFooter(widget.render(80));
   widget.handleMouse(event("press", 4, y));
   widget.handleMouse(event("release", 4, y));
   await new Promise((resolve) => setTimeout(resolve, 550));
@@ -634,7 +669,7 @@ test("往返布局、attempt、目标及模式的每次实际绘制不可逆地�
         getAuditLifecycle: () => lifecycle,
         onToggleExpanded: () => toggles++,
       });
-      const y = widget.render(80).findIndex((s) => s.includes("[展开]"));
+      const y = auditFooter(widget.render(80));
       assert.ok(y >= 0);
       widget.handleMouse(event("press", 4, y));
       if (mode === "pending")
@@ -708,7 +743,7 @@ test("状态更新的 attempt 往返即使尚未重绘也使旧手势失效；�
     getAuditorProgress: () => p,
     onToggleExpanded: () => count++,
   });
-  const y = widget.render(80).findIndex((s) => s.includes("[展开]"));
+  const y = auditFooter(widget.render(80));
   widget.handleMouse(event("press", 4, y));
   p = progress("b");
   widget.update();
@@ -747,7 +782,7 @@ test("浮层出现后消失不可复活旧按下或延迟单击", async () => {
         getAuditorProgress: () => progress(),
         onToggleExpanded: () => toggles++,
       });
-      const y = widget.render(80).findIndex((s) => s.includes("[展开]"));
+      const y = auditFooter(widget.render(80));
       widget.handleMouse(event("press", 4, y));
       if (kind === "pending")
         assert.deepEqual(
@@ -770,3 +805,412 @@ test("浮层出现后消失不可复活旧按下或延迟单击", async () => {
       assert.equal(toggles, 0, `${kind}/${observation}`);
     }
 });
+
+test("清单切换只出现于底边框，中断与生效的收起键明确分开", () => {
+  let expanded = false;
+  const options = {
+    ...DEFAULT_GOAL_KEYBINDINGS,
+    dashboard: { ...DEFAULT_GOAL_KEYBINDINGS.dashboard },
+  };
+  let keybindings = options;
+  let p = progress();
+  const theme = createMockTheme();
+  const widget = new GoalWidgetComponent({
+    tui: createMockTUI({ terminalRows: 24 }).tui,
+    theme,
+    getGoal: () => null,
+    getAuditorProgress: () => p,
+    getExpanded: () => expanded,
+    getSettings: () => ({ keybindings }),
+  });
+  const compact = widget.render(96);
+  assert.match(compact[2]!, /等待逐项上报/);
+  assert.doesNotMatch(compact.join("\n"), /展开查看清单/);
+  assert.equal(compact.filter((line) => line.includes("[展开清单]")).length, 1);
+  assert.match(
+    compact[auditFooter(compact)]!,
+    /^╰─ \[展开清单\] Ctrl\+Shift\+T · Esc: stop audit/,
+  );
+  p = {
+    ...p,
+    checks: p.checks!.map((item, index) =>
+      index === 0 ? { ...item, state: "running" } : item,
+    ),
+  };
+  assert.match(widget.render(96)[2]!, /◌ 检查项 0/);
+  expanded = true;
+  const drawFooter = () => {
+    const lines = widget.render(96);
+    return lines[auditFooter(lines)]!;
+  };
+  assert.match(
+    drawFooter(),
+    /^╰─ \[收起清单\] Ctrl\+Shift\+T · Esc: stop audit/,
+  );
+  keybindings = {
+    ...options,
+    interruptAudit: "f7",
+    dashboard: {
+      ...options.dashboard,
+      collapse: "f7",
+      toggleExpand: ["f7", "f8"],
+    },
+  };
+  assert.match(drawFooter(), /^╰─ \[收起清单\] F8 · F7: stop audit/);
+  keybindings = {
+    ...options,
+    interruptAudit: [],
+    dashboard: { ...options.dashboard, collapse: [], toggleExpand: [] },
+  };
+  assert.doesNotMatch(drawFooter(), /F7|F8|Unbound|stop audit|Ctrl\+Shift\+T/);
+  assert.match(
+    renderAuditorWidgetLines(progress(), theme, 96).join("\n"),
+    /等待逐项上报 · 展开查看清单/,
+  );
+});
+
+function keyboardFooterHarness(
+  t: import("node:test").TestContext,
+  settings = {},
+  autoContinue = false,
+) {
+  const cwd = mkdtempSync(join(tmpdir(), "goal-footer-keys-"));
+  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  mkdirSync(join(cwd, ".pi"));
+  writeFileSync(
+    join(cwd, ".pi", "pi-goal-x-settings.json"),
+    JSON.stringify(settings),
+  );
+  let input: ((data: string) => unknown) | undefined;
+  let expanded = false;
+  const calls: string[] = [];
+  const goal = createGoal({ objective: "目标", sisyphus: false, autoContinue });
+  const toggle = () => {
+    expanded = !expanded;
+    calls.push("toggle");
+  };
+  const core = {
+    state: { goal },
+    goalModalDepth: 0,
+    uiPromptDepth: 0,
+    auditProgress: progress() as AuditorProgress | null,
+    isDashboardExpanded: () => expanded,
+    toggleDashboardExpanded: toggle,
+    abortAudit: () => {
+      calls.push("audit-stop");
+    },
+    interruption: {
+      pause: () => calls.push("pause"),
+      interruptTurn: () => calls.push("host-stop"),
+    },
+    goalWidgetComponentRef: { current: null as GoalWidgetComponent | null },
+  };
+  const ctx = {
+    cwd,
+    hasUI: true,
+    isIdle: () => true,
+    ui: {
+      onTerminalInput: (fn: typeof input) => {
+        input = fn;
+        return () => {
+          input = undefined;
+        };
+      },
+    },
+  };
+  const widget = new GoalWidgetComponent({
+    tui: createMockTUI({ terminalRows: 24 }).tui,
+    theme: createMockTheme(),
+    getGoal: () => goal,
+    getSettings: () => loadGoalSettings(cwd),
+    getExpanded: core.isDashboardExpanded,
+    getAuditorProgress: () => core.auditProgress,
+    onToggleExpanded: toggle,
+    isIdle: ctx.isIdle,
+  });
+  core.goalWidgetComponentRef.current = widget;
+  syncTerminalInputPause(core as never, ctx as never);
+  const footer = () => {
+    const lines = widget.render(96);
+    return lines[auditFooter(lines)]!;
+  };
+  const click = (label: string) => {
+    const lines = widget.render(96);
+    const y = auditFooter(lines);
+    const index = lines[y]!.indexOf(label);
+    assert.ok(index >= 0, lines[y]);
+    const x = visibleWidth(lines[y]!.slice(0, index));
+    widget.handleMouse(event("press", x, y, { width: 96 }));
+    assert.deepEqual(
+      widget.handleMouse(event("click", x, y, { width: 96, clickCount: 1 })),
+      { handled: true },
+    );
+  };
+  return { core, footer, click, calls, fire: (data: string) => input?.(data) };
+}
+
+const ctrlShiftT = "\x1b[116;6u";
+
+test("真实输入分派与两个底边框一致：Pi 中断先于普通切换键，但不禁用鼠标", (t) => {
+  const previous = getKeybindings();
+  setKeybindings(
+    new KeybindingsManager({
+      "app.interrupt": {
+        defaultKeys: "ctrl+shift+t",
+        description: "interrupt",
+      },
+    }),
+  );
+  t.after(() => setKeybindings(previous));
+  const { core, footer, calls, fire, click } = keyboardFooterHarness(
+    t,
+    {},
+    true,
+  );
+  assert.match(footer(), /\[展开清单\]/);
+  assert.doesNotMatch(footer(), /Ctrl\+Shift\+T/);
+  assert.deepEqual(fire(ctrlShiftT), { consume: true });
+  assert.deepEqual(calls, ["host-stop"]);
+  core.auditProgress = null;
+  assert.match(footer(), /\[展开\]/);
+  assert.doesNotMatch(footer(), /Ctrl\+Shift\+T/);
+  assert.deepEqual(fire(ctrlShiftT), { consume: true });
+  assert.deepEqual(calls, ["host-stop", "host-stop"]);
+  click("[展开]");
+  assert.match(footer(), /\[收起\] Esc/);
+  assert.deepEqual(fire("\x1b"), { consume: true });
+  assert.match(footer(), /\[展开\]/);
+});
+
+test("审计鼠标和实际终端快捷键交替切换同一状态；中断优先且滚动只提示可用键", async (t) => {
+  const { footer, calls, fire, click } = keyboardFooterHarness(t, {
+    keybindings: { interruptAudit: "up" },
+  });
+  assert.match(footer(), /\[展开清单\]/);
+  assert.deepEqual(fire(ctrlShiftT), { consume: true });
+  assert.match(footer(), /\[收起清单\]/);
+  assert.match(footer(), /↑: stop audit · ↓ 1–\d+\//);
+  assert.doesNotMatch(footer(), /↑\/↓/);
+  assert.deepEqual(fire("\x1b[A"), { consume: true });
+  assert.deepEqual(calls, ["toggle", "audit-stop"]);
+  click("[收起清单]");
+  await new Promise((resolve) => setTimeout(resolve, 575));
+  assert.match(footer(), /\[展开清单\]/);
+  click("[展开清单]");
+  await new Promise((resolve) => setTimeout(resolve, 575));
+  assert.match(footer(), /\[收起清单\]/);
+  assert.deepEqual(fire(ctrlShiftT), { consume: true });
+  assert.match(footer(), /\[展开清单\]/);
+  assert.deepEqual(calls, [
+    "toggle",
+    "audit-stop",
+    "toggle",
+    "toggle",
+    "toggle",
+  ]);
+  const unbound = keyboardFooterHarness(t, {
+    keybindings: { dashboard: { up: [], down: [] } },
+  });
+  unbound.fire(ctrlShiftT);
+  assert.match(unbound.footer(), / · 1–\d+\//);
+  assert.doesNotMatch(unbound.footer(), /[↑↓]/);
+});
+
+test("传统 ESC+字母与方向键重叠：提示遵循 Pi 解码，Kitty 可区分时恢复按键", (t) => {
+  const prior = isKittyProtocolActive();
+  t.after(() => setKittyProtocolActive(prior));
+  setKittyProtocolActive(false);
+  for (const [direction, letter] of [
+    ["up", "p"],
+    ["down", "n"],
+    ["left", "b"],
+    ["right", "f"],
+  ] as const) {
+    const { footer, calls, fire } = keyboardFooterHarness(t, {
+      keybindings: {
+        interruptAudit: `alt+${direction}`,
+        dashboard: { toggleExpand: [`alt+${letter}`, "f8"] },
+      },
+    });
+    assert.match(footer(), /^╰─ \[展开清单\] F8 · Alt\+.+: stop audit/);
+    assert.deepEqual(fire(`\x1b${letter}`), { consume: true });
+    assert.deepEqual(calls, ["audit-stop"]);
+    assert.match(footer(), /\[展开清单\]/);
+    assert.deepEqual(fire("\x1b[19~"), { consume: true });
+    assert.match(footer(), /\[收起清单\]/);
+  }
+  const { footer, calls, fire } = keyboardFooterHarness(t, {
+    keybindings: {
+      interruptAudit: "alt+up",
+      dashboard: { toggleExpand: "alt+p" },
+    },
+  });
+  assert.doesNotMatch(footer(), /Alt\+P/);
+  setKittyProtocolActive(true);
+  assert.match(footer(), /^╰─ \[展开清单\] Alt\+P · Alt\+↑: stop audit/);
+  assert.deepEqual(fire("\x1b[112;3u"), { consume: true });
+  assert.deepEqual(calls, ["toggle"]);
+  assert.match(footer(), /\[收起清单\]/);
+});
+
+test("Kitty 根据事件中报告的布局识别冲突，不假设 Shift 总产生美式符号", (t) => {
+  const prior = isKittyProtocolActive();
+  t.after(() => setKittyProtocolActive(prior));
+  setKittyProtocolActive(true);
+  for (const [stop, view, raw, stopLabel] of [
+    ["ctrl+shift+1", "ctrl+!", "\x1b[49:33;6u", "Ctrl+Shift+1"],
+    ["shift+7", "/", "\x1b[55:47;2u", "Shift+7"],
+    ["shift+6", "&", "\x1b[54:38;2u", "Shift+6"],
+    ["ctrl+1", "ctrl+2", "\x1b[49::50;5u", "Ctrl+1"],
+  ] as const) {
+    const { footer, calls, fire } = keyboardFooterHarness(t, {
+      keybindings: {
+        interruptAudit: stop,
+        dashboard: { toggleExpand: [view, "f8"] },
+      },
+    });
+    assert.ok(
+      footer().startsWith(`╰─ [展开清单] F8 · ${stopLabel}: stop audit`),
+      footer(),
+    );
+    assert.deepEqual(fire(raw), { consume: true });
+    assert.deepEqual(calls, ["audit-stop"]);
+    assert.match(footer(), /\[展开清单\]/);
+    assert.deepEqual(fire("\x1b[19~"), { consume: true });
+    assert.deepEqual(calls, ["audit-stop", "toggle"]);
+    assert.match(footer(), /\[收起清单\]/);
+  }
+});
+
+test("不提示配置语法接受但 Pi 解码不支持的键，同时保留可用备选", (t) => {
+  const prior = isKittyProtocolActive();
+  t.after(() => setKittyProtocolActive(prior));
+  setKittyProtocolActive(true);
+  const { footer, calls, fire } = keyboardFooterHarness(t, {
+    keybindings: {
+      interruptAudit: ["shift+escape", "f7"],
+      dashboard: { toggleExpand: ["ctrl+f8", "ctrl+pageUp", "f8"] },
+    },
+  });
+  assert.match(footer(), /^╰─ \[展开清单\] Ctrl\+PageUp\/F8 · F7: stop audit/);
+  assert.doesNotMatch(footer(), /Shift\+Esc|Ctrl\+F8/);
+  assert.equal(fire("\x1b[27;2u"), undefined);
+  assert.equal(fire("\x1b[19;5~"), undefined);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(fire("\x1b[18~"), { consume: true });
+  assert.deepEqual(fire("\x1b[5;5~"), { consume: true });
+  assert.deepEqual(calls, ["audit-stop", "toggle"]);
+  const unsupportedOnly = keyboardFooterHarness(t, {
+    keybindings: { interruptAudit: "shift+escape" },
+  });
+  assert.doesNotMatch(unsupportedOnly.footer(), /stop audit|Shift\+Esc/);
+  assert.equal(unsupportedOnly.fire("\x1b[27;2u"), undefined);
+});
+
+for (const mode of [
+  "task press",
+  "audit press",
+  "audit pending",
+  "audit attempt",
+  "audit result",
+  "audit ordinary progress",
+  "audit detached",
+] as const) {
+  test(`同帧变更只作废已失效的底边框手势：${mode}`, async (t) => {
+    const cwd = mkdtempSync(join(tmpdir(), "goal-footer-coalesced-"));
+    t.after(() => rmSync(cwd, { recursive: true, force: true }));
+    const core = createGoalCore({
+      getActiveTools: () => [],
+      setActiveTools: () => {},
+      appendEntry: () => {},
+    } as never);
+    core.state.goal = createGoal({
+      objective: "底边框",
+      autoContinue: false,
+      sisyphus: false,
+    });
+    if (mode !== "task press") core.auditProgress = progress();
+    let input: ((data: string) => unknown) | undefined;
+    const ctx = {
+      cwd,
+      hasUI: true,
+      isIdle: () => true,
+      ui: {
+        setStatus() {},
+        setWidget() {},
+        onTerminalInput: (fn: typeof input) => {
+          input = fn;
+          return () => {
+            input = undefined;
+          };
+        },
+      },
+    };
+    const widget = new GoalWidgetComponent({
+      tui: createMockTUI().tui,
+      theme: createMockTheme(),
+      getGoal: () => core.state.goal,
+      getAuditorProgress: () => core.auditProgress,
+      getAuditResult: () => core.auditResult,
+      getExpanded: () => core.isDashboardExpanded(),
+      onToggleExpanded: () => core.toggleDashboardExpanded(),
+    });
+    core.goalWidgetComponentRef.current = widget;
+    syncTerminalInputPause(core, ctx as never);
+    const before = widget.render(80);
+    const y = auditFooter(before);
+    const label = mode === "task press" ? "[展开]" : "[展开清单]";
+    const index = before[y]!.indexOf(label);
+    assert.ok(index >= 0, before[y]);
+    const x = visibleWidth(before[y]!.slice(0, index));
+    const press = event("press", x, y);
+    const click = event("click", x, y, { clickCount: 1 });
+    assert.equal(widget.handleMouse(press), undefined);
+    const pending = mode !== "task press" && mode !== "audit press";
+    if (pending) assert.deepEqual(widget.handleMouse(click), { handled: true });
+    if (mode === "audit detached") {
+      core.clearGoalWidget(ctx as never);
+      assert.equal(core.goalWidgetComponentRef.current, null);
+      await new Promise((resolve) => setTimeout(resolve, 575));
+      assert.equal(
+        core.isDashboardExpanded(),
+        false,
+        "卸载的组件不能再切换面板",
+      );
+      return;
+    }
+
+    // None of these transitions draws until after the source has returned.
+    if (mode === "audit ordinary progress") {
+      core.auditProgress = { ...core.auditProgress!, elapsedMs: 2000 };
+      widget.render(80);
+      await new Promise((resolve) => setTimeout(resolve, 575));
+      assert.equal(
+        core.isDashboardExpanded(),
+        true,
+        "普通审计刷新保留同一目标的有效单击",
+      );
+      return;
+    } else if (mode === "audit attempt") {
+      core.auditProgress = progress("b");
+      core.auditProgress = progress("a");
+    } else if (mode === "audit result") {
+      core.setAuditResult("approved", "temporary result");
+      core.clearAuditResult();
+    } else {
+      assert.deepEqual(input?.(ctrlShiftT), { consume: true });
+      assert.equal(core.isDashboardExpanded(), true);
+      assert.deepEqual(input?.(ctrlShiftT), { consume: true });
+      assert.equal(core.isDashboardExpanded(), false);
+    }
+    assert.deepEqual(widget.render(80), before);
+    if (!pending) assert.equal(widget.handleMouse(click), undefined);
+    await new Promise((resolve) => setTimeout(resolve, 575));
+    assert.equal(core.isDashboardExpanded(), false, "旧按下或延迟操作不会复活");
+    assert.equal(widget.handleMouse(press), undefined);
+    assert.deepEqual(widget.handleMouse(click), { handled: true });
+    if (mode !== "task press")
+      await new Promise((resolve) => setTimeout(resolve, 575));
+    assert.equal(core.isDashboardExpanded(), true, "同一位置的新手势仍然可用");
+  });
+}

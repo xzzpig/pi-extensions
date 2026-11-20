@@ -20,7 +20,7 @@ export function renderFittingTaskWidget(options: {
   render: (budget: number | undefined, hideIndicators: boolean) => string[];
   header: () => number | undefined;
   taskLines: () => Iterable<number>;
-  controls: () => { line: number; hasCurrent: boolean } | undefined;
+  controls: () => { line: number; preserveThrough: number } | undefined;
 }): string[] {
   let natural = options.render(undefined, false);
   const header = options.header();
@@ -37,6 +37,8 @@ export function renderFittingTaskWidget(options: {
   const maximum = options.expanded
     ? expandedTaskViewportRows(options.width)
     : compactTaskViewportRows(options.width);
+  // Preserve the existing body budget: expanding the list by one would move
+  // an already visible current-task summary out of frame on short terminals.
   let budget = Math.max(0, Math.min(maximum, cap - header - 5));
   let hideIndicators = false;
   if (budget === 0 && cap >= header + 2) {
@@ -47,17 +49,19 @@ export function renderFittingTaskWidget(options: {
   const renderedHeader = options.header();
   if (budget === 0 && renderedHeader !== undefined && renderedHeader + 1 >= cap)
     natural[cap - 1] = truncateToWidth("任务区空间不足", options.width, "…");
-  if (natural.length > cap && cap > 0) {
-    const lastTask = Math.max(renderedHeader ?? 0, ...options.taskLines());
-    const start = Math.min(natural.length - 1, lastTask + 2);
-    const controls = options.controls();
-    const count = Math.min(
-      natural.length - cap,
-      natural.length - 1 - start - (controls ? 1 : 0),
+  const controls = options.controls();
+  if (controls && controls.line >= cap) {
+    // Prefer existing task content and its current-task summary over a new
+    // footer. The cap can omit the footer, but cannot replace that summary.
+    const firstDetail = Math.max(
+      (renderedHeader ?? 0) + 2,
+      controls.preserveThrough + 1,
+      ...Array.from(options.taskLines(), (line) => line + 1),
     );
-    if (count > 0) {
-      natural.splice(start, count);
-      if (controls && controls.line >= start) controls.line -= count;
+    const count = controls.line - cap + 1;
+    if (controls.line - count >= firstDetail) {
+      natural.splice(controls.line - count, count);
+      controls.line -= count;
     }
   }
   return natural;

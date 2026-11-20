@@ -703,7 +703,7 @@ test("expanded mode renders the full dashboard without mutating editor state", (
 	const expandedLines = component.render(100);
 	const text = expandedLines.join("\n");
 	assert.match(text, /├─ Tasks /);
-	assert.match(text, /Esc\/Ctrl\+Shift\+T: collapse/);
+	assert.match(expandedLines.at(-1)!, /^╰─ \[收起\] Esc\/Ctrl\+Shift\+T/);
 	// Rendering is pure: re-rendering returns identical lines.
 	assert.deepEqual(component.render(100), expandedLines);
 	expanded.current = false;
@@ -899,16 +899,17 @@ test("Ctrl+Shift+Home/End/PgUp/PgDn jump and page in the compact list", () => {
 
 test("compact overflow shows the scroll hint in the footer; a short list does not", () => {
 	const overflowing = scrollHarness(false);
-	assert.match(overflowing.component.render(100).join("\n"), /Ctrl\+Shift\+T: expand · Ctrl\+Shift\+↑↓: scroll/);
-	const narrow = scrollHarness(false);
-	assert.match(narrow.component.render(40).join("\n"), /↑↓: scroll/, "minimal layout shortens the hint");
+	assert.match(overflowing.component.render(100).at(-1)!, /^╰─ \[展开\] Ctrl\+Shift\+T .*Ctrl\+Shift\+↑↓: scroll/);
+	const narrowFooter = scrollHarness(false).component.render(40).at(-1)!;
+	assert.match(narrowFooter, /^╰─ \[展开\]/);
+	assert.doesNotMatch(narrowFooter, /: scroll/, "minimal layout prioritizes the actions");
 	const g = goal({ taskList: { tasks: [
 		{ id: "t1", title: "One", status: "pending" },
 		{ id: "t2", title: "Two", status: "pending" },
 		{ id: "t3", title: "Three", status: "pending" },
 	], blockCompletion: false, proposedAt: testProposedAt } });
 	const short = scrollHarness(false, g);
-	assert.match(short.component.render(100).join("\n"), /Ctrl\+Shift\+T: expand tasks/, "no overflow → no scroll hint");
+	assert.doesNotMatch(short.component.render(100).at(-1)!, /: scroll/, "no overflow → no scroll hint");
 });
 
 test("Ctrl+Shift chords are not consumed when the compact list fits", () => {

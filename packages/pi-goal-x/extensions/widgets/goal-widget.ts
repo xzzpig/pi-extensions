@@ -1,10 +1,13 @@
+import { dashboardKeyboardAvailable } from "../fork-dashboard-host-keys.ts";
+import { dashboardFooterKeys, type DashboardFooterKeys } from "../fork-dashboard-key-routes.ts";
+import { dashboardHostFrame, observeDashboardHostFrame, sameDashboardHostFrame, type DashboardHostFrame } from "./fork-dashboard-host-frame.ts";
 import type { GoalKeybinding, GoalCommands } from "../goal-controls.ts";
 import type { AuditorProgress } from "../goal-auditor.ts";
 import { AuditDashboardViewport } from "./fork-audit-viewport.ts";
 import { AuditDashboardMouse, auditTerminalRows } from "./fork-audit-mouse.ts";
 import { TaskTreeView, type TaskTreeProjection } from "./fork-task-tree-view.ts";
 import { TaskTreeMouse } from "./fork-task-tree-mouse.ts";
-import { handleTaskWidgetMouse } from "./fork-task-widget-mouse.ts";
+import { handleTaskWidgetMouse, taskWidgetMouseSignature, taskWidgetSourceSignature } from "./fork-task-widget-mouse.ts";
 import { renderFittingTaskWidget } from "./fork-task-widget-layout.ts";
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
@@ -40,6 +43,7 @@ import {
 	renderUnfocusedDashboard,
 } from "./goal-dashboard-renderer.ts";
 import { deriveAuditResultCard, deriveAuditorDashboardModel } from "./auditor-dashboard-model.ts";
+import type { TaskFooterControls } from "./fork-task-dashboard-footer.ts";
 
 type GoalWidgetColor = Extract<ThemeColor, "accent" | "warning" | "success" | "error" | "dim" | "muted" | "text">;
 
@@ -84,6 +88,8 @@ export function makeGoalWidgetFactory(opts: {
 	getOpenGoalCount: () => number;
 	getAuditorProgress: () => AuditorWidgetProgress | null;
 	getAuditLifecycle?: () => object | null;
+	isIdle?: () => boolean;
+	isKeyboardBlocked?: () => boolean;
 	getSettings: () => GoalSettings;
 	getDebugMode: () => boolean;
 	getStalled: () => boolean;
@@ -105,6 +111,8 @@ export function makeGoalWidgetFactory(opts: {
 			getOpenGoalCount: opts.getOpenGoalCount,
 			getAuditorProgress: opts.getAuditorProgress,
 			getAuditLifecycle: opts.getAuditLifecycle,
+			isIdle: opts.isIdle,
+			isKeyboardBlocked: opts.isKeyboardBlocked,
 			getSettings: opts.getSettings,
 			getDebugMode: opts.getDebugMode,
 			getStalled: opts.getStalled,
@@ -140,6 +148,8 @@ export interface GoalWidgetOptions {
 	getOpenGoalCount?: () => number;
 	getAuditorProgress?: () => AuditorWidgetProgress | null;
 	getAuditLifecycle?: () => object | null;
+	isIdle?: () => boolean;
+	isKeyboardBlocked?: () => boolean;
 	getSettings?: () => GoalSettings;
 	getDebugMode?: () => boolean;
 	/** F5: stalled badge (active auto-continue goal with no recent activity). */
@@ -328,7 +338,7 @@ export function renderAuditResultCardView(
 	return renderAuditResultCard(deriveAuditResultCard(view.verdict, view.report), theme, width);
 }
 
-export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Theme, width: number, options: { commands?: GoalCommands; openGoalCount?: number; auditorProgress?: AuditorWidgetProgress | null; disableTasks?: boolean; stalled?: boolean; ledgerEvents?: GoalLedgerEvent[]; expanded?: boolean; debug?: boolean; model?: GoalDashboardModel | null; compactScrollOffset?: number; expandedScrollOffset?: number; expandedTaskRows?: number; compactTaskRows?: number; taskProjection?: TaskTreeProjection; taskLine?: (node: DashboardTaskNode, line: number) => void; taskHeader?: (line: number) => void; controlsLine?: (line: number, hasCurrent: boolean) => void; taskArea?: (first: number, last: number) => void; hideTaskIndicators?: boolean; keybindings?: GoalDashboardKeybindings; auditorKey?: GoalKeybinding; interruptAuditKey?: GoalKeybinding; /** Terminal-height bound (see boundWidgetRenderLines); undefined = unbounded. */ terminalRows?: number } = {}): string[] {
+export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Theme, width: number, options: { commands?: GoalCommands; openGoalCount?: number; auditorProgress?: AuditorWidgetProgress | null; disableTasks?: boolean; stalled?: boolean; ledgerEvents?: GoalLedgerEvent[]; expanded?: boolean; debug?: boolean; model?: GoalDashboardModel | null; compactScrollOffset?: number; expandedScrollOffset?: number; expandedTaskRows?: number; compactTaskRows?: number; taskProjection?: TaskTreeProjection; taskLine?: (node: DashboardTaskNode, line: number) => void; taskHeader?: (line: number) => void; controlsLine?: (controls: TaskFooterControls) => void; footerKeys?: DashboardFooterKeys; taskArea?: (first: number, last: number) => void; hideTaskIndicators?: boolean; keybindings?: GoalDashboardKeybindings; auditorKey?: GoalKeybinding; interruptAuditKey?: GoalKeybinding; /** Terminal-height bound (see boundWidgetRenderLines); undefined = unbounded. */ terminalRows?: number } = {}): string[] {
 	// When auditor progress is active, show the structured audit dashboard
 	// instead of the normal goal widget (§15.3).
 	if (options.auditorProgress) {
@@ -355,8 +365,8 @@ export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Them
 	});
 	if (!model) return [];
 	const lines = options.expanded
-		? renderExpandedDashboard(model, theme, safeWidth, { scrollOffset: options.expandedScrollOffset, rows: options.expandedTaskRows, keybindings: options.keybindings, taskRows: options.taskProjection?.rows, expandedTasks: options.taskProjection?.expanded, taskLine: options.taskLine, taskHeader: options.taskHeader, controlsLine: options.controlsLine, taskArea: options.taskArea, hideTaskIndicators: options.hideTaskIndicators })
-		: renderCompactDashboard(model, theme, safeWidth, { scrollOffset: options.compactScrollOffset, keybindings: options.keybindings, auditorKey: options.auditorKey, taskRows: options.taskProjection?.rows, taskRowBudget: options.compactTaskRows, expandedTasks: options.taskProjection?.expanded, taskLine: options.taskLine, taskHeader: options.taskHeader, controlsLine: options.controlsLine, taskArea: options.taskArea, hideTaskIndicators: options.hideTaskIndicators });
+		? renderExpandedDashboard(model, theme, safeWidth, { scrollOffset: options.expandedScrollOffset, rows: options.expandedTaskRows, keybindings: options.keybindings, taskRows: options.taskProjection?.rows, expandedTasks: options.taskProjection?.expanded, taskLine: options.taskLine, taskHeader: options.taskHeader, controlsLine: options.controlsLine, footerKeys: options.footerKeys, taskArea: options.taskArea, hideTaskIndicators: options.hideTaskIndicators })
+		: renderCompactDashboard(model, theme, safeWidth, { scrollOffset: options.compactScrollOffset, keybindings: options.keybindings, auditorKey: options.auditorKey, taskRows: options.taskProjection?.rows, taskRowBudget: options.compactTaskRows, expandedTasks: options.taskProjection?.expanded, taskLine: options.taskLine, taskHeader: options.taskHeader, controlsLine: options.controlsLine, footerKeys: options.footerKeys, taskArea: options.taskArea, hideTaskIndicators: options.hideTaskIndicators });
 	return boundWidgetRenderLines(clampLinesToWidth(lines, width), options.terminalRows);
 }
 
@@ -367,6 +377,8 @@ export class GoalWidgetComponent implements Component {
 	private getOpenGoalCount: () => number;
 	private getAuditorProgress: () => AuditorWidgetProgress | null;
 	private getAuditLifecycle: () => object | null;
+	private readonly isIdle: () => boolean;
+	private readonly isKeyboardBlocked: () => boolean;
 	private auditMouseLifecycle: object | null = null;
 	private getSettings: () => GoalSettings;
 	private getDebugMode: () => boolean;
@@ -382,15 +394,18 @@ export class GoalWidgetComponent implements Component {
 	private compactScrollOffset = 0;
 	private expandedScrollOffset = 0;
 	private lastRenderWidth = 100;
+	private lastHostFrame?: DashboardHostFrame;
+	private readonly hostFrameObservation: ReturnType<typeof observeDashboardHostFrame>;
 	private readonly auditViewport = new AuditDashboardViewport();
 	private readonly auditMouse = new AuditDashboardMouse();
 	private auditIdentity: string | undefined;
 	private readonly taskView = new TaskTreeView();
 	private readonly taskMouse = new TaskTreeMouse();
-	private taskControls: { line: number; hasCurrent: boolean } | undefined;
+	private taskControls: TaskFooterControls | undefined;
 	private taskArea: { first: number; last: number } | undefined;
 	private taskGoalId: string | undefined;
 	private taskSourceSignature: string | undefined;
+	private taskMouseSignature = "";
 	private taskRowBudget: number | undefined;
 	private hideTaskIndicators = false;
 	private taskHeaderLine: number | undefined;
@@ -416,6 +431,8 @@ export class GoalWidgetComponent implements Component {
 		this.getOpenGoalCount = options.getOpenGoalCount ?? (() => (this.getGoal() ? 1 : 0));
 		this.getAuditorProgress = options.getAuditorProgress ?? (() => null);
 		this.getAuditLifecycle = options.getAuditLifecycle ?? (() => null);
+		this.isIdle = options.isIdle ?? (() => true);
+		this.isKeyboardBlocked = options.isKeyboardBlocked ?? (() => false);
 		this.getSettings = options.getSettings ?? (() => ({}));
 		this.getDebugMode = options.getDebugMode ?? (() => false);
 		this.getStalled = options.getStalled ?? (() => false);
@@ -423,6 +440,7 @@ export class GoalWidgetComponent implements Component {
 		this.onToggleExpanded = options.onToggleExpanded ?? (() => {});
 		this.getLedgerEvents = options.getLedgerEvents ?? (() => []);
 		this.getAuditResult = options.getAuditResult ?? (() => null);
+		this.hostFrameObservation = observeDashboardHostFrame(this.tui, this, () => this.resetDashboardMouse(), () => this.clearDashboardGestures());
 	}
 
 	/** Whether the dashboard is currently in expanded mode (§10). */
@@ -441,19 +459,32 @@ export class GoalWidgetComponent implements Component {
 			&& focused.actionHandlers instanceof Map && focused.actionHandlers.has("app.clear");
 	}
 
+	private isHostFrameCurrent(): boolean {
+		return this.lastHostFrame !== undefined && sameDashboardHostFrame(this.lastHostFrame, dashboardHostFrame(this.tui, this));
+	}
+
 	handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+		if (!this.isHostFrameCurrent()) { this.resetDashboardMouse(); return undefined; }
+		this.hostFrameObservation.observePlacement();
 		const goal = this.getGoal();
 		const audit = this.getAuditorProgress();
 		if (audit && !this.getAuditResult()) {
 			const identity = this.auditIdentity, lifecycle = this.getAuditLifecycle(), layout = JSON.stringify([this.lastRenderWidth, this.auditViewport.geometry]);
-			const isCurrent = () => !this.tui.hasOverlay?.() && !!this.getAuditorProgress() && !this.getAuditResult() && lifecycle === this.getAuditLifecycle() && identity === this.auditIdentity && identity === JSON.stringify([this.getGoal()?.id, this.getAuditorProgress()?.attemptId, this.getExpanded() || this.getDebugMode(), auditTerminalRows(this.tui)]) && layout === JSON.stringify([this.lastRenderWidth, this.auditViewport.geometry]);
+			const isCurrent = () => this.isHostFrameCurrent() && !this.tui.hasOverlay?.() && !!this.getAuditorProgress() && !this.getAuditResult() && lifecycle === this.getAuditLifecycle() && identity === this.auditIdentity && identity === JSON.stringify([this.getGoal()?.id, this.getAuditorProgress()?.attemptId, this.getExpanded() || this.getDebugMode(), auditTerminalRows(this.tui)]) && layout === JSON.stringify([this.lastRenderWidth, this.auditViewport.geometry]);
 			return this.auditMouse.handle(event, { enabled: this.auditMouseLifecycle === lifecycle && isCurrent(), identity, width: this.lastRenderWidth, geometry: this.auditViewport.geometry, isCurrent, toggle: () => { this.onToggleExpanded(); this.tui.requestRender(); }, scroll: (delta) => { this.auditViewport.scroll(delta, () => this.tui.requestRender()); } });
 		}
 		this.auditMouse.clear();
-		return handleTaskWidgetMouse({ event, mouse: this.taskMouse, enabled: !!goal && !audit && !this.getAuditResult() && goal.id === this.taskGoalId && this.taskSourceSignature === JSON.stringify([goal.currentTaskId, goal.taskList, this.getExpanded()]), width: this.lastRenderWidth, signatureState: [this.taskGoalId, this.taskSourceSignature], rows: this.taskLineMap, controls: this.taskControls, taskArea: this.taskArea,
+		return handleTaskWidgetMouse({ event, mouse: this.taskMouse, enabled: !!goal && !audit && !this.getAuditResult() && goal.id === this.taskGoalId && this.taskSourceSignature === taskWidgetSourceSignature(goal, this.getExpanded()), width: this.lastRenderWidth, signature: this.taskMouseSignature, rows: this.taskLineMap, controls: this.taskControls, taskArea: this.taskArea,
 			act: (action) => { if (action.kind === "task") this.taskView.toggle(action.id); else if (action.kind === "follow") this.taskView.resetFollow(); else this.onToggleExpanded(); this.tui.requestRender(); },
 			scroll: (delta) => { const mode = this.getExpanded() ? "expanded" : "compact"; const rows = this.taskRowBudget ?? (mode === "expanded" ? expandedTaskViewportRows(this.lastRenderWidth) : compactTaskViewportRows(this.lastRenderWidth)); this.taskView.scroll(mode, rows, delta); this.tui.requestRender(); },
 		});
+	}
+
+	/** Consume source changes synchronously, even when the next draw is coalesced. */
+	observeTaskSource(goal: GoalWidgetRecord | null): void {
+		if (this.taskSourceSignature === undefined || (this.taskGoalId === goal?.id && this.taskSourceSignature === taskWidgetSourceSignature(goal, this.getExpanded()))) return;
+		this.taskMouse.clear();
+		this.clearTaskGeometry();
 	}
 
 	private clearTaskGeometry(): void {
@@ -524,15 +555,14 @@ export class GoalWidgetComponent implements Component {
 
 	render(width: number): string[] {
 		this.lastRenderWidth = Math.max(1, width);
+		this.lastHostFrame = this.hostFrameObservation.sync();
 		// Terminal-height bound (spec 2026-08-10): read pi's terminal rows at
 		// render time so the widget never fills the terminal — the chat/editor
 		// stay visible and scrollable and the widget can never trigger pi-tui's
 		// shrink full-render (\x1b[2J\x1b[H\x1b[3J) scrollback wipe. Same cast
 		// pattern as the questionnaire churn guard; mock TUIs without a
 		// `terminal` render unbounded.
-		// SAFETY: this.tui is the live pi-tui instance captured by the widget
-		// factory; the widened shape reads one optional field and fails safe.
-		const terminalRows = (this.tui as unknown as { terminal?: { rows?: number } }).terminal?.rows;
+		const terminalRows = this.lastHostFrame.rows;
 		// Render the current branch unbounded (natural), then apply the
 		// stable-height bound (spec 2026-08-11): the rendered height latches at
 		// the first render of each regime and stays constant (fits and capped),
@@ -552,7 +582,11 @@ export class GoalWidgetComponent implements Component {
 		const rendered = applyStableHeightBound(natural, terminalRows, this.stableHeightState, regime, reserve);
 		for (const line of this.taskLineMap.keys()) if (line >= rendered.length) this.taskLineMap.delete(line);
 		if (this.taskControls && this.taskControls.line >= rendered.length) this.taskControls = undefined;
-		if (this.taskArea) this.taskArea.last = Math.min(this.taskArea.last, rendered.length - 1);
+		if (this.taskArea) this.taskArea.last = Math.min(this.taskArea.last, (this.taskControls?.line ?? rendered.length) - 1);
+		const taskSignature = taskWidgetMouseSignature({ width: this.lastRenderWidth, rows: this.taskLineMap, controls: this.taskControls, taskArea: this.taskArea }, [this.taskGoalId, this.taskSourceSignature, terminalRows]);
+		if (this.taskMouseSignature !== taskSignature) this.taskMouse.clear();
+		this.taskMouseSignature = taskSignature;
+		this.auditViewport.clipGeometry(rendered.length);
 		this.auditMouse.observe(this.auditIdentity, this.getAuditLifecycle(), this.lastRenderWidth, this.auditViewport.geometry, this.tui.hasOverlay?.() ?? false);
 		return rendered;
 	}
@@ -633,9 +667,10 @@ export class GoalWidgetComponent implements Component {
 			return clampLinesToWidth(renderAuditResultCardView(auditResult, this.theme, width), width);
 		}
 		const audit = this.getAuditorProgress();
-		if (audit) { this.taskMouse.clear(); if (this.auditMouseLifecycle !== this.getAuditLifecycle()) this.auditMouse.clear(); this.auditMouseLifecycle = this.getAuditLifecycle(); const expanded = this.getExpanded() || this.getDebugMode(); const goalId = this.getGoal()?.id; this.auditIdentity = JSON.stringify([goalId, audit.attemptId, expanded, auditTerminalRows(this.tui)]); return this.auditViewport.render(audit, this.theme, safeWidth, { expanded, goalId, lifecycle: this.getAuditLifecycle() ?? undefined, interactive: true, interruptKey: settings.keybindings?.interruptAudit }); }
-		if (this.getAuditLifecycle()) this.auditViewport.park(); else this.auditViewport.leave(); this.auditIdentity = undefined; this.auditMouse.clear();
 		const goal = this.getGoal();
+		const footerKeys = dashboardFooterKeys({ settings, goal, audit: !!audit, expanded: this.getExpanded(), isIdle: this.isIdle, host: this.tui, keyboardAvailable: dashboardKeyboardAvailable(this.tui, this.isMainEditorFocused(), this.isKeyboardBlocked()) });
+		if (audit) { this.taskMouse.clear(); if (this.auditMouseLifecycle !== this.getAuditLifecycle()) this.auditMouse.clear(); this.auditMouseLifecycle = this.getAuditLifecycle(); const expanded = this.getExpanded() || this.getDebugMode(); const goalId = goal?.id; this.auditIdentity = JSON.stringify([goalId, audit.attemptId, expanded, auditTerminalRows(this.tui)]); return this.auditViewport.render(audit, this.theme, safeWidth, { expanded, goalId, lifecycle: this.getAuditLifecycle() ?? undefined, interactive: true, interruptKey: settings.keybindings?.interruptAudit, footerKeys }); }
+		if (this.getAuditLifecycle()) this.auditViewport.park(); else this.auditViewport.leave(); this.auditIdentity = undefined; this.auditMouse.clear();
 		const otherCount = Math.max(0, this.getOpenGoalCount() - 1);
 		const model = goal ? deriveGoalDashboardModel(goal as GoalRecord | null, {
 			focused: true,
@@ -651,7 +686,7 @@ export class GoalWidgetComponent implements Component {
 		this.taskControls = undefined;
 		this.taskArea = undefined;
 		this.taskGoalId = model?.goalId;
-		this.taskSourceSignature = JSON.stringify([goal?.currentTaskId, goal?.taskList, this.getExpanded()]);
+		this.taskSourceSignature = taskWidgetSourceSignature(goal, this.getExpanded());
 		this.taskLineMap.clear();
 		this.compactScrollOffset = this.taskView.offset("compact", this.taskRowBudget ?? compactTaskViewportRows(safeWidth));
 		this.expandedScrollOffset = this.taskView.offset("expanded", this.taskRowBudget ?? expandedTaskViewportRows(safeWidth));
@@ -672,7 +707,8 @@ export class GoalWidgetComponent implements Component {
 			taskProjection: projection,
 			taskHeader: (line) => { this.taskHeaderLine = line; },
 			taskLine: (node, line) => { this.taskLineMap.set(line, node); },
-			controlsLine: (line, hasCurrent) => { this.taskControls = { line, hasCurrent }; },
+			controlsLine: (controls) => { this.taskControls = controls; },
+			footerKeys,
 			taskArea: (first, last) => { this.taskArea = { first, last }; },
 			keybindings: settings.keybindings?.dashboard,
 			auditorKey: settings.keybindings?.toggleAuditor,
@@ -738,6 +774,7 @@ export class GoalWidgetComponent implements Component {
 		else if (key === "home") offset = 0;
 		else if (key === "end") offset = maxScrollOffset(list.length, rows);
 		offset = clampScrollOffset(offset, list.length, rows);
+		if (offset !== previous) this.taskMouse.clear();
 		this.compactScrollOffset = this.taskView.scroll("compact", rows, offset - previous);
 		this.tui.requestRender();
 		return true;
@@ -779,12 +816,31 @@ export class GoalWidgetComponent implements Component {
 		else if (key === "home") offset = 0;
 		else if (key === "end") offset = maxO;
 		offset = clampScrollOffset(offset, list.length, rows);
+		if (offset !== previous) this.taskMouse.clear();
 		this.expandedScrollOffset = this.taskView.scroll("expanded", rows, offset - previous);
 		this.tui.requestRender();
 		return true;
 	}
 
+	private clearDashboardGestures(): void {
+		this.taskMouse.clear();
+		this.auditMouse.clear();
+	}
+
+	/** Mode changes are observable before Pi can draw the next frame. */
+	resetDashboardMouse(): void {
+		this.clearDashboardGestures();
+		this.clearTaskGeometry();
+		this.auditIdentity = undefined;
+	}
+
+	dispose(): void {
+		this.hostFrameObservation.dispose();
+		this.resetDashboardMouse();
+	}
+
 	invalidate(): void {
+		this.hostFrameObservation.sync();
 		this.tui.requestRender();
 	}
 }

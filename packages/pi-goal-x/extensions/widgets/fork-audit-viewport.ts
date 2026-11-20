@@ -1,8 +1,10 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { AuditorProgress } from "../goal-auditor.ts";
 import type { GoalKeybinding } from "../goal-controls.ts";
+import type { DashboardFooterKeys } from "../fork-dashboard-key-routes.ts";
 import { deriveAuditorDashboardModel } from "./auditor-dashboard-model.ts";
 import {
+  AUDIT_DASHBOARD_CHROME_ROWS,
   auditDashboardBody,
   renderDynamicAuditorDashboard,
   type AuditDashboardGeometry,
@@ -37,6 +39,7 @@ export class AuditDashboardViewport {
     opts: {
       expanded: boolean;
       interruptKey?: GoalKeybinding;
+      footerKeys?: DashboardFooterKeys;
       interactive?: boolean;
       goalId?: string;
       lifecycle?: object;
@@ -62,9 +65,10 @@ export class AuditDashboardViewport {
     this.active = true;
     if (progress.attemptId) this.attemptId = progress.attemptId;
     this.expanded = opts.expanded;
-    this.rows = opts.interactive
-      ? Math.max(0, Math.min(14, Math.floor(this.maxRows) - 4))
-      : Math.max(1, Math.min(14, Math.floor(this.maxRows) - 3));
+    this.rows = Math.max(
+      opts.interactive ? 0 : 1,
+      Math.min(14, Math.floor(this.maxRows) - AUDIT_DASHBOARD_CHROME_ROWS),
+    );
     const model = deriveAuditorDashboardModel(progress, {
       auditorLabel: progress.auditorLabel,
     });
@@ -77,6 +81,7 @@ export class AuditDashboardViewport {
     return renderDynamicAuditorDashboard(model, theme, width, {
       showToolDetails: opts.expanded,
       interruptKey: opts.interruptKey,
+      footerKeys: opts.footerKeys,
       viewportRows: this.rows,
       scrollOffset: this.offset,
       interactive: opts.interactive,
@@ -85,6 +90,15 @@ export class AuditDashboardViewport {
         this.geometry = geometry;
       },
     });
+  }
+
+  clipGeometry(height: number): void {
+    const { control, body } = this.geometry;
+    if (control && control.line >= height) delete this.geometry.control;
+    if (body) {
+      if (body.first >= height) delete this.geometry.body;
+      else body.last = Math.min(body.last, height - 1);
+    }
   }
 
   leave(): void {

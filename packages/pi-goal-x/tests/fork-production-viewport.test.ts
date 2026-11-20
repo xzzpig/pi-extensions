@@ -16,6 +16,6 @@ test("real SDK chat viewport and editor Container regression suite", () => {
     ["--experimental-strip-types", "--test", fixture],
     { encoding: "utf8", timeout: 120_000, env },
   );
-  assert.match(output, /(?:#|ℹ)\s+pass 70/);
+  assert.match(output, /(?:#|ℹ)\s+pass 73/);
   assert.match(output, /(?:#|ℹ)\s+fail 0/);
 });

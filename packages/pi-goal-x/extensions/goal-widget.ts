@@ -1,5 +1,7 @@
 import { GOAL_KEY_ACTIONS, GOAL_COMMAND_INPUTS, bindingKeys, keyActionBinding, type GoalCommandId } from "./goal-controls.ts";
-import { isKeyRelease, isKeyRepeat, matchesKey, getKeybindings } from "@earendil-works/pi-tui";
+import { isKeyRelease, isKeyRepeat, matchesKey } from "@earendil-works/pi-tui";
+import { dashboardKeyboardAvailable } from "./fork-dashboard-host-keys.ts";
+import { dispatchDashboardKey } from "./fork-dashboard-key-routes.ts";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { cloneGoal, createGoal, nowIso, type GoalTask } from "./goal-record.ts";
 import { checkSubtasksComplete, findTaskInTree } from "./goal-policy.ts";
@@ -100,7 +102,7 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 			const isRepeat = isKeyRepeat(data);
 			// Foreign focused overlays and blocking UI prompts own their input.
 			const mainEditorFocused = core.goalWidgetComponentRef.current?.isMainEditorFocused?.();
-			if (core.goalModalDepth > 0 || core.uiPromptDepth > 0 || mainEditorFocused === false || (mainEditorFocused === undefined && core.goalTui?.hasOverlay?.())) return undefined;
+			if (!dashboardKeyboardAvailable(core.goalTui, mainEditorFocused, core.goalModalDepth > 0 || core.uiPromptDepth > 0)) return undefined;
 			const settings = loadGoalSettings(goalCwd);
 			const matches = (path: string): boolean => {
 				const action = KEY_ACTION_BY_PATH.get(path)!;
@@ -112,27 +114,8 @@ export function syncTerminalInputPause(core: GoalCore, ctx: ExtensionContext): v
 					(core.auditProgress ? action.context === "audit" : core.isDashboardExpanded() ? action.context === "expanded" : action.context === "compact"));
 				return applicable.some(action => bindingKeys(keyActionBinding(settings, action)).some(key => matchesKey(data, key))) ? { consume: true } : undefined;
 			}
-			if (core.auditProgress && matches("interruptAudit")) { core.abortAudit(ctx); return { consume: true }; }
-			if (core.isDashboardExpanded() && matches("dashboard.collapse")) { core.toggleDashboardExpanded(); return { consume: true }; }
-			if (matches("pause") && ((core.state.goal?.status === "active" && core.state.goal.autoContinue) || (core.state.goal?.status === "paused" && !ctx.isIdle()))) {
-				core.interruption.pause(ctx);
-				// Preserve Pi's ordinary Escape handling for the default combined stop.
-				return matchesKey(data, "escape") && settings.pauseOrder === "together" ? undefined : { consume: true };
-			}
-			// Follow Pi's configured interrupt key.
-			let hostInterrupt = matchesKey(data, "escape");
-			try {
-				const manager = getKeybindings();
-				const keys = manager.getKeys("app.interrupt");
-				if (keys.length) hostInterrupt = keys.some(key => matchesKey(data, key));
-			} catch { /* Embeddings without an app keymap retain Escape. */ }
-			if (hostInterrupt && !matches("pause") && core.state.goal?.status === "active" && core.state.goal.autoContinue) {
-				core.interruption.interruptTurn(ctx); return { consume: true };
-			}
-			if (matches("dashboard.toggleExpand")) { core.toggleDashboardExpanded(); return { consume: true }; }
-			if (matches("toggleAuditor")) {
-				core.toggleGoalAuditor(ctx); core.goalWidgetComponentRef.current?.invalidate(); return { consume: true };
-			}
+			const dashboardKey = dispatchDashboardKey(data, settings, core, ctx);
+			if (dashboardKey) return dashboardKey === "consume" ? { consume: true } : undefined;
 			if (core.isDashboardExpanded()) {
 				for (const [name, key] of EXPANDED_NAVIGATION) if (matches(`dashboard.${name}`) && core.goalWidgetComponentRef.current?.handleNavigationKey(key)) return { consume: true };
 			}

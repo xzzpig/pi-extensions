@@ -202,12 +202,14 @@ export function createGoalCore(
 
 	function assignFocusedGoalId(next: string | null): void {
 		if (focusedGoalId !== next) {
+   goalWidgetComponentRef.current?.resetDashboardMouse();
    focusRevision += 1;
    // Revoke the old owner's side channel before retiring its active audit.
    if (focusedGoalId) invalidateAuditSidechannelsForOwner(auditSessionId, focusedGoalId, "focus_changed");
    activeAudit?.cancel("Goal focus changed during completion audit.");
   }
 		focusedGoalId = next;
+		goalWidgetComponentRef.current?.observeTaskSource(state.goal);
 	}
 
 	function focusedOperationToken(goalId: string): { goalId: string; revision: number } {
@@ -263,6 +265,7 @@ export function createGoalCore(
 		getPool: () => goalsById,
 		replacePool: (pool) => {
 			goalsById = pool;
+			goalWidgetComponentRef.current?.observeTaskSource(state.goal);
 		},
 		getFocusedGoalId: () => focusedGoalId,
 		assignFocusedGoalId: (goalId) => assignFocusedGoalId(goalId),
@@ -293,19 +296,28 @@ export function createGoalCore(
 	let runningGoalId: string | null = null;
 	let terminalInputUnsubscribe: (() => void) | null = null;
 	let auditProgress: AuditorWidgetProgress | null = null;
+	function publishAuditProgress(next: AuditorWidgetProgress | null): void {
+		if (!!auditProgress !== !!next || auditProgress?.attemptId !== next?.attemptId) goalWidgetComponentRef.current?.resetDashboardMouse();
+		auditProgress = next;
+	}
 	let auditAnimationTimer: ReturnType<typeof setInterval> | null = null;
 	let auditResult: { verdict: AuditVerdict; report: string; at: string } | null = null;
 	let auditResultClearTimer: ReturnType<typeof setTimeout> | null = null;
 
+	function publishAuditResult(next: typeof auditResult): void {
+		if (!!auditResult !== !!next) goalWidgetComponentRef.current?.resetDashboardMouse();
+		auditResult = next;
+	}
+
 	function setAuditResult(verdict: AuditVerdict, report: string): void {
 		const result = { verdict, report, at: nowIso() };
-		auditResult = result;
+		publishAuditResult(result);
 		if (auditResultClearTimer) clearTimeout(auditResultClearTimer);
 		// Short-lived foreground display (§2.5): the card is visible while the
 		// user reads it, then the normal dashboard returns automatically.
 		auditResultClearTimer = setTimeout(() => {
 			if (auditResult !== result) return;
-			auditResult = null;
+			publishAuditResult(null);
 			auditResultClearTimer = null;
 			goalWidgetComponentRef.current?.invalidate();
 		}, 6000);
@@ -316,12 +328,13 @@ export function createGoalCore(
 	function clearAuditResult(): void {
 		if (auditResultClearTimer) clearTimeout(auditResultClearTimer);
 		auditResultClearTimer = null;
-		auditResult = null;
+		publishAuditResult(null);
 	}
 	let activeAudit: ActiveGoalAudit | null = null;
 	let auditAbortController: AbortController | null = null;
 	let auditAborted = false;
  function invalidateSession(): void {
+  goalWidgetComponentRef.current?.resetDashboardMouse();
   focusRevision += 1;
   activeAudit?.cancel("Session replaced or shut down during completion audit.");
  }
@@ -583,7 +596,7 @@ export function createGoalCore(
 		auditAbortController.abort();
 		auditAbortController = null;
   stopAuditAnimation();
-  auditProgress = null;
+  publishAuditProgress(null);
   goalWidgetComponentRef.current?.invalidate();
   auditAborted = true;
  }
@@ -799,6 +812,7 @@ export function createGoalCore(
 	function clearGoalWidget(ctx: ExtensionContext): void {
   lastUiCtx = null;
   widgetRegistered = false;
+  goalWidgetComponentRef.current?.dispose();
   goalWidgetComponentRef.current = null;
   goalTuiRef.current = null;
   if (ctx.hasUI) {
@@ -907,6 +921,8 @@ export function createGoalCore(
 						getOpenGoalCount: () => otherOpenGoalCount(goalsById, null),
 						getAuditorProgress: () => auditProgress,
 						getAuditLifecycle: () => activeAudit?.phase === "settled" ? null : activeAudit,
+						isIdle: () => ctx.isIdle(),
+						isKeyboardBlocked: () => goalModalDepth > 0 || uiPromptDepth > 0,
 						getSettings: () => ({ ...loadGoalSettings(goalCwd), commands: core.loadedCommands }),
 						getDebugMode: () => debugMode,
 						getStalled: () => stallNotified,
@@ -944,6 +960,8 @@ export function createGoalCore(
 					getOpenGoalCount: () => otherOpenGoalCount(goalsById, null),
 					getAuditorProgress: () => auditProgress,
 					getAuditLifecycle: () => activeAudit?.phase === "settled" ? null : activeAudit,
+					isIdle: () => ctx.isIdle(),
+					isKeyboardBlocked: () => goalModalDepth > 0 || uiPromptDepth > 0,
 					getSettings: () => ({ ...loadGoalSettings(goalCwd), commands: core.loadedCommands }),
 					getDebugMode: () => debugMode,
 					getStalled: () => stallNotified,
@@ -1245,13 +1263,13 @@ export function createGoalCore(
 			return auditProgress;
 		},
 		set auditProgress(value: AuditorWidgetProgress | null) {
-			auditProgress = value;
+			publishAuditProgress(value);
 		},
 		get auditResult() {
 			return auditResult;
 		},
 		set auditResult(value: { verdict: AuditVerdict; report: string; at: string } | null) {
-			auditResult = value;
+			publishAuditResult(value);
 		},
 		setAuditResult,
 		clearAuditResult,
@@ -1265,6 +1283,7 @@ export function createGoalCore(
    return activeAudit;
   },
   set activeAudit(value: ActiveGoalAudit | null) {
+   if (auditProgress && activeAudit !== value) goalWidgetComponentRef.current?.resetDashboardMouse();
    activeAudit = value;
   },
 		get goalModalDepth() {
@@ -1314,6 +1333,7 @@ export function createGoalCore(
 			return debugMode;
 		},
 		set debugMode(value: boolean) {
+			if (debugMode !== value) goalWidgetComponentRef.current?.resetDashboardMouse();
 			debugMode = value;
 		},
 		get terminalInputUnsubscribe() {
@@ -1324,6 +1344,7 @@ export function createGoalCore(
 		},
 		toggleDashboardExpanded() {
 			dashboardExpanded = !dashboardExpanded;
+			goalWidgetComponentRef.current?.resetDashboardMouse();
 			goalWidgetComponentRef.current?.invalidate();
 		},
 		isDashboardExpanded() {

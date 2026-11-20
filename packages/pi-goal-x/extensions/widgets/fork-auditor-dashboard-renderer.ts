@@ -2,6 +2,10 @@ import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { GoalKeybinding } from "../goal-controls.ts";
 import { bindingKeys } from "../goal-controls.ts";
 import { formatGoalKeybinding } from "../goal-settings.ts";
+import {
+  dashboardFooterKeys,
+  type DashboardFooterKeys,
+} from "../fork-dashboard-key-routes.ts";
 import type { AuditorDashboardModel } from "./auditor-dashboard-model.ts";
 import { formatAuditElapsed } from "./auditor-dashboard-model.ts";
 import {
@@ -10,11 +14,19 @@ import {
   boxFooter,
   clampLinesToWidth,
 } from "./goal-dashboard-renderer.ts";
+import {
+  layoutDashboardFooter,
+  type FooterEntry,
+} from "./fork-dashboard-footer.ts";
 import { wrapTextWithAnsi } from "./text-cache.ts";
+
+// Header, summary and the bottom border remain outside the scrolling body.
+export const AUDIT_DASHBOARD_CHROME_ROWS = 3;
 
 export interface AuditDashboardRenderOptions {
   showToolDetails?: boolean;
   interruptKey?: GoalKeybinding;
+  footerKeys?: DashboardFooterKeys;
   scrollOffset?: number;
   viewportRows?: number;
   interactive?: boolean;
@@ -76,6 +88,47 @@ export function auditDashboardBody(
   return lines;
 }
 
+function auditFooter(
+  width: number,
+  theme: Theme,
+  expanded: boolean,
+  keys: DashboardFooterKeys,
+  active: boolean,
+  scrollRange: string,
+  estimate: string,
+) {
+  const frame = (text: string) => theme.fg("muted", text);
+  const entries: FooterEntry<"toggle">[] = [
+    {
+      text: frame(expanded ? "[收起清单]" : "[展开清单]"),
+      shortText: frame(expanded ? "[收起]" : "[展开]"),
+      action: "toggle",
+    },
+  ];
+  if (active && keys.stopAudit.length) {
+    const stopHint = keys.stopAudit.map(formatGoalKeybinding).join("/");
+    entries.push({
+      text: frame(`${stopHint}: stop audit`),
+      shortText: frame(`${stopHint}: stop`),
+    });
+  }
+  if (keys.toggle.length)
+    entries.push({
+      text: frame(keys.toggle.map(formatGoalKeybinding).join("/")),
+      after: "toggle",
+    });
+  if (scrollRange) {
+    const scrollKeys = [...keys.scrollUp, ...keys.scrollDown]
+      .map(formatGoalKeybinding)
+      .join("/");
+    entries.push({
+      text: frame(scrollKeys ? `${scrollKeys} ${scrollRange}` : scrollRange),
+    });
+  }
+  if (estimate) entries.push({ text: frame(estimate), right: true });
+  return layoutDashboardFooter(width, frame, entries);
+}
+
 export function renderDynamicAuditorDashboard(
   model: AuditorDashboardModel,
   theme: Theme,
@@ -100,7 +153,9 @@ export function renderDynamicAuditorDashboard(
           : current
             ? `${model.active ? "◌" : "·"} ${plain(current.label)}${model.active ? "" : "（审计已结束）"}`
             : model.active
-              ? "等待逐项上报 · 展开查看清单"
+              ? opts.interactive
+                ? "等待逐项上报"
+                : "等待逐项上报 · 展开查看清单"
               : "审计已结束 · 未检查项不自动补勾",
       ];
   const cap = opts.interactive
@@ -109,7 +164,7 @@ export function renderDynamicAuditorDashboard(
   const rows = opts.interactive
     ? Math.min(
         expanded ? Math.max(0, Math.floor(opts.viewportRows ?? 12)) : 1,
-        Math.max(0, cap - 4),
+        Math.max(0, cap - AUDIT_DASHBOARD_CHROME_ROWS),
       )
     : expanded
       ? Math.max(1, Math.floor(opts.viewportRows ?? 12))
@@ -127,17 +182,13 @@ export function renderDynamicAuditorDashboard(
   while (visible.length < rows) visible.push("");
   const estimate =
     model.percentage === undefined ? "" : `审计员估计 ${model.percentage}%`;
-  const hints = [
-    model.active && bindingKeys(opts.interruptKey ?? "escape").length
-      ? `${formatGoalKeybinding(opts.interruptKey ?? "escape")}: stop audit`
-      : "",
-    expanded && body.length > rows
-      ? `↑/↓ ${offset + 1}–${Math.min(offset + rows, body.length)}/${body.length}`
-      : "",
-    !expanded ? "展开查看清单" : "",
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const interruptKeys = model.active
+    ? bindingKeys(opts.interruptKey ?? "escape")
+    : [];
+  const scrollRange =
+    expanded && body.length > rows && rows > 0
+      ? `${offset + 1}–${Math.min(offset + rows, body.length)}/${body.length}`
+      : "";
   const lines = [
     boxHeader(
       theme,
@@ -155,14 +206,44 @@ export function renderDynamicAuditorDashboard(
   const geometry: AuditDashboardGeometry = {};
   if (opts.interactive && expanded && rows > 0)
     geometry.body = { first: 2, last: 1 + rows };
-  if (opts.interactive && cap >= 4) {
-    const label = expanded ? "[收起]" : "[展开]";
-    const controlLine = lines.length;
-    lines.push(boxLine(theme, safeWidth, label));
-    if (width - 3 >= 6)
-      geometry.control = { line: controlLine, start: 2, end: 8 };
+  if (opts.interactive) {
+    if (lines.length < cap) {
+      const footer = auditFooter(
+        width,
+        theme,
+        expanded,
+        opts.footerKeys ??
+          dashboardFooterKeys({
+            settings: { keybindings: { interruptAudit: opts.interruptKey } },
+            audit: true,
+            expanded,
+            isIdle: () => true,
+          }),
+        model.active,
+        scrollRange,
+        estimate,
+      );
+      const control = footer.actions[0];
+      if (control)
+        geometry.control = {
+          line: lines.length,
+          start: control.start,
+          end: control.end,
+        };
+      lines.push(footer.text);
+    }
+  } else {
+    const hints = [
+      interruptKeys.length
+        ? `${formatGoalKeybinding(opts.interruptKey ?? "escape")}: stop audit`
+        : "",
+      scrollRange ? `↑/↓ ${scrollRange}` : "",
+      !expanded ? "展开查看清单" : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    lines.push(boxFooter(theme, safeWidth, hints, estimate));
   }
-  lines.push(boxFooter(theme, safeWidth, hints, estimate));
   if (opts.interactive && lines.length > cap) lines.length = cap;
   opts.onGeometry?.(geometry);
   return clampLinesToWidth(lines, width);

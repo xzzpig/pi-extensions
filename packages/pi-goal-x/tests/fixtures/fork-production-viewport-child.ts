@@ -26,6 +26,8 @@ import { showTweakProposalDialog } from "../../extensions/goal-tweak-confirmatio
 import { buildTweakComparison } from "../../extensions/goal-tweak-diff.ts";
 import { projectTweakCandidate } from "../../extensions/goal-tweak-projection.ts";
 import { convertFlatTasks } from "../../extensions/goal-task-tools.ts";
+import { createGoal } from "../../extensions/goal-record.ts";
+import { GoalWidgetComponent } from "../../extensions/widgets/goal-widget.ts";
 import type { GoalRecord } from "../../extensions/goal-record.ts";
 import {
   createMockExtensionContext,
@@ -1660,3 +1662,140 @@ for (const phase of ["pressed", "pending"] as const)
       h.tui.stop();
     }
   });
+
+for (const gesture of ["task press", "audit press", "audit pending"] as const) {
+  test(`production Goal-X dock layout invalidates ${gesture}`, async () => {
+    let input = (_data: string) => {};
+    const terminal = {
+      columns: 100,
+      rows: 36,
+      kittyProtocolActive: true,
+      start(fn: typeof input) {
+        input = fn;
+      },
+      stop() {},
+      write() {},
+      hideCursor() {},
+      showCursor() {},
+      moveBy() {},
+      clearLine() {},
+      clearFromCursor() {},
+      clearScreen() {},
+    };
+    const tui = new TuiAltScreen(terminal as never, false, undefined, {
+      mouse: true,
+      copyOnSelect: false,
+    });
+    const host = tui as unknown as { doRender(): void };
+    const originalDraw = host.doRender;
+    const draw = () => host.doRender();
+    const goal = createGoal({
+      objective: "Dock layout",
+      autoContinue: false,
+      sisyphus: false,
+    });
+    goal.taskList = {
+      tasks: [{ id: "current", title: "Current task", status: "pending" }],
+      proposedAt: goal.createdAt,
+      blockCompletion: false,
+    };
+    goal.currentTaskId = "current";
+    const audit = gesture.startsWith("audit");
+    let toggles = 0;
+    const widget = new GoalWidgetComponent({
+      tui: createInteractiveTuiReference(() => tui),
+      theme: createMockTheme(),
+      getGoal: () => goal,
+      getAuditorProgress: () =>
+        audit
+          ? { phase: "running", elapsedMs: 0, attemptId: "a", recentOutput: [] }
+          : null,
+      getExpanded: () => toggles % 2 === 1,
+      onToggleExpanded: () => {
+        toggles++;
+      },
+    });
+    let acceptedClicks = 0;
+    const handleMouse = widget.handleMouse.bind(widget);
+    widget.handleMouse = (event) => {
+      const result = handleMouse(event);
+      if (event.type === "click" && result?.handled) acceptedClicks++;
+      return result;
+    };
+    const widgetsAbove = new Container();
+    widgetsAbove.addChild({
+      render: () => ["another widget"],
+      invalidate() {},
+    });
+    widgetsAbove.addChild(widget);
+    let editorRows = 3;
+    const empty = { render: () => [], invalidate() {} };
+    const viewport = createChatViewport({
+      document: {
+        render: () => Array.from({ length: 50 }, (_, i) => `chat ${i}`),
+        invalidate() {},
+      },
+      pendingMessages: empty,
+      status: empty,
+      widgetsAbove,
+      editor: {
+        render: () => Array.from({ length: editorRows }, () => "editor"),
+        invalidate() {},
+      },
+      footer: empty,
+    });
+    const label = audit ? "[展开清单]" : "[展开]";
+    const point = () => {
+      const lines = tui.getScreenLines();
+      const y = lines.findIndex(
+        (line) => line.startsWith("╰") && line.includes(label),
+      );
+      assert.ok(y >= 0, lines.join("\n"));
+      return { x: visibleWidth(lines[y]!.split(label)[0]!), y };
+    };
+    const send = (p: { x: number; y: number }, suffix: "M" | "m") =>
+      input(`\x1b[<0;${p.x + 1};${p.y + 1}${suffix}`);
+    const pending = gesture.endsWith("pending");
+    const auditDelay = () => new Promise((resolve) => setTimeout(resolve, 570));
+    try {
+      tui.setLayoutRoot(viewport.root);
+      tui.start();
+      draw();
+      draw();
+      const old = point();
+      send(old, "M");
+      if (pending) {
+        send(old, "m");
+        assert.equal(acceptedClicks, 1, "native click is now queued");
+      }
+      editorRows = 5;
+      draw();
+      assert.equal(point().y, old.y - 2, "the editor moved the painted footer");
+      if (!pending) {
+        editorRows = 3;
+        draw();
+        assert.deepEqual(
+          point(),
+          old,
+          "the footer is back at the original point",
+        );
+        send(old, "m");
+      }
+      // Allow both Pi’s double-click window and a queued audit click to expire.
+      await auditDelay();
+      assert.equal(toggles, 0, "reflow invalidates the old gesture");
+      // A same-size paint, unlike a dock relocation, keeps a fresh gesture.
+      const fresh = point();
+      send(fresh, "M");
+      draw();
+      send(fresh, "m");
+      draw();
+      if (audit) await auditDelay();
+      assert.equal(toggles, 1, "a valid click survives ordinary redraws");
+    } finally {
+      widget.dispose();
+      assert.equal(host.doRender, originalDraw);
+      tui.stop();
+    }
+  });
+}
