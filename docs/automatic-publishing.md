@@ -118,12 +118,20 @@ This implementation never configures external accounts automatically.
 
 ```bash
 pnpm run publish:check                         # plan only; no build or upload
-pnpm run publish:pack --only pi-notify          # gates + pack; no upload
-node scripts/release.mjs --pack --check-all    # verify every public plugin
+pnpm run publish:pack --only pi-notify          # gates + pack pending versions; no upload
+node scripts/release.mjs --pack --check-all    # full workspace check; no upload
 pnpm run test:release                          # isolated release regression tests
 # Real local upload; separate explicit authorization + local npm auth required:
 # pnpm run publish:all --only pi-notify
 ```
+
+Use `--only` to restrict normal release planning and packing to the named
+plugins. Exact versions already on npm are skipped; if the plan reports
+`Pending (0)` in this mode, no tarball was built or startup-tested.
+`--check-all` is a separate, workspace-wide verification mode: it packs every
+public plugin even if its version is already on npm. The CLI rejects combining
+`--check-all` with `--only`. There is no release CLI mode to rebuild a selected
+already-published version without expanding the check to the full workspace.
 
 Run commands inside the repository direnv/Nix environment. Linux checks involving
 sandbox-runtime additionally need Bun, gcc, strip, static libc/libseccomp development

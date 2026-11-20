@@ -4,6 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { checkScripts, gatePackages } from "./release.mjs";
 import {
   planRelease,
@@ -35,6 +37,21 @@ const makePlan = (all, lookup = async () => null, only = []) =>
     only,
     versions: Object.fromEntries(all.map((p) => [p.dir, p.version])),
   });
+test("release CLI rejects combining --check-all and --only before running release steps", () => {
+  const script = fileURLToPath(new URL("./release.mjs", import.meta.url));
+  for (const args of [
+    ["--check-all", "--only", "pi-goal-x"],
+    ["--only", "pi-goal-x", "--check-all"],
+    ["--check-all", "--only", ""],
+  ]) {
+    const result = spawnSync(process.execPath, [script, "--pack", ...args], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: "" },
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /--check-all cannot be combined with --only/);
+  }
+});
 test("peer ranges cannot hide workspace dev dependencies", async () => {
   const consumer = {
     ...b,

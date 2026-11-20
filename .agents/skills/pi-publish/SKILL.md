@@ -48,9 +48,20 @@ pnpm run test:release
 pnpm exec prettier --check .
 pnpm run publish:check
 pnpm run publish:pack --only pi-notify
-# Check/build/pack every public plugin, even already-published versions:
-node scripts/release.mjs --pack --check-all
 ```
+
+Use `publish:pack --only <dir>` for selected release candidates. If the
+selected version already exists on npm, it is skipped; `Pending (0)` with no
+candidates means no tarball was built or startup-tested. Do not bump a version
+solely to make the check run.
+
+Run `node scripts/release.mjs --pack --check-all` separately only when full
+workspace verification is intended. It checks and packs every public plugin,
+including already-published versions, and cannot be combined with `--only`.
+There is no release CLI mode to re-pack only selected already-published
+versions. If preparing a single plugin without a version bump, report the
+package checks that actually ran and note that official tarball validation was
+skipped. Do not silently substitute a workspace-wide check.
 
 `publish:check` only queries registry state and writes a JSON plan; it does not
 run build hooks. `publish:pack` additionally performs release gates and builds

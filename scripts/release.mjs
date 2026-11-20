@@ -187,7 +187,7 @@ async function publishValidatedArtifacts(artifacts, { lookup, registry }) {
 async function main() {
   const args = process.argv.slice(2);
   let mode = "plan",
-    only = [],
+    only,
     registry = process.env.PI_PUBLISH_REGISTRY ?? "https://registry.npmjs.org";
   let output = path.join(root, "artifacts/release"),
     checkAll = false;
@@ -213,11 +213,15 @@ async function main() {
       /* Legacy compatibility: validation replaces mutation. */
     } else if (["--help", "-h"].includes(arg)) {
       console.log(
-        "release.mjs [--plan|--dry-run|--pack|--publish] [--only dir,dir] [--registry URL] [--output dir] [--check-all]",
+        "release.mjs [--plan|--dry-run|--pack|--publish] [--only dir,dir | --check-all] [--registry URL] [--output dir]",
       );
       return;
     } else throw new Error(`Unknown argument: ${arg}`);
   }
+  if (checkAll && only !== undefined)
+    throw new Error(
+      "--check-all cannot be combined with --only. Use --pack --check-all for all public plugins, or --pack --only <dir> for pending versions of selected plugins.",
+    );
   if (!registry || !/^https?:\/\//.test(registry))
     throw new Error("Expected HTTP(S) registry");
   if (
