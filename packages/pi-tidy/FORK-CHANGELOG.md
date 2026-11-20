@@ -6,6 +6,14 @@ Current upstream baseline (not a claim about older releases): [0.9.6 / ea4ca7c36
 
 Historical entries below were migrated from the repository's existing changelogs; missing dates and historical baselines have not been invented.
 
+## [0.1.5] - 2026-11-20
+
+### Fixed
+
+- Pi now reads the fork changelog instead of the upstream release history, so
+  startup no longer repeatedly renders unrelated upstream updates. Both histories
+  remain available in the package.
+
 ## 0.1.4 — 降低长会话渲染开销
 
 - 稳定回复复用代码块规则线与复制按钮布局，避免每帧扫描全部历史代码行；内容、宽度和相关选项变化时重新计算。

@@ -6,6 +6,14 @@ Current upstream baseline (not a claim about older releases): [pi-permission-sys
 
 Historical entries below were migrated from the repository's existing changelogs; missing dates and historical baselines have not been invented.
 
+## [1.8.2] - 2026-11-20
+
+### Fixed
+
+- Pi now reads the fork changelog instead of the upstream release history, so
+  startup no longer repeatedly renders unrelated upstream updates. Both histories
+  remain available in the package.
+
 ## [1.8.1] — 2026-11-15
 
 ### Fixed

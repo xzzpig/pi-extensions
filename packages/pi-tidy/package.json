@@ -1,6 +1,6 @@
 {
   "name": "@xzzpig/pi-tidy",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "type": "module",
   "packageManager": "pnpm@11.10.0",
   "description": "Tool folding for the pi agent — a reply's tool calls collapse to one clickable line; failures, edit diffs and running jobs stay visible",

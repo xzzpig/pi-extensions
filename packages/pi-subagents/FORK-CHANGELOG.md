@@ -69,6 +69,14 @@ These notes were already present without a release version; they are not new unr
   upstream runner refactor; upstream's removal of `completionGuard` was
   adopted.
 
+## [0.25.2] - 2026-11-20
+
+### Fixed
+
+- Pi now reads the fork changelog instead of the upstream release history, so
+  startup no longer repeatedly renders unrelated upstream updates. Both histories
+  remain available in the package.
+
 ## [0.25.1] - 2026-11-15 (fork)
 
 ### Changed
