@@ -6,6 +6,12 @@ Current upstream baseline (not a claim about older releases): [0.5.0 / 91cef7580
 
 Historical entries below were migrated from the repository's existing changelogs; missing dates and historical baselines have not been invented.
 
+## [0.3.4] - 2026-11-20
+
+### Performance
+
+- 发布包预打包扩展入口，减少 Pi 启动时逐个解析、加载 TypeScript 模块的开销；Pi 核心与共享 diff 依赖保持外置。
+
 ## [0.3.3] - 2026-11-19
 
 ### Fork changes

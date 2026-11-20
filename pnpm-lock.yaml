@@ -570,6 +570,9 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 24.12.4
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
       rollup:
         specifier: ^4.62.2
         version: 4.62.4

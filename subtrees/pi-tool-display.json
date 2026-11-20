@@ -12,6 +12,7 @@
   "notes": "Forked from MasuRii/pi-tool-display. The bashCommandDisplay contract lives in openspec (spec bash-command-display); bashLivePreviewMode and bashOutputMode:'auto' are documented in the package README. The read-only tool presentation provider (getToolPresentation/presentationRevision on pi-tool-display.api.v1) is specified in openspec (spec transcript-builder-api, change align-btw-transcript-presentation) and documented for consumers in docs/tool-presentation-provider.md with types in tool-display-api-consumer.d.ts.",
   "reapplyOnSync": [
     "Preserve the package.json prepack/dist-pkg and bundled private diff dependency so independent installs resolve compiled JS without a registry copy.",
+    "Retain the esbuild dev dependency and call fork/stage-package.mjs from prepack so the packed Pi entry is a single .ts module with host peers and the bundled shared diff left external; the checkout still uses the source entry.",
     "Reapply src/diff-renderer.ts delegation for split row pairing, column measurement and row composition to @xzzpig/pi-components/diff; preserve upstream file parsing, cell/ANSI rendering and user config. Retain the shared diff dependency in package.json and its independent bundled delivery.",
     "the fork import block in src/bash-display.ts, where renderBashCall gains an optional config param, replaces upstream's new Text(\"\", 0, 0) reuse expression with new BashCommandLineText(\"\", 0, 0), and adds one resolveBashCommandDisplayArgs preprocessing line plus one text.setCollapse(shouldCollapseBashCommand(config, context)) line — buildBashCallText and its 3 call sites keep upstream bytes",
     "the bash-auto-mode import plus its normalization call at the top of the fork-owned renderBashDisplayResult, and the 2 renderBashCall call sites passing the existing getConfig()",
@@ -34,6 +35,11 @@
     "Do not mix fork release headings into the upstream changelog or use upstream history as the Pi startup changelog."
   ],
   "knownDebt": [
+    {
+      "kind": "other",
+      "path": "packages/pi-tool-display/package.json",
+      "reason": "[policy] The fork prebundles the installed extension entry to avoid per-module Jiti loading at startup; remove the prepack seam and build dependency when upstream ships an equivalent host-compatible prebuilt entry."
+    },
     {
       "kind": "other",
       "path": "packages/pi-tool-display/package.json",
