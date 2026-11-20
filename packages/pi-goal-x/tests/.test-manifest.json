@@ -3,6 +3,7 @@
   "note": "Expected test-entry manifest for the runner self-check (pnpm run test:selfcheck). Regenerate with: node scripts/run-unit-tests.mjs --write-manifest",
   "unitFiles": [
     ".tests/fault-injection.test.ts",
+    ".tests/fork-agent-initiated-tweak.test.ts",
     ".tests/fork-audit-checklist.test.ts",
     ".tests/fork-audit-completion-gate.test.ts",
     ".tests/fork-audit-dashboard.test.ts",

@@ -293,5 +293,6 @@ test("goal evolution instruction mentions /goal-tweak instead of updatedObjectiv
 	const goalText = goalContextMessagePrompt(goal);
 	assert.ok(!goalText.includes("updatedObjective"), "goalContextMessagePrompt must NOT reference updatedObjective");
 	assert.ok(goalText.includes("immutable"), "goalContextMessagePrompt must mention the goal is immutable");
-	assert.ok(goalText.includes("/goal-tweak"), "goalContextMessagePrompt must instruct user to run /goal-tweak");
+	assert.ok(goalText.includes("tweak={goal_id, reason}"), "goalContextMessagePrompt must advertise the explicit tweak proposal入口");
+	assert.doesNotMatch(goalText, /ask the user to run \/goal-tweak/, "the model must not punt a revision to a user command");
 });

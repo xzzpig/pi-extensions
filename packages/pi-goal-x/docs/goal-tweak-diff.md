@@ -6,6 +6,22 @@ fork-only module `extensions/goal-tweak-confirmation.ts`; it presents the
 effective candidate built by the caller and never recomputes goal semantics
 itself.
 
+## Agent-initiated tweaks
+
+A running goal's model may propose a revision without the user first running
+`/goal-tweak`: it calls `propose_goal_draft` with an explicit
+`tweak: { goal_id, reason }` plus the complete revised objective. The reason
+must be non-empty. Admission is guarded by fork-only
+`extensions/goal-agent-tweak.ts`: it requires the focused, active goal to match
+`goal_id`, rejects a stopped turn or an existing user draft, and never switches
+focus. All validation (objective, budget, tasks, audit flush) runs before the
+draft is registered, so a rejected proposal leaves no draft behind. Existing
+`PI_GOAL_AUTO_CONFIRM` semantics apply unchanged: `1` confirms without a dialog,
+`0` requires an interactive decision, and an unavailable interactive host never
+approves. Confirm/continue/cancel and focus/revision validation use the same
+transaction as a user-initiated tweak. The reason is display-only: it never
+enters the objective, verification contract, or semantic diff.
+
 ## What the dialog shows
 
 - **Diff (default):** the line-level change from the authoritative goal to the
@@ -19,6 +35,11 @@ itself.
   focusable row `View the full modified goal (read-only)` switches to it, and
   `Back to the change diff (read-only)` switches back. Viewing is read-only: it
   does not confirm, save, cancel, or start a new model turn.
+- **Adjustment reason:** when a model proposed the tweak, `调整原因` appears at
+  the top of the body in both the diff and full views (and in the basic-host
+  fallback). It is inert display text, stripped of terminal control sequences,
+  and remains attached to the saved result after confirm, continue, cancel, or
+  auto-confirm.
 - **Auditor state:** `● Auditor enabled` / `○ Auditor disabled` with the
   configured toggle key. Changing it rebuilds both views for the new choice
   before anything is applied.
@@ -105,6 +126,7 @@ comparison; string-only callers remain supported:
 await showTweakProposalDialog(ctx, {
   presentation: (auditorEnabled) => ({ diffText, fullText, diffEntries }),
   defaultAuditorEnabled,
+  reason, // optional, for agent-initiated tweaks
 });
 ```
 

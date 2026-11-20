@@ -39,6 +39,13 @@ The previous mixed log placed the following fork baseline-capture notes under up
 - The auditor's tool whitelist, its `structured_output` verdict contract, the
   completion transaction, and the dashboard phase semantics are unchanged.
 
+## [Unreleased]
+
+### Fork changes
+
+- 目标执行中，模型可通过 `propose_goal_draft` 的 `tweak: { goal_id, reason }` 直接提出目标调整，无需用户先运行 `/goal-tweak`。既有确认、自动确认策略和焦点/候选校验保持适用。
+- 调整原因在差异与全文审核视图、基础确认及当次工具结果中单独展示，不写入目标正文或语义差异；继续讨论和取消沿用目标调整语义。
+
 ## [0.12.5] - 2026-11-19
 
 ### Fork changes

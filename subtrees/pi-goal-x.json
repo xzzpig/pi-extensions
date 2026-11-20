@@ -184,6 +184,12 @@
       "kind": "other",
       "path": "packages/pi-goal-x/README.md",
       "reason": "[policy] Explicit fork changelog routing/packaging and dual-history navigation distinguish independent release sequences. Retain until upstream offers an equivalent fork-aware packaging contract."
+    },
+    {
+      "kind": "noise",
+      "path": "packages/pi-goal-x/extensions/goal-drafting.ts",
+      "reason": "[artifact] continue-refining branch was restructured into a fork-only ownership check; remaining braces/return lines are whitespace twins of upstream lines. The actual draft lifecycle logic lives in fork-agent-tweak-decision.ts. Accept until upstream refactors this block.",
+      "recordedAt": "2026-11-19"
     }
   ],
   "reapplyOnSync": [
@@ -220,6 +226,7 @@
     "Keep the fork-only docs/auto-continuation-gate.md, docs/unfocused-sessions.md and docs/dynamic-audit-checklist.md in the published package by retaining their explicit entries in package.json's files list.",
     "在 goal-events.ts 的 currentGoalContextParts 与 goal-state.ts 的 focus 变更/会话载入路径上删除上游重新引入的未聚焦模型提醒：请求侧 [PI GOAL UNFOCUSED] 分支与 pi-goal-steering-event 发送都不得恢复；保留其 stale-checkpoint 分支、focus entry 写入与 UI 更新。旧键 hideUnfocusedPrompt 继续解析/分层/保存但不进入设置菜单与设置摘要。",
     "目标调整差异审核：保留 goal-drafting.ts 的 withTweakReview 执行包装、TweakReview 候选/确认/summary/mutate 接缝、初步待校验展示及 renderTweakReview 结果接缝；tweak 业务字段构造已抽到 fork-only goal-tweak-projection.ts，后续上游修改恢复/预算/任务合并规则时需同步对齐。goal-drafting 与 goal-tweak-status-persistence 测试保留 fork-tweak-draft-fixture 的旧问卷夹具到新调整决策映射及初步展示断言调整；package.json files 保留 docs/goal-tweak-diff.md。新测试按清单重新生成 tests/.test-manifest.json。",
+    "模型主动调整(allow-agent-initiated-goal-tweak)：重施 goal-drafting.ts 的 tweak 参数、工具指引、草稿 reason/agentInitiated 重水合、准入及审核事务调用接缝；以 fork-only 处理草稿归属、权威校验和锁内投影。重施 prompts/goal-prompts.ts 的执行提示；goal-service.ts 仅为模型提案的 flush 提供锁内无缓存对账与焦点保护接缝，其他 flush 保留原行为；模型提案在 apply 的锁内回调直接读取权威目标，不改变通用 mutate 签名。fork-goal-authority.ts 的无缓存解析镜像 storage/goal-files.ts 的 parseGoalContentCached：上游解析规则改变时同步更新镜像。审核结果与目标冲突提示应保留理由并区分被替换草稿。 模型提案准入/确认 flush 读取失败时必须保留当前焦点及令牌；手动及其他 flush 保持原有行为。 模型 tweak 准入直读及锁内投影必须核对头部 activePath 与实际读取路径的绑定（其他事务保留兼容性）；审核基线和候选均比较 scheduler 与目标路径，避免未审核的写入位置或调度结果。 propose_goal_draft 在准入前和审核后尊重工具 AbortSignal，弹窗须传递 AbortSignal 以关闭宿主且禁止迟到 fallback，锁内投影不得提交中止的候选；无效宿主确认结果不得视为批准。 同步时重施 tests/goal-controls.test.ts 与 tests/goal-update-objective.test.ts 的提示断言：明确 tweak={goal_id, reason}，并保留配置命令别名与不可直接修改目标的断言。",
     "Keep Type imported directly from host-provided typebox in goal-core-tools.ts, goal-drafting.ts, goal-oracle.ts and goal-task-tools.ts for Pi 1.5 npm SDK type compatibility; retain the fork-only goal-auditor-progress.ts direct typebox import. Do not migrate goal-x schemas to pi-schema.",
     "packaging identity (repository.url, files allowlist, per-package lockfile policy) is enforced by scripts/check-fork-identity.mjs — run `node scripts/check-fork-identity.mjs` after every subtree pull/sync",
     "Keep pi.changelogPath pointing to ./FORK-CHANGELOG.md, ship the fork log and any upstream changelog, and retain README release-history navigation. Never append fork releases to the upstream log; follow docs/fork-changelogs.md."

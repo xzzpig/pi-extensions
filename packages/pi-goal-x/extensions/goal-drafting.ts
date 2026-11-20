@@ -3,16 +3,21 @@ import { commandHint, commandInstructions } from "./goal-controls.ts";
 import { Type } from "typebox";
 import { defineTool, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { extractVerificationContract, sisyphusObjectiveSufficient } from "./goal-contract.ts";
+import { extractVerificationContract } from "./goal-contract.ts";
 import { buildDraftConfirmationText, buildProposalSummary, buildTweakConfirmationText, goalDraftingPrompt, type GoalDraftingFocus } from "./goal-draft.ts";
 import { renderConfirmationTasks } from "./goal-task-confirmation.ts";
 import { deriveTasksFromObjective } from "./goal-task-derive.ts";
 import { goalDetails, renderGoalResult } from "./goal-format.ts";
+import { validateDraftParams } from "./fork-goal-draft-validation.ts";
+import { readAuthoritativeGoal } from "./fork-goal-authority.ts";
 import { budgetReached } from "./goal-accounting.ts";
 import { buildGoalCreatedReport, formatGoalBudget } from "./goal-policy.ts";
 import { loadGoalSettings } from "./goal-settings.ts";
+import { TWEAK_PARAM_SCHEMA } from "./goal-agent-tweak.ts";
+import { createAgentTweakPorts, prepareAgentTweak } from "./fork-agent-tweak-orchestration.ts";
+import { checkAgentDecision, projectLockedTweak, handleDraftDecision, awaitProposalDecision, commitAgentTweakDecision, decisionRejectedText, rejectDecision } from "./fork-agent-tweak-decision.ts";
 import { DIALOG_UNAVAILABLE_HINT, proposalDialogFailureMessage, shouldAutoConfirmProposal, showProposalDialog, type ProposalDecision } from "./goal-questionnaire.ts";
-import { nowIso, validateTokenBudgetInput, type GoalRecord, type GoalTaskList } from "./goal-record.ts";
+import { nowIso, type GoalRecord, type GoalTaskList } from "./goal-record.ts";
 import type { GoalCore } from "./goal-state.ts";
 import { convertFlatTasks, countTasks, type FlatTaskInput } from "./goal-task-tools.ts";
 import { PROPOSE_DRAFT_TOOL_NAME } from "./goal-tool-names.ts";
@@ -34,6 +39,10 @@ export interface GoalDraftSession {
 	targetGoalId?: string;
 	startedAt: string;
 	auditorEnabled: boolean;
+	/** Why an autonomous agent proposed this revision; absent for user-initiated tweaks. */
+	reason?: string;
+	/** True when this draft was created by an agent-initiated tweak proposal. */
+	agentInitiated?: boolean;
 	/** Tombstone marker: set when the draft is cancelled, confirmed, or replaced. */
 	clearedAt?: string;
 }
@@ -44,6 +53,10 @@ export interface ActiveGoalDraft {
 	targetGoalId?: string;
 	startedAt: string;
 	auditorEnabled: boolean;
+	/** Why an autonomous agent proposed this revision; absent for user-initiated tweaks. */
+	reason?: string;
+	/** True when this draft was created by an agent-initiated tweak proposal. */
+	agentInitiated?: boolean;
 }
 
 const activeDrafts = new WeakMap<GoalCore, ActiveGoalDraft>();
@@ -107,7 +120,7 @@ export function rehydrateDraft(core: GoalCore, ctx: ExtensionContext): void {
 			return;
 		}
 	}
-	activeDrafts.set(core, { mode: session.mode, originalTopic: session.seed, targetGoalId: session.targetGoalId, startedAt: session.startedAt, auditorEnabled: session.auditorEnabled });
+	activeDrafts.set(core, { mode: session.mode, originalTopic: session.seed, targetGoalId: session.targetGoalId, startedAt: session.startedAt, auditorEnabled: session.auditorEnabled, ...(session.reason ? { reason: session.reason } : {}), ...(session.agentInitiated ? { agentInitiated: true } : {}) });
 	core.goalDraftActive = true;
 }
 
@@ -234,7 +247,8 @@ export function registerDraftingTools(core: GoalCore): void {
 		description: "Present the drafted objective and agent-selected task plan for explicit user confirmation.",
 		promptSnippet: "Confirm the proposed goal and any useful task tree in one dialog.",
 		promptGuidelines: [
-			commandInstructions("Use only during a /goal, /sisyphus, or /goal-tweak guided draft.", core.loadedCommands),
+			commandInstructions("Use only during a /goal, /sisyphus, or /goal-tweak guided draft; a running goal may instead pass explicit tweak={goal_id, reason} to propose a revision.", core.loadedCommands),
+			"You MAY submit a tweak proposal for the current active goal when the objective or acceptance criteria are no longer suitable. Provide the full revised objective and a non-empty reason; never apply the revision directly. Do not propose a tweak just to update task progress, and do not change a budget unless the user requested it. If the user cancels the tweak, keep the current objective and do not immediately re-propose the same revision.",
 			"Clarify ambiguity before proposing. Include tasks when the work naturally decomposes into trackable milestones; omit them for genuinely simple work.",
 			"Set token_budget only when the user explicitly asked for a token budget or a spend limit. Never invent, estimate, or infer one from the objective's size; omitting it creates a goal with no budget.",
 			"Confirmation creates or revises the goal atomically. Continue Chatting leaves drafting active for refinement.",
@@ -246,51 +260,71 @@ export function registerDraftingTools(core: GoalCore): void {
 			sisyphus: Type.Optional(Type.Boolean({ description: "Must match the user-selected goal mode." })),
 			tasks: Type.Optional(flatTaskSchema()),
 			block_completion: Type.Optional(Type.Boolean({ description: "Require task completion before goal completion." })),
+			tweak: Type.Optional(TWEAK_PARAM_SCHEMA),
 		}, { additionalProperties: false }),
 		executionMode: "sequential",
 		async execute(_id, params, _signal, _update, ctx) {
 			return withTweakReview(async () => {
-			const draft = activeDraft(core);
-			if (!draft) return { content: [{ type: "text", text: commandInstructions("No guided goal draft is active. Do not create a goal without the user starting /goal or /sisyphus.", core.loadedCommands) }], details: goalDetails(core.state.goal) };
-			if (params.token_budget !== undefined && params.token_budget !== null) {
-				const validation = validateTokenBudgetInput(params.token_budget);
-				if (!validation.ok) return {content: [{type: "text", text: validation.message}], details: goalDetails(core.state.goal)};
-			}
-			const objective = params.objective.trim();
-			if (!objective) return { content: [{ type: "text", text: "The proposed objective must be at least 1 character." }], details: goalDetails(core.state.goal) };
-			const objectiveMaxChars = loadGoalSettings(ctx.cwd).objectiveMaxChars ?? 0;
-			if (objectiveMaxChars > 0 && objective.length > objectiveMaxChars) return { content: [{ type: "text", text: `The proposed objective must be at most ${objectiveMaxChars} characters (${objective.length} given).` }], details: goalDetails(core.state.goal) };
+			if (_signal?.aborted && (params.tweak !== undefined || activeDraft(core)?.agentInitiated)) return { isError: true, content: [{ type: "text", text: "Goal proposal was aborted; no goal was changed." }], details: goalDetails(core.state.goal) };
+			// Fork-only authority: reconcile from disk, validate and build a LOCAL
+			// proposal. No draft/runtime state changes before the user decides.
+			const ports = createAgentTweakPorts(core, ctx, () => activeDraft(core), () => validateDraftParams({
+				rawObjective: () => params.objective,
+				tokenBudget: () => params.token_budget,
+				tasks: () => params.tasks,
+				blockCompletion: () => params.block_completion,
+				sisyphus: () => params.sisyphus,
+				mode: () => activeDraft(core)?.mode,
+				convertTasks: (tasks, blockCompletion) => proposedTaskList(core, ctx, tasks, blockCompletion),
+			}, ctx, params.tweak !== undefined || activeDraft(core)?.agentInitiated === true), params.tweak);
+			const decisionPorts = {
+				activeDraft: () => activeDraft(core),
+				setActive: (active: boolean) => { core.goalDraftActive = active; },
+				setDraft: (draft: ActiveGoalDraft) => activeDrafts.set(core, draft),
+				persistSession: (session: GoalDraftSession) => draftSessionEntry(core, session),
+				clearDraft: () => clearGoalDrafting(core, ctx),
+			};
+			const prepared = prepareAgentTweak({ tweak: params.tweak }, ports, ctx);
+			if (prepared.kind === "reject") return { content: [{ type: "text", text: prepared.message }], details: goalDetails(core.state.goal) };
+			if (_signal?.aborted && prepared.draft.agentInitiated) return { isError: true, content: [{ type: "text", text: "Goal proposal was aborted; no goal was changed." }], details: goalDetails(core.state.goal) };
+			const registered = prepared.registered;
+			let draft = prepared.draft;
+			const objective = prepared.objective;
+			const taskResult = prepared.taskResult;
 			const expectedSisyphus = draft.mode === "sisyphus";
-			if (draft.mode !== "tweak" && ((params.sisyphus === true) !== expectedSisyphus)) return { content: [{ type: "text", text: "Proposal mode does not match the command that began this draft." }], details: goalDetails(core.state.goal) };
-			const taskResult = proposedTaskList(core, ctx, params.tasks as FlatTaskInput[] | undefined, params.block_completion);
-			if (!taskResult.ok) return { content: [{ type: "text", text: taskResult.message }], details: goalDetails(core.state.goal) };
-			const flushError = core.goalService.flushForAudit(ctx);
-			if (flushError || core.goalService.isTurnBuffered()) return {content: [{type: "text", text: "Proposal not saved: " + (flushError ?? "goal changes are still buffered")}], details: goalDetails(core.state.goal)};
-			core.reconcileFocusedGoalFromDisk(ctx);
-			const target = draft.mode === "tweak" ? core.state.goal : undefined;
+			// Disk reconciliation already happened before admission. Re-check that
+			// the target still matches after all validation before registering.
+			// The review baseline is the authoritative target returned by prepare,
+			// never the cache-merged in-memory goal (which can hide budget/tasks).
+			const target = draft.mode === "tweak" ? (prepared.target ?? core.state.goal) : undefined;
 			if (draft.mode === "tweak" && (!target || target.id !== draft.targetGoalId)) return { content: [{ type: "text", text: commandInstructions("The goal changed while drafting; review it and start /goal-tweak again.", core.loadedCommands) }], details: goalDetails(core.state.goal) };
 			if (target?.status === "complete") return {content: [{type: "text", text: "Completed goals cannot be tweaked."}], details: goalDetails(target)};
 			const proposalToken = target ? core.focusedOperationToken(target.id) : undefined;
 			const proposalRevision = target?.revision ?? 0;
-			const review = target ? new TweakReview(ctx, target, objective, taskResult.value, params.token_budget, draft.auditorEnabled) : undefined;
+			const review = target ? new TweakReview(ctx, target, objective, taskResult.value, params.token_budget, draft.auditorEnabled, draft.reason, draft.agentInitiated === true) : undefined;
 			const proposedBudget = params.token_budget === undefined ? target?.tokenBudget : params.token_budget ?? undefined;
 			const budgetSummary = target ? `Current ${formatGoalBudget(target.tokenBudget)}\nProposed ${formatGoalBudget(proposedBudget)}` : formatGoalBudget(proposedBudget);
-			if (draft.mode === "sisyphus" && !sisyphusObjectiveSufficient(objective)) return { content: [{ type: "text", text: "A Sisyphus goal needs ordered steps with explicit per-step done criteria. Refine the objective with numbered steps (1) ..., 2) ...) or Step N: blocks before proposing again." }], details: goalDetails(core.state.goal) };
 			let confirmation: { decision: ProposalDecision; auditorEnabled: boolean; unavailable: boolean; feedback?: string };
 			if (shouldAutoConfirmProposal({ hasUI: ctx.hasUI, autoConfirmEnv: process.env.PI_GOAL_AUTO_CONFIRM })) {
 				confirmation = { decision: "confirm" as const, auditorEnabled: draft.auditorEnabled, unavailable: false };
 			} else {
 				core.enterGoalModal();
 				try {
-					confirmation = review ? await review.confirm() : await showProposalDialog(ctx, proposalText(draft, objective, params.auto_continue !== false, taskResult.value, target ?? undefined, params.token_budget), draft.mode === "sisyphus" ? "sisyphus" : "goal", draft.auditorEnabled);
+					confirmation = await awaitProposalDecision(review ? review.confirm(draft.agentInitiated ? _signal : undefined) : showProposalDialog(ctx, proposalText(draft, objective, params.auto_continue !== false, taskResult.value, target ?? undefined, params.token_budget), draft.mode === "sisyphus" ? "sisyphus" : "goal", draft.auditorEnabled), draft.agentInitiated ? _signal : undefined);
 				} catch (error) {
-					return { content: [{ type: "text", text: `${proposalDialogFailureMessage(error)} Do not retry the dialog until the host issue is resolved.` }], details: goalDetails(core.state.goal) };
+					if (_signal?.aborted && draft.agentInitiated) commitAgentTweakDecision({ decision: "cancel", unavailable: true, registered, proposal: draft, ports: decisionPorts });
+					if (review) review.recordFailure(error);
+					return { isError: true, content: [{ type: "text", text: `${proposalDialogFailureMessage(error)} Do not retry the dialog until the host issue is resolved.` }], details: goalDetails(core.state.goal) };
 				} finally {
 					core.exitGoalModal();
 				}
 			}
-			const settings = loadGoalSettings(ctx.cwd);
-			const extracted = settings.disableContracts ? { objective, verificationContract: undefined } : extractVerificationContract(objective);
+			if (_signal?.aborted && draft.agentInitiated) {
+				if (draft.agentInitiated) commitAgentTweakDecision({ decision: "cancel", unavailable: true, registered, proposal: draft, ports: decisionPorts });
+				review?.recordFailure(new Error("Proposal aborted"));
+				return { isError: true, content: [{ type: "text", text: "Goal proposal was aborted; no goal was changed." }], details: goalDetails(core.state.goal) };
+			}
+			const extracted = prepared.extracted;
 			// §14: the durable proposal summary is part of the transcript for
 			// EVERY outcome (confirm / continue refining / cancel), so the user
 			// can review the proposal after the dialog closes.
@@ -302,23 +336,30 @@ export function registerDraftingTools(core: GoalCore): void {
 				auditorEnabled: confirmation.auditorEnabled,
 			});
 			if (confirmation.decision === "cancel") {
-				clearGoalDrafting(core, ctx);
+				handleDraftDecision({ decision: "cancel", unavailable: confirmation.unavailable, registered, proposal: draft, auditorEnabled: confirmation.auditorEnabled, ports: decisionPorts });
 				return {
 					content: [{ type: "text", text: `${summary}\n\nDraft cancelled; no goal was created. Run ${commandHint("goal", core.loadedCommands)} or ${commandHint("sisyphus", core.loadedCommands)} to start a new draft.` }],
 					details: goalDetails(core.state.goal, undefined, { decision: "cancelled", ...(confirmation.feedback?.trim() ? { reason: confirmation.feedback.trim() } : {}) }),
 				};
 			}
 			if (confirmation.unavailable) {
-				return { content: [{ type: "text", text: `${summary}\n\n${DIALOG_UNAVAILABLE_HINT} The goal was NOT created and drafting remains active; do not retry the dialog until the host supports it or the user explicitly restarts with PI_GOAL_AUTO_CONFIRM=1.` }], details: goalDetails(core.state.goal) };
+				// An agent-initiated proposal that cannot be shown was never
+				// approved; it must not leave an active/persisted draft behind.
+				const isAgent = handleDraftDecision({ decision: "continue", unavailable: true, registered, proposal: draft, auditorEnabled: confirmation.auditorEnabled, ports: decisionPorts });
+				const stateNote = isAgent ? "; the proposed tweak was discarded and no draft was created"
+					: " and drafting remains active";
+				return { content: [{ type: "text", text: `${summary}\n\n${DIALOG_UNAVAILABLE_HINT} The goal was NOT changed${stateNote}; do not retry the dialog until the host supports it or the user explicitly restarts with PI_GOAL_AUTO_CONFIRM=1.` }], details: goalDetails(core.state.goal) };
 			}
 			if (confirmation.decision !== "confirm") {
-				// Continue refining: preserve the user's auditor choice for the
-				// next proposal (memory and the durable session entry).
-				if (confirmation.auditorEnabled !== draft.auditorEnabled) {
-					const next = { ...draft, auditorEnabled: confirmation.auditorEnabled };
-					activeDrafts.set(core, next);
-					draftSessionEntry(core, { version: 1, mode: next.mode, seed: next.originalTopic, targetGoalId: next.targetGoalId, startedAt: next.startedAt, auditorEnabled: next.auditorEnabled });
+				// Continue refining: preserve the user's auditor choice, target and
+				// reason in memory AND in the durable session entry so a reload can
+				// re-prove admission for the next proposal.
+				const continueInvalid = checkAgentDecision(ctx, core, draft, registered, activeDraft(core), proposalToken, proposalRevision).conflict;
+				if (continueInvalid) {
+					return rejectDecision({ content: [{ type: "text", text: `${summary}\n\n${decisionRejectedText()}` }], details: goalDetails(core.state.goal) },
+						review, "continue rejected: goal or draft changed while reviewing");
 				}
+				handleDraftDecision({ decision: "continue", unavailable: false, registered, proposal: draft, auditorEnabled: confirmation.auditorEnabled, ports: decisionPorts });
 				// §proposal-adjust: the user can type the adjustment in the dialog
 				// itself (the "Continue chatting" option opens an editor). The goal
 				// is still untouched and drafting stays active — the same continue
@@ -357,9 +398,21 @@ export function registerDraftingTools(core: GoalCore): void {
 			}
 			if (!target) return { content: [{ type: "text", text: commandInstructions("The goal changed while drafting; review it and start /goal-tweak again.", core.loadedCommands) }], details: goalDetails(core.state.goal) };
 			const token = proposalToken!;
-			const finalFlushError = core.goalService.flushForAudit(ctx);
-			core.reconcileFocusedGoalFromDisk(ctx);
-			if (finalFlushError || core.goalService.isTurnBuffered() || !core.isFocusedOperationCurrent(token) || core.state.goal?.revision !== proposalRevision || core.state.goal?.status === "complete") return {content: [{type: "text", text: "Goal tweak was not applied: the goal changed during confirmation. Review and propose again."}], details: goalDetails(core.state.goal)};
+			const finalFlushError = core.goalService.flushForAudit(ctx, draft.agentInitiated === true);
+			if (!draft.agentInitiated) core.reconcileFocusedGoalFromDisk(ctx);
+			const checked = checkAgentDecision(ctx, core, draft, registered, activeDraft(core), token, proposalRevision);
+			const authoritative = checked.fresh;
+			if (checked.conflict) {
+				if (checked.conflict === "goal") commitAgentTweakDecision({ decision: "cancel", unavailable: true, registered, proposal: draft, ports: decisionPorts });
+				const reason = checked.conflict === "goal" ? "Goal tweak was not applied: the goal changed while reviewing this proposal; re-read it and propose again." : "The active draft changed while reviewing this proposal; the tweak was NOT applied and the new draft was left untouched.";
+				return { content: [{ type: "text", text: `${summary}\n\n${reason}` }], details: goalDetails(core.state.goal) };
+			}
+			if (finalFlushError || core.goalService.isTurnBuffered() || !core.isFocusedOperationCurrent(token) || core.state.goal?.revision !== proposalRevision || core.state.goal?.status === "complete") {
+				// A manual tweak keeps its draft on conflict (baseline behavior);
+				// an agent proposal only clears a draft it still owns.
+				if (draft.agentInitiated) commitAgentTweakDecision({ decision: "cancel", unavailable: true, registered, proposal: draft, ports: decisionPorts });
+				return {content: [{type: "text", text: "Goal tweak was not applied: the goal changed during confirmation. Review and propose again."}], details: goalDetails(core.state.goal)};
+			}
 			const now = nowIso();
 			// §7.5 merge: a goal tweak must never change the status of steps that
 			// persist across the tweak. The proposed list merges into the goal's
@@ -375,11 +428,11 @@ export function registerDraftingTools(core: GoalCore): void {
 			const result = core.goalService.apply(ctx, {
 				reconcile: false, focusToken: token, refreshFromDisk: true,
 				mutate: (goal) => {
-					const projected = review!.mutate(goal, confirmation.auditorEnabled);
+					const projected = projectLockedTweak({ goal, fresh: draft.agentInitiated ? readAuthoritativeGoal(ctx, core) : null, authoritative, agentInitiated: draft.agentInitiated === true, targetId: target.id, revision: proposalRevision, review: review!, auditorEnabled: confirmation.auditorEnabled, now, signal: draft.agentInitiated ? _signal : undefined });
 					resumed = projected.resumed;
-					return { ...projected.candidate, updatedAt: now };
+					return projected.candidate;
 				},
-				ledger: (written) => [...(target.tokenBudget !== written.tokenBudget ? [{type: "goal_budget_changed" as const, goalId: written.id, oldBudget: target.tokenBudget ?? null, newBudget: written.tokenBudget ?? null, tokensUsed: written.usage.tokensUsed, at: written.updatedAt}] : []), ...(target.status !== "budget_limited" && written.status === "budget_limited" ? [{type: "goal_budget_limited" as const, goalId: written.id, budget: written.tokenBudget!, tokensUsed: written.usage.tokensUsed, at: written.updatedAt}] : []), { type: "goal_tweaked", goalId: written.id, changeSummary: "Goal revised through /goal-tweak drafting.", at: written.updatedAt }, ...(taskResult.value ? [{ type: "task_list_set" as const, goalId: written.id, taskCount: countTasks(written.taskList?.tasks), blockCompletion: taskResult.value.blockCompletion, at: written.updatedAt }] : [])],
+				ledger: (written) => [...((authoritative ?? target) && (authoritative ?? target)!.tokenBudget !== written.tokenBudget ? [{type: "goal_budget_changed" as const, goalId: written.id, oldBudget: (authoritative ?? target)!.tokenBudget ?? null, newBudget: written.tokenBudget ?? null, tokensUsed: written.usage.tokensUsed, at: written.updatedAt}] : []), ...((authoritative ?? target) && (authoritative ?? target)!.status !== "budget_limited" && written.status === "budget_limited" ? [{type: "goal_budget_limited" as const, goalId: written.id, budget: written.tokenBudget!, tokensUsed: written.usage.tokensUsed, at: written.updatedAt}] : []), { type: "goal_tweaked", goalId: written.id, changeSummary: "Goal revised through /goal-tweak drafting.", at: written.updatedAt }, ...(taskResult.value ? [{ type: "task_list_set" as const, goalId: written.id, taskCount: countTasks(written.taskList?.tasks), blockCompletion: draft.agentInitiated ? written.taskList?.blockCompletion === true : taskResult.value.blockCompletion, at: written.updatedAt }] : [])],
 			});
 			if (!result.ok) return { content: [{ type: "text", text: "Goal tweak was not applied: " + result.message }], details: goalDetails(core.state.goal) };
 			if (resumed) {
@@ -405,7 +458,8 @@ export function registerDraftingTools(core: GoalCore): void {
 				if (!scheduling.terminate) schedulingNote = "\n" + scheduling.content.filter(item => item.type === "text").map(item => item.text).join("\n");
 				core.queueContinuation(ctx, true);
 			}
-			clearGoalDrafting(core, ctx);
+			if (draft.agentInitiated) commitAgentTweakDecision({ decision: "confirm", unavailable: false, registered, proposal: draft, ports: decisionPorts });
+			else clearGoalDrafting(core, ctx);
 			return { content: [{ type: "text", text: `${summary}\n\nGoal tweak confirmed and applied.\n${formatGoalBudget(result.goal.tokenBudget)}${schedulingNote}${result.goal.status === "budget_limited" ? "\nConsumed tokens already meet this budget; the goal remains budget-limited." : result.goal.status === "paused" ? commandInstructions("\nGoal remains paused. Use /goal-resume to continue when scheduling permits.", core.loadedCommands) : ""}` }], details: goalDetails(result.goal), terminate: true };
 			});
 		},
@@ -417,7 +471,7 @@ export function registerDraftingTools(core: GoalCore): void {
 			// line; the dialog frame alone cannot (its churn-guard bound keeps
 			// it within the terminal height). The user can scroll up and read
 			// everything while the dialog is open ("the user can just scroll").
-			const tweakCall = renderTweakCall(activeDraft(core)?.mode === "tweak", theme, context, { target: core.state.goal, args, auditorEnabled: activeDraft(core)?.auditorEnabled ?? true });
+			const tweakCall = renderTweakCall(activeDraft(core)?.mode === "tweak" || args?.tweak != null, theme, context, { target: core.state.goal, args, agentInitiated: activeDraft(core)?.agentInitiated, auditorEnabled: activeDraft(core)?.auditorEnabled ?? !(core.state.goal?.skipAuditor ?? (loadGoalSettings(context?.cwd ?? process.cwd()).auditor?.disabled === true)) });
 			if (tweakCall) return tweakCall;
 			const objective = String(args?.objective ?? "");
 			let text = theme.fg("toolTitle", "propose_goal_draft ") + theme.fg("muted", objective);

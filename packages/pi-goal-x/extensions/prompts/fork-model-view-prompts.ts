@@ -114,7 +114,7 @@ export function goalStateSnapshotPrompt(goal: GoalRecord, settings?: GoalSetting
 	lines.push("[RULES]");
 	lines.push('- Complete only via update_goal({status: "complete"}) when every requirement is satisfied; the independent auditor inspects real artifacts, not claims.');
 	lines.push('- Report update_goal({status: "blocked"}) only after the SAME blocker recurs on three consecutive goal turns; keep trying concrete next steps before that.');
-	lines.push("- The objective is immutable; propose changes and ask the user to run /goal-tweak.");
+	lines.push("- The objective is immutable; never edit it directly. If it must change, submit propose_goal_draft with tweak={goal_id, reason} and the full revised objective for user review. Do not ask the user to run /goal-tweak just to start your proposal; save simple task progress with update_goal_task instead. If the user cancels a proposed tweak, keep the current objective and do not immediately re-propose the same revision.");
 	for (const note of options?.foldedNotes ?? []) {
 		if (!note.trim()) continue;
 		lines.push("");

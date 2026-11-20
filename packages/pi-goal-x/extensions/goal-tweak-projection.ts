@@ -59,6 +59,12 @@ export interface TweakProjectionResult {
 	schedulerReset: boolean;
 }
 
+/** Match the existing storage normalizer for model-initiated review and commit. */
+export function normalizeAgentTweakCandidate(candidate: GoalRecord): GoalRecord {
+	return { ...candidate, objective: candidate.objective.replace(/\r\n/g, "\n").trim(),
+		taskList: candidate.taskList?.tasks.length ? candidate.taskList : undefined };
+}
+
 export function projectTweakCandidate(
 	goal: GoalRecord,
 	proposal: TweakProposalInput,

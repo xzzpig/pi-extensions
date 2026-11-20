@@ -36,6 +36,10 @@ export interface TweakProposalDialogOptions {
 	presentation: (auditorEnabled: boolean) => TweakProposalViews;
 	/** Initial completion-auditor selection (the draft's persisted choice). */
 	defaultAuditorEnabled: boolean;
+	/** Why the model proposed this revision; displayed separately from the diff. */
+	reason?: string;
+	/** Cancel the host review when the owning tool invocation is aborted. */
+	signal?: AbortSignal;
 }
 
 interface InternalProposalOptions extends TweakProposalDialogOptions {
@@ -572,22 +576,47 @@ class TweakProposalDialog implements Component, Focusable {
 			? borderedLine(accent, innerWidth, truncateToWidth(`${padding}${content}`, innerWidth, "…"))
 			: truncateToWidth(content, innerWidth, "");
 		const wrapWidth = Math.max(1, innerWidth - padding.length);
+		// Reason rows are part of the SCROLLABLE body, so a long reason can never
+		// displace the fixed decision area. They are inert display text and keep
+		// per-source anchors so scrolling/resize behave like every other row.
+		const reasonRows: BodyRow[] = [];
+		let reasonEntryCount = 0;
+		if (this.options.reason) {
+			const reasonEntries: DiffTextEntry[] = [
+				{ kind: "meta", content: "调整原因", hunkIndex: 0 },
+				...sanitizeProposalText(this.options.reason).split("\n").map((content) => ({ kind: "meta" as const, content, hunkIndex: 0 })),
+				{ kind: "meta", content: "", hunkIndex: 0 },
+			];
+			reasonEntryCount = reasonEntries.length;
+			for (const row of renderAnchoredDiffEntries(reasonEntries, { width: wrapWidth, mode: "unified" })) {
+				reasonRows.push({ ...row, text: line(dim(row.text)) });
+			}
+		}
+		let bodyRows: BodyRow[];
 		if (this.view === "diff" && this.views.diffEntries) {
-			return renderAnchoredDiffEntries(this.views.diffEntries, { width: wrapWidth, mode: "auto", splitMinWidth: 120, theme: this.theme })
+			bodyRows = renderAnchoredDiffEntries(this.views.diffEntries, { width: wrapWidth, mode: "auto", splitMinWidth: 120, theme: this.theme })
 				.map((row) => ({ ...row, text: line(row.text) }));
+		} else {
+			const rawLines = sanitizeProposalText(body).split("\n");
+			if (rawLines.length === 1 && rawLines[0] === "") {
+				bodyRows = [{ text: line(dim("(no content provided)")), entryIndexes: [0], part: 0, sourcePositions: [{ entryIndex: 0, offset: 0 }] }];
+			} else {
+				const entries: DiffTextEntry[] = rawLines.map((content) => ({ kind: "meta", content, hunkIndex: 1 }));
+				bodyRows = renderAnchoredDiffEntries(entries, { width: wrapWidth, mode: "unified" }).map((row) => {
+					const rawLine = rawLines[row.entryIndexes[0] ?? 0] ?? "";
+					const kind = this.view === "diff" ? lineStyle(rawLine) : "context";
+					return { ...row, text: line(kind === "added" ? success(row.text) : kind === "removed" ? error(row.text) : kind === "meta" ? dim(row.text) : muted(row.text)) };
+				});
+			}
 		}
-		const rawLines = sanitizeProposalText(body).split("\n");
-		if (rawLines.length === 1 && rawLines[0] === "") {
-			return [{ text: line(dim("(no content provided)")), entryIndexes: [0], part: 0, sourcePositions: [{ entryIndex: 0, offset: 0 }] }];
+		// Offset the diff/source anchors by the reason block so scroll anchoring
+		// keeps pointing at the correct body row.
+		const offset = reasonEntryCount;
+		for (const row of bodyRows) {
+			row.entryIndexes = row.entryIndexes.map((i) => i + offset);
+			row.sourcePositions = row.sourcePositions.map((p) => ({ ...p, entryIndex: p.entryIndex + offset }));
 		}
-		// Full text (and legacy string-only hosts) use the same exact grapheme
-		// wrapping as semantic rows, preserving blank lines and spaces.
-		const entries: DiffTextEntry[] = rawLines.map((content) => ({ kind: "meta", content, hunkIndex: 1 }));
-		return renderAnchoredDiffEntries(entries, { width: wrapWidth, mode: "unified" }).map((row) => {
-			const rawLine = rawLines[row.entryIndexes[0] ?? 0] ?? "";
-			const kind = this.view === "diff" ? lineStyle(rawLine) : "context";
-			return { ...row, text: line(kind === "added" ? success(row.text) : kind === "removed" ? error(row.text) : kind === "meta" ? dim(row.text) : muted(row.text)) };
-		});
+		return [...reasonRows, ...bodyRows];
 	}
 
 	private reanchorBody(rows: readonly BodyRow[], width: number, force = false): void {
@@ -847,6 +876,14 @@ class TweakProposalDialog implements Component, Focusable {
 	}
 }
 
+function isTweakProposalDialogResult(value: unknown): value is TweakProposalDialogResult {
+	if (!value || typeof value !== "object") return false;
+	const result = value as Record<string, unknown>;
+	return (result.decision === "confirm" || result.decision === "continue" || result.decision === "cancel")
+		&& typeof result.auditorEnabled === "boolean" && typeof result.unavailable === "boolean"
+		&& (result.feedback === undefined || typeof result.feedback === "string");
+}
+
 function unavailableResult(options: TweakProposalDialogOptions): TweakProposalDialogResult {
 	return { decision: "continue", auditorEnabled: options.defaultAuditorEnabled, unavailable: true };
 }
@@ -857,7 +894,7 @@ function unavailableResult(options: TweakProposalDialogOptions): TweakProposalDi
  * native select per step and the existing input dialog for feedback. Viewing a
  * read-only presentation is an option, never an answer.
  */
-async function runBasicTweakDialog(ctx: ExtensionContext, options: TweakProposalDialogOptions): Promise<TweakProposalDialogResult> {
+export async function runBasicTweakDialog(ctx: ExtensionContext, options: TweakProposalDialogOptions): Promise<TweakProposalDialogResult> {
 	if (typeof ctx.ui.select !== "function") return unavailableResult(options);
 	let auditorEnabled = options.defaultAuditorEnabled;
 	let view: TweakProposalView = "diff";
@@ -870,15 +907,19 @@ async function runBasicTweakDialog(ctx: ExtensionContext, options: TweakProposal
 			? `${entry.lineKind === "add" ? "+" : entry.lineKind === "remove" ? "-" : " "} ${entry.content}`
 			: entry.content).join("\n");
 		const presentation = view === "diff" ? (semanticDiff ?? views.diffText) : (views.fullUiText ?? views.fullText);
+		const reasonBlock = options.reason ? ["调整原因：", sanitizeProposalText(options.reason).trim(), ""] : [];
 		const prompt = [
 			DIALOG_TITLE,
 			"",
 			view === "diff" ? DIFF_VIEW_LABEL : FULL_VIEW_LABEL,
+			"",
+			...reasonBlock,
 			sanitizeProposalText(presentation).trim() || "(no content provided)",
 			"",
 			`Auditor: ${auditorEnabled ? "enabled" : "disabled"}`,
 		].join("\n");
-		const picked = await ctx.ui.select(prompt, choices);
+		const picked = await ctx.ui.select(prompt, choices, { signal: options.signal });
+		if (options.signal?.aborted) throw new Error("Goal proposal aborted");
 		if (picked === undefined) {
 			// Dismissing the native dialog is the same escape path as the rich
 			// component: continue refining, never an implicit approval.
@@ -898,7 +939,8 @@ async function runBasicTweakDialog(ctx: ExtensionContext, options: TweakProposal
 		if (picked === DECISION_OPTIONS[2].label) return { decision: "cancel", auditorEnabled, unavailable: false };
 		let feedback: string | undefined;
 		if (typeof ctx.ui.input === "function") {
-			const typed = await ctx.ui.input(`${prompt}\n\nContinue chatting — type the adjustment you want (optional):`, "Adjustment (optional)");
+			const typed = await ctx.ui.input(`${prompt}\n\nContinue chatting — type the adjustment you want (optional):`, "Adjustment (optional)", { signal: options.signal });
+			if (options.signal?.aborted) throw new Error("Goal proposal aborted");
 			const trimmed = typed?.trim();
 			feedback = trimmed ? trimmed : undefined;
 		} else if (typeof ctx.ui.notify === "function") {
@@ -944,11 +986,17 @@ export async function showTweakProposalDialog(
 	ctx: ExtensionContext,
 	options: TweakProposalDialogOptions,
 ): Promise<TweakProposalDialogResult> {
+	if (options.signal?.aborted) throw new Error("Goal proposal aborted");
 	if (!ctx.hasUI) return unavailableResult(options);
 	if (typeof ctx.ui.custom === "function") {
 		let result: TweakProposalDialogResult | undefined;
+		let close: (() => void) | undefined;
+		const abort = () => close?.();
+		options.signal?.addEventListener("abort", abort, { once: true });
 		try {
 			result = await ctx.ui.custom<TweakProposalDialogResult | undefined>((tui, theme, _keybindings, done) => {
+				close = () => done(undefined);
+				if (options.signal?.aborted) { close(); return { render: () => [], invalidate: () => {} }; }
 				// Some web hosts invoke the factory with a render callback in place of
 				// a TUI. Bail out through done(undefined) so the caller can use the
 				// native select fallback instead of silently approving.
@@ -959,14 +1007,21 @@ export async function showTweakProposalDialog(
 				return new TweakProposalDialog(ctx, tui, theme, done, options);
 			});
 		} catch (error) {
+			if (options.signal?.aborted) throw new Error("Goal proposal aborted");
 			// A host that advertises custom rendering but fails while building it is
 			// not a confirmation. Fall through to the basic loop; never approve.
 			if (typeof ctx.ui.notify === "function") {
 				ctx.ui.notify(`The tweak review dialog could not be rendered by this host (${error instanceof Error ? error.message : String(error)}); falling back to basic dialogs.`, "warning");
 			}
 			result = undefined;
+		} finally {
+			options.signal?.removeEventListener("abort", abort);
 		}
-		if (result !== undefined && result !== null) return result;
+		if (options.signal?.aborted) throw new Error("Goal proposal aborted");
+		if (result !== undefined && result !== null) {
+			if (options.reason && !isTweakProposalDialogResult(result)) throw new Error("The host returned an invalid tweak confirmation response");
+			return result;
+		}
 	}
 	return runBasicTweakDialog(ctx, options);
 }

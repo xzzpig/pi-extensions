@@ -19,6 +19,7 @@ import {
 } from "./storage/goal-files.ts";
 import { acquireGoalLock, type GoalLock } from "./storage/goal-lock.ts";
 import { mergeFocusedGoalWithDisk } from "./goal-pool.ts";
+import { canFlushBufferedGoal, readAuthoritativeGoalAtPath } from "./fork-goal-authority.ts";
 
 /**
  * Session state access + runtime glue hooks that the GoalService needs.
@@ -199,7 +200,7 @@ export class GoalService {
 	 * active) goal-file write with a revision bump, one batched ledger append.
 	 * No-op when nothing was buffered. Returns the written record or null.
 	 */
-	flushTurn(ctx: GoalServiceContext): GoalRecord | null {
+	flushTurn(ctx: GoalServiceContext, agentReview = false): GoalRecord | null {
 		if (!this.turn.active) return null;
   ctx = this.turnContext ?? ctx;
 		this.flushError = null;
@@ -218,20 +219,21 @@ export class GoalService {
 			return null;
 		}
 		try {
-   const freshDisk = this.readFreshDiskGoal(ctx, goal);
+   let freshDisk = this.readFreshDiskGoal(ctx, goal);
+   if (agentReview && freshDisk && goal.activePath) freshDisk = readAuthoritativeGoalAtPath(resolveGoalPath(ctx, GOALS_DIR, goal.activePath));
    const expected = this.turnBase ?? goal;
-   if (!freshDisk || (freshDisk.revision ?? 0) !== (expected.revision ?? 0)) {
+   if (!freshDisk || (freshDisk.revision ?? 0) !== (expected.revision ?? 0) || (agentReview && !canFlushBufferedGoal(freshDisk, goal, expected, true))) {
     this.flushError = `Goal ${goal.id} changed in another process; buffered changes were rejected. Refresh and retry.`;
     // Reject the speculative transaction, never overwrite another writer.
     this.turn.active = false;
     this.turn.goal = null;
     this.turn.ledger = [];
-    if (freshDisk && this.ref.getFocusedGoalId() === goal.id) {
+    if (freshDisk && (!agentReview || freshDisk.id === goal.id) && this.ref.getFocusedGoalId() === goal.id) {
      const tokens = Math.max(0, goal.usage.tokensUsed - expected.usage.tokensUsed);
      const seconds = Math.max(0, goal.usage.activeSeconds - expected.usage.activeSeconds);
      this.ref.setFocused({ ...freshDisk, usage: {tokensUsed: freshDisk.usage.tokensUsed + tokens, activeSeconds: freshDisk.usage.activeSeconds + seconds} });
      this.trackBaseline(freshDisk.id, freshDisk.usage);
-    } else if (!freshDisk) {
+    } else if (!freshDisk && !agentReview) {
      this.ref.getPool().delete(goal.id);
      if (this.ref.getFocusedGoalId() === goal.id) {
       this.ref.assignFocusedGoalId(null);
@@ -258,8 +260,8 @@ export class GoalService {
 	}
 
 	/** Completion must never audit state that failed to flush. */
- flushForAudit(ctx: GoalServiceContext): string | null {
-  this.flushTurn(ctx);
+ flushForAudit(ctx: GoalServiceContext, agentReview = false): string | null {
+  this.flushTurn(ctx, agentReview);
   return this.flushError;
  }
 

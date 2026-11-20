@@ -34,6 +34,7 @@ export const FORK_TEST_FILES = [
 	"tests/goal-tweak-diff.test.ts",
 	"tests/goal-tweak-confirmation.test.ts",
 	"tests/goal-tweak-review.test.ts",
+	"tests/fork-agent-initiated-tweak.test.ts",
 	"tests/goal-audit-sidechannel.test.ts",
 	"tests/goal-audit-context-snapshot.test.ts",
 	"tests/goal-audit-supervisor-flow.test.ts",
