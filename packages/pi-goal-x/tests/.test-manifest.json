@@ -20,6 +20,8 @@
     ".tests/fork-goal-confirmation-layout.test.ts",
     ".tests/fork-goal-confirmation-mouse.test.ts",
     ".tests/fork-goal-semantic-diff.test.ts",
+    ".tests/fork-last-audit-dashboard.test.ts",
+    ".tests/fork-last-audit-outcome.test.ts",
     ".tests/fork-local-auditor.test.ts",
     ".tests/fork-local-controls.test.ts",
     ".tests/fork-local-mutation.test.ts",

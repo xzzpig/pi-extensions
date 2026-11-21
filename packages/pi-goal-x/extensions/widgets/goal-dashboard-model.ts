@@ -1,4 +1,5 @@
 import type { GoalCommands } from "../goal-controls.ts";
+import type { GoalAuditFailureView } from "./fork-goal-audit-failure.ts";
 import { schedulerSummaryParts } from "../goal-scheduler-state.ts";
 import { taskIndex } from "../goal-task-index.ts";
 /**
@@ -26,6 +27,7 @@ export type DashboardStatusCode = "running" | "idle" | "paused" | "blocked" | "b
 export interface GoalDashboardModel {
 	scheduling: string[];
 	idlePacing?: string;
+	auditFailure?: GoalAuditFailureView;
 	goalId: string;
 	title: string;
 

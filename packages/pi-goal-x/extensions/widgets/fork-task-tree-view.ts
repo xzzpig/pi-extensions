@@ -111,7 +111,7 @@ export class TaskTreeView {
     return true;
   }
 
-  offset(mode: TaskViewMode, rows: number): number {
+  offset(mode: TaskViewMode, rows: number, commit = true): number {
     const list = this.projection.rows;
     const count = Math.max(0, Math.floor(rows));
     const max = Math.max(0, list.length - count);
@@ -129,8 +129,10 @@ export class TaskTreeView {
       if (index >= 0) offset = index;
     }
     offset = Math.max(0, Math.min(max, offset));
-    this.offsets[mode] = offset;
-    this.firstIds[mode] = list[offset]?.id;
+    if (commit) {
+      this.offsets[mode] = offset;
+      this.firstIds[mode] = list[offset]?.id;
+    }
     return offset;
   }
 

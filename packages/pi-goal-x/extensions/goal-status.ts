@@ -13,6 +13,8 @@ import type { GoalKeybindings } from "./goal-settings.ts";
 import { truncateText } from "./goal-core.ts";
 import type { GoalLedgerEvent, GoalLedgerEvent as LedgerEvent } from "./goal-ledger.ts";
 import { latestAuditorResultForGoal, latestAuditForGoal, latestEventsForGoal } from "./goal-ledger.ts";
+import { goalAuditFailure, goalAuditHistory } from "./fork-goal-audit-history.ts";
+import { verboseAuditFailureLines } from "./widgets/fork-goal-audit-failure.ts";
 import type { GoalRecord, GoalTask } from "./goal-record.ts";
 import { deriveGoalDashboardModel, formatCompactTokens, formatDashboardDuration } from "./widgets/goal-dashboard-model.ts";
 import {
@@ -268,9 +270,11 @@ function buildVerboseStatus(goal: GoalRecord, model: ReturnType<typeof deriveGoa
 			lines.push(`  ${event.at.slice(0, 19)} ${event.type}`);
 		}
 	}
-	const audit = latestAuditorResultForGoal(events, goal.id);
- if (latestAuditForGoal(events, goal.id)?.type === "audit_started") lines.push("", "Latest audit: no recorded result.");
-	if (audit) {
+	const auditHistory = goalAuditHistory(events, goal.id);
+	const failure = goalAuditFailure(auditHistory);
+	const audit = auditHistory.audit;
+	if (audit?.type === "audit_started") lines.push("", "Latest audit: no recorded result.");
+	if (!failure && audit?.type === "audit_result") {
 		lines.push("", `Last audit (${audit.at.slice(0, 10)}): ${audit.verdict}`);
 		lines.push(truncateText(audit.report.replace(/\s+/g, " "), 400));
 	}
@@ -278,6 +282,7 @@ function buildVerboseStatus(goal: GoalRecord, model: ReturnType<typeof deriveGoa
 		lines.push("", "Effective settings:");
 		lines.push(...settingsReport.map((line) => `  ${line}`));
 	}
+	if (failure) lines.push(...verboseAuditFailureLines(failure));
 	return lines.join("\n");
 }
 

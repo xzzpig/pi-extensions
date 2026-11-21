@@ -1,4 +1,5 @@
 import type { DashboardFooterKeys } from "../fork-dashboard-key-routes.ts";
+import { fitCurrentTaskDetails, goalAuditFailureStatusRows, inlineInferredTaskTitle, INFERRED_TASK_NOTE } from "./fork-goal-audit-failure.ts";
 import type { GoalKeybinding } from "../goal-controls.ts";
 import { appendTaskDashboardFooter, taskFooterAuditorNote, taskFooterScrollHint, type TaskFooterControls } from "./fork-task-dashboard-footer.ts";
 import { renderDynamicAuditorDashboard, type AuditDashboardRenderOptions } from "./fork-auditor-dashboard-renderer.ts";
@@ -305,20 +306,20 @@ export function renderCompactDashboard(
 	const inner = safeWidth - 2;
 	const lines: string[] = [];
 
-	lines.push(boxHeader(theme, safeWidth, `${accent(theme, "pi-goal-x")} ${frame(theme, `─ ${model.title}`)}`));
+	const statusHeader = model.auditFailure?.minimumLayout === "status-header";
+	if (!statusHeader) lines.push(boxHeader(theme, safeWidth, `${accent(theme, "pi-goal-x")} ${frame(theme, `─ ${model.title}`)}`));
 
 	// Status line.
 	if (model.status.code === "complete") {
 		lines.push(boxLine(theme, safeWidth, `${success(theme, "✓")} ${success(theme, "All required work is complete.")}`));
 	} else {
-		lines.push(boxLine(theme, safeWidth, model.idlePacing ? fit(model.idlePacing, inner) : statusLine(theme, model)));
+		for (const row of goalAuditFailureStatusRows(model.idlePacing ? fit(model.idlePacing, inner) : statusLine(theme, model), model.auditFailure, safeWidth - (statusHeader ? 6 : 3), (text) => theme.fg("error", text))) lines.push((statusHeader ? boxHeader : boxLine)(theme, safeWidth, row));
 	}
-
-	for (const row of model.scheduling ?? []) if (row !== model.idlePacing) lines.push(boxLine(theme, safeWidth, muted(theme, fit(row, inner))));
+	for (const row of model.scheduling ?? []) if (!statusHeader && row !== model.idlePacing) lines.push(boxLine(theme, safeWidth, muted(theme, fit(row, inner))));
 
 	// Budget (when configured): fuel gauge + amount, amber until the budget is
 	// exhausted, then soft red.
-	if (model.budget) {
+	if (model.budget && !statusHeader) {
 		const fuel = model.budget.used >= model.budget.total ? "error" : "mdHeading";
 		lines.push(boxLine(theme, safeWidth, `${theme.fg(fuel as RenderColor, "⛽")} ${muted(theme, "Budget")} ${theme.fg(fuel as RenderColor, formatBudget(model.budget.used, model.budget.total))}`));
 	}
@@ -359,11 +360,11 @@ export function renderCompactDashboard(
 			const subWord = mode === "narrow" ? "" : "Sub ";
 			headerRight += `${muted(theme, ` · ${subWord}`)}${muted(theme, `${model.currentTask.completedSubtasks}/${model.currentTask.totalSubtasks}`)} ${subBar}`;
 		}
-		lines.push(boxSectionRule(theme, safeWidth, headerLabel, headerRight));
-		opts.taskHeader?.(lines.length - 1);
+		if (!statusHeader && model.auditFailure?.minimumLayout !== "hide-task-header") lines.push(boxSectionRule(theme, safeWidth, headerLabel, headerRight));
+		if (!statusHeader && model.auditFailure?.minimumLayout !== "hide-task-header") opts.taskHeader?.(lines.length - 1);
 		const taskAreaStart = lines.length;
 		if (opts.taskRows) {
-			if (viewport.rows === 0) lines.push(boxLine(theme, safeWidth, "任务区空间不足"));
+			if (viewport.rows === 0 && !statusHeader) lines.push(boxLine(theme, safeWidth, "任务区空间不足"));
 			if (viewport.rows > 0 && !opts.hideTaskIndicators && viewport.hiddenAbove > 0) lines.push(boxLine(theme, safeWidth, dim(theme, `↑ ${viewport.hiddenAbove} more task${viewport.hiddenAbove === 1 ? "" : "s"}`)));
 			for (const node of topLevel.slice(viewport.offset, viewport.offset + viewport.rows)) { opts.taskLine?.(node, lines.length); lines.push(boxLine(theme, safeWidth, renderTaskRow(theme, node, Math.min(node.depth, 6), inner, opts.expandedTasks))); }
 			if (viewport.rows > 0 && !opts.hideTaskIndicators && viewport.hiddenBelow > 0) lines.push(boxLine(theme, safeWidth, dim(theme, `… +${viewport.hiddenBelow} more task${viewport.hiddenBelow === 1 ? "" : "s"}`)));
@@ -373,13 +374,14 @@ export function renderCompactDashboard(
 		opts.taskArea?.(taskAreaStart, lines.length - 1);
 	}
 
+	const taskRowsEnd = lines.length - 1;
 	// §9.4: all top-level tasks done and no current task → "All tasks complete".
 	if (!model.currentTask && model.taskProgress && model.taskProgress.completed === model.taskProgress.total && model.status.code !== "complete") {
 		lines.push(boxLine(theme, safeWidth, `${muted(theme, "Current")}  ${accent(theme, "All tasks complete")}`));
 	}
 
 	// Current task (persisted focus or inferred first pending).
-	if (model.currentTask) {
+	if (model.currentTask && !model.auditFailure?.minimumLayout) {
 		if (mode === "minimal") {
 			lines.push(boxLine(theme, safeWidth, `${accent(theme, "▸")} ${accent(theme, fit(model.currentTask.title, inner - 3))}`));
 		} else {
@@ -388,7 +390,7 @@ export function renderCompactDashboard(
 		}
 	}
 
-	const preserveThrough = lines.length - 1;
+	const preserveThrough = model.auditFailure?.shareStatusRow && topLevel.length && !model.currentTask ? taskRowsEnd : lines.length - 1;
 	// Current-task subtask progress moved into the Tasks header row (§9.3);
 	// the standalone compact Subtasks progress line was removed. (The
 	// expanded dashboard's Current-task block still shows it.)
@@ -469,20 +471,25 @@ export function renderExpandedDashboard(
 	const inner = safeWidth - 2;
 	const lines: string[] = [];
 
-	lines.push(boxHeader(theme, safeWidth, `${accent(theme, "pi-goal-x")} ${frame(theme, `─ ${model.title}`)}`));
+	const minimumLayout = model.auditFailure?.minimumLayout;
+	const boundedDetails = minimumLayout === "status-header-bounded-details";
+	const withoutTaskDivider = boundedDetails || minimumLayout === "status-header-without-task-divider";
+	const statusHeader = minimumLayout === "status-header" || minimumLayout === "status-header-with-details" || withoutTaskDivider;
+	const hideTaskHeader = minimumLayout === "status-header" || minimumLayout === "hide-task-header" || withoutTaskDivider;
+	if (!statusHeader) lines.push(boxHeader(theme, safeWidth, `${accent(theme, "pi-goal-x")} ${frame(theme, `─ ${model.title}`)}`));
 
-	lines.push(boxLine(theme, safeWidth, statusLine(theme, model)));
-	for (const row of model.scheduling ?? []) lines.push(boxLine(theme, safeWidth, muted(theme, fit(row, inner))));
+	for (const row of goalAuditFailureStatusRows(statusLine(theme, model), model.auditFailure, safeWidth - (statusHeader ? 6 : 3), (text) => theme.fg("error", text))) lines.push((statusHeader && lines.length === 0 ? boxHeader : boxLine)(theme, safeWidth, row));
+	if (!statusHeader) for (const row of model.scheduling ?? []) lines.push(boxLine(theme, safeWidth, muted(theme, fit(row, inner))));
 
-	if (spec.showPath && model.filePath) {
+	if (spec.showPath && model.filePath && !model.auditFailure?.minimumLayout) {
 		lines.push(boxLine(theme, safeWidth, dim(theme, `File: ${model.filePath}`)));
 	}
-	if (model.budget) {
+	if (model.budget && !statusHeader) {
 		lines.push(boxLine(theme, safeWidth, `${theme.fg("mdHeading", "⛽")} ${muted(theme, `Budget ${formatBudget(model.budget.used, model.budget.total)}`)}`));
 	}
 
 	// Progress section (§4.2).
-	if (model.taskProgress) {
+	if (model.taskProgress && !model.auditFailure?.minimumLayout) {
 		lines.push(boxSectionRule(theme, safeWidth, "Progress"));
 		const bar = progressBar(theme, model.taskProgress.percentage, Math.max(10, spec.barWidth + 8));
 		lines.push(boxLine(theme, safeWidth, `${bar} ${muted(theme, `${model.taskProgress.completed}/${model.taskProgress.total} tasks · ${model.taskProgress.percentage}%`)}`));
@@ -493,14 +500,14 @@ export function renderExpandedDashboard(
 	// budget the panel stays bounded and ↑/↓ keys move the window.
 	const taskRows = opts.taskRows ?? model.taskTree;
 	if (taskRows.length > 0) {
-		lines.push(boxSectionRule(theme, safeWidth, "Tasks"));
-		opts.taskHeader?.(lines.length - 1);
+		if (!hideTaskHeader) lines.push(boxSectionRule(theme, safeWidth, "Tasks"));
+		if (!hideTaskHeader) opts.taskHeader?.(lines.length - 1);
 		const taskAreaStart = lines.length;
 		const totalRows = taskRows.length;
 		const rows = opts.rows ?? totalRows;
 		const offset = opts.scrollOffset ?? anchoredScrollOffset(taskRows, rows);
 		const viewport = deriveTaskListViewport(totalRows, rows, offset);
-		if (opts.taskRows && viewport.rows === 0) lines.push(boxLine(theme, safeWidth, "任务区空间不足"));
+		if (opts.taskRows && viewport.rows === 0 && !statusHeader) lines.push(boxLine(theme, safeWidth, "任务区空间不足"));
 		if (viewport.rows > 0 && !opts.hideTaskIndicators && viewport.hiddenAbove > 0) {
 			lines.push(boxLine(theme, safeWidth, dim(theme, `↑ ${viewport.hiddenAbove} more task${viewport.hiddenAbove === 1 ? "" : "s"}`)));
 		}
@@ -516,8 +523,11 @@ export function renderExpandedDashboard(
 	}
 
 	// Current-task section (§4.2).
-	if (model.currentTask) {
-		lines.push(...renderCurrentTaskBlock(model, theme, safeWidth, spec.barWidth));
+	if (model.currentTask && (!minimumLayout || minimumLayout === "hide-progress" || minimumLayout === "status-header-with-details" || withoutTaskDivider)) {
+		const detailStyle = boundedDetails ? "integrated-heading" : withoutTaskDivider ? "inline-note" : undefined;
+		const details = renderCurrentTaskBlock(model, theme, safeWidth, spec.barWidth, detailStyle);
+		const detailCap = boundedDetails ? model.auditFailure?.rowCap : undefined;
+		lines.push(...(detailCap === undefined ? details : fitCurrentTaskDetails(details, detailCap - lines.length - 1, inner - 1, (text) => boxLine(theme, safeWidth, text))));
 	}
 
 	const preserveThrough = lines.length - 1;
@@ -548,12 +558,18 @@ export function renderCurrentTaskBlock(
 	theme: Theme,
 	width: number,
 	barWidth = 16,
+	detailStyle?: "inline-note" | "integrated-heading",
 ): string[] {
 	const safeWidth = Math.max(10, width);
 	const inner = safeWidth - 2;
 	const lines: string[] = [];
-	lines.push(boxSectionRule(theme, safeWidth, "Current task"));
-	lines.push(boxLine(theme, safeWidth, `${accent(theme, model.currentTask!.id)} · ${fit(model.currentTask!.title, inner - visibleWidth(`${model.currentTask!.id} · `))}`));
+	const integrated = detailStyle === "integrated-heading";
+	if (!integrated) lines.push(boxSectionRule(theme, safeWidth, "Current task"));
+	const prefix = `${integrated ? "Current task: " : ""}${accent(theme, model.currentTask!.id)} · `;
+	const inlineNote = detailStyle !== undefined && model.currentTask!.inferred;
+	const titleWidth = inner - (integrated ? 3 : 1);
+	const title = inlineNote ? inlineInferredTaskTitle(prefix, model.currentTask!.title, titleWidth, (text) => dim(theme, text)) : `${prefix}${fit(model.currentTask!.title, (integrated ? titleWidth : inner) - visibleWidth(prefix))}`;
+	lines.push(integrated ? boxSectionRule(theme, safeWidth, title) : boxLine(theme, safeWidth, title));
 	if (model.currentTask!.totalSubtasks > 0) {
 		const bar = progressBar(theme, model.currentTask!.subtaskPercentage, Math.max(8, barWidth));
 		lines.push(boxLine(theme, safeWidth, `${muted(theme, "Subtasks")} ${bar} ${model.currentTask!.completedSubtasks}/${model.currentTask!.totalSubtasks} · ${model.currentTask!.subtaskPercentage}%`));
@@ -564,8 +580,8 @@ export function renderCurrentTaskBlock(
 	if (model.currentTask!.evidence) {
 		lines.push(...wrappedBlock(theme, safeWidth, "Evidence", model.currentTask!.evidence));
 	}
-	if (model.currentTask!.inferred) {
-		lines.push(boxLine(theme, safeWidth, dim(theme, "Inferred from the first pending task — no persisted current task.")));
+	if (model.currentTask!.inferred && !inlineNote) {
+		lines.push(boxLine(theme, safeWidth, dim(theme, INFERRED_TASK_NOTE)));
 	}
 	return lines;
 }

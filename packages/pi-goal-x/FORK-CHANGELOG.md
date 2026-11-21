@@ -43,6 +43,8 @@ The previous mixed log placed the following fork baseline-capture notes under up
 
 ### Fork changes
 
+- 短时审计结果卡消失后，Dashboard 仍显示当前目标上次有效的拒绝或运行错误原因。展开可查看预览，`/goal-status verbose` 可查看完整报告；重启后从账本恢复，通过复审或明确跳过后清除旧提示。任务勾选和完成判定不变。
+
 - 目标执行中，模型可通过 `propose_goal_draft` 的 `tweak: { goal_id, reason }` 直接提出目标调整，无需用户先运行 `/goal-tweak`。既有确认、自动确认策略和焦点/候选校验保持适用。
 - 调整原因在差异与全文审核视图、基础确认及当次工具结果中单独展示，不写入目标正文或语义差异；继续讨论和取消沿用目标调整语义。
 - 待办与审计进度面板的展开/收起按钮统一到可点击的底边框；待办有当前任务时可从同处恢复跟随，审计清单仍可在正文内滚动。

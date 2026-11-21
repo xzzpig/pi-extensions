@@ -35,7 +35,7 @@ import {
 	sanitizeGoalPaths,
 } from "./storage/goal-files.ts";
 import { GoalService } from "./goal-service.ts";
-import { goalActivityEvents, latestAuditorResultForGoal, readGoalLedger } from "./goal-ledger.ts";
+import { goalActivityEvents, goalRuntimeAuditFailure, latestAuditorResultForGoal, readGoalLedger } from "./goal-ledger.ts";
 import { GoalAccounting } from "./goal-accounting.ts";
 import { newGoalScheduler } from "./goal-scheduler-state.ts";
 import { GoalScheduler } from "./goal-scheduler.ts";
@@ -929,6 +929,7 @@ export function createGoalCore(
 						getExpanded: () => dashboardExpanded,
 						onToggleExpanded: () => core.toggleDashboardExpanded(),
 						getLedgerEvents: () => state.goal ? goalActivityEvents(storage, state.goal.id) : [],
+						getAuditFailure: (id) => goalRuntimeAuditFailure(storage, id),
 						getAuditResult: () => auditResult,
 						onTui: (tui) => {
 							mouseCapabilityNotice.observe(tui.mode, core.sessionOwner, (message) => ctx.ui.notify(message, "warning"));
@@ -968,6 +969,7 @@ export function createGoalCore(
 					getExpanded: () => dashboardExpanded,
 					onToggleExpanded: () => core.toggleDashboardExpanded(),
 					getLedgerEvents: () => state.goal ? goalActivityEvents(storage, state.goal.id) : [],
+					getAuditFailure: (id) => goalRuntimeAuditFailure(storage, id),
 					getAuditResult: () => auditResult,
 					onTui: (tui) => {
 						mouseCapabilityNotice.observe(tui.mode, core.sessionOwner, (message) => ctx.ui.notify(message, "warning"));

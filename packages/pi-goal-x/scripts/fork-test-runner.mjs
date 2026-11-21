@@ -29,6 +29,8 @@ export const FORK_TEST_FILES = [
 	"tests/fork-audit-checklist.test.ts",
 	"tests/fork-audit-progress.test.ts",
 	"tests/fork-audit-dashboard.test.ts",
+	"tests/fork-last-audit-outcome.test.ts",
+	"tests/fork-last-audit-dashboard.test.ts",
 	"tests/fork-audit-completion-gate.test.ts",
 	"tests/goal-tweak-projection.test.ts",
 	"tests/goal-tweak-diff.test.ts",

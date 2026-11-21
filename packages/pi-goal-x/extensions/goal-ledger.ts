@@ -1,6 +1,7 @@
 import { goalStoragePath, ensureGoalStorageDirectory, isExternalGoalStorage, type GoalStorageContext } from "./storage/goal-root.ts";
 import { indexedActivityEvents } from "./goal-activity.ts";
 import { buildLedgerIndex, indexLedgerEvent, auditApplies, type GoalLedgerIndex } from "./goal-ledger-index.ts";
+import { goalAuditFailure, validAcceptedAuditTerminal } from "./fork-goal-audit-history.ts";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { renameAtomicSync } from "./storage/atomic-rename.ts";
@@ -264,7 +265,7 @@ function parseLedgerLines(content: string): GoalLedgerReadResult {
 // ---------------------------------------------------------------------------
 
 export const LEDGER_CHECKPOINT_FILE = ".goal-ledger-checkpoint.json";
-export const LEDGER_CHECKPOINT_VERSION = 4;
+export const LEDGER_CHECKPOINT_VERSION = 5;
 const CHECKPOINT_RECENT_CAP = 12;
 
 /** In-memory ledger checkpoint (maps in native form). */
@@ -451,6 +452,7 @@ function checkpointFromJson(value: unknown): LedgerCheckpoint | null {
     if (!entry || !Array.isArray(entry.recent) || !Array.isArray(entry.activity) || !Array.isArray(entry.oracle)) return null;
     if (entry.recent.length > 12 || entry.activity.length > 64) return null;
     if (entry.activity.length > 0 && !entry.lastActivityEvent) return null;
+    if (!validAcceptedAuditTerminal(entry.acceptedAuditTerminal, pair[0], isValidLedgerEvent)) return null;
     if (![...entry.recent, ...entry.activity, ...[entry.audit, entry.auditStarted, entry.settledAudit, entry.completion, entry.lifecycle, entry.lastActivityEvent].filter(Boolean)].every(isValidLedgerEvent)) return null;
     if (!entry.oracle.every((p: unknown[]) => {
      if (!Array.isArray(p) || p.length !== 2 || typeof p[0] !== "string" || !p[1] || typeof p[1] !== "object") return false;
@@ -624,6 +626,9 @@ function runtimeIndex(ctx: GoalLedgerContext): Map<string, GoalLedgerIndex> {
 const runtimeReady = new Set<string>();
 export function goalActivityEvents(ctx: GoalLedgerContext, goalId: string): GoalLedgerEvent[] {
  return indexedActivityEvents(runtimeIndex(ctx).get(goalId)?.activity ?? []);
+}
+export function goalRuntimeAuditFailure(ctx: GoalLedgerContext, goalId: string) {
+ return goalAuditFailure(runtimeIndex(ctx).get(goalId));
 }
 export function goalRuntimeEvents(ctx: GoalLedgerContext, goalId: string): GoalLedgerEvent[] {
  const entry = runtimeIndex(ctx).get(goalId);
