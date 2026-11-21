@@ -1,5 +1,6 @@
 import { GOAL_COMMANDS, commandHint, commandPaths, commandProblems, commandRoutes, matchCommandRoute, type GoalCommandId } from "./goal-controls.ts";
 import { showGoalControls } from "./widgets/goal-controls-dialog.ts";
+import { resumeGoalWithMessage, type GoalResumeContext } from "./fork-goal-resume-message.ts";
 import { goalStoragePath, goalStorageRoot } from "./storage/goal-root.ts";
 import { existsSync } from "node:fs";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -109,16 +110,21 @@ export function registerGoalCommands(core: GoalCore): void {
 	const actions = new Map<GoalCommandId, Definition>();
 	const define = (id: GoalCommandId, definition: Definition): void => { actions.set(id, definition); };
 
-	async function chooseOpenGoal(ctx: ExtensionContext, title: string): Promise<GoalRecord | null> {
+	async function chooseOpenGoal(ctx: ExtensionContext, title: string, onSelected?: (goalId: string) => void): Promise<GoalRecord | null> {
+		const selectedGoal = () => {
+			const goal = core.state.goal;
+			if (goal) onSelected?.(goal.id);
+			return goal;
+		};
 		core.reconcileFocusedGoalFromDisk(ctx);
-		if (core.state.goal && core.state.goal.status !== "complete") return core.state.goal;
+		if (core.state.goal && core.state.goal.status !== "complete") return selectedGoal();
 		const open = core.openGoals();
 		if (open.length === 0) return null;
 		if (open.length === 1) {
 			const only = open[0];
 			if (!only) return null;
 			core.setFocusedGoalId(only.id, ctx, "selected");
-			return core.state.goal;
+			return selectedGoal();
 		}
 		if (!ctx.hasUI) {
 			ctx.ui.notify(buildUnfocusedOpenGoalsSummary(open.length), "warning");
@@ -135,7 +141,7 @@ export function registerGoalCommands(core: GoalCore): void {
 				return null;
 			}
 			core.setFocusedGoalId(selectedId, ctx, "selected");
-			return core.state.goal;
+			return selectedGoal();
 		} finally {
 			core.exitGoalModal();
 		}
@@ -371,26 +377,36 @@ export function registerGoalCommands(core: GoalCore): void {
 		ctx.abort?.();
 	}
 
-	async function handleGoalResume(ctx: ExtensionContext): Promise<void> {
-		core.reconcileFocusedGoalFromDisk(ctx);
-		if (!core.state.goal && otherOpenGoalCount(core.goalsById, null) > 0) {
-			const selected = await chooseOpenGoal(ctx, "Resume or focus open goal");
-			if (!selected) return;
-		}
-		if (!core.state.goal) { ctx.ui.notify("No goal is focused.", "warning"); return; }
-		if (!core.scheduler.resume(ctx)) return;
+	function resumeFocusedGoal(ctx: ExtensionContext, start: "kickoff" | "user-message" = "kickoff"): boolean {
+		const goal = core.state.goal;
+		if (!goal) { ctx.ui.notify("No goal is focused.", "warning"); return false; }
+		if (!core.scheduler.resume(ctx, start)) return false;
 		ctx.ui.notify("Goal resumed; autonomous allowance renewed.", "info");
 		// Append ledger event for resumption
 		try {
 			core.goalService.appendEvents(ctx, [{
 				type: "goal_resumed",
-				goalId: core.state.goal.id,
+				goalId: goal.id,
 				reason: "user",
 				at: nowIso(),
 			}]);
 		} catch {
 			// Ledger append failure should not crash resume
 		}
+		return true;
+	}
+
+	async function handleGoalResume(rawArgs: string, ctx: GoalResumeContext): Promise<void> {
+		core.reconcileFocusedGoalFromDisk(ctx);
+		const message = rawArgs.trim();
+		if (message) return resumeGoalWithMessage(core, ctx, message,
+			onSelected => chooseOpenGoal(ctx, "Resume or focus open goal", onSelected),
+			() => resumeFocusedGoal(ctx, "user-message"));
+		if (!core.state.goal && otherOpenGoalCount(core.goalsById, null) > 0) {
+			const selected = await chooseOpenGoal(ctx, "Resume or focus open goal");
+			if (!selected) return;
+		}
+		resumeFocusedGoal(ctx);
 	}
 
 	/**
@@ -964,9 +980,9 @@ export function registerGoalCommands(core: GoalCore): void {
 		},
 	});
 	define("goal-resume", {
-		description: "Continue now and renew the configured autonomous-run allowance.",
-		handler: async (_rawArgs, ctx) => {
-			await handleGoalResume(ctx);
+		description: "Resume and renew the autonomous-run allowance; append an optional message to continue with it.",
+		handler: async (rawArgs, ctx) => {
+			await handleGoalResume(rawArgs, ctx);
 		},
 	});
 	const configured = loadGoalSettings(process.cwd()).commands;
@@ -977,6 +993,7 @@ export function registerGoalCommands(core: GoalCore): void {
 	core.invokeGoalCommand = async (id, args, ctx) => {
 		const action = actions.get(id);
 		if (!action) return;
+		if (id === "goal-resume" && args.trim()) return action.handler(args, ctx); // Only the actual picker is modal.
 		core.enterGoalModal();
 		try { await action.handler(args, ctx); }
 		finally { core.exitGoalModal(); }

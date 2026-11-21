@@ -43,6 +43,8 @@ The previous mixed log placed the following fork baseline-capture notes under up
 
 ### Fork changes
 
+- `/goal-resume <消息>` 可在暂停后一次恢复目标并发送纠偏内容。上一轮未结束时会先等它收尾；无并发输入时，正文作为新一轮的普通用户消息，不额外启动自动续跑，也不占用自主运行次数。Esc 和无参恢复保持不变；同一会话并发提交的普通消息不保证先后。
+
 - 短时审计结果卡消失后，Dashboard 仍显示当前目标上次有效的拒绝或运行错误原因。展开可查看预览，`/goal-status verbose` 可查看完整报告；重启后从账本恢复，通过复审或明确跳过后清除旧提示。任务勾选和完成判定不变。
 
 - 目标执行中，模型可通过 `propose_goal_draft` 的 `tweak: { goal_id, reason }` 直接提出目标调整，无需用户先运行 `/goal-tweak`。既有确认、自动确认策略和焦点/候选校验保持适用。

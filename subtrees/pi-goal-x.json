@@ -13,6 +13,11 @@
   "knownDebt": [
     {
       "kind": "other",
+      "path": "packages/pi-goal-x/extensions/goal-{commands,scheduler}.ts",
+      "reason": "[policy] Minimal command and scheduler seams let a user message replace the automatic resume kickoff without changing resume admission. Remove when upstream supports equivalent message-first resume."
+    },
+    {
+      "kind": "other",
       "reason": "[policy] Final goal confirmation needs minimal goal-draft and goal-questionnaire seams plus package manifest staging for the private shared diff; fork-only modules own layout, mouse and semantics. Remove seams when upstream supports equivalent confirmation behavior and independently bundled diff."
     },
     {
@@ -193,6 +198,7 @@
     }
   ],
   "reapplyOnSync": [
+    "带正文恢复：保留 goal-commands.ts 将带正文分支交给 fork-goal-resume-message.ts 的接缝，只传入既有目标选择（同步通知选定目标）和恢复回调；监听、等待、身份复核和发送均由 fork 模块处理；带正文的恢复等待不持有外层模态，保留真实选择器模态和原 Esc 路由；goal-scheduler.ts 保留 user-message 启动模式，复用恢复写入但不安排 kickoff。重生成测试清单。",
     "上次审计失败展示：重施 goal-ledger-index.ts 的共享尝试投影接缝，以及 goal-ledger.ts 的派生版本校验、终态字段校验与有界 widget getter；goal-state.ts 将 getter 接到两个 widget 注册入口，widgets/goal-widget.ts、goal-dashboard-model.ts、goal-dashboard-renderer.ts 保留普通视图失败摘要、基线任务窗口试算和极矮布局接缝，goal-status.ts 保留 verbose 完整报告接缝。同步重生成 tests/.test-manifest.json，保持新增行为覆盖在 fork 测试中。",
     "保留 goal-draft.ts 显示空行格式接缝和 goal-questionnaire.ts 的最终创建确认接缝；package.json 声明共享 diff 及独立 dist-pkg/prepack，具体交互、比较与 staging 逻辑留在 fork-only 文件。",
     "Audit dashboard mouse: retain goal-widget.ts native audit branch delegation, effective dashboard keybindings, final geometry clipping and active lifecycle identity hooks, plus goal-state.ts activeAudit getter wiring; keep scrolling, bottom-border controls and gesture behavior in fork-only widgets. Package docs/audit-dashboard-mouse.md and regenerate the fork test manifest; preserve same-attempt Escape resume and keep audit navigation display-only.",
@@ -233,6 +239,7 @@
     "Keep pi.changelogPath pointing to ./FORK-CHANGELOG.md, ship the fork log and any upstream changelog, and retain README release-history navigation. Never append fork releases to the upstream log; follow docs/fork-changelogs.md."
   ],
   "doNotReintroduce": [
+    "带正文恢复不能在旧轮中止收尾前激活目标，也不能同时启动自动 kickoff 或把正文插入旧轮；无参恢复保持原行为。",
     "不得从短时卡片或近期活动窗口寻找失败报告，也不得忽略已批准、已跳过或尝试身份而倒序选择任意旧失败；展示不修改审计输入、裁决或任务状态。",
     "不得恢复 auditor transcript runtime 或让共享 diff 依赖指向 node_modules 内 TypeScript；确认框的旧手势不可复活、浏览不得修改目标事务。",
     "Do not route audit wheel to transcript at list boundaries, collapse task and audit input targets, consume text-selection press, or treat mouse browsing as an audit transaction; preserve same-attempt Escape park/resume and host overlay/link priority.",

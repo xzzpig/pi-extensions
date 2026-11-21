@@ -19,6 +19,7 @@
     ".tests/fork-dashboard-host-frame.test.ts",
     ".tests/fork-goal-confirmation-layout.test.ts",
     ".tests/fork-goal-confirmation-mouse.test.ts",
+    ".tests/fork-goal-resume-message.test.ts",
     ".tests/fork-goal-semantic-diff.test.ts",
     ".tests/fork-last-audit-dashboard.test.ts",
     ".tests/fork-last-audit-outcome.test.ts",
@@ -165,6 +166,7 @@
     ".tests/integration/goal-change-manifest.test.ts"
   ],
   "e2eFiles": [
+    ".tests/e2e/fork-goal-resume-message-sdk.test.ts",
     ".tests/e2e/fork-unfocused-silence-sdk.test.ts",
     ".tests/e2e/goal-context-system-sdk.test.ts",
     ".tests/e2e/goal-continuation-user.test.ts",

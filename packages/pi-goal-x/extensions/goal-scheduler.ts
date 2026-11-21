@@ -151,7 +151,8 @@ export class GoalScheduler {
 	}
 
 	/** Only explicit user resume resets spent allowance, including while already active/waiting. */
-	resume(ctx: ExtensionContext): boolean {
+	resume(ctx: ExtensionContext, start: "kickoff" | "user-message" = "kickoff"): boolean {
+		const kickoff = start === "kickoff";
 		invalidateGoalSettingsCache();
 		if (this.limit(ctx) === 0) { ctx.ui.notify(this.allowanceReason(ctx), "warning"); return false; }
 		try {
@@ -160,13 +161,13 @@ export class GoalScheduler {
 			this.write(ctx, g => {
 				if (g.status === "complete" || budgetReached(g)) throw new Error("A completed or token-budget-limited goal cannot resume.");
 				return { ...g, status: "active", autoContinue: true, stopReason: undefined, pauseReason: undefined, pauseSuggestedAction: undefined,
-					scheduler: { ...newGoalScheduler(this.owner(ctx)), phase: "ready", decision: { kind: "ready", purpose: "kickoff" } } };
+					scheduler: { ...newGoalScheduler(this.owner(ctx)), ...(kickoff ? { phase: "ready", decision: { kind: "ready", purpose: "kickoff" } } : {}) } };
 			});
 			this.core.interruption.resumed(ctx);
 			// A resume during host work waits for settlement; another model turn
 			// still invalidates it through turn(), just like a declaration.
-			this.declared = this.inRun;
-			this.schedule(ctx);
+			this.declared = kickoff && this.inRun;
+			if (kickoff) this.schedule(ctx);
 			return true;
 		} catch (error) { ctx.ui.notify(String(error), "warning"); return false; }
 	}
