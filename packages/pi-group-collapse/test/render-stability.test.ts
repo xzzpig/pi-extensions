@@ -141,7 +141,7 @@ describe("render stability", () => {
       expect(renderAll().join("\n")).toBe(first.join("\n"));
       expect(runtime.debugSegmentCount()).toBe(segmentsBefore);
       expect(first.length).toBe(1); // one folded summary line
-      expect(plain(first)).toContain("2 次工具调用");
+      expect(plain(first)).toContain("工具调用×2");
     } finally {
       restore();
     }
@@ -230,7 +230,7 @@ describe("render stability", () => {
 
     const rendersBefore = counters.renders;
     const first = renderAll();
-    const summaries = first.filter((line) => line.includes("1 次工具调用"));
+    const summaries = first.filter((line) => line.includes("工具调用×1"));
     expect(summaries.length).toBe(2); // both groups folded
 
     for (let pass = 0; pass < 50; pass++) {

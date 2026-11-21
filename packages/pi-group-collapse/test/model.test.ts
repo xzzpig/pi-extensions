@@ -41,7 +41,19 @@ describe("segment division", () => {
     const segments = model.currentSegments();
     expect(segments.length).toBe(1);
     expect(summarize(segments)).toEqual([
-      { tools: 3, thinking: 1, messages: 0, failed: 0, warnings: 0, errors: 0 },
+      {
+        tools: 3,
+        thinking: 1,
+        messages: 0,
+        failed: 0,
+        warnings: 0,
+        errors: 0,
+        toolCounts: [
+          { name: "bash", count: 1 },
+          { name: "mcp__srv__op", count: 1 },
+          { name: "read", count: 1 },
+        ],
+      },
     ]);
     // One tool call + result pair is exactly one member.
     expect(segments[0].members.map((m) => m.key)).toEqual([
@@ -121,8 +133,27 @@ describe("segment division", () => {
       ["c"],
     ]);
     expect(summarize(segments)).toEqual([
-      { tools: 2, thinking: 0, messages: 1, failed: 0, warnings: 0, errors: 0 },
-      { tools: 1, thinking: 0, messages: 0, failed: 0, warnings: 0, errors: 0 },
+      {
+        tools: 2,
+        thinking: 0,
+        messages: 1,
+        failed: 0,
+        warnings: 0,
+        errors: 0,
+        toolCounts: [
+          { name: "bash", count: 1 },
+          { name: "read", count: 1 },
+        ],
+      },
+      {
+        tools: 1,
+        thinking: 0,
+        messages: 0,
+        failed: 0,
+        warnings: 0,
+        errors: 0,
+        toolCounts: [{ name: "bash", count: 1 }],
+      },
     ]);
   });
 
@@ -213,7 +244,15 @@ describe("segment division", () => {
       { type: "turnEnd" },
     ]);
     expect(summarize(model.currentSegments())).toEqual([
-      { tools: 1, thinking: 0, messages: 0, failed: 0, warnings: 0, errors: 0 },
+      {
+        tools: 1,
+        thinking: 0,
+        messages: 0,
+        failed: 0,
+        warnings: 0,
+        errors: 0,
+        toolCounts: [{ name: "edit", count: 1 }],
+      },
       { tools: 0, thinking: 0, messages: 2, failed: 0, warnings: 0, errors: 0 },
       { tools: 0, thinking: 1, messages: 0, failed: 0, warnings: 0, errors: 0 },
     ]);
@@ -231,7 +270,20 @@ describe("segment division", () => {
       { type: "turnEnd" },
     ]);
     expect(summarize(model.currentSegments())).toEqual([
-      { tools: 4, thinking: 0, messages: 0, failed: 0, warnings: 0, errors: 0 },
+      {
+        tools: 4,
+        thinking: 0,
+        messages: 0,
+        failed: 0,
+        warnings: 0,
+        errors: 0,
+        toolCounts: [
+          { name: "edit", count: 1 },
+          { name: "mcp__custom__tool", count: 1 },
+          { name: "never_seen_before", count: 1 },
+          { name: "write", count: 1 },
+        ],
+      },
     ]);
   });
 
@@ -246,7 +298,15 @@ describe("segment division", () => {
       { type: "turnEnd" },
     ]);
     expect(summarize(model.currentSegments())).toEqual([
-      { tools: 2, thinking: 0, messages: 0, failed: 1, warnings: 0, errors: 0 },
+      {
+        tools: 2,
+        thinking: 0,
+        messages: 0,
+        failed: 1,
+        warnings: 0,
+        errors: 0,
+        toolCounts: [{ name: "bash", count: 2 }],
+      },
     ]);
   });
 
@@ -319,7 +379,15 @@ describe("segment division", () => {
       { type: "turnEnd" },
     ]);
     expect(summarize(model.currentSegments())).toEqual([
-      { tools: 1, thinking: 1, messages: 0, failed: 0, warnings: 0, errors: 0 },
+      {
+        tools: 1,
+        thinking: 1,
+        messages: 0,
+        failed: 0,
+        warnings: 0,
+        errors: 0,
+        toolCounts: [{ name: "bash", count: 1 }],
+      },
     ]);
   });
 
@@ -332,7 +400,15 @@ describe("segment division", () => {
     model.apply({ type: "toolArgs", toolCallId: "a" });
     expect(model.member("a")?.version).toBe(before + 2);
     expect(summarize(model.currentSegments())).toEqual([
-      { tools: 1, thinking: 0, messages: 0, failed: 0, warnings: 0, errors: 0 },
+      {
+        tools: 1,
+        thinking: 0,
+        messages: 0,
+        failed: 0,
+        warnings: 0,
+        errors: 0,
+        toolCounts: [{ name: "bash", count: 1 }],
+      },
     ]);
   });
 });

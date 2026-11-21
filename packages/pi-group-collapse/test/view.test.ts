@@ -30,18 +30,18 @@ describe("summaryLine", () => {
     const line = summaryLine(summary({ tools: 4, thinking: 3, messages: 2 }), {
       width: WIDE,
     });
-    expect(line).toBe("▸ 4 次工具调用 · 3 段思考 · 2 条消息");
+    expect(line).toBe("▸ 工具调用×4 · 思考×3 · 消息×2");
   });
 
   test("zero kinds are omitted", () => {
     expect(summaryLine(summary({ tools: 1 }), { width: WIDE })).toBe(
-      "▸ 1 次工具调用",
+      "▸ 工具调用×1",
     );
     expect(summaryLine(summary({ thinking: 2 }), { width: WIDE })).toBe(
-      "▸ 2 段思考",
+      "▸ 思考×2",
     );
     expect(summaryLine(summary({ messages: 2 }), { width: WIDE })).toBe(
-      "▸ 2 条消息",
+      "▸ 消息×2",
     );
   });
 
@@ -51,24 +51,24 @@ describe("summaryLine", () => {
 
   test("failures and errors outrank warnings in the marker", () => {
     expect(summaryLine(summary({ tools: 2, failed: 1 }), { width: WIDE })).toBe(
-      "▸ ✗ 2 次工具调用",
+      "▸ ✗ 工具调用×2",
     );
     expect(summaryLine(summary({ tools: 2, errors: 1 }), { width: WIDE })).toBe(
-      "▸ ✗ 2 次工具调用",
+      "▸ ✗ 工具调用×2",
     );
     expect(
       summaryLine(summary({ messages: 1, warnings: 1 }), { width: WIDE }),
-    ).toBe("▸ ⚠ 1 条消息");
+    ).toBe("▸ ⚠ 消息×1");
   });
 
   test("the marker survives narrow terminals that drop counts", () => {
-    // "▸ ✗ 2 次工具调用" measures 16 cells; that is the minimal line the
-    // marker can appear in, and 16 columns still show it.
-    const narrow = summaryLine(summary({ tools: 2, failed: 1 }), { width: 16 });
-    expect(narrow).toBe("▸ ✗ 2 次工具调用");
+    // "▸ ✗ 工具调用×2" is the minimal line which can include the marker.
+    const width = visibleWidth("▸ ✗ 工具调用×2");
+    const narrow = summaryLine(summary({ tools: 2, failed: 1 }), { width });
+    expect(narrow).toBe("▸ ✗ 工具调用×2");
     // Below the minimal width the group keeps its original display.
     expect(
-      summaryLine(summary({ tools: 2, failed: 1 }), { width: 15 }),
+      summaryLine(summary({ tools: 2, failed: 1 }), { width: width - 1 }),
     ).toBeUndefined();
   });
 
@@ -80,14 +80,17 @@ describe("summaryLine", () => {
     expect(wide).toContain("45");
     expect(wide).toContain("6");
 
-    // "▸ 123 次工具调用 · 45 段思考" measures 28 cells and drops the
-    // messages count at that width.
-    const tight = summaryLine(counts, { width: 28 });
-    expect(tight).toBe("▸ 123 次工具调用 · 45 段思考");
+    // "▸ 工具调用×123 · 思考×45" fits without the messages count at its width.
+    const tight = summaryLine(counts, {
+      width: visibleWidth("▸ 工具调用×123 · 思考×45"),
+    });
+    expect(tight).toBe("▸ 工具调用×123 · 思考×45");
 
-    // "▸ 123 次工具调用" alone fits exactly 16.
-    const minimal = summaryLine(counts, { width: 16 });
-    expect(minimal).toBe("▸ 123 次工具调用");
+    // At its exact width only the tool count fits.
+    const minimal = summaryLine(counts, {
+      width: visibleWidth("▸ 工具调用×123"),
+    });
+    expect(minimal).toBe("▸ 工具调用×123");
   });
 
   test("a terminal too narrow for the minimal summary keeps the original display", () => {
@@ -98,7 +101,7 @@ describe("summaryLine", () => {
 
   test("CJK counts double their cell width", () => {
     const line = summaryLine(summary({ tools: 1 }), { width: WIDE })!;
-    // "▸ 1 次工具调用": the han characters occupy two cells each.
+    // "▸ 工具调用×1": the han characters occupy two cells each.
     expect(visibleWidth(line)).toBeGreaterThan(line.length / 2);
     // The line must actually fit its claimed width.
     expect(visibleWidth(line)).toBeLessThanOrEqual(WIDE);

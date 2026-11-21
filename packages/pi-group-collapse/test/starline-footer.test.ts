@@ -128,16 +128,16 @@ function scene() {
   const content = box.children[0];
   if (!content || !box.scrollContentLines) throw new Error("no scroll content");
   const lines = box.scrollContentLines;
-  const row = (needle: string) => {
+  const row = (pattern: RegExp) => {
     const index = lines.findIndex((line) =>
-      stripTerminalSequences(line).includes(needle),
+      pattern.test(stripTerminalSequences(line)),
     );
-    if (index < 0) throw new Error(`missing ${needle}`);
+    if (index < 0) throw new Error(`missing ${pattern}`);
     return content.rect.y + index;
   };
   const lookup = { root: frame.root, keyText: "ctrl+o" };
   return {
-    target: (needle: string) => expandTargetAt(lookup, 2, row(needle)),
+    target: (pattern: RegExp) => expandTargetAt(lookup, 2, row(pattern)),
     lines,
   };
 }
@@ -146,8 +146,8 @@ function assertFooterMatchesHeader(): void {
   settle();
   expect(runtime.expandAll()).toBe(1);
   const rendered = scene();
-  const header = rendered.target("▾ 分组");
-  const footer = rendered.target("收起分组");
+  const header = rendered.target(/^\s*▾.* 分组 /u);
+  const footer = rendered.target(/收起分组/u);
   expect(header).toBeDefined();
   expect(footer?.component).toBe(header?.component);
   expect(footer?.expanded).toBe(false);
@@ -156,7 +156,7 @@ function assertFooterMatchesHeader(): void {
     .render(WIDTH)
     .map(stripTerminalSequences)
     .join("\n");
-  expect(collapsed).toContain("▸ 分组");
+  expect(collapsed).toMatch(/^\s*▸.* 分组 /mu);
   expect(collapsed).not.toContain("收起分组");
 }
 

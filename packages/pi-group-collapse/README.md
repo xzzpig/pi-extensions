@@ -21,6 +21,14 @@ Validated with Pi 1.1.0 in fullscreen mode. When using Starline's click handling
 use `@xzzpig/pi-starline` 0.5.1 or later for the explicit group-target integration.
 Older or unsupported host component layouts fail safely without hiding content.
 
+## 分组标题与耗时
+
+折叠和展开使用相同的单行标题，例如 `▸ ✗ 耗时 3.2s · 分组 工具调用×4 · 思考×3 · 工具失败×1 · bash×3 read×1`。所有计数使用「名称×次数」；有足够空间时，标题也会显示 `通知警告×1`、`通知错误×1` 等异常数量。屏幕变窄时，依次省略工具明细、耗时和异常数量，优先保留原有的成员计数和异常标记。
+
+`耗时 3.2s` 指该组最早成员开始到最晚成员结束的实际经过时间。它包含组内间隔，并行执行不会重复计时，也不包含等待整轮结束或等待折叠的时间。成员缺少可靠计时证据时，只省略耗时，不改变分组状态。使用扩展自定义渲染器的消息，以及无法安全验证的过大或不透明数据，都不会提供计时证据。
+
+耗时只保存在当前视图的内存中。执行 `/reload`、恢复会话或重建转录后，历史组仍显示工具明细和异常数量，但不显示或补算耗时。自动压缩后即使继续同一轮，新视图中完整观测到的组也可计时；跨重建的旧起点不会沿用。
+
 ## What it does
 
 - **Groups by visible order**: contiguous tools, thinking runs, and
@@ -31,8 +39,9 @@ Older or unsupported host component layouts fail safely without hiding content.
   stopped. Parallel tools must all finish; unknown evidence never counts
   as success.
 - **Two-level view**: a folded group renders one width-aware title bar
-  (`▸ 分组 4 次工具调用 · 3 段思考 · 2 条消息`, with `✗`/`⚠` markers when
-  failures or warning/error notifications exist). An accent-colored arrow
+  (`▸ ✗ 分组 工具调用×4 · 思考×3 · 工具失败×1 · bash×3 read×1`).
+  The bar reports tool failures and notification warnings/errors separately
+  when space permits, in addition to the `✗`/`⚠` marker. An accent-colored arrow
   and label distinguish the bar from message text; a neutral background
   follows the host theme when it provides a panel color. Expanding keeps
   the same title with `▾` and restores the members' original rendering
@@ -40,9 +49,22 @@ Older or unsupported host component layouts fail safely without hiding content.
   own expand states. When the group was opened and its actual end can be
   located safely, a single `▴ 收起分组` row at the end collapses that
   same group without changing any member's own expand state. Narrow
-  terminals omit the label before sacrificing statistics or exception
-  markers; if the bottom control cannot fit or be safely located, it is
-  omitted and the title and commands remain available.
+  terminals drop tool-name details first, then elapsed time, then exception
+  quantities; a lower-priority field cannot replace a higher-priority one.
+  These optional details give way before any of the original title;
+  a still narrower terminal omits the label before sacrificing core
+  statistics or exception markers. If the bottom control cannot fit or be
+  safely located, it is omitted and the title and commands remain available.
+- **Group elapsed time**: `耗时 3.2s` is the span from the earliest observed
+  member start to the latest member end, including gaps inside the group.
+  Parallel calls do not count twice; time waiting for the turn to settle or
+  for a later turn to fold an abnormal group is not included. Missing or
+  ambiguous member timing omits this field. Custom messages using a
+  renderer callback are not timed: the callback may render from state that
+  is not part of the message. Even with the built-in renderer, large or
+  opaque metadata can prevent reliable timing. Timing lives only in the current
+  view: after `/reload`, session resume, or transcript rebuild, history still
+  shows the tool and exception counts but does not show elapsed time.
 - **Group spacing**: provably owned placeholders of hidden thinking and
   notifications fold with their members. A group gets a single external
   blank line when needed next to visible content; existing spacing and

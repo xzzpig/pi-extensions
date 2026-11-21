@@ -207,7 +207,7 @@ describe("runtime with an unreadable status builder", () => {
     // The moved line is painted (not hidden) with whatever the host now
     // renders on it, and the two segments keep their own folds.
     expect(transcript).toContain("a host status the observer cannot attribute");
-    expect(transcript).toContain("▸ 分组 2 次工具调用");
-    expect(transcript).toContain("▸ 分组 1 次工具调用 · 1 条消息");
+    expect(transcript).toContain("▸ 分组 工具调用×2");
+    expect(transcript).toContain("▸ 分组 工具调用×1 · 消息×1");
   });
 });

@@ -297,7 +297,7 @@ describe("combination matrix", () => {
       settleOneTool(tool);
       const own = tool.render(WIDTH);
       expect(own.length).toBe(1); // folded summary
-      expect(plain(own)).toContain("1 次工具调用");
+      expect(plain(own)).toContain("工具调用×1");
 
       // Expand: the real bash renderer's output comes back unchanged.
       dispatchToggle(tool);
@@ -344,7 +344,7 @@ describe("combination matrix", () => {
       expect(text).toContain("new line");
       expect(text).toContain("old line");
       // Title row added exactly one line above the real diff rendering.
-      expect(expanded[0]).toContain("1 次工具调用");
+      expect(expanded[0]).toContain("工具调用×1");
       dispatchToggle(tool);
       expect(tool.render(WIDTH).length).toBe(1);
     });
@@ -384,7 +384,7 @@ describe("combination matrix", () => {
       const expanded = tool.render(WIDTH);
       // Title added above the call shell; the hidden body stays empty —
       // the group never forces content back on.
-      expect(expanded[0]).toContain("1 次工具调用");
+      expect(expanded[0]).toContain("工具调用×1");
       expect(plain(expanded)).not.toContain("result body");
     });
 
@@ -421,14 +421,14 @@ describe("combination matrix", () => {
       dispatchToggle(custom);
       const expanded = custom.render(WIDTH);
       expect(plain(expanded)).toContain("audit body");
-      expect(plain(expanded)).toContain("1 条消息");
+      expect(plain(expanded)).toContain("消息×1");
 
       // The member's own expand state keeps functioning under the open
       // group: collapsing the member truncates its body while the group
       // title stays.
       custom.setExpanded(false);
       const memberCollapsed = custom.render(WIDTH);
-      expect(memberCollapsed[0]).toContain("1 条消息");
+      expect(memberCollapsed[0]).toContain("消息×1");
       // And re-expanding it restores the body — the group view did not
       // take over the member's own interaction.
       custom.setExpanded(true);

@@ -137,7 +137,7 @@ describe("first-startup resume binding", () => {
     receiver.renderInitialMessages();
 
     const rendered = renderedText(receiver);
-    expect(rendered).toContain("1 次工具调用");
+    expect(rendered).toContain("工具调用×1");
     expect(rendered).not.toContain("echo resume-tool");
     expect(rendered).not.toContain("done resume-tool");
     // The binding requested the one repaint that makes the folded first

@@ -334,7 +334,7 @@ describe("review round 3: updated groups join the deferred candidates", () => {
     runtime.handlePiEvent({ type: "tool_execution_end", toolCallId: "next" });
     settled(runtime);
     expect(runtime.debugFoldedIds()).toEqual([1, 2]);
-    expect(text(component)).toContain("1 条消息");
+    expect(text(component)).toContain("消息×1");
     runtime.onSessionShutdown();
   });
 
@@ -396,7 +396,7 @@ describe("review round 3: empty thinking runs get no number", () => {
     expect(keys).toHaveLength(1);
     expect(keys[0].endsWith("#t0")).toBe(true);
     expect(runtime.debugFoldedIds()).toEqual([1]);
-    expect(text(assistant)).toContain("1 段思考");
+    expect(text(assistant)).toContain("思考×1");
     expect(text(assistant)).not.toContain("NONEMPTY THOUGHT");
     runtime.onSessionShutdown();
   });

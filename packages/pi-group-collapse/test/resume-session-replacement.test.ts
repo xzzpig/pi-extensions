@@ -182,7 +182,7 @@ describe("in-session /resume replacement binding", () => {
       getBranch: () => oldBranch,
     });
     receiver.renderInitialMessages();
-    expect(renderedText(receiver)).toContain("1 次工具调用");
+    expect(renderedText(receiver)).toContain("工具调用×1");
     const oldChildren = [...receiver.chatContainer.children];
     expect(oldChildren.length).toBeGreaterThan(0);
     const renderRequestsAfterOldFrame = renderRequests.length;
@@ -201,7 +201,7 @@ describe("in-session /resume replacement binding", () => {
     // new components exist, nothing folded them yet.
     expect(renderedText(receiver)).toContain("echo new-a");
     expect(renderedText(receiver)).toContain("done new-b");
-    expect(renderedText(receiver)).not.toContain("2 次工具调用");
+    expect(renderedText(receiver)).not.toContain("工具调用×2");
     // The replaced branch's components left the view with the clear().
     for (const child of oldChildren) {
       expect(receiver.chatContainer.children).not.toContain(child);
@@ -217,7 +217,7 @@ describe("in-session /resume replacement binding", () => {
     });
 
     const resumed = renderedText(receiver);
-    expect(resumed).toContain("2 次工具调用");
+    expect(resumed).toContain("工具调用×2");
     expect(resumed).not.toContain("echo new-a");
     expect(resumed).not.toContain("done new-b");
     // The new branch, not the replaced one: one folded turn replayed from

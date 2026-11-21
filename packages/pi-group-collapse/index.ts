@@ -104,6 +104,9 @@ export default function extension(pi: ExtensionAPI): void {
     flush(ctx.ui.notify.bind(ctx.ui));
   });
 
+  pi.on("tool_execution_start", (event) => {
+    runtime.handlePiEvent({ ...event });
+  });
   pi.on("tool_execution_update", (event, ctx) => {
     // SAFETY: this built-in event is read by type and known fields only.
     runtime.handlePiEvent(event as unknown as never);

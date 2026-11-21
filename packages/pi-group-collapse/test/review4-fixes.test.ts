@@ -132,7 +132,7 @@ describe("review round 4: per-block text boundaries", () => {
     const rendered = text(assistant);
     expect(rendered).toContain("TEXT 1");
     expect(rendered).toContain("TEXT 2");
-    expect(rendered).toContain("1 段思考");
+    expect(rendered).toContain("思考×1");
     runtime.onSessionShutdown();
   });
 

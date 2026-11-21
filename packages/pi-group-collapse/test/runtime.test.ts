@@ -92,7 +92,7 @@ describe("GroupCollapseRuntime", () => {
     );
     // Every member renders through the projection: carrier shows the
     // single summary, the other member hides.
-    const summary = lines.filter((line) => line.includes("2 次工具调用"));
+    const summary = lines.filter((line) => line.includes("工具调用×2"));
     expect(summary.length).toBe(1);
     expect(plainLines(lines)).not.toContain("echo t1");
     expect(plainLines(lines)).not.toContain("done t2");
@@ -163,7 +163,7 @@ describe("GroupCollapseRuntime", () => {
     expect(plain).not.toContain("echo a1");
     expect(plain).not.toContain("echo b1");
     expect(plain).toContain("next question");
-    const summaries = lines.filter((line) => line.includes("1 次工具调用"));
+    const summaries = lines.filter((line) => line.includes("工具调用×1"));
     expect(summaries.length).toBe(2);
   });
 
@@ -175,7 +175,7 @@ describe("GroupCollapseRuntime", () => {
     );
     const plain = plainLines(lines);
     // Title line plus the byte-identical member output.
-    expect(plain).toContain("1 次工具调用");
+    expect(plain).toContain("工具调用×1");
     expect(plain).toContain("echo t1");
     expect(plain).toContain("done t1");
 

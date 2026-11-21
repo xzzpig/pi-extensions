@@ -137,7 +137,7 @@ describe("review regression: streaming assistant rescans", () => {
     expect(runtime.debugFoldedIds().length).toBe(1);
     const rendered = plain(component.render(WIDTH));
     expect(rendered).not.toContain("grew later");
-    expect(rendered).toContain("1 段思考");
+    expect(rendered).toContain("思考×1");
     // The final text boundary split: the answer stays visible.
     expect(rendered).toContain("final answer");
   });
@@ -291,7 +291,7 @@ describe("review regression: history/live identity", () => {
     expect(runtime.debugFoldedIds().length).toBe(1);
     const rendered = plain(component.render(WIDTH));
     expect(rendered).not.toContain("history thinking");
-    expect(rendered).toContain("1 段思考");
+    expect(rendered).toContain("思考×1");
     expect(rendered).toContain("history answer");
   });
 });
@@ -378,7 +378,7 @@ describe("review regression: thinking-run click precision", () => {
     const folded = component.render(WIDTH);
     const summaryRows = folded
       .map((line, index) => ({ line, index }))
-      .filter(({ line }) => stripTerminalSequences(line).includes("1 段思考"));
+      .filter(({ line }) => stripTerminalSequences(line).includes("思考×1"));
     expect(summaryRows.length).toBe(2);
 
     const click = (row: number) => {
@@ -408,14 +408,14 @@ describe("review regression: thinking-run click precision", () => {
     // Both shell rows still render (first folded summary + second title).
     const secondPass = component
       .render(WIDTH)
-      .filter((line) => stripTerminalSequences(line).includes("1 段思考"));
+      .filter((line) => stripTerminalSequences(line).includes("思考×1"));
     expect(secondPass.length).toBe(2);
 
     // Click the second title: it collapses again.
     const after = component
       .render(WIDTH)
       .map((line, index) => ({ line, index }))
-      .filter(({ line }) => stripTerminalSequences(line).includes("1 段思考"));
+      .filter(({ line }) => stripTerminalSequences(line).includes("思考×1"));
     click(after[after.length - 1].index);
     rendered = plain(component.render(WIDTH));
     // The second run collapsed back to its summary; the first run's own
@@ -426,7 +426,7 @@ describe("review regression: thinking-run click precision", () => {
     expect(
       component
         .render(WIDTH)
-        .filter((line) => stripTerminalSequences(line).includes("1 段思考"))
+        .filter((line) => stripTerminalSequences(line).includes("思考×1"))
         .length,
     ).toBe(2);
   });

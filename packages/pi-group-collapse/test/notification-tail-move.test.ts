@@ -159,9 +159,9 @@ function omRules(): unknown[] {
   ];
 }
 
-function startSession(rules: unknown[] = omRules()): void {
+function startSession(rules: unknown[] = omRules(), now?: () => number): void {
   writeConfig(rules);
-  runtime = new GroupCollapseRuntime({ notify: () => {} });
+  runtime = new GroupCollapseRuntime({ notify: () => {} }, now);
   runtime.onSessionStart({ mode: "tui", cwd: root, getBranch: () => [] });
   receiver = makeReceiver();
 }
@@ -255,8 +255,8 @@ describe("notification tail moves", () => {
 
     const transcript = renderedTranscript();
     expect(summaryOccurrences(transcript)).toBe(1);
-    expect(transcript).toContain("17 次工具调用");
-    expect(transcript).toContain("4 条消息");
+    expect(transcript).toContain("工具调用×17");
+    expect(transcript).toContain("消息×4");
     // Folded members are not painted individually.
     expect(transcript).not.toContain("Observational memory:");
   });
@@ -331,8 +331,8 @@ describe("notification tail moves", () => {
     // The old line is visible again (its own text until the host repaints).
     const transcript = renderedTranscript();
     expect(transcript).toContain("Observational memory:");
-    expect(transcript).toContain("▸ 分组 2 次工具调用");
-    expect(transcript).toContain("▸ 分组 3 次工具调用");
+    expect(transcript).toContain("▸ 分组 工具调用×2");
+    expect(transcript).toContain("▸ 分组 工具调用×3");
   });
 
   test("a visible keep line is never retroactively hidden by a group move", () => {
@@ -364,8 +364,8 @@ describe("notification tail moves", () => {
     // member, and the groups on both sides stay separate.
     const transcript = renderedTranscript();
     expect(transcript).toContain("Notice: urgent: rate limited");
-    expect(transcript).toContain("▸ 分组 2 次工具调用");
-    expect(transcript).toContain("▸ 分组 1 次工具调用 · 1 条消息");
+    expect(transcript).toContain("▸ 分组 工具调用×2");
+    expect(transcript).toContain("▸ 分组 工具调用×1 · 消息×1");
     expect(runtime.debugFoldedIds()).toHaveLength(2);
   });
 
@@ -392,8 +392,8 @@ describe("notification tail moves", () => {
     expect(runtime.debugFoldedIds()).toHaveLength(1);
     const transcript = renderedTranscript();
     expect(transcript).toContain("Session compacted 1 time");
-    expect(transcript).toContain("▸ 分组 3 次工具调用");
-    expect(transcript).not.toContain("条消息");
+    expect(transcript).toContain("▸ 分组 工具调用×3");
+    expect(transcript).not.toContain("消息×");
   });
 
   test("an own-coupled member survives a core status on the tail", () => {
@@ -421,9 +421,31 @@ describe("notification tail moves", () => {
     ]);
     expect(runtime.debugFoldedIds()).toEqual(folded);
     const transcript = renderedTranscript();
-    expect(transcript).toContain("▸ 分组 3 次工具调用 · 1 条消息");
+    expect(transcript).toContain("▸ 分组 工具调用×3 · 消息×1");
     // The core status line itself is visible, the member is still folded.
     expect(transcript).toContain("Session compacted 1 time");
+  });
+
+  test("a proven unchanged line retains its appearance time across a tail move", () => {
+    let at = 100;
+    startSession(omRules(), () => at);
+    runtime.handlePiEvent({ type: "agent_start" });
+    notify(OM_TEXTS[0]);
+    const line = receiver.lastStatusText as { build?: () => string };
+    line.build = () => OM_TEXTS[0];
+    receiver.chatContainer.addChild(new Spacer(1) as never);
+    at = 1700;
+    notify(OM_TEXTS[1]);
+    settleNormally();
+    expect(renderedTranscript()).toContain("耗时 1.6s");
+
+    // Reusing the last line after settlement cannot stretch this older group.
+    at = 5500;
+    notify(OM_TEXTS[2]);
+    runtime.handlePiEvent({ type: "agent_start" });
+    settleNormally();
+    expect(renderedTranscript()).toContain("消息×2");
+    expect(renderedTranscript()).not.toContain("耗时");
   });
 
   test("a real content update reveals first, then re-folds at next settle", () => {
@@ -452,7 +474,7 @@ describe("notification tail moves", () => {
     ]);
     expect(runtime.debugFoldedIds()).toEqual([folded[0]]);
     const refolded = renderedTranscript();
-    expect(refolded).toContain("▸ 分组 3 次工具调用 · 1 条消息");
+    expect(refolded).toContain("▸ 分组 工具调用×3 · 消息×1");
     expect(refolded).not.toContain("~99,999-token chunk");
   });
 

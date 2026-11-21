@@ -242,7 +242,7 @@ describe("rereview regression: group-wide width fallback", () => {
     settled(runtime);
 
     // Comfortable width: the folded group renders its summary.
-    expect(text(receiver.chatContainer)).toContain("1 段思考");
+    expect(text(receiver.chatContainer)).toContain("思考×1");
     // Width 5: the summary cannot fit — the whole group renders through:
     // the thinking body is visible (the 4-column wrap keeps only "VIS"
     // contiguous), no summary row renders, and the tool body is not
@@ -280,7 +280,7 @@ describe("rereview regression: custom message update reveals first", () => {
     receiver.chatContainer.addChild(component);
     runtime.syncReceiver(receiver);
     settled(runtime);
-    expect(text(component)).toContain("1 条消息");
+    expect(text(component)).toContain("消息×1");
 
     // The provider rewrites the message body in place and invalidates.
     message.content = "NEW AUDIT";
@@ -298,7 +298,7 @@ describe("rereview regression: custom message update reveals first", () => {
     runtime.syncReceiver(receiver);
     runtime.syncReceiver(receiver);
     expect(runtime.debugFoldedIds()).toEqual(foldedAgain);
-    expect(text(component)).toContain("1 条消息");
+    expect(text(component)).toContain("消息×1");
     runtime.onSessionShutdown();
   });
 });
@@ -364,7 +364,7 @@ describe("rereview regression: persisted custom_message identity", () => {
     // the summary — not an unfolded duplicate showing the raw body.
     expect(runtime.debugSegmentCount()).toBe(1);
     expect(runtime.debugFoldedIds()).toEqual([1]);
-    expect(text(component)).toContain("1 条消息");
+    expect(text(component)).toContain("消息×1");
     expect(text(component)).not.toContain("HISTORICAL AUDIT");
     runtime.onSessionShutdown();
   });

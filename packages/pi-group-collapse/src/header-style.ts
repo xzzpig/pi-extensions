@@ -7,8 +7,8 @@
  * carrier summary, expanded carrier title, thinking-run summary, and
  * thinking-run title) share one look:
  *
- *   ▸ 分组 17 次工具调用 · 4 条消息      (folded)
- *   ▾ 分组 17 次工具调用 · 4 条消息      (expanded)
+ *   ▸ 耗时 3.2s · 分组 工具调用×17 · 消息×4      (folded)
+ *   ▾ 耗时 3.2s · 分组 工具调用×17 · 消息×4      (expanded)
  *
  * - the disclosure arrow and the `分组` label take the host theme's accent;
  * - an error/warning marker keeps its semantic color (error/warning) and
@@ -19,9 +19,8 @@
  *   background — no hard-coded RGB, no Nerd Font glyphs, one row high; a
  *   theme that leaves panels unbacked (the generated system theme for
  *   terminals that report no colors) simply renders no band;
- * - the label is the only optional part: a terminal too narrow for it
- *   keeps the plain summary row, so decoration can never cost the group
- *   its entry point or trigger a width fallback the plain row survives.
+ * - optional details only use columns left after the existing label and
+ *   counts are fitted; they never make an otherwise visible header disappear.
  *
  * The plain summary text, its counts, and the fit/fallback decisions stay
  * in `view.ts`; this module only decorates what that module already fitted.
@@ -35,7 +34,12 @@
 import type { ThemeBg, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import type { SegmentSummary } from "./model.ts";
-import { summaryLine, summaryMarker, type SummaryTextOptions } from "./view.ts";
+import {
+  summaryDetails,
+  summaryLine,
+  summaryMarker,
+  type SummaryTextOptions,
+} from "./view.ts";
 
 /** The label between the arrow and the counts. */
 export const GROUP_HEADER_LABEL = "分组";
@@ -100,17 +104,19 @@ export function groupHeaderLine(
       : ` ${paintForeground(theme, markerColor(marker), marker)}`);
   const tail = paintForeground(theme, "muted", counts);
 
-  // The label is the only optional part. A terminal too narrow for it keeps
-  // the arrow, the error/warning marker, and the counts — each still in its
-  // semantic color — at exactly the plain row's cell width, so decoration
-  // can never cost the group its entry point or force a width fallback.
-  const labelled = `${head} ${paintForeground(theme, "accent", label)}${tail}`;
-  const unlabelled = `${head}${tail}`;
-  const row =
-    [labelled, unlabelled].find(
-      (candidate) => visibleWidth(candidate) <= options.width,
-    ) ?? plain;
-  return paintBackground(theme, row, options.width);
+  // Fit the original row first, including the label when it fits.
+  const labelled = ` ${paintForeground(theme, "accent", label)}${tail}`;
+  const body = visibleWidth(head + labelled) <= options.width ? labelled : tail;
+  const { elapsedPrefix, suffix } = summaryDetails(
+    summary,
+    options.width - visibleWidth(head + body),
+  );
+  const row = head + paintForeground(theme, "muted", elapsedPrefix) + body;
+  return paintBackground(
+    theme,
+    row + paintForeground(theme, "muted", suffix),
+    options.width,
+  );
 }
 
 /** A single group-level control at the end of an expanded group. */

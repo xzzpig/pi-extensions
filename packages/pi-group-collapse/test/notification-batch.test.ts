@@ -290,7 +290,7 @@ describe("one status change drops many members", () => {
     // notification member is left anywhere.
     const transcript = receiver.chatContainer.render(WIDTH).join("\n");
     expect(transcript.split("▸").length - 1).toBe(N);
-    expect(transcript).not.toContain("条消息");
+    expect(transcript).not.toContain("消息×");
     // The lines themselves are revealed again (the host paints their cached
     // text until its next invalidate; that is the host's business).
     expect(transcript).toContain("Observational memory:");
@@ -316,7 +316,7 @@ describe("one status change drops many members", () => {
     );
     const transcript = receiver.chatContainer.render(WIDTH).join("\n");
     expect(transcript).toContain("Session compacted 1 time");
-    expect(transcript).not.toContain("条消息");
+    expect(transcript).not.toContain("消息×");
   });
 
   test("doubling the transcript doubles the batch cost (linear)", () => {
@@ -411,6 +411,6 @@ describe("one status change drops many members", () => {
     ]);
     const transcript = receiver.chatContainer.render(WIDTH).join("\n");
     expect(transcript).toContain("Notice: urgent: rate limited");
-    expect(transcript).not.toContain("条消息");
+    expect(transcript).not.toContain("消息×");
   });
 });

@@ -155,16 +155,16 @@ function setup() {
 test("commands preserve one OM group and repaint without success notifications", async () => {
   const fixture = setup();
   const count = fixture.host.chatContainer.children.length;
-  expect(fixture.rendered()).toContain("▸ 分组 17 次工具调用 · 4 条消息");
+  expect(fixture.rendered()).toContain("▸ 分组 工具调用×17 · 消息×4");
   await fixture.run("expand");
   fixture.expectSingleGroup();
-  expect(fixture.rendered()).toContain("▾ 分组 17 次工具调用 · 4 条消息");
+  expect(fixture.rendered()).toContain("▾ 分组 工具调用×17 · 消息×4");
   expect(fixture.rendered()).toContain("BODY-command-tool-17");
   expect(fixture.requestRender).toHaveBeenCalledTimes(1);
 
   await fixture.run("collapse");
   fixture.expectSingleGroup();
-  expect(fixture.rendered()).toContain("▸ 分组 17 次工具调用 · 4 条消息");
+  expect(fixture.rendered()).toContain("▸ 分组 工具调用×17 · 消息×4");
   expect(fixture.rendered()).not.toContain("BODY-command-tool-");
   expect(fixture.requestRender).toHaveBeenCalledTimes(2);
   expect(fixture.notify).not.toHaveBeenCalled();
@@ -190,11 +190,11 @@ test("collapse command refolds a pointer-opened group without changing membershi
     clickCount: 1,
   };
   first.handleMouse(event);
-  expect(fixture.rendered()).toContain("▾ 分组 17 次工具调用 · 4 条消息");
+  expect(fixture.rendered()).toContain("▾ 分组 工具调用×17 · 消息×4");
   fixture.requestRender.mockClear();
   await fixture.run("collapse");
   fixture.expectSingleGroup();
-  expect(fixture.rendered()).toContain("▸ 分组 17 次工具调用 · 4 条消息");
+  expect(fixture.rendered()).toContain("▸ 分组 工具调用×17 · 消息×4");
   expect(fixture.rendered()).not.toContain("BODY-command-tool-");
   expect(fixture.requestRender).toHaveBeenCalledTimes(1);
   expect(fixture.notify).not.toHaveBeenCalled();
@@ -221,5 +221,5 @@ test("invalid command arguments retain a warning without reclassifying OM rows",
     "warning",
   );
   fixture.expectSingleGroup();
-  expect(fixture.rendered()).toContain("▸ 分组 17 次工具调用 · 4 条消息");
+  expect(fixture.rendered()).toContain("▸ 分组 工具调用×17 · 消息×4");
 });

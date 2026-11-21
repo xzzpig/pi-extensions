@@ -24,6 +24,7 @@
  */
 
 import {
+  AssistantMessageComponent,
   CustomMessageComponent,
   InteractiveMode,
   ToolExecutionComponent,
@@ -52,6 +53,16 @@ import {
   type GroupCollapseSnapshot,
 } from "./config.ts";
 import { TurnTracker } from "./lifecycle.ts";
+import { GroupTiming, type Interval } from "./group-timing.ts";
+import {
+  customArrayIndices,
+  customField,
+  opaqueCustomField,
+  sameCustomSnapshot,
+  sameNativeCustomBody,
+  snapshotCustomMessage,
+  snapshotField,
+} from "./custom-content.ts";
 import {
   GroupingModel,
   summarizeSegment,
@@ -105,7 +116,7 @@ type BranchEntry = {
   };
   readonly customType?: string;
   readonly display?: boolean;
-  readonly content?: string;
+  readonly content?: unknown;
 };
 
 export type RuntimeContextInput = {
@@ -133,6 +144,8 @@ type InstalledDisplays = {
   observer: PatchInstallResult;
   expandObserver: PatchInstallResult;
   customExpandObserver: PatchInstallResult;
+  customContentObserver: PatchInstallResult;
+  assistantContentObserver: PatchInstallResult;
 };
 
 const identityIds = new WeakMap<object, string>();
@@ -187,6 +200,8 @@ export class GroupCollapseRuntime {
   private model = new GroupingModel(this.policy);
   private store = new GroupStateStore();
   private pending = new PendingFoldCollection();
+  private timing = new GroupTiming();
+  private customAppearances = new WeakMap<object, number>();
   private tracker = new TurnTracker({
     onSettled: (settled) => this.applyFolding(settled.turn, settled.outcome),
   });
@@ -219,6 +234,9 @@ export class GroupCollapseRuntime {
       lastBlockType: string;
       signature: string;
       appliedTextBoundaries: Set<number>;
+      timedRuns: ReadonlyMap<number, string>;
+      renderedChildren: unknown;
+      timedContent?: ReturnType<typeof assistantBlocksOf>;
     }
   >();
   /** Receiver pending a post-rebuild rescan (rebind pass). */
@@ -243,14 +261,31 @@ export class GroupCollapseRuntime {
   /** The live theme accessor from session_start (dropped on shutdown). */
   private lastGetTheme: RuntimeContextInput["getTheme"];
   /** Per-custom-component content signature, for change detection. */
-  private customStates = new WeakMap<object, string>();
+  private customStates = new WeakMap<
+    object,
+    {
+      key: string;
+      message: object;
+      content: unknown;
+      snapshot: ReturnType<typeof snapshotCustomMessage>;
+      details: unknown;
+      customType: string;
+      display: boolean;
+    }
+  >();
   /** History custom messages indexed by (customType, display, content). */
   private customHistoryBySignature = new Map<string, string[]>();
   /** History custom keys already claimed by a scanned component. */
   private consumedCustomKeys = new Set<string>();
 
-  constructor(notifications: RuntimeNotifications) {
+  private readonly now: () => number;
+
+  constructor(
+    notifications: RuntimeNotifications,
+    now = () => performance.now(),
+  ) {
     this.notifications = notifications;
+    this.now = now;
   }
 
   /** A new extension factory owns a new queue even when the runtime survives. */
@@ -317,6 +352,10 @@ export class GroupCollapseRuntime {
       this.guard.invalidate(),
     );
     this.adoptRebuilt(rebuilt);
+    // Compaction can replace the view between an intermediate agent_end
+    // and the final agent_settled. Keep collecting in this logical turn,
+    // but only with events observed by the new, empty collector.
+    if (this.displayAllowed && this.tracker.isRunning()) this.timing.begin();
     this.knownComponents = new WeakSet();
     this.componentPositions = new WeakMap();
     this.componentsByKey = new Map();
@@ -358,6 +397,7 @@ export class GroupCollapseRuntime {
     pending: PendingFoldCollection;
   }): void {
     this.model = rebuilt.model;
+    this.resetTiming();
     this.store = rebuilt.store;
     this.pending = rebuilt.pending;
     this.groupHandles.clear();
@@ -376,6 +416,7 @@ export class GroupCollapseRuntime {
     // Every semantic index dies with the session: a later rebuild starts
     // from nothing, and stale events or behavior slots cannot reach in.
     this.model = new GroupingModel(this.policy);
+    this.resetTiming();
     this.store = new GroupStateStore();
     this.pending = new PendingFoldCollection();
     this.groupHandles.clear();
@@ -408,6 +449,84 @@ export class GroupCollapseRuntime {
     });
   }
 
+  private observeTranscriptTiming(
+    receiver: HostReceiver,
+    event: TranscriptTimingEvent,
+    before: number,
+  ): void {
+    if (event.type === "message_start" || event.type === "entry_appended") {
+      const children = receiver.chatContainer.children;
+      const appended =
+        children.length === before + 1 ? children[before] : undefined;
+      if (appended instanceof CustomMessageComponent) {
+        const custom = readCustomMessage(appended);
+        if (
+          custom &&
+          this.displays?.customContentObserver.available &&
+          matchesCustomAppearance(custom.message, event)
+        ) {
+          this.customAppearances.set(custom.message, this.now());
+        }
+      }
+    }
+    if (!this.timing.active || event.message?.role !== "assistant") return;
+    if (event.type !== "message_start" && event.type !== "message_update")
+      return;
+    const component = (
+      receiver as HostReceiver & { streamingComponent?: unknown }
+    ).streamingComponent;
+    if (!(component instanceof AssistantMessageComponent)) return;
+    if (readAssistantShape(component)?.messageRef !== event.message) return;
+    if (event.type === "message_start") {
+      this.timing.watchThinking(component);
+      return;
+    }
+    const block = event.assistantMessageEvent;
+    const index = block?.contentIndex;
+    if (typeof index !== "number" || !Number.isSafeInteger(index) || index < 0)
+      return;
+    if (block?.type === "thinking_start") {
+      this.timing.thinkingStart(component, index, this.now());
+    } else if (block?.type === "thinking_end") {
+      // The stream event owns the time and index; compare against the text
+      // that actually reached this component. Companion renderers can label
+      // the displayed message without editing the provider's event payload.
+      const displayed = event.message.content?.[index];
+      if (
+        displayed?.type === "thinking" &&
+        typeof displayed.thinking === "string"
+      ) {
+        this.timing.thinkingEnd(
+          component,
+          index,
+          this.now(),
+          displayed.thinking,
+        );
+      }
+    }
+  }
+
+  private resetTiming(): void {
+    this.timing = new GroupTiming();
+    this.customAppearances = new WeakMap();
+  }
+
+  private recordAppearance(
+    key: string,
+    at: number | undefined,
+    replaced: boolean,
+  ): void {
+    if (this.timing.point(this.model.member(key), at, replaced)) {
+      this.viewIndex = undefined;
+    }
+  }
+
+  private recordTiming(key: string, interval: Interval | undefined): void {
+    if (this.timing.record(this.model.member(key), interval)) {
+      this.viewIndex = undefined;
+    }
+  }
+
   // ------------------------------------------------------------------
   // Pi event mapping
   // ------------------------------------------------------------------
@@ -425,7 +544,10 @@ export class GroupCollapseRuntime {
         // the still-active turn's earlier segments become foldable.
         const wasRunning = this.tracker.isRunning();
         this.tracker.apply({ type: "agent_start" });
-        if (!wasRunning) this.model.apply({ type: "turnBegin" });
+        if (!wasRunning) {
+          this.model.apply({ type: "turnBegin" });
+          if (this.displayAllowed) this.timing.begin();
+        }
         break;
       }
       case "agent_end": {
@@ -455,11 +577,19 @@ export class GroupCollapseRuntime {
         // Close the model's turn before classifying: the fold planner and
         // the render projection must both see the turn as finished.
         this.model.apply({ type: "turnEnd" });
+        this.timing.settle();
         this.tracker.apply({
           type: "agent_settled",
           aborted: event.aborted as boolean | undefined,
         });
         break;
+      case "tool_execution_start": {
+        if (this.timing.active && isTopLevelToolEvent(event)) {
+          const key = event.toolCallId;
+          this.timing.toolStart(key, this.now(), this.model.member(key));
+        }
+        break;
+      }
       case "tool_execution_update": {
         const toolCallId = event.toolCallId as string;
         if (typeof toolCallId === "string") {
@@ -468,6 +598,12 @@ export class GroupCollapseRuntime {
         break;
       }
       case "tool_execution_end": {
+        if (this.timing.active && isTopLevelToolEvent(event)) {
+          const key = event.toolCallId;
+          if (this.timing.toolEnd(key, this.now(), this.model.member(key))) {
+            this.viewIndex = undefined;
+          }
+        }
         const toolCallId = event.toolCallId as string;
         if (typeof toolCallId === "string") {
           this.model.apply({
@@ -637,11 +773,16 @@ export class GroupCollapseRuntime {
     if (tool) {
       if (boundKeyOf(child) !== tool.toolCallId) {
         bindComponentWithKey(child, tool.toolCallId);
+        const existed = this.model.member(tool.toolCallId);
         this.model.apply({
           type: "toolCall",
           toolCallId: tool.toolCallId,
           toolName: tool.toolName,
         });
+        const member = this.model.member(tool.toolCallId);
+        if (!existed && member && this.timing.bindNewTool(member)) {
+          this.viewIndex = undefined;
+        }
       }
       return;
     }
@@ -652,6 +793,7 @@ export class GroupCollapseRuntime {
       // component identity. Both produce the same member keys.
       const messageKey =
         this.entryIdsByMessage.get(shape.messageRef) ?? identityOf(child);
+      const previousKey = boundKeyOf(child);
       bindComponentWithKey(child, messageKey);
       // Incremental rescan: pi streams one assistant component through
       // repeated updateContent calls. A completed message that did not
@@ -667,21 +809,61 @@ export class GroupCollapseRuntime {
         !state.streaming &&
         !shape.streaming &&
         state.blockCount === shape.blockCount &&
-        state.lastBlockType === shape.lastBlockType
+        state.lastBlockType === shape.lastBlockType &&
+        (state.timedRuns.size === 0 ||
+          state.renderedChildren === shape.renderedChildren)
       ) {
         return; // completed and unchanged
       }
-      const blocks = assistantBlocksOf(shape.messageRef);
+      if (
+        state &&
+        !state.streaming &&
+        !shape.streaming &&
+        previousKey === messageKey
+      ) {
+        // Repainting a finalized row can invalidate its own timing evidence,
+        // but must not send old transcript items into the currently open turn.
+        if (state.timedContent) {
+          const unchanged = unchangedThinkingRuns(
+            state.timedContent,
+            shape.content,
+          );
+          const retained = new Map(state.timedRuns);
+          for (const [run, key] of retained) {
+            if (unchanged.has(run)) continue;
+            this.recordTiming(key, undefined);
+            retained.delete(run);
+          }
+          state.timedRuns = retained;
+          if (retained.size === 0) state.timedContent = undefined;
+        }
+        state.message = shape.messageRef;
+        state.blockCount = shape.blockCount;
+        state.lastBlockType = shape.lastBlockType;
+        state.renderedChildren = shape.renderedChildren;
+        return;
+      }
+      const blocks = assistantBlocksOf(shape.content);
+      const timing =
+        !shape.streaming && child instanceof AssistantMessageComponent
+          ? this.timing.finishThinking(child, blocks)
+          : [];
       const signature =
         blocks.map((b) => b.type + (b.nonEmpty ? ":1" : ":0")).join(",") +
         (shape.streaming ? "/s" : "/e");
       if (
-        state &&
+        shape.streaming &&
+        state?.streaming &&
         state.message === shape.messageRef &&
         state.signature === signature
       ) {
         return; // streaming frame with no visible change
       }
+      // Without a verifiable association to the old runs, the component
+      // cannot carry their timing into this new rendering.
+      for (const key of state?.timedRuns.values() ?? [])
+        this.recordTiming(key, undefined);
+      const timedRuns = new Map<number, string>();
       // Consecutive thinking blocks merge into one native run, exactly as
       // the host renderer builds one MouseRegion per contiguous run — and
       // an all-empty group renders as nothing (no MouseRegion, no run
@@ -723,9 +905,10 @@ export class GroupCollapseRuntime {
             this.model.apply({
               type: "thinkingRun",
               messageKey,
-              runIndex: runIndex++,
+              runIndex,
               nonEmpty: true,
             });
+            runIndex += 1;
           }
           previousWasThinking = true;
         } else {
@@ -746,6 +929,17 @@ export class GroupCollapseRuntime {
         }
       }
       if (!shape.streaming) {
+        // Do not assign a host run's interval to a different projected run
+        // when the two disagree on boundaries (e.g. a tool between thoughts).
+        if (timing.length === runIndex) {
+          for (const [index, interval] of timing.entries()) {
+            if (interval) {
+              const key = `${messageKey}#t${index}`;
+              this.recordTiming(key, interval);
+              timedRuns.set(index, key);
+            }
+          }
+        }
         this.model.apply({ type: "messageEnd", messageKey });
       }
       this.assistantStates.set(child, {
@@ -755,41 +949,15 @@ export class GroupCollapseRuntime {
         lastBlockType: shape.lastBlockType,
         signature,
         appliedTextBoundaries: appliedBoundaries,
+        timedRuns,
+        renderedChildren: shape.renderedChildren,
+        timedContent: timedRuns.size > 0 ? blocks : undefined,
       });
       return;
     }
     const custom = readCustomMessage(child);
     if (custom) {
-      const key = this.customMessageKey(custom);
-      const signature = customSignature(
-        custom.customType,
-        custom.display,
-        custom.content,
-      );
-      if (boundKeyOf(child) !== key) {
-        bindComponentWithKey(child, key);
-        this.customStates.set(child, signature);
-        this.model.apply({
-          type: "customMessage",
-          key,
-          customType: custom.customType,
-          display: custom.display,
-        });
-      } else if (this.customStates.get(child) !== signature) {
-        // The provider updated an already-bound message: reveal the
-        // affected group first (member updates always surface), then
-        // re-classify, then join the deferred candidates so the next
-        // normal settle re-folds it. Unchanged re-scans are not updates.
-        this.customStates.set(child, signature);
-        this.revealSegmentOf(key);
-        this.model.apply({
-          type: "customMessageUpdate",
-          key,
-          customType: custom.customType,
-          display: custom.display,
-        });
-        this.recollectSegmentOf(key);
-      }
+      this.syncCustomMessage(child, custom);
       return;
     }
     if (isUserMessage(child)) {
@@ -929,7 +1097,8 @@ export class GroupCollapseRuntime {
     // Bind before applying: the projection consults the binding when the
     // group folds, and the scan must recognize the carrier.
     bindComponentWithKey(component, key);
-    if (this.model.member(key)) {
+    const replaced = this.model.member(key) !== undefined;
+    if (replaced) {
       // Reveal first: the reused line's new content must be visible
       // before the group's classification is recomputed.
       this.revealSegmentOf(key);
@@ -946,6 +1115,7 @@ export class GroupCollapseRuntime {
       this.model.apply({ type: "notification", key, level, text });
     }
     if (this.model.member(key)) {
+      this.recordAppearance(key, this.now(), replaced);
       this.groupedNotifications.add(component);
     } else {
       // Re-classification dropped it (e.g. a keep-identity update): the
@@ -1019,6 +1189,9 @@ export class GroupCollapseRuntime {
     // invalidation path: a dropped member must not stay "already applied"
     // for later scans. (The split itself already happened in the model.)
     for (const { key, component } of updates) {
+      // This callback is only for shared builders that may repaint to a
+      // different version. The old appearance time no longer proves it.
+      this.recordTiming(key, undefined);
       if (this.model.member(key)) this.groupedNotifications.add(component);
       else {
         this.groupedNotifications.delete(component);
@@ -1149,10 +1322,22 @@ export class GroupCollapseRuntime {
       "handleEvent",
       "runtime-receiver-sync",
       ({ predecessor, receiver, args }) => {
-        const result = predecessor.apply(receiver, args);
-        if (this.displayAllowed && isHostReceiver(receiver)) {
-          this.syncReceiver(receiver as HostReceiver);
+        if (
+          !this.sessionActive ||
+          !this.displayAllowed ||
+          !isHostReceiver(receiver)
+        ) {
+          return predecessor.apply(receiver, args);
         }
+        const event = args[0] as TranscriptTimingEvent | undefined;
+        const observed = isTranscriptTimingEvent(event);
+        const before = observed ? receiver.chatContainer.children.length : 0;
+        const timing = this.timing;
+        const result = predecessor.apply(receiver, args);
+        if (observed && this.timing === timing) {
+          this.observeTranscriptTiming(receiver, event, before);
+        }
+        this.syncReceiver(receiver);
         return result;
       },
     );
@@ -1314,6 +1499,49 @@ export class GroupCollapseRuntime {
         return predecessor.apply(receiver, args);
       },
     );
+    const customContentObserver = installPrototypePatch(
+      // SAFETY: the registry probes the callable rebuild slot before wrapping.
+      CustomMessageComponent.prototype as unknown as Record<
+        PropertyKey,
+        unknown
+      >,
+      "rebuild",
+      "runtime-custom-content-observer",
+      ({ predecessor, receiver, args }) => {
+        const result = predecessor.apply(receiver, args);
+        // Rebuild is also used by invalidate(), with no session event.
+        // Only bound rows are checked; unrelated events skip body payloads.
+        if (
+          receiver instanceof CustomMessageComponent &&
+          this.customStates.has(receiver)
+        ) {
+          const message = readCustomMessage(receiver);
+          if (message) this.syncCustomMessage(receiver, message, true);
+        }
+        return result;
+      },
+    );
+    const assistantContentObserver = installPrototypePatch(
+      // SAFETY: the registry probes the callable updateContent slot before wrapping.
+      AssistantMessageComponent.prototype as unknown as Record<
+        PropertyKey,
+        unknown
+      >,
+      "updateContent",
+      "runtime-assistant-content-observer",
+      ({ predecessor, receiver, args }) => {
+        const result = predecessor.apply(receiver, args);
+        if (
+          receiver instanceof AssistantMessageComponent &&
+          this.assistantStates.get(receiver)?.timedRuns.size
+        ) {
+          // Live streaming continues through the normal event scan; only a
+          // previously timed row can have stale evidence before the next scan.
+          this.classifyAndApply(receiver, false);
+        }
+        return result;
+      },
+    );
     this.displays = {
       render,
       handleEvent,
@@ -1321,7 +1549,93 @@ export class GroupCollapseRuntime {
       observer,
       expandObserver,
       customExpandObserver,
+      customContentObserver,
+      assistantContentObserver,
     };
+  }
+
+  private syncCustomMessage(
+    component: { constructor: Function },
+    custom: NonNullable<ReturnType<typeof readCustomMessage>>,
+    rebuilt = false,
+  ): void {
+    const { message, customType, display } = custom;
+    const previous = this.customStates.get(component);
+    const { value: content } = customField(message, "content");
+    const { value: details } = customField(message, "details");
+    const sameRow =
+      previous?.message === message &&
+      previous.content === content &&
+      previous.details === details &&
+      previous.customType === customType &&
+      previous.display === display;
+    // The renderer callback can consult external state not stored anywhere
+    // on the message. Only the built-in renderer has verifiable inputs.
+    const native =
+      component instanceof CustomMessageComponent &&
+      Object.hasOwn(component, "customRenderer") &&
+      customField(component, "customRenderer").value == null;
+    const at = native ? this.customAppearances.get(message) : undefined;
+    const boundMember = previous ? this.model.member(previous.key) : undefined;
+    const hadTiming =
+      boundMember !== undefined && this.timing.get(boundMember) !== undefined;
+    // History and unprovable rows never acquired a point, so there is no
+    // deep timing evidence to revalidate when the host invalidates them.
+    if (sameRow && at === undefined && (!rebuilt || !previous.snapshot)) return;
+    const snapshot =
+      native && (hadTiming || at !== undefined)
+        ? snapshotCustomMessage(message)
+        : undefined;
+    if (
+      sameRow &&
+      at === undefined &&
+      previous.snapshot &&
+      snapshot &&
+      sameCustomSnapshot(previous.snapshot.value, snapshot.value)
+    )
+      return;
+    const membershipChanged =
+      previous?.message !== message ||
+      previous.customType !== customType ||
+      previous.display !== display;
+    const previousBody =
+      previous?.snapshot && snapshotField(previous.snapshot.value, "content");
+    const currentBody = snapshot
+      ? snapshotField(snapshot.value, "content")
+      : previousBody === undefined
+        ? undefined
+        : snapshotCustomMessage(content)?.value;
+    const bodyChanged =
+      previousBody !== undefined && currentBody !== undefined
+        ? !sameNativeCustomBody(previousBody, currentBody)
+        : previous?.content !== content;
+    const key =
+      previous?.key ??
+      this.customMessageKey(message, customType, display, content);
+    this.customAppearances.delete(message);
+    const observedAt = snapshot ? at : undefined;
+    this.customStates.set(component, {
+      key,
+      message,
+      content,
+      // No future verification is needed after withdrawal of the point.
+      snapshot: observedAt === undefined ? undefined : snapshot,
+      details,
+      customType,
+      display,
+    });
+    if (!previous) {
+      const existed = this.model.member(key);
+      bindComponentWithKey(component, key);
+      this.model.apply({ type: "customMessage", key, customType, display });
+      if (!existed) this.recordAppearance(key, observedAt, false);
+      return;
+    }
+    this.recordAppearance(key, observedAt, true);
+    if (!membershipChanged && !bodyChanged) return;
+    this.revealSegmentOf(key);
+    this.model.apply({ type: "customMessageUpdate", key, customType, display });
+    this.recollectSegmentOf(key);
   }
 
   /** Make a member's folded group visible without user-open immunity. */
@@ -1371,20 +1685,20 @@ export class GroupCollapseRuntime {
    * (sessionEntryToContextMessages for persisted custom_message entries),
    * else the message object's transient identity.
    */
-  private customMessageKey(custom: {
-    message: object;
-    customType: string;
-    display: boolean;
-    content: string;
-  }): string {
+  private customMessageKey(
+    message: NonNullable<ReturnType<typeof readCustomMessage>>["message"],
+    customType: string,
+    display: boolean,
+    content: unknown,
+  ): string {
     return (
-      this.entryIdsByMessage.get(custom.message) ??
-      this.unclaimedHistoryCustomKey(
-        custom.customType,
-        custom.display,
-        custom.content,
-      ) ??
-      identityOf(custom.message)
+      this.entryIdsByMessage.get(message) ??
+      (this.customHistoryBySignature.size > 0
+        ? this.unclaimedHistoryCustomKey(
+            customSignature(customType, display, content),
+          )
+        : undefined) ??
+      identityOf(message)
     );
   }
 
@@ -1394,13 +1708,10 @@ export class GroupCollapseRuntime {
    * their entries in entry order; the claim dies with the next rebuild.
    */
   private unclaimedHistoryCustomKey(
-    customType: string,
-    display: boolean,
-    content: string,
+    signature: string | undefined,
   ): string | undefined {
-    const candidates = this.customHistoryBySignature.get(
-      customSignature(customType, display, content),
-    );
+    if (signature === undefined) return undefined;
+    const candidates = this.customHistoryBySignature.get(signature);
     if (candidates === undefined) return undefined;
     for (const key of candidates) {
       if (!this.consumedCustomKeys.has(key)) {
@@ -1419,6 +1730,8 @@ export class GroupCollapseRuntime {
     this.displays.observer.cleanup();
     this.displays.expandObserver.cleanup();
     this.displays.customExpandObserver.cleanup();
+    this.displays.customContentObserver.cleanup();
+    this.displays.assistantContentObserver.cleanup();
     this.displays = undefined;
     this.notificationObserver = undefined;
   }
@@ -1455,7 +1768,7 @@ export class GroupCollapseRuntime {
     const messageThinking = new Map<string, Map<number, number>>();
     for (const segment of this.model.currentSegments()) {
       byId.set(segment.id, segment);
-      summaries.set(segment.id, summarizeSegment(segment));
+      summaries.set(segment.id, summarizeSegment(segment, this.timing.get));
       for (const member of segment.members) {
         byMember.set(member.key, segment);
         if (member.kind === "thinking") {
@@ -1477,7 +1790,10 @@ export class GroupCollapseRuntime {
   }
 
   private summaryOf(segment: Segment): ReturnType<typeof summarizeSegment> {
-    return this.index().summaries.get(segment.id) ?? summarizeSegment(segment);
+    return (
+      this.index().summaries.get(segment.id) ??
+      summarizeSegment(segment, this.timing.get)
+    );
   }
 
   private projectionFor(
@@ -1993,6 +2309,62 @@ function readToolIdentity(
   return undefined;
 }
 
+function isTopLevelToolEvent(
+  event: Record<string, unknown>,
+): event is Record<string, unknown> & { toolCallId: string } {
+  return (
+    typeof event.toolCallId === "string" &&
+    !event.toolCallId.includes("/") &&
+    event.parentToolCallId === undefined
+  );
+}
+
+type TranscriptTimingEvent = {
+  type?: string;
+  message?: {
+    role?: string;
+    content?: readonly { type?: string; thinking?: string }[];
+  };
+  assistantMessageEvent?: { type?: string; contentIndex?: number };
+  entry?: {
+    type?: string;
+    customType?: string;
+    display?: boolean;
+    content?: unknown;
+    timestamp?: string;
+  };
+};
+
+function isTranscriptTimingEvent(
+  event?: TranscriptTimingEvent,
+): event is TranscriptTimingEvent {
+  if (event?.type === "message_start")
+    return (
+      event.message?.role === "assistant" || event.message?.role === "custom"
+    );
+  if (event?.type === "entry_appended")
+    return event.entry?.type === "custom_message";
+  if (event?.type !== "message_update" || event.message?.role !== "assistant")
+    return false;
+  const phase = event.assistantMessageEvent?.type;
+  return phase === "thinking_start" || phase === "thinking_end";
+}
+
+function matchesCustomAppearance(
+  message: { customType?: string; content?: unknown; timestamp?: number },
+  event: TranscriptTimingEvent,
+): boolean {
+  if (event.type === "message_start") return event.message === message;
+  const entry = event.entry;
+  if (entry?.type !== "custom_message" || !entry.display || !entry.timestamp)
+    return false;
+  return (
+    message.customType === entry.customType &&
+    customField(message, "content").value === entry.content &&
+    message.timestamp === Date.parse(entry.timestamp)
+  );
+}
+
 /**
  * Cheap assistant shape read: identity, streaming flag, and block count —
  * everything needed to skip an unchanged completed message without
@@ -2004,13 +2376,15 @@ function readAssistantShape(value: object):
       streaming: boolean;
       blockCount: number;
       lastBlockType: string;
+      renderedChildren: unknown;
+      content: readonly AssistantBlock[];
     }
   | undefined {
   const candidate = value as {
-    contentContainer?: unknown;
+    contentContainer?: { children?: unknown };
     lastMessage?: {
       role?: string;
-      content?: readonly { type?: string }[];
+      content?: readonly AssistantBlock[];
     } | null;
     isStreaming?: boolean;
   };
@@ -2021,6 +2395,8 @@ function readAssistantShape(value: object):
     messageRef: candidate.lastMessage as object,
     streaming: candidate.isStreaming === true,
     blockCount: content.length,
+    renderedChildren: candidate.contentContainer.children,
+    content,
     // A cheap structural signal: reading the last block's type (never its
     // thinking/text body) catches in-place structural swaps at equal count.
     lastBlockType: content[content.length - 1]?.type ?? "",
@@ -2028,31 +2404,99 @@ function readAssistantShape(value: object):
 }
 
 /** Map the message's content blocks (reads thinking/text fields). */
-function assistantBlocksOf(
-  messageRef: object,
-): readonly { type: string; nonEmpty: boolean }[] {
-  const message = messageRef as {
-    content?: readonly {
-      type?: string;
-      thinking?: string;
-      text?: string;
-    }[];
-  };
-  return (message.content ?? []).map((block) => ({
+function assistantBlocksOf(content: readonly AssistantBlock[]): readonly {
+  type: string;
+  nonEmpty: boolean;
+  source: AssistantBlock;
+  thinking?: string;
+  text?: string;
+}[] {
+  return content.map((block) => ({
     type: block.type ?? "",
-    nonEmpty:
-      (block.thinking !== undefined ? block.thinking.trim() : undefined) !== ""
-        ? true
-        : (block.text !== undefined ? block.text.trim() : "") !== "",
+    source: block,
+    thinking: block.thinking,
+    text: block.text,
+    nonEmpty: Boolean(
+      (block.type === "thinking" ? block.thinking : block.text)?.trim(),
+    ),
   }));
 }
 
-function readCustomMessage(value: object):
+type AssistantBlock = { type?: string; thinking?: string; text?: string };
+
+type VisibleThinkingRun = { block: AssistantBlock; text: string }[];
+
+/** Pi renders consecutive thinking blocks as one run, without empty thoughts. */
+function visibleThinkingLayout(
+  content: readonly AssistantBlock[],
+  observed: ReturnType<typeof assistantBlocksOf>,
+  fromSnapshot = false,
+): VisibleThinkingRun[] {
+  const runs: VisibleThinkingRun[] = [];
+  let run: VisibleThinkingRun | undefined;
+  for (const [index, block] of content.entries()) {
+    const prior = observed[index];
+    if (block.type === "thinking") {
+      const thought = block.thinking;
+      if (thought === undefined) continue;
+      const nonEmpty =
+        prior?.type === "thinking" && prior.thinking === thought
+          ? prior.nonEmpty
+          : Boolean(thought.trim());
+      if (!nonEmpty) continue;
+      if (!run) {
+        run = [];
+        runs.push(run);
+      }
+      run.push({
+        block: fromSnapshot ? observed[index].source : block,
+        text: thought,
+      });
+    } else {
+      // The host ends a thinking run at any non-thinking block, even one
+      // with no visible text. Its text content is not timing evidence.
+      run = undefined;
+    }
+  }
+  return runs;
+}
+
+/** A proof stays with its component run ordinal, never with an equal-looking replacement. */
+function unchangedThinkingRuns(
+  observed: ReturnType<typeof assistantBlocksOf>,
+  current: readonly AssistantBlock[],
+): Set<number> {
+  const prior = visibleThinkingLayout(observed, observed, true);
+  const next = visibleThinkingLayout(current, observed);
+  const unchanged = new Set<number>();
+  for (const [index, run] of prior.entries()) {
+    const replacement = next[index];
+    if (!replacement) continue;
+    if (
+      run.length === replacement.length &&
+      run.every((thought, i) => {
+        const nextThought = replacement[i];
+        return (
+          thought.block === nextThought.block &&
+          thought.text === nextThought.text
+        );
+      })
+    )
+      unchanged.add(index);
+  }
+  return unchanged;
+}
+
+function readCustomMessage(value: { constructor: Function }):
   | {
-      message: object;
+      message: {
+        customType?: string;
+        content?: unknown;
+        details?: unknown;
+        timestamp?: number;
+      };
       customType: string;
       display: boolean;
-      content: string;
     }
   | undefined {
   const candidate = value as {
@@ -2061,19 +2505,17 @@ function readCustomMessage(value: object):
       customType?: string;
       display?: boolean;
       content?: unknown;
+      details?: unknown;
+      timestamp?: number;
     };
   };
   if (!candidate.message || candidate.message.role !== "custom")
     return undefined;
   if (typeof candidate.message.customType !== "string") return undefined;
   return {
-    message: candidate.message as object,
+    message: candidate.message,
     customType: candidate.message.customType,
     display: candidate.message.display !== false,
-    content:
-      typeof candidate.message.content === "string"
-        ? candidate.message.content
-        : "",
   };
 }
 
@@ -2085,9 +2527,67 @@ function readCustomMessage(value: object):
 function customSignature(
   customType: string,
   display: boolean,
-  content: string,
-): string {
-  return `${customType}\u0000${display ? "1" : "0"}\u0000${content}`;
+  content: unknown,
+): string | undefined {
+  // Snapshot supported body fields by value, not array/object identity:
+  // extensions can replace a block or mutate it in place before invalidate().
+  if (content === opaqueCustomField) return undefined;
+  let body: string | CustomBlockSignature[] | null =
+    typeof content === "string" ? content : null;
+  if (
+    typeof content === "object" &&
+    content !== null &&
+    customField(content, "length").value === opaqueCustomField
+  )
+    return undefined;
+  if (Array.isArray(content)) {
+    // History identity is independent of the small timing-proof budget.
+    // Walk actual own indices, not length or an extension-supplied iterator.
+    body = [];
+    for (const index of customArrayIndices(content)) {
+      const block = customField(content, index).value;
+      if (block === opaqueCustomField) return undefined;
+      body.push(customBlockSignature(block));
+    }
+  }
+  return JSON.stringify([customType, display, body]);
+}
+
+type CustomBlockSignature =
+  | readonly [kind: string, value?: string, extra?: string]
+  | null;
+
+function customBlockSignature(block: unknown): CustomBlockSignature {
+  if (typeof block !== "object" || block === null) return null;
+  const item = block as {
+    type?: string;
+    text?: string;
+    textSignature?: string;
+    data?: string;
+    mimeType?: string;
+  };
+  const type = customField(item, "type").value;
+  if (type === "text")
+    return [
+      type,
+      customStringField(item, "text"),
+      customStringField(item, "textSignature"),
+    ];
+  if (type === "image")
+    return [
+      type,
+      customStringField(item, "mimeType"),
+      customStringField(item, "data"),
+    ];
+  return null;
+}
+
+function customStringField(
+  record: { constructor: Function },
+  key: string,
+): string | undefined {
+  const { value } = customField(record, key);
+  return typeof value === "string" ? value : undefined;
 }
 
 /** Index a history custom member by signature (entry order preserved). */
@@ -2095,11 +2595,12 @@ function noteCustomSignature(
   customSignatures: Map<string, string[]> | undefined,
   customType: string,
   display: boolean,
-  content: string,
+  content: unknown,
   key: string,
 ): void {
   if (!customSignatures) return;
   const signature = customSignature(customType, display, content);
+  if (signature === undefined) return;
   const keys = customSignatures.get(signature);
   if (keys) {
     keys.push(key);
@@ -2245,7 +2746,7 @@ export function mapBranchEntries(
         const custom = entry.message as unknown as {
           customType?: string;
           display?: boolean;
-          content?: string;
+          content?: unknown;
         };
         if (typeof custom.customType === "string") {
           mapped.push({
@@ -2258,7 +2759,7 @@ export function mapBranchEntries(
             customSignatures,
             custom.customType,
             custom.display !== false,
-            typeof custom.content === "string" ? custom.content : "",
+            custom.content,
             entry.id,
           );
         }
@@ -2274,7 +2775,8 @@ export function mapBranchEntries(
         customSignatures,
         entry.customType ?? "",
         entry.display !== false,
-        entry.content ?? "",
+        // Match sessionEntryToContextMessages: old absent/null bodies render as [].
+        entry.content ?? [],
         entry.id,
       );
     } else if (

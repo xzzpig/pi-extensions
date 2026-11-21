@@ -24,6 +24,7 @@
  * results, thinking or message bodies.
  */
 
+import type { Interval } from "./group-timing.ts";
 import type { CompiledRules, NotificationLevel } from "./rules.ts";
 import { actionForCandidateCompiled } from "./rules.ts";
 
@@ -239,11 +240,13 @@ export class GroupingModel {
           break;
         }
         const orphan = this.orphanResults.get(item.toolCallId);
+        let status: MemberStatus = "pending";
+        if (orphan) status = orphan.isError ? "failed" : "settled";
         this.addMember({
           kind: "tool",
           key: item.toolCallId,
           toolName: item.toolName,
-          status: orphan ? (orphan.isError ? "failed" : "settled") : "pending",
+          status,
         });
         if (orphan) this.orphanResults.delete(item.toolCallId);
         this.revisionCounter += 1;
@@ -633,6 +636,8 @@ export class GroupingModel {
 /** Segment summary used by the two-level group view. */
 export type SegmentSummary = {
   readonly tools: number;
+  readonly toolCounts?: readonly { name: string; count: number }[];
+  readonly elapsedMs?: number;
   readonly thinking: number;
   readonly messages: number;
   readonly failed: number;
@@ -641,17 +646,33 @@ export type SegmentSummary = {
   readonly errors: number;
 };
 
-export function summarizeSegment(segment: Segment): SegmentSummary {
+export function summarizeSegment(
+  segment: Segment,
+  intervalOf?: (member: Member) => Interval | undefined,
+): SegmentSummary {
+  const counts = new Map<string, number>();
   let tools = 0;
   let thinking = 0;
   let messages = 0;
   let failed = 0;
   let warnings = 0;
   let errors = 0;
+  let timed = 0;
+  let start = Infinity;
+  let end = -Infinity;
   for (const member of segment.members) {
+    const interval = intervalOf?.(member);
+    if (interval) {
+      timed += 1;
+      start = Math.min(start, interval.start);
+      end = Math.max(end, interval.end);
+    }
     switch (member.kind) {
       case "tool":
         tools += 1;
+        if (member.toolName) {
+          counts.set(member.toolName, (counts.get(member.toolName) ?? 0) + 1);
+        }
         if (member.status === "failed") failed += 1;
         break;
       case "thinking":
@@ -667,5 +688,23 @@ export function summarizeSegment(segment: Segment): SegmentSummary {
         break;
     }
   }
-  return { tools, thinking, messages, failed, warnings, errors };
+  const summary: SegmentSummary = {
+    tools,
+    thinking,
+    messages,
+    failed,
+    warnings,
+    errors,
+    ...(timed > 0 && timed === segment.members.length
+      ? { elapsedMs: end - start }
+      : {}),
+  };
+  if (counts.size === 0) return summary;
+  const toolCounts = Array.from(counts, ([name, count]) => ({ name, count }));
+  toolCounts.sort((a, b) => {
+    if (a.count !== b.count) return b.count - a.count;
+    if (a.name === b.name) return 0;
+    return a.name < b.name ? -1 : 1;
+  });
+  return { ...summary, toolCounts };
 }

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0 — Group details and elapsed time
+
+- Show tool names and call counts, tool failures, and notification warnings and errors in folded and expanded headers. All counts use `名称×次数`.
+- When every member has reliable live timing, place `耗时` at the front of the header. It includes gaps between members but not time spent waiting for a fold, and overlapping calls are not counted twice.
+- Keep elapsed time in memory only: restored groups retain their static counts, and new groups can still be timed after a transcript rebuild. On narrow terminals, optional details give way to core counts and exception markers.
+
 ## 0.1.2 — Group spacing and bottom collapse
 
 - Fold proven hidden-thinking and notification spacers with their members, and keep one deduplicated group boundary when adjacent visible content needs separation.

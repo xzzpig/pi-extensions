@@ -180,7 +180,7 @@ describe("group layout with real host components", () => {
     runtime.syncReceiver(host);
     settle();
     const rows = lines();
-    const summary = rowOf(rows, "38 次工具调用 · 33 段思考");
+    const summary = rowOf(rows, "工具调用×38 · 思考×33");
     const after = rowOf(rows, "AFTER-GROUP");
     expect(summary).toBeGreaterThanOrEqual(0);
     expect(after).toBeGreaterThan(summary);
@@ -202,7 +202,7 @@ describe("group layout with real host components", () => {
     runtime.syncReceiver(host);
     settle();
     const rows = lines();
-    const summary = rowOf(rows, "10 次工具调用 · 10 条消息");
+    const summary = rowOf(rows, "工具调用×10 · 消息×10");
     const after = rowOf(rows, "AFTER-NOTICES");
     expect(summary).toBeGreaterThanOrEqual(0);
     expect(blankBetween(rows, summary, after)).toBe(1);
@@ -222,7 +222,7 @@ describe("group layout with real host components", () => {
     expect(host.lastStatusMessage).toBe("NOTICE: second");
     runtime.syncReceiver(host);
     settle();
-    expect(lines().map(plain).join("\n")).toContain("1 次工具调用 · 1 条消息");
+    expect(lines().map(plain).join("\n")).toContain("工具调用×1 · 消息×1");
     const spacer = before[before.length - 2];
     expect(spacer.render(WIDTH)).toEqual([]);
     expect(Reflect.get(notification, "build")).toBe(originalBuilder);
@@ -274,8 +274,8 @@ describe("group layout with real host components", () => {
     runtime.syncReceiver(host);
     settle();
     const rows = lines();
-    assertOneBoundary(rows, "BEFORE-THOUGHT", "1 段思考");
-    assertOneBoundary(rows, "1 段思考", "AFTER-THOUGHT");
+    assertOneBoundary(rows, "BEFORE-THOUGHT", "思考×1");
+    assertOneBoundary(rows, "思考×1", "AFTER-THOUGHT");
     expect(rows.map(plain).join("\n")).not.toContain("HIDDEN-THOUGHT");
   });
 
@@ -294,7 +294,7 @@ describe("group layout with real host components", () => {
     runtime.syncReceiver(host);
     settle();
     const output = lines().map(plain).join("\n");
-    expect(output).toContain("1 段思考");
+    expect(output).toContain("思考×1");
     expect(output).toContain("Response was truncated");
     expect(output).toContain("RECOVERED-TEXT");
     expect(output).not.toContain("HIDDEN-TRUNCATED-THOUGHT");
@@ -309,8 +309,8 @@ describe("group layout with real host components", () => {
     runtime.syncReceiver(host);
     settle();
     const rows = lines();
-    assertOneBoundary(rows, "BEFORE-TOOL", "1 次工具调用");
-    assertOneBoundary(rows, "1 次工具调用", "AFTER-TOOL");
+    assertOneBoundary(rows, "BEFORE-TOOL", "工具调用×1");
+    assertOneBoundary(rows, "工具调用×1", "AFTER-TOOL");
     expect(runtime.expandAll()).toBe(1);
     expect(plain(component.render(WIDTH).join("\n"))).toContain("echo single");
   });
@@ -322,8 +322,8 @@ describe("group layout with real host components", () => {
     runtime.syncReceiver(host);
     settle();
     const rows = lines();
-    assertOneBoundary(rows, "BEFORE-TIGHT", "1 次工具调用");
-    assertOneBoundary(rows, "1 次工具调用", "AFTER-TIGHT");
+    assertOneBoundary(rows, "BEFORE-TIGHT", "工具调用×1");
+    assertOneBoundary(rows, "工具调用×1", "AFTER-TIGHT");
   });
 
   test("repeated expand and collapse keeps one boundary without accumulating rows", () => {
@@ -334,9 +334,9 @@ describe("group layout with real host components", () => {
     settle();
     for (let pass = 0; pass < 5; pass++) {
       const folded = lines();
-      assertOneBoundary(folded, "BEFORE-LOOP", "1 次工具调用");
-      assertOneBoundary(folded, "1 次工具调用", "AFTER-LOOP");
-      const foldedHeader = rowOf(component.render(WIDTH), "1 次工具调用");
+      assertOneBoundary(folded, "BEFORE-LOOP", "工具调用×1");
+      assertOneBoundary(folded, "工具调用×1", "AFTER-LOOP");
+      const foldedHeader = rowOf(component.render(WIDTH), "工具调用×1");
       const target = readExpandTarget(component)?.resolveLocalTarget(
         foldedHeader,
         WIDTH,
@@ -344,7 +344,7 @@ describe("group layout with real host components", () => {
       expect(target).toBeDefined();
       target?.component.setExpanded(true);
       const opened = lines();
-      assertOneBoundary(opened, "BEFORE-LOOP", "1 次工具调用");
+      assertOneBoundary(opened, "BEFORE-LOOP", "工具调用×1");
       assertOneBoundary(opened, "收起分组", "AFTER-LOOP");
       const footerRow = rowOf(component.render(WIDTH), "收起分组");
       readExpandTarget(component)
@@ -409,7 +409,7 @@ describe("group layout with real host components", () => {
     runtime.syncReceiver(host);
     settle();
     const rows = lines();
-    assertOneBoundary(rows, "1 次工具调用 · 1 段思考", "LAST-ASSISTANT-TEXT");
+    assertOneBoundary(rows, "工具调用×1 · 思考×1", "LAST-ASSISTANT-TEXT");
     expect(rows.map(plain).join("\n")).toContain("FOLLOWING-CONTENT");
   });
 
@@ -423,8 +423,8 @@ describe("group layout with real host components", () => {
     runtime.syncReceiver(host);
     settle();
     const rows = lines();
-    assertOneBoundary(rows, "BEFORE-CARRIER", "1 段思考");
-    assertOneBoundary(rows, "1 段思考", "AFTER-CARRIER");
+    assertOneBoundary(rows, "BEFORE-CARRIER", "思考×1");
+    assertOneBoundary(rows, "思考×1", "AFTER-CARRIER");
   });
 
   test("a thinking-only group at transcript edges has no extra blank boundaries", () => {
@@ -435,7 +435,7 @@ describe("group layout with real host components", () => {
     settle();
     const rows = lines();
     expect(rows).toHaveLength(1);
-    expect(plain(rows[0])).toContain("1 段思考");
+    expect(plain(rows[0])).toContain("思考×1");
     // The removed leading host Spacer carried Pi's zone-start marker;
     // it must survive on the remaining assistant output.
     expect(rows[0]).toContain("\x1b]133;A\x07");
@@ -451,7 +451,7 @@ describe("group layout with real host components", () => {
     settle();
     const rows = lines();
     const headings = rows.flatMap((line, index) =>
-      plain(line).includes("1 次工具调用") ? [index] : [],
+      plain(line).includes("工具调用×1") ? [index] : [],
     );
     expect(headings).toHaveLength(2);
     expect(headings[0]).toBe(0);
@@ -477,7 +477,7 @@ describe("group layout with real host components", () => {
     const rows = lines();
     expect(plain(rows[0])).toBe("BEFORE-ADJACENT");
     expect(plain(rows[1])).toBe("");
-    expect(plain(rows[2])).toContain("1 次工具调用");
+    expect(plain(rows[2])).toContain("工具调用×1");
     // The first component's local row 0 is a boundary, not its header.
     // Resolving after the whole container render must not reuse a later
     // neighbor probe's temporary, unpadded geometry.
@@ -662,7 +662,7 @@ describe("group layout with real host components", () => {
       plain(line).includes("收起分组") ? [index] : [],
     );
     const headers = rows.flatMap((line, index) =>
-      plain(line).includes("▾") && plain(line).includes("1 段思考")
+      plain(line).includes("▾") && plain(line).includes("思考×1")
         ? [index]
         : [],
     );

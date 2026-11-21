@@ -5,14 +5,14 @@
  * marker when any exists (markers outrank counts and are never squeezed
  * out), and the non-zero kind counts — tools, thinking runs, messages —
  * separated by middots. The line never embeds member content: no tool
- * arguments, results, thinking, or message bodies, and no tool names to
- * crowd out the markers. Width is measured in terminal cells (CJK counts
+ * arguments, results, thinking, or message bodies. Optional header details
+ * are fitted separately and cannot crowd out the core. Width is measured in terminal cells (CJK counts
  * double) and the line degrades by dropping the least significant count
  * first; a terminal too narrow for even the minimal identifiable summary
  * keeps the group's original display instead of overflowing.
  */
 
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import type { SegmentSummary } from "./model.ts";
 
 export type SummaryTextOptions = {
@@ -64,13 +64,13 @@ export function summaryLine(
 
   const parts: CountPart[] = [];
   if (summary.tools > 0) {
-    parts.push({ significance: 3, text: `${summary.tools} 次工具调用` });
+    parts.push({ significance: 3, text: `工具调用×${summary.tools}` });
   }
   if (summary.thinking > 0) {
-    parts.push({ significance: 2, text: `${summary.thinking} 段思考` });
+    parts.push({ significance: 2, text: `思考×${summary.thinking}` });
   }
   if (summary.messages > 0) {
-    parts.push({ significance: 1, text: `${summary.messages} 条消息` });
+    parts.push({ significance: 1, text: `消息×${summary.messages}` });
   }
   if (parts.length === 0) return undefined;
 
@@ -98,8 +98,80 @@ function compose(
   return `${head} ${parts.map((part) => part.text).join(" · ")}`;
 }
 
+const DETAIL_SEPARATOR = " · ";
+type SummaryDetails = { elapsedPrefix: string; suffix: string };
+const EMPTY_DETAILS: SummaryDetails = { elapsedPrefix: "", suffix: "" };
+const detailCache = new WeakMap<
+  SegmentSummary,
+  { budget: number; details: SummaryDetails }
+>();
+
+/** Fit complete details into the columns left over by the original header. */
+export function summaryDetails(
+  summary: SegmentSummary,
+  budget: number,
+): SummaryDetails {
+  if (budget <= visibleWidth(DETAIL_SEPARATOR)) return EMPTY_DETAILS;
+  const cached = detailCache.get(summary);
+  if (cached?.budget === budget) return cached.details;
+
+  let remaining = budget;
+  let elapsedPrefix = "";
+  let suffix = "";
+  const append = (label: string, separator = DETAIL_SEPARATOR) => {
+    const part = separator + label;
+    const width = visibleWidth(part);
+    if (width > remaining) return false;
+    suffix += part;
+    remaining -= width;
+    return true;
+  };
+
+  const finish = () => {
+    const details = { elapsedPrefix, suffix };
+    detailCache.set(summary, { budget, details });
+    return details;
+  };
+  if (summary.failed > 0 && !append(`工具失败×${summary.failed}`))
+    return finish();
+  if (summary.errors > 0 && !append(`通知错误×${summary.errors}`))
+    return finish();
+  if (summary.warnings > 0 && !append(`通知警告×${summary.warnings}`))
+    return finish();
+  if (
+    summary.elapsedMs !== undefined &&
+    Number.isFinite(summary.elapsedMs) &&
+    summary.elapsedMs >= 0
+  ) {
+    const seconds = summary.elapsedMs / 1000;
+    // Display first, but allocate after the exception counts as before.
+    const prefix = ` 耗时 ${seconds > 0 && seconds < 0.1 ? "<0.1" : seconds.toFixed(1)}s ·`;
+    const width = visibleWidth(prefix);
+    if (width > remaining) return finish();
+    elapsedPrefix = prefix;
+    remaining -= width;
+  }
+
+  let hasTool = false;
+  for (const { name, count } of summary.toolCounts ?? []) {
+    // At minimum a one-cell name, a multiplication sign and one digit.
+    if (remaining < (hasTool ? 4 : 6)) break;
+    const safeName = stripTerminalSequences(name)
+      .replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, "")
+      .trim();
+    if (
+      safeName &&
+      append(`${safeName}×${count}`, hasTool ? " " : DETAIL_SEPARATOR)
+    ) {
+      hasTool = true;
+    }
+  }
+
+  return finish();
+}
+
 /**
- * Summary cache key inputs: the line depends only on the counts and the
+ * Core summary cache key inputs: the core depends only on the counts and the
  * group's expanded state, so a cache can reuse a rendered line until the
  * segment's statistics or its disclosure state change.
  */

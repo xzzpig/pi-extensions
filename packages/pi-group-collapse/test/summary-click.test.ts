@@ -352,11 +352,11 @@ describe("native summary clicks", () => {
     runtime.handlePiEvent({ type: "agent_settled", aborted: false });
     const folded = component.render(WIDTH);
     expect(plain(folded)).not.toContain("alpha thinking");
-    expect(plain(folded)).toContain("1 段思考");
+    expect(plain(folded)).toContain("思考×1");
 
     // Expand through a plain click on the in-place summary row...
     const summaryRow = folded.findIndex((line) =>
-      stripTerminalSequences(line).includes("1 段思考"),
+      stripTerminalSequences(line).includes("思考×1"),
     );
     expect(summaryRow).toBeGreaterThan(-1);
     dispatch(component, at("press", 1, summaryRow));

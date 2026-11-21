@@ -187,10 +187,10 @@ describe("summaryLine disclosure state", () => {
   test("a folded summary shows ▸ and an expanded one shows ▾", () => {
     const counts = summary({ tools: 4, thinking: 3, messages: 2 });
     expect(summaryLine(counts, { width: WIDTH })).toBe(
-      "▸ 4 次工具调用 · 3 段思考 · 2 条消息",
+      "▸ 工具调用×4 · 思考×3 · 消息×2",
     );
     expect(summaryLine(counts, { width: WIDTH, expanded: true })).toBe(
-      "▾ 4 次工具调用 · 3 段思考 · 2 条消息",
+      "▾ 工具调用×4 · 思考×3 · 消息×2",
     );
   });
 
@@ -207,13 +207,13 @@ describe("summaryLine disclosure state", () => {
         width: WIDTH,
         expanded: true,
       }),
-    ).toBe("▾ ✗ 2 次工具调用");
+    ).toBe("▾ ✗ 工具调用×2");
     expect(
       summaryLine(summary({ messages: 1, warnings: 1 }), {
         width: WIDTH,
         expanded: true,
       }),
-    ).toBe("▾ ⚠ 1 条消息");
+    ).toBe("▾ ⚠ 消息×1");
   });
 
   test("the summary cache key covers the disclosure state", () => {
@@ -250,17 +250,17 @@ describe("runtime disclosure: tool carriers", () => {
       const [tool] = foldedToolGroup(runtime, receiver, ["t1", "t2"]);
 
       expect(arrowsIn(tool.render(WIDTH))).toEqual([FOLDED]);
-      expect(text(tool)).toContain("2 次工具调用");
+      expect(text(tool)).toContain("工具调用×2");
 
       click(tool, 0);
       expect(arrowsIn(tool.render(WIDTH))).toEqual([EXPANDED]);
-      expect(text(tool)).toContain("2 次工具调用");
+      expect(text(tool)).toContain("工具调用×2");
       // The member body really came back below the title.
       expect(text(tool)).toContain("echo t1");
 
       click(tool, 0);
       expect(arrowsIn(tool.render(WIDTH))).toEqual([FOLDED]);
-      expect(text(tool)).toContain("2 次工具调用");
+      expect(text(tool)).toContain("工具调用×2");
       expect(text(tool)).not.toContain("echo t1");
     } finally {
       runtime.onSessionShutdown();
@@ -271,10 +271,10 @@ describe("runtime disclosure: tool carriers", () => {
     const { runtime, receiver } = start();
     try {
       const [tool] = foldedToolGroup(runtime, receiver, ["f1"], true);
-      expect(text(tool)).toContain("▸ ✗ 分组 1 次工具调用");
+      expect(text(tool)).toContain("▸ ✗ 分组 工具调用×1");
 
       click(tool, 0);
-      expect(text(tool)).toContain("▾ ✗ 分组 1 次工具调用");
+      expect(text(tool)).toContain("▾ ✗ 分组 工具调用×1");
     } finally {
       runtime.onSessionShutdown();
     }
@@ -324,7 +324,7 @@ describe("runtime disclosure: thinking-run titles", () => {
       expect(plain(folded)).not.toContain("BETA-THOUGHT");
 
       // Expand the first group only.
-      const [firstSummaryRow] = rowsWith(folded, "1 段思考");
+      const [firstSummaryRow] = rowsWith(folded, "思考×1");
       click(assistant, firstSummaryRow);
       const oneOpen = assistant.render(WIDTH);
       expect(arrowsIn(oneOpen)).toEqual([EXPANDED, FOLDED]);
@@ -332,13 +332,13 @@ describe("runtime disclosure: thinking-run titles", () => {
       expect(plain(oneOpen)).not.toContain("BETA-THOUGHT");
 
       // Collapse it again: back to the folded pair.
-      click(assistant, rowsWith(oneOpen, "段思考")[0]);
+      click(assistant, rowsWith(oneOpen, "思考×")[0]);
       const refolded = assistant.render(WIDTH);
       expect(arrowsIn(refolded)).toEqual([FOLDED, FOLDED]);
       expect(plain(refolded)).not.toContain("ALPHA-THOUGHT");
 
       // Now the second group: its ▸ becomes ▾, the first stays ▸.
-      click(assistant, rowsWith(refolded, "1 段思考")[1]);
+      click(assistant, rowsWith(refolded, "思考×1")[1]);
       const otherOpen = assistant.render(WIDTH);
       expect(arrowsIn(otherOpen)).toEqual([FOLDED, EXPANDED]);
       expect(plain(otherOpen)).not.toContain("ALPHA-THOUGHT");

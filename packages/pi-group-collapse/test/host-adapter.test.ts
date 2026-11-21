@@ -200,11 +200,11 @@ describe("render projection", () => {
     plan({
       kind: "titled",
       token: undefined,
-      titleFor: () => "▾ 2 次工具调用",
+      titleFor: () => "▾ 工具调用×2",
     });
     const expanded = tool.render(WIDTH);
     expect(expanded.length).toBe(own.length + 1);
-    expect(expanded[0]).toBe("▾ 2 次工具调用");
+    expect(expanded[0]).toBe("▾ 工具调用×2");
     // Below the title: byte-identical lines at the same width — no list,
     // no indentation, no re-wrapped borders.
     expect(expanded.slice(1)).toEqual(own);
@@ -232,7 +232,7 @@ describe("render projection", () => {
     component.render(WIDTH);
     expect(overrides.size).toBe(0);
 
-    plan({ kind: "titled", token: undefined, titleFor: () => "▾ 1 段思考" });
+    plan({ kind: "titled", token: undefined, titleFor: () => "▾ 思考×1" });
     component.render(WIDTH);
     expect(overrides.size).toBe(0);
     // The renderer's own hiding field is untouched too.
@@ -273,10 +273,10 @@ describe("render projection", () => {
     plan({
       kind: "titled",
       token: undefined,
-      titleFor: () => "▾ 1 次工具调用",
+      titleFor: () => "▾ 工具调用×1",
     });
     const expanded = component.render(WIDTH);
-    expect(expanded[0]).toBe("▾ 1 次工具调用");
+    expect(expanded[0]).toBe("▾ 工具调用×1");
     expect(expanded.slice(1)).toEqual(own);
     expect(stripTerminalSequences(expanded.join("\n"))).not.toContain(
       "file body",

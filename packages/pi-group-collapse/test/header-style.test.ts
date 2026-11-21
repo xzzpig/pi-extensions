@@ -318,6 +318,71 @@ function click(component: object, row: number, width = WIDTH): unknown {
 }
 
 describe("groupHeaderLine decoration", () => {
+  test("shrinking never substitutes elapsed time or tools for a missing higher-priority detail", () => {
+    const counts = summary({
+      tools: 1,
+      failed: 1,
+      elapsedMs: 3200,
+      toolCounts: [{ name: "x", count: 1 }],
+    });
+    const core = "▸ ✗ 分组 工具调用×1";
+    const failure = " · 工具失败×1";
+    const untimed = core + failure;
+    const timed = `▸ ✗ 耗时 3.2s · 分组 工具调用×1${failure}`;
+    const full = `${timed} · x×1`;
+    expect(groupHeaderLine(counts, { width: visibleWidth(full) })).toBe(full);
+    expect(groupHeaderLine(counts, { width: visibleWidth(full) - 1 })).toBe(
+      timed,
+    );
+    expect(groupHeaderLine(counts, { width: visibleWidth(timed) - 1 })).toBe(
+      untimed,
+    );
+    expect(groupHeaderLine(counts, { width: visibleWidth(untimed) - 1 })).toBe(
+      core,
+    );
+  });
+  test("extra fields fit after the original header and unsafe names cannot escape it", () => {
+    const counts = summary({
+      tools: 5,
+      thinking: 1,
+      messages: 2,
+      failed: 1,
+      warnings: 1,
+      errors: 1,
+      elapsedMs: 3200,
+      toolCounts: [
+        { name: "很".repeat(200), count: 2 },
+        { name: "\x1b[31mb\na\x07sh\x1b[0m", count: 2 },
+        { name: "read", count: 1 },
+      ],
+    });
+    const full = groupHeaderLine(counts, { width: 118 })!;
+    expect(full).toContain("工具失败×1 · 通知错误×1 · 通知警告×1");
+    expect(full).toBe(
+      "▸ ✗ 耗时 3.2s · 分组 工具调用×5 · 思考×1 · 消息×2 · 工具失败×1 · 通知错误×1 · 通知警告×1 · bash×2 read×1",
+    );
+
+    expect(groupHeaderLine(counts, { width: 118, expanded: true })).toBe(
+      EXPANDED + full.slice(1),
+    );
+    const original = {
+      ...counts,
+      failed: 0,
+      warnings: 0,
+      errors: 1,
+      toolCounts: [],
+      elapsedMs: undefined,
+    };
+    const core = groupHeaderLine(original, { width: 60 })!.split(
+      " · 通知错误×1",
+    )[0];
+    for (const width of [visibleWidth(core), visibleWidth(core) + 13, 90]) {
+      const fitted = groupHeaderLine(counts, { width })!;
+      expect(fitted).toContain(core.slice("▸ ✗ ".length));
+      expect(visibleWidth(fitted)).toBeLessThanOrEqual(width);
+    }
+    expect(groupHeaderLine(counts, { width: 10 })).toBeUndefined();
+  });
   test("a folded header carries the arrow, label, counts, and full-width background", () => {
     const counts = summary({ tools: 17, messages: 4 });
     const row = groupHeaderLine(counts, { width: WIDTH, theme: stubTheme() });
@@ -328,7 +393,7 @@ describe("groupHeaderLine decoration", () => {
     // with the neutral token.
     expect(line).toContain(`${SGR.accent}${FOLDED}\x1b[39m`);
     expect(line).toContain(`${SGR.accent}${LABEL}\x1b[39m`);
-    expect(line).toContain(`${SGR.muted} 17 次工具调用 · 4 条消息\x1b[39m`);
+    expect(line).toContain(`${SGR.muted} 工具调用×17 · 消息×4\x1b[39m`);
     expect(line.startsWith(SGR.toolPendingBg)).toBe(true);
     expect(line.endsWith("\x1b[49m")).toBe(true);
 
@@ -336,7 +401,7 @@ describe("groupHeaderLine decoration", () => {
     // is unchanged apart from the label.
     expect(visibleWidth(line)).toBe(WIDTH);
     expect(visible(line).trimEnd()).toBe(
-      `${FOLDED} ${LABEL} 17 次工具调用 · 4 条消息`,
+      `${FOLDED} ${LABEL} 工具调用×17 · 消息×4`,
     );
     expect(visible(line)).toContain(FOLDED);
   });
@@ -353,7 +418,7 @@ describe("groupHeaderLine decoration", () => {
       theme: stubTheme(),
     });
     expect(visible(expanded as string).trimEnd()).toBe(
-      `${EXPANDED} ${LABEL} 17 次工具调用 · 4 条消息`,
+      `${EXPANDED} ${LABEL} 工具调用×17 · 消息×4`,
     );
     // Only the disclosure glyph differs; the decoration never flips state.
     expect(visible(expanded as string).slice(1)).toBe(
@@ -367,7 +432,9 @@ describe("groupHeaderLine decoration", () => {
       width: WIDTH,
       theme: stubTheme(),
     }) as string;
-    expect(visible(failed).trimEnd()).toBe(`${FOLDED} ✗ ${LABEL} 2 次工具调用`);
+    expect(visible(failed).trimEnd()).toBe(
+      `${FOLDED} ✗ ${LABEL} 工具调用×2 · 工具失败×1`,
+    );
     expect(failed).toContain(`${SGR.error}✗\x1b[39m`);
     // The alert stays at the left edge, directly after the arrow.
     expect(failed.indexOf("✗")).toBeLessThan(failed.indexOf(LABEL));
@@ -376,7 +443,9 @@ describe("groupHeaderLine decoration", () => {
       width: WIDTH,
       theme: stubTheme(),
     }) as string;
-    expect(visible(warned).trimEnd()).toBe(`${FOLDED} ⚠ ${LABEL} 1 条消息`);
+    expect(visible(warned).trimEnd()).toBe(
+      `${FOLDED} ⚠ ${LABEL} 消息×1 · 通知警告×1`,
+    );
     expect(warned).toContain(`${SGR.warning}⚠\x1b[39m`);
   });
 
@@ -405,7 +474,7 @@ describe("groupHeaderLine decoration", () => {
       theme: noPanels,
     }) as string;
     expect(row.endsWith("\x1b[39m")).toBe(true);
-    expect(visible(row)).toBe(`${FOLDED} ${LABEL} 2 次工具调用`);
+    expect(visible(row)).toBe(`${FOLDED} ${LABEL} 工具调用×2`);
     expect(visibleWidth(row)).toBeLessThan(40);
   });
 
@@ -488,24 +557,22 @@ describe("groupHeaderLine decoration", () => {
       width: 40,
       theme: throwing,
     }) as string;
-    expect(visible(row).trimEnd()).toBe(`${FOLDED} ${LABEL} 2 次工具调用`);
+    expect(visible(row).trimEnd()).toBe(`${FOLDED} ${LABEL} 工具调用×2`);
     expect(row).not.toContain("\x1b[");
   });
 
   test("a narrow row drops only the label and keeps every semantic color", () => {
-    // The counts still fit at width 16, so the label goes and the arrow and
-    // counts keep their colors at exactly the plain row's cell width.
-    const plainRow = summaryLine(summary({ tools: 123 }), {
-      width: 16,
-    }) as string;
+    // At the plain row's width, the label goes and the arrow and counts
+    // keep their colors.
+    const plainRow = summaryLine(summary({ tools: 123 }), { width: WIDTH })!;
     const row = groupHeaderLine(summary({ tools: 123 }), {
-      width: 16,
+      width: visibleWidth(plainRow),
       theme: stubTheme(),
     }) as string;
     expect(visible(row).trimEnd()).toBe(plainRow);
     expect(row).not.toContain(LABEL);
     expect(row).toContain(`${SGR.accent}${FOLDED}\x1b[39m`);
-    expect(row).toContain(`${SGR.muted} 123 次工具调用\x1b[39m`);
+    expect(row).toContain(`${SGR.muted} 工具调用×123\x1b[39m`);
     expect(visibleWidth(row)).toBe(visibleWidth(plainRow));
 
     // A failure/warning marker keeps its semantic color without the label.
@@ -513,13 +580,13 @@ describe("groupHeaderLine decoration", () => {
       width: 16,
       theme: stubTheme(),
     }) as string;
-    expect(visible(failed).trimEnd()).toBe("▸ ✗ 2 次工具调用");
+    expect(visible(failed).trimEnd()).toBe("▸ ✗ 工具调用×2");
     expect(failed).toContain(`${SGR.error}✗\x1b[39m`);
     expect(failed).toContain(`${SGR.accent}${FOLDED}\x1b[39m`);
     expect(failed).not.toContain(LABEL);
 
     const warned = groupHeaderLine(summary({ messages: 1, warnings: 1 }), {
-      width: 16,
+      width: visibleWidth("▸ ⚠ 消息×1"),
       theme: stubTheme(),
     }) as string;
     expect(warned).toContain(`${SGR.warning}⚠\x1b[39m`);
@@ -528,7 +595,7 @@ describe("groupHeaderLine decoration", () => {
 
   test("without a theme the header degrades to uncolored text", () => {
     const row = groupHeaderLine(summary({ tools: 2 }), { width: 40 });
-    expect(row).toBe(`${FOLDED} ${LABEL} 2 次工具调用`);
+    expect(row).toBe(`${FOLDED} ${LABEL} 工具调用×2`);
   });
 });
 
@@ -554,7 +621,9 @@ describe("runtime header decoration", () => {
 
       // One row, full width, decorated with the injected Theme's own escapes.
       expect(visibleWidth(row)).toBe(WIDTH);
-      expect(visible(row).trimEnd()).toBe(`${FOLDED} ${LABEL} 1 次工具调用`);
+      expect(visible(row).trimEnd()).toBe(
+        `${FOLDED} ${LABEL} 工具调用×1 · bash×1`,
+      );
       expect(row).toContain(`${theme.getFgAnsi("accent")}${FOLDED}`);
       expect(row).toContain(`${theme.getFgAnsi("accent")}${LABEL}`);
       expect(row.startsWith(theme.getBgAnsi("toolPendingBg"))).toBe(true);
@@ -595,7 +664,7 @@ describe("runtime header decoration", () => {
       const [tool] = foldedToolGroup(runtime, receiver, ["t1"]);
       const lines = tool.render(WIDTH);
       expect(lines.length).toBe(1);
-      expect(visible(lines[0])).toBe(`${FOLDED} ${LABEL} 1 次工具调用`);
+      expect(visible(lines[0])).toBe(`${FOLDED} ${LABEL} 工具调用×1 · bash×1`);
       expect(lines[0]).not.toContain("\x1b[");
     } finally {
       runtime.onSessionShutdown();
@@ -614,6 +683,7 @@ describe("runtime header decoration", () => {
       // Title first, ▾, decorated, one row — then the member's own output.
       expect(visible(expanded[0])).toContain(EXPANDED);
       expect(visible(expanded[0])).toContain(LABEL);
+      expect(visible(expanded[0])).toContain("bash×2");
       expect(visible(expanded[0])).not.toContain(FOLDED);
       expect(expanded[0].endsWith("\x1b[49m")).toBe(true);
 
@@ -649,11 +719,11 @@ describe("runtime header decoration", () => {
 
       const folded = assistant.render(WIDTH);
       const summaryRow = folded.findIndex((line) =>
-        visible(line).includes("段思考"),
+        visible(line).includes("思考×"),
       );
       expect(summaryRow).toBeGreaterThanOrEqual(0);
       expect(visible(folded[summaryRow]).trimEnd()).toBe(
-        `${FOLDED} ${LABEL} 1 段思考`,
+        `${FOLDED} ${LABEL} 思考×1`,
       );
       expect(visibleWidth(folded[summaryRow])).toBe(WIDTH);
       expect(visible(folded.join("\n"))).not.toContain("ALPHA-THOUGHT");
@@ -720,7 +790,7 @@ describe("runtime header decoration", () => {
         // keep a summary row: no member is revealed and no row overflows.
         expect(lines.length).toBe(1);
         expect(visibleWidth(lines[0])).toBe(width);
-        expect(visible(lines[0]).trimEnd()).toContain("次工具调用");
+        expect(visible(lines[0]).trimEnd()).toContain("工具调用×");
         expect(visible(lines[0])).not.toContain("echo t1");
       }
     } finally {
@@ -807,7 +877,7 @@ describe("factory theme wiring", () => {
       // header still renders its label, uncolored, and nothing throws.
       ui = { notify() {} };
       const third = tool.render(WIDTH)[0];
-      expect(visible(third)).toBe(`${FOLDED} ${LABEL} 1 次工具调用`);
+      expect(visible(third)).toBe(`${FOLDED} ${LABEL} 工具调用×1 · bash×1`);
       expect(third).not.toContain("\x1b[");
     } finally {
       runtime.onSessionShutdown();
