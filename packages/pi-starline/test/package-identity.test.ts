@@ -21,8 +21,11 @@ describe("package identity", () => {
 		}
 	});
 
-	it("ships extension sources, declarations and fork release notes only", () => {
-		expect(pkg.files).toEqual(["extensions", "dist", "types", "FORK-CHANGELOG.md"]);
+	it("ships extension sources, declarations and both release histories", () => {
+		// `types/` is what other extensions `import type` the pill API from.
+		// The upstream log stays byte-identical and the fork log carries the
+		// independently versioned @xzzpig releases; both must reach the tarball.
+		expect(pkg.files).toEqual(["CHANGELOG.md", "extensions", "dist", "types", "FORK-CHANGELOG.md"]);
 	});
 
 	it("keeps both copyright lines in the licence", () => {

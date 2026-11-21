@@ -50,7 +50,7 @@
     {
       "kind": "other",
       "path": "packages/pi-starline/test/package-identity.test.ts",
-      "reason": "[policy] The exact published-files assertion follows the intentional fork allowlist including declarations and fork release notes, without relaxing runtime assertions. Reconcile when upstream changes its packaging contract."
+      "reason": "[policy] The exact published-files assertion follows the intentional fork allowlist including declarations and both release histories (the byte-identical upstream log plus FORK-CHANGELOG.md), without relaxing runtime assertions. Reconcile when upstream changes its packaging contract."
     },
     {
       "kind": "other",
@@ -147,7 +147,7 @@
     "keep test/contract/mouse-api.test.ts pinning that key plus the version:1 rejection fixture",
     "every git probe in extensions/starline/git.ts passes --no-optional-locks (test/git-no-optional-locks.test.ts)",
     "test/runtime.test.ts passes an explicit empty env to detectRuntime so ambient Nix markers cannot shadow file-marker fixtures",
-    "Keep package.json TAB-indented with the fork name/version/dependencies, declaration build:types/prepack scripts, and files allowlist (extensions, dist, types, FORK-CHANGELOG.md). Keep the upstream package-identity test aligned; regenerate the package-lock root identity mechanically with npm, never by hand.",
+    "Keep package.json TAB-indented with the fork name/version/dependencies, declaration build:types/prepack scripts, and files allowlist (CHANGELOG.md, extensions, dist, types, FORK-CHANGELOG.md). Keep the upstream package-identity test aligned; regenerate the package-lock root identity mechanically with npm, never by hand.",
     "the fork's pi-mouse-events consumer implementation lives in the fork-only mouse/fork-consumer.ts, with mouse/index.ts kept as a re-export seam (upstream installer signature only); editor selections retain the fork's draft-copy behavior, while transcript selections fall through to Pi's native verbatim copy. Preserve the optional asynchronous copy slot and older-v2 OSC 52 fallback for editor selections, and prefer the shared post-component wheel slot/Pi-computed delta with the older pre-dispatch fallback.",
     "preserve pi-zentui legacy symbol interoperability in editor-factory-marker.ts, ui.ts and prototype-patch-registry.ts and retain test/legacy-symbols.test.ts when upstream removes the aliases",
     "delegate mouse/pointer-shape.ts requests to the shared pointer coordinator; keep the fork pill-mouse observer and adapt upstream external-layer and clipboard tests to the shared consumer architecture",
