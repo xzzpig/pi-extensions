@@ -1,4 +1,5 @@
 import type { DashboardFooterKeys } from "../fork-dashboard-key-routes.ts";
+import { blockerPreviewRows, blockerSummary } from "./fork-goal-blocker-preview.ts";
 import { fitCurrentTaskDetails, goalAuditFailureStatusRows, inlineInferredTaskTitle, INFERRED_TASK_NOTE } from "./fork-goal-audit-failure.ts";
 import type { GoalKeybinding } from "../goal-controls.ts";
 import { appendTaskDashboardFooter, taskFooterAuditorNote, taskFooterScrollHint, type TaskFooterControls } from "./fork-task-dashboard-footer.ts";
@@ -402,7 +403,7 @@ export function renderCompactDashboard(
 
 	// Blocked details (§4.5).
 	if (model.status.code === "blocked") {
-		if (model.status.reason) lines.push(boxLine(theme, safeWidth, `${theme.fg("error", "Blocker")}  ${muted(theme, fit(model.status.reason, inner - 10))}`));
+		if (model.status.reason) lines.push(boxLine(theme, safeWidth, `${theme.fg("error", "Blocker")}  ${muted(theme, blockerSummary(model.status.reason, Math.max(0, inner - 10)))}`));
 		if (spec.showPauseAction && model.status.suggestedAction) lines.push(boxLine(theme, safeWidth, `${muted(theme, "Action")}   ${fit(model.status.suggestedAction, inner - 9)}`));
 	}
 
@@ -463,7 +464,7 @@ export function renderExpandedDashboard(
 	model: GoalDashboardModel,
 	theme: Theme,
 	width: number,
-	opts: { scrollOffset?: number; rows?: number; keybindings?: GoalDashboardKeybindings; taskRows?: DashboardTaskNode[]; expandedTasks?: ReadonlySet<string>; taskLine?: (node: DashboardTaskNode, line: number) => void; taskHeader?: (line: number) => void; controlsLine?: (controls: TaskFooterControls) => void; footerKeys?: DashboardFooterKeys; taskArea?: (first: number, last: number) => void; hideTaskIndicators?: boolean } = {},
+	opts: { scrollOffset?: number; rows?: number; keybindings?: GoalDashboardKeybindings; taskRows?: DashboardTaskNode[]; expandedTasks?: ReadonlySet<string>; taskLine?: (node: DashboardTaskNode, line: number) => void; taskHeader?: (line: number) => void; controlsLine?: (controls: TaskFooterControls) => void; footerKeys?: DashboardFooterKeys; taskArea?: (first: number, last: number) => void; hideTaskIndicators?: boolean; rowCap?: number; commands?: GoalCommands } = {},
 ): string[] {
 	const safeWidth = Math.max(10, width);
 	const mode = layoutMode(safeWidth);
@@ -542,6 +543,10 @@ export function renderExpandedDashboard(
 		lines.push(...renderActivityBlock(model.recentActivity, theme, safeWidth));
 	}
 
+	if (!opts.controlsLine && model.status.code === "blocked" && model.status.reason) {
+		const rows = blockerPreviewRows(model.status.reason, inner - 1, (opts.rowCap ?? Infinity) - lines.length - 1, opts.commands);
+		lines.push(...rows.map((row) => boxLine(theme, safeWidth, muted(theme, row))));
+	}
 		const closeKeys = [opts.keybindings?.collapse ?? "escape", opts.keybindings?.toggleExpand ?? DEFAULT_GOAL_KEYBINDINGS.dashboard.toggleExpand].flatMap(bindingKeys);
 	if (opts.controlsLine) appendTaskDashboardFooter(lines, width, (text) => frame(theme, text), opts.controlsLine, { expanded: true, hasCurrent: !!model.currentTask, preserveThrough, keys: opts.footerKeys?.toggle ?? closeKeys });
 	else lines.push(boxFooter(theme, safeWidth, closeKeys.length ? `${closeKeys.map(formatGoalKeybinding).join("/")}: collapse` : ""));

@@ -218,6 +218,7 @@
     "Keep fork release entries in FORK-CHANGELOG.md and the README fork notice; leave upstream CHANGELOG.md untouched.",
     "在 goal-events.ts active 生成边界调用 goalModelPromptParts；仅在上游 showContextUsage 显式启用时读取宿主上下文用量，默认关闭；将生成计数经 fork-context-retention.ts 协调，保留上下文开关变化时的请求前缀而不保留已移除的预算/运行约束；context handler 保留既有 display-only 过滤/checkpoint 规范化，不新增旧消息遥测投影",
     "Use the Pi 1.4 typed session_compact_failed handler and scheduler.rejectCheckpoint while retaining the fork session-scoped auditor registration and sidechannel teardown.",
+    "阻塞原因展示：重施 widgets/goal-dashboard-renderer.ts 的紧凑摘要和非交互预览调用、widgets/goal-widget.ts 的展开预览拟合接缝，以及 goal-core-tools.ts 仅在成功提交 blocked 后设置 resultDetail 的接缝；重新生成 tests/.test-manifest.json。",
     "re-apply the goal-core-tools.ts model-view call sites for create_goal, get_goal summary/history and projected detail pages; keep UI notification and independent auditor detailedSummary inputs authoritative",
     "保留 goal-detail.ts 接受新历史查询的执行字段视图（unknown rows/asRecord）的最小接缝；新返回先选字段再分页，使用原内容 hash/cursor，不重引入投影版本或 revision-token 缓存",
     "re-apply goal-compaction.ts filtering of audit_usage and model-view budget boundaries for compaction helpers and the live post-compaction delta",
@@ -240,6 +241,7 @@
   ],
   "doNotReintroduce": [
     "带正文恢复不能在旧轮中止收尾前激活目标，也不能同时启动自动 kickoff 或把正文插入旧轮；无参恢复保持原行为。",
+    "阻塞原因预览不得占用原有最小任务窗口或底边框，也不得用当前焦点替换会话历史结果中的当次原因或改变模型可见正文。",
     "不得从短时卡片或近期活动窗口寻找失败报告，也不得忽略已批准、已跳过或尝试身份而倒序选择任意旧失败；展示不修改审计输入、裁决或任务状态。",
     "不得恢复 auditor transcript runtime 或让共享 diff 依赖指向 node_modules 内 TypeScript；确认框的旧手势不可复活、浏览不得修改目标事务。",
     "Do not route audit wheel to transcript at list boundaries, collapse task and audit input targets, consume text-selection press, or treat mouse browsing as an audit transaction; preserve same-attempt Escape park/resume and host overlay/link priority.",

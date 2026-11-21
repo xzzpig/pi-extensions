@@ -39,10 +39,11 @@ The previous mixed log placed the following fork baseline-capture notes under up
 - The auditor's tool whitelist, its `structured_output` verdict contract, the
   completion transaction, and the dashboard phase semantics are unchanged.
 
-## [Unreleased]
+## [0.12.6] - 2026-11-21
 
 ### Fork changes
 
+- 阻塞目标的紧凑面板显示一行原因，展开面板在空间允许时提供多行预览。通过 `/goal-status verbose` 可查看当前原因全文；展开会话里的 `update_goal` 结果可回看当次完整原因，即使目标后来恢复。
 - `/goal-resume <消息>` 可在暂停后一次恢复目标并发送纠偏内容。上一轮未结束时会先等它收尾；无并发输入时，正文作为新一轮的普通用户消息，不额外启动自动续跑，也不占用自主运行次数。Esc 和无参恢复保持不变；同一会话并发提交的普通消息不保证先后。
 
 - 短时审计结果卡消失后，Dashboard 仍显示当前目标上次有效的拒绝或运行错误原因。展开可查看预览，`/goal-status verbose` 可查看完整报告；重启后从账本恢复，通过复审或明确跳过后清除旧提示。任务勾选和完成判定不变。

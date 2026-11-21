@@ -17,6 +17,8 @@
     ".tests/fork-context-usage-option.test.ts",
     ".tests/fork-dashboard-footer.test.ts",
     ".tests/fork-dashboard-host-frame.test.ts",
+    ".tests/fork-goal-blocker-dashboard.test.ts",
+    ".tests/fork-goal-blocker-results.test.ts",
     ".tests/fork-goal-confirmation-layout.test.ts",
     ".tests/fork-goal-confirmation-mouse.test.ts",
     ".tests/fork-goal-resume-message.test.ts",

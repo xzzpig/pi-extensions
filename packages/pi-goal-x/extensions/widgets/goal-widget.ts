@@ -9,6 +9,7 @@ import { TaskTreeView, type TaskTreeProjection } from "./fork-task-tree-view.ts"
 import { TaskTreeMouse } from "./fork-task-tree-mouse.ts";
 import { handleTaskWidgetMouse, taskWidgetMouseSignature, taskWidgetSourceSignature } from "./fork-task-widget-mouse.ts";
 import { dashboardDockChildren, renderFittingTaskWidget, measureOrdinaryTaskWindow } from "./fork-task-widget-layout.ts";
+import { blockerPreviewRows } from "./fork-goal-blocker-preview.ts";
 import type { AuditFailureMinimumLayout, GoalAuditFailure } from "./fork-goal-audit-failure.ts";
 import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI, TuiMouseEvent, TuiMouseEventResult } from "@earendil-works/pi-tui";
@@ -36,6 +37,7 @@ import {
 	type DashboardTaskNode,
 } from "./goal-dashboard-model.ts";
 import {
+	boxLine,
 	clampLinesToWidth,
 	renderAuditResultCard,
 	renderAuditorDashboard,
@@ -369,7 +371,7 @@ export function renderGoalWidgetLines(goal: GoalWidgetRecord | null, theme: Them
 	});
 	if (!model) return [];
 	const lines = options.expanded
-		? renderExpandedDashboard(model, theme, safeWidth, { scrollOffset: options.expandedScrollOffset, rows: options.expandedTaskRows, keybindings: options.keybindings, taskRows: options.taskProjection?.rows, expandedTasks: options.taskProjection?.expanded, taskLine: options.taskLine, taskHeader: options.taskHeader, controlsLine: options.controlsLine, footerKeys: options.footerKeys, taskArea: options.taskArea, hideTaskIndicators: options.hideTaskIndicators })
+		? renderExpandedDashboard(model, theme, safeWidth, { scrollOffset: options.expandedScrollOffset, rows: options.expandedTaskRows, keybindings: options.keybindings, taskRows: options.taskProjection?.rows, expandedTasks: options.taskProjection?.expanded, taskLine: options.taskLine, taskHeader: options.taskHeader, controlsLine: options.controlsLine, footerKeys: options.footerKeys, taskArea: options.taskArea, hideTaskIndicators: options.hideTaskIndicators, rowCap: options.terminalRows ? Math.max(1, options.terminalRows - WIDGET_HEIGHT_RESERVE) : undefined, commands: options.commands })
 		: renderCompactDashboard(model, theme, safeWidth, { scrollOffset: options.compactScrollOffset, keybindings: options.keybindings, auditorKey: options.auditorKey, taskRows: options.taskProjection?.rows, taskRowBudget: options.compactTaskRows, expandedTasks: options.taskProjection?.expanded, taskLine: options.taskLine, taskHeader: options.taskHeader, controlsLine: options.controlsLine, footerKeys: options.footerKeys, taskArea: options.taskArea, hideTaskIndicators: options.hideTaskIndicators });
 	return boundWidgetRenderLines(clampLinesToWidth(lines, width), options.terminalRows);
 }
@@ -577,20 +579,22 @@ export class GoalWidgetComponent implements Component {
 		// terminal stops jumping to the bottom.
 		const goal = this.getGoal();
 		const failure = goal && goal.status !== "complete" && !this.getAuditResult() && !this.getAuditorProgress() ? this.getAuditFailure(goal.id) : undefined;
+		const blocker = this.getExpanded() && goal?.status === "blocked" ? goal.pauseReason : undefined;
 		const taskReserve = this.measureDockReserve(width, false) ?? WIDGET_HEIGHT_RESERVE;
 		const reserve = failure ? this.measureDockReserve(width, true) ?? taskReserve : taskReserve;
+		const blockerPreviewCap = blocker && terminalRows ? Math.max(1, terminalRows - (this.measureDockReserve(width, true) ?? taskReserve)) : undefined;
 		const ordinaryRegime = this.stableHeightRegime();
-		const regime = ordinaryRegime + (failure ? `|audit-failure:${this.lastRenderWidth}` : "");
+		const regime = ordinaryRegime + (failure ? `|audit-failure:${this.lastRenderWidth}` : "") + (blocker ? `|blocker:${this.lastRenderWidth}` : "");
 		const taskWindowKey = JSON.stringify([ordinaryRegime, taskWidgetSourceSignature(goal, this.getExpanded()), this.lastRenderWidth, terminalRows, taskReserve]);
-		if (failure) this.reconcileOrdinaryTaskWindow(width, terminalRows, taskReserve, taskWindowKey);
+		if (failure || blocker) this.reconcileOrdinaryTaskWindow(width, terminalRows, taskReserve, taskWindowKey);
 		const prior = this.lastOrdinaryTaskWindow;
-		const priorTaskWindow = failure && prior?.key === taskWindowKey && prior.renderer === this.lastHostFrame.renderer ? prior : undefined;
+		const priorTaskWindow = (failure || blocker) && prior?.key === taskWindowKey && prior.renderer === this.lastHostFrame.renderer ? prior : undefined;
 		const sameAuditLatch = this.stableHeightState.stickyRegime === regime && this.stableHeightState.stickyTerminalRows === terminalRows && this.stableHeightState.stickyReserve === reserve;
 		this.auditViewport.maxRows = Math.max(1, sameAuditLatch ? (this.stableHeightState.stickyCap ?? (terminalRows ?? 24) - reserve - 1) : (terminalRows ?? 24) - reserve - 1);
 		this.taskHeaderLine = undefined;
 		this.clearTaskGeometry();
-		const natural = renderFittingTaskWidget({ width, terminalRows, reserve, taskReserve, regime, sticky: this.stableHeightState, expanded: this.getExpanded(), auditFailure: !!failure, priorTaskWindow, header: () => this.taskHeaderLine, taskLines: () => this.taskLineMap.keys(), controls: () => this.taskControls, render: (budget, hideIndicators, previewRows, shareStatusRow, minimumLayout, rowCap) => { this.taskRowBudget = budget; this.hideTaskIndicators = hideIndicators; return this.renderNatural(width, failure, previewRows, shareStatusRow, minimumLayout, !failure, rowCap); } });
-		if (failure) this.commitTaskOffsets(this.lastRenderWidth, this.taskRowBudget !== 0);
+		const natural = renderFittingTaskWidget({ width, terminalRows, reserve, taskReserve, regime, sticky: this.stableHeightState, expanded: this.getExpanded(), auditFailure: !!failure, priorTaskWindow, blockerPreviewCap, blockerPreview: blocker ? (rows) => blockerPreviewRows(blocker, width - 3, rows, this.getSettings().commands).map((row) => boxLine(this.theme, width, this.theme.fg("muted", row))) : undefined, header: () => this.taskHeaderLine, taskLines: () => this.taskLineMap.keys(), controls: () => this.taskControls, render: (budget, hideIndicators, previewRows, shareStatusRow, minimumLayout, rowCap) => { this.taskRowBudget = budget; this.hideTaskIndicators = hideIndicators; return this.renderNatural(width, failure, previewRows, shareStatusRow, minimumLayout, !failure && !blocker, rowCap); } });
+		if (failure || blocker) this.commitTaskOffsets(this.lastRenderWidth, this.taskRowBudget !== 0);
 		else if (this.taskHeaderLine !== undefined && this.taskRowBudget !== undefined) this.lastOrdinaryTaskWindow = { key: taskWindowKey, renderer: this.lastHostFrame.renderer, budget: this.taskRowBudget, hideIndicators: this.hideTaskIndicators };
 		// Reserve adapted to the actual dock chrome (status + editor + footer +
 		// pending): the widget's block plus the chrome must never exceed the

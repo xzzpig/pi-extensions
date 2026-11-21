@@ -310,7 +310,7 @@ pi.registerTool(defineTool({
 				type: "text",
 				text: "Goal blocked. Continuation stopped; the goal is waiting for the user to resume, revise, or clear it. Stop now; do not start another tool call.",
 			}],
-			details: goalDetails(core.state.goal),
+			details: goalDetails(core.state.goal, `Blocker: ${result.goal.pauseReason ?? reason}`),
 			terminate: true,
 		};
 	};

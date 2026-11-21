@@ -37,6 +37,8 @@ type FittingTaskWidgetOptions = {
   expanded: boolean;
   auditFailure?: boolean;
   priorTaskWindow?: { budget: number; hideIndicators: boolean };
+  blockerPreview?: (rows: number) => string[];
+  blockerPreviewCap?: number;
   render: (
     budget: number | undefined,
     hideIndicators: boolean,
@@ -54,7 +56,34 @@ type FittingTaskWidgetOptions = {
 export function renderFittingTaskWidget(
   options: FittingTaskWidgetOptions,
 ): string[] {
-  const initial = options.render(undefined, false);
+  const cap = taskWidgetCap(options);
+  const lines = fitTaskWidget(options, cap);
+  const controls = options.controls();
+  if (!options.blockerPreview || !controls) return lines;
+
+  // Insert only after the protected task geometry. No task row or mouse
+  // target moves; trim lower-priority details and update the final footer.
+  const firstDetail = protectedTaskRows(options, controls.preserveThrough);
+  const previewCap = Math.min(
+    cap ?? Infinity,
+    options.blockerPreviewCap ?? Infinity,
+  );
+  // A stricter preview cap accounts for the fullscreen spacer. If that cap
+  // cannot even fit the existing protected rows and footer, keep the original
+  // layout rather than charging the spacer to the ordinary task window.
+  if (firstDetail > controls.line) return lines;
+  if (firstDetail + 1 > previewCap) {
+    // Keep the footer when a task expands into the space formerly occupied
+    // by optional current-task detail. Never trim a task row to make room.
+    return trimOptionalDetails(options, lines, previewCap, -1);
+  }
+  const preview = options.blockerPreview(previewCap - firstDetail - 1);
+  lines.splice(firstDetail, 0, ...preview);
+  controls.line += preview.length;
+  return trimOptionalDetails(options, lines, previewCap);
+}
+
+function taskWidgetCap(options: FittingTaskWidgetOptions) {
   const sameLatch =
     options.sticky.stickyRegime === options.regime &&
     options.sticky.stickyTerminalRows === options.terminalRows &&
@@ -62,7 +91,14 @@ export function renderFittingTaskWidget(
   const dockCap = options.terminalRows
     ? Math.max(1, options.terminalRows - options.reserve)
     : undefined;
-  const cap = sameLatch ? options.sticky.stickyCap : dockCap;
+  return sameLatch ? options.sticky.stickyCap : dockCap;
+}
+
+function fitTaskWidget(
+  options: FittingTaskWidgetOptions,
+  cap: number | undefined,
+) {
+  const initial = options.render(undefined, false);
   if (cap === undefined) {
     return options.auditFailure && options.expanded
       ? options.render(undefined, false, 4)
@@ -295,10 +331,14 @@ function trimOptionalDetails(
   options: FittingTaskWidgetOptions,
   lines: string[],
   cap: number,
+  preserveThrough?: number,
 ): string[] {
   const controls = options.controls();
   if (!controls || controls.line < cap) return lines;
-  const firstDetail = protectedTaskRows(options, controls.preserveThrough);
+  const firstDetail = protectedTaskRows(
+    options,
+    preserveThrough ?? controls.preserveThrough,
+  );
   const count = controls.line - cap + 1;
   if (controls.line - count >= firstDetail) {
     lines.splice(controls.line - count, count);
