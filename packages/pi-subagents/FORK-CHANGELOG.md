@@ -69,6 +69,20 @@ These notes were already present without a release version; they are not new unr
   upstream runner refactor; upstream's removal of `completionGuard` was
   adopted.
 
+## [0.25.3] - 2026-11-22
+
+### Fixed
+
+- Native children reuse compatible user-installed npm extensions. Unversioned
+  sources reuse the installed version rather than checking for the latest
+  release. A different explicit version uses Pi's temporary package loader and
+  suppresses the automatically discovered npm copy before its factory runs,
+  preventing duplicate prompt hooks.
+- If an explicitly selected npm extension cannot load and its required tool is
+  missing, the child fails before its first ordinary model request. Extensions
+  can still register tools during prompt preparation, and resumed-session
+  compaction runs as before.
+
 ## [0.25.2] - 2026-11-20
 
 ### Fixed

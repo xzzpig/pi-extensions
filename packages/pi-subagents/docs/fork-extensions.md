@@ -99,6 +99,24 @@ participates only when the host marks that project trusted; a project's
 profile definitions are likewise applied only for a trusted project, and an
 untrusted project's registry is ignored with a warning.
 
+## Reusing installed npm extensions in child sessions
+
+Local native Pi children accept `npm:` sources in `extensions` and
+`subagentOnlyExtensions`, including their settings-level defaults. The child
+reuses a matching user-installed Pi package for an unversioned request, an
+exact version, or a compatible semver range. If no compatible install is
+available, or the request uses a dist-tag such as `@next`, Pi handles the
+original source through its temporary package loader.
+
+If an explicit source also names a package listed in user or project `packages`,
+its automatically discovered npm extension entries are suppressed for that
+child. Independently configured paths, unrelated extensions, and non-extension
+package resources keep their normal discovery rules. If Pi cannot load the explicit version, the child does
+not fall back to the suppressed version; required tools still use the existing
+missing-tool diagnostic. The child does not rewrite settings or replace the
+user-installed package with its explicitly selected version. Use one explicit
+npm selector per package in a child session.
+
 ## Context injection
 
 By default the parent agent learns which agents exist only by calling `subagent({ action: "list" })`. Context injection pre-declares selected agents in the parent system prompt through a compact `<available_subagents>` block, so routing decisions can happen without a discovery round trip.

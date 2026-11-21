@@ -222,7 +222,8 @@
     "packaging identity (repository.url, files allowlist, per-package lockfile policy) is enforced by scripts/check-fork-identity.mjs — run `node scripts/check-fork-identity.mjs` after every subtree pull/sync",
     "Keep the Herdr forwarding lifecycle fixture using fork-remote-shell-env.ts to supply cat in the simulated remote HOME/.local/bin; do not relax the production hardened remote PATH for a NixOS fixture.",
     "Keep pi.changelogPath pointing to ./FORK-CHANGELOG.md, ship the fork log and any upstream changelog, and retain README release-history navigation. Never append fork releases to the upstream log; follow docs/fork-changelogs.md.",
-    "Keep FORK-CHANGELOG.md in scripts/build-package.mjs staticFiles so compiled dist-pkg retains the explicit Pi changelog route."
+    "Keep FORK-CHANGELOG.md in scripts/build-package.mjs staticFiles so compiled dist-pkg retains the explicit Pi changelog route.",
+    "Keep the child-session.ts seam to fork-child-npm-extensions.ts: resolve additional source paths and attach the instance-local package collector adapter before DefaultResourceLoader.reload, then install the first-stream tool guard after extension binding and MCP readiness, so it checks after prompt preparation but before the original model stream. Verify against pinned and current Pi SDKs; retain semver and its types until Pi handles reuse and pre-initialization deduplication natively."
   ],
   "doNotReintroduce": [
     "Do not restore upstream repository.url as the fork publishing source; npm provenance must identify the actual build repository.",
@@ -234,6 +235,7 @@
     "do not wrap agent-management.jsonDetails in try/catch (it is at upstream bytes)",
     "keep the .oxlintrc.json overrides broad and the pi-lens findings on upstream-original code unfixed (declared in knownDebt)",
     "Do not retain a trusted-project context-injection snapshot across a change to untrusted session state; untrusted discovery must preserve user agents instead of letting same-name project agents shadow them.",
-    "Do not mix fork release headings into the upstream changelog or use upstream history as the Pi startup changelog."
+    "Do not mix fork release headings into the upstream changelog or use upstream history as the Pi startup changelog.",
+    "Do not move child npm package deduplication to a post-load callback, or inject extensions: [] package filters that claim paths from independent non-npm sources and alter resource discovery. Do not rewrite parent or on-disk settings to select a child version."
   ]
 }

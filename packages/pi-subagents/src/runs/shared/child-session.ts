@@ -14,6 +14,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { cleanupSessionResources, registerSessionResourceCleanup } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent, ToolCallEventResult, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { CHILD_COMMAND_TOOL, createChildCommandRuntime } from "./child-commands.ts";
+import { resolveChildNpmExtensions } from "./fork-child-npm-extensions.ts";
 import { supervisorChannelDir } from "./child-tool-plan.ts";
 import { pinChildCacheRetention } from "../../shared/child-cache-retention.ts";
 import { parseAcceptanceReport } from "./acceptance.ts";
@@ -584,6 +585,7 @@ export function createDefaultChildSessionFactory(options: DefaultChildSessionFac
 			const isRequiredSource = (extensionPath: string) => requiredPaths.size > 0 && requiredExtensionIdentity(
 				resolvedExtensionPaths.get(extensionPath) ?? extensionPath.replace(PI_UNICODE_SPACES, " "),
 			) !== undefined;
+			const npmExtensions = await resolveChildNpmExtensions(pi, settingsManager, launch, agentDir);
 			const loader = new pi.DefaultResourceLoader({
 				cwd: launch.cwd,
 				agentDir,
@@ -595,7 +597,7 @@ export function createDefaultChildSessionFactory(options: DefaultChildSessionFac
 				noPromptTemplates: true,
 				noThemes: true,
 				noContextFiles: launch.noContextFiles,
-				additionalExtensionPaths: builtinMcp ? [...launch.extensionPaths, "builtin:mcp"] : launch.extensionPaths,
+				additionalExtensionPaths: builtinMcp ? [...npmExtensions.additionalExtensionPaths, "builtin:mcp"] : npmExtensions.additionalExtensionPaths,
 				extensionFactories: [...launch.hooks, ...(commands ? [{ name: "pi-subagents:commands", factory: (api: ExtensionAPI) => {
 					api.registerTool(commands.wrap(pi.createBashTool(launch.cwd, { commandPrefix: settingsManager.getShellCommandPrefix(), shellPath: settingsManager.getShellPath() }) as unknown as ToolDefinition));
 					api.registerTool(commands.tool());
@@ -605,6 +607,7 @@ export function createDefaultChildSessionFactory(options: DefaultChildSessionFac
 				// An empty list stops Pi from filling the slot with the operator's APPEND_SYSTEM.md (#2960).
 				appendSystemPrompt: launch.appendSystemPrompt !== undefined ? [launch.appendSystemPrompt] : [],
 			});
+			npmExtensions.filterAmbient?.(loader);
 			// pi's own hosts emit `session_shutdown` before disposing a session so the
 			// extensions loaded into it (ambient extensions included) release their
 			// watchers, servers, and timers. Do the same, then dispose.
@@ -739,6 +742,7 @@ export function createDefaultChildSessionFactory(options: DefaultChildSessionFac
 				mcpWaits.set(cancel, { ready, parent: launch.parentSessionFile });
 				try { await ready; } finally { mcpWaits.delete(cancel); }
 			}
+			npmExtensions.guardFirstModelCall?.(launch.runtime, session);
 			let reportCompleted = false;
 			const guidanceClosed = "Child completed its acceptance report; resume it for further guidance.";
 			const assertAcceptsGuidance = (): void => { if (reportCompleted) throw new Error(guidanceClosed); };
